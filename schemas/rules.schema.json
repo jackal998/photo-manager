@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PhotoManager Rule",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "scope": {
+      "enum": [
+        "global",
+        "perGroup"
+      ]
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "operator": {
+            "enum": [
+              "eq",
+              "neq",
+              "gt",
+              "lt",
+              "regex",
+              "contains",
+              "startsWith",
+              "endsWith"
+            ]
+          },
+          "value": {}
+        },
+        "required": [
+          "field",
+          "operator",
+          "value"
+        ]
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "mark",
+              "lock",
+              "aggregateSelect",
+              "selectBySameFolder"
+            ]
+          },
+          "value": {},
+          "field": {
+            "type": "string"
+          },
+          "operator": {
+            "enum": [
+              "min",
+              "max",
+              "first",
+              "last",
+              "shortest",
+              "longest"
+            ]
+          },
+          "pathField": {
+            "type": "string"
+          },
+          "regex": {
+            "type": "string"
+          },
+          "mark": {
+            "type": "boolean"
+          },
+          "lock": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      }
+    }
+  },
+  "required": [
+    "name",
+    "scope",
+    "actions"
+  ]
+}

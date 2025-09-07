@@ -1,0 +1,14 @@
+{
+  "thumbnail_size": 512,
+  "thumbnail_mem_cache": 512,
+  "thumbnail_disk_cache_dir": "%LOCALAPPDATA%/PhotoManager/thumbs",
+  "delete": {
+    "confirm_group_full_delete": true
+  },
+  "sorting": {
+    "defaults": []
+  },
+  "ui": {
+    "locale": "zh-TW"
+  }
+}
