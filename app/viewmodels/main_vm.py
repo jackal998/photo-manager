@@ -19,6 +19,9 @@ class MainVM:
             grouped[item.group_number].append(item)
         self.groups = [PhotoGroup(group_number=k, items=v) for k, v in sorted(grouped.items())]
 
+    def export_csv(self, path: str) -> None:
+        self._repo.save(path, self.groups)
+
     @property
     def group_count(self) -> int:
         return len(self.groups)
