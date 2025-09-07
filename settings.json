@@ -6,7 +6,16 @@
     "confirm_group_full_delete": true
   },
   "sorting": {
-    "defaults": []
+    "defaults": [
+      {
+        "field": "file_size_bytes",
+        "asc": false
+      },
+      {
+        "field": "file_path",
+        "asc": true
+      }
+    ]
   },
   "ui": {
     "locale": "zh-TW"
