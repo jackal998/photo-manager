@@ -10,12 +10,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QVBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMenuBar,
     QFileDialog,
     QMessageBox,
     QTreeView,
+    QDialog,
 )
 from PySide6.QtGui import QStandardItemModel, QStandardItem
 
@@ -37,27 +36,22 @@ class MainWindow(QMainWindow):
         self.action_export = file_menu.addAction("Export CSV…")
         file_menu.addSeparator()
         self.action_exit = file_menu.addAction("Exit")
+        tools_menu = menubar.addMenu("Tools")
+        self.action_edit_rules = tools_menu.addAction("Edit Rules…")
+        self.action_edit_filters = tools_menu.addAction("Edit Filters…")
         self.setMenuBar(menubar)
 
         self.action_import.triggered.connect(self.on_import_csv)
         self.action_export.triggered.connect(self.on_export_csv)
         self.action_exit.triggered.connect(self.close)
+        self.action_edit_rules.triggered.connect(self.on_edit_rules)
+        self.action_edit_filters.triggered.connect(self.on_edit_filters)
 
         # Status bar
         self.statusBar().showMessage("Ready", 3000)
 
-        # Left panel: rules placeholder
-        left = QVBoxLayout()
-        left.addWidget(QLabel("Rules / Filters"))
-        self.rules_placeholder = QListWidget()
-        left.addWidget(self.rules_placeholder)
-
-        # Center: groups list + tree view
+        # Center: single tree view (groups/items)
         center = QVBoxLayout()
-        center.addWidget(QLabel("Groups"))
-        self.groups_list = QListWidget()
-        center.addWidget(self.groups_list)
-        center.addWidget(QLabel("Details"))
         self.tree = QTreeView()
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
@@ -69,23 +63,33 @@ class MainWindow(QMainWindow):
         self.preview_label = QLabel("(preview placeholder)")
         right.addWidget(self.preview_label)
 
-        root.addLayout(left, 2)
-        root.addLayout(center, 5)
+        # Root layout: center + right only
+        root.addLayout(center, 7)
         root.addLayout(right, 3)
 
         self.setCentralWidget(central)
 
+    def on_edit_rules(self) -> None:
+        from app.views.dialogs.rules_dialog import RulesDialog
+
+        dlg = RulesDialog(self)
+        dlg.exec()
+
+    def on_edit_filters(self) -> None:
+        from app.views.dialogs.filters_dialog import FiltersDialog
+
+        dlg = FiltersDialog(self)
+        dlg.exec()
+
     def show_group_counts(self, group_count: int) -> None:
-        self.groups_list.clear()
-        self.groups_list.addItem(QListWidgetItem(f"Groups: {group_count}"))
+        # No-op: groups sidebar removed; keep method to avoid breaking callers
+        pass
 
     def show_groups_summary(self, groups: list) -> None:
+        # No-op: groups sidebar removed; keep method to avoid breaking callers
         if not groups:
             return
-        self.groups_list.addItem(QListWidgetItem(""))
-        for g in groups:
-            count = len(getattr(g, "items", []) or [])
-            self.groups_list.addItem(QListWidgetItem(f"Group {g.group_number} ({count})"))
+        return
 
     def refresh_tree(self, groups: list) -> None:
         model = QStandardItemModel()
