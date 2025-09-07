@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
         center.addWidget(QLabel("Details"))
         self.tree = QTreeView()
         self.tree.setUniformRowHeights(True)
+        self.tree.setSortingEnabled(True)
         center.addWidget(self.tree)
 
         # Right: preview placeholder
@@ -92,7 +93,6 @@ class MainWindow(QMainWindow):
         for g in groups:
             group_item = QStandardItem(f"Group {g.group_number}")
             group_item.setEditable(False)
-            # Blank columns for group row
             group_row = [group_item, QStandardItem(""), QStandardItem(""), QStandardItem(str(len(getattr(g, 'items', []) or [])))]
             for it in group_row:
                 it.setEditable(False)
