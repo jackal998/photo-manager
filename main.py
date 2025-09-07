@@ -43,8 +43,6 @@ def main() -> int:
         vm.load_csv(str(sample_csv))
 
     win = MainWindow(vm=vm, repo=repo)
-    win.show_group_counts(vm.group_count)
-    win.show_groups_summary(vm.groups)
     win.refresh_tree(vm.groups)
     win.statusBar().showMessage("Ready", 2000)
     win.show()
