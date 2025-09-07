@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -25,12 +24,11 @@ def main() -> int:
     repo = CsvPhotoRepository()
     vm = MainVM(repo)
 
-    # Load sample CSV on startup (M1 convenience)
     sample_csv = BASE_DIR / "samples" / "sample.csv"
     if sample_csv.exists():
         vm.load_csv(str(sample_csv))
 
-    win = MainWindow()
+    win = MainWindow(vm=vm, repo=repo)
     win.show_group_counts(vm.group_count)
     win.show_groups_summary(vm.groups)
     win.show()
