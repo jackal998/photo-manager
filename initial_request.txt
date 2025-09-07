@@ -1,0 +1,36 @@
+context:我要做一個windows上可以運行的小工具
+
+goal:
+方便我整合不同來源搜尋出來包含相似照片以及重複照片
+然後人工過濾之後根據某些規則進行刪除
+
+requirements:
+1. 可以讀取既有的CSV檔案，檔案格式是：
+    - 第一行是欄位名稱:GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileSize,GpsLatitude,GpsLongitude,PixelHeight,PixelWidth,DpiWidth,DpiHeight,Orientation
+    - 第二行開始是資料，example：
+      - 1,0,0,H:\Photos\MobileBackup\iPhone\2023\01\,h:\photos\mobilebackup\iphone\2023\01\img_7611_original.heic,2023-01-27 13:56:23,2023-01-27 12:56:23,1.44MB,35.5527777777778,135.182222222222,4032,3024,72,72,1
+      - 2,0,0,H:\Photos\MobileBackup\iPhone\2023\02\,h:\photos\mobilebackup\iphone\2023\02\img_4251.heic,2023-02-18 14:46:21,2023-02-18 14:46:21,1.17MB,24.0588888888889,120.431388888889,4032,3024,72,72,1
+2. 可以讀取檔案的資料，並且可以將資料顯示在畫面上(方便操作的GUI)
+3. 在畫面上可以進行操作：
+    - 可以將資料進行分群顯示:
+      - headers:
+      - group 1 (<count>):
+        - data 1
+        - data 2
+        - data 3
+      - group 2 (<count>):
+        - data 5
+        - data 6
+    - group 可折疊/展開
+    - 可以將資料進行標記/取消標記(selected)
+      - 可以自訂規則(ex: 如果<欄位> match <Regex>，則標記為1(selected))
+        - 例如:
+          - 選擇所有相同資料夾(相同路徑)內的所有其他圖片
+          - 選擇每個group內檔案最大/最小；最新/最舊；路徑最長/最短；檔案名稱最長/最短；檔案大小最大/最小；等等
+      - 可以將selected資料進行鎖定/取消鎖定
+      - 可以將selected資料進行刪除
+    - 可以將資料進行排序
+    - 可以將資料進行匯出
+    - 可以將資料進行匯入
+4. 可以單獨預覽/顯示單筆圖片
+5. 可以顯示Group內所有圖片
