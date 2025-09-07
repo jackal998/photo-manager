@@ -6,10 +6,10 @@ goal:
 
 requirements:
 1. 可以讀取既有的CSV檔案，檔案格式是：
-    - 第一行是欄位名稱:GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileSize,GpsLatitude,GpsLongitude,PixelHeight,PixelWidth,DpiWidth,DpiHeight,Orientation
+    - 第一行是欄位名稱:GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileSize
     - 第二行開始是資料，example：
-      - 1,0,0,H:\Photos\MobileBackup\iPhone\2023\01\,h:\photos\mobilebackup\iphone\2023\01\img_7611_original.heic,2023-01-27 13:56:23,2023-01-27 12:56:23,1.44MB,35.5527777777778,135.182222222222,4032,3024,72,72,1
-      - 2,0,0,H:\Photos\MobileBackup\iPhone\2023\02\,h:\photos\mobilebackup\iphone\2023\02\img_4251.heic,2023-02-18 14:46:21,2023-02-18 14:46:21,1.17MB,24.0588888888889,120.431388888889,4032,3024,72,72,1
+      - 1,0,0,H:\Photos\MobileBackup\iPhone\2023\01\,h:\photos\mobilebackup\iphone\2023\01\img_7611_original.heic,2023-01-27 13:56:23,2023-01-27 12:56:23,1.44MB
+      - 2,0,0,H:\Photos\MobileBackup\iPhone\2023\02\,h:\photos\mobilebackup\iphone\2023\02\img_4251.heic,2023-02-18 14:46:21,2023-02-18 14:46:21,1.17MB
 2. 可以讀取檔案的資料，並且可以將資料顯示在畫面上(方便操作的GUI)
 3. 在畫面上可以進行操作：
     - 可以將資料進行分群顯示:
