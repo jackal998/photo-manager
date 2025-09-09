@@ -14,6 +14,7 @@ from infrastructure.csv_repository import CsvPhotoRepository
 from infrastructure.logging import init_logging
 from infrastructure.settings import JsonSettings
 from infrastructure.image_service import ImageService
+from infrastructure.delete_service import DeleteService
 
 
 BASE_DIR = Path(__file__).parent
@@ -110,7 +111,8 @@ def main() -> int:
     except Exception as ex:
         logger.info("HEIC diagnostics skipped due to exception: {}", ex)
 
-    win = MainWindow(vm=vm, repo=repo, image_service=img, settings=settings)
+    deleter = DeleteService()
+    win = MainWindow(vm=vm, repo=repo, image_service=img, settings=settings, delete_service=deleter)
     win.refresh_tree(vm.groups)
     win.statusBar().showMessage("Ready", 2000)
     win.show()
