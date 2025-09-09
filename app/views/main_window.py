@@ -52,12 +52,13 @@ class _ImageTask(QRunnable):
 class MainWindow(QMainWindow):
     imageLoaded = Signal(str, str, object)  # token, path, QImage
 
-    def __init__(self, vm: Any, repo: Any, image_service: Any | None = None, settings: Any | None = None) -> None:
+    def __init__(self, vm: Any, repo: Any, image_service: Any | None = None, settings: Any | None = None, delete_service: Any | None = None) -> None:
         super().__init__()
         self._vm = vm
         self._repo = repo
         self._img = image_service
         self._settings = settings
+        self._deleter = delete_service
         self._thumb_size: int = 512
         if self._settings is not None:
             try:
@@ -74,6 +75,7 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("File")
         self.action_import = file_menu.addAction("Import CSV…")
         self.action_export = file_menu.addAction("Export CSV…")
+        self.action_delete = file_menu.addAction("Delete Selected…")
         file_menu.addSeparator()
         self.action_exit = file_menu.addAction("Exit")
         tools_menu = menubar.addMenu("Tools")
@@ -84,6 +86,7 @@ class MainWindow(QMainWindow):
         self.action_import.triggered.connect(self.on_import_csv)
         self.action_export.triggered.connect(self.on_export_csv)
         self.action_exit.triggered.connect(self.close)
+        self.action_delete.triggered.connect(self.on_delete_selected)
         self.action_edit_rules.triggered.connect(self.on_edit_rules)
         self.action_edit_filters.triggered.connect(self.on_edit_filters)
 
@@ -166,11 +169,12 @@ class MainWindow(QMainWindow):
 
     def refresh_tree(self, groups: list) -> None:
         model = QStandardItemModel()
-        model.setHorizontalHeaderLabels(["Group", "File Name", "Folder", "Size (Bytes)"])
+        model.setHorizontalHeaderLabels(["Group", "Sel", "File Name", "Folder", "Size (Bytes)"])
         for g in groups:
             group_item = QStandardItem(f"Group {g.group_number}")
             group_item.setEditable(False)
-            group_row = [group_item, QStandardItem(""), QStandardItem(""), QStandardItem(str(len(getattr(g, 'items', []) or [])))]
+            # Group row has NO selection checkbox (checkboxes only on files)
+            group_row = [group_item, QStandardItem(""), QStandardItem(""), QStandardItem(""), QStandardItem(str(len(getattr(g, 'items', []) or [])))]
             for it in group_row:
                 it.setEditable(False)
             model.appendRow(group_row)
@@ -178,8 +182,12 @@ class MainWindow(QMainWindow):
                 name = Path(p.file_path).name
                 folder = p.folder_path
                 size = str(p.file_size_bytes)
+                check = QStandardItem("")
+                check.setCheckable(True)
+                check.setEditable(False)
                 child_row = [
                     QStandardItem(""),
+                    check,
                     QStandardItem(name),
                     QStandardItem(folder),
                     QStandardItem(size),
@@ -188,12 +196,12 @@ class MainWindow(QMainWindow):
                     it.setEditable(False)
                 # Store authoritative full path on the name item to avoid mismatches
                 try:
-                    child_row[1].setData(p.file_path, Qt.UserRole)
+                    child_row[2].setData(p.file_path, Qt.UserRole)
                 except Exception:
                     pass
                 group_item.appendRow(child_row)
         self.tree.setModel(model)
-        for i in range(4):
+        for i in range(5):
             self.tree.resizeColumnToContents(i)
 
         # Reconnect selection model after model reset
@@ -210,8 +218,8 @@ class MainWindow(QMainWindow):
         group_text = model.data(model.index(idx.row(), 0, idx.parent()))
         if idx.parent().isValid():
             # Child row selected -> single preview
-            name_index = model.index(idx.row(), 1, idx.parent())
-            folder_index = model.index(idx.row(), 2, idx.parent())
+            name_index = model.index(idx.row(), 2, idx.parent())
+            folder_index = model.index(idx.row(), 3, idx.parent())
             name = model.data(name_index)
             folder = model.data(folder_index)
             path = model.data(name_index, Qt.UserRole)
@@ -227,17 +235,84 @@ class MainWindow(QMainWindow):
             if parent_item is not None:
                 rows = parent_item.rowCount()
                 for r in range(rows):
-                    name_item = parent_item.child(r, 1)
-                    folder_item = parent_item.child(r, 2)
+                    name_item = parent_item.child(r, 2)
+                    folder_item = parent_item.child(r, 3)
                     name = model.itemFromIndex(name_item.index()).text() if name_item else ""
                     folder = model.itemFromIndex(folder_item.index()).text() if folder_item else ""
-                    size_txt = model.itemFromIndex(parent_item.child(r, 3).index()).text() if parent_item.child(r, 3) else ""
+                    size_txt = model.itemFromIndex(parent_item.child(r, 4).index()).text() if parent_item.child(r, 4) else ""
                     if name and folder:
                         p = name_item.data(Qt.UserRole) if name_item else None
                         if not p:
                             p = str(Path(folder) / name)
                         group_items.append((p, name, folder, size_txt))
             self._show_group_grid(group_items)
+
+    def _gather_checked_paths(self) -> list[str]:
+        model = self.tree.model()
+        if model is None:
+            return []
+        paths: list[str] = []
+        root_count = model.rowCount()
+        for r in range(root_count):
+            parent_item = model.item(r, 0)
+            if parent_item is None:
+                continue
+            child_count = parent_item.rowCount()
+            for cr in range(child_count):
+                check_item = parent_item.child(cr, 1)
+                name_item = parent_item.child(cr, 2)
+                if check_item and check_item.checkState() == Qt.Checked and name_item:
+                    p = name_item.data(Qt.UserRole)
+                    if p:
+                        paths.append(p)
+        return paths
+
+    def on_delete_selected(self) -> None:
+        if not self._deleter:
+            QMessageBox.information(self, "Delete", "Delete service not available.")
+            return
+        selected_paths = self._gather_checked_paths()
+        if not selected_paths:
+            QMessageBox.information(self, "Delete", "No items checked.")
+            return
+        from app.views.dialogs.delete_confirm_dialog import DeleteConfirmDialog
+        plan = self._deleter.plan_delete(self._vm.groups, selected_paths)
+        if self._settings and bool(self._settings.get("delete.confirm_group_full_delete", True)):
+            dlg = DeleteConfirmDialog(plan.group_summaries, self)
+            if dlg.exec() != QDialog.Accepted:
+                return
+        result = self._deleter.execute_delete(self._vm.groups, plan)
+        # Notifications
+        if result.success_paths:
+            self.statusBar().showMessage(f"Deleted {len(result.success_paths)} items. Log: {getattr(result, 'log_path', '')}", 5000)
+            try:
+                # Best-effort info dialog for success (optional)
+                QMessageBox.information(self, "Delete", f"Deleted {len(result.success_paths)} items.\nLog: {getattr(result, 'log_path', '')}")
+            except Exception:
+                pass
+        if result.failed:
+            QMessageBox.warning(self, "Delete", f"Failed: {len(result.failed)} items. See log.")
+
+        # Update VM: remove deleted files and prune groups with only one file
+        try:
+            if result.success_paths:
+                self._vm.remove_deleted_and_prune(result.success_paths)
+                # Refresh tree view with updated groups
+                self.refresh_tree(self._vm.groups)
+        except Exception:
+            pass
+
+        # Prompt to update source CSV after list actions completed
+        try:
+            if result.success_paths:
+                src = getattr(self._vm, "get_source_csv_path", lambda: None)()
+                if src:
+                    resp = QMessageBox.question(self, "Update CSV?", f"Update source CSV file?\n{src}")
+                    if resp == QMessageBox.Yes:
+                        self._vm.export_csv(src)
+                        self.statusBar().showMessage("CSV updated", 3000)
+        except Exception as ex:
+            logger.error("Update CSV after delete failed: {}", ex)
 
     # Actions
     def on_import_csv(self) -> None:
