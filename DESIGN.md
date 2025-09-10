@@ -6,13 +6,13 @@
 
 - **語言/平台**: Python 3.11+（Windows）
 - **GUI**: PySide6（Qt 6）
-- **HEIC**: 依賴系統的 HEIF Image Extensions；以 Windows Shell/WIC 取得縮圖/預覽
+- **HEIC**: 依賴系統的 HEIF Image Extensions；以 Windows Shell/WIC 取得縮圖/預覽（可選 Pillow/pillow-heif）
 - **刪除**: 預設送資源回收桶（send2trash）
 - **鎖定**: 僅 App 內部狀態，不改動檔案屬性
 - **匯出 FileSize**: 一律重新讀取實體檔案大小，以 Bytes（整數）輸出
 - **資料量級**: 約 20,000 組群、50,000 檔案（需虛擬化、懶載入與快取）
 - **分群來源**: 一律由 CSV 提供；本 App 不做相似/重複分析
-- **Undo/Redo**: 僅針對「規則導致的 標記/鎖定/選取 變更」支援；刪除不支援 Undo
+- **Select/UnSelect**: 「Select by Field/Regex」對話框支援批次選擇/取消選擇
 - **群組全選刪除策略**: 允許，但跳出強烈警告並需二次確認
 
 ---
@@ -21,8 +21,8 @@
 
 - **目標**
   - 讀取/顯示大量 CSV 之照片資料，依 `GroupNumber` 分群可折疊/展開
-  - 規則引擎：條件式與聚合式（perGroup / global），支援 Undo/Redo（僅狀態變更）
-  - 操作：標記/取消、鎖定/取消、刪除（回收桶）、多鍵排序、匯入/匯出
+  - 操作：勾選/取消勾選（Selected）、刪除（回收桶）、基本排序、匯入/匯出
+  - Select 對話框：依欄位 + Regex 批次選擇/取消選擇
   - 預覽：單檔原圖預覽；群組格狀縮圖（磁碟+記憶體快取）
   - 效能：50k 筆流暢操作（虛擬化、懶載入、背景 IO）
 - **非目標**
@@ -122,8 +122,9 @@ photo_manager/
   - `get_preview(path:str, max_side:int) -> QImage | bytes`
   - 具備磁碟+記憶體 LRU 快取；快取鍵：`sha1(path + mtime + size)`
 - `IDeleteService`
-  - `delete_to_recycle(paths:list[str]) -> DeleteResult`（略過 locked，回傳成功/失敗明細）
-  - 刪除前檢查群組全選，回傳需二次確認清單
+  - `plan_delete(groups, selected_paths) -> DeletePlan`（略過 locked，彙總受影響群組/筆數、偵測全選群組）
+  - `delete_to_recycle(paths:list[str]) -> DeleteResult`
+  - `execute_delete(groups, plan, log_dir=None) -> DeleteResult`（執行並寫出 CSV 紀錄）
 - `IRuleService`
   - `execute(groups, rule) -> Command`（可 `undo()`/`redo()`）
 - `ISortService`
@@ -135,109 +136,32 @@ photo_manager/
 
 ---
 
-## 7. 規則引擎
+## 7. 選擇（Select）對話框
 
-- 範圍：`global` / `perGroup`
-- 類型：
-  - 條件式（欄位比較、regex、contains/startsWith/endsWith）
-  - 聚合式（每群 min/max/first/last/shortest/longest）
-- 動作：`mark`, `lock`, `aggregateSelect`, `selectBySameFolder`
-- 執行：回傳一個 `Command`（封裝所有受影響項目的狀態變更）；支援 undo/redo
+對話框提供簡化批次選擇/取消選擇能力：
 
-### 規則 JSON Schema（簡版）
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "PhotoManager Rule",
-  "type": "object",
-  "properties": {
-    "name": { "type": "string" },
-    "scope": { "enum": ["global", "perGroup"] },
-    "conditions": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "field": { "type": "string" },
-          "operator": { "enum": ["eq","neq","gt","lt","regex","contains","startsWith","endsWith"] },
-          "value": {}
-        },
-        "required": ["field","operator","value"]
-      }
-    },
-    "actions": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "type": { "enum": ["mark","lock","aggregateSelect","selectBySameFolder"] },
-          "value": {},
-          "field": { "type": "string" },
-          "operator": { "enum": ["min","max","first","last","shortest","longest"] },
-          "pathField": { "type": "string" },
-          "regex": { "type": "string" },
-          "mark": { "type": "boolean" },
-          "lock": { "type": "boolean" }
-        },
-        "required": ["type"]
-      }
-    }
-  },
-  "required": ["name","scope","actions"]
-}
-```
-
-### 規則範例
-
-```json
-{
-  "name": "每群選最大檔案",
-  "scope": "perGroup",
-  "actions": [
-    { "type": "aggregateSelect", "field": "file_size_bytes", "operator": "max", "mark": true }
-  ]
-}
-```
-
-```json
-{
-  "name": "選同資料夾",
-  "scope": "global",
-  "actions": [
-    { "type": "selectBySameFolder", "pathField": "folder_path", "regex": ".*\\\\iPhone\\\\2023\\\\02\\\\.*", "mark": true }
-  ]
-}
-```
-
-```json
-{
-  "name": "檔名後綴",
-  "scope": "perGroup",
-  "conditions": [
-    { "field": "file_path", "operator": "regex", "value": ".*_original\\.heic$" }
-  ],
-  "actions": [
-    { "type": "mark", "value": true },
-    { "type": "lock", "value": false }
-  ]
-}
-```
+- 元件：
+  - 下拉選單 `Field`：列出主清單顯示的所有欄位（如 Group、File Name、Folder、Size(Bytes) 等可匹配項）
+  - 文字框 `Regex`：接受使用者輸入，支援標準正則（RE），即時校驗格式
+  - 按鈕：`Select`、`Unselect`
+- 行為：
+  - `Select`：遍歷所有檔案列，將欄位值符合 Regex 者勾選為 Selected
+  - `Unselect`：遍歷所有檔案列，將欄位值符合 Regex 者取消勾選 Selected
+  - 僅作用於檔案列（群組列不具勾選）
 
 ---
 
 ## 8. UI/UX 與互動流程
 
 - 主畫面布局：
-  - 左：規則與快速篩選（已鎖定/已標記/路徑 Regex 等）
-  - 中：群組樹（`QTreeView`，父=Group、子=Photo）+ 列表欄位可排序
+  - 中：群組樹（`QTreeView`，父=Group、子=Photo）。第 0 欄為群組；子列包含 `Selected` 勾選框（僅檔案列）。
   - 右：預覽（單檔原圖；群組縮圖格）
 - 操作：
-  - 勾選列 → 選取（Selected）
-  - 工具列：標記/取消、鎖定/取消、刪除、排序、匯入/匯出、規則執行/撤銷/重做
+  - 勾選/取消勾選（Selected）
+  - 功能表：`File > Import/Export/ Delete Selected…`、`Select > Select by Field/Regex/…`
   - 刪除：
-    - 跳出摘要：將刪除 N 筆，其中 M 組為「全選刪除」→ 需二次確認
-    - 可顯示群組清單與筆數，使用者逐項確認
+    - 摘要：顯示受影響群組/全部群組、將刪除檔案/總檔案；若包含全選群組，列出群組清單並需勾選同意
+    - 執行：送回收桶（略過 locked）；寫刪除 CSV；自清單移除成功刪除檔案；移除僅剩單檔之群組；詢問是否覆寫來源 CSV
 - 虛擬化與懶載入：
   - 群組先載入索引，展開時才載入子項（可選）
   - 縮圖在可見範圍內懶載入，背景預取鄰近項
@@ -252,7 +176,7 @@ photo_manager/
   3) 單檔預覽需要更大尺寸時，再請求更大縮圖；若仍不足，提供「外部開啟」
 - 快取：
   - 磁碟：`%LOCALAPPDATA%/PhotoManager/thumbs/{sha1(path+mtime+size)}.jpg`
-  - 記憶體：LRU（容量可配置，預設 256–512 張）
+  - 記憶體：LRU（容量可配置，預設 512 張）
 
 ---
 
@@ -262,14 +186,14 @@ photo_manager/
 - 刪除前檢查：
   - 集合中若包含任一群組「全選刪除」，需顯示強烈警告與二次確認對話框
   - 對話框列出涉及群組與各群刪除筆數，要求使用者逐步勾選確認或一次性確認
-- 刪除結果：產生 CSV Log（時間、群組、檔案路徑、成功/失敗原因）
+- 刪除結果：產生 CSV Log（時間、群組、檔案路徑、成功/失敗原因；成功與失敗都記錄）
 
 ---
 
 ## 11. 效能與穩定性
 
 - 大量資料最佳化：
-  - `QAbstractItemModel` + `QSortFilterProxyModel`，僅維護必要狀態
+  - `QStandardItemModel` 並利用 Qt 內建排序（核心仍保留 SortService 以利匯出/後處理）
   - 延遲展開載入與釋放不可見群組的子項（可選進階）
   - 背景 IO：`QThreadPool` + `QRunnable`（CSV 讀取、檔案大小、縮圖）
   - 磁碟/記憶體快取（縮圖）、分批更新 UI（batched signals）
@@ -325,7 +249,7 @@ photo_manager/
 ## 16. 里程碑與 DoD
 
 - M1 最小可用版本（Week 1）
-  - 匯入/匯出 CSV、群組樹與列表、單/群縮圖預覽（含快取）、基本排序、規則執行（含 Undo/Redo）、刪除（警告+回收桶）
+  - 匯入/匯出 CSV、群組樹與列表（檔案列具 Selected 勾選）、單/群縮圖預覽（含快取）、基本排序（Qt 內建）、Select 對話框（Field/Regex 的 Select/Unselect）、刪除（摘要/強制確認/回收桶/自動 CSV Log/清單修剪/詢問覆寫 CSV）
   - DoD：50k 筆可順暢瀏覽與基本操作；文件與打包指引齊備
 - M2 穩定與優化（Week 2）
   - 進階篩選、更多聚合器、設定面板、操作日誌匯出、UI 優化
