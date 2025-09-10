@@ -6,6 +6,7 @@ from typing import Any, Optional, Dict, List
 from loguru import logger
 from PySide6.QtWidgets import (
     QMainWindow,
+    QApplication,
     QWidget,
     QHBoxLayout,
     QVBoxLayout,
@@ -18,9 +19,10 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QGridLayout,
     QSplitter,
+    QHeaderView,
 )
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QPixmap
-from PySide6.QtCore import Qt, QThreadPool, QRunnable, QObject, Signal, QSize
+from PySide6.QtCore import Qt, QThreadPool, QRunnable, QObject, Signal, QSortFilterProxyModel, QEvent
 import re
 
 
@@ -125,6 +127,12 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 7)
         splitter.setStretchFactor(1, 3)
+        self._splitter = splitter
+        # Refit on splitter moves (handles tree/preview border drags)
+        try:
+            self._splitter.splitterMoved.connect(lambda *_: self._apply_single_pixmap_fit())
+        except Exception:
+            pass
 
         # Root layout: splitter only
         root.addWidget(splitter)
@@ -143,6 +151,31 @@ class MainWindow(QMainWindow):
         self._single_pm: Optional[QPixmap] = None
 
         # Selection handling will be connected after a model is set in refresh_tree
+        # Tree header behaviors: draggable and interactive resize
+        try:
+            header = self.tree.header()
+            header.setSectionsMovable(True)
+            header.setStretchLastSection(False)
+            header.setSectionsClickable(True)
+            header.setSectionResizeMode(QHeaderView.Interactive)
+        except Exception:
+            pass
+
+        # Default window size: half of available screen in both width and height
+        try:
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                rect = screen.availableGeometry()
+                self.resize(int(rect.width() * 0.5), int(rect.height() * 0.5))
+        except Exception:
+            pass
+
+        # Track preview viewport resizes to keep fit-on-width accurate
+        try:
+            self.preview_area.viewport().installEventFilter(self)
+            self.preview_area.installEventFilter(self)
+        except Exception:
+            pass
 
     # Deprecated: old dialogs no longer mounted on menu
     def on_edit_rules(self) -> None:  # pragma: no cover
@@ -176,7 +209,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _apply_select_regex(self, field: str, pattern: str, make_checked: bool) -> None:
-        model = self.tree.model()
+        model = getattr(self, "_model", None)
         if model is None:
             return
         try:
@@ -225,7 +258,14 @@ class MainWindow(QMainWindow):
             if not rows:
                 return values
             idx = rows[0]
-            model = self.tree.model()
+            view_model = self.tree.model()
+            src_model = getattr(self, "_model", None)
+            proxy = getattr(self, "_proxy", None)
+            if proxy is not None and hasattr(proxy, "mapToSource"):
+                idx = proxy.mapToSource(idx)
+                model = src_model
+            else:
+                model = view_model
             if idx.parent().isValid():
                 # Child row (file)
                 parent_idx = idx.parent()
@@ -256,19 +296,30 @@ class MainWindow(QMainWindow):
 
     def refresh_tree(self, groups: list) -> None:
         model = QStandardItemModel()
-        model.setHorizontalHeaderLabels(["Group", "Sel", "File Name", "Folder", "Size (Bytes)"])
+        model.setHorizontalHeaderLabels(["Group", "Sel", "File Name", "Folder", "Size (Bytes)", "Group Count"])
         for g in groups:
             group_item = QStandardItem(f"Group {g.group_number}")
             group_item.setEditable(False)
+            try:
+                # Numeric sort for group column
+                group_item.setData(int(getattr(g, 'group_number', 0) or 0), Qt.UserRole + 1)
+            except Exception:
+                pass
             # Group row has NO selection checkbox (checkboxes only on files)
-            group_row = [group_item, QStandardItem(""), QStandardItem(""), QStandardItem(""), QStandardItem(str(len(getattr(g, 'items', []) or [])))]
+            group_count_val = len(getattr(g, 'items', []) or [])
+            group_row = [group_item, QStandardItem(""), QStandardItem(""), QStandardItem(""), QStandardItem(""), QStandardItem(str(group_count_val))]
+            try:
+                # Numeric sort for group count
+                group_row[5].setData(int(group_count_val), Qt.UserRole + 1)
+            except Exception:
+                pass
             for it in group_row:
                 it.setEditable(False)
             model.appendRow(group_row)
             for p in getattr(g, "items", []) or []:
                 name = Path(p.file_path).name
                 folder = p.folder_path
-                size = str(p.file_size_bytes)
+                size_num = int(getattr(p, 'file_size_bytes', 0) or 0)
                 check = QStandardItem("")
                 check.setCheckable(True)
                 check.setEditable(False)
@@ -277,8 +328,26 @@ class MainWindow(QMainWindow):
                     check,
                     QStandardItem(name),
                     QStandardItem(folder),
-                    QStandardItem(size),
+                    QStandardItem(str(size_num)),
+                    QStandardItem(""),
                 ]
+                # Sort roles for child row
+                try:
+                    child_row[1].setData(0, Qt.UserRole + 1)  # Sel default unchecked
+                except Exception:
+                    pass
+                try:
+                    child_row[2].setData(str(name).lower(), Qt.UserRole + 1)  # File Name text sort (ci)
+                except Exception:
+                    pass
+                try:
+                    child_row[3].setData(str(folder).lower(), Qt.UserRole + 1)  # Folder text sort (ci)
+                except Exception:
+                    pass
+                try:
+                    child_row[4].setData(int(size_num), Qt.UserRole + 1)  # Size numeric sort
+                except Exception:
+                    pass
                 for it in child_row:
                     it.setEditable(False)
                 # Store authoritative full path on the name item to avoid mismatches
@@ -287,12 +356,54 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 group_item.appendRow(child_row)
-        self.tree.setModel(model)
-        for i in range(5):
-            self.tree.resizeColumnToContents(i)
+        # Install proxy for numeric/text sort with roles
+        try:
+            proxy = QSortFilterProxyModel(self)
+            proxy.setSortRole(Qt.UserRole + 1)
+            proxy.setSortCaseSensitivity(Qt.CaseInsensitive)
+            proxy.setSourceModel(model)
+            self.tree.setModel(proxy)
+            self._proxy = proxy
+            self._model = model
+            # Default sort by Group numerically
+            self.tree.sortByColumn(0, Qt.AscendingOrder)
+        except Exception:
+            self.tree.setModel(model)
+            self._proxy = None  # type: ignore[attr-defined]
+            self._model = model
+        # Expand all first so content-based width accounts for children
+        try:
+            self.tree.expandAll()
+        except Exception:
+            pass
+        # Auto size columns to contents, then leave interactive for user drag
+        try:
+            header = self.tree.header()
+            for i in range(6):
+                header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+            self.tree.doItemsLayout()
+            for i in range(6):
+                header.setSectionResizeMode(i, QHeaderView.Interactive)
+        except Exception:
+            for i in range(6):
+                self.tree.resizeColumnToContents(i)
 
         # Reconnect selection model after model reset
         self.tree.selectionModel().selectionChanged.connect(self.on_tree_selection_changed)
+
+        # Adjust splitter so the tree fits visible content width
+        try:
+            total_cols = 6
+            tree_w = sum(self.tree.columnWidth(i) for i in range(total_cols)) + 24
+            win_w = max(1, self.width())
+            right_w = max(1, win_w - tree_w - 24)
+            if right_w < 200:
+                right_w = 200
+            if tree_w < 200:
+                tree_w = 200
+            self._splitter.setSizes([tree_w, right_w])
+        except Exception:
+            pass
 
     # Selection -> preview
     def on_tree_selection_changed(self, *_: Any) -> None:
@@ -300,7 +411,15 @@ class MainWindow(QMainWindow):
         if not indexes:
             return
         idx = indexes[0]
-        model = self.tree.model()
+        view_model = self.tree.model()
+        src_model = getattr(self, "_model", None)
+        proxy = getattr(self, "_proxy", None)
+        if proxy is not None and hasattr(proxy, "mapToSource"):
+            src_idx = proxy.mapToSource(idx)
+            model = src_model
+            idx = src_idx
+        else:
+            model = view_model
         # Determine if group or child
         group_text = model.data(model.index(idx.row(), 0, idx.parent()))
         if idx.parent().isValid():
@@ -335,7 +454,7 @@ class MainWindow(QMainWindow):
             self._show_group_grid(group_items)
 
     def _gather_checked_paths(self) -> list[str]:
-        model = self.tree.model()
+        model = getattr(self, "_model", None)
         if model is None:
             return []
         paths: list[str] = []
@@ -450,7 +569,8 @@ class MainWindow(QMainWindow):
 
     def _show_single_preview(self, path: str) -> None:
         self._clear_preview()
-        # Single: 1x original; allow scrollbars for large images
+        # Single: original size; enable scrollbars when content exceeds viewport
+        self.preview_area.setWidgetResizable(False)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._single_label.setVisible(True)
         self._single_label.setText("Loading…")
@@ -465,7 +585,8 @@ class MainWindow(QMainWindow):
 
     def _show_group_grid(self, items: List[tuple[str, str, str, str]]) -> None:
         self._clear_preview()
-        # Grid: no horizontal scroll; dynamic columns/cell size 200-600
+        # Grid: no horizontal scroll; allow vertical scroll; dynamic geometry
+        self.preview_area.setWidgetResizable(True)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._grid_paths = [p for p, _, _, _ in items]
         self._grid_items = list(items)
@@ -512,7 +633,11 @@ class MainWindow(QMainWindow):
         viewport = self.preview_area.viewport()
         width = max(1, viewport.width())
         spacing = 4
-        min_px, max_px = 200, 600
+        min_px = 200
+        try:
+            max_px = int(self._thumb_size) if int(self._thumb_size) > 0 else 600
+        except Exception:
+            max_px = 600
         best_cols = 1
         best_cell = min_px
         for cols in range(1, 64):
@@ -540,6 +665,7 @@ class MainWindow(QMainWindow):
                     self._single_label.setText("(failed)")
                     return
                 self._single_pm = pm
+                # Fit to current viewport width (avoid horizontal scroll), keep aspect ratio
                 self._apply_single_pixmap_fit()
                 self._single_label.setText("")
             elif token.startswith("grid|"):
@@ -587,18 +713,42 @@ class MainWindow(QMainWindow):
                     self._pool.start(task)
             self._preview_layout.addWidget(self._grid_container)
         else:
+            # Re-apply width fit for single-image preview on window resize
             self._apply_single_pixmap_fit()
 
     def _apply_single_pixmap_fit(self) -> None:
-        if not self._single_pm:
-            return
-        vp = self.preview_area.viewport()
-        max_w = max(1, vp.width())
-        pm = self._single_pm
-        if pm.width() > max_w:
-            scaled = pm.scaledToWidth(max_w, Qt.SmoothTransformation)
-            self._single_label.setPixmap(scaled)
+        # Scale to viewport width (avoid horizontal scroll), keep aspect ratio. Do not scale up.
+        try:
+            # Skip when in grid mode
+            if self._grid_container is not None and self._grid_items:
+                return
+            if self._single_pm is None or self._single_pm.isNull():
+                return
+            vp = self.preview_area.viewport()
+            max_w = max(1, vp.width())
+            pm = self._single_pm
+            target_w = min(pm.width(), max_w - 1)  # subtract 1px to avoid bar jitter
+            if target_w <= 0:
+                target_w = pm.width()
+            if pm.width() != target_w:
+                scaled = pm.scaledToWidth(target_w, Qt.SmoothTransformation)
+                self._single_label.setPixmap(scaled)
+            else:
+                self._single_label.setPixmap(pm)
             self._single_label.adjustSize()
-        else:
-            self._single_label.setPixmap(pm)
-            self._single_label.adjustSize()
+            try:
+                # Ensure container updates its size for accurate scrollbars
+                self._preview_container.adjustSize()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        try:
+            if event and event.type() == QEvent.Resize:
+                if obj is self.preview_area or obj is self.preview_area.viewport():
+                    self._apply_single_pixmap_fit()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)

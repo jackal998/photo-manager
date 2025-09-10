@@ -1,8 +1,8 @@
-## Photo Manager 設計路線 v1.0（Python 版）
+# Photo Manager 設計路線 v1.0（Python 版）
 
 本文件為本專案之唯一權威設計依據（Single Source of Truth）。後續開發、測試與發佈以此文件為準。
 
-### 決策總結（Final）
+## 決策總結（Final）
 
 - **語言/平台**: Python 3.11+（Windows）
 - **GUI**: PySide6（Qt 6）
@@ -57,13 +57,13 @@ flowchart LR
   Core --> Img[IImageService (Shell/WIC, Cache)]
   Core --> Del[IDeleteService (Recycle Bin)]
   Core --> Cfg[ISettings]
-```
+```text
 
 ---
 
 ## 4. 專案結構（目錄）
 
-```
+```text
 photo_manager/
   app/
     views/            # MainWindow, GroupPanel, PhotoTable, PreviewPane, RulePanel
@@ -156,6 +156,10 @@ photo_manager/
 - 主畫面布局：
   - 中：群組樹（`QTreeView`，父=Group、子=Photo）。第 0 欄為群組；子列包含 `Selected` 勾選框（僅檔案列）。
   - 右：預覽（單檔原圖；群組縮圖格）
+  - 預設視窗大小：可用螢幕寬與高的 50%（約 1/4 面積）
+  - 樹狀表頭：可拖曳、互動調整寬度；新增 `Group Count` 欄位，`Size (Bytes)` 獨立顯示
+  - 預設行為：展開所有群組、各欄寬以「內容寬度」自動調整；調整分隔線以讓樹狀寬度恰好顯示當前欄位
+  - 預覽捲動：若影像高度大於可見高度，使用垂直捲動條以完整檢視
 - 操作：
   - 勾選/取消勾選（Selected）
   - 功能表：`File > Import/Export/ Delete Selected…`、`Select > Select by Field/Regex/…`
@@ -165,6 +169,7 @@ photo_manager/
 - 虛擬化與懶載入：
   - 群組先載入索引，展開時才載入子項（可選）
   - 縮圖在可見範圍內懶載入，背景預取鄰近項
+  - 縮圖格大小：依 `settings.json` 的 `thumbnail_size` 設為上限，最小 200px，動態計算欄數
 
 ---
 
@@ -265,7 +270,7 @@ photo_manager/
 
 ## 18. 附錄：範例 CSV 標頭與列
 
-```
+```csv
 GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileSize
 1,0,0,H:\\Photos\\MobileBackup\\iPhone\\2023\\01\\,h:\\photos\\mobilebackup\\iphone\\2023\\01\\img_7611_original.heic,2023-01-27 13:56:23,2023-01-27 12:56:23,1.44MB
 ```
