@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PySide6.QtCore import Qt, QThreadPool, QRunnable, QObject, Signal, QSize
+import re
 
 
 class _ImageTask(QRunnable):
@@ -78,17 +79,15 @@ class MainWindow(QMainWindow):
         self.action_delete = file_menu.addAction("Delete Selected…")
         file_menu.addSeparator()
         self.action_exit = file_menu.addAction("Exit")
-        tools_menu = menubar.addMenu("Tools")
-        self.action_edit_rules = tools_menu.addAction("Edit Rules…")
-        self.action_edit_filters = tools_menu.addAction("Edit Filters…")
+        select_menu = menubar.addMenu("Select")
+        self.action_select_by = select_menu.addAction("Select by Field/Regex…")
         self.setMenuBar(menubar)
 
         self.action_import.triggered.connect(self.on_import_csv)
         self.action_export.triggered.connect(self.on_export_csv)
         self.action_exit.triggered.connect(self.close)
         self.action_delete.triggered.connect(self.on_delete_selected)
-        self.action_edit_rules.triggered.connect(self.on_edit_rules)
-        self.action_edit_filters.triggered.connect(self.on_edit_filters)
+        self.action_select_by.triggered.connect(self.on_open_select_dialog)
 
         # Status bar
         self.statusBar().showMessage("Ready", 3000)
@@ -145,17 +144,105 @@ class MainWindow(QMainWindow):
 
         # Selection handling will be connected after a model is set in refresh_tree
 
-    def on_edit_rules(self) -> None:
+    # Deprecated: old dialogs no longer mounted on menu
+    def on_edit_rules(self) -> None:  # pragma: no cover
         from app.views.dialogs.rules_dialog import RulesDialog
 
         dlg = RulesDialog(self)
         dlg.exec()
 
-    def on_edit_filters(self) -> None:
+    def on_edit_filters(self) -> None:  # pragma: no cover
         from app.views.dialogs.filters_dialog import FiltersDialog
 
         dlg = FiltersDialog(self)
         dlg.exec()
+
+    def on_open_select_dialog(self) -> None:
+        try:
+            from app.views.dialogs.select_dialog import SelectDialog
+        except Exception:
+            QMessageBox.critical(self, "Select", "Select dialog not available.")
+            return
+        fields = [
+            "Group",
+            "File Name",
+            "Folder",
+            "Size (Bytes)",
+        ]
+        row_values = self._get_highlighted_row_values()
+        dlg = SelectDialog(fields=fields, parent=self, row_values=row_values)
+        dlg.selectRequested.connect(lambda field, pattern: self._apply_select_regex(field, pattern, True))
+        dlg.unselectRequested.connect(lambda field, pattern: self._apply_select_regex(field, pattern, False))
+        dlg.exec()
+
+    def _apply_select_regex(self, field: str, pattern: str, make_checked: bool) -> None:
+        model = self.tree.model()
+        if model is None:
+            return
+        try:
+            rx = re.compile(pattern)
+        except Exception:
+            QMessageBox.warning(self, "Regex", "Invalid regular expression.")
+            return
+        root_count = model.rowCount()
+        for r in range(root_count):
+            parent_item = model.item(r, 0)
+            if parent_item is None:
+                continue
+            if field == "Group":
+                group_text = parent_item.text() or ""
+                if rx.search(group_text or ""):
+                    # Apply to all children
+                    for cr in range(parent_item.rowCount()):
+                        check_item = parent_item.child(cr, 1)
+                        if check_item is not None and check_item.isCheckable():
+                            check_item.setCheckState(Qt.Checked if make_checked else Qt.Unchecked)
+                continue
+            # Else match per child
+            for cr in range(parent_item.rowCount()):
+                target_text = ""
+                if field == "File Name":
+                    item = parent_item.child(cr, 2)
+                    target_text = item.text() if item else ""
+                elif field == "Folder":
+                    item = parent_item.child(cr, 3)
+                    target_text = item.text() if item else ""
+                elif field == "Size (Bytes)":
+                    item = parent_item.child(cr, 4)
+                    target_text = item.text() if item else ""
+                if target_text and rx.search(target_text):
+                    check_item = parent_item.child(cr, 1)
+                    if check_item is not None and check_item.isCheckable():
+                        check_item.setCheckState(Qt.Checked if make_checked else Qt.Unchecked)
+
+    def _get_highlighted_row_values(self) -> Dict[str, str]:
+        values: Dict[str, str] = {}
+        try:
+            sel = self.tree.selectionModel()
+            if not sel:
+                return values
+            rows = sel.selectedRows()
+            if not rows:
+                return values
+            idx = rows[0]
+            model = self.tree.model()
+            if idx.parent().isValid():
+                # Child row (file)
+                parent_idx = idx.parent()
+                group_text = model.data(model.index(parent_idx.row(), 0, parent_idx.parent())) or ""
+                name = model.data(model.index(idx.row(), 2, parent_idx)) or ""
+                folder = model.data(model.index(idx.row(), 3, parent_idx)) or ""
+                size_txt = model.data(model.index(idx.row(), 4, parent_idx)) or ""
+                values["Group"] = str(group_text)
+                values["File Name"] = str(name)
+                values["Folder"] = str(folder)
+                values["Size (Bytes)"] = str(size_txt)
+            else:
+                # Group row selected → no data row defaults
+                pass
+        except Exception:
+            pass
+        return values
 
     def show_group_counts(self, group_count: int) -> None:
         # No-op: groups sidebar removed; keep method to avoid breaking callers
