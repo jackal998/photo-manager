@@ -1,0 +1,35 @@
+[
+  {
+    "name": "每群選最大檔案",
+    "scope": "perGroup",
+    "actions": [
+      {
+        "type": "aggregateSelect",
+        "field": "file_size_bytes",
+        "operator": "max",
+        "mark": true
+      }
+    ]
+  },
+  {
+    "name": "檔名後綴",
+    "scope": "perGroup",
+    "conditions": [
+      {
+        "field": "file_path",
+        "operator": "regex",
+        "value": ".*_original\\.heic$"
+      }
+    ],
+    "actions": [
+      {
+        "type": "mark",
+        "value": true
+      },
+      {
+        "type": "lock",
+        "value": false
+      }
+    ]
+  }
+]
