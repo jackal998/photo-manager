@@ -11,7 +11,7 @@ from loguru import logger
 from PySide6.QtGui import QImage, QImageReader, QColor
 from PySide6.QtCore import QSize, Qt
 
-from core.services.interfaces import IImageService, ISettings
+ 
 
 
 def _compute_cache_key(path: str, size_key: int) -> str:
@@ -56,8 +56,8 @@ class _LRUCache:
             self._data.popitem(last=False)
 
 
-class ImageService(IImageService):
-    def __init__(self, settings: Optional[ISettings] = None) -> None:
+class ImageService:
+    def __init__(self, settings: Optional[object] = None) -> None:
         self._mem_cap = 512
         self._disk_dir = str(Path.home() / "AppData" / "Local" / "PhotoManager" / "thumbs")
         if settings is not None:

@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Iterable, List, Tuple
 
 from core.models import PhotoGroup, PhotoRecord
-from core.services.interfaces import ISortService
+ 
 
 
-class SortService(ISortService):
+class SortService:
     def sort(self, groups: Iterable[PhotoGroup], sort_keys: List[Tuple[str, bool]]) -> None:
         if not sort_keys:
             return
