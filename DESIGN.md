@@ -4,9 +4,9 @@
 
 ## 決策總結（Final）
 
-- **語言/平台**: Python 3.11+（Windows）
+- **語言/平台**: Python 3.11+（Windows Only）
 - **GUI**: PySide6（Qt 6）
-- **HEIC**: 依賴系統的 HEIF Image Extensions；以 Windows Shell/WIC 取得縮圖/預覽（可選 Pillow/pillow-heif）
+- **HEIC**: 需安裝 `pillow-heif` 才能完整解碼原圖；若未安裝則以 Windows Shell/WIC 取得縮圖做為備援（不崩潰，僅縮圖/預覽尺寸受限）
 - **刪除**: 預設送資源回收桶（send2trash）
 - **鎖定**: 僅 App 內部狀態，不改動檔案屬性
 - **匯出 FileSize**: 一律重新讀取實體檔案大小，以 Bytes（整數）輸出
@@ -53,10 +53,10 @@
 ```mermaid
 flowchart LR
   UI[PySide6 Views/ViewModels] --> Core[Core Services & Rule Engine]
-  Core --> Repo[IPhotoRepository (CSV)]
-  Core --> Img[IImageService (Shell/WIC, Cache)]
-  Core --> Del[IDeleteService (Recycle Bin)]
-  Core --> Cfg[ISettings]
+  Core --> Repo[CSV Repository]
+  Core --> Img[ImageService (Shell/WIC, Cache)]
+  Core --> Del[DeleteService (Recycle Bin)]
+  Core --> Cfg[Settings]
 ```text
 
 ---
@@ -136,9 +136,9 @@ photo_manager/
 
 ---
 
-## 7. 選擇（Select）對話框
+## 7. 選擇（Select）對話框（Rule v0：UI-based Selection Rules）
 
-對話框提供簡化批次選擇/取消選擇能力：
+對話框提供簡化批次選擇/取消選擇能力（Rule v0 為「UI-based Selection Rules」）：
 
 - 元件：
   - 下拉選單 `Field`：列出主清單顯示的所有欄位（如 Group、File Name、Folder、Size(Bytes) 等可匹配項）
@@ -148,6 +148,8 @@ photo_manager/
   - `Select`：遍歷所有檔案列，將欄位值符合 Regex 者勾選為 Selected
   - `Unselect`：遍歷所有檔案列，將欄位值符合 Regex 者取消勾選 Selected
   - 僅作用於檔案列（群組列不具勾選）
+
+說明：目前規則能力由 UI 直接呼叫選取服務（批次勾選/取消），非通用規則引擎。此為 v0 能力，用以滿足批次操作需求。
 
 ---
 
@@ -173,11 +175,14 @@ photo_manager/
 
 ---
 
-## 9. 影像處理策略（系統 HEIC）
+## 9. 影像處理策略（Windows / HEIC）
 
+- 平台：Windows Only
 - 主流程：
   1) `QImageReader` 嘗試載入（常見格式）
-  2) 若為 HEIC/HEIF 或載入失敗 → 以 Windows Shell/WIC 取得指定尺寸縮圖
+  2) 若為 HEIC/HEIF：
+     - 已安裝 `pillow-heif`：以 Pillow 解碼並產生縮圖/預覽
+     - 未安裝 `pillow-heif`：以 Windows Shell/WIC 取得指定尺寸縮圖（備援），確保不崩潰
   3) 單檔預覽需要更大尺寸時，再請求更大縮圖；若仍不足，提供「外部開啟」
 - 快取：
   - 磁碟：`%LOCALAPPDATA%/PhotoManager/thumbs/{sha1(path+mtime+size)}.jpg`
@@ -226,7 +231,7 @@ photo_manager/
 - 單元：
   - CSV 解析與容錯
   - 檔案大小 Bytes 重新讀取
-  - 規則引擎（條件/聚合）與 Command 的 undo/redo
+  - 規則引擎（條件/聚合）與 Command 的 undo/redo（目前引擎為擴充點，未在執行路徑）
   - 刪除策略檢查（群組全選偵測、locked 跳過）
 - 整合：
   - 匯入 → 套規則 → 選取/標記/鎖定 → 匯出 → 刪除（模擬 send2trash）

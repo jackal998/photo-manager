@@ -10,10 +10,10 @@ import csv
 import os
 
 from core.models import PhotoRecord, PhotoGroup
-from core.services.interfaces import DeleteResult, IDeleteService, DeletePlan, DeletePlanGroupSummary
+from core.services.interfaces import DeleteResult, DeletePlan, DeletePlanGroupSummary
 
 
-class DeleteService(IDeleteService):
+class DeleteService:
     def plan_delete(self, groups: Iterable[PhotoGroup], selected_paths: list[str]) -> DeletePlan:
         # Build a quick lookup of path -> (group, record, locked)
         selected_set = set(selected_paths)

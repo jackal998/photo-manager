@@ -4,10 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from core.services.interfaces import ISettings
 
-
-class JsonSettings(ISettings):
+class JsonSettings:
     def __init__(self, settings_path: str | Path) -> None:
         self._path = Path(settings_path)
         if not self._path.exists():

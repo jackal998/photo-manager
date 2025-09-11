@@ -10,7 +10,7 @@ from typing import Iterable, Iterator
 from loguru import logger
 
 from core.models import PhotoRecord, PhotoGroup
-from core.services.interfaces import IPhotoRepository
+ 
 
 CSV_HEADERS = [
     "GroupNumber",
@@ -67,7 +67,7 @@ def _ensure_filesize_bytes(file_path: str, file_size_field: str) -> int:
             return 0
 
 
-class CsvPhotoRepository(IPhotoRepository):
+class CsvPhotoRepository:
     def load(self, csv_path: str) -> Iterator[PhotoRecord]:
         path = Path(csv_path)
         with path.open("r", encoding="utf-8", newline="") as f:

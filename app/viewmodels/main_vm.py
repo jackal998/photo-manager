@@ -4,12 +4,12 @@ from collections import defaultdict
 from typing import Iterable, Optional
 
 from core.models import PhotoRecord, PhotoGroup
-from core.services.interfaces import IPhotoRepository
+ 
 from core.services.sort_service import SortService
 
 
 class MainVM:
-    def __init__(self, repo: IPhotoRepository, sorter: Optional[SortService] = None, default_sort: Optional[list[tuple[str, bool]]] = None) -> None:
+    def __init__(self, repo, sorter: Optional[SortService] = None, default_sort: Optional[list[tuple[str, bool]]] = None) -> None:
         self._repo = repo
         self._sorter = sorter or SortService()
         self._default_sort = default_sort or []
