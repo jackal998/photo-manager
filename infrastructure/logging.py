@@ -1,10 +1,14 @@
+"""Logging initialization utilities using loguru."""
+
 from __future__ import annotations
 
 from pathlib import Path
+
 from loguru import logger
 
 
 def init_logging(log_dir: str | None = None) -> None:
+    """Initialize rotating file logging under the given directory."""
     if log_dir is None:
         log_dir = str(Path.home() / "AppData" / "Local" / "PhotoManager" / "logs")
     log_path = Path(log_dir)

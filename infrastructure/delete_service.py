@@ -1,20 +1,30 @@
+"""Deletion planning and execution service.
+
+Provides a high-level API to plan deletions across photo groups, skip locked
+records, and execute deletes by moving files to the recycle bin, while writing
+an audit CSV log.
+"""
+
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
+import csv
+from datetime import datetime
+import os
+from pathlib import Path
 
 from loguru import logger
 from send2trash import send2trash
-from pathlib import Path
-from datetime import datetime
-import csv
-import os
 
-from core.models import PhotoRecord, PhotoGroup
-from core.services.interfaces import DeleteResult, DeletePlan, DeletePlanGroupSummary
+from core.models import PhotoGroup
+from core.services.interfaces import DeletePlan, DeletePlanGroupSummary, DeleteResult
 
 
 class DeleteService:
+    """Coordinates delete operations and audit logging."""
+
     def plan_delete(self, groups: Iterable[PhotoGroup], selected_paths: list[str]) -> DeletePlan:
+        """Compute a delete plan from selected paths, skipping locked items."""
         # Build a quick lookup of path -> (group, record, locked)
         selected_set = set(selected_paths)
         per_group_selected: dict[int, int] = {}
@@ -30,9 +40,9 @@ class DeleteService:
             per_group_selected[g.group_number] = sel_count
 
         # Skip locked in final delete list
-        delete_paths: List[str] = [p for p in selected_paths if not lock_map.get(p, False)]
+        delete_paths: list[str] = [p for p in selected_paths if not lock_map.get(p, False)]
 
-        summaries: List[DeletePlanGroupSummary] = []
+        summaries: list[DeletePlanGroupSummary] = []
         for g in groups:
             sel = per_group_selected.get(g.group_number, 0)
             tot = per_group_total.get(g.group_number, 0)
@@ -48,25 +58,38 @@ class DeleteService:
         return DeletePlan(delete_paths=delete_paths, group_summaries=summaries)
 
     def delete_to_recycle(self, paths: list[str]) -> DeleteResult:
+        """Send files to recycle bin and report per-path results."""
         success: list[str] = []
         failed: list[tuple[str, str]] = []
         for p in paths:
             try:
                 send2trash(p)
                 success.append(p)
-            except Exception as ex:
+            except OSError as ex:
                 logger.error("Delete failed for {}: {}", p, ex)
                 failed.append((p, str(ex)))
         return DeleteResult(success_paths=success, failed=failed)
 
-    def execute_delete(self, groups: Iterable[PhotoGroup], plan: DeletePlan, log_dir: Optional[str] = None) -> DeleteResult:
+    def execute_delete(
+        self, groups: Iterable[PhotoGroup], plan: DeletePlan, log_dir: str | None = None
+    ) -> DeleteResult:
+        """Execute the delete plan and write an audit CSV log.
+
+        Args:
+            groups: Groups used to map file path to group in the log.
+            plan: The delete plan produced by `plan_delete`.
+            log_dir: Optional directory to write the audit log; defaults to
+                `%LOCALAPPDATA%/PhotoManager/delete_logs`.
+        """
         result = self.delete_to_recycle(plan.delete_paths)
         # Auto-write CSV log under %LOCALAPPDATA%/PhotoManager/delete_logs unless overridden
         try:
             base_dir = (
                 os.path.expandvars(log_dir)
                 if log_dir
-                else os.path.join(os.path.expandvars("%LOCALAPPDATA%"), "PhotoManager", "delete_logs")
+                else os.path.join(
+                    os.path.expandvars("%LOCALAPPDATA%"), "PhotoManager", "delete_logs"
+                )
             )
             Path(base_dir).mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -84,7 +107,12 @@ class DeleteService:
                 for p, reason in result.failed:
                     writer.writerow([path_to_group.get(p, 0), p, 0, reason])
             result.log_path = log_path
-            logger.info("Delete log written: {} ({} success, {} failed)", log_path, len(result.success_paths), len(result.failed))
-        except Exception as ex:
+            logger.info(
+                "Delete log written: {} ({} success, {} failed)",
+                log_path,
+                len(result.success_paths),
+                len(result.failed),
+            )
+        except (OSError, ValueError) as ex:
             logger.error("Write delete log failed: {}", ex)
         return result

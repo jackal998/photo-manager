@@ -1,47 +1,52 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Dict, List
-
-from loguru import logger
-from PySide6.QtWidgets import (
-    QMainWindow,
-    QApplication,
-    QWidget,
-    QHBoxLayout,
-    QVBoxLayout,
-    QMenuBar,
-    QFileDialog,
-    QMessageBox,
-    QTreeView,
-    QDialog,
-    QSplitter,
-    QHeaderView,
-)
-from PySide6.QtGui import QStandardItemModel, QStandardItem
-from PySide6.QtCore import Qt, QObject, Signal, QSortFilterProxyModel
 import re
+from typing import Any
 
-from .constants import (
-    COL_GROUP,
-    COL_SEL,
-    COL_NAME,
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QMainWindow,
+    QMenuBar,
+    QMessageBox,
+    QSplitter,
+    QTreeView,
+    QVBoxLayout,
+    QWidget,
+)
+from loguru import logger
+
+from app.views.constants import (
     COL_FOLDER,
+    COL_GROUP,
+    COL_NAME,
+    COL_SEL,
     COL_SIZE_BYTES,
-    COL_GROUP_COUNT,
     NUM_COLUMNS,
     PATH_ROLE,
 )
-from .tree_model_builder import build_model
-from .selection_service import apply_select_regex
-from .image_tasks import ImageTaskRunner
-from .preview_pane import PreviewPane
+from app.views.image_tasks import ImageTaskRunner
+from app.views.preview_pane import PreviewPane
+from app.views.selection_service import apply_select_regex
+from app.views.tree_model_builder import build_model
 
 
 class MainWindow(QMainWindow):
     imageLoaded = Signal(str, str, object)  # token, path, QImage
 
-    def __init__(self, vm: Any, repo: Any, image_service: Any | None = None, settings: Any | None = None, delete_service: Any | None = None) -> None:
+    def __init__(
+        self,
+        vm: Any,
+        repo: Any,
+        image_service: Any | None = None,
+        settings: Any | None = None,
+        delete_service: Any | None = None,
+    ) -> None:
         super().__init__()
         self._vm = vm
         self._repo = repo
@@ -165,8 +170,12 @@ class MainWindow(QMainWindow):
         ]
         row_values = self._get_highlighted_row_values()
         dlg = SelectDialog(fields=fields, parent=self, row_values=row_values)
-        dlg.selectRequested.connect(lambda field, pattern: self._apply_select_regex(field, pattern, True))
-        dlg.unselectRequested.connect(lambda field, pattern: self._apply_select_regex(field, pattern, False))
+        dlg.selectRequested.connect(
+            lambda field, pattern: self._apply_select_regex(field, pattern, True)
+        )
+        dlg.unselectRequested.connect(
+            lambda field, pattern: self._apply_select_regex(field, pattern, False)
+        )
         dlg.exec()
 
     def _apply_select_regex(self, field: str, pattern: str, make_checked: bool) -> None:
@@ -185,8 +194,8 @@ class MainWindow(QMainWindow):
             # Best effort; keep silent to avoid UX disruption
             pass
 
-    def _get_highlighted_row_values(self) -> Dict[str, str]:
-        values: Dict[str, str] = {}
+    def _get_highlighted_row_values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
         try:
             sel = self.tree.selectionModel()
             if not sel:
@@ -292,7 +301,7 @@ class MainWindow(QMainWindow):
         else:
             model = view_model
         # Determine if group or child
-        group_text = model.data(model.index(idx.row(), COL_GROUP, idx.parent()))
+        _ = model.data(model.index(idx.row(), COL_GROUP, idx.parent()))
         if idx.parent().isValid():
             # Child row selected -> single preview
             name_index = model.index(idx.row(), COL_NAME, idx.parent())
@@ -307,7 +316,7 @@ class MainWindow(QMainWindow):
             self._preview.show_single(path)
         else:
             # Group level selected -> grid thumbnails
-            group_items: List[tuple[str, str, str, str]] = []
+            group_items: list[tuple[str, str, str, str]] = []
             parent_item = model.itemFromIndex(model.index(idx.row(), COL_GROUP))
             if parent_item is not None:
                 rows = parent_item.rowCount()
@@ -316,7 +325,11 @@ class MainWindow(QMainWindow):
                     folder_item = parent_item.child(r, COL_FOLDER)
                     name = model.itemFromIndex(name_item.index()).text() if name_item else ""
                     folder = model.itemFromIndex(folder_item.index()).text() if folder_item else ""
-                    size_txt = model.itemFromIndex(parent_item.child(r, COL_SIZE_BYTES).index()).text() if parent_item.child(r, COL_SIZE_BYTES) else ""
+                    size_txt = (
+                        model.itemFromIndex(parent_item.child(r, COL_SIZE_BYTES).index()).text()
+                        if parent_item.child(r, COL_SIZE_BYTES)
+                        else ""
+                    )
                     if name and folder:
                         p = name_item.data(PATH_ROLE) if name_item else None
                         if not p:
@@ -353,6 +366,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Delete", "No items checked.")
             return
         from app.views.dialogs.delete_confirm_dialog import DeleteConfirmDialog
+
         plan = self._deleter.plan_delete(self._vm.groups, selected_paths)
         if self._settings and bool(self._settings.get("delete.confirm_group_full_delete", True)):
             dlg = DeleteConfirmDialog(plan.group_summaries, self)
@@ -361,10 +375,17 @@ class MainWindow(QMainWindow):
         result = self._deleter.execute_delete(self._vm.groups, plan)
         # Notifications
         if result.success_paths:
-            self.statusBar().showMessage(f"Deleted {len(result.success_paths)} items. Log: {getattr(result, 'log_path', '')}", 5000)
+            self.statusBar().showMessage(
+                f"Deleted {len(result.success_paths)} items. Log: {getattr(result, 'log_path', '')}",
+                5000,
+            )
             try:
                 # Best-effort info dialog for success (optional)
-                QMessageBox.information(self, "Delete", f"Deleted {len(result.success_paths)} items.\nLog: {getattr(result, 'log_path', '')}")
+                QMessageBox.information(
+                    self,
+                    "Delete",
+                    f"Deleted {len(result.success_paths)} items.\nLog: {getattr(result, 'log_path', '')}",
+                )
             except Exception:
                 pass
         if result.failed:
@@ -384,7 +405,9 @@ class MainWindow(QMainWindow):
             if result.success_paths:
                 src = getattr(self._vm, "get_source_csv_path", lambda: None)()
                 if src:
-                    resp = QMessageBox.question(self, "Update CSV?", f"Update source CSV file?\n{src}")
+                    resp = QMessageBox.question(
+                        self, "Update CSV?", f"Update source CSV file?\n{src}"
+                    )
                     if resp == QMessageBox.Yes:
                         self._vm.export_csv(src)
                         self.statusBar().showMessage("CSV updated", 3000)
@@ -401,7 +424,12 @@ class MainWindow(QMainWindow):
             self.show_group_counts(self._vm.group_count)
             self.show_groups_summary(self._vm.groups)
             self.refresh_tree(self._vm.groups)
-            logger.info("Imported CSV: {} | groups={} items={}", path, self._vm.group_count, sum(len(g.items) for g in self._vm.groups))
+            logger.info(
+                "Imported CSV: {} | groups={} items={}",
+                path,
+                self._vm.group_count,
+                sum(len(g.items) for g in self._vm.groups),
+            )
             self.statusBar().showMessage(f"Imported {self._vm.group_count} groups", 3000)
         except Exception as ex:
             logger.exception("Import CSV failed: {}", ex)
@@ -417,7 +445,12 @@ class MainWindow(QMainWindow):
             return
         try:
             self._repo.save(path, self._vm.groups)
-            logger.info("Exported CSV: {} | groups={} items={} (bytes correct)", path, self._vm.group_count, sum(len(g.items) for g in self._vm.groups))
+            logger.info(
+                "Exported CSV: {} | groups={} items={} (bytes correct)",
+                path,
+                self._vm.group_count,
+                sum(len(g.items) for g in self._vm.groups),
+            )
             QMessageBox.information(self, "Export", "Export completed.")
             self.statusBar().showMessage("Export completed", 3000)
         except Exception as ex:

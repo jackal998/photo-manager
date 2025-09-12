@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QListWidget, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QListWidget, QPushButton, QVBoxLayout
 
 # Deprecated: This dialog is no longer used. Kept for reference only.
 
 
 class RulesDialog(QDialog):
     """Deprecated placeholder dialog. Not mounted in menu anymore."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Rules")
@@ -33,5 +34,3 @@ class RulesDialog(QDialog):
         root.addLayout(btns)
 
         self.btn_close.clicked.connect(self.accept)
-
-

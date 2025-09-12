@@ -1,47 +1,46 @@
+"""Sorting service for `PhotoGroup` collections.
+
+The service performs multi-key sorting across records, handling None values and
+per-key ascending/descending ordering without mutating original values.
+"""
+
 from __future__ import annotations
 
-from typing import Iterable, List, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 from core.models import PhotoGroup, PhotoRecord
- 
 
 
 class SortService:
-    def sort(self, groups: Iterable[PhotoGroup], sort_keys: List[Tuple[str, bool]]) -> None:
+    """Provides sorting utilities for `PhotoGroup` lists."""
+
+    def sort(self, groups: Iterable[PhotoGroup], sort_keys: list[tuple[str, bool]]) -> None:
+        """Sorts items in each group in-place based on provided keys.
+
+        Args:
+            groups: Iterable of groups to sort.
+            sort_keys: List of tuples (field_name, ascending).
+        """
+
         if not sort_keys:
             return
 
-        def build_key_func(record: PhotoRecord):
-            values: list = []
-            for field_name, ascending in sort_keys:
-                value = getattr(record, field_name, None)
-                # Normalize for None to ensure consistent comparisons
-                if value is None:
-                    value = "" if ascending else chr(0x10FFFF)
-                values.append(value)
-            return tuple(values)
-
         for group in groups:
-            # Apply multi-key sort; handle ascending per key by transforming values
-            # Since Python's sort supports reverse as a single flag, we adapt values
-            # by negating numbers for descending and using tuple of adjusted values.
-            decorated: list[tuple] = []
+            # Build a decorated list with adjusted values for per-key order
+            decorated: list[tuple[tuple[Any, ...], PhotoRecord]] = []
             for item in group.items:
-                row: list = []
+                row: list[Any] = []
                 for field_name, ascending in sort_keys:
-                    v = getattr(item, field_name, None)
-                    if v is None:
-                        v = 0 if isinstance(v, (int, float)) else ""
-                    if not ascending:
-                        if isinstance(v, (int, float)):
-                            v = -v
-                        else:
-                            # For strings, invert by reversing sort order via tuple (1, str) vs (0, str)
-                            v = (1, str(v))
+                    value = getattr(item, field_name, None)
+                    if value is None:
+                        value = 0 if isinstance(value, (int, float)) else ""
+                    if isinstance(value, (int, float)):
+                        row.append(value if ascending else -value)
                     else:
-                        if not isinstance(v, (int, float)):
-                            v = (0, str(v))
-                    row.append(v)
+                        # For strings/others, embed a leading flag to control order
+                        row.append((0, str(value)) if ascending else (1, str(value)))
                 decorated.append((tuple(row), item))
+
             decorated.sort(key=lambda x: x[0])
             group.items = [it for _, it in decorated]

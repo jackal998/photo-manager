@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
 # Deprecated: This dialog is no longer used. Kept for reference only.
 
 
 class FiltersDialog(QDialog):
     """Deprecated placeholder dialog. Not mounted in menu anymore."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Filters")
@@ -27,5 +28,3 @@ class FiltersDialog(QDialog):
         root.addLayout(btns)
 
         self.btn_close.clicked.connect(self.accept)
-
-

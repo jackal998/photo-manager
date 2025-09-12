@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from loguru import logger
 from PySide6.QtCore import QObject, QRunnable, QThreadPool
+from loguru import logger
 
 
 class _ImageTask(QRunnable):
@@ -14,7 +14,9 @@ class _ImageTask(QRunnable):
     `imageLoaded`.
     """
 
-    def __init__(self, *, path: str, side: int, is_preview: bool, service: Any, receiver: QObject, token: str) -> None:
+    def __init__(
+        self, *, path: str, side: int, is_preview: bool, service: Any, receiver: QObject, token: str
+    ) -> None:
         super().__init__()
         self._path = path
         self._side = side
@@ -58,7 +60,14 @@ class ImageTaskRunner:
         token = f"single|{path}|{side}"
         if self._service is None:
             return token
-        task = _ImageTask(path=path, side=side, is_preview=True, service=self._service, receiver=self._receiver, token=token)
+        task = _ImageTask(
+            path=path,
+            side=side,
+            is_preview=True,
+            service=self._service,
+            receiver=self._receiver,
+            token=token,
+        )
         self._pool.start(task)
         return token
 
@@ -67,8 +76,13 @@ class ImageTaskRunner:
         token = f"grid|{path}|{thumb_side}"
         if self._service is None:
             return token
-        task = _ImageTask(path=path, side=thumb_side, is_preview=False, service=self._service, receiver=self._receiver, token=token)
+        task = _ImageTask(
+            path=path,
+            side=thumb_side,
+            is_preview=False,
+            service=self._service,
+            receiver=self._receiver,
+            token=token,
+        )
         self._pool.start(task)
         return token
-
-
