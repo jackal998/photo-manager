@@ -1,52 +1,61 @@
+"""UI adapter to apply regex-based selection to a Qt `QStandardItemModel`."""
+
 from __future__ import annotations
 
 from typing import Any
-import re
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItemModel
 
-from .constants import COL_GROUP, COL_SEL, COL_NAME, COL_FOLDER, COL_SIZE_BYTES
+from app.views.constants import COL_FOLDER, COL_GROUP, COL_NAME, COL_SEL, COL_SIZE_BYTES
+from core.services.selection_service import RegexSelectionService
 
 
-def apply_select_regex(model: QStandardItemModel, field: str, pattern: str, make_checked: bool) -> None:
-    """Apply selection/unselection based on regex match.
+def apply_select_regex(
+    model: QStandardItemModel, field: str, pattern: str, make_checked: bool
+) -> None:
+    """Apply selection/unselection to `model` where `field` matches `pattern`.
 
-    - `field` is one of the UI headers (Group, File Name, Folder, Size (Bytes)).
-    - Applies only to file rows; when `field == Group`, applies to all children
-      of matching groups.
-    - `make_checked=True` selects, `False` unselects.
+    Args:
+        model: Qt standard item model containing group/child rows.
+        field: One of "Group", "File Name", "Folder", "Size (Bytes)".
+        pattern: Regular expression to match against the target field.
+        make_checked: If True, set checked; otherwise uncheck.
     """
-    rx = re.compile(pattern)
 
-    root_count = model.rowCount()
-    for r in range(root_count):
-        parent_item = model.item(r, COL_GROUP)
-        if parent_item is None:
-            continue
-        if field == "Group":
-            group_text = parent_item.text() or ""
-            if rx.search(group_text or ""):
-                for cr in range(parent_item.rowCount()):
-                    check_item = parent_item.child(cr, COL_SEL)
-                    if check_item is not None and check_item.isCheckable():
-                        check_item.setCheckState(Qt.Checked if make_checked else Qt.Unchecked)
-            continue
+    class _QtModelAccessor:
+        def __init__(self, m: QStandardItemModel) -> None:
+            self._m = m
 
-        # Else match per child
-        for cr in range(parent_item.rowCount()):
-            if field == "File Name":
-                item = parent_item.child(cr, COL_NAME)
-            elif field == "Folder":
-                item = parent_item.child(cr, COL_FOLDER)
-            elif field == "Size (Bytes)":
-                item = parent_item.child(cr, COL_SIZE_BYTES)
+        def iter_groups(self) -> list[Any]:
+            return [
+                self._m.item(r, COL_GROUP)
+                for r in range(self._m.rowCount())
+                if self._m.item(r, COL_GROUP) is not None
+            ]
+
+        def iter_children(self, group: Any) -> list[int]:
+            return list(range(group.rowCount()))
+
+        def get_field_text(self, group: Any, child: Any, field_name: str) -> str:
+            if child is None:
+                return group.text() or ""
+            if field_name == "File Name":
+                item = group.child(int(child), COL_NAME)
+            elif field_name == "Folder":
+                item = group.child(int(child), COL_FOLDER)
+            elif field_name == "Size (Bytes)":
+                item = group.child(int(child), COL_SIZE_BYTES)
+            elif field_name == "Group":
+                return group.text() or ""
             else:
                 item = None
-            target_text = item.text() if item else ""
-            if target_text and rx.search(target_text):
-                check_item = parent_item.child(cr, COL_SEL)
-                if check_item is not None and check_item.isCheckable():
-                    check_item.setCheckState(Qt.Checked if make_checked else Qt.Unchecked)
+            return item.text() if item is not None else ""
 
+        def set_checked(self, group: Any, child: Any, checked: bool) -> None:
+            check_item = group.child(int(child), COL_SEL)
+            if check_item is not None and check_item.isCheckable():
+                check_item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
 
+    service = RegexSelectionService(_QtModelAccessor(model))
+    service.apply(field, pattern, make_checked)

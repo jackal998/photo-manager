@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import sys
 import os
 from pathlib import Path
+import sys
 
-from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QImageReader
+from PySide6.QtWidgets import QApplication
 from loguru import logger
 
-from app.views.main_window import MainWindow
 from app.viewmodels.main_vm import MainVM
+from app.views.main_window import MainWindow
 from infrastructure.csv_repository import CsvPhotoRepository
+from infrastructure.delete_service import DeleteService
+from infrastructure.image_service import ImageService
 from infrastructure.logging import init_logging
 from infrastructure.settings import JsonSettings
-from infrastructure.image_service import ImageService
-from infrastructure.delete_service import DeleteService
-
 
 BASE_DIR = Path(__file__).parent
 
@@ -50,7 +49,12 @@ def main() -> int:
 
     # HEIC diagnostics: log supported formats and try WIC 512/1024 on the first HEIC
     try:
-        fmts = sorted({bytes(f).decode('ascii', errors='ignore').lower() for f in QImageReader.supportedImageFormats()})
+        fmts = sorted(
+            {
+                bytes(f).decode("ascii", errors="ignore").lower()
+                for f in QImageReader.supportedImageFormats()
+            }
+        )
         logger.info("Qt supported formats: {}", ", ".join(fmts))
         heic_path: str | None = None
         for g in getattr(vm, "groups", []) or []:
@@ -71,7 +75,9 @@ def main() -> int:
                         r.setAutoTransform(True)
                         _img = r.read()
                         if _img is None or _img.isNull():
-                            logger.info("Qt read (orig) failed: {}", r.errorString() or "null image")
+                            logger.info(
+                                "Qt read (orig) failed: {}", r.errorString() or "null image"
+                            )
                         else:
                             logger.info("Qt read (orig) ok: {}x{}", _img.width(), _img.height())
                     except Exception as ex:
@@ -92,7 +98,9 @@ def main() -> int:
                         if pub512 is None or pub512.isNull():
                             logger.info("Public thumbnail 512 failed")
                         else:
-                            logger.info("Public thumbnail 512 ok: {}x{}", pub512.width(), pub512.height())
+                            logger.info(
+                                "Public thumbnail 512 ok: {}x{}", pub512.width(), pub512.height()
+                            )
                     except Exception as ex:
                         logger.info("Public thumbnail 512 exception: {}", ex)
 
@@ -101,7 +109,9 @@ def main() -> int:
                         if pub1024 is None or pub1024.isNull():
                             logger.info("Public preview 1024 failed")
                         else:
-                            logger.info("Public preview 1024 ok: {}x{}", pub1024.width(), pub1024.height())
+                            logger.info(
+                                "Public preview 1024 ok: {}x{}", pub1024.width(), pub1024.height()
+                            )
                     except Exception as ex:
                         logger.info("Public preview 1024 exception: {}", ex)
             except Exception as ex:
