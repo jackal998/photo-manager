@@ -1,27 +1,26 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Tuple
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
-from PySide6.QtCore import QSortFilterProxyModel
 
-from .constants import (
-    HEADERS,
-    COL_GROUP,
-    COL_SEL,
-    COL_NAME,
+from app.views.constants import (
     COL_FOLDER,
-    COL_SIZE_BYTES,
     COL_GROUP_COUNT,
-    NUM_COLUMNS,
+    COL_NAME,
+    COL_SEL,
+    COL_SIZE_BYTES,
+    HEADERS,
     PATH_ROLE,
     SORT_ROLE,
 )
 
 
-def build_model(groups: Iterable[object]) -> tuple[QStandardItemModel, QSortFilterProxyModel | None]:
+def build_model(
+    groups: Iterable[object],
+) -> tuple[QStandardItemModel, QSortFilterProxyModel | None]:
     """Builds the tree model and a proxy for sorting with roles.
 
     Returns (model, proxy). Proxy can be None on failure.
@@ -104,5 +103,3 @@ def build_model(groups: Iterable[object]) -> tuple[QStandardItemModel, QSortFilt
         proxy = None
 
     return model, proxy
-
-
