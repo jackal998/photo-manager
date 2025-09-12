@@ -1,25 +1,27 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
-from loguru import logger
-from PySide6.QtCore import Qt, QObject, QEvent
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget, QGridLayout
+from PySide6.QtWidgets import QGridLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+from loguru import logger
 
-from .constants import (
+from app.views.constants import (
+    DEFAULT_THUMB_SIZE,
+    GRID_MARGIN_RATIO,
     GRID_MIN_THUMB_PX,
     GRID_SPACING_PX,
-    GRID_MARGIN_RATIO,
-    DEFAULT_THUMB_SIZE,
 )
-from .image_tasks import ImageTaskRunner
+from app.views.image_tasks import ImageTaskRunner
 
 
 class PreviewPane(QWidget):
     """Encapsulates the right-side preview (single image / grid)."""
 
-    def __init__(self, parent: QWidget | None, task_runner: ImageTaskRunner, thumb_size: int | None = None) -> None:
+    def __init__(
+        self, parent: QWidget | None, task_runner: ImageTaskRunner, thumb_size: int | None = None
+    ) -> None:
         super().__init__(parent)
         self._runner = task_runner
         self._thumb_size = int(thumb_size or DEFAULT_THUMB_SIZE)
@@ -48,10 +50,10 @@ class PreviewPane(QWidget):
 
         # state
         self._current_single_token: str | None = None
-        self._grid_labels: Dict[str, QLabel] = {}
+        self._grid_labels: dict[str, QLabel] = {}
         self._grid_container: QWidget | None = None
         self._grid_layout: QGridLayout | None = None
-        self._grid_items: List[Tuple[str, str, str, str]] = []
+        self._grid_items: list[tuple[str, str, str, str]] = []
         self._single_pm: QPixmap | None = None
 
         # Track preview viewport resizes to keep fit-on-width accurate
@@ -70,7 +72,7 @@ class PreviewPane(QWidget):
         self._single_label.setText("Loading…")
         self._current_single_token = self._runner.request_single_preview(path)
 
-    def show_grid(self, items: List[Tuple[str, str, str, str]]) -> None:
+    def show_grid(self, items: list[tuple[str, str, str, str]]) -> None:
         self.clear()
         self.preview_area.setWidgetResizable(True)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -135,7 +137,11 @@ class PreviewPane(QWidget):
                 if pm.isNull():
                     lbl.setText("(failed)")
                     return
-                lbl.setPixmap(pm.scaled(lbl.width(), lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                lbl.setPixmap(
+                    pm.scaled(
+                        lbl.width(), lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                    )
+                )
                 lbl.setText("")
         except Exception as ex:  # pragma: no cover - UI best effort
             logger.error("Update preview failed: {}", ex)
@@ -243,5 +249,3 @@ class PreviewPane(QWidget):
                 pass
         except Exception:
             pass
-
-

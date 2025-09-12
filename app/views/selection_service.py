@@ -1,3 +1,5 @@
+"""UI adapter to apply regex-based selection to a Qt `QStandardItemModel`."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -5,14 +7,20 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItemModel
 
-from .constants import COL_GROUP, COL_SEL, COL_NAME, COL_FOLDER, COL_SIZE_BYTES
+from app.views.constants import COL_FOLDER, COL_GROUP, COL_NAME, COL_SEL, COL_SIZE_BYTES
 from core.services.selection_service import RegexSelectionService
 
 
-def apply_select_regex(model: QStandardItemModel, field: str, pattern: str, make_checked: bool) -> None:
-    """Apply selection/unselection based on regex match via Core service.
+def apply_select_regex(
+    model: QStandardItemModel, field: str, pattern: str, make_checked: bool
+) -> None:
+    """Apply selection/unselection to `model` where `field` matches `pattern`.
 
-    Behavior is identical to the previous inline implementation.
+    Args:
+        model: Qt standard item model containing group/child rows.
+        field: One of "Group", "File Name", "Folder", "Size (Bytes)".
+        pattern: Regular expression to match against the target field.
+        make_checked: If True, set checked; otherwise uncheck.
     """
 
     class _QtModelAccessor:
@@ -20,7 +28,11 @@ def apply_select_regex(model: QStandardItemModel, field: str, pattern: str, make
             self._m = m
 
         def iter_groups(self) -> list[Any]:
-            return [self._m.item(r, COL_GROUP) for r in range(self._m.rowCount()) if self._m.item(r, COL_GROUP) is not None]
+            return [
+                self._m.item(r, COL_GROUP)
+                for r in range(self._m.rowCount())
+                if self._m.item(r, COL_GROUP) is not None
+            ]
 
         def iter_children(self, group: Any) -> list[int]:
             return list(range(group.rowCount()))
@@ -47,5 +59,3 @@ def apply_select_regex(model: QStandardItemModel, field: str, pattern: str, make
 
     service = RegexSelectionService(_QtModelAccessor(model))
     service.apply(field, pattern, make_checked)
-
-

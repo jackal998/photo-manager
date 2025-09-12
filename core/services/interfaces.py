@@ -1,17 +1,40 @@
+"""Core service interfaces and shared data structures.
+
+This module defines simple dataclasses that represent delete planning
+and results used across the infrastructure and UI layers.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+
 
 @dataclass
 class DeleteResult:
+    """Outcome of a delete operation.
+
+    Attributes:
+        success_paths: Paths successfully deleted.
+        failed: Tuples of (path, reason) for failures.
+        log_path: Optional path to a detailed log file.
+    """
+
     success_paths: list[str]
-    failed: list[tuple[str, str]]  # (path, reason)
-    log_path: Optional[str] = None
+    failed: list[tuple[str, str]]
+    log_path: str | None = None
 
 
 @dataclass
 class DeletePlanGroupSummary:
+    """Summary of delete intent for a single group.
+
+    Attributes:
+        group_number: Identifier of the group.
+        selected_count: Number of selected items in the group.
+        total_count: Total items in the group.
+        is_full_delete: Whether all items in the group are selected.
+    """
+
     group_number: int
     selected_count: int
     total_count: int
@@ -20,7 +43,12 @@ class DeletePlanGroupSummary:
 
 @dataclass
 class DeletePlan:
-    # Paths chosen for deletion (already filtered to skip locked)
+    """Planned delete operation with per-group summaries.
+
+    Attributes:
+        delete_paths: Paths chosen for deletion (already filtered to skip locked).
+        group_summaries: Group-level summaries for confirmation UI.
+    """
+
     delete_paths: list[str]
-    # Group-level summaries for confirmation UI
-    group_summaries: List[DeletePlanGroupSummary]
+    group_summaries: list[DeletePlanGroupSummary]

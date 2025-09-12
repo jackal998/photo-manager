@@ -1,34 +1,38 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-from loguru import logger
-from PySide6.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout
-from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt
-
-from infrastructure.settings import JsonSettings
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from loguru import logger
 
 # Register pillow-heif once for faster subsequent opens (if available)
 try:
     from pillow_heif import register_heif_opener  # type: ignore
+
     register_heif_opener()
 except Exception:
     pass
+
+
 def _pil_to_qimage(pil_img) -> QImage | None:
     try:
         # Lazily import to keep dependency optional
-        from PIL import Image
+
         if pil_img.mode not in ("RGBA", "RGB"):
             pil_img = pil_img.convert("RGBA")
         if pil_img.mode == "RGB":
             # QImage.Format_RGB888 is fine; ensure bytes alignment
             data = pil_img.tobytes("raw", "RGB")
-            qimg = QImage(data, pil_img.width, pil_img.height, pil_img.width * 3, QImage.Format_RGB888)
+            qimg = QImage(
+                data, pil_img.width, pil_img.height, pil_img.width * 3, QImage.Format_RGB888
+            )
         else:
             data = pil_img.tobytes("raw", "RGBA")
-            qimg = QImage(data, pil_img.width, pil_img.height, pil_img.width * 4, QImage.Format_RGBA8888)
+            qimg = QImage(
+                data, pil_img.width, pil_img.height, pil_img.width * 4, QImage.Format_RGBA8888
+            )
         if qimg is None or qimg.isNull():
             return None
         # Detach from Python buffer
@@ -45,6 +49,7 @@ def load_pillow_heif(path: str, side: int = 0) -> tuple[QImage | None, str | Non
     """
     try:
         from PIL import Image, ImageOps
+
         with Image.open(path) as im:
             # Apply EXIF orientation
             try:
@@ -86,9 +91,12 @@ def main() -> int:
         root.addWidget(QLabel(f"Testing: {p}"))
         row = QHBoxLayout()
 
+        def _make_loader(path: str, side: int):
+            return lambda: load_pillow_heif(path, side)
+
         for method_name, loader in (
-            ("Pillow-HEIF 512", lambda: load_pillow_heif(p, 512)),
-            ("Pillow-HEIF 1024", lambda: load_pillow_heif(p, 1024)),
+            ("Pillow-HEIF 512", _make_loader(p, 512)),
+            ("Pillow-HEIF 1024", _make_loader(p, 1024)),
         ):
             v = QVBoxLayout()
             v.addWidget(QLabel(method_name))
@@ -99,7 +107,11 @@ def main() -> int:
             if img is not None and not img.isNull():
                 pm = QPixmap.fromImage(img)
                 if not pm.isNull():
-                    lbl.setPixmap(pm.scaled(lbl.width(), lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    lbl.setPixmap(
+                        pm.scaled(
+                            lbl.width(), lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                        )
+                    )
                     lbl.setText("")
             v.addWidget(lbl)
             row.addLayout(v)
@@ -114,5 +126,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

@@ -1,24 +1,33 @@
+"""Dialog for selecting items by field/regex."""
+
 from __future__ import annotations
 
-from typing import List, Dict, Optional
-
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
-    QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QComboBox,
     QLineEdit,
     QPushButton,
+    QVBoxLayout,
 )
 
 
 class SelectDialog(QDialog):
+    """Simple dialog to emit select/unselect requests for field+regex.
+
+    Signals:
+        selectRequested(str, str): Emitted when user clicks Select.
+        unselectRequested(str, str): Emitted when user clicks Unselect.
+    """
+
     selectRequested = Signal(str, str)  # field, regex
     unselectRequested = Signal(str, str)  # field, regex
 
-    def __init__(self, fields: List[str], parent=None, row_values: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self, fields: list[str], parent=None, row_values: dict[str, str] | None = None
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Select by Field/Regex")
         self._fields = list(fields)
@@ -100,9 +109,8 @@ class SelectDialog(QDialog):
         value = self._row_values.get(field, "")
         if value:
             import re as _re
+
             self.regex.setText(f"^{_re.escape(value)}$")
         else:
             # Leave blank to keep placeholder when no data row highlighted
             self.regex.clear()
-
-

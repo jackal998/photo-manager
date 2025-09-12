@@ -1,24 +1,21 @@
 from __future__ import annotations
 
-from typing import List
-
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
-    QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QHBoxLayout,
     QPushButton,
-    QCheckBox,
+    QVBoxLayout,
 )
 
 from core.services.interfaces import DeletePlanGroupSummary
 
 
 class DeleteConfirmDialog(QDialog):
-    def __init__(self, summaries: List[DeletePlanGroupSummary], parent=None) -> None:
+    def __init__(self, summaries: list[DeletePlanGroupSummary], parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Confirm Delete")
 
@@ -71,5 +68,3 @@ class DeleteConfirmDialog(QDialog):
         if not self._confirm_box.isChecked():
             return
         self.accept()
-
-
