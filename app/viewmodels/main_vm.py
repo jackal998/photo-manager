@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from loguru import logger
+
 from core.models import PhotoGroup, PhotoRecord
 from core.services.sort_service import SortService
 
@@ -70,6 +72,68 @@ class MainVM:
                 PhotoGroup(group_number=g.group_number, items=kept_items, is_expanded=g.is_expanded)
             )
         self.groups = new_groups
+
+    def remove_from_list(self, paths_to_remove: list[str]) -> None:
+        """Remove specified items from the list without deleting actual files."""
+        if not paths_to_remove:
+            return
+        removed = set(paths_to_remove)
+        new_groups: list[PhotoGroup] = []
+        for g in self.groups:
+            kept_items = [it for it in g.items if it.file_path not in removed]
+            if kept_items:
+                new_groups.append(
+                    PhotoGroup(
+                        group_number=g.group_number, items=kept_items, is_expanded=g.is_expanded
+                    )
+                )
+        self.groups = new_groups
+
+    def remove_group_from_list(self, group_number: int) -> None:
+        """Remove an entire group from the list without deleting actual files."""
+
+        # Log before removal
+        groups_before = len(self.groups)
+        group_numbers_before = [g.group_number for g in self.groups]
+        logger.info(
+            "Before removal - Total groups: {}, Group numbers: {}",
+            groups_before,
+            group_numbers_before,
+        )
+        logger.info("Attempting to remove group: {}", group_number)
+
+        # Find and log the group being removed
+        group_to_remove = None
+        for g in self.groups:
+            if g.group_number == group_number:
+                group_to_remove = g
+                break
+
+        if group_to_remove:
+            logger.info(
+                "Found group {} with {} files to remove",
+                group_number,
+                len(group_to_remove.items),
+            )
+        else:
+            logger.warning("Group {} not found in current groups", group_number)
+
+        # Perform removal
+        self.groups = [g for g in self.groups if g.group_number != group_number]
+
+        # Log after removal
+        groups_after = len(self.groups)
+        group_numbers_after = [g.group_number for g in self.groups]
+        logger.info(
+            "After removal - Total groups: {}, Group numbers: {}",
+            groups_after,
+            group_numbers_after,
+        )
+
+    def get_highlighted_items(self) -> list[str]:
+        """Get file paths of currently highlighted (selected) items in the UI."""
+        # This will be called from the UI to get currently selected items
+        return []
 
     @property
     def group_count(self) -> int:

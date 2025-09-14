@@ -150,3 +150,10 @@ class CsvPhotoRepository:
                             "FileSize": size,
                         }
                     )
+
+    def remove_from_list(self, paths_to_remove: list[str]) -> None:
+        """Remove specified items from the list without deleting actual files."""
+        # This method would update the internal state or database to reflect the removal
+        # For now, it's a placeholder to show where the logic would be implemented
+        # pylint: disable=unused-argument
+        return
