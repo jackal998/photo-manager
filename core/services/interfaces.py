@@ -52,3 +52,24 @@ class DeletePlan:
 
     delete_paths: list[str]
     group_summaries: list[DeletePlanGroupSummary]
+
+
+@dataclass
+class RemoveResult:
+    """Outcome of a remove operation.
+
+    Attributes:
+        success_paths: Paths successfully removed from the list.
+        failed: Tuples of (path, reason) for failures.
+    """
+
+    success_paths: list[str]
+    failed: list[tuple[str, str]]
+
+
+class IListService:
+    """Interface for list management services."""
+
+    def remove_from_list(self, paths: list[str]) -> RemoveResult:
+        """Remove specified paths from the list without deleting actual files."""
+        raise NotImplementedError
