@@ -334,6 +334,11 @@ class MainWindow(QMainWindow):
                             p = str(Path(folder) / name)
                         group_items.append((p, name, folder, size_txt))
             self._preview.show_grid(group_items)
+            # Request autoplay for all videos after loading tiles
+            try:
+                self._preview.autoplay_all_videos_when_ready()
+            except Exception:
+                pass
 
     # PRESERVED: Image loading slot
 
