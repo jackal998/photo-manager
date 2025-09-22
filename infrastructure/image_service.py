@@ -162,7 +162,7 @@ class ImageService:
         return img
 
     def _load_from_source(self, path: str, requested_side: int) -> QImage | None:
-        """Try Pillow-HEIF, Qt reader, then Windows Shell/WIC in that order."""
+        """Try Pillow-HEIF, Qt reader, Windows Shell/WIC, then video thumbnail in that order."""
         ext = Path(path).suffix.lower()
         # 0) Prefer Pillow-HEIF for HEIC/HEIF when available
         if ext in {".heic", ".heif"} and self._pillow_available and self._pillow_heif_available:
@@ -202,7 +202,7 @@ class ImageService:
         except (OSError, ValueError) as ex:
             logger.debug("QImageReader failed for {}: {}", path, ex)
 
-        # 2) Fallback: Windows Shell/WIC thumbnail (good on Windows, esp. HEIC)
+        # 2) Fallback: Windows Shell/WIC thumbnail (good on Windows, incl. many videos)
         try:
             return self._load_via_shell_thumbnail(path, requested_side)
         except OSError as ex:
@@ -465,6 +465,10 @@ class ImageService:
         except OSError as ex:
             logger.debug("_load_via_shell_thumbnail exception: {}", ex)
             return None
+
+    # Note: No video thumbnail extraction via QMediaPlayer in background threads.
+    # For videos, rely on Windows Shell/WIC where available; otherwise, fallback to
+    # placeholder and update thumbnail when the tile starts playing.
 
     def _looks_like_placeholder(self, img: QImage) -> bool:
         """Heuristic to detect grey placeholder images."""

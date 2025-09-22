@@ -205,6 +205,10 @@ class MainWindow(QMainWindow):
             "select_by": self.on_open_select_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
             "exit": self.close,
+            "open_latest_log": self._open_latest_log,
+            "open_latest_delete_log": self._open_latest_delete_log,
+            "open_log_directory": self._open_log_directory,
+            "open_delete_log_directory": self._open_delete_log_directory,
         }
         self.menu_controller.connect_actions(handlers)
 
@@ -334,6 +338,11 @@ class MainWindow(QMainWindow):
                             p = str(Path(folder) / name)
                         group_items.append((p, name, folder, size_txt))
             self._preview.show_grid(group_items)
+            # Request autoplay for all videos after loading tiles
+            try:
+                self._preview.autoplay_all_videos_when_ready()
+            except Exception:
+                pass
 
     # PRESERVED: Image loading slot
 
@@ -441,6 +450,44 @@ class MainWindow(QMainWindow):
 
         dlg = FiltersDialog(self)
         dlg.exec()
+
+    def _open_latest_log(self) -> None:
+        """Open the latest log file."""
+        from infrastructure.logging import open_latest_log
+
+        if not open_latest_log():
+            QMessageBox.warning(
+                self, "Log File Not Found", "No log files found in the log directory."
+            )
+
+    def _open_latest_delete_log(self) -> None:
+        """Open the latest delete log file."""
+        from infrastructure.logging import open_latest_delete_log
+
+        if not open_latest_delete_log():
+            QMessageBox.warning(
+                self,
+                "Delete Log Not Found",
+                "No delete log files found in the delete log directory.",
+            )
+
+    def _open_log_directory(self) -> None:
+        """Open the log directory in file explorer."""
+        from infrastructure.logging import open_log_directory
+
+        if not open_log_directory():
+            QMessageBox.warning(
+                self, "Log Directory Not Found", "Log directory could not be opened."
+            )
+
+    def _open_delete_log_directory(self) -> None:
+        """Open the delete log directory in file explorer."""
+        from infrastructure.logging import open_delete_log_directory
+
+        if not open_delete_log_directory():
+            QMessageBox.warning(
+                self, "Delete Log Directory Not Found", "Delete log directory could not be opened."
+            )
 
 
 # Helper implementation classes

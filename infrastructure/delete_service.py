@@ -63,11 +63,61 @@ class DeleteService:
         failed: list[tuple[str, str]] = []
         for p in paths:
             try:
-                send2trash(p)
-                success.append(p)
-            except OSError as ex:
-                logger.error("Delete failed for {}: {}", p, ex)
-                failed.append((p, str(ex)))
+                # Normalize and validate path
+                normalized_path = os.path.normpath(p)
+
+                # Check if file exists and is accessible
+                if not os.path.exists(normalized_path):
+                    logger.error("File does not exist: {}", normalized_path)
+                    failed.append((p, "File does not exist"))
+                    continue
+
+                # Try different approaches for non-ASCII paths
+                # Method 1: Try with normalized path
+                try:
+                    send2trash(normalized_path)
+                    success.append(p)
+                except (UnicodeEncodeError, OSError) as ex:
+                    logger.warning(
+                        "Failed to delete with normalized path {}: {}", normalized_path, ex
+                    )
+                    # Method 2: Try with original path
+                    try:
+                        send2trash(p)
+                        success.append(p)
+                    except (UnicodeEncodeError, OSError) as ex2:
+                        logger.warning("Failed to delete with original path {}: {}", p, ex2)
+                        # Method 3: Try with absolute path
+                        try:
+                            abs_path = os.path.abspath(p)
+                            send2trash(abs_path)
+                            success.append(p)
+                        except (UnicodeEncodeError, OSError) as ex3:
+                            logger.error(
+                                "All delete methods failed for {}: {} / {} / {}",
+                                p,
+                                ex,
+                                ex2,
+                                ex3,
+                            )
+                            failed.append(
+                                (
+                                    p,
+                                    f"Multiple delete failures: {str(ex)}, {str(ex2)}, {str(ex3)}",
+                                )
+                            )
+                    except RuntimeError as ex2:
+                        logger.error("Unexpected error with original path {}: {}", p, ex2)
+                        failed.append((p, f"Unexpected error: {str(ex2)}"))
+                except RuntimeError as ex:
+                    logger.error(
+                        "Unexpected error with normalized path {}: {}", normalized_path, ex
+                    )
+                    failed.append((p, f"Unexpected error: {str(ex)}"))
+
+            except (UnicodeEncodeError, OSError, RuntimeError) as ex:
+                logger.error("Unexpected error deleting {}: {}", p, ex)
+                failed.append((p, f"Unexpected error: {str(ex)}"))
         return DeleteResult(success_paths=success, failed=failed)
 
     def execute_delete(
