@@ -50,6 +50,14 @@ class MenuController:
         list_menu = menubar.addMenu("List")
         self.actions["remove_from_list"] = list_menu.addAction("Remove from List")
 
+        # Log Menu
+        log_menu = menubar.addMenu("Log")
+        self.actions["open_latest_log"] = log_menu.addAction("Open Latest Log")
+        self.actions["open_latest_delete_log"] = log_menu.addAction("Open Latest Delete Log")
+        log_menu.addSeparator()
+        self.actions["open_log_directory"] = log_menu.addAction("Open Log Directory")
+        self.actions["open_delete_log_directory"] = log_menu.addAction("Open Delete Log Directory")
+
         self.window.setMenuBar(menubar)
 
         # Store actions as window attributes for backward compatibility
@@ -91,6 +99,23 @@ class MenuController:
         # List menu actions
         if "remove_from_list" in handlers:
             self.actions["remove_from_list"].triggered.connect(handlers["remove_from_list"])
+
+        # Log menu actions
+        if "open_latest_log" in handlers:
+            self.actions["open_latest_log"].triggered.connect(handlers["open_latest_log"])
+
+        if "open_latest_delete_log" in handlers:
+            self.actions["open_latest_delete_log"].triggered.connect(
+                handlers["open_latest_delete_log"]
+            )
+
+        if "open_log_directory" in handlers:
+            self.actions["open_log_directory"].triggered.connect(handlers["open_log_directory"])
+
+        if "open_delete_log_directory" in handlers:
+            self.actions["open_delete_log_directory"].triggered.connect(
+                handlers["open_delete_log_directory"]
+            )
 
     def get_action(self, name: str) -> QAction | None:
         """Get a specific action by name.
