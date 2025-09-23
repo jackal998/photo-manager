@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
             parent_widget=self,
             ui_updater=self.ui_updater,
             status_reporter=self.status_reporter,
+            checked_paths_provider=self.selection_controller,
         )
 
         # Tree data provider for dialog handler
@@ -379,11 +380,9 @@ class MainWindow(QMainWindow):
 
                 if reply == QMessageBox.Yes:
                     try:
-                        self._vm.export_csv(source_path)
+                        # Use the same export path used by the menu export (with dialogs)
+                        self.file_operations.export_csv_to_path(source_path)
                         logger.info("Source file updated on exit: {}", source_path)
-                        QMessageBox.information(
-                            self, "File Updated", "Source file has been updated successfully."
-                        )
                     except Exception as ex:
                         logger.error("Failed to update source file on exit: {}", ex)
                         QMessageBox.warning(

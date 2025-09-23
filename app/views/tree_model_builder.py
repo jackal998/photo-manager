@@ -61,6 +61,12 @@ def build_model(
             check = QStandardItem("")
             check.setCheckable(True)
             check.setEditable(False)
+            # Initialize checkbox from model's is_mark
+            try:
+                is_marked = bool(getattr(p, "is_mark", False))
+                check.setCheckState(Qt.Checked if is_marked else Qt.Unchecked)
+            except Exception:
+                pass
             child_row = [
                 QStandardItem(""),
                 check,

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from typing import Any, Protocol
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMenu, QTreeView
+
+from app.views.media_utils import normalize_windows_path
 
 
 class ActionHandlers(Protocol):
@@ -119,6 +124,39 @@ class ContextMenuHandler:
 
             unselect_file_action = menu.addAction("Unselect File")
             unselect_file_action.triggered.connect(lambda: self.handlers.unselect_files([item]))
+
+            # Open Folder action
+            open_folder_action = menu.addAction("Open Folder")
+
+            def _open_folder(checked: bool = False, path: str = item.get("path", "")) -> None:
+                try:
+                    if not path:
+                        return
+                    norm_path = normalize_windows_path(path)
+                    folder = os.path.dirname(norm_path) or norm_path
+                    if not folder:
+                        return
+                    # Use Windows Explorer to open folder and select the file if possible
+                    if os.name == "nt":
+                        try:
+                            if os.path.exists(norm_path):
+                                subprocess.Popen(["explorer", "/select,", norm_path])
+                            elif os.path.isdir(folder):
+                                subprocess.Popen(["explorer", folder])
+                            else:
+                                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+                        except Exception:
+                            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+                    else:
+                        # Cross-platform fallback
+                        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+                except Exception:
+                    try:
+                        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
+                    except Exception:
+                        pass
+
+            open_folder_action.triggered.connect(_open_folder)
 
         elif item["type"] == "group":
             # Group-specific actions

@@ -52,6 +52,7 @@ class FileOperationsHandler:
         parent_widget: QObject,
         ui_updater: UIUpdateCallback,
         status_reporter: StatusReporter,
+        checked_paths_provider: object | None = None,
     ) -> None:
         """Initialize with required services and callbacks.
 
@@ -71,6 +72,8 @@ class FileOperationsHandler:
         self.parent = parent_widget
         self.ui_updater = ui_updater
         self.status_reporter = status_reporter
+        # Optional callable or object with gather_checked_paths() to pull UI state
+        self.checked_paths_provider = checked_paths_provider
 
     def import_csv(self) -> None:
         """Handle CSV import with file dialog and error handling."""
@@ -110,7 +113,7 @@ class FileOperationsHandler:
             return
 
         try:
-            self.repo.save(path, self.vm.groups)
+            self._export_to_path(path)
             logger.info(
                 "Exported CSV: {} | groups={} items={} (bytes correct)",
                 path,
@@ -124,6 +127,47 @@ class FileOperationsHandler:
             logger.exception("Export CSV failed: {}", ex)
             QMessageBox.critical(self.parent, "Export Error", str(ex))
             self.status_reporter.show_status("Export failed")
+
+    def export_csv_to_path(self, path: str) -> None:
+        """Programmatically export to a specific path (no file dialog).
+
+        Includes mark sync so the saved CSV reflects current tree checkbox state.
+        """
+        if not path:
+            return
+        self._export_to_path(path)
+        try:
+            logger.info(
+                "Exported CSV: {} | groups={} items={} (bytes correct)",
+                path,
+                self.vm.group_count,
+                sum(len(g.items) for g in self.vm.groups),
+            )
+            QMessageBox.information(self.parent, "Export", "Export completed.")
+            self.status_reporter.show_status("Export completed")
+        except Exception:
+            # If UI feedback fails, do not raise further
+            pass
+
+    def _export_to_path(self, path: str) -> None:
+        """Internal helper: sync marks and save to `path`."""
+        # Sync marks from UI checkboxes into model before saving
+        try:
+            checked_paths: list[str] = []
+            provider = self.checked_paths_provider
+            if provider is not None:
+                if callable(provider):
+                    checked_paths = provider()
+                elif hasattr(provider, "gather_checked_paths"):
+                    checked_paths = provider.gather_checked_paths()  # type: ignore[attr-defined]
+            if hasattr(self.vm, "update_marks_from_checked_paths"):
+                self.vm.update_marks_from_checked_paths(checked_paths)  # type: ignore[attr-defined]
+        except Exception:
+            # Best-effort; do not block export on sync issues
+            pass
+
+        # Save to CSV using repository
+        self.repo.save(path, self.vm.groups)
 
     def delete_selected_files(self, selected_paths: list[str]) -> None:
         """Handle file deletion workflow with confirmation and cleanup.
@@ -326,7 +370,7 @@ class FileOperationsHandler:
                         self.parent, "Update CSV?", f"Update source CSV file?\n{src}"
                     )
                     if resp == QMessageBox.Yes:
-                        self.vm.export_csv(src)
+                        self.export_csv_to_path(src)
                         self.status_reporter.show_status("CSV updated")
         except Exception as ex:
             logger.error("Update CSV after delete failed: {}", ex)
