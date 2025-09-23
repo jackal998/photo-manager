@@ -180,6 +180,13 @@ class MainWindow(QMainWindow):
         self._preview = PreviewPane(right_widget, self._runner, thumb_size=self._thumb_size)
         right_layout.addWidget(self._preview)
 
+        # Register preview handle releaser with delete service (if available)
+        try:
+            if self._deleter is not None and hasattr(self._deleter, "set_handle_releaser"):
+                self._deleter.set_handle_releaser(self._preview.release_file_handles)
+        except Exception:
+            pass
+
         # Setup main layout with splitter
         central = self.layout_manager.setup_main_layout(center_widget, right_widget)
         self.setCentralWidget(central)

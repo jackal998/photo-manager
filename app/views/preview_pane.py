@@ -264,6 +264,52 @@ class PreviewPane(QWidget):
         self._single_label.setVisible(False)
         self._single_pm = None
 
+    def release_file_handles(self) -> None:
+        """Release any open media/file handles held by the preview.
+
+        - Stops and detaches the single video player if present
+        - Stops and detaches any grid video players
+        - Clears QPixmaps to drop file-backed resources
+        """
+        try:
+            # Stop single video player
+            if self._single_video_player is not None:
+                try:
+                    self._single_video_player.cleanup()
+                except Exception:
+                    pass
+                try:
+                    self._preview_layout.removeWidget(self._single_video_player)
+                except Exception:
+                    pass
+                try:
+                    self._single_video_player.deleteLater()
+                except Exception:
+                    pass
+                self._single_video_player = None
+
+            # Stop grid video players
+            for player in list(self._grid_video_players.values()):
+                try:
+                    player.cleanup()
+                except Exception:
+                    pass
+                try:
+                    player.deleteLater()
+                except Exception:
+                    pass
+            self._grid_video_players.clear()
+
+            # Clear pixmaps to free resources
+            try:
+                self._single_label.clear()
+            except Exception:
+                pass
+
+        except Exception:
+            # Best-effort; never raise from a release
+            pass
+
     def on_image_loaded(self, token: str, path: str, image: Any) -> None:
         try:
             if token.startswith("single|"):
