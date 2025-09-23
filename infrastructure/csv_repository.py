@@ -15,8 +15,29 @@ from pathlib import Path
 from loguru import logger
 
 from core.models import PhotoGroup, PhotoRecord
+from infrastructure.utils import (
+    format_csv_datetime,
+    get_exif_datetime_original,
+    get_filesystem_creation_datetime,
+    parse_csv_datetime,
+)
 
+# Canonical headers for saving (full spec)
 CSV_HEADERS = [
+    "GroupNumber",
+    "IsMark",
+    "IsLocked",
+    "FolderPath",
+    "FilePath",
+    "Capture Date",
+    "Modified Date",
+    "Creation Date",
+    "Shot Date",
+    "FileSize",
+]
+
+# Backwards-compatible minimal headers required for loading
+REQUIRED_LOAD_HEADERS = [
     "GroupNumber",
     "IsMark",
     "IsLocked",
@@ -29,17 +50,11 @@ CSV_HEADERS = [
 
 
 def _parse_datetime(value: str) -> datetime | None:
-    """Parse timestamp from CSV using `%Y-%m-%d %H:%M:%S`.
-
-    Returns None if the value is empty or invalid.
-    """
-    if not value:
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
+    """Backwards-compatible CSV datetime parser using infrastructure.utils."""
+    dt = parse_csv_datetime(value)
+    if dt is None and value:
         logger.warning("Invalid datetime: {}", value)
-        return None
+    return dt
 
 
 def _parse_bool_int(value: str) -> bool:
@@ -86,8 +101,8 @@ class CsvPhotoRepository:
         path = Path(csv_path)
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            # Validate minimal headers and order (we accept extra columns but ignore)
-            missing = [h for h in CSV_HEADERS if h not in reader.fieldnames]
+            # Validate minimal headers (accept extra columns; new date columns are optional on load)
+            missing = [h for h in REQUIRED_LOAD_HEADERS if h not in (reader.fieldnames or [])]
             if missing:
                 raise ValueError(f"CSV missing required headers: {missing}")
 
@@ -100,7 +115,17 @@ class CsvPhotoRepository:
                     file_path = row.get("FilePath", "") or ""
                     capture_date = _parse_datetime(row.get("Capture Date", ""))
                     modified_date = _parse_datetime(row.get("Modified Date", ""))
+                    # CSV-provided values (may be missing in older CSVs)
+                    csv_creation_date = _parse_datetime(row.get("Creation Date", ""))
+                    # Legacy mapping: if Shot Date missing, fall back to Capture Date
+                    csv_shot_date = _parse_datetime(row.get("Shot Date", "")) or capture_date
                     file_size_bytes = _ensure_filesize_bytes(file_path, row.get("FileSize", "0"))
+
+                    # Fill missing values from extraction without overriding CSV-provided values
+                    fs_creation_dt = get_filesystem_creation_datetime(file_path)
+                    exif_dt = get_exif_datetime_original(file_path)
+                    final_creation = csv_creation_date or fs_creation_dt
+                    final_shot = csv_shot_date or exif_dt
 
                     yield PhotoRecord(
                         group_number=group_number,
@@ -111,6 +136,8 @@ class CsvPhotoRepository:
                         capture_date=capture_date,
                         modified_date=modified_date,
                         file_size_bytes=file_size_bytes,
+                        creation_date=final_creation,
+                        shot_date=final_shot,
                     )
                 except (ValueError, TypeError, KeyError) as ex:
                     logger.error("CSV row error: {} | row={} ", ex, row)
@@ -130,6 +157,18 @@ class CsvPhotoRepository:
                         size = int(os.path.getsize(item.file_path))
                     except OSError:
                         size = item.file_size_bytes or 0
+
+                    # Prepare creation date with fallback
+                    if item.creation_date:
+                        creation_date = item.creation_date
+                    else:
+                        creation_date = get_filesystem_creation_datetime(item.file_path)
+
+                    if item.shot_date:
+                        shot_date = item.shot_date
+                    else:
+                        shot_date = get_exif_datetime_original(item.file_path)
+
                     writer.writerow(
                         {
                             "GroupNumber": item.group_number,
@@ -137,16 +176,10 @@ class CsvPhotoRepository:
                             "IsLocked": 1 if item.is_locked else 0,
                             "FolderPath": item.folder_path,
                             "FilePath": item.file_path,
-                            "Capture Date": (
-                                item.capture_date.strftime("%Y-%m-%d %H:%M:%S")
-                                if item.capture_date
-                                else ""
-                            ),
-                            "Modified Date": (
-                                item.modified_date.strftime("%Y-%m-%d %H:%M:%S")
-                                if item.modified_date
-                                else ""
-                            ),
+                            "Capture Date": format_csv_datetime(item.capture_date),
+                            "Modified Date": format_csv_datetime(item.modified_date),
+                            "Creation Date": format_csv_datetime(creation_date),
+                            "Shot Date": format_csv_datetime(shot_date),
                             "FileSize": size,
                         }
                     )

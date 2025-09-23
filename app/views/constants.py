@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
-# Column headers and indices (order must remain unchanged)
+# Column headers and indices (base order preserved; new columns appended)
 HEADERS: list[str] = [
     "Group",
     "Sel",
@@ -17,6 +17,8 @@ HEADERS: list[str] = [
     "Folder",
     "Size (Bytes)",
     "Group Count",
+    "Creation Date",
+    "Shot Date",
 ]
 
 COL_GROUP: int = 0
@@ -25,7 +27,9 @@ COL_NAME: int = 2
 COL_FOLDER: int = 3
 COL_SIZE_BYTES: int = 4
 COL_GROUP_COUNT: int = 5
-NUM_COLUMNS: int = 6
+COL_CREATION_DATE: int = 6
+COL_SHOT_DATE: int = 7
+NUM_COLUMNS: int = 8
 
 
 # Data roles

@@ -7,10 +7,12 @@ from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from app.views.constants import (
+    COL_CREATION_DATE,
     COL_FOLDER,
     COL_GROUP_COUNT,
     COL_NAME,
     COL_SEL,
+    COL_SHOT_DATE,
     COL_SIZE_BYTES,
     HEADERS,
     PATH_ROLE,
@@ -45,6 +47,8 @@ def build_model(
             QStandardItem(""),
             QStandardItem(""),
             QStandardItem(str(group_count_val)),
+            QStandardItem(""),
+            QStandardItem(""),
         ]
         try:
             group_row[COL_GROUP_COUNT].setData(int(group_count_val), SORT_ROLE)
@@ -58,6 +62,11 @@ def build_model(
             name = Path(getattr(p, "file_path", "")).name
             folder = getattr(p, "folder_path", "")
             size_num = int(getattr(p, "file_size_bytes", 0) or 0)
+            # Dates as strings for display; keep numeric roles for sorting
+            shot_dt = getattr(p, "shot_date", None)
+            creation_dt = getattr(p, "creation_date", None)
+            shot_txt = shot_dt.strftime("%Y-%m-%d %H:%M:%S") if shot_dt else ""
+            creation_txt = creation_dt.strftime("%Y-%m-%d %H:%M:%S") if creation_dt else ""
             check = QStandardItem("")
             check.setCheckable(True)
             check.setEditable(False)
@@ -74,6 +83,8 @@ def build_model(
                 QStandardItem(folder),
                 QStandardItem(str(size_num)),
                 QStandardItem(""),
+                QStandardItem(creation_txt),
+                QStandardItem(shot_txt),
             ]
             try:
                 child_row[COL_SEL].setData(0, SORT_ROLE)
@@ -89,6 +100,19 @@ def build_model(
                 pass
             try:
                 child_row[COL_SIZE_BYTES].setData(int(size_num), SORT_ROLE)
+            except Exception:
+                pass
+            try:
+                # Use timestamp for numeric sort (or 0 when missing)
+                child_row[COL_CREATION_DATE].setData(
+                    int(creation_dt.timestamp()) if creation_dt else 0, SORT_ROLE
+                )
+            except Exception:
+                pass
+            try:
+                child_row[COL_SHOT_DATE].setData(
+                    int(shot_dt.timestamp()) if shot_dt else 0, SORT_ROLE
+                )
             except Exception:
                 pass
             for it in child_row:
