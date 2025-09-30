@@ -135,6 +135,17 @@ class MainVM:
         # This will be called from the UI to get currently selected items
         return []
 
+    def update_marks_from_checked_paths(self, checked_paths: list[str]) -> None:
+        """Set `is_mark` on records based on currently checked file paths.
+
+        Args:
+            checked_paths: List of file paths that are checked in the UI
+        """
+        checked: set[str] = set(checked_paths or [])
+        for group in self.groups:
+            for rec in group.items:
+                rec.is_mark = rec.file_path in checked
+
     @property
     def group_count(self) -> int:
         """Number of groups currently loaded."""

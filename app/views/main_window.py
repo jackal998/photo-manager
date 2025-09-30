@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
             parent_widget=self,
             ui_updater=self.ui_updater,
             status_reporter=self.status_reporter,
+            checked_paths_provider=self.selection_controller,
         )
 
         # Tree data provider for dialog handler
@@ -178,6 +179,13 @@ class MainWindow(QMainWindow):
         self._runner = ImageTaskRunner(service=self._img, receiver=self)
         self._preview = PreviewPane(right_widget, self._runner, thumb_size=self._thumb_size)
         right_layout.addWidget(self._preview)
+
+        # Register preview handle releaser with delete service (if available)
+        try:
+            if self._deleter is not None and hasattr(self._deleter, "set_handle_releaser"):
+                self._deleter.set_handle_releaser(self._preview.release_file_handles)
+        except Exception:
+            pass
 
         # Setup main layout with splitter
         central = self.layout_manager.setup_main_layout(center_widget, right_widget)
@@ -313,10 +321,29 @@ class MainWindow(QMainWindow):
                 if not folder or not name:
                     return
                 path = str(Path(folder) / name)
-            self._preview.show_single(path)
+            # Optional date/size info for single preview header
+            try:
+                size_index = model.index(idx.row(), 4, idx.parent())
+                creation_index = model.index(idx.row(), 6, idx.parent())
+                shot_index = model.index(idx.row(), 7, idx.parent())
+                size_txt = model.data(size_index) or ""
+                creation_txt = model.data(creation_index) or ""
+                shot_txt = model.data(shot_index) or ""
+                self._preview.show_single(
+                    path,
+                    {
+                        "name": name,
+                        "folder": folder,
+                        "size": size_txt,
+                        "creation": creation_txt,
+                        "shot": shot_txt,
+                    },
+                )
+            except Exception:
+                self._preview.show_single(path)
         else:
             # Group level selected -> grid thumbnails
-            group_items: list[tuple[str, str, str, str]] = []
+            group_items: list[tuple[str, str, str, str, str, str]] = []
             parent_item = model.itemFromIndex(model.index(idx.row(), COL_GROUP))
             if parent_item is not None:
                 rows = parent_item.rowCount()
@@ -332,11 +359,21 @@ class MainWindow(QMainWindow):
                         if parent_item.child(r, 4)
                         else ""
                     )
+                    creation_txt = (
+                        model.itemFromIndex(parent_item.child(r, 6).index()).text()
+                        if parent_item.child(r, 6)
+                        else ""
+                    )
+                    shot_txt = (
+                        model.itemFromIndex(parent_item.child(r, 7).index()).text()
+                        if parent_item.child(r, 7)
+                        else ""
+                    )
                     if name and folder:
                         p = name_item.data(32) if name_item else None  # PATH_ROLE
                         if not p:
                             p = str(Path(folder) / name)
-                        group_items.append((p, name, folder, size_txt))
+                        group_items.append((p, name, folder, size_txt, creation_txt, shot_txt))
             self._preview.show_grid(group_items)
             # Request autoplay for all videos after loading tiles
             try:
@@ -379,11 +416,9 @@ class MainWindow(QMainWindow):
 
                 if reply == QMessageBox.Yes:
                     try:
-                        self._vm.export_csv(source_path)
+                        # Use the same export path used by the menu export (with dialogs)
+                        self.file_operations.export_csv_to_path(source_path)
                         logger.info("Source file updated on exit: {}", source_path)
-                        QMessageBox.information(
-                            self, "File Updated", "Source file has been updated successfully."
-                        )
                     except Exception as ex:
                         logger.error("Failed to update source file on exit: {}", ex)
                         QMessageBox.warning(
