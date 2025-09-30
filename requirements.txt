@@ -6,3 +6,4 @@ pywin32>=306; platform_system == "Windows"
 # Image decoding
 Pillow>=10.0
 pillow-heif>=0.15
+rawpy>=0.19 ; platform_system != "Windows" or python_version >= "3.9"

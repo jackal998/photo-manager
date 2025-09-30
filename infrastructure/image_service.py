@@ -39,6 +39,15 @@ except ImportError:  # pragma: no cover - optional dependency
     PIL_HEIF_AVAILABLE = False
 
 
+# Optional rawpy (DNG) support
+try:  # pragma: no cover - optional dependency
+    import rawpy  # type: ignore
+
+    RAWPY_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    RAWPY_AVAILABLE = False
+
+
 def _compute_cache_key(path: str, size_key: int) -> str:
     """Compute a stable cache key from path, mtime, size, and requested side."""
     try:
@@ -108,6 +117,8 @@ class ImageService:
         # Optional: Pillow / pillow-heif
         self._pillow_available = bool(PIL_AVAILABLE)
         self._pillow_heif_available = bool(PIL_HEIF_AVAILABLE)
+        # Optional: rawpy for DNG
+        self._rawpy_available = bool(RAWPY_AVAILABLE)
 
     # Public API
     def get_thumbnail(self, path: str, size: int) -> Any:
@@ -161,8 +172,15 @@ class ImageService:
         self._mem_cache.put(key, img)
         return img
 
+    # pylint: disable=too-many-return-statements,too-many-branches
     def _load_from_source(self, path: str, requested_side: int) -> QImage | None:
-        """Try Pillow-HEIF, Qt reader, Windows Shell/WIC, then video thumbnail in that order."""
+        """Try Pillow-HEIF, then Qt reader or Windows Shell/WIC as applicable.
+
+        Notes:
+        - HEIC/HEIF: prefer Pillow-HEIF if available, then WIC.
+        - DNG: prefer rawpy if available; else try QImageReader, then WIC (Raw Image Extension).
+        - Other still images: QImageReader, then WIC.
+        """
         ext = Path(path).suffix.lower()
         # 0) Prefer Pillow-HEIF for HEIC/HEIF when available
         if ext in {".heic", ".heif"} and self._pillow_available and self._pillow_heif_available:
@@ -176,7 +194,53 @@ class ImageService:
                 logger.debug("Shell/WIC thumbnail failed for HEIC {}: {}", path, ex)
                 return None
 
-        # 1) Try QImageReader for common formats (non-HEIC)
+        # 1) Explicit DNG handling: rawpy (if available) -> QImageReader -> Shell/WIC
+        if ext == ".dng":
+            # rawpy first
+            if self._rawpy_available:
+                try:
+                    img = self._load_via_rawpy(path, requested_side)
+                    if img is not None and not img.isNull():
+                        return img
+                except (OSError, ValueError) as ex:
+                    logger.debug("rawpy load failed for DNG {}: {}", path, ex)
+
+            # then Qt
+            try:
+                reader = QImageReader(path)
+                reader.setAutoTransform(True)
+                if requested_side and requested_side > 0 and reader.size().isValid():
+                    orig = reader.size()
+                    w, h = orig.width(), orig.height()
+                    if w > 0 and h > 0:
+                        if w >= h:
+                            nw = min(requested_side, w)
+                            nh = int(h * (nw / max(1, w)))
+                        else:
+                            nh = min(requested_side, h)
+                            nw = int(w * (nh / max(1, h)))
+                        reader.setScaledSize(QSize(nw, nh))
+                img = reader.read()
+                if img is not None and not img.isNull():
+                    if requested_side and requested_side > 0:
+                        img = img.scaled(
+                            requested_side,
+                            requested_side,
+                            Qt.KeepAspectRatio,
+                            Qt.SmoothTransformation,
+                        )
+                    return img
+            except (OSError, ValueError) as ex:
+                logger.debug("QImageReader failed for DNG {}: {}", path, ex)
+
+            # Single preview uses 1024 default inside WIC when requested_side == 0
+            try:
+                return self._load_via_shell_thumbnail(path, requested_side)
+            except OSError as ex:
+                logger.debug("Shell/WIC thumbnail failed for DNG {}: {}", path, ex)
+                return None
+
+        # 2) Other still images: Try QImageReader
         try:
             reader = QImageReader(path)
             reader.setAutoTransform(True)
@@ -202,7 +266,7 @@ class ImageService:
         except (OSError, ValueError) as ex:
             logger.debug("QImageReader failed for {}: {}", path, ex)
 
-        # 2) Fallback: Windows Shell/WIC thumbnail (good on Windows, incl. many videos)
+        # 3) Fallback: Windows Shell/WIC thumbnail (good on Windows, incl. many videos)
         try:
             return self._load_via_shell_thumbnail(path, requested_side)
         except OSError as ex:
@@ -252,6 +316,50 @@ class ImageService:
             return qimg.copy()
         except (ValueError, TypeError) as ex:
             logger.debug("PIL->QImage convert failed: {}", ex)
+            return None
+
+    def _load_via_rawpy(
+        self, path: str, requested_side: int
+    ) -> QImage | None:  # pylint: disable=W0718
+        """Load DNG via rawpy and return QImage; scale to `requested_side` if > 0.
+
+        Requires `rawpy` to be installed. Returns None on failure.
+        """
+        if not self._rawpy_available:
+            return None
+        try:
+            assert RAWPY_AVAILABLE and rawpy is not None  # type: ignore[name-defined]
+            # Use context manager to ensure resources are freed promptly
+            with rawpy.imread(path) as raw:  # type: ignore[attr-defined]
+                # Postprocess tuned for pleasant previews (brightness/WB/highlights)
+                rgb = raw.postprocess(  # pylint: disable=no-member
+                    use_auto_wb=True,  # neutral WB across various devices
+                    no_auto_bright=False,  # enable auto-brightness to avoid dark renders
+                    auto_bright_thr=0.01,
+                    bright=1.0,
+                    output_color=rawpy.ColorSpace.sRGB,  # pylint: disable=no-member
+                    output_bps=8,
+                    gamma=(2.222, 4.5),
+                    demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,  # pylint: disable=no-member
+                    highlight_mode=rawpy.HighlightMode.Blend,  # pylint: disable=no-member
+                )
+            # Convert numpy array (H, W, 3) uint8 to QImage
+            h, w = int(rgb.shape[0]), int(rgb.shape[1])  # type: ignore[attr-defined]
+            # Ensure contiguous bytes
+            buf = rgb.tobytes(order="C")  # type: ignore[attr-defined]
+            bytes_per_line = w * 3
+            qimg = QImage(buf, w, h, bytes_per_line, QImage.Format_RGB888)
+            if qimg is None or qimg.isNull():
+                return None
+            # Detach from underlying buffer
+            qimg = qimg.copy()
+            if requested_side and requested_side > 0:
+                qimg = qimg.scaled(
+                    requested_side, requested_side, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+            return qimg
+        except Exception as ex:  # pragma: no cover - optional path  # pylint: disable=W0718
+            logger.debug("rawpy exception for {}: {}", path, ex)
             return None
 
     # Windows Shell/WIC via ctypes, return QImage or None
