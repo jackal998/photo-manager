@@ -7,7 +7,7 @@ an audit CSV log.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 import csv
 from datetime import datetime
 import os
@@ -22,6 +22,13 @@ from core.services.interfaces import DeletePlan, DeletePlanGroupSummary, DeleteR
 
 class DeleteService:
     """Coordinates delete operations and audit logging."""
+
+    def __init__(self) -> None:
+        self._handle_releaser: Callable[[], None] | None = None
+
+    def set_handle_releaser(self, releaser: Callable[[], None] | None) -> None:
+        """Register a callable to release UI-held file handles before deletion."""
+        self._handle_releaser = releaser
 
     def plan_delete(self, groups: Iterable[PhotoGroup], selected_paths: list[str]) -> DeletePlan:
         """Compute a delete plan from selected paths, skipping locked items."""
@@ -59,6 +66,14 @@ class DeleteService:
 
     def delete_to_recycle(self, paths: list[str]) -> DeleteResult:
         """Send files to recycle bin and report per-path results."""
+        # Release any UI-held file handles (e.g., preview/video) before deleting
+        try:
+            if self._handle_releaser is not None:
+                self._handle_releaser()
+        except (AttributeError, RuntimeError, OSError):
+            # Best-effort; do not block delete - UI cleanup can fail for various reasons
+            pass
+
         success: list[str] = []
         failed: list[tuple[str, str]] = []
         for p in paths:

@@ -34,13 +34,17 @@
 ## 2. CSV 規格與匯出規則
 
 - 欄位（順序固定）：
-  - `GroupNumber, IsMark, IsLocked, FolderPath, FilePath, Capture Date, Modified Date, FileSize`
+  - `GroupNumber, IsMark, IsLocked, FolderPath, FilePath, Capture Date, Modified Date, Creation Date, Shot Date, FileSize`
 - 匯入：
   - 標頭對應必須；缺欄/型別錯誤以容錯策略處理並記錄日誌；忽略其他欄位
   - `FileSize` 欄位若為人類可讀字串（如 "1.44MB"），匯入後將在內部以檔案實際大小覆寫（Bytes），若已經是Bytes（整數），則直接使用
+  - `Capture Date`：沿用舊欄位，視為來源拍攝日期備援
+  - `Creation Date`：以檔案系統建立時間 `os.path.getctime` 取得（Windows 即建立時間）；匯入時若 CSV 無此欄位或空值，內部以檔案系統值覆寫
+  - `Shot Date`：以 EXIF `DateTimeOriginal` 為主；匯入時若 CSV 無此欄位或空值，先嘗試 EXIF；若無 EXIF，則以 `Capture Date` 值備援
 - 匯出：
   - 欄位順序維持一致
   - `FileSize` 一律輸出實際檔案大小 Bytes（整數）
+  - 日期欄位一律輸出格式：`YYYY-MM-DD HH:MM:SS`；無值輸出空字串
 
 ---
 

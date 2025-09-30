@@ -18,6 +18,9 @@ class PhotoRecord:
     capture_date: datetime | None
     modified_date: datetime | None
     file_size_bytes: int
+    # New canonical dates
+    creation_date: datetime | None = None
+    shot_date: datetime | None = None
     gps_latitude: float | None = None
     gps_longitude: float | None = None
     pixel_height: int | None = None

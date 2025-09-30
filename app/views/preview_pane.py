@@ -74,7 +74,7 @@ class PreviewPane(QWidget):
             pass
 
     # Public API
-    def show_single(self, path: str) -> None:
+    def show_single(self, path: str, info: dict | None = None) -> None:
         self.clear()
         self.preview_area.setWidgetResizable(False)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -98,17 +98,46 @@ class PreviewPane(QWidget):
                 self._single_label.setVisible(True)
                 self._single_label.setText("Video file not found or cannot be played")
         else:
-            # Show image preview
+            # Show image preview with optional info block
             self._single_label.setVisible(True)
-            self._single_label.setText("Loading…")
+            if info and isinstance(info, dict):
+                name = info.get("name") or ""
+                folder = info.get("folder") or ""
+                size_txt = info.get("size") or ""
+                creation = info.get("creation") or ""
+                shot = info.get("shot") or ""
+                parts = [
+                    p
+                    for p in [
+                        name,
+                        folder,
+                        f"{size_txt} Bytes" if size_txt else "",
+                        creation and f"Created: {creation}" or "",
+                        shot and f"Shot: {shot}" or "",
+                    ]
+                    if p
+                ]
+                header = "\n".join(parts)
+                self._single_label.setText(header + ("\n\nLoading…" if header else "Loading…"))
+            else:
+                self._single_label.setText("Loading…")
             self._current_single_token = self._runner.request_single_preview(path)
 
-    def show_grid(self, items: list[tuple[str, str, str, str]]) -> None:
+    def show_grid(
+        self, items: list[tuple[str, str, str, str] | tuple[str, str, str, str, str, str]]
+    ) -> None:
         self.clear()
         self.preview_area.setWidgetResizable(True)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         # Normalize paths and pre-sort tiles by aspect category and size to pack better
-        normalized = [(normalize_windows_path(p), n, f, s) for (p, n, f, s) in items]
+        normalized: list[tuple[str, str, str, str, str, str]] = []
+        for it in items:
+            if len(it) == 4:
+                p, n, f, s = it  # type: ignore
+                normalized.append((normalize_windows_path(p), n, f, s, "", ""))
+            else:
+                p, n, f, s, c, sh = it  # type: ignore
+                normalized.append((normalize_windows_path(p), n, f, s, c or "", sh or ""))
 
         def _aspect_bucket(path: str) -> int:
             # 0: landscape, 1: square/unknown, 2: portrait
@@ -153,10 +182,10 @@ class PreviewPane(QWidget):
         self._grid_all_players_ready = False
 
         # Check if any items are videos
-        has_videos = any(is_video(p) for p, _, _, _ in self._grid_items)
+        has_videos = any(is_video(it[0]) for it in self._grid_items)
 
         for i, it in enumerate(self._grid_items):
-            p, name, folder, size_txt = it
+            p, name, folder, size_txt, creation_txt, shot_txt = it
             r, c = divmod(i, cols)
             tile = QWidget()
             v = QVBoxLayout(tile)
@@ -188,7 +217,13 @@ class PreviewPane(QWidget):
                 self._grid_pending_video_labels[p] = img_lbl
 
                 # Add duration to info if available
-                info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes\n(Duration: --:--)")
+                extra = []
+                if creation_txt:
+                    extra.append(f"Created: {creation_txt}")
+                if shot_txt:
+                    extra.append(f"Shot: {shot_txt}")
+                extra_txt = ("\n" + "\n".join(extra)) if extra else ""
+                info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}\n(Duration: --:--)")
                 info.setWordWrap(True)
                 v.addWidget(info)
                 info.setObjectName("info_label")  # Give it a unique object name
@@ -202,7 +237,13 @@ class PreviewPane(QWidget):
                 img_lbl.setFixedSize(thumb_side, thumb_side)
                 img_lbl.setAlignment(Qt.AlignCenter)
                 v.addWidget(img_lbl)
-                info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes")
+                extra = []
+                if creation_txt:
+                    extra.append(f"Created: {creation_txt}")
+                if shot_txt:
+                    extra.append(f"Shot: {shot_txt}")
+                extra_txt = ("\n" + "\n".join(extra)) if extra else ""
+                info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}")
                 info.setWordWrap(True)
                 info.setObjectName("info_label")  # Give it a unique object name
                 v.addWidget(info)
@@ -263,6 +304,52 @@ class PreviewPane(QWidget):
         self._single_label.clear()
         self._single_label.setVisible(False)
         self._single_pm = None
+
+    def release_file_handles(self) -> None:
+        """Release any open media/file handles held by the preview.
+
+        - Stops and detaches the single video player if present
+        - Stops and detaches any grid video players
+        - Clears QPixmaps to drop file-backed resources
+        """
+        try:
+            # Stop single video player
+            if self._single_video_player is not None:
+                try:
+                    self._single_video_player.cleanup()
+                except Exception:
+                    pass
+                try:
+                    self._preview_layout.removeWidget(self._single_video_player)
+                except Exception:
+                    pass
+                try:
+                    self._single_video_player.deleteLater()
+                except Exception:
+                    pass
+                self._single_video_player = None
+
+            # Stop grid video players
+            for player in list(self._grid_video_players.values()):
+                try:
+                    player.cleanup()
+                except Exception:
+                    pass
+                try:
+                    player.deleteLater()
+                except Exception:
+                    pass
+            self._grid_video_players.clear()
+
+            # Clear pixmaps to free resources
+            try:
+                self._single_label.clear()
+            except Exception:
+                pass
+
+        except Exception:
+            # Best-effort; never raise from a release
+            pass
 
     def on_image_loaded(self, token: str, path: str, image: Any) -> None:
         try:
@@ -365,7 +452,8 @@ class PreviewPane(QWidget):
             if not self._grid_items or self._grid_layout is None:
                 return
             # Trigger click handler for each pending video label to create players
-            for p, _, _, _ in self._grid_items:
+            for it in self._grid_items:
+                p = it[0]
                 if is_video(p) and p in self._grid_pending_video_labels:
                     lbl = self._grid_pending_video_labels.get(p)
                     if lbl and hasattr(lbl, "mousePressEvent"):
@@ -381,9 +469,9 @@ class PreviewPane(QWidget):
         if not self._grid_items:
             return
         pending = [
-            p
-            for (p, _, _, _) in self._grid_items
-            if is_video(p) and p not in self._grid_video_players
+            it[0]
+            for it in self._grid_items
+            if is_video(it[0]) and it[0] not in self._grid_video_players
         ]
         if pending:
             return
@@ -422,10 +510,10 @@ class PreviewPane(QWidget):
             self._grid_labels = {}
 
             # Check if any items are videos for controller
-            has_videos = any(is_video(p) for p, _, _, _ in self._grid_items)
+            has_videos = any(is_video(it[0]) for it in self._grid_items)
 
             for i, it in enumerate(self._grid_items):
-                p, name, folder, size_txt = it
+                p, name, folder, size_txt, creation_txt, shot_txt = it
                 r, c = divmod(i, cols)
                 tile = QWidget()
                 v = QVBoxLayout(tile)
@@ -454,7 +542,15 @@ class PreviewPane(QWidget):
                     img_lbl.mousePressEvent = _make_click_handler2()
                     v.addWidget(img_lbl)
 
-                    info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes\n(Duration: --:--)")
+                    extra = []
+                    if creation_txt:
+                        extra.append(f"Created: {creation_txt}")
+                    if shot_txt:
+                        extra.append(f"Shot: {shot_txt}")
+                    extra_txt = ("\n" + "\n".join(extra)) if extra else ""
+                    info = QLabel(
+                        f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}\n(Duration: --:--)"
+                    )
                     info.setWordWrap(True)
                     info.setObjectName("info_label")
                     v.addWidget(info)
@@ -468,7 +564,13 @@ class PreviewPane(QWidget):
                     img_lbl.setFixedSize(thumb_side, thumb_side)
                     img_lbl.setAlignment(Qt.AlignCenter)
                     v.addWidget(img_lbl)
-                    info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes")
+                    extra = []
+                    if creation_txt:
+                        extra.append(f"Created: {creation_txt}")
+                    if shot_txt:
+                        extra.append(f"Shot: {shot_txt}")
+                    extra_txt = ("\n" + "\n".join(extra)) if extra else ""
+                    info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}")
                     info.setWordWrap(True)
                     info.setObjectName("info_label")
                     v.addWidget(info)
