@@ -27,27 +27,29 @@ class FileRecord:
     misnamed: bool = False   # True if magic bytes differ from file extension
 
 
-def scan_sources(sources: dict[str, Path]) -> list[FileRecord]:
+def scan_sources(
+    sources: dict[str, Path],
+    limit: int | None = None,
+) -> list[FileRecord]:
     """Walk each source directory and return all discovered FileRecords.
 
     Args:
-        sources: Mapping of label → root path, e.g.
-                 {'iphone': Path('\\\\LinXiaoYun\\home\\Photos\\MobileBackup\\iPhone'),
-                  'takeout': Path('D:\\Downloads\\Takeout\\Google 相簿'),
-                  'jdrive': Path('J:\\圖片')}
+        sources: Mapping of label → root path.
+        limit: If set, stop after this many files per source (for debug/dry-run).
     """
     records: list[FileRecord] = []
     for label, root in sources.items():
         if not root.exists():
             raise FileNotFoundError(f"Source directory not found: {root}")
-        records.extend(_scan_dir(root, label))
+        records.extend(_scan_dir(root, label, limit=limit))
     return records
 
 
-def _scan_dir(root: Path, label: str) -> list[FileRecord]:
+def _scan_dir(root: Path, label: str, limit: int | None = None) -> list[FileRecord]:
     """Recursively walk root and return FileRecords with Live Photo pairs resolved."""
     # Collect all media files grouped by directory for efficient pairing
     by_dir: dict[Path, list[Path]] = {}
+    total = 0
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -56,6 +58,9 @@ def _scan_dir(root: Path, label: str) -> list[FileRecord]:
         if path.suffix.lower() not in MEDIA_EXTENSIONS:
             continue
         by_dir.setdefault(path.parent, []).append(path)
+        total += 1
+        if limit and total >= limit:
+            break
 
     records: list[FileRecord] = []
     for directory, files in by_dir.items():
