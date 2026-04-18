@@ -36,6 +36,10 @@ class MenuController:
 
         # File Menu
         file_menu = menubar.addMenu("File")
+        self.actions["open_manifest"] = file_menu.addAction("Open Manifest…")
+        self.actions["save_manifest"] = file_menu.addAction("Save Manifest Decisions…")
+        self.actions["save_manifest"].setEnabled(False)
+        file_menu.addSeparator()
         self.actions["import"] = file_menu.addAction("Import CSV…")
         self.actions["export"] = file_menu.addAction("Export CSV…")
         self.actions["delete"] = file_menu.addAction("Delete Selected…")
@@ -77,6 +81,12 @@ class MenuController:
             handlers: Dictionary mapping action names to handler callables
         """
         # File menu actions
+        if "open_manifest" in handlers:
+            self.actions["open_manifest"].triggered.connect(handlers["open_manifest"])
+
+        if "save_manifest" in handlers:
+            self.actions["save_manifest"].triggered.connect(handlers["save_manifest"])
+
         if "import" in handlers:
             self.actions["import"].triggered.connect(handlers["import"])
 
