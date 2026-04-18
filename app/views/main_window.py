@@ -207,6 +207,8 @@ class MainWindow(QMainWindow):
         """Connect all signal/slot relationships."""
         # Menu action handlers
         handlers = {
+            "open_manifest": self.on_open_manifest,
+            "save_manifest": self.on_save_manifest,
             "import": self.on_import_csv,
             "export": self.on_export_csv,
             "delete": self.on_delete_selected,
@@ -266,6 +268,14 @@ class MainWindow(QMainWindow):
         pass
 
     # PRESERVED: Menu action handlers
+
+    def on_open_manifest(self) -> None:
+        """Handle Open Manifest action."""
+        self.file_operations.import_manifest()
+
+    def on_save_manifest(self) -> None:
+        """Handle Save Manifest Decisions action."""
+        self.file_operations.save_manifest_decisions()
 
     def on_import_csv(self) -> None:
         """Handle CSV import action."""
