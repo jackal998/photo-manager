@@ -95,6 +95,9 @@ def main() -> int:
     from scanner.dedup import HashResult, classify
     from scanner.manifest import write_manifest, print_summary
 
+    print("Read-only scan — no files will be moved or deleted.", flush=True)
+    print("MOVE / SKIP / REVIEW in the results are planned actions only.\n", flush=True)
+
     # --- Walk sources (print per-source progress) ---
     limit_note = f" (capped at {args.limit} per source)" if args.limit else ""
     print(f"Scanning {len(sources)} source(s){limit_note}…", flush=True)

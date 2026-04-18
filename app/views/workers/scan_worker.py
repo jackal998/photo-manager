@@ -51,6 +51,10 @@ class ScanWorker(QThread):
         import io
         from contextlib import redirect_stdout
 
+        self._emit("Read-only scan — no files will be moved or deleted.")
+        self._emit("MOVE / SKIP / REVIEW in the results are planned actions only.")
+        self._emit("")
+
         # --- 1. Walk sources ---
         self._emit(f"Scanning {len(self.sources)} source(s)…")
         records = []

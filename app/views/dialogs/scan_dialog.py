@@ -24,10 +24,13 @@ from PySide6.QtWidgets import (
 
 from app.views.workers.scan_worker import ScanWorker
 
+# (internal_key, display_label, placeholder_hint)
+# Internal keys are stored in settings.json under "sources.*".
+# Priority order: first entry wins when the same file appears in multiple folders.
 _SOURCES = [
-    ("iphone",  "iPhone backup (NAS)"),
-    ("takeout", "Google Takeout"),
-    ("jdrive",  "J:\\圖片 archive"),
+    ("iphone",  "Folder 1  (highest priority)", "Browse to select a source folder…"),
+    ("takeout", "Folder 2",                     "Browse to select a source folder…"),
+    ("jdrive",  "Folder 3  (lowest priority)",  "Browse to select a source folder…"),
 ]
 
 
@@ -94,21 +97,39 @@ class ScanDialog(QDialog):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
+        # Read-only notice
+        notice = QLabel(
+            "Read-only scan — no files are moved or deleted. "
+            "MOVE / SKIP in the log are planned actions stored in the manifest only."
+        )
+        notice.setWordWrap(True)
+        notice.setStyleSheet("color: #555; font-style: italic; padding: 4px 0;")
+        root.addWidget(notice)
+
         # Source folder rows
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         self._source_rows: dict[str, _SourceRow] = {}
-        for key, hint in _SOURCES:
+        for key, display, hint in _SOURCES:
             row = _SourceRow(key, hint, self)
             self._source_rows[key] = row
-            form.addRow(QLabel(key + ":"), row)
+            form.addRow(QLabel(display + ":"), row)
 
         # Manifest output path
         self._output_row = _SourceRow("output", "migration_manifest.sqlite", self)
-        self._output_row.field.setPlaceholderText("Output manifest path")
-        form.addRow(QLabel("output:"), self._output_row)
+        self._output_row.field.setPlaceholderText("Output manifest path (.sqlite)")
+        form.addRow(QLabel("Save manifest to:"), self._output_row)
 
         root.addLayout(form)
+
+        # Priority note
+        priority_note = QLabel(
+            "When the same photo exists in multiple folders, "
+            "the copy from the highest-priority folder is kept."
+        )
+        priority_note.setWordWrap(True)
+        priority_note.setStyleSheet("color: #666; font-size: 11px; padding: 2px 0 6px 0;")
+        root.addWidget(priority_note)
 
         # Progress log
         self._log_widget = QPlainTextEdit()
