@@ -15,6 +15,9 @@ Usage examples:
   # Summary only, no DB written
   python scan.py --source ... --dry-run
 
+  # Debug: cap to 100 files per source (avoids full network read)
+  python scan.py --source ... --dry-run --limit 100
+
   # Tighter near-duplicate threshold
   python scan.py --source ... --similarity-threshold 6
 """
@@ -71,6 +74,13 @@ def main() -> int:
         action="store_true",
         help="Print summary only; do not write the manifest file",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cap to N files per source — for debugging without reading the full network share",
+    )
     args = parser.parse_args()
 
     sources: dict[str, Path] = {}
@@ -85,28 +95,42 @@ def main() -> int:
     from scanner.dedup import HashResult, classify
     from scanner.manifest import write_manifest, print_summary
 
-    print(f"Scanning {len(sources)} source(s)…")
-    records = scan_sources(sources)
-    print(f"  Found {len(records):,} media files")
+    # --- Walk sources (print per-source progress) ---
+    limit_note = f" (capped at {args.limit} per source)" if args.limit else ""
+    print(f"Scanning {len(sources)} source(s){limit_note}…", flush=True)
+    records = []
+    for label, root in sources.items():
+        print(f"  Walking {label}: {root} …", end=" ", flush=True)
+        partial = scan_sources({label: root}, limit=args.limit)
+        print(f"{len(partial):,} files", flush=True)
+        records.extend(partial)
+    print(f"  Total: {len(records):,} media files", flush=True)
 
-    print("Computing hashes…")
-    hash_results: list[HashResult] = []
-
-    # Batch EXIF date extraction via exiftool
-    print("Reading EXIF dates (exiftool)…")
+    # --- Batch EXIF date extraction via exiftool (chunked) ---
     all_paths = [r.path for r in records]
+    chunk_size = 500
+    n_chunks = (len(all_paths) + chunk_size - 1) // chunk_size
+    print(f"Reading EXIF dates ({len(all_paths):,} files, {n_chunks} chunk(s))…", flush=True)
     try:
         with ExiftoolProcess() as et:
-            dates = batch_read_dates(all_paths, et)
+            dates = {}
+            for i in range(0, len(all_paths), chunk_size):
+                chunk = all_paths[i: i + chunk_size]
+                dates.update(batch_read_dates(chunk, et, chunk_size=chunk_size))
+                done = min(i + chunk_size, len(all_paths))
+                print(f"  EXIF {done:,}/{len(all_paths):,}", end="\r", flush=True)
+            print(f"  EXIF done — {sum(1 for v in dates.values() if v):,} dates found", flush=True)
     except FileNotFoundError:
         print(
-            "WARNING: exiftool not found on PATH — EXIF dates unavailable.\n"
+            "\nWARNING: exiftool not found on PATH — EXIF dates unavailable.\n"
             "Install from https://exiftool.org/ and ensure it is in your PATH.",
             file=sys.stderr,
         )
         dates = {p: None for p in all_paths}
 
-    # Compute SHA-256 + pHash
+    # --- Compute SHA-256 + pHash ---
+    print(f"Hashing {len(records):,} files…", flush=True)
+    hash_results: list[HashResult] = []
     iterable = tqdm(records, desc="Hashing", unit="file") if _TQDM else records
     for record in iterable:
         sha256 = compute_sha256(record.path)
@@ -117,18 +141,20 @@ def main() -> int:
             phash=phash,
             exif_date=dates.get(record.path),
         ))
+    if not _TQDM:
+        print("  Hashing done.", flush=True)
 
-    print("Classifying…")
+    print("Classifying…", flush=True)
     rows = classify(hash_results, threshold=args.threshold)
 
     print_summary(rows)
 
     if args.dry_run:
-        print("--dry-run: manifest not written.")
+        print("--dry-run: manifest not written.", flush=True)
         return 0
 
     write_manifest(rows, args.output)
-    print(f"Manifest written to: {args.output}")
+    print(f"Manifest written to: {args.output}", flush=True)
     return 0
 
 
