@@ -293,3 +293,78 @@ GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileS
 - Selected：UI 當前選取狀態（不直接對應 CSV 欄位）
 - Marked：`IsMark == 1`
 - Locked：`IsLocked == 1`（僅 App 內，非檔案屬性）
+
+---
+
+## 20. Scanner Architecture (Phase 1 — pHash Deduplication)
+
+Replaces Cisdem Duplicate Finder. Produces `migration_manifest.sqlite` which
+the review GUI loads via `ManifestRepository`.
+
+### Pipeline stages
+
+```
+scan_sources()  →  batch_read_dates()  →  compute_sha256/phash()  →  classify()  →  write_manifest()
+   walker           exif (exiftool)         hasher                    dedup          manifest
+```
+
+### Module responsibilities
+
+| Module | File | Responsibility |
+|--------|------|---------------|
+| `scanner.walker` | `scanner/walker.py` | rglob each source dir; detect media type; pair Live Photos (same-stem HEIC+MOV); yield `FileRecord` |
+| `scanner.exif` | `scanner/exif.py` | Persistent exiftool `-stay_open` process; batch EXIF reads (chunked ≤500/call) |
+| `scanner.hasher` | `scanner/hasher.py` | SHA-256 (all files) + pHash via `imagehash` (photos only; RAW uses embedded JPEG thumb) |
+| `scanner.dedup` | `scanner/dedup.py` | Group by SHA-256 → EXACT_DUPLICATE; group by pHash → FORMAT_DUPLICATE or REVIEW_DUPLICATE; apply RAW+lossy exception; propagate Live Photo pairs |
+| `scanner.manifest` | `scanner/manifest.py` | Write SQLite `migration_manifest`; `print_summary` action counts |
+| `scanner.media` | `scanner/media.py` | `MEDIA_EXTENSIONS`, `SKIP_FILENAMES`, Live Photo pair logic, `_magic_type` |
+
+### Classification rules
+
+| Condition | Action |
+|-----------|--------|
+| SHA-256 match | `SKIP` (EXACT_DUPLICATE) |
+| pHash hamming == 0, both lossy | `SKIP` lower-priority (FORMAT_DUPLICATE) |
+| pHash hamming == 0, one RAW + one lossy | Both `MOVE` (complementary) |
+| pHash hamming 1–10 | `REVIEW_DUPLICATE` (human review in GUI) |
+| No EXIF DateTimeOriginal | `UNDATED` |
+| Otherwise | `MOVE` |
+
+Source priority (EXACT_DUPLICATE): `iphone > takeout > jdrive`  
+Format priority (FORMAT_DUPLICATE): `heic > jpeg > png > others`
+
+### GUI integration
+
+`ScanDialog` (in `app/views/dialogs/`) lets the user pick source folders and
+runs `ScanWorker` (a `QThread`) in the background. On completion it calls
+`MainWindow._load_manifest_from_path()` which invokes `ManifestRepository.load()`
+to map REVIEW_DUPLICATE rows into the existing `PhotoGroup`/`PhotoRecord` tree.
+
+`ManifestRepository.save()` writes human decisions back to the manifest
+(`SKIP`/`MOVE`) and marks rows `executed=1`.
+
+### CLI
+
+```bash
+python scan.py \
+  --source iphone="\NAS\Photos\MobileBackup" \
+  --source takeout="D:\Downloads\Takeout" \
+  --source jdrive="J:\圖片" \
+  --output migration_manifest.sqlite
+
+python scan.py ... --limit 200 --dry-run   # bounded debug run
+```
+
+### manifest schema (key columns)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `source_path` | TEXT | Absolute path |
+| `source_label` | TEXT | `iphone` / `takeout` / `jdrive` |
+| `dest_path` | TEXT | NULL for SKIP/UNDATED |
+| `action` | TEXT | MOVE / SKIP / REVIEW_DUPLICATE / UNDATED |
+| `source_hash` | TEXT | SHA-256 hex |
+| `phash` | TEXT | 64-bit perceptual hash hex; NULL for video |
+| `hamming_distance` | INTEGER | Distance to `duplicate_of`'s phash |
+| `duplicate_of` | TEXT | source_path of kept file |
+| `executed` | INTEGER | 0=pending 1=done 2=failed |

@@ -19,5 +19,11 @@
   },
   "ui": {
     "locale": "zh-TW"
+  },
+  "sources": {
+    "iphone": "",
+    "takeout": "",
+    "jdrive": "",
+    "output": "migration_manifest.sqlite"
   }
 }
