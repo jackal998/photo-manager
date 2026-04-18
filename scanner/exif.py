@@ -74,14 +74,30 @@ def _parse_exif_date(raw: str) -> Optional[datetime]:
         return None
 
 
-def batch_read_dates(paths: list[Path], et: ExiftoolProcess) -> dict[Path, Optional[datetime]]:
-    """Return {path: DateTimeOriginal} for all paths in one exiftool call.
+_EXIF_CHUNK = 500  # files per exiftool call — avoids memory/command-line limits
+
+
+def batch_read_dates(
+    paths: list[Path],
+    et: ExiftoolProcess,
+    chunk_size: int = _EXIF_CHUNK,
+) -> dict[Path, Optional[datetime]]:
+    """Return {path: DateTimeOriginal} for all paths, chunked to avoid limits.
 
     Falls back to CreateDate / QuickTime:CreateDate when DateTimeOriginal is absent.
+    Processes paths in chunks of chunk_size to keep each exiftool call manageable.
     """
     if not paths:
         return {}
 
+    result: dict[Path, Optional[datetime]] = {}
+    for offset in range(0, len(paths), chunk_size):
+        chunk = paths[offset: offset + chunk_size]
+        result.update(_read_chunk(chunk, et))
+    return result
+
+
+def _read_chunk(paths: list[Path], et: ExiftoolProcess) -> dict[Path, Optional[datetime]]:
     args = ["-DateTimeOriginal", "-CreateDate", "-QuickTime:CreateDate", "-s3", "-f"]
     args += [str(p) for p in paths]
     output = et.execute(args)
