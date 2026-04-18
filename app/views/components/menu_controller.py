@@ -36,6 +36,8 @@ class MenuController:
 
         # File Menu
         file_menu = menubar.addMenu("File")
+        self.actions["scan_sources"] = file_menu.addAction("Scan Sources…")
+        file_menu.addSeparator()
         self.actions["open_manifest"] = file_menu.addAction("Open Manifest…")
         self.actions["save_manifest"] = file_menu.addAction("Save Manifest Decisions…")
         self.actions["save_manifest"].setEnabled(False)
@@ -81,6 +83,9 @@ class MenuController:
             handlers: Dictionary mapping action names to handler callables
         """
         # File menu actions
+        if "scan_sources" in handlers:
+            self.actions["scan_sources"].triggered.connect(handlers["scan_sources"])
+
         if "open_manifest" in handlers:
             self.actions["open_manifest"].triggered.connect(handlers["open_manifest"])
 

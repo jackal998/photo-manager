@@ -207,6 +207,7 @@ class MainWindow(QMainWindow):
         """Connect all signal/slot relationships."""
         # Menu action handlers
         handlers = {
+            "scan_sources": self.on_scan_sources,
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
             "import": self.on_import_csv,
@@ -268,6 +269,34 @@ class MainWindow(QMainWindow):
         pass
 
     # PRESERVED: Menu action handlers
+
+    def on_scan_sources(self) -> None:
+        """Open the Scan Sources dialog."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        dlg = ScanDialog(
+            settings=self._settings,
+            on_scan_complete=self._load_manifest_from_path,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _load_manifest_from_path(self, manifest_path: str) -> None:
+        """Load a manifest directly (called after scan completes or from Open Manifest)."""
+        from infrastructure.manifest_repository import ManifestRepository
+        try:
+            self.vm.load_from_repo(ManifestRepository(), manifest_path)
+            self.file_operations._manifest_path = manifest_path
+            self.show_groups_summary(self.vm.groups)
+            self.refresh_tree(self.vm.groups)
+            try:
+                self.menu_controller.enable_action("save_manifest", True)
+            except AttributeError:
+                pass
+            n = self.vm.group_count
+            self.show_status(f"Loaded manifest: {n} pairs to review")
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Load Manifest Error", str(exc))
 
     def on_open_manifest(self) -> None:
         """Handle Open Manifest action."""
