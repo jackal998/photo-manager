@@ -37,8 +37,22 @@ class MainVM:
 
     def load_csv(self, path: str) -> None:
         """Load CSV `path`, group records, and apply `default_sort` if provided."""
+        self._manifest_path = None
         items: list[PhotoRecord] = list(self._repo.load(path))
         self._source_csv_path = path
+        self._group_records(items)
+
+    def load_from_repo(self, repo, path: str) -> None:
+        """Load from an arbitrary repository (e.g. ManifestRepository).
+
+        Use this when the source is not a CSV (e.g. migration_manifest.sqlite).
+        """
+        self._source_csv_path = None
+        self._manifest_path = path
+        items: list[PhotoRecord] = list(repo.load(path))
+        self._group_records(items)
+
+    def _group_records(self, items: list[PhotoRecord]) -> None:
         grouped: dict[int, list[PhotoRecord]] = defaultdict(list)
         for item in items:
             grouped[item.group_number].append(item)

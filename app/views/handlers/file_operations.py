@@ -75,6 +75,73 @@ class FileOperationsHandler:
         # Optional callable or object with gather_checked_paths() to pull UI state
         self.checked_paths_provider = checked_paths_provider
 
+    def import_manifest(self) -> None:
+        """Open a migration_manifest.sqlite and load REVIEW_DUPLICATE groups."""
+        path, _ = QFileDialog.getOpenFileName(
+            self.parent, "Open Manifest", "", "SQLite Files (*.sqlite *.db);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            from infrastructure.manifest_repository import ManifestRepository
+            manifest_repo = ManifestRepository()
+            self.vm.load_from_repo(manifest_repo, path)
+            self.ui_updater.show_group_counts(self.vm.group_count)
+            self.ui_updater.show_groups_summary(self.vm.groups)
+            self.ui_updater.refresh_tree(self.vm.groups)
+
+            # Enable "Save Manifest Decisions" and remember the open manifest path
+            self._manifest_path = path
+            try:
+                self.parent.menu_controller.enable_action("save_manifest", True)
+            except AttributeError:
+                pass
+
+            n_groups = self.vm.group_count
+            n_items = sum(len(g.items) for g in self.vm.groups)
+            logger.info("Opened manifest: {} | groups={} items={}", path, n_groups, n_items)
+            self.status_reporter.show_status(
+                f"Opened manifest: {n_groups} pairs to review ({n_items} files)"
+            )
+
+        except Exception as ex:
+            logger.exception("Open manifest failed: {}", ex)
+            QMessageBox.critical(self.parent, "Open Manifest Error", str(ex))
+            self.status_reporter.show_status("Open manifest failed")
+
+    def save_manifest_decisions(self) -> None:
+        """Write current is_mark state back to the open manifest."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            QMessageBox.information(self.parent, "Save Manifest", "No manifest open.")
+            return
+
+        try:
+            # Sync marks from UI checkboxes before saving
+            checked_paths: list[str] = []
+            provider = self.checked_paths_provider
+            if provider is not None:
+                if callable(provider):
+                    checked_paths = provider()
+                elif hasattr(provider, "gather_checked_paths"):
+                    checked_paths = provider.gather_checked_paths()
+            if hasattr(self.vm, "update_marks_from_checked_paths"):
+                self.vm.update_marks_from_checked_paths(checked_paths)
+
+            from infrastructure.manifest_repository import ManifestRepository
+            updated = ManifestRepository().save(manifest_path, self.vm.groups)
+            logger.info("Manifest decisions saved: {} rows updated", updated)
+            QMessageBox.information(
+                self.parent, "Save Manifest", f"Saved decisions for {updated} file(s)."
+            )
+            self.status_reporter.show_status(f"Manifest saved ({updated} decisions written)")
+
+        except Exception as ex:
+            logger.exception("Save manifest failed: {}", ex)
+            QMessageBox.critical(self.parent, "Save Manifest Error", str(ex))
+            self.status_reporter.show_status("Save manifest failed")
+
     def import_csv(self) -> None:
         """Handle CSV import with file dialog and error handling."""
         path, _ = QFileDialog.getOpenFileName(self.parent, "Import CSV", "", "CSV Files (*.csv)")
