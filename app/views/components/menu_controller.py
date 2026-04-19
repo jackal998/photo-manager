@@ -45,6 +45,8 @@ class MenuController:
         self.actions["import"] = file_menu.addAction("Import CSV…")
         self.actions["export"] = file_menu.addAction("Export CSV…")
         self.actions["delete"] = file_menu.addAction("Delete Selected…")
+        self.actions["execute_action"] = file_menu.addAction("Execute Action…")
+        self.actions["execute_action"].setEnabled(False)
         file_menu.addSeparator()
         self.actions["exit"] = file_menu.addAction("Exit")
 
@@ -100,6 +102,9 @@ class MenuController:
 
         if "delete" in handlers:
             self.actions["delete"].triggered.connect(handlers["delete"])
+
+        if "execute_action" in handlers:
+            self.actions["execute_action"].triggered.connect(handlers["execute_action"])
 
         if "exit" in handlers:
             self.actions["exit"].triggered.connect(handlers["exit"])

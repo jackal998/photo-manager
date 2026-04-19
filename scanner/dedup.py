@@ -1,8 +1,8 @@
-"""Classify files as KEEP/MOVE/SKIP/REVIEW_DUPLICATE/UNDATED.
+"""Classify files as KEEP/MOVE/EXACT/REVIEW_DUPLICATE/UNDATED.
 
 Classification rules:
-  SHA-256 match                          → SKIP (EXACT_DUPLICATE)
-  pHash hamming == 0, both lossy         → SKIP lower priority (FORMAT_DUPLICATE)
+  SHA-256 match                          → EXACT (exact duplicate)
+  pHash hamming == 0, both lossy         → EXACT lower priority (format duplicate)
   pHash hamming == 0, one RAW + lossy    → MOVE both (complementary)
   pHash hamming 1–threshold              → REVIEW_DUPLICATE
   no EXIF date                           → UNDATED
@@ -120,9 +120,9 @@ def _classify_exact(records: list[HashResult], rows: dict[Path, ManifestRow]) ->
         for duplicate in group[1:]:
             rows[duplicate.record.path] = _make_row(
                 duplicate,
-                "SKIP",
+                "EXACT",
                 duplicate_of=str(keeper.record.path),
-                reason=f"EXACT_DUPLICATE of {keeper.record.path.name}",
+                reason=f"exact duplicate of {keeper.record.path.name}",
             )
 
 
@@ -172,10 +172,10 @@ def _classify_format_group(group: list[HashResult], rows: dict[Path, ManifestRow
             continue
         rows[duplicate.record.path] = _make_row(
             duplicate,
-            "SKIP",
+            "EXACT",
             duplicate_of=str(keeper.record.path),
             hamming=0,
-            reason=f"FORMAT_DUPLICATE of {keeper.record.path.name} "
+            reason=f"format duplicate of {keeper.record.path.name} "
                    f"({duplicate.record.file_type} vs {keeper.record.file_type})",
         )
 
@@ -231,7 +231,7 @@ def _propagate_pairs(records: list[HashResult], rows: dict[Path, ManifestRow]) -
         own_row = rows.get(hr.record.path)
         if own_row is None:
             continue
-        if own_row.action in ("SKIP", "KEEP"):
+        if own_row.action in ("EXACT", "KEEP"):
             partner_hr = path_to_hr.get(partner_path)
             if partner_hr:
                 rows[partner_path] = _make_row(

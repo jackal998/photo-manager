@@ -2,22 +2,18 @@
 into PhotoRecord/PhotoGroup objects for the Qt review UI.
 
 Load flow:
-  Every row is loaded.  Files with a duplicate_of reference (SKIP /
+  Every row is loaded.  Files with a duplicate_of reference (EXACT /
   REVIEW_DUPLICATE) are grouped with their reference as a pair.
   Files that appear only as references are not duplicated as standalone rows.
-  - REVIEW_DUPLICATE candidate  → is_mark=True,  is_locked=False
-  - SKIP candidate              → is_mark=True,  is_locked=False
-  - KEEP file                   → is_mark=False, is_locked=True
-  - Reference in a pair         → is_mark=False, is_locked=True
-  - MOVE / UNDATED              → is_mark=False, is_locked=False
+  All records are loaded with is_mark=False, is_locked=False — no automatic
+  pre-selection or locking; the user decides actions directly.
 
   EXIF date is only read for REVIEW_DUPLICATE rows (performance: avoids
-  opening every file with Pillow for the thousands of MOVE/SKIP rows).
+  opening every file with Pillow for the thousands of MOVE/EXACT rows).
 
 Save flow:
-  Non-locked items only:
-    is_mark=True  → action=SKIP,  executed=1
-    is_mark=False → action=MOVE,  executed=1
+  Writes rec.action back to the manifest for every record whose action is
+  non-empty and not KEEP, and marks those rows executed=1.
 """
 
 from __future__ import annotations
@@ -38,7 +34,7 @@ FROM   migration_manifest
 ORDER  BY
     CASE action
         WHEN 'REVIEW_DUPLICATE' THEN 1
-        WHEN 'SKIP'             THEN 2
+        WHEN 'EXACT'            THEN 2
         WHEN 'KEEP'             THEN 3
         WHEN 'UNDATED'          THEN 4
         WHEN 'MOVE'             THEN 5
@@ -51,7 +47,15 @@ ORDER  BY
 _SAVE_SQL = """
 UPDATE migration_manifest
 SET    action = ?, executed = 1
-WHERE  source_path = ? AND action IN ('REVIEW_DUPLICATE', 'MOVE', 'SKIP', 'UNDATED')
+WHERE  source_path = ? AND action NOT IN ('KEEP', '')
+"""
+
+_UPDATE_ACTION_SQL = """
+UPDATE migration_manifest SET action = ? WHERE source_path = ?
+"""
+
+_MARK_EXECUTED_SQL = """
+UPDATE migration_manifest SET executed = 1 WHERE source_path = ?
 """
 
 
@@ -128,7 +132,7 @@ class ManifestRepository:
         # and must not also appear as standalone single-item rows.
         ref_paths: set[str] = set()
         for row in all_rows:
-            if row["action"] in ("REVIEW_DUPLICATE", "SKIP") and row["duplicate_of"]:
+            if row["action"] in ("REVIEW_DUPLICATE", "EXACT") and row["duplicate_of"]:
                 ref_paths.add(row["duplicate_of"])
 
         for row in all_rows:
@@ -136,23 +140,21 @@ class ManifestRepository:
             group_number: int = row["id"]
             source_path: str = row["source_path"]
             ref_path: str | None = row["duplicate_of"]
-            is_pair = bool(ref_path) and action in ("REVIEW_DUPLICATE", "SKIP")
+            is_pair = bool(ref_path) and action in ("REVIEW_DUPLICATE", "EXACT")
 
             # Skip standalone emit for files already shown as pair references
             if source_path in ref_paths and not is_pair:
                 continue
 
-            is_keep = action == "KEEP"
             # Only read EXIF for REVIEW_DUPLICATE — avoids opening thousands of files
             read_exif = action == "REVIEW_DUPLICATE"
-            candidate_marked = action in ("SKIP", "REVIEW_DUPLICATE")
 
             try:
                 yield _photo_record(
                     source_path=source_path,
                     group_number=group_number,
-                    is_mark=candidate_marked,
-                    is_locked=is_keep,
+                    is_mark=False,
+                    is_locked=False,
                     action=action,
                     read_exif=read_exif,
                 )
@@ -166,7 +168,7 @@ class ManifestRepository:
                         source_path=ref_path,
                         group_number=group_number,
                         is_mark=False,
-                        is_locked=True,
+                        is_locked=False,
                         action="",        # reference role — action belongs to the candidate
                         read_exif=read_exif,
                     )
@@ -176,25 +178,41 @@ class ManifestRepository:
     # ------------------------------------------------------------------ save
 
     def save(self, manifest_path: str, groups: Iterable[PhotoGroup]) -> int:
-        """Write user decisions from groups back to the manifest.
+        """Write current action for every record back to the manifest.
 
-        For each non-locked item in each group:
-          is_mark=True  → SKIP  (user confirmed skip / not worth migrating)
-          is_mark=False → MOVE  (user wants this file migrated)
-        KEEP rows and reference files (is_locked=True) are never changed.
+        Rows with action='' or action='KEEP' are skipped — those are either
+        reference-role files or authoritative iPhone sources that never change.
+        All other rows are written with their current action and marked executed=1.
         """
         conn = sqlite3.connect(manifest_path)
         updated = 0
         try:
             for group in groups:
                 for rec in group.items:
-                    if rec.is_locked:
+                    if not rec.action or rec.action == "KEEP":
                         continue
-                    new_action = "SKIP" if rec.is_mark else "MOVE"
-                    cursor = conn.execute(_SAVE_SQL, (new_action, rec.file_path))
+                    cursor = conn.execute(_SAVE_SQL, (rec.action, rec.file_path))
                     updated += cursor.rowcount
             conn.commit()
         finally:
             conn.close()
         logger.info("Manifest decisions saved: {} rows updated", updated)
         return updated
+
+    def update_action(self, manifest_path: str, file_path: str, new_action: str) -> None:
+        """Update the action for a single row without changing executed flag."""
+        conn = sqlite3.connect(manifest_path)
+        try:
+            conn.execute(_UPDATE_ACTION_SQL, (new_action, file_path))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def mark_executed(self, manifest_path: str, file_paths: list[str]) -> None:
+        """Mark a list of rows as executed=1."""
+        conn = sqlite3.connect(manifest_path)
+        try:
+            conn.executemany(_MARK_EXECUTED_SQL, [(p,) for p in file_paths])
+            conn.commit()
+        finally:
+            conn.close()

@@ -213,6 +213,7 @@ class MainWindow(QMainWindow):
             "import": self.on_import_csv,
             "export": self.on_export_csv,
             "delete": self.on_delete_selected,
+            "execute_action": self.on_execute_action,
             "select_by": self.on_open_select_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
             "exit": self.close,
@@ -293,17 +294,11 @@ class MainWindow(QMainWindow):
             except AttributeError:
                 pass
             n = self._vm.group_count
-            if n == 0:
-                QMessageBox.information(
-                    self,
-                    "No Pairs to Review",
-                    "The manifest contains no REVIEW_DUPLICATE pairs.\n\n"
-                    "This happens when all duplicates were exact byte-for-byte copies "
-                    "(SHA-256 match → SKIP). Those are already decided — no human review needed.\n\n"
-                    "REVIEW_DUPLICATE only appears for perceptually similar files that differ "
-                    "in format or quality (e.g. the same photo as JPG and HEIC).",
-                )
-            self.statusBar().showMessage(f"Loaded manifest: {n} pair(s) to review", 5000)
+            try:
+                self.menu_controller.enable_action("execute_action", True)
+            except AttributeError:
+                pass
+            self.statusBar().showMessage(f"Loaded manifest: {n} group(s)", 5000)
         except Exception as exc:
             QMessageBox.critical(self, "Load Manifest Error", str(exc))
 
@@ -327,6 +322,10 @@ class MainWindow(QMainWindow):
         """Handle delete selected action."""
         selected_paths = self.selection_controller.gather_checked_paths()
         self.file_operations.delete_selected_files(selected_paths)
+
+    def on_execute_action(self) -> None:
+        """Handle Execute Action — open review dialog and run planned operations."""
+        self.file_operations.execute_action()
 
     def on_open_select_dialog(self) -> None:
         """Handle open select dialog action."""
@@ -662,3 +661,7 @@ class ActionHandlersImpl:
     def show_select_dialog(self) -> None:
         """Show select by field/regex dialog."""
         self.dialog.show_select_dialog()
+
+    def set_action(self, items: list[dict], action: str) -> None:
+        """Set scanner action for file items."""
+        self.file_ops.set_action(items, action)

@@ -423,6 +423,42 @@ class FileOperationsHandler:
             logger.error("Delete files failed: {}", e)
             QMessageBox.critical(self.parent, "Error", f"Delete failed: {str(e)}")
 
+    def set_action(self, items: list[dict], new_action: str) -> None:
+        """Set the scanner action for the given file items in memory and in SQLite."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            return
+        from infrastructure.manifest_repository import ManifestRepository
+        repo = ManifestRepository()
+        for item in items:
+            if item.get("type") != "file":
+                continue
+            file_path = item["path"]
+            for group in self.vm.groups:
+                for rec in group.items:
+                    if rec.file_path == file_path:
+                        rec.action = new_action
+                        break
+            repo.update_action(manifest_path, file_path, new_action)
+        self.ui_updater.refresh_tree(self.vm.groups)
+        self.status_reporter.show_status(f"Action updated to {new_action}")
+
+    def execute_action(self) -> None:
+        """Open the Execute Action review dialog and run planned operations."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            QMessageBox.information(self.parent, "Execute Action", "No manifest loaded.")
+            return
+        from PySide6.QtWidgets import QDialog
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self.vm.groups, manifest_path, self.parent)
+        if dlg.exec() == QDialog.Accepted:
+            if dlg.deleted_paths:
+                self.vm.remove_deleted_and_prune(dlg.deleted_paths)
+            self.ui_updater.refresh_tree(self.vm.groups)
+            total = len(dlg.deleted_paths) + len(dlg.executed_paths)
+            self.status_reporter.show_status(f"Executed {total} action(s)")
+
     def _prompt_csv_update_after_delete(self, success_paths: list[str]) -> None:
         """Prompt user to update source CSV after successful delete operation.
 
