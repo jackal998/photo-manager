@@ -45,6 +45,11 @@ class MenuController:
         self.actions["import"] = file_menu.addAction("Import CSV…")
         self.actions["export"] = file_menu.addAction("Export CSV…")
         self.actions["delete"] = file_menu.addAction("Delete Selected…")
+        set_action_submenu = file_menu.addMenu("Set Action")
+        set_action_submenu.setEnabled(False)
+        self.actions["set_action_delete"] = set_action_submenu.addAction("delete")
+        self.actions["set_action_keep"] = set_action_submenu.addAction("keep")
+        self._set_action_submenu = set_action_submenu
         self.actions["execute_action"] = file_menu.addAction("Execute Action…")
         self.actions["execute_action"].setEnabled(False)
         file_menu.addSeparator()
@@ -103,6 +108,12 @@ class MenuController:
         if "delete" in handlers:
             self.actions["delete"].triggered.connect(handlers["delete"])
 
+        if "set_action_delete" in handlers:
+            self.actions["set_action_delete"].triggered.connect(handlers["set_action_delete"])
+
+        if "set_action_keep" in handlers:
+            self.actions["set_action_keep"].triggered.connect(handlers["set_action_keep"])
+
         if "execute_action" in handlers:
             self.actions["execute_action"].triggered.connect(handlers["execute_action"])
 
@@ -158,6 +169,11 @@ class MenuController:
         action = self.actions.get(name)
         if action:
             action.setEnabled(enabled)
+        # Keep the Set Action submenu in sync with its children
+        if name in ("set_action_delete", "set_action_keep"):
+            submenu = getattr(self, "_set_action_submenu", None)
+            if submenu is not None:
+                submenu.setEnabled(enabled)
 
     def get_all_actions(self) -> dict[str, QAction]:
         """Get all actions.

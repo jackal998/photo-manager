@@ -423,8 +423,8 @@ class FileOperationsHandler:
             logger.error("Delete files failed: {}", e)
             QMessageBox.critical(self.parent, "Error", f"Delete failed: {str(e)}")
 
-    def set_action(self, items: list[dict], new_action: str) -> None:
-        """Set the scanner action for the given file items in memory and in SQLite."""
+    def set_decision(self, items: list[dict], new_decision: str) -> None:
+        """Set user_decision for the given file items in memory and in SQLite."""
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             return
@@ -437,11 +437,39 @@ class FileOperationsHandler:
             for group in self.vm.groups:
                 for rec in group.items:
                     if rec.file_path == file_path:
-                        rec.action = new_action
+                        rec.user_decision = new_decision
                         break
-            repo.update_action(manifest_path, file_path, new_action)
+            repo.update_decision(manifest_path, file_path, new_decision)
         self.ui_updater.refresh_tree(self.vm.groups)
-        self.status_reporter.show_status(f"Action updated to {new_action}")
+        self.status_reporter.show_status(f"Decision set to '{new_decision}'")
+
+    def batch_set_decision(self, new_decision: str) -> None:
+        """Set user_decision for all Sel-checked files."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            QMessageBox.information(self.parent, "Set Action", "No manifest loaded.")
+            return
+        checked_paths: list[str] = []
+        provider = self.checked_paths_provider
+        if provider is not None:
+            if callable(provider):
+                checked_paths = provider()
+            elif hasattr(provider, "gather_checked_paths"):
+                checked_paths = provider.gather_checked_paths()
+        if not checked_paths:
+            QMessageBox.information(self.parent, "Set Action", "No files selected (use Sel checkboxes).")
+            return
+        from infrastructure.manifest_repository import ManifestRepository
+        repo = ManifestRepository()
+        count = 0
+        for group in self.vm.groups:
+            for rec in group.items:
+                if rec.file_path in checked_paths:
+                    rec.user_decision = new_decision
+                    repo.update_decision(manifest_path, rec.file_path, new_decision)
+                    count += 1
+        self.ui_updater.refresh_tree(self.vm.groups)
+        self.status_reporter.show_status(f"Set '{new_decision}' for {count} file(s)")
 
     def execute_action(self) -> None:
         """Open the Execute Action review dialog and run planned operations."""

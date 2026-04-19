@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt
 
 # Column headers and indices (base order preserved; new columns appended)
 HEADERS: list[str] = [
-    "Group",
+    "Match",
     "Sel",
     "File Name",
     "Folder",

@@ -213,6 +213,8 @@ class MainWindow(QMainWindow):
             "import": self.on_import_csv,
             "export": self.on_export_csv,
             "delete": self.on_delete_selected,
+            "set_action_delete": lambda: self.file_operations.batch_set_decision("delete"),
+            "set_action_keep": lambda: self.file_operations.batch_set_decision("keep"),
             "execute_action": self.on_execute_action,
             "select_by": self.on_open_select_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
@@ -294,10 +296,11 @@ class MainWindow(QMainWindow):
             except AttributeError:
                 pass
             n = self._vm.group_count
-            try:
-                self.menu_controller.enable_action("execute_action", True)
-            except AttributeError:
-                pass
+            for _act in ("execute_action", "set_action_delete", "set_action_keep"):
+                try:
+                    self.menu_controller.enable_action(_act, True)
+                except AttributeError:
+                    pass
             self.statusBar().showMessage(f"Loaded manifest: {n} group(s)", 5000)
         except Exception as exc:
             QMessageBox.critical(self, "Load Manifest Error", str(exc))
@@ -662,6 +665,6 @@ class ActionHandlersImpl:
         """Show select by field/regex dialog."""
         self.dialog.show_select_dialog()
 
-    def set_action(self, items: list[dict], action: str) -> None:
-        """Set scanner action for file items."""
-        self.file_ops.set_action(items, action)
+    def set_decision(self, items: list[dict], decision: str) -> None:
+        """Set user decision (delete/keep) for file items."""
+        self.file_ops.set_decision(items, decision)

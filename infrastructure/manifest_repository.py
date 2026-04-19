@@ -5,15 +5,17 @@ Load flow:
   Every row is loaded.  Files with a duplicate_of reference (EXACT /
   REVIEW_DUPLICATE) are grouped with their reference as a pair.
   Files that appear only as references are not duplicated as standalone rows.
-  All records are loaded with is_mark=False, is_locked=False — no automatic
-  pre-selection or locking; the user decides actions directly.
+  All records load with is_mark=False, is_locked=False and user_decision=""
+  (no automatic pre-selection; the user sets delete/keep explicitly).
 
-  EXIF date is only read for REVIEW_DUPLICATE rows (performance: avoids
-  opening every file with Pillow for the thousands of MOVE/EXACT rows).
+  EXIF date is only read for REVIEW_DUPLICATE rows (performance).
+
+  If the DB pre-dates the user_decision column, an ALTER TABLE migration runs
+  automatically so older manifests open without error.
 
 Save flow:
-  Writes rec.action back to the manifest for every record whose action is
-  non-empty and not KEEP, and marks those rows executed=1.
+  Writes rec.user_decision for every record back to the manifest.
+  (executed=1 is set separately by ExecuteActionDialog after operations run.)
 """
 
 from __future__ import annotations
@@ -29,7 +31,8 @@ from core.models import PhotoGroup, PhotoRecord
 from infrastructure.utils import get_exif_datetime_original, get_filesystem_creation_datetime
 
 _LOAD_ALL_SQL = """
-SELECT id, source_path, source_label, duplicate_of, hamming_distance, reason, action, executed
+SELECT id, source_path, source_label, duplicate_of, hamming_distance, reason,
+       action, executed, user_decision
 FROM   migration_manifest
 ORDER  BY
     CASE action
@@ -45,13 +48,11 @@ ORDER  BY
 """
 
 _SAVE_SQL = """
-UPDATE migration_manifest
-SET    action = ?, executed = 1
-WHERE  source_path = ? AND action NOT IN ('KEEP', '')
+UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
 """
 
-_UPDATE_ACTION_SQL = """
-UPDATE migration_manifest SET action = ? WHERE source_path = ?
+_UPDATE_DECISION_SQL = """
+UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
 """
 
 _MARK_EXECUTED_SQL = """
@@ -66,6 +67,7 @@ def _photo_record(
     is_locked: bool,
     action: str = "",
     read_exif: bool = True,
+    user_decision: str = "",
 ) -> PhotoRecord:
     """Build a PhotoRecord from a source_path, reading metadata from disk.
 
@@ -100,6 +102,7 @@ def _photo_record(
         creation_date=creation,
         shot_date=shot,
         action=action,
+        user_decision=user_decision,
     )
 
 
@@ -111,9 +114,9 @@ class ManifestRepository:
     def load(self, manifest_path: str) -> Iterator[PhotoRecord]:
         """Yield PhotoRecords for every row in the manifest.
 
-        Ordering: REVIEW_DUPLICATE → SKIP → KEEP → UNDATED → MOVE.
-        Paired rows (SKIP / REVIEW_DUPLICATE with duplicate_of) yield
-        candidate first, then locked reference.  Files that already appear
+        Ordering: REVIEW_DUPLICATE → EXACT → KEEP → UNDATED → MOVE.
+        Paired rows (EXACT / REVIEW_DUPLICATE with duplicate_of) yield
+        candidate first, then the reference inline.  Files that already appear
         as references are not also yielded as standalone rows.
         """
         path = Path(manifest_path)
@@ -123,6 +126,14 @@ class ManifestRepository:
         conn = sqlite3.connect(manifest_path)
         conn.row_factory = sqlite3.Row
         try:
+            # Migrate older DBs that lack user_decision column
+            try:
+                conn.execute(
+                    "ALTER TABLE migration_manifest ADD COLUMN user_decision TEXT DEFAULT ''"
+                )
+                conn.commit()
+            except Exception:
+                pass  # column already exists
             all_rows = conn.execute(_LOAD_ALL_SQL).fetchall()
         finally:
             conn.close()
@@ -141,6 +152,7 @@ class ManifestRepository:
             source_path: str = row["source_path"]
             ref_path: str | None = row["duplicate_of"]
             is_pair = bool(ref_path) and action in ("REVIEW_DUPLICATE", "EXACT")
+            user_decision: str = row["user_decision"] or ""
 
             # Skip standalone emit for files already shown as pair references
             if source_path in ref_paths and not is_pair:
@@ -157,6 +169,7 @@ class ManifestRepository:
                     is_locked=False,
                     action=action,
                     read_exif=read_exif,
+                    user_decision=user_decision,
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("Skipping {}: {}", source_path, exc)
@@ -169,8 +182,9 @@ class ManifestRepository:
                         group_number=group_number,
                         is_mark=False,
                         is_locked=False,
-                        action="",        # reference role — action belongs to the candidate
+                        action="",   # reference role — action belongs to the candidate
                         read_exif=read_exif,
+                        user_decision="",  # ref has no independent decision
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping reference {}: {}", ref_path, exc)
@@ -178,20 +192,13 @@ class ManifestRepository:
     # ------------------------------------------------------------------ save
 
     def save(self, manifest_path: str, groups: Iterable[PhotoGroup]) -> int:
-        """Write current action for every record back to the manifest.
-
-        Rows with action='' or action='KEEP' are skipped — those are either
-        reference-role files or authoritative iPhone sources that never change.
-        All other rows are written with their current action and marked executed=1.
-        """
+        """Write user_decision for every record back to the manifest."""
         conn = sqlite3.connect(manifest_path)
         updated = 0
         try:
             for group in groups:
                 for rec in group.items:
-                    if not rec.action or rec.action == "KEEP":
-                        continue
-                    cursor = conn.execute(_SAVE_SQL, (rec.action, rec.file_path))
+                    cursor = conn.execute(_SAVE_SQL, (rec.user_decision, rec.file_path))
                     updated += cursor.rowcount
             conn.commit()
         finally:
@@ -199,11 +206,11 @@ class ManifestRepository:
         logger.info("Manifest decisions saved: {} rows updated", updated)
         return updated
 
-    def update_action(self, manifest_path: str, file_path: str, new_action: str) -> None:
-        """Update the action for a single row without changing executed flag."""
+    def update_decision(self, manifest_path: str, file_path: str, decision: str) -> None:
+        """Update user_decision for a single row (right-click set action)."""
         conn = sqlite3.connect(manifest_path)
         try:
-            conn.execute(_UPDATE_ACTION_SQL, (new_action, file_path))
+            conn.execute(_UPDATE_DECISION_SQL, (decision, file_path))
             conn.commit()
         finally:
             conn.close()

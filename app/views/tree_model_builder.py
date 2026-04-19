@@ -20,6 +20,36 @@ from app.views.constants import (
     SORT_ROLE,
 )
 
+_ACTION_TO_MATCH = {
+    "EXACT": "exact",
+    "REVIEW_DUPLICATE": "similar",
+}
+
+
+def _group_match_label(items: list) -> str:
+    """Derive group-level match label from its files."""
+    for item in items:
+        if getattr(item, "action", "") == "EXACT":
+            return "exact"
+    for item in items:
+        if getattr(item, "action", "") == "REVIEW_DUPLICATE":
+            return "similar"
+    return ""
+
+
+def _file_match_label(action: str, group_items: list) -> str:
+    """Derive file-level match label; reference files inherit from siblings."""
+    label = _ACTION_TO_MATCH.get(action, "")
+    if label:
+        return label
+    if action == "":  # reference role — inherit from sibling candidate
+        for sibling in group_items:
+            sib = getattr(sibling, "action", "")
+            inherited = _ACTION_TO_MATCH.get(sib, "")
+            if inherited:
+                return inherited
+    return ""
+
 
 def build_model(
     groups: Iterable[object],
@@ -33,14 +63,18 @@ def build_model(
 
     for g in groups:
         group_number = int(getattr(g, "group_number", 0) or 0)
-        group_item = QStandardItem(f"Group {group_number}")
+        items_list = getattr(g, "items", []) or []
+
+        # Col 0 at group row shows the overall match type for the group
+        group_match = _group_match_label(items_list)
+        group_item = QStandardItem(group_match)
         group_item.setEditable(False)
         try:
             group_item.setData(group_number, SORT_ROLE)
         except Exception:
             pass
 
-        group_count_val = len(getattr(g, "items", []) or [])
+        group_count_val = len(items_list)
         group_row = [
             group_item,
             QStandardItem(""),
@@ -60,16 +94,22 @@ def build_model(
             it.setEditable(False)
         model.appendRow(group_row)
 
-        for p in getattr(g, "items", []) or []:
+        for p in items_list:
             name = Path(getattr(p, "file_path", "")).name
             folder = getattr(p, "folder_path", "")
             size_num = int(getattr(p, "file_size_bytes", 0) or 0)
-            # Dates as strings for display; keep numeric roles for sorting
             shot_dt = getattr(p, "shot_date", None)
             creation_dt = getattr(p, "creation_date", None)
             shot_txt = shot_dt.strftime("%Y-%m-%d %H:%M:%S") if shot_dt else ""
             creation_txt = creation_dt.strftime("%Y-%m-%d %H:%M:%S") if creation_dt else ""
-            item_action = getattr(p, "action", "") or ""
+
+            # Col 0 at file row: match type, with sibling-inherit for reference files
+            file_action = getattr(p, "action", "") or ""
+            file_match = _file_match_label(file_action, items_list)
+
+            # Col 8: user's decision (delete / keep / "")
+            item_decision = getattr(p, "user_decision", "") or ""
+
             check = QStandardItem("")
             check.setEditable(False)
             check.setCheckable(True)
@@ -78,8 +118,9 @@ def build_model(
                 check.setCheckState(Qt.Checked if is_marked else Qt.Unchecked)
             except Exception:
                 pass
+
             child_row = [
-                QStandardItem(""),  # COL_GROUP
+                QStandardItem(file_match),   # COL_GROUP — match type
                 check,
                 QStandardItem(name),
                 QStandardItem(folder),
@@ -87,7 +128,7 @@ def build_model(
                 QStandardItem(""),
                 QStandardItem(creation_txt),
                 QStandardItem(shot_txt),
-                QStandardItem(item_action),  # COL_ACTION
+                QStandardItem(item_decision),  # COL_ACTION — user decision
             ]
             try:
                 child_row[COL_SEL].setData(0, SORT_ROLE)
@@ -106,7 +147,6 @@ def build_model(
             except Exception:
                 pass
             try:
-                # Use timestamp for numeric sort (or 0 when missing)
                 child_row[COL_CREATION_DATE].setData(
                     int(creation_dt.timestamp()) if creation_dt else 0, SORT_ROLE
                 )

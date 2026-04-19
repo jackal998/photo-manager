@@ -15,19 +15,14 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
-_ACTIONABLE = {"EXACT", "MOVE"}
-
 _PLAN_TEXT = {
-    "EXACT": "Delete (confirmed duplicate)",
-    "MOVE": "Move — mark as executed",
-    "REVIEW_DUPLICATE": "Skip — still needs review",
-    "UNDATED": "Skip — no EXIF date",
-    "KEEP": "Skip — authoritative copy",
+    "delete": "Delete file",
+    "keep": "Mark as kept / executed",
 }
 
 
 class ExecuteActionDialog(QDialog):
-    """Shows all planned file operations; executes them when the user confirms."""
+    """Shows planned file operations based on user decisions; executes on confirm."""
 
     def __init__(self, groups: list, manifest_path: str | None, parent=None) -> None:
         super().__init__(parent)
@@ -45,46 +40,43 @@ class ExecuteActionDialog(QDialog):
         ops = []
         for group in groups:
             for rec in getattr(group, "items", []):
-                action = getattr(rec, "action", "") or ""
-                if not action or action == "KEEP":
+                decision = getattr(rec, "user_decision", "") or ""
+                if not decision:
                     continue
-                ops.append({"action": action, "path": rec.file_path})
+                ops.append({"decision": decision, "path": rec.file_path})
         return ops
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        actionable = [op for op in self._ops if op["action"] in _ACTIONABLE]
-        n_delete = sum(1 for op in actionable if op["action"] == "EXACT")
-        n_move = sum(1 for op in actionable if op["action"] == "MOVE")
-        n_skip = len(self._ops) - len(actionable)
+        n_delete = sum(1 for op in self._ops if op["decision"] == "delete")
+        n_keep = sum(1 for op in self._ops if op["decision"] == "keep")
 
         summary = QLabel(
-            f"<b>{len(actionable)}</b> actionable: "
-            f"{n_delete} deletion(s), {n_move} move(s) planned. "
-            f"{n_skip} row(s) skipped (still need review or have no date)."
+            f"<b>{len(self._ops)}</b> file(s) with decisions: "
+            f"{n_delete} delete, {n_keep} keep."
         )
         layout.addWidget(summary)
 
         table = QTableWidget(len(self._ops), 3)
-        table.setHorizontalHeaderLabels(["Action", "File", "Plan"])
+        table.setHorizontalHeaderLabels(["Decision", "File", "Plan"])
         table.horizontalHeader().setStretchLastSection(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         for row, op in enumerate(self._ops):
-            action = op["action"]
-            table.setItem(row, 0, QTableWidgetItem(action))
+            decision = op["decision"]
+            table.setItem(row, 0, QTableWidgetItem(decision))
             table.setItem(row, 1, QTableWidgetItem(Path(op["path"]).name))
-            table.setItem(row, 2, QTableWidgetItem(_PLAN_TEXT.get(action, f"Unknown: {action}")))
+            table.setItem(row, 2, QTableWidgetItem(_PLAN_TEXT.get(decision, decision)))
         table.resizeColumnsToContents()
         layout.addWidget(table)
 
-        if not actionable:
-            layout.addWidget(QLabel("No actionable operations — nothing to execute."))
+        if not self._ops:
+            layout.addWidget(QLabel("No decisions set — use 'Set Action' to mark files first."))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("Execute")
-        buttons.button(QDialogButtonBox.Ok).setEnabled(bool(actionable))
+        buttons.button(QDialogButtonBox.Ok).setEnabled(bool(self._ops))
         buttons.accepted.connect(self._on_execute)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -93,11 +85,11 @@ class ExecuteActionDialog(QDialog):
 
     def _on_execute(self) -> None:
         for op in self._ops:
-            action = op["action"]
+            decision = op["decision"]
             path = op["path"]
-            if action == "EXACT":
+            if decision == "delete":
                 self._delete_file(path)
-            elif action == "MOVE":
+            elif decision == "keep":
                 self.executed_paths.append(path)
 
         if self._manifest_path:
@@ -119,6 +111,6 @@ class ExecuteActionDialog(QDialog):
             except ImportError:
                 os.remove(path)
             self.deleted_paths.append(path)
-            logger.info("Deleted duplicate: {}", path)
+            logger.info("Deleted file: {}", path)
         except Exception as exc:
             logger.warning("Failed to delete {}: {}", path, exc)

@@ -30,6 +30,8 @@ class PhotoRecord:
     orientation: int | None = None
     # Scanner classification (populated when loaded from manifest; empty for CSV)
     action: str = ""
+    # User's planned file operation (delete | keep | "" = undecided)
+    user_decision: str = ""
 
 
 @dataclass

@@ -117,13 +117,13 @@ class TestPrintSummary:
     def test_counts_each_action(self, capsys):
         rows = (
             [_row(f"/m{i}.jpg", "MOVE", dest_path=f"/d/{i}.jpg") for i in range(3)]
-            + [_row(f"/s{i}.jpg", "SKIP") for i in range(2)]
+            + [_row(f"/s{i}.jpg", "EXACT") for i in range(2)]
             + [_row(f"/r{i}.jpg", "REVIEW_DUPLICATE") for i in range(1)]
         )
         print_summary(rows)
         out = capsys.readouterr().out
         assert "MOVE" in out
-        assert "SKIP" in out
+        assert "EXACT" in out
         assert "REVIEW_DUPLICATE" in out
 
     def test_empty_rows_no_crash(self, capsys):
