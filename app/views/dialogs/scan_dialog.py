@@ -35,7 +35,7 @@ _SOURCES = [
 
 
 class _SourceRow(QWidget):
-    """One row: label + path field + Browse button."""
+    """One row: label + path field + Browse button (directory picker)."""
 
     def __init__(self, label: str, hint: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -66,6 +66,24 @@ class _SourceRow(QWidget):
     @path.setter
     def path(self, value: str) -> None:
         self.field.setText(value)
+
+
+class _OutputRow(_SourceRow):
+    """Output row: uses a file-save dialog filtered to .sqlite files."""
+
+    def _browse(self) -> None:
+        start = self.field.text() or "migration_manifest.sqlite"
+        chosen, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Manifest As",
+            start,
+            "SQLite manifest (*.sqlite);;All files (*)",
+        )
+        if chosen:
+            # Ensure .sqlite extension
+            if not chosen.lower().endswith(".sqlite"):
+                chosen += ".sqlite"
+            self.field.setText(chosen)
 
 
 class ScanDialog(QDialog):
@@ -115,8 +133,8 @@ class ScanDialog(QDialog):
             self._source_rows[key] = row
             form.addRow(QLabel(display + ":"), row)
 
-        # Manifest output path
-        self._output_row = _SourceRow("output", "migration_manifest.sqlite", self)
+        # Manifest output path (file-save dialog, enforces .sqlite extension)
+        self._output_row = _OutputRow("output", "migration_manifest.sqlite", self)
         self._output_row.field.setPlaceholderText("Output manifest path (.sqlite)")
         form.addRow(QLabel("Save manifest to:"), self._output_row)
 

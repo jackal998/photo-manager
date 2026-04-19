@@ -284,18 +284,27 @@ class MainWindow(QMainWindow):
         """Load a manifest directly (called after scan completes or from Open Manifest)."""
         from infrastructure.manifest_repository import ManifestRepository
         try:
-            self.vm.load_from_repo(ManifestRepository(), manifest_path)
+            self._vm.load_from_repo(ManifestRepository(), manifest_path)
             self.file_operations._manifest_path = manifest_path
-            self.show_groups_summary(self.vm.groups)
-            self.refresh_tree(self.vm.groups)
+            self.show_groups_summary(self._vm.groups)
+            self.refresh_tree(self._vm.groups)
             try:
                 self.menu_controller.enable_action("save_manifest", True)
             except AttributeError:
                 pass
-            n = self.vm.group_count
-            self.show_status(f"Loaded manifest: {n} pairs to review")
+            n = self._vm.group_count
+            if n == 0:
+                QMessageBox.information(
+                    self,
+                    "No Pairs to Review",
+                    "The manifest contains no REVIEW_DUPLICATE pairs.\n\n"
+                    "This happens when all duplicates were exact byte-for-byte copies "
+                    "(SHA-256 match → SKIP). Those are already decided — no human review needed.\n\n"
+                    "REVIEW_DUPLICATE only appears for perceptually similar files that differ "
+                    "in format or quality (e.g. the same photo as JPG and HEIC).",
+                )
+            self.statusBar().showMessage(f"Loaded manifest: {n} pair(s) to review", 5000)
         except Exception as exc:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Load Manifest Error", str(exc))
 
     def on_open_manifest(self) -> None:
