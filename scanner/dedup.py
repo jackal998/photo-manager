@@ -262,7 +262,7 @@ def _make_row(
         action=action,
         source_hash=hr.sha256,
         phash=hr.phash,
-        hamming_distance=hamming,
+        hamming_distance=int(hamming) if hamming is not None else None,
         duplicate_of=duplicate_of,
         reason=reason,
     )
