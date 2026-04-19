@@ -16,10 +16,22 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 │     writes  migration_manifest.sqlite                                       │
 │                                                                             │
 │  2. REVIEW (photo-manager)                                                  │
-│     GUI: File > Open Manifest…  —or—  CLI: python review.py …             │
-│     Triage REVIEW_DUPLICATE pairs; save decisions back to the manifest     │
+│     GUI: File > Open Manifest…                                              │
+│     Inspect every group — col 0 shows match type (exact / similar / empty) │
+│     Mark files with Sel checkboxes, then use                               │
+│       File > Set Action > delete / keep  to record your decision           │
+│     Right-click a single file → Set Action → delete / keep (per-file)     │
+│     File > Save Manifest Decisions… persists decisions to the manifest     │
 │                                                                             │
-│  3. MIGRATE (photo-transfer)                                                │
+│     CLI alternative: python review.py … for REVIEW_DUPLICATE triage       │
+│                                                                             │
+│  3. EXECUTE (photo-manager)                                                 │
+│     File > Execute Action…  opens a review dialog listing all planned      │
+│     operations.  Confirm to:                                                │
+│       • delete → send file to recycle bin                                  │
+│       • keep   → mark as executed in the manifest                          │
+│                                                                             │
+│  4. MIGRATE (photo-transfer)                                                │
 │     python migrate.py --manifest migration_manifest.sqlite --dest-root … │
 │     Copies every MOVE row to the destination tree                           │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -80,25 +92,36 @@ The PySide6 desktop app is the primary interface. Launch it with `run.bat`.
 
 Source paths are remembered in `settings.json` for the next session.
 
-### Step 2 — Review duplicates
+### Step 2 — Review groups
 
-The tree shows every **REVIEW_DUPLICATE** group loaded from the manifest.
+The tree shows all files loaded from the manifest.
 
 | Column | Meaning |
 |--------|---------|
-| Checkbox | Mark this file for the action chosen at save time |
-| Lock icon | Reference copy — cannot be marked |
-| Group # | Pairs files by Hamming-distance bucket |
+| **Match** (col 0) | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
+| **Sel** | Checkbox — select files for batch actions |
+| **Action** (col 8) | Your decision: `delete` / `keep` / *(empty = undecided)* |
 
-- **Check** the candidate you want to *skip* (discard from migration).
-- **Leave unchecked** to *keep* (the file will be moved to the destination).
-- Locked rows are the reference copy and cannot be changed.
+**Setting decisions:**
+
+- *Per file*: right-click a file → **Set Action → delete** or **keep**.
+- *Batch*: tick **Sel** on the files you want to act on, then
+  **File › Set Action › delete** (or **keep**) applies to all checked files.
 
 ### Step 3 — Save decisions
 
-**File › Save Manifest Decisions…** writes your marks back to the SQLite
-manifest (`executed = 1`). Checked items become `SKIP`; unchecked become
-`MOVE`. Run `photo-transfer/migrate.py` afterwards to execute the moves.
+**File › Save Manifest Decisions…** writes `delete` / `keep` decisions back
+to the SQLite manifest.  Decisions persist across sessions.
+
+### Step 4 — Execute actions
+
+**File › Execute Action…** opens a confirmation dialog listing every planned
+operation.  Click **Execute** to carry out:
+
+- `delete` → file is sent to the recycle bin (`send2trash`)
+- `keep` → marked as executed in the manifest (no file operation)
+
+After execution, the manifest reflects which files were processed.
 
 ---
 
@@ -144,8 +167,8 @@ Decisions persist immediately — the session is resumable at any time.
 
 | Condition | Action |
 |-----------|--------|
-| SHA-256 match | `SKIP` (EXACT_DUPLICATE) |
-| pHash hamming = 0, both lossy (JPG / HEIC / PNG) | `SKIP` lower-priority format (FORMAT_DUPLICATE) |
+| SHA-256 match | `EXACT` (exact duplicate — lower-priority copy) |
+| pHash hamming = 0, both lossy (JPG / HEIC / PNG) | `EXACT` lower-priority format (format duplicate) |
 | pHash hamming = 0, one RAW + one lossy | `MOVE` both (complementary — always kept together) |
 | pHash hamming 1–threshold | `REVIEW_DUPLICATE` — needs human triage |
 | No EXIF `DateTimeOriginal` | `UNDATED` |
@@ -190,20 +213,33 @@ photo-manager/
 │
 ├── app/                     # PySide6 GUI
 │   ├── views/
-│   │   ├── main_window.py   # Main window + scan/manifest handlers
+│   │   ├── main_window.py   # Main window — wires all components
+│   │   ├── tree_model_builder.py  # Builds QStandardItemModel from groups
+│   │   ├── constants.py     # Column indices and header labels
+│   │   ├── components/
+│   │   │   ├── menu_controller.py     # Menu creation + "Set Action" submenu
+│   │   │   ├── tree_controller.py     # Tree view interactions
+│   │   │   └── selection_controller.py
+│   │   ├── handlers/
+│   │   │   ├── file_operations.py     # set_decision, batch_set_decision, execute_action
+│   │   │   └── context_menu.py        # Right-click Set Action routing
 │   │   ├── dialogs/
-│   │   │   └── scan_dialog.py   # Scan Sources dialog
+│   │   │   ├── scan_dialog.py         # Scan Sources dialog
+│   │   │   └── execute_action_dialog.py  # Review + execute delete/keep operations
 │   │   └── workers/
-│   │       └── scan_worker.py   # Background QThread for scan pipeline
+│   │       └── scan_worker.py         # Background QThread for scan pipeline
 │   └── viewmodels/
 │       └── main_vm.py       # Groups/marks logic; loads CSV or manifest
 │
 ├── core/                    # Models + service interfaces
-├── infrastructure/          # CSV repo, manifest repo, delete service, settings
+│   └── models.py            # PhotoRecord (action, user_decision), PhotoGroup
+├── infrastructure/          # I/O: CSV repo, manifest repo, delete service, settings
+│   └── manifest_repository.py  # load/save user_decision; update_decision(); mark_executed()
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 138 tests — scanner, infra, viewmodel
+└── tests/                   # 190+ tests — scanner, infra, viewmodel, GUI handlers
+    ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
     ├── test_walker.py
@@ -215,7 +251,10 @@ photo-manager/
     ├── test_delete_service.py
     ├── test_scanner_exif.py
     ├── test_scanner_manifest.py
-    └── test_main_vm.py
+    ├── test_main_vm.py
+    ├── test_file_operations.py  # set_decision, batch_set_decision
+    ├── test_execute_action_dialog.py
+    └── test_context_menu.py
 ```
 
 ---
@@ -244,11 +283,3 @@ Source paths set via **File › Scan Sources…** are saved here automatically.
 
 ---
 
-## Legacy files
-
-Files in `legacy/` are kept for reference only and are not part of the active workflow:
-
-| File | Was used for |
-|------|-------------|
-| `legacy/convert_dupproj_to_csv.py` | Converting Cisdem `.dupproj` exports to CSV |
-| `legacy/heic_test.py` | One-off HEIC format smoke test |

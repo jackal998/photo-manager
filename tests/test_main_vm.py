@@ -11,7 +11,13 @@ from core.models import PhotoGroup, PhotoRecord
 from app.viewmodels.main_vm import MainVM
 
 
-def _rec(path: str, group: int = 1, is_mark: bool = False, is_locked: bool = False) -> PhotoRecord:
+def _rec(
+    path: str,
+    group: int = 1,
+    is_mark: bool = False,
+    is_locked: bool = False,
+    user_decision: str = "",
+) -> PhotoRecord:
     return PhotoRecord(
         group_number=group,
         is_mark=is_mark,
@@ -21,6 +27,7 @@ def _rec(path: str, group: int = 1, is_mark: bool = False, is_locked: bool = Fal
         capture_date=datetime(2024, 1, 1),
         modified_date=datetime(2024, 1, 1),
         file_size_bytes=1024,
+        user_decision=user_decision,
     )
 
 
@@ -170,6 +177,40 @@ class TestRemoveGroupFromList:
         vm.load_csv("/f.csv")
         vm.remove_group_from_list(999)
         assert vm.group_count == 1
+
+
+# ── user_decision preserved through load ──────────────────────────────────
+
+class TestUserDecisionPreserved:
+    def test_user_decision_survives_load_from_repo(self):
+        """user_decision values set on PhotoRecords must survive load_from_repo."""
+        rec = _rec("/a.jpg", group=1, user_decision="delete")
+        repo = _mock_repo(rec)
+        vm = MainVM(MagicMock())
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        loaded = vm.groups[0].items[0]
+        assert loaded.user_decision == "delete"
+
+    def test_user_decision_empty_by_default(self):
+        rec = _rec("/a.jpg", group=1)
+        repo = _mock_repo(rec)
+        vm = MainVM(MagicMock())
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        assert vm.groups[0].items[0].user_decision == ""
+
+    def test_multiple_user_decisions_preserved(self):
+        recs = [
+            _rec("/a.jpg", group=1, user_decision="delete"),
+            _rec("/b.jpg", group=1, user_decision="keep"),
+            _rec("/c.jpg", group=2, user_decision=""),
+        ]
+        repo = _mock_repo(*recs)
+        vm = MainVM(MagicMock())
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        by_path = {r.file_path: r for g in vm.groups for r in g.items}
+        assert by_path["/a.jpg"].user_decision == "delete"
+        assert by_path["/b.jpg"].user_decision == "keep"
+        assert by_path["/c.jpg"].user_decision == ""
 
 
 # ── group_count ────────────────────────────────────────────────────────────
