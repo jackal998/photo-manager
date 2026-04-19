@@ -2,11 +2,11 @@
 into PhotoRecord/PhotoGroup objects for the Qt review UI.
 
 Load flow:
-  Every row is loaded.  Files with a duplicate_of reference (EXACT /
-  REVIEW_DUPLICATE) are grouped with their reference as a pair.
-  Files that appear only as references are not duplicated as standalone rows.
-  All records load with is_mark=False, is_locked=False and user_decision=""
-  (no automatic pre-selection; the user sets delete/keep explicitly).
+  Every row is loaded except those with user_decision='removed' (dismissed by
+  the user via "Remove from List").  Files with a duplicate_of reference (EXACT /
+  REVIEW_DUPLICATE) are grouped with their reference as a pair.  If the reference
+  file itself is marked 'removed', the inline yield is also skipped.
+  All records load with is_mark=False, is_locked=False.
 
   EXIF date is only read for REVIEW_DUPLICATE rows (performance).
 
@@ -57,6 +57,10 @@ UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
 
 _MARK_EXECUTED_SQL = """
 UPDATE migration_manifest SET executed = 1 WHERE source_path = ?
+"""
+
+_REMOVE_FROM_REVIEW_SQL = """
+UPDATE migration_manifest SET user_decision = 'removed' WHERE source_path = ?
 """
 
 
@@ -138,11 +142,20 @@ class ManifestRepository:
         finally:
             conn.close()
 
+        # Paths explicitly removed from the review list — excluded from load.
+        # Checked in Python (not SQL) so the inline reference-yield guard can
+        # also consult this set.
+        removed_paths: set[str] = {
+            row["source_path"] for row in all_rows if (row["user_decision"] or "") == "removed"
+        }
+
         # Collect every path that appears as a duplicate_of reference in a pair.
-        # These will be yielded inline as the reference child of their parent row
-        # and must not also appear as standalone single-item rows.
+        # Only consider non-removed candidates when building this set, so that
+        # a removed candidate's reference can appear as a standalone row.
         ref_paths: set[str] = set()
         for row in all_rows:
+            if (row["user_decision"] or "") == "removed":
+                continue
             if row["action"] in ("REVIEW_DUPLICATE", "EXACT") and row["duplicate_of"]:
                 ref_paths.add(row["duplicate_of"])
 
@@ -153,6 +166,10 @@ class ManifestRepository:
             ref_path: str | None = row["duplicate_of"]
             is_pair = bool(ref_path) and action in ("REVIEW_DUPLICATE", "EXACT")
             user_decision: str = row["user_decision"] or ""
+
+            # Skip rows dismissed via "Remove from List"
+            if user_decision == "removed":
+                continue
 
             # Skip standalone emit for files already shown as pair references
             if source_path in ref_paths and not is_pair:
@@ -175,7 +192,7 @@ class ManifestRepository:
                 logger.warning("Skipping {}: {}", source_path, exc)
                 continue
 
-            if is_pair and ref_path:
+            if is_pair and ref_path and ref_path not in removed_paths:
                 try:
                     yield _photo_record(
                         source_path=ref_path,
@@ -220,6 +237,19 @@ class ManifestRepository:
         conn = sqlite3.connect(manifest_path)
         try:
             conn.executemany(_MARK_EXECUTED_SQL, [(p,) for p in file_paths])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def remove_from_review(self, manifest_path: str, file_paths: list[str]) -> None:
+        """Mark rows as removed from the review list (user_decision='removed').
+
+        Removed rows are excluded from future load() calls so they do not
+        reappear when the manifest is reopened.
+        """
+        conn = sqlite3.connect(manifest_path)
+        try:
+            conn.executemany(_REMOVE_FROM_REVIEW_SQL, [(p,) for p in file_paths])
             conn.commit()
         finally:
             conn.close()

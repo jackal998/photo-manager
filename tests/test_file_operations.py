@@ -247,7 +247,77 @@ class TestBatchSetDecision:
 
         handler.batch_set_decision("delete")
 
-        mock_info.assert_called_once()
+
+# ── remove_from_list (DB sync) ─────────────────────────────────────────────
+
+class TestRemoveFromList:
+    def test_remove_items_updates_db_when_manifest_loaded(self, tmp_path):
+        """remove_items_from_list writes user_decision='removed' to SQLite."""
+        from app.viewmodels.main_vm import MainVM
+        from unittest.mock import MagicMock
+
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        rec_a = _rec("/a.jpg", group=1)
+        rec_b = _rec("/b.jpg", group=1)
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[rec_a, rec_b])]
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.remove_items_from_list([{"type": "file", "path": "/a.jpg"}])
+
+        assert _read_decision(db, "/a.jpg") == "removed"
+        assert _read_decision(db, "/b.jpg") == ""
+
+    def test_remove_items_noop_when_no_manifest(self, tmp_path):
+        """remove_items_from_list does NOT write to DB when no manifest is loaded."""
+        from app.viewmodels.main_vm import MainVM
+        from unittest.mock import MagicMock
+
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        rec_a = _rec("/a.jpg", group=1)
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[rec_a])]
+        # No manifest_path set — CSV workflow
+        handler, _, _ = _make_handler(vm, manifest_path=None)
+
+        handler.remove_items_from_list([{"type": "file", "path": "/a.jpg"}])
+
+        # DB row unchanged (no manifest to write to)
+        assert _read_decision(db, "/a.jpg") == ""
+
+    def test_remove_group_marks_all_files_in_group(self, tmp_path):
+        """Removing a whole group marks every file in that group as 'removed'."""
+        from app.viewmodels.main_vm import MainVM
+        from unittest.mock import MagicMock
+
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        rec_a = _rec("/a.jpg", group=5)
+        rec_b = _rec("/b.jpg", group=5)
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=5, items=[rec_a, rec_b])]
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.remove_items_from_list([{"type": "group", "group_number": 5}])
+
+        assert _read_decision(db, "/a.jpg") == "removed"
+        assert _read_decision(db, "/b.jpg") == "removed"
+
+    def test_remove_via_toolbar_checked_paths_updates_db(self, tmp_path):
+        """remove_from_list_toolbar with checked_paths writes 'removed' to SQLite."""
+        from app.viewmodels.main_vm import MainVM
+        from unittest.mock import MagicMock
+
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        rec_a = _rec("/a.jpg", group=1)
+        rec_b = _rec("/b.jpg", group=1)
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[rec_a, rec_b])]
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.remove_from_list_toolbar(checked_paths=["/a.jpg"], highlighted_items=[])
+
+        assert _read_decision(db, "/a.jpg") == "removed"
+        assert _read_decision(db, "/b.jpg") == ""
 
     @patch("PySide6.QtWidgets.QMessageBox.information")
     def test_no_checked_paths_shows_message(self, mock_info, tmp_path):

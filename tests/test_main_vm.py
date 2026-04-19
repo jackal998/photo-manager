@@ -115,12 +115,42 @@ class TestRemoveFromList:
 
 class TestRemoveDeletedAndPrune:
     def test_group_with_one_remaining_item_pruned(self):
+        """Default (prune_singles=True): CSV workflow drops groups reduced to 1 item."""
         repo = _mock_repo(_rec("/a.jpg", 1), _rec("/b.jpg", 1))
         vm = MainVM(repo)
         vm.load_csv("/f.csv")
         vm.remove_deleted_and_prune(["/a.jpg"])
-        # Only one item left in the group → group dropped
+        # Only one item left in the group → group dropped (CSV behaviour)
         assert vm.group_count == 0
+
+    def test_prune_singles_false_keeps_single_item_group(self):
+        """prune_singles=False: manifest workflow keeps groups reduced to 1 item."""
+        repo = _mock_repo(_rec("/a.jpg", 1), _rec("/b.jpg", 1))
+        vm = MainVM(repo)
+        vm.load_csv("/f.csv")
+        vm.remove_deleted_and_prune(["/a.jpg"], prune_singles=False)
+        assert vm.group_count == 1
+        assert vm.groups[0].items[0].file_path == "/b.jpg"
+
+    def test_prune_singles_false_still_drops_empty_groups(self):
+        """prune_singles=False must still drop groups where ALL items are deleted."""
+        repo = _mock_repo(_rec("/a.jpg", 1), _rec("/b.jpg", 1))
+        vm = MainVM(repo)
+        vm.load_csv("/f.csv")
+        vm.remove_deleted_and_prune(["/a.jpg", "/b.jpg"], prune_singles=False)
+        assert vm.group_count == 0
+
+    def test_prune_singles_false_standalone_group_survives(self):
+        """Standalone single-item groups (KEEP/UNDATED/MOVE) persist after unrelated delete."""
+        repo = _mock_repo(
+            _rec("/pair_cand.jpg", 1), _rec("/pair_ref.jpg", 1),
+            _rec("/standalone.jpg", 2),
+        )
+        vm = MainVM(repo)
+        vm.load_csv("/f.csv")
+        # Delete the candidate; standalone group should survive
+        vm.remove_deleted_and_prune(["/pair_cand.jpg"], prune_singles=False)
+        assert vm.group_count == 2  # group 1 (ref only) + group 2 (standalone)
 
     def test_group_with_two_remaining_items_kept(self):
         repo = _mock_repo(_rec("/a.jpg", 1), _rec("/b.jpg", 1), _rec("/c.jpg", 1))

@@ -316,6 +316,7 @@ class FileOperationsHandler:
                 logger.info("Removing {} checked files from list via toolbar", len(checked_paths))
                 self.vm.remove_from_list(checked_paths)
                 self.ui_updater.refresh_tree(self.vm.groups)
+                self._sync_removed_to_db(checked_paths)
                 self.status_reporter.show_status(f"Removed {len(checked_paths)} file(s) from list")
                 return
 
@@ -324,18 +325,25 @@ class FileOperationsHandler:
                 logger.info(
                     "Removing {} highlighted items from list via toolbar", len(highlighted_items)
                 )
-                file_paths = [item for item in highlighted_items if item.get("type") == "file"]
-                group_numbers = [item for item in highlighted_items if item.get("type") == "group"]
+                file_items = [item for item in highlighted_items if item.get("type") == "file"]
+                group_items = [item for item in highlighted_items if item.get("type") == "group"]
 
-                if file_paths:
-                    paths = [item["path"] for item in file_paths]
-                    self.vm.remove_from_list(paths)
+                # Collect all paths before modifying vm (groups disappear after removal)
+                paths_for_db: list[str] = [item["path"] for item in file_items]
+                for item in group_items:
+                    for g in self.vm.groups:
+                        if g.group_number == item["group_number"]:
+                            paths_for_db.extend(r.file_path for r in g.items)
+                            break
 
-                if group_numbers:
-                    for item in group_numbers:
-                        self.vm.remove_group_from_list(item["group_number"])
+                if file_items:
+                    self.vm.remove_from_list([item["path"] for item in file_items])
+
+                for item in group_items:
+                    self.vm.remove_group_from_list(item["group_number"])
 
                 self.ui_updater.refresh_tree(self.vm.groups)
+                self._sync_removed_to_db(paths_for_db)
                 self.status_reporter.show_status("Removed items from list")
                 return
 
@@ -356,28 +364,34 @@ class FileOperationsHandler:
             items: List of items with 'type' ('file'|'group') and relevant identifiers
         """
         try:
-            file_paths = []
-            group_numbers = []
+            file_paths: list[str] = []
+            group_numbers: list[int] = []
 
-            # Separate files and groups
             for item in items:
                 if item["type"] == "file":
                     file_paths.append(item["path"])
                 elif item["type"] == "group":
                     group_numbers.append(item["group_number"])
 
-            # Remove files first
+            # Collect all paths for DB sync BEFORE vm removal (groups disappear after)
+            paths_for_db: list[str] = list(file_paths)
+            for gn in group_numbers:
+                for g in self.vm.groups:
+                    if g.group_number == gn:
+                        paths_for_db.extend(r.file_path for r in g.items)
+                        break
+
             if file_paths:
                 logger.info("Removing {} files from list", len(file_paths))
                 self.vm.remove_from_list(file_paths)
 
-            # Remove groups
             if group_numbers:
                 logger.info("Removing {} groups from list", len(group_numbers))
                 for group_num in group_numbers:
                     self.vm.remove_group_from_list(group_num)
 
             self.ui_updater.refresh_tree(self.vm.groups)
+            self._sync_removed_to_db(paths_for_db)
 
             total_removed = len(file_paths) + len(group_numbers)
             self.status_reporter.show_status(f"Removed {total_removed} item(s) from list")
@@ -422,6 +436,17 @@ class FileOperationsHandler:
         except Exception as e:
             logger.error("Delete files failed: {}", e)
             QMessageBox.critical(self.parent, "Error", f"Delete failed: {str(e)}")
+
+    def _sync_removed_to_db(self, file_paths: list[str]) -> None:
+        """Mark file_paths as removed in the manifest DB (manifest workflow only)."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path or not file_paths:
+            return
+        try:
+            from infrastructure.manifest_repository import ManifestRepository
+            ManifestRepository().remove_from_review(manifest_path, file_paths)
+        except Exception as exc:
+            logger.warning("Failed to sync removed paths to manifest: {}", exc)
 
     def set_decision(self, items: list[dict], new_decision: str) -> None:
         """Set user_decision for the given file items in memory and in SQLite."""
@@ -482,7 +507,8 @@ class FileOperationsHandler:
         dlg = ExecuteActionDialog(self.vm.groups, manifest_path, self.parent)
         if dlg.exec() == QDialog.Accepted:
             if dlg.deleted_paths:
-                self.vm.remove_deleted_and_prune(dlg.deleted_paths)
+                # prune_singles=False: manifest single-item groups must persist
+                self.vm.remove_deleted_and_prune(dlg.deleted_paths, prune_singles=False)
             self.ui_updater.refresh_tree(self.vm.groups)
             total = len(dlg.deleted_paths) + len(dlg.executed_paths)
             self.status_reporter.show_status(f"Executed {total} action(s)")

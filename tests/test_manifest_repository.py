@@ -440,3 +440,106 @@ class TestManifestRepositoryUpdateDecision:
         ).fetchone()
         conn.close()
         assert row[0] == "keep"
+
+
+class TestRemoveFromReview:
+    """remove_from_review() and the load() filter for user_decision='removed'."""
+
+    def test_marks_user_decision_removed(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "duplicate_of": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+        ])
+        ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
+
+        conn = sqlite3.connect(db)
+        row = conn.execute(
+            "SELECT user_decision FROM migration_manifest WHERE source_path = '/a.jpg'"
+        ).fetchone()
+        conn.close()
+        assert row[0] == "removed"
+
+    def test_multiple_paths_marked(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "duplicate_of": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/b.jpg", "duplicate_of": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/c.jpg", "duplicate_of": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+        ])
+        ManifestRepository().remove_from_review(str(db), ["/a.jpg", "/c.jpg"])
+
+        conn = sqlite3.connect(db)
+        rows = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT source_path, user_decision FROM migration_manifest"
+            ).fetchall()
+        }
+        conn.close()
+        assert rows["/a.jpg"] == "removed"
+        assert rows["/b.jpg"] == ""      # untouched
+        assert rows["/c.jpg"] == "removed"
+
+    def test_load_skips_removed_candidates(self, tmp_path):
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(f), "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None,
+                  "user_decision": "removed"}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        assert all(r.file_path != str(f) for r in records)
+
+    def test_load_skips_removed_inline_reference(self, tmp_path):
+        """When the reference file is removed, its inline yield is also skipped."""
+        cand = tmp_path / "cand.jpg"
+        ref = tmp_path / "ref.jpg"
+        _make_jpeg(cand)
+        _make_jpeg(ref)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
+            _ref_row({"source_path": str(ref), "user_decision": "removed"}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        # Candidate loads but reference is skipped
+        paths = {r.file_path for r in records}
+        assert str(cand) in paths
+        assert str(ref) not in paths
+
+    def test_load_non_removed_rows_unaffected(self, tmp_path):
+        f_keep = tmp_path / "keep.jpg"
+        f_del = tmp_path / "del.jpg"
+        _make_jpeg(f_keep)
+        _make_jpeg(f_del)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(f_keep), "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None,
+                  "user_decision": "keep"}),
+            _row({"source_path": str(f_del), "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None,
+                  "user_decision": "removed"}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        paths = {r.file_path for r in records}
+        assert str(f_keep) in paths
+        assert str(f_del) not in paths
+
+    def test_removed_candidate_reference_becomes_standalone(self, tmp_path):
+        """If a REVIEW_DUPLICATE candidate is removed, its reference should
+        reappear as a standalone row on next load (not be suppressed)."""
+        cand = tmp_path / "cand.jpg"
+        ref = tmp_path / "ref.jpg"
+        _make_jpeg(cand)
+        _make_jpeg(ref)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "duplicate_of": str(ref),
+                  "user_decision": "removed"}),
+            _ref_row({"source_path": str(ref)}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        paths = {r.file_path for r in records}
+        assert str(cand) not in paths
+        assert str(ref) in paths   # ref's own MOVE row now loads as standalone

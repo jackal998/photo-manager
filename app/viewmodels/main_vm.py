@@ -68,8 +68,15 @@ class MainVM:
         """Return the last-loaded CSV path, if available."""
         return self._source_csv_path
 
-    def remove_deleted_and_prune(self, deleted_paths: list[str]) -> None:
-        """Remove deleted items and drop groups with <= 1 item remaining."""
+    def remove_deleted_and_prune(
+        self, deleted_paths: list[str], prune_singles: bool = True
+    ) -> None:
+        """Remove deleted items and optionally drop groups with exactly 1 item left.
+
+        prune_singles=True  (default) — CSV workflow: pairs collapse to nothing.
+        prune_singles=False — manifest workflow: single-item groups must persist
+                              (KEEP / UNDATED / MOVE rows are single-item by design).
+        """
         if not deleted_paths:
             return
         removed = set(deleted_paths)
@@ -77,10 +84,8 @@ class MainVM:
         for g in self.groups:
             kept_items = [it for it in g.items if it.file_path not in removed]
             if not kept_items:
-                # Entire group removed -> drop
                 continue
-            # If group has only one file left, drop the group from the main list per request
-            if len(kept_items) == 1:
+            if prune_singles and len(kept_items) == 1:
                 continue
             new_groups.append(
                 PhotoGroup(group_number=g.group_number, items=kept_items, is_expanded=g.is_expanded)
@@ -105,44 +110,7 @@ class MainVM:
 
     def remove_group_from_list(self, group_number: int) -> None:
         """Remove an entire group from the list without deleting actual files."""
-
-        # Log before removal
-        groups_before = len(self.groups)
-        group_numbers_before = [g.group_number for g in self.groups]
-        logger.info(
-            "Before removal - Total groups: {}, Group numbers: {}",
-            groups_before,
-            group_numbers_before,
-        )
-        logger.info("Attempting to remove group: {}", group_number)
-
-        # Find and log the group being removed
-        group_to_remove = None
-        for g in self.groups:
-            if g.group_number == group_number:
-                group_to_remove = g
-                break
-
-        if group_to_remove:
-            logger.info(
-                "Found group {} with {} files to remove",
-                group_number,
-                len(group_to_remove.items),
-            )
-        else:
-            logger.warning("Group {} not found in current groups", group_number)
-
-        # Perform removal
         self.groups = [g for g in self.groups if g.group_number != group_number]
-
-        # Log after removal
-        groups_after = len(self.groups)
-        group_numbers_after = [g.group_number for g in self.groups]
-        logger.info(
-            "After removal - Total groups: {}, Group numbers: {}",
-            groups_after,
-            group_numbers_after,
-        )
 
     def get_highlighted_items(self) -> list[str]:
         """Get file paths of currently highlighted (selected) items in the UI."""
