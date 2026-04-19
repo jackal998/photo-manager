@@ -151,11 +151,83 @@ class TestManifestRepositoryLoad:
         records = list(ManifestRepository().load(str(db)))
         assert all(r.file_path != str(tmp_path / "missing.jpg") for r in records)
 
-    def test_empty_when_no_review_duplicate_rows(self, tmp_path):
+    def test_move_row_yields_single_record(self, tmp_path):
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
         db = _make_manifest(tmp_path, [
-            {**_row({}), "action": "MOVE"},
+            _row({"source_path": str(f), "action": "MOVE", "duplicate_of": None, "hamming_distance": None}),
         ])
-        assert list(ManifestRepository().load(str(db))) == []
+        records = list(ManifestRepository().load(str(db)))
+        assert len(records) == 1
+        assert records[0].action == "MOVE"
+        assert records[0].is_mark is False
+        assert records[0].is_locked is False
+
+    def test_keep_row_is_locked(self, tmp_path):
+        f = tmp_path / "keep.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(f), "action": "KEEP", "duplicate_of": None, "hamming_distance": None}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        assert len(records) == 1
+        assert records[0].is_locked is True
+        assert records[0].is_mark is False
+
+    def test_undated_row_yields_single_record(self, tmp_path):
+        f = tmp_path / "undated.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(f), "action": "UNDATED", "duplicate_of": None, "hamming_distance": None}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        assert len(records) == 1
+        assert records[0].action == "UNDATED"
+        assert records[0].is_mark is False
+        assert records[0].is_locked is False
+
+    def test_skip_row_yields_pair(self, tmp_path):
+        cand = tmp_path / "jdrive" / "a.jpg"
+        ref = tmp_path / "takeout" / "a.jpg"
+        _make_jpeg(cand)
+        _make_jpeg(ref)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "SKIP", "duplicate_of": str(ref)}),
+            _ref_row({"source_path": str(ref)}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        assert len(records) == 2
+        by_path = {r.file_path: r for r in records}
+        assert by_path[str(cand)].is_mark is True
+        assert by_path[str(ref)].is_locked is True
+
+    def test_ref_not_duplicated_as_standalone(self, tmp_path):
+        """A file appearing as duplicate_of in a SKIP pair must not also appear as a standalone row."""
+        cand = tmp_path / "jdrive" / "a.jpg"
+        ref = tmp_path / "takeout" / "a.jpg"
+        _make_jpeg(cand)
+        _make_jpeg(ref)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "SKIP", "duplicate_of": str(ref)}),
+            # ref has its own MOVE row — should NOT appear twice
+            _ref_row({"source_path": str(ref)}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        ref_records = [r for r in records if r.file_path == str(ref)]
+        assert len(ref_records) == 1  # inline reference only, not also standalone
+
+    def test_action_field_set_on_record(self, tmp_path):
+        cand = tmp_path / "jdrive" / "a.jpg"
+        ref = tmp_path / "takeout" / "a.jpg"
+        _make_jpeg(cand)
+        _make_jpeg(ref)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
+            _ref_row({"source_path": str(ref)}),
+        ])
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].action == "REVIEW_DUPLICATE"
+        assert records[str(ref)].action == ""  # reference role — no action
 
 
 class TestManifestRepositorySave:

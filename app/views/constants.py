@@ -19,6 +19,7 @@ HEADERS: list[str] = [
     "Group Count",
     "Creation Date",
     "Shot Date",
+    "Action",
 ]
 
 COL_GROUP: int = 0
@@ -29,7 +30,8 @@ COL_SIZE_BYTES: int = 4
 COL_GROUP_COUNT: int = 5
 COL_CREATION_DATE: int = 6
 COL_SHOT_DATE: int = 7
-NUM_COLUMNS: int = 8
+COL_ACTION: int = 8
+NUM_COLUMNS: int = 9
 
 
 # Data roles

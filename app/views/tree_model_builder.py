@@ -7,6 +7,7 @@ from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from app.views.constants import (
+    COL_ACTION,
     COL_CREATION_DATE,
     COL_FOLDER,
     COL_GROUP_COUNT,
@@ -40,6 +41,9 @@ def build_model(
             pass
 
         group_count_val = len(getattr(g, "items", []) or [])
+        # Derive the group action from the first item (empty for CSV-loaded groups)
+        first_item = (getattr(g, "items", None) or [None])[0]
+        group_action = getattr(first_item, "action", "") or ""
         group_row = [
             group_item,
             QStandardItem(""),
@@ -49,6 +53,7 @@ def build_model(
             QStandardItem(str(group_count_val)),
             QStandardItem(""),
             QStandardItem(""),
+            QStandardItem(group_action),   # COL_ACTION
         ]
         try:
             group_row[COL_GROUP_COUNT].setData(int(group_count_val), SORT_ROLE)
@@ -67,17 +72,24 @@ def build_model(
             creation_dt = getattr(p, "creation_date", None)
             shot_txt = shot_dt.strftime("%Y-%m-%d %H:%M:%S") if shot_dt else ""
             creation_txt = creation_dt.strftime("%Y-%m-%d %H:%M:%S") if creation_dt else ""
+            is_locked = bool(getattr(p, "is_locked", False))
+            item_action = getattr(p, "action", "") or ""
             check = QStandardItem("")
-            check.setCheckable(True)
             check.setEditable(False)
-            # Initialize checkbox from model's is_mark
-            try:
-                is_marked = bool(getattr(p, "is_mark", False))
-                check.setCheckState(Qt.Checked if is_marked else Qt.Unchecked)
-            except Exception:
-                pass
+            if is_locked:
+                # Reference/keeper file — show lock, not a checkbox
+                check.setCheckable(False)
+                check.setText("🔒")
+            else:
+                check.setCheckable(True)
+                try:
+                    is_marked = bool(getattr(p, "is_mark", False))
+                    check.setCheckState(Qt.Checked if is_marked else Qt.Unchecked)
+                except Exception:
+                    pass
+            role_label = "(ref)" if is_locked else ""
             child_row = [
-                QStandardItem(""),
+                QStandardItem(role_label),  # COL_GROUP: role hint for child rows
                 check,
                 QStandardItem(name),
                 QStandardItem(folder),
@@ -85,6 +97,7 @@ def build_model(
                 QStandardItem(""),
                 QStandardItem(creation_txt),
                 QStandardItem(shot_txt),
+                QStandardItem(item_action),  # COL_ACTION
             ]
             try:
                 child_row[COL_SEL].setData(0, SORT_ROLE)

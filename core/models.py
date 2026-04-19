@@ -28,6 +28,8 @@ class PhotoRecord:
     dpi_width: int | None = None
     dpi_height: int | None = None
     orientation: int | None = None
+    # Scanner classification (populated when loaded from manifest; empty for CSV)
+    action: str = ""
 
 
 @dataclass
