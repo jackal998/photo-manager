@@ -47,12 +47,12 @@ def _make_manifest(tmp_path: Path, rows: list[dict]) -> Path:
 
 def _row(overrides: dict) -> dict:
     base = {
-        "source_path": "/jdrive/a.jpg",
+        "source_path": "/source/a.jpg",
         "source_label": "jdrive",
         "dest_path": None,
         "action": "REVIEW_DUPLICATE",
         "hamming_distance": 5,
-        "duplicate_of": "/takeout/a.jpg",
+        "duplicate_of": "/reference/a.jpg",
         "reason": "near-duplicate (hamming=5)",
         "executed": 0,
     }
@@ -61,7 +61,7 @@ def _row(overrides: dict) -> dict:
 
 def _ref_row(overrides: dict = {}) -> dict:
     base = {
-        "source_path": "/takeout/a.jpg",
+        "source_path": "/reference/a.jpg",
         "source_label": "takeout",
         "dest_path": "2024/20240601_takeout/a.jpg",
         "action": "MOVE",
@@ -246,14 +246,14 @@ class TestManifestRepositorySave:
 
     def test_marked_candidate_becomes_skip(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/jdrive/a.jpg", "duplicate_of": "/takeout/a.jpg"}),
+            _row({"source_path": "/source/a.jpg", "duplicate_of": "/reference/a.jpg"}),
         ])
-        group = self._make_group("/jdrive/a.jpg", "/takeout/a.jpg", cand_mark=True)
+        group = self._make_group("/source/a.jpg", "/reference/a.jpg", cand_mark=True)
         ManifestRepository().save(str(db), [group])
 
         conn = sqlite3.connect(db)
         row = conn.execute(
-            "SELECT action, executed FROM migration_manifest WHERE source_path = '/jdrive/a.jpg'"
+            "SELECT action, executed FROM migration_manifest WHERE source_path = '/source/a.jpg'"
         ).fetchone()
         conn.close()
         assert row[0] == "SKIP"
@@ -261,29 +261,29 @@ class TestManifestRepositorySave:
 
     def test_unmarked_candidate_becomes_move(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/jdrive/a.jpg", "duplicate_of": "/takeout/a.jpg"}),
+            _row({"source_path": "/source/a.jpg", "duplicate_of": "/reference/a.jpg"}),
         ])
-        group = self._make_group("/jdrive/a.jpg", "/takeout/a.jpg", cand_mark=False)
+        group = self._make_group("/source/a.jpg", "/reference/a.jpg", cand_mark=False)
         ManifestRepository().save(str(db), [group])
 
         conn = sqlite3.connect(db)
         row = conn.execute(
-            "SELECT action FROM migration_manifest WHERE source_path = '/jdrive/a.jpg'"
+            "SELECT action FROM migration_manifest WHERE source_path = '/source/a.jpg'"
         ).fetchone()
         conn.close()
         assert row[0] == "MOVE"
 
     def test_locked_reference_not_updated(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/jdrive/a.jpg", "duplicate_of": "/takeout/a.jpg"}),
-            _ref_row({"source_path": "/takeout/a.jpg"}),
+            _row({"source_path": "/source/a.jpg", "duplicate_of": "/reference/a.jpg"}),
+            _ref_row({"source_path": "/reference/a.jpg"}),
         ])
-        group = self._make_group("/jdrive/a.jpg", "/takeout/a.jpg", cand_mark=True)
+        group = self._make_group("/source/a.jpg", "/reference/a.jpg", cand_mark=True)
         ManifestRepository().save(str(db), [group])
 
         conn = sqlite3.connect(db)
         row = conn.execute(
-            "SELECT action FROM migration_manifest WHERE source_path = '/takeout/a.jpg'"
+            "SELECT action FROM migration_manifest WHERE source_path = '/reference/a.jpg'"
         ).fetchone()
         conn.close()
         assert row[0] == "MOVE"  # unchanged

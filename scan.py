@@ -7,9 +7,9 @@ writes a non-destructive migration_manifest.sqlite for human review.
 Usage examples:
   # Full scan
   python scan.py \\
-    --source iphone="\\\\LinXiaoYun\\home\\Photos\\MobileBackup\\iPhone" \\
-    --source takeout="D:\\Downloads\\Takeout\\Google 相簿" \\
-    --source jdrive="J:\\圖片" \\
+    --source iphone="C:\\path\\to\\iphone\\backup" \\
+    --source takeout="C:\\path\\to\\google\\takeout" \\
+    --source jdrive="C:\\path\\to\\photo\\library" \\
     --output migration_manifest.sqlite
 
   # Summary only, no DB written

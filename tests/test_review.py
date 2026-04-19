@@ -44,12 +44,12 @@ def _make_manifest(tmp_path: Path, rows: list[dict]) -> Path:
 
 def _default(overrides: dict) -> dict:
     base = {
-        "source_path": "/jdrive/a.jpg",
+        "source_path": "/source/a.jpg",
         "source_label": "jdrive",
         "dest_path": None,
         "action": "REVIEW_DUPLICATE",
         "hamming_distance": 5,
-        "duplicate_of": "/iphone/a.jpg",
+        "duplicate_of": "/reference/a.jpg",
         "reason": "near-duplicate (hamming=5)",
         "executed": 0,
     }

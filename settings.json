@@ -21,9 +21,9 @@
     "locale": "zh-TW"
   },
   "sources": {
-    "iphone": "D:/Downloads/Takeout/Google 相簿/QA_1",
-    "takeout": "D:/Downloads/Takeout/Google 相簿",
+    "iphone": "",
+    "takeout": "",
     "jdrive": "",
-    "output": "test.sqlite"
+    "output": "migration_manifest.sqlite"
   }
 }
