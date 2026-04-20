@@ -43,10 +43,6 @@ def main() -> int:
     default_sort = _parse_default_sort(settings)
     vm = MainVM(repo, default_sort=default_sort)
 
-    sample_csv = BASE_DIR / "samples" / "sample.csv"
-    if sample_csv.exists():
-        vm.load_csv(str(sample_csv))
-
     # HEIC diagnostics: log supported formats and try WIC 512/1024 on the first HEIC
     try:
         fmts = sorted(
