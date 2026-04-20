@@ -42,8 +42,6 @@ class MenuController:
         self.actions["save_manifest"] = file_menu.addAction("Save Manifest Decisions…")
         self.actions["save_manifest"].setEnabled(False)
         file_menu.addSeparator()
-        self.actions["import"] = file_menu.addAction("Import CSV…")
-        self.actions["export"] = file_menu.addAction("Export CSV…")
         self.actions["delete"] = file_menu.addAction("Delete Selected…")
         set_action_submenu = file_menu.addMenu("Set Action")
         set_action_submenu.setEnabled(False)
@@ -74,8 +72,6 @@ class MenuController:
         self.window.setMenuBar(menubar)
 
         # Store actions as window attributes for backward compatibility
-        self.window.action_import = self.actions["import"]
-        self.window.action_export = self.actions["export"]
         self.window.action_delete = self.actions["delete"]
         self.window.action_exit = self.actions["exit"]
         self.window.action_select_by = self.actions["select_by"]
@@ -98,12 +94,6 @@ class MenuController:
 
         if "save_manifest" in handlers:
             self.actions["save_manifest"].triggered.connect(handlers["save_manifest"])
-
-        if "import" in handlers:
-            self.actions["import"].triggered.connect(handlers["import"])
-
-        if "export" in handlers:
-            self.actions["export"].triggered.connect(handlers["export"])
 
         if "delete" in handlers:
             self.actions["delete"].triggered.connect(handlers["delete"])

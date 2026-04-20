@@ -46,7 +46,6 @@ class FileOperationsHandler:
     def __init__(
         self,
         vm: Any,
-        repo: Any,
         delete_service: Any,
         settings: Any,
         parent_widget: QObject,
@@ -54,19 +53,7 @@ class FileOperationsHandler:
         status_reporter: StatusReporter,
         checked_paths_provider: object | None = None,
     ) -> None:
-        """Initialize with required services and callbacks.
-
-        Args:
-            vm: ViewModel instance for data operations
-            repo: Repository instance for CSV operations
-            delete_service: Delete service for file deletion
-            settings: Settings instance for configuration
-            parent_widget: Parent widget for dialogs
-            ui_updater: Callback for UI updates
-            status_reporter: Callback for status messages
-        """
         self.vm = vm
-        self.repo = repo
         self.deleter = delete_service
         self.settings = settings
         self.parent = parent_widget
@@ -142,100 +129,6 @@ class FileOperationsHandler:
             QMessageBox.critical(self.parent, "Save Manifest Error", str(ex))
             self.status_reporter.show_status("Save manifest failed")
 
-    def import_csv(self) -> None:
-        """Handle CSV import with file dialog and error handling."""
-        path, _ = QFileDialog.getOpenFileName(self.parent, "Import CSV", "", "CSV Files (*.csv)")
-        if not path:
-            return
-
-        try:
-            self.vm.load_csv(path)
-            self.ui_updater.show_group_counts(self.vm.group_count)
-            self.ui_updater.show_groups_summary(self.vm.groups)
-            self.ui_updater.refresh_tree(self.vm.groups)
-
-            logger.info(
-                "Imported CSV: {} | groups={} items={}",
-                path,
-                self.vm.group_count,
-                sum(len(g.items) for g in self.vm.groups),
-            )
-            self.status_reporter.show_status(f"Imported {self.vm.group_count} groups")
-
-        except Exception as ex:
-            logger.exception("Import CSV failed: {}", ex)
-            QMessageBox.critical(self.parent, "Import Error", str(ex))
-            self.status_reporter.show_status("Import failed")
-
-    def export_csv(self) -> None:
-        """Handle CSV export with validation and error handling."""
-        if not self.vm.groups:
-            QMessageBox.information(self.parent, "Export", "No data to export.")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(
-            self.parent, "Export CSV", "export.csv", "CSV Files (*.csv)"
-        )
-        if not path:
-            return
-
-        try:
-            self._export_to_path(path)
-            logger.info(
-                "Exported CSV: {} | groups={} items={} (bytes correct)",
-                path,
-                self.vm.group_count,
-                sum(len(g.items) for g in self.vm.groups),
-            )
-            QMessageBox.information(self.parent, "Export", "Export completed.")
-            self.status_reporter.show_status("Export completed")
-
-        except Exception as ex:
-            logger.exception("Export CSV failed: {}", ex)
-            QMessageBox.critical(self.parent, "Export Error", str(ex))
-            self.status_reporter.show_status("Export failed")
-
-    def export_csv_to_path(self, path: str) -> None:
-        """Programmatically export to a specific path (no file dialog).
-
-        Includes mark sync so the saved CSV reflects current tree checkbox state.
-        """
-        if not path:
-            return
-        self._export_to_path(path)
-        try:
-            logger.info(
-                "Exported CSV: {} | groups={} items={} (bytes correct)",
-                path,
-                self.vm.group_count,
-                sum(len(g.items) for g in self.vm.groups),
-            )
-            QMessageBox.information(self.parent, "Export", "Export completed.")
-            self.status_reporter.show_status("Export completed")
-        except Exception:
-            # If UI feedback fails, do not raise further
-            pass
-
-    def _export_to_path(self, path: str) -> None:
-        """Internal helper: sync marks and save to `path`."""
-        # Sync marks from UI checkboxes into model before saving
-        try:
-            checked_paths: list[str] = []
-            provider = self.checked_paths_provider
-            if provider is not None:
-                if callable(provider):
-                    checked_paths = provider()
-                elif hasattr(provider, "gather_checked_paths"):
-                    checked_paths = provider.gather_checked_paths()  # type: ignore[attr-defined]
-            if hasattr(self.vm, "update_marks_from_checked_paths"):
-                self.vm.update_marks_from_checked_paths(checked_paths)  # type: ignore[attr-defined]
-        except Exception:
-            # Best-effort; do not block export on sync issues
-            pass
-
-        # Save to CSV using repository
-        self.repo.save(path, self.vm.groups)
-
     def delete_selected_files(self, selected_paths: list[str]) -> None:
         """Handle file deletion workflow with confirmation and cleanup.
 
@@ -293,9 +186,6 @@ class FileOperationsHandler:
                     self.ui_updater.refresh_tree(self.vm.groups)
             except Exception:
                 pass
-
-            # Prompt to update source CSV after list actions completed
-            self._prompt_csv_update_after_delete(result.success_paths)
 
         except Exception as ex:
             logger.error("Delete selected files failed: {}", ex)
@@ -513,21 +403,3 @@ class FileOperationsHandler:
             total = len(dlg.deleted_paths) + len(dlg.executed_paths)
             self.status_reporter.show_status(f"Executed {total} action(s)")
 
-    def _prompt_csv_update_after_delete(self, success_paths: list[str]) -> None:
-        """Prompt user to update source CSV after successful delete operation.
-
-        Args:
-            success_paths: List of successfully deleted file paths
-        """
-        try:
-            if success_paths:
-                src = getattr(self.vm, "get_source_csv_path", lambda: None)()
-                if src:
-                    resp = QMessageBox.question(
-                        self.parent, "Update CSV?", f"Update source CSV file?\n{src}"
-                    )
-                    if resp == QMessageBox.Yes:
-                        self.export_csv_to_path(src)
-                        self.status_reporter.show_status("CSV updated")
-        except Exception as ex:
-            logger.error("Update CSV after delete failed: {}", ex)

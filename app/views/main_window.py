@@ -44,24 +44,12 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         vm: Any,
-        repo: Any,
         image_service: Any | None = None,
         settings: Any | None = None,
         delete_service: Any | None = None,
     ) -> None:
-        """Initialize MainWindow with all services and components.
-
-        Args:
-            vm: ViewModel instance for data operations
-            repo: Repository instance for CSV operations
-            image_service: Image service for loading/processing images
-            settings: Settings instance for configuration
-            delete_service: Delete service for file deletion
-        """
         super().__init__()
-
-        # Initialize services and state
-        self._initialize_services(vm, repo, image_service, settings, delete_service)
+        self._initialize_services(vm, image_service, settings, delete_service)
 
         # Setup components
         self._setup_components()
@@ -78,22 +66,11 @@ class MainWindow(QMainWindow):
     def _initialize_services(
         self,
         vm: Any,
-        repo: Any,
         image_service: Any | None,
         settings: Any | None,
         delete_service: Any | None,
     ) -> None:
-        """Initialize all service dependencies.
-
-        Args:
-            vm: ViewModel instance
-            repo: Repository instance
-            image_service: Image service instance
-            settings: Settings instance
-            delete_service: Delete service instance
-        """
         self._vm = vm
-        self._repo = repo
         self._img = image_service
         self._settings = settings
         self._deleter = delete_service
@@ -128,7 +105,6 @@ class MainWindow(QMainWindow):
         # Initialize file operations handler
         self.file_operations = FileOperationsHandler(
             vm=self._vm,
-            repo=self._repo,
             delete_service=self._deleter,
             settings=self._settings,
             parent_widget=self,
@@ -210,8 +186,6 @@ class MainWindow(QMainWindow):
             "scan_sources": self.on_scan_sources,
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
-            "import": self.on_import_csv,
-            "export": self.on_export_csv,
             "delete": self.on_delete_selected,
             "set_action_delete": lambda: self.file_operations.batch_set_decision("delete"),
             "set_action_keep": lambda: self.file_operations.batch_set_decision("keep"),
@@ -312,14 +286,6 @@ class MainWindow(QMainWindow):
     def on_save_manifest(self) -> None:
         """Handle Save Manifest Decisions action."""
         self.file_operations.save_manifest_decisions()
-
-    def on_import_csv(self) -> None:
-        """Handle CSV import action."""
-        self.file_operations.import_csv()
-
-    def on_export_csv(self) -> None:
-        """Handle CSV export action."""
-        self.file_operations.export_csv()
 
     def on_delete_selected(self) -> None:
         """Handle delete selected action."""

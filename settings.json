@@ -21,9 +21,9 @@
     "locale": "zh-TW"
   },
   "sources": {
-    "iphone": "D:/Downloads/Takeout/Google 相簿/QA_1",
-    "takeout": "",
-    "jdrive": "",
-    "output": "C:/Users/J/repository/photo-manager/test.sqlite"
+    "iphone": "D:/Downloads/Takeout/Google 相簿",
+    "takeout": "//linxiaoyun/J/圖片",
+    "jdrive": "//linxiaoyun/home/Photos",
+    "output": "C:/Users/J/repository/photo-manager/migration_manifest.sqlite"
   }
 }

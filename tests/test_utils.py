@@ -9,47 +9,9 @@ import pytest
 from PIL import Image
 
 from infrastructure.utils import (
-    format_csv_datetime,
     get_exif_datetime_original,
     get_filesystem_creation_datetime,
-    parse_csv_datetime,
 )
-
-
-# ── parse_csv_datetime ─────────────────────────────────────────────────────
-
-class TestParseCsvDatetime:
-    def test_valid_format(self):
-        dt = parse_csv_datetime("2024-06-15 10:30:00")
-        assert dt == datetime(2024, 6, 15, 10, 30, 0)
-
-    def test_none_input(self):
-        assert parse_csv_datetime(None) is None
-
-    def test_empty_string(self):
-        assert parse_csv_datetime("") is None
-
-    def test_wrong_format(self):
-        assert parse_csv_datetime("15/06/2024") is None
-
-    def test_whitespace_padded(self):
-        dt = parse_csv_datetime("  2024-01-01 00:00:00  ")
-        assert dt == datetime(2024, 1, 1, 0, 0, 0)
-
-
-# ── format_csv_datetime ────────────────────────────────────────────────────
-
-class TestFormatCsvDatetime:
-    def test_formats_datetime(self):
-        dt = datetime(2024, 6, 15, 10, 30, 0)
-        assert format_csv_datetime(dt) == "2024-06-15 10:30:00"
-
-    def test_none_returns_empty(self):
-        assert format_csv_datetime(None) == ""
-
-    def test_round_trip(self):
-        original = datetime(2023, 12, 31, 23, 59, 59)
-        assert parse_csv_datetime(format_csv_datetime(original)) == original
 
 
 # ── get_filesystem_creation_datetime ──────────────────────────────────────

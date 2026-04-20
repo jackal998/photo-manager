@@ -10,7 +10,6 @@ from loguru import logger
 
 from app.viewmodels.main_vm import MainVM
 from app.views.main_window import MainWindow
-from infrastructure.csv_repository import CsvPhotoRepository
 from infrastructure.delete_service import DeleteService
 from infrastructure.image_service import ImageService
 from infrastructure.logging import init_logging
@@ -38,10 +37,9 @@ def main() -> int:
 
     app = QApplication(sys.argv)
 
-    repo = CsvPhotoRepository()
     img = ImageService(settings)
     default_sort = _parse_default_sort(settings)
-    vm = MainVM(repo, default_sort=default_sort)
+    vm = MainVM(default_sort=default_sort)
 
     # HEIC diagnostics: log supported formats and try WIC 512/1024 on the first HEIC
     try:
@@ -118,7 +116,7 @@ def main() -> int:
         logger.info("HEIC diagnostics skipped due to exception: {}", ex)
 
     deleter = DeleteService()
-    win = MainWindow(vm=vm, repo=repo, image_service=img, settings=settings, delete_service=deleter)
+    win = MainWindow(vm=vm, image_service=img, settings=settings, delete_service=deleter)
     win.refresh_tree(vm.groups)
     win.statusBar().showMessage("Ready", 2000)
     win.show()

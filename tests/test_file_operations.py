@@ -72,7 +72,6 @@ def _make_handler(vm, manifest_path: str | None, checked_paths=None):
 
     handler = FileOperationsHandler(
         vm=vm,
-        repo=MagicMock(),
         delete_service=MagicMock(),
         settings=MagicMock(),
         parent_widget=parent,
