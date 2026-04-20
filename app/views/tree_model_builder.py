@@ -10,6 +10,7 @@ from app.views.constants import (
     COL_ACTION,
     COL_CREATION_DATE,
     COL_FOLDER,
+    COL_GROUP,
     COL_GROUP_COUNT,
     COL_NAME,
     COL_SEL,
@@ -19,6 +20,20 @@ from app.views.constants import (
     PATH_ROLE,
     SORT_ROLE,
 )
+
+# Numeric sort priorities — lower value = sorted first (ascending)
+_ACTION_SORT: dict[str, int] = {
+    "REVIEW_DUPLICATE": 1,
+    "EXACT": 2,
+    "KEEP": 3,
+    "UNDATED": 4,
+    "MOVE": 5,
+}  # missing / "" → 6
+
+_DECISION_SORT: dict[str, int] = {
+    "delete": 1,
+    "keep": 2,
+}  # "" (undecided) → 3
 
 _ACTION_TO_MATCH = {
     "EXACT": "exact",
@@ -64,34 +79,81 @@ def build_model(
     for g in groups:
         group_number = int(getattr(g, "group_number", 0) or 0)
         items_list = getattr(g, "items", []) or []
+        first = items_list[0] if items_list else None
 
         # Col 0 at group row shows the overall match type for the group
         group_match = _group_match_label(items_list)
         group_item = QStandardItem(group_match)
         group_item.setEditable(False)
-        try:
-            group_item.setData(group_number, SORT_ROLE)
-        except Exception:
-            pass
 
         group_count_val = len(items_list)
         group_row = [
-            group_item,
-            QStandardItem(""),
-            QStandardItem(""),
-            QStandardItem(""),
-            QStandardItem(""),
-            QStandardItem(str(group_count_val)),
-            QStandardItem(""),
-            QStandardItem(""),
-            QStandardItem(""),  # COL_ACTION — action is at file level only
+            group_item,                              # COL_GROUP  (0)
+            QStandardItem(""),                       # COL_SEL    (1)
+            QStandardItem(""),                       # COL_ACTION (2) — decision at file level
+            QStandardItem(""),                       # COL_NAME   (3)
+            QStandardItem(""),                       # COL_FOLDER (4)
+            QStandardItem(""),                       # COL_SIZE_BYTES (5)
+            QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (6)
+            QStandardItem(""),                       # COL_CREATION_DATE (7)
+            QStandardItem(""),                       # COL_SHOT_DATE (8)
         ]
+        for it in group_row:
+            it.setEditable(False)
+
+        # Group-level SORT_ROLE: representative value from the first item
+        try:
+            group_row[COL_GROUP].setData(
+                _ACTION_SORT.get(getattr(first, "action", ""), 6) if first else 6, SORT_ROLE
+            )
+        except Exception:
+            pass
+        try:
+            marked_count = sum(1 for it in items_list if getattr(it, "is_mark", False))
+            group_row[COL_SEL].setData(marked_count, SORT_ROLE)
+        except Exception:
+            pass
+        try:
+            group_row[COL_ACTION].setData(
+                _DECISION_SORT.get(getattr(first, "user_decision", ""), 3) if first else 3,
+                SORT_ROLE,
+            )
+        except Exception:
+            pass
+        try:
+            first_name = Path(getattr(first, "file_path", "")).name.lower() if first else ""
+            group_row[COL_NAME].setData(first_name, SORT_ROLE)
+        except Exception:
+            pass
+        try:
+            first_folder = str(getattr(first, "folder_path", "")).lower() if first else ""
+            group_row[COL_FOLDER].setData(first_folder, SORT_ROLE)
+        except Exception:
+            pass
+        try:
+            first_size = int(getattr(first, "file_size_bytes", 0) or 0) if first else 0
+            group_row[COL_SIZE_BYTES].setData(first_size, SORT_ROLE)
+        except Exception:
+            pass
         try:
             group_row[COL_GROUP_COUNT].setData(int(group_count_val), SORT_ROLE)
         except Exception:
             pass
-        for it in group_row:
-            it.setEditable(False)
+        try:
+            first_cd = getattr(first, "creation_date", None) if first else None
+            group_row[COL_CREATION_DATE].setData(
+                int(first_cd.timestamp()) if first_cd else 0, SORT_ROLE
+            )
+        except Exception:
+            pass
+        try:
+            first_sd = getattr(first, "shot_date", None) if first else None
+            group_row[COL_SHOT_DATE].setData(
+                int(first_sd.timestamp()) if first_sd else 0, SORT_ROLE
+            )
+        except Exception:
+            pass
+
         model.appendRow(group_row)
 
         for p in items_list:
@@ -107,12 +169,13 @@ def build_model(
             file_action = getattr(p, "action", "") or ""
             file_match = _file_match_label(file_action, items_list)
 
-            # Col 8: user's decision (delete / keep / "")
+            # Col 2: user's decision (delete / keep / "")
             item_decision = getattr(p, "user_decision", "") or ""
 
             check = QStandardItem("")
             check.setEditable(False)
             check.setCheckable(True)
+            is_marked = False
             try:
                 is_marked = bool(getattr(p, "is_mark", False))
                 check.setCheckState(Qt.Checked if is_marked else Qt.Unchecked)
@@ -120,18 +183,27 @@ def build_model(
                 pass
 
             child_row = [
-                QStandardItem(file_match),   # COL_GROUP — match type
-                check,
-                QStandardItem(name),
-                QStandardItem(folder),
-                QStandardItem(str(size_num)),
-                QStandardItem(""),
-                QStandardItem(creation_txt),
-                QStandardItem(shot_txt),
-                QStandardItem(item_decision),  # COL_ACTION — user decision
+                QStandardItem(file_match),          # COL_GROUP  (0) — match type
+                check,                               # COL_SEL    (1)
+                QStandardItem(item_decision),        # COL_ACTION (2) — user decision
+                QStandardItem(name),                 # COL_NAME   (3)
+                QStandardItem(folder),               # COL_FOLDER (4)
+                QStandardItem(str(size_num)),        # COL_SIZE_BYTES (5)
+                QStandardItem(""),                   # COL_GROUP_COUNT (6) — group level only
+                QStandardItem(creation_txt),         # COL_CREATION_DATE (7)
+                QStandardItem(shot_txt),             # COL_SHOT_DATE (8)
             ]
+
             try:
-                child_row[COL_SEL].setData(0, SORT_ROLE)
+                child_row[COL_GROUP].setData(_ACTION_SORT.get(file_action, 6), SORT_ROLE)
+            except Exception:
+                pass
+            try:
+                child_row[COL_SEL].setData(1 if is_marked else 0, SORT_ROLE)
+            except Exception:
+                pass
+            try:
+                child_row[COL_ACTION].setData(_DECISION_SORT.get(item_decision, 3), SORT_ROLE)
             except Exception:
                 pass
             try:
@@ -158,12 +230,13 @@ def build_model(
                 )
             except Exception:
                 pass
-            for it in child_row:
-                it.setEditable(False)
             try:
                 child_row[COL_NAME].setData(getattr(p, "file_path", ""), PATH_ROLE)
             except Exception:
                 pass
+
+            for it in child_row:
+                it.setEditable(False)
             group_item.appendRow(child_row)
 
     # Install proxy for numeric/text sort with roles

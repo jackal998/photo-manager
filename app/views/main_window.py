@@ -22,7 +22,7 @@ from app.views.components.selection_controller import SelectionController
 
 # Import extracted components
 from app.views.components.tree_controller import TreeController
-from app.views.constants import COL_GROUP
+from app.views.constants import COL_CREATION_DATE, COL_FOLDER, COL_GROUP, COL_NAME, COL_SHOT_DATE, COL_SIZE_BYTES
 from app.views.handlers.context_menu import ContextMenuHandler
 from app.views.handlers.dialog_handler import DialogHandler
 from app.views.handlers.file_operations import FileOperationsHandler
@@ -362,8 +362,8 @@ class MainWindow(QMainWindow):
         # Determine if group or child
         if idx.parent().isValid():
             # Child row selected -> single preview
-            name_index = model.index(idx.row(), 2, idx.parent())  # COL_NAME
-            folder_index = model.index(idx.row(), 3, idx.parent())  # COL_FOLDER
+            name_index = model.index(idx.row(), COL_NAME, idx.parent())
+            folder_index = model.index(idx.row(), COL_FOLDER, idx.parent())
             name = model.data(name_index)
             folder = model.data(folder_index)
             path = model.data(name_index, 32)  # PATH_ROLE
@@ -373,9 +373,9 @@ class MainWindow(QMainWindow):
                 path = str(Path(folder) / name)
             # Optional date/size info for single preview header
             try:
-                size_index = model.index(idx.row(), 4, idx.parent())
-                creation_index = model.index(idx.row(), 6, idx.parent())
-                shot_index = model.index(idx.row(), 7, idx.parent())
+                size_index = model.index(idx.row(), COL_SIZE_BYTES, idx.parent())
+                creation_index = model.index(idx.row(), COL_CREATION_DATE, idx.parent())
+                shot_index = model.index(idx.row(), COL_SHOT_DATE, idx.parent())
                 size_txt = model.data(size_index) or ""
                 creation_txt = model.data(creation_index) or ""
                 shot_txt = model.data(shot_index) or ""
@@ -398,25 +398,25 @@ class MainWindow(QMainWindow):
             if parent_item is not None:
                 rows = parent_item.rowCount()
                 for r in range(rows):
-                    name_item = parent_item.child(r, 2)  # COL_NAME
-                    folder_item = parent_item.child(r, 3)  # COL_FOLDER
+                    name_item = parent_item.child(r, COL_NAME)
+                    folder_item = parent_item.child(r, COL_FOLDER)
                     name = model.itemFromIndex(name_item.index()).text() if name_item else ""
                     folder = model.itemFromIndex(folder_item.index()).text() if folder_item else ""
                     size_txt = (
                         model.itemFromIndex(
-                            parent_item.child(r, 4).index()
-                        ).text()  # COL_SIZE_BYTES
-                        if parent_item.child(r, 4)
+                            parent_item.child(r, COL_SIZE_BYTES).index()
+                        ).text()
+                        if parent_item.child(r, COL_SIZE_BYTES)
                         else ""
                     )
                     creation_txt = (
-                        model.itemFromIndex(parent_item.child(r, 6).index()).text()
-                        if parent_item.child(r, 6)
+                        model.itemFromIndex(parent_item.child(r, COL_CREATION_DATE).index()).text()
+                        if parent_item.child(r, COL_CREATION_DATE)
                         else ""
                     )
                     shot_txt = (
-                        model.itemFromIndex(parent_item.child(r, 7).index()).text()
-                        if parent_item.child(r, 7)
+                        model.itemFromIndex(parent_item.child(r, COL_SHOT_DATE).index()).text()
+                        if parent_item.child(r, COL_SHOT_DATE)
                         else ""
                     )
                     if name and folder:
