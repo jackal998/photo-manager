@@ -7,8 +7,31 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItemModel
 
-from app.views.constants import COL_FOLDER, COL_GROUP, COL_NAME, COL_SEL, COL_SIZE_BYTES
+from app.views.constants import (
+    COL_ACTION,
+    COL_CREATION_DATE,
+    COL_FOLDER,
+    COL_GROUP,
+    COL_GROUP_COUNT,
+    COL_NAME,
+    COL_SEL,
+    COL_SHOT_DATE,
+    COL_SIZE_BYTES,
+)
 from core.services.selection_service import RegexSelectionService
+
+# Fields that live on the group row; a regex match selects every child in the group.
+_GROUP_LEVEL_FIELDS: frozenset[str] = frozenset({"Match", "Group Count"})
+
+# Mapping from display field name to column index for file-level fields.
+_FILE_COL: dict[str, int] = {
+    "Action": COL_ACTION,
+    "File Name": COL_NAME,
+    "Folder": COL_FOLDER,
+    "Size (Bytes)": COL_SIZE_BYTES,
+    "Creation Date": COL_CREATION_DATE,
+    "Shot Date": COL_SHOT_DATE,
+}
 
 
 def apply_select_regex(
@@ -18,7 +41,7 @@ def apply_select_regex(
 
     Args:
         model: Qt standard item model containing group/child rows.
-        field: One of "Group", "File Name", "Folder", "Size (Bytes)".
+        field: One of the field names listed in dialog_handler.FIELDS.
         pattern: Regular expression to match against the target field.
         make_checked: If True, set checked; otherwise uncheck.
     """
@@ -37,19 +60,27 @@ def apply_select_regex(
         def iter_children(self, group: Any) -> list[int]:
             return list(range(group.rowCount()))
 
-        def get_field_text(self, group: Any, child: Any, field_name: str) -> str:
+        def get_field_text(self, group: Any, child: Any, field_name: str) -> str | None:
+            """Return text to match against.
+
+            Returns None for file-level fields when child is None (signals to
+            the service that this field should be handled at child level).
+            """
             if child is None:
-                return group.text() or ""
-            if field_name == "File Name":
-                item = group.child(int(child), COL_NAME)
-            elif field_name == "Folder":
-                item = group.child(int(child), COL_FOLDER)
-            elif field_name == "Size (Bytes)":
-                item = group.child(int(child), COL_SIZE_BYTES)
-            elif field_name == "Group":
-                return group.text() or ""
-            else:
-                item = None
+                if field_name not in _GROUP_LEVEL_FIELDS:
+                    return None  # file-level field — service will iterate children
+                if field_name == "Match":
+                    return group.text() or ""
+                if field_name == "Group Count":
+                    row = group.index().row()
+                    item = self._m.item(row, COL_GROUP_COUNT)
+                    return item.text() if item is not None else ""
+                return None
+
+            col = _FILE_COL.get(field_name)
+            if col is None:
+                return ""
+            item = group.child(int(child), col)
             return item.text() if item is not None else ""
 
         def set_checked(self, group: Any, child: Any, checked: bool) -> None:

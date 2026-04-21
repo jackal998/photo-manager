@@ -46,21 +46,29 @@ class RegexSelectionService:
     def apply(self, field: str, regex: str, select: bool) -> None:
         """Apply selection for rows whose target field matches `regex`.
 
+        The accessor signals whether a field is group-level by returning a
+        non-None value from get_field_text(..., child=None, ...).  Group-level
+        fields (e.g. "Match", "Group Count") match against the group row and
+        select every child on a hit.  File-level fields match each child row
+        individually.
+
         Args:
-            field: Field name to inspect (e.g., "File Name").
+            field: Field name to inspect (must match a key in the accessor).
             regex: Regular expression to match.
             select: If True, set to checked; otherwise uncheck.
         """
         rx = re.compile(regex)
 
         for group in self._acc.iter_groups():
-            if field == "Group":
-                group_text = self._acc.get_field_text(group, None, field)
-                if rx.search(group_text or ""):
+            group_text = self._acc.get_field_text(group, None, field)
+            if group_text is not None:
+                # Group-level field: one match selects all children
+                if rx.search(group_text):
                     for child in self._acc.iter_children(group):
                         self._acc.set_checked(group, child, select)
                 continue
 
+            # File-level field: match each child independently
             for child in self._acc.iter_children(group):
                 target_text = self._acc.get_field_text(group, child, field) or ""
                 if target_text and rx.search(target_text):

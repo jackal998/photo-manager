@@ -20,7 +20,8 @@ CREATE TABLE migration_manifest (
     hamming_distance INTEGER,
     duplicate_of     TEXT,
     reason           TEXT,
-    executed         INTEGER NOT NULL DEFAULT 0
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT ''
 );
 """
 
@@ -30,12 +31,11 @@ def _make_manifest(tmp_path: Path, rows: list[dict]) -> Path:
     with sqlite3.connect(db_path) as conn:
         conn.executescript(_DDL)
         for r in rows:
+            cols = list(r.keys())
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(f":{c}" for c in cols)
             conn.execute(
-                "INSERT INTO migration_manifest "
-                "(source_path, source_label, dest_path, action, "
-                " hamming_distance, duplicate_of, reason, executed) "
-                "VALUES (:source_path, :source_label, :dest_path, :action, "
-                "        :hamming_distance, :duplicate_of, :reason, :executed)",
+                f"INSERT INTO migration_manifest ({col_list}) VALUES ({placeholders})",
                 r,
             )
         conn.commit()
@@ -44,14 +44,15 @@ def _make_manifest(tmp_path: Path, rows: list[dict]) -> Path:
 
 def _default(overrides: dict) -> dict:
     base = {
-        "source_path": "/jdrive/a.jpg",
+        "source_path": "/source/a.jpg",
         "source_label": "jdrive",
         "dest_path": None,
         "action": "REVIEW_DUPLICATE",
         "hamming_distance": 5,
-        "duplicate_of": "/iphone/a.jpg",
+        "duplicate_of": "/reference/a.jpg",
         "reason": "near-duplicate (hamming=5)",
         "executed": 0,
+        "user_decision": "",
     }
     return {**base, **overrides}
 
@@ -62,7 +63,7 @@ class TestPendingReviews:
         db = _make_manifest(tmp_path, [
             _default({"source_path": "/a.jpg"}),
             _default({"source_path": "/b.jpg", "action": "MOVE"}),
-            _default({"source_path": "/c.jpg", "action": "SKIP"}),
+            _default({"source_path": "/c.jpg", "action": "EXACT"}),
         ])
         conn = _open(db)
         rows = _pending_reviews(conn, show_all=False)

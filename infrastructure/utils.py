@@ -27,27 +27,6 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     RAWPY_AVAILABLE = False
 
-CSV_DT_FMT = "%Y-%m-%d %H:%M:%S"
-
-
-def parse_csv_datetime(value: str | None) -> datetime | None:
-    """Parse timestamp from CSV using CSV_DT_FMT; return None on failure."""
-    if not value:
-        return None
-    try:
-        return datetime.strptime(value.strip(), CSV_DT_FMT)
-    except (ValueError, TypeError):
-        return None
-
-
-def format_csv_datetime(dt: datetime | None) -> str:
-    """Format datetime for CSV; empty string when None."""
-    try:
-        return dt.strftime(CSV_DT_FMT) if dt else ""
-    except (ValueError, TypeError, AttributeError):
-        return ""
-
-
 def get_filesystem_creation_datetime(path: str) -> datetime | None:
     """Best-effort file creation time.
 

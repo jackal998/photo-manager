@@ -36,13 +36,20 @@ class MenuController:
 
         # File Menu
         file_menu = menubar.addMenu("File")
+        self.actions["scan_sources"] = file_menu.addAction("Scan Sources…")
+        file_menu.addSeparator()
         self.actions["open_manifest"] = file_menu.addAction("Open Manifest…")
         self.actions["save_manifest"] = file_menu.addAction("Save Manifest Decisions…")
         self.actions["save_manifest"].setEnabled(False)
         file_menu.addSeparator()
-        self.actions["import"] = file_menu.addAction("Import CSV…")
-        self.actions["export"] = file_menu.addAction("Export CSV…")
         self.actions["delete"] = file_menu.addAction("Delete Selected…")
+        set_action_submenu = file_menu.addMenu("Set Action")
+        set_action_submenu.setEnabled(False)
+        self.actions["set_action_delete"] = set_action_submenu.addAction("delete")
+        self.actions["set_action_keep"] = set_action_submenu.addAction("keep")
+        self._set_action_submenu = set_action_submenu
+        self.actions["execute_action"] = file_menu.addAction("Execute Action…")
+        self.actions["execute_action"].setEnabled(False)
         file_menu.addSeparator()
         self.actions["exit"] = file_menu.addAction("Exit")
 
@@ -65,8 +72,6 @@ class MenuController:
         self.window.setMenuBar(menubar)
 
         # Store actions as window attributes for backward compatibility
-        self.window.action_import = self.actions["import"]
-        self.window.action_export = self.actions["export"]
         self.window.action_delete = self.actions["delete"]
         self.window.action_exit = self.actions["exit"]
         self.window.action_select_by = self.actions["select_by"]
@@ -81,20 +86,26 @@ class MenuController:
             handlers: Dictionary mapping action names to handler callables
         """
         # File menu actions
+        if "scan_sources" in handlers:
+            self.actions["scan_sources"].triggered.connect(handlers["scan_sources"])
+
         if "open_manifest" in handlers:
             self.actions["open_manifest"].triggered.connect(handlers["open_manifest"])
 
         if "save_manifest" in handlers:
             self.actions["save_manifest"].triggered.connect(handlers["save_manifest"])
 
-        if "import" in handlers:
-            self.actions["import"].triggered.connect(handlers["import"])
-
-        if "export" in handlers:
-            self.actions["export"].triggered.connect(handlers["export"])
-
         if "delete" in handlers:
             self.actions["delete"].triggered.connect(handlers["delete"])
+
+        if "set_action_delete" in handlers:
+            self.actions["set_action_delete"].triggered.connect(handlers["set_action_delete"])
+
+        if "set_action_keep" in handlers:
+            self.actions["set_action_keep"].triggered.connect(handlers["set_action_keep"])
+
+        if "execute_action" in handlers:
+            self.actions["execute_action"].triggered.connect(handlers["execute_action"])
 
         if "exit" in handlers:
             self.actions["exit"].triggered.connect(handlers["exit"])
@@ -148,6 +159,11 @@ class MenuController:
         action = self.actions.get(name)
         if action:
             action.setEnabled(enabled)
+        # Keep the Set Action submenu in sync with its children
+        if name in ("set_action_delete", "set_action_keep"):
+            submenu = getattr(self, "_set_action_submenu", None)
+            if submenu is not None:
+                submenu.setEnabled(enabled)
 
     def get_all_actions(self) -> dict[str, QAction]:
         """Get all actions.

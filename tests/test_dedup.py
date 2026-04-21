@@ -70,7 +70,7 @@ class TestIphoneKeep:
                      exif_date=_dt())
         rows = _rows(classify([iphone, jdrive]))
         assert rows["/iphone/IMG_001.HEIC"].action == "KEEP"
-        assert rows["/jdrive/IMG_001.jpg"].action == "SKIP"
+        assert rows["/jdrive/IMG_001.jpg"].action == "EXACT"
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +84,8 @@ class TestExactDuplicate:
         jdrive = _hr("/jdrive/a.jpg", sha256="same", source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([iphone, takeout, jdrive]))
         assert rows["/iphone/a.jpg"].action == "KEEP"
-        assert rows["/takeout/a.jpg"].action == "SKIP"
-        assert rows["/jdrive/a.jpg"].action == "SKIP"
+        assert rows["/takeout/a.jpg"].action == "EXACT"
+        assert rows["/jdrive/a.jpg"].action == "EXACT"
 
     def test_skip_points_to_kept_file(self):
         a = _hr("/jdrive/a.jpg", sha256="x", source_label="jdrive", exif_date=_dt())
@@ -107,7 +107,7 @@ class TestFormatDuplicate:
                    source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([heic, jpeg]))
         assert rows["/a.heic"].action in ("MOVE", "KEEP")
-        assert rows["/a.jpg"].action == "SKIP"
+        assert rows["/a.jpg"].action == "EXACT"
 
     def test_raw_and_jpeg_both_move(self):
         """RAW + JPEG of same shot must both be kept (complementary rule)."""
@@ -185,8 +185,8 @@ class TestLivePhotoPair:
                    file_type="heic", exif_date=_dt())
 
         rows = _rows(classify([heic, mov, orig]))
-        assert rows[heic_path.as_posix()].action == "SKIP"
-        assert rows[mov_path.as_posix()].action == "SKIP"
+        assert rows[heic_path.as_posix()].action == "EXACT"
+        assert rows[mov_path.as_posix()].action == "EXACT"
 
 
 # ---------------------------------------------------------------------------
