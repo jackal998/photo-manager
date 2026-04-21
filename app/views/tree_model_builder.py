@@ -101,10 +101,14 @@ def build_model(
         for it in group_row:
             it.setEditable(False)
 
-        # Group-level SORT_ROLE: representative value from the first item
+        # Group-level SORT_ROLE: aggregate across all files so that sorting a column
+        # reorders groups by their "best" file's value (first file after in-group sort).
+        # Min-priority wins for ranked fields (delete=1 < keep=2 < ""=3); max wins for size.
         try:
             group_row[COL_GROUP].setData(
-                _ACTION_SORT.get(getattr(first, "action", ""), 6) if first else 6, SORT_ROLE
+                min((_ACTION_SORT.get(getattr(it, "action", ""), 6) for it in items_list),
+                    default=6),
+                SORT_ROLE,
             )
         except Exception:
             pass
@@ -115,24 +119,35 @@ def build_model(
             pass
         try:
             group_row[COL_ACTION].setData(
-                _DECISION_SORT.get(getattr(first, "user_decision", ""), 3) if first else 3,
+                min((_DECISION_SORT.get(getattr(it, "user_decision", ""), 3)
+                     for it in items_list),
+                    default=3),
                 SORT_ROLE,
             )
         except Exception:
             pass
         try:
-            first_name = Path(getattr(first, "file_path", "")).name.lower() if first else ""
-            group_row[COL_NAME].setData(first_name, SORT_ROLE)
+            group_row[COL_NAME].setData(
+                min((Path(getattr(it, "file_path", "")).name.lower() for it in items_list),
+                    default=""),
+                SORT_ROLE,
+            )
         except Exception:
             pass
         try:
-            first_folder = str(getattr(first, "folder_path", "")).lower() if first else ""
-            group_row[COL_FOLDER].setData(first_folder, SORT_ROLE)
+            group_row[COL_FOLDER].setData(
+                min((str(getattr(it, "folder_path", "")).lower() for it in items_list),
+                    default=""),
+                SORT_ROLE,
+            )
         except Exception:
             pass
         try:
-            first_size = int(getattr(first, "file_size_bytes", 0) or 0) if first else 0
-            group_row[COL_SIZE_BYTES].setData(first_size, SORT_ROLE)
+            group_row[COL_SIZE_BYTES].setData(
+                max((int(getattr(it, "file_size_bytes", 0) or 0) for it in items_list),
+                    default=0),
+                SORT_ROLE,
+            )
         except Exception:
             pass
         try:
@@ -140,17 +155,21 @@ def build_model(
         except Exception:
             pass
         try:
-            first_cd = getattr(first, "creation_date", None) if first else None
-            group_row[COL_CREATION_DATE].setData(
-                int(first_cd.timestamp()) if first_cd else 0, SORT_ROLE
-            )
+            cd_timestamps = [
+                int(cd.timestamp())
+                for it in items_list
+                if (cd := getattr(it, "creation_date", None)) is not None
+            ]
+            group_row[COL_CREATION_DATE].setData(min(cd_timestamps, default=0), SORT_ROLE)
         except Exception:
             pass
         try:
-            first_sd = getattr(first, "shot_date", None) if first else None
-            group_row[COL_SHOT_DATE].setData(
-                int(first_sd.timestamp()) if first_sd else 0, SORT_ROLE
-            )
+            sd_timestamps = [
+                int(sd.timestamp())
+                for it in items_list
+                if (sd := getattr(it, "shot_date", None)) is not None
+            ]
+            group_row[COL_SHOT_DATE].setData(min(sd_timestamps, default=0), SORT_ROLE)
         except Exception:
             pass
 

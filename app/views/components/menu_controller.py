@@ -43,11 +43,16 @@ class MenuController:
         self.actions["save_manifest"].setEnabled(False)
         file_menu.addSeparator()
         self.actions["delete"] = file_menu.addAction("Delete Selected…")
-        set_action_submenu = file_menu.addMenu("Set Action")
-        set_action_submenu.setEnabled(False)
-        self.actions["set_action_delete"] = set_action_submenu.addAction("delete")
-        self.actions["set_action_keep"] = set_action_submenu.addAction("keep")
-        self._set_action_submenu = set_action_submenu
+        hl_submenu = file_menu.addMenu("Set Action to Activated Files")
+        hl_submenu.setEnabled(False)
+        self.actions["set_action_hl_delete"] = hl_submenu.addAction("delete")
+        self.actions["set_action_hl_keep"] = hl_submenu.addAction("keep")
+        self._set_action_hl_submenu = hl_submenu
+        sel_submenu = file_menu.addMenu("Set Action to Selected (Sel) Files")
+        sel_submenu.setEnabled(False)
+        self.actions["set_action_sel_delete"] = sel_submenu.addAction("delete")
+        self.actions["set_action_sel_keep"] = sel_submenu.addAction("keep")
+        self._set_action_sel_submenu = sel_submenu
         self.actions["execute_action"] = file_menu.addAction("Execute Action…")
         self.actions["execute_action"].setEnabled(False)
         file_menu.addSeparator()
@@ -98,11 +103,17 @@ class MenuController:
         if "delete" in handlers:
             self.actions["delete"].triggered.connect(handlers["delete"])
 
-        if "set_action_delete" in handlers:
-            self.actions["set_action_delete"].triggered.connect(handlers["set_action_delete"])
+        if "set_action_hl_delete" in handlers:
+            self.actions["set_action_hl_delete"].triggered.connect(handlers["set_action_hl_delete"])
 
-        if "set_action_keep" in handlers:
-            self.actions["set_action_keep"].triggered.connect(handlers["set_action_keep"])
+        if "set_action_hl_keep" in handlers:
+            self.actions["set_action_hl_keep"].triggered.connect(handlers["set_action_hl_keep"])
+
+        if "set_action_sel_delete" in handlers:
+            self.actions["set_action_sel_delete"].triggered.connect(handlers["set_action_sel_delete"])
+
+        if "set_action_sel_keep" in handlers:
+            self.actions["set_action_sel_keep"].triggered.connect(handlers["set_action_sel_keep"])
 
         if "execute_action" in handlers:
             self.actions["execute_action"].triggered.connect(handlers["execute_action"])
@@ -159,9 +170,13 @@ class MenuController:
         action = self.actions.get(name)
         if action:
             action.setEnabled(enabled)
-        # Keep the Set Action submenu in sync with its children
-        if name in ("set_action_delete", "set_action_keep"):
-            submenu = getattr(self, "_set_action_submenu", None)
+        # Keep parent submenus in sync with their child actions
+        if name in ("set_action_hl_delete", "set_action_hl_keep"):
+            submenu = getattr(self, "_set_action_hl_submenu", None)
+            if submenu is not None:
+                submenu.setEnabled(enabled)
+        elif name in ("set_action_sel_delete", "set_action_sel_keep"):
+            submenu = getattr(self, "_set_action_sel_submenu", None)
             if submenu is not None:
                 submenu.setEnabled(enabled)
 

@@ -111,6 +111,7 @@ class MainWindow(QMainWindow):
             ui_updater=self.ui_updater,
             status_reporter=self.status_reporter,
             checked_paths_provider=self.selection_controller,
+            highlighted_items_provider=self.tree_controller,
         )
 
         # Tree data provider for dialog handler
@@ -187,8 +188,10 @@ class MainWindow(QMainWindow):
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
             "delete": self.on_delete_selected,
-            "set_action_delete": lambda: self.file_operations.batch_set_decision("delete"),
-            "set_action_keep": lambda: self.file_operations.batch_set_decision("keep"),
+            "set_action_hl_delete": lambda: self.file_operations.set_decision_to_highlighted("delete"),
+            "set_action_hl_keep": lambda: self.file_operations.set_decision_to_highlighted("keep"),
+            "set_action_sel_delete": lambda: self.file_operations.batch_set_decision("delete"),
+            "set_action_sel_keep": lambda: self.file_operations.batch_set_decision("keep"),
             "execute_action": self.on_execute_action,
             "select_by": self.on_open_select_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
@@ -270,7 +273,11 @@ class MainWindow(QMainWindow):
             except AttributeError:
                 pass
             n = self._vm.group_count
-            for _act in ("execute_action", "set_action_delete", "set_action_keep"):
+            for _act in (
+                "execute_action",
+                "set_action_hl_delete", "set_action_hl_keep",
+                "set_action_sel_delete", "set_action_sel_keep",
+            ):
                 try:
                     self.menu_controller.enable_action(_act, True)
                 except AttributeError:
