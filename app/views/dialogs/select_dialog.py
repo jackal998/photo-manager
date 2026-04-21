@@ -49,13 +49,11 @@ class SelectDialog(QDialog):
         row2.addWidget(self.regex)
         root.addLayout(row2)
 
-        # Helper tips / mini manual
         tips = QLabel(
-            "使用說明：依欄位+正則批次勾選或取消。\n"
-            "- 精確比對：^文字$\n"
-            "- 任意字串：.*\n"
-            "- 數字：\\d+（例如檔名數字）\n"
-            "範例：^IMG_\\d+\\.HEIC$（檔名），^H:\\\\Photos\\\\2023\\\\.*（資料夾）"
+            "Regex tips:\n"
+            "  Exact match: ^text$     Any substring: .*     Digits: \\d+\n"
+            "  Examples:  ^IMG_\\d+\\.HEIC$  (File Name),  ^delete$  (Action),\n"
+            "             ^exact$  (Match),  ^H:\\\\Photos\\\\2023\\\\  (Folder)"
         )
         tips.setWordWrap(True)
         root.addWidget(tips)
@@ -77,7 +75,7 @@ class SelectDialog(QDialog):
         # Defaults:
         # - Field => Folder
         # - Regex => exact of current row field if available; else blank
-        self._set_default_field("Folder")
+        self._set_default_field("File Name")
         self.combo.currentTextChanged.connect(self._on_field_changed)
         self._apply_exact_regex_for_current_field()
 

@@ -1,18 +1,16 @@
 """
 UI/view constants centralized for reuse across view modules.
-
-This module MUST NOT change any visible text, column order, or sorting
-semantics. It only centralizes magic numbers and roles.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
-# Column headers and indices (base order preserved; new columns appended)
+# Column headers and indices
 HEADERS: list[str] = [
-    "Group",
+    "Match",
     "Sel",
+    "Action",
     "File Name",
     "Folder",
     "Size (Bytes)",
@@ -23,13 +21,14 @@ HEADERS: list[str] = [
 
 COL_GROUP: int = 0
 COL_SEL: int = 1
-COL_NAME: int = 2
-COL_FOLDER: int = 3
-COL_SIZE_BYTES: int = 4
-COL_GROUP_COUNT: int = 5
-COL_CREATION_DATE: int = 6
-COL_SHOT_DATE: int = 7
-NUM_COLUMNS: int = 8
+COL_ACTION: int = 2
+COL_NAME: int = 3
+COL_FOLDER: int = 4
+COL_SIZE_BYTES: int = 5
+COL_GROUP_COUNT: int = 6
+COL_CREATION_DATE: int = 7
+COL_SHOT_DATE: int = 8
+NUM_COLUMNS: int = 9
 
 
 # Data roles

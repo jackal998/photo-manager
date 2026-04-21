@@ -8,7 +8,16 @@ from typing import Protocol
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QMessageBox
 
-from app.views.constants import COL_FOLDER, COL_GROUP, COL_NAME, COL_SIZE_BYTES
+from app.views.constants import (
+    COL_ACTION,
+    COL_CREATION_DATE,
+    COL_FOLDER,
+    COL_GROUP,
+    COL_GROUP_COUNT,
+    COL_NAME,
+    COL_SHOT_DATE,
+    COL_SIZE_BYTES,
+)
 
 
 class TreeDataProvider(Protocol):
@@ -66,10 +75,14 @@ class DialogHandler:
             return
 
         fields = [
-            "Group",
+            "Match",
+            "Action",
             "File Name",
             "Folder",
             "Size (Bytes)",
+            "Group Count",
+            "Creation Date",
+            "Shot Date",
         ]
 
         row_values = self._get_highlighted_row_values()
@@ -112,22 +125,30 @@ class DialogHandler:
                 model = view_model
 
             if idx.parent().isValid():
-                # Child row (file) - extract data
+                # Child row (file) — extract per-column values
                 parent_idx = idx.parent()
-                group_text = (
-                    model.data(model.index(parent_idx.row(), COL_GROUP, parent_idx.parent())) or ""
-                )
-                name = model.data(model.index(idx.row(), COL_NAME, parent_idx)) or ""
-                folder = model.data(model.index(idx.row(), COL_FOLDER, parent_idx)) or ""
-                size_txt = model.data(model.index(idx.row(), COL_SIZE_BYTES, parent_idx)) or ""
 
-                values["Group"] = str(group_text)
-                values["File Name"] = str(name)
-                values["Folder"] = str(folder)
-                values["Size (Bytes)"] = str(size_txt)
+                def _gcol(col: int) -> str:
+                    return model.data(model.index(idx.row(), col, parent_idx)) or ""
+
+                def _group_col(col: int) -> str:
+                    return model.data(model.index(parent_idx.row(), col, parent_idx.parent())) or ""
+
+                values["Match"] = _group_col(COL_GROUP)
+                values["Group Count"] = _group_col(COL_GROUP_COUNT)
+                values["Action"] = _gcol(COL_ACTION)
+                values["File Name"] = _gcol(COL_NAME)
+                values["Folder"] = _gcol(COL_FOLDER)
+                values["Size (Bytes)"] = _gcol(COL_SIZE_BYTES)
+                values["Creation Date"] = _gcol(COL_CREATION_DATE)
+                values["Shot Date"] = _gcol(COL_SHOT_DATE)
             else:
-                # Group row selected → no data row defaults
-                pass
+                # Group row selected — populate group-level fields only
+                def _top_col(col: int) -> str:
+                    return model.data(model.index(idx.row(), col)) or ""
+
+                values["Match"] = _top_col(COL_GROUP)
+                values["Group Count"] = _top_col(COL_GROUP_COUNT)
         except Exception:
             pass
 

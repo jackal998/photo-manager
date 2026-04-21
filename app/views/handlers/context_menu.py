@@ -13,6 +13,9 @@ from PySide6.QtWidgets import QMenu, QTreeView
 from app.views.media_utils import normalize_windows_path
 
 
+_SETTABLE_DECISIONS = ("delete", "keep")
+
+
 class ActionHandlers(Protocol):
     """Protocol for action handler callbacks."""
 
@@ -34,6 +37,10 @@ class ActionHandlers(Protocol):
 
     def show_select_dialog(self) -> None:
         """Show select by field/regex dialog."""
+        ...
+
+    def set_decision(self, items: list[dict], decision: str) -> None:
+        """Set the user decision (delete/keep) for file items."""
         ...
 
 
@@ -124,6 +131,16 @@ class ContextMenuHandler:
 
             unselect_file_action = menu.addAction("Unselect File")
             unselect_file_action.triggered.connect(lambda: self.handlers.unselect_files([item]))
+
+            # Set Action submenu
+            menu.addSeparator()
+            set_action_menu = menu.addMenu("Set Action")
+            for dec in _SETTABLE_DECISIONS:
+                a = set_action_menu.addAction(dec)
+                a.triggered.connect(
+                    lambda checked=False, _dec=dec, _item=item:
+                        self.handlers.set_decision([_item], _dec)
+                )
 
             # Open Folder action
             open_folder_action = menu.addAction("Open Folder")

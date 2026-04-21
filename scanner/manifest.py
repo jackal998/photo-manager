@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
     hamming_distance INTEGER,
     duplicate_of     TEXT,
     reason           TEXT,
-    executed         INTEGER NOT NULL DEFAULT 0
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
 CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
@@ -70,11 +71,11 @@ def print_summary(rows: list[ManifestRow]) -> None:
 
     print("\n── Migration Manifest Summary ──────────────────────")
     print(f"  Total files scanned : {total:>7,}")
-    for action in ("KEEP", "MOVE", "SKIP", "REVIEW_DUPLICATE", "UNDATED"):
+    for action in ("KEEP", "MOVE", "EXACT", "REVIEW_DUPLICATE", "UNDATED"):
         n = counts.get(action, 0)
         pct = 100 * n / total if total else 0
         print(f"  {action:<20}: {n:>7,}  ({pct:.1f}%)")
-    other = total - sum(counts[a] for a in ("KEEP", "MOVE", "SKIP", "REVIEW_DUPLICATE", "UNDATED"))
+    other = total - sum(counts[a] for a in ("KEEP", "MOVE", "EXACT", "REVIEW_DUPLICATE", "UNDATED"))
     if other:
         print(f"  {'other':<20}: {other:>7,}")
     print("────────────────────────────────────────────────────\n")

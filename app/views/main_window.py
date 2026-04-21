@@ -22,7 +22,7 @@ from app.views.components.selection_controller import SelectionController
 
 # Import extracted components
 from app.views.components.tree_controller import TreeController
-from app.views.constants import COL_GROUP
+from app.views.constants import COL_CREATION_DATE, COL_FOLDER, COL_GROUP, COL_NAME, COL_SHOT_DATE, COL_SIZE_BYTES
 from app.views.handlers.context_menu import ContextMenuHandler
 from app.views.handlers.dialog_handler import DialogHandler
 from app.views.handlers.file_operations import FileOperationsHandler
@@ -44,24 +44,12 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         vm: Any,
-        repo: Any,
         image_service: Any | None = None,
         settings: Any | None = None,
         delete_service: Any | None = None,
     ) -> None:
-        """Initialize MainWindow with all services and components.
-
-        Args:
-            vm: ViewModel instance for data operations
-            repo: Repository instance for CSV operations
-            image_service: Image service for loading/processing images
-            settings: Settings instance for configuration
-            delete_service: Delete service for file deletion
-        """
         super().__init__()
-
-        # Initialize services and state
-        self._initialize_services(vm, repo, image_service, settings, delete_service)
+        self._initialize_services(vm, image_service, settings, delete_service)
 
         # Setup components
         self._setup_components()
@@ -78,22 +66,11 @@ class MainWindow(QMainWindow):
     def _initialize_services(
         self,
         vm: Any,
-        repo: Any,
         image_service: Any | None,
         settings: Any | None,
         delete_service: Any | None,
     ) -> None:
-        """Initialize all service dependencies.
-
-        Args:
-            vm: ViewModel instance
-            repo: Repository instance
-            image_service: Image service instance
-            settings: Settings instance
-            delete_service: Delete service instance
-        """
         self._vm = vm
-        self._repo = repo
         self._img = image_service
         self._settings = settings
         self._deleter = delete_service
@@ -128,7 +105,6 @@ class MainWindow(QMainWindow):
         # Initialize file operations handler
         self.file_operations = FileOperationsHandler(
             vm=self._vm,
-            repo=self._repo,
             delete_service=self._deleter,
             settings=self._settings,
             parent_widget=self,
@@ -207,11 +183,13 @@ class MainWindow(QMainWindow):
         """Connect all signal/slot relationships."""
         # Menu action handlers
         handlers = {
+            "scan_sources": self.on_scan_sources,
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
-            "import": self.on_import_csv,
-            "export": self.on_export_csv,
             "delete": self.on_delete_selected,
+            "set_action_delete": lambda: self.file_operations.batch_set_decision("delete"),
+            "set_action_keep": lambda: self.file_operations.batch_set_decision("keep"),
+            "execute_action": self.on_execute_action,
             "select_by": self.on_open_select_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
             "exit": self.close,
@@ -269,6 +247,38 @@ class MainWindow(QMainWindow):
 
     # PRESERVED: Menu action handlers
 
+    def on_scan_sources(self) -> None:
+        """Open the Scan Sources dialog."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        dlg = ScanDialog(
+            settings=self._settings,
+            on_scan_complete=self._load_manifest_from_path,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _load_manifest_from_path(self, manifest_path: str) -> None:
+        """Load a manifest directly (called after scan completes or from Open Manifest)."""
+        from infrastructure.manifest_repository import ManifestRepository
+        try:
+            self._vm.load_from_repo(ManifestRepository(), manifest_path)
+            self.file_operations._manifest_path = manifest_path
+            self.show_groups_summary(self._vm.groups)
+            self.refresh_tree(self._vm.groups)
+            try:
+                self.menu_controller.enable_action("save_manifest", True)
+            except AttributeError:
+                pass
+            n = self._vm.group_count
+            for _act in ("execute_action", "set_action_delete", "set_action_keep"):
+                try:
+                    self.menu_controller.enable_action(_act, True)
+                except AttributeError:
+                    pass
+            self.statusBar().showMessage(f"Loaded manifest: {n} group(s)", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Manifest Error", str(exc))
+
     def on_open_manifest(self) -> None:
         """Handle Open Manifest action."""
         self.file_operations.import_manifest()
@@ -277,18 +287,14 @@ class MainWindow(QMainWindow):
         """Handle Save Manifest Decisions action."""
         self.file_operations.save_manifest_decisions()
 
-    def on_import_csv(self) -> None:
-        """Handle CSV import action."""
-        self.file_operations.import_csv()
-
-    def on_export_csv(self) -> None:
-        """Handle CSV export action."""
-        self.file_operations.export_csv()
-
     def on_delete_selected(self) -> None:
         """Handle delete selected action."""
         selected_paths = self.selection_controller.gather_checked_paths()
         self.file_operations.delete_selected_files(selected_paths)
+
+    def on_execute_action(self) -> None:
+        """Handle Execute Action — open review dialog and run planned operations."""
+        self.file_operations.execute_action()
 
     def on_open_select_dialog(self) -> None:
         """Handle open select dialog action."""
@@ -322,8 +328,8 @@ class MainWindow(QMainWindow):
         # Determine if group or child
         if idx.parent().isValid():
             # Child row selected -> single preview
-            name_index = model.index(idx.row(), 2, idx.parent())  # COL_NAME
-            folder_index = model.index(idx.row(), 3, idx.parent())  # COL_FOLDER
+            name_index = model.index(idx.row(), COL_NAME, idx.parent())
+            folder_index = model.index(idx.row(), COL_FOLDER, idx.parent())
             name = model.data(name_index)
             folder = model.data(folder_index)
             path = model.data(name_index, 32)  # PATH_ROLE
@@ -333,9 +339,9 @@ class MainWindow(QMainWindow):
                 path = str(Path(folder) / name)
             # Optional date/size info for single preview header
             try:
-                size_index = model.index(idx.row(), 4, idx.parent())
-                creation_index = model.index(idx.row(), 6, idx.parent())
-                shot_index = model.index(idx.row(), 7, idx.parent())
+                size_index = model.index(idx.row(), COL_SIZE_BYTES, idx.parent())
+                creation_index = model.index(idx.row(), COL_CREATION_DATE, idx.parent())
+                shot_index = model.index(idx.row(), COL_SHOT_DATE, idx.parent())
                 size_txt = model.data(size_index) or ""
                 creation_txt = model.data(creation_index) or ""
                 shot_txt = model.data(shot_index) or ""
@@ -358,25 +364,25 @@ class MainWindow(QMainWindow):
             if parent_item is not None:
                 rows = parent_item.rowCount()
                 for r in range(rows):
-                    name_item = parent_item.child(r, 2)  # COL_NAME
-                    folder_item = parent_item.child(r, 3)  # COL_FOLDER
+                    name_item = parent_item.child(r, COL_NAME)
+                    folder_item = parent_item.child(r, COL_FOLDER)
                     name = model.itemFromIndex(name_item.index()).text() if name_item else ""
                     folder = model.itemFromIndex(folder_item.index()).text() if folder_item else ""
                     size_txt = (
                         model.itemFromIndex(
-                            parent_item.child(r, 4).index()
-                        ).text()  # COL_SIZE_BYTES
-                        if parent_item.child(r, 4)
+                            parent_item.child(r, COL_SIZE_BYTES).index()
+                        ).text()
+                        if parent_item.child(r, COL_SIZE_BYTES)
                         else ""
                     )
                     creation_txt = (
-                        model.itemFromIndex(parent_item.child(r, 6).index()).text()
-                        if parent_item.child(r, 6)
+                        model.itemFromIndex(parent_item.child(r, COL_CREATION_DATE).index()).text()
+                        if parent_item.child(r, COL_CREATION_DATE)
                         else ""
                     )
                     shot_txt = (
-                        model.itemFromIndex(parent_item.child(r, 7).index()).text()
-                        if parent_item.child(r, 7)
+                        model.itemFromIndex(parent_item.child(r, COL_SHOT_DATE).index()).text()
+                        if parent_item.child(r, COL_SHOT_DATE)
                         else ""
                     )
                     if name and folder:
@@ -624,3 +630,7 @@ class ActionHandlersImpl:
     def show_select_dialog(self) -> None:
         """Show select by field/regex dialog."""
         self.dialog.show_select_dialog()
+
+    def set_decision(self, items: list[dict], decision: str) -> None:
+        """Set user decision (delete/keep) for file items."""
+        self.file_ops.set_decision(items, decision)

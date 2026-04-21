@@ -27,3 +27,19 @@ class JsonSettings:
             else:
                 return default
         return node
+
+    def set(self, key: str, value: Any) -> None:
+        """Set a dotted `key` to `value` (creates intermediate dicts as needed)."""
+        parts = key.split(".")
+        node: Any = self._data
+        for part in parts[:-1]:
+            if not isinstance(node.get(part), dict):
+                node[part] = {}
+            node = node[part]
+        node[parts[-1]] = value
+
+    def save(self) -> None:
+        """Persist current data back to the settings file."""
+        with self._path.open("w", encoding="utf-8") as f:
+            import json as _json
+            _json.dump(self._data, f, indent=2, ensure_ascii=False)

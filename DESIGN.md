@@ -97,22 +97,28 @@ photo_manager/
 
 - `PhotoRecord`
   - `group_number:int`
-  - `is_mark:bool`
-  - `is_locked:bool`（僅 App 內）
+  - `is_mark:bool` — Sel checkbox 狀態（CSV workflow 使用）
+  - `is_locked:bool` — 保護欄位（目前在 GUI 中一律為 False；Delete service 仍尊重此欄）
   - `folder_path:str`
   - `file_path:str`
   - `capture_date:datetime|None`
   - `modified_date:datetime|None`
+  - `creation_date:datetime|None` — 檔案系統建立時間
+  - `shot_date:datetime|None` — EXIF DateTimeOriginal
   - `file_size_bytes:int`（以 `os.path.getsize` 重新讀取）
-  - `gps_latitude:float|None`
-  - `gps_longitude:float|None`
-  - `pixel_height:int|None`, `pixel_width:int|None`
-  - `dpi_width:int|None`, `dpi_height:int|None`
-  - `orientation:int|None`
+  - `action:str` — Scanner 分類（唯讀）：`EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `KEEP` / `UNDATED` / `""` (reference role)
+  - `user_decision:str` — 使用者操作決定（可寫）：`"delete"` / `"keep"` / `""` (undecided)
 - `PhotoGroup`
   - `group_number:int`
   - `items:list[PhotoRecord]`
   - `is_expanded:bool`（UI 狀態）
+
+**action vs user_decision 分離原則：**
+
+| 欄位 | 來源 | 用途 | 可變？ |
+|------|------|------|-------|
+| `action` | Scanner 寫入，manifest 載入 | 分類標籤（col 0 Match 顯示依據） | 否（唯讀）|
+| `user_decision` | 使用者透過 Set Action 設定 | 實際檔案操作（col 8 Action 顯示依據）| 是 |
 
 ---
 
@@ -290,6 +296,88 @@ GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileS
 
 ## 19. 定義與術語
 
-- Selected：UI 當前選取狀態（不直接對應 CSV 欄位）
-- Marked：`IsMark == 1`
-- Locked：`IsLocked == 1`（僅 App 內，非檔案屬性）
+- **Selected（Sel）**：UI Sel 勾選框狀態，用於批次操作目標選擇
+- **Marked（IsMark）**：`is_mark == True`（CSV workflow 使用；manifest workflow 中由 Sel 取代）
+- **Locked（IsLocked）**：`is_locked == True`（僅 App 內狀態；Delete service 跳過 locked 項目；manifest workflow 中目前一律為 False）
+- **action**：Scanner 分類（`EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `KEEP` / `UNDATED`）；唯讀，col 0 "Match" 顯示
+- **user_decision**：使用者決定（`"delete"` / `"keep"` / `""`）；col 8 "Action" 顯示；透過 Set Action 設定
+
+---
+
+## 20. Scanner Architecture (Phase 1 — pHash Deduplication)
+
+Replaces Cisdem Duplicate Finder. Produces `migration_manifest.sqlite` which
+the review GUI loads via `ManifestRepository`.
+
+### Pipeline stages
+
+```
+scan_sources()  →  batch_read_dates()  →  compute_sha256/phash()  →  classify()  →  write_manifest()
+   walker           exif (exiftool)         hasher                    dedup          manifest
+```
+
+### Module responsibilities
+
+| Module | File | Responsibility |
+|--------|------|---------------|
+| `scanner.walker` | `scanner/walker.py` | rglob each source dir; detect media type; pair Live Photos (same-stem HEIC+MOV); yield `FileRecord` |
+| `scanner.exif` | `scanner/exif.py` | Persistent exiftool `-stay_open` process; batch EXIF reads (chunked ≤500/call) |
+| `scanner.hasher` | `scanner/hasher.py` | SHA-256 (all files) + pHash via `imagehash` (photos only; RAW uses embedded JPEG thumb) |
+| `scanner.dedup` | `scanner/dedup.py` | Group by SHA-256 → EXACT_DUPLICATE; group by pHash → FORMAT_DUPLICATE or REVIEW_DUPLICATE; apply RAW+lossy exception; propagate Live Photo pairs |
+| `scanner.manifest` | `scanner/manifest.py` | Write SQLite `migration_manifest`; `print_summary` action counts |
+| `scanner.media` | `scanner/media.py` | `MEDIA_EXTENSIONS`, `SKIP_FILENAMES`, Live Photo pair logic, `_magic_type` |
+
+### Classification rules
+
+| Condition | Action |
+|-----------|--------|
+| SHA-256 match | `EXACT` (exact duplicate — lower-priority copy) |
+| pHash hamming == 0, both lossy | `EXACT` lower-priority (format duplicate) |
+| pHash hamming == 0, one RAW + one lossy | Both `MOVE` (complementary) |
+| pHash hamming 1–10 | `REVIEW_DUPLICATE` (human review in GUI) |
+| No EXIF DateTimeOriginal | `UNDATED` |
+| Otherwise | `MOVE` |
+
+Source priority (EXACT_DUPLICATE): `iphone > takeout > jdrive`  
+Format priority (FORMAT_DUPLICATE): `heic > jpeg > png > others`
+
+### GUI integration
+
+`ScanDialog` (in `app/views/dialogs/`) lets the user pick source folders and
+runs `ScanWorker` (a `QThread`) in the background. On completion it calls
+`MainWindow._load_manifest_from_path()` which invokes `ManifestRepository.load()`
+to map all rows into the `PhotoGroup`/`PhotoRecord` tree.
+
+`ManifestRepository.save()` writes `user_decision` values (`delete`/`keep`/`""`) back
+to the manifest for each record.  The `action` column (scanner classification) is
+never modified by the GUI.
+
+### CLI
+
+```bash
+python scan.py \
+  --source iphone="\NAS\Photos\MobileBackup" \
+  --source takeout="D:\Downloads\Takeout" \
+  --source jdrive="J:\圖片" \
+  --output migration_manifest.sqlite
+
+python scan.py ... --limit 200 --dry-run   # bounded debug run
+```
+
+### manifest schema (key columns)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `source_path` | TEXT | Absolute path |
+| `source_label` | TEXT | `iphone` / `takeout` / `jdrive` |
+| `dest_path` | TEXT | NULL for EXACT/UNDATED |
+| `action` | TEXT | Scanner classification: `EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `KEEP` / `UNDATED` |
+| `source_hash` | TEXT | SHA-256 hex |
+| `phash` | TEXT | 64-bit perceptual hash hex; NULL for video |
+| `hamming_distance` | INTEGER | Distance to `duplicate_of`'s phash |
+| `duplicate_of` | TEXT | source_path of kept file |
+| `executed` | INTEGER | 0=pending 1=done |
+| `user_decision` | TEXT | User's planned file operation: `delete` / `keep` / `""` (undecided) |
+
+`user_decision` is added automatically to older manifests (pre-existing DBs
+lacking the column are migrated via `ALTER TABLE … ADD COLUMN` on first load).

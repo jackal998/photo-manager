@@ -46,7 +46,6 @@ class FileOperationsHandler:
     def __init__(
         self,
         vm: Any,
-        repo: Any,
         delete_service: Any,
         settings: Any,
         parent_widget: QObject,
@@ -54,19 +53,7 @@ class FileOperationsHandler:
         status_reporter: StatusReporter,
         checked_paths_provider: object | None = None,
     ) -> None:
-        """Initialize with required services and callbacks.
-
-        Args:
-            vm: ViewModel instance for data operations
-            repo: Repository instance for CSV operations
-            delete_service: Delete service for file deletion
-            settings: Settings instance for configuration
-            parent_widget: Parent widget for dialogs
-            ui_updater: Callback for UI updates
-            status_reporter: Callback for status messages
-        """
         self.vm = vm
-        self.repo = repo
         self.deleter = delete_service
         self.settings = settings
         self.parent = parent_widget
@@ -142,100 +129,6 @@ class FileOperationsHandler:
             QMessageBox.critical(self.parent, "Save Manifest Error", str(ex))
             self.status_reporter.show_status("Save manifest failed")
 
-    def import_csv(self) -> None:
-        """Handle CSV import with file dialog and error handling."""
-        path, _ = QFileDialog.getOpenFileName(self.parent, "Import CSV", "", "CSV Files (*.csv)")
-        if not path:
-            return
-
-        try:
-            self.vm.load_csv(path)
-            self.ui_updater.show_group_counts(self.vm.group_count)
-            self.ui_updater.show_groups_summary(self.vm.groups)
-            self.ui_updater.refresh_tree(self.vm.groups)
-
-            logger.info(
-                "Imported CSV: {} | groups={} items={}",
-                path,
-                self.vm.group_count,
-                sum(len(g.items) for g in self.vm.groups),
-            )
-            self.status_reporter.show_status(f"Imported {self.vm.group_count} groups")
-
-        except Exception as ex:
-            logger.exception("Import CSV failed: {}", ex)
-            QMessageBox.critical(self.parent, "Import Error", str(ex))
-            self.status_reporter.show_status("Import failed")
-
-    def export_csv(self) -> None:
-        """Handle CSV export with validation and error handling."""
-        if not self.vm.groups:
-            QMessageBox.information(self.parent, "Export", "No data to export.")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(
-            self.parent, "Export CSV", "export.csv", "CSV Files (*.csv)"
-        )
-        if not path:
-            return
-
-        try:
-            self._export_to_path(path)
-            logger.info(
-                "Exported CSV: {} | groups={} items={} (bytes correct)",
-                path,
-                self.vm.group_count,
-                sum(len(g.items) for g in self.vm.groups),
-            )
-            QMessageBox.information(self.parent, "Export", "Export completed.")
-            self.status_reporter.show_status("Export completed")
-
-        except Exception as ex:
-            logger.exception("Export CSV failed: {}", ex)
-            QMessageBox.critical(self.parent, "Export Error", str(ex))
-            self.status_reporter.show_status("Export failed")
-
-    def export_csv_to_path(self, path: str) -> None:
-        """Programmatically export to a specific path (no file dialog).
-
-        Includes mark sync so the saved CSV reflects current tree checkbox state.
-        """
-        if not path:
-            return
-        self._export_to_path(path)
-        try:
-            logger.info(
-                "Exported CSV: {} | groups={} items={} (bytes correct)",
-                path,
-                self.vm.group_count,
-                sum(len(g.items) for g in self.vm.groups),
-            )
-            QMessageBox.information(self.parent, "Export", "Export completed.")
-            self.status_reporter.show_status("Export completed")
-        except Exception:
-            # If UI feedback fails, do not raise further
-            pass
-
-    def _export_to_path(self, path: str) -> None:
-        """Internal helper: sync marks and save to `path`."""
-        # Sync marks from UI checkboxes into model before saving
-        try:
-            checked_paths: list[str] = []
-            provider = self.checked_paths_provider
-            if provider is not None:
-                if callable(provider):
-                    checked_paths = provider()
-                elif hasattr(provider, "gather_checked_paths"):
-                    checked_paths = provider.gather_checked_paths()  # type: ignore[attr-defined]
-            if hasattr(self.vm, "update_marks_from_checked_paths"):
-                self.vm.update_marks_from_checked_paths(checked_paths)  # type: ignore[attr-defined]
-        except Exception:
-            # Best-effort; do not block export on sync issues
-            pass
-
-        # Save to CSV using repository
-        self.repo.save(path, self.vm.groups)
-
     def delete_selected_files(self, selected_paths: list[str]) -> None:
         """Handle file deletion workflow with confirmation and cleanup.
 
@@ -294,9 +187,6 @@ class FileOperationsHandler:
             except Exception:
                 pass
 
-            # Prompt to update source CSV after list actions completed
-            self._prompt_csv_update_after_delete(result.success_paths)
-
         except Exception as ex:
             logger.error("Delete selected files failed: {}", ex)
             QMessageBox.critical(self.parent, "Error", f"Delete failed: {str(ex)}")
@@ -316,6 +206,7 @@ class FileOperationsHandler:
                 logger.info("Removing {} checked files from list via toolbar", len(checked_paths))
                 self.vm.remove_from_list(checked_paths)
                 self.ui_updater.refresh_tree(self.vm.groups)
+                self._sync_removed_to_db(checked_paths)
                 self.status_reporter.show_status(f"Removed {len(checked_paths)} file(s) from list")
                 return
 
@@ -324,18 +215,25 @@ class FileOperationsHandler:
                 logger.info(
                     "Removing {} highlighted items from list via toolbar", len(highlighted_items)
                 )
-                file_paths = [item for item in highlighted_items if item.get("type") == "file"]
-                group_numbers = [item for item in highlighted_items if item.get("type") == "group"]
+                file_items = [item for item in highlighted_items if item.get("type") == "file"]
+                group_items = [item for item in highlighted_items if item.get("type") == "group"]
 
-                if file_paths:
-                    paths = [item["path"] for item in file_paths]
-                    self.vm.remove_from_list(paths)
+                # Collect all paths before modifying vm (groups disappear after removal)
+                paths_for_db: list[str] = [item["path"] for item in file_items]
+                for item in group_items:
+                    for g in self.vm.groups:
+                        if g.group_number == item["group_number"]:
+                            paths_for_db.extend(r.file_path for r in g.items)
+                            break
 
-                if group_numbers:
-                    for item in group_numbers:
-                        self.vm.remove_group_from_list(item["group_number"])
+                if file_items:
+                    self.vm.remove_from_list([item["path"] for item in file_items])
+
+                for item in group_items:
+                    self.vm.remove_group_from_list(item["group_number"])
 
                 self.ui_updater.refresh_tree(self.vm.groups)
+                self._sync_removed_to_db(paths_for_db)
                 self.status_reporter.show_status("Removed items from list")
                 return
 
@@ -356,28 +254,34 @@ class FileOperationsHandler:
             items: List of items with 'type' ('file'|'group') and relevant identifiers
         """
         try:
-            file_paths = []
-            group_numbers = []
+            file_paths: list[str] = []
+            group_numbers: list[int] = []
 
-            # Separate files and groups
             for item in items:
                 if item["type"] == "file":
                     file_paths.append(item["path"])
                 elif item["type"] == "group":
                     group_numbers.append(item["group_number"])
 
-            # Remove files first
+            # Collect all paths for DB sync BEFORE vm removal (groups disappear after)
+            paths_for_db: list[str] = list(file_paths)
+            for gn in group_numbers:
+                for g in self.vm.groups:
+                    if g.group_number == gn:
+                        paths_for_db.extend(r.file_path for r in g.items)
+                        break
+
             if file_paths:
                 logger.info("Removing {} files from list", len(file_paths))
                 self.vm.remove_from_list(file_paths)
 
-            # Remove groups
             if group_numbers:
                 logger.info("Removing {} groups from list", len(group_numbers))
                 for group_num in group_numbers:
                     self.vm.remove_group_from_list(group_num)
 
             self.ui_updater.refresh_tree(self.vm.groups)
+            self._sync_removed_to_db(paths_for_db)
 
             total_removed = len(file_paths) + len(group_numbers)
             self.status_reporter.show_status(f"Removed {total_removed} item(s) from list")
@@ -423,21 +327,79 @@ class FileOperationsHandler:
             logger.error("Delete files failed: {}", e)
             QMessageBox.critical(self.parent, "Error", f"Delete failed: {str(e)}")
 
-    def _prompt_csv_update_after_delete(self, success_paths: list[str]) -> None:
-        """Prompt user to update source CSV after successful delete operation.
-
-        Args:
-            success_paths: List of successfully deleted file paths
-        """
+    def _sync_removed_to_db(self, file_paths: list[str]) -> None:
+        """Mark file_paths as removed in the manifest DB (manifest workflow only)."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path or not file_paths:
+            return
         try:
-            if success_paths:
-                src = getattr(self.vm, "get_source_csv_path", lambda: None)()
-                if src:
-                    resp = QMessageBox.question(
-                        self.parent, "Update CSV?", f"Update source CSV file?\n{src}"
-                    )
-                    if resp == QMessageBox.Yes:
-                        self.export_csv_to_path(src)
-                        self.status_reporter.show_status("CSV updated")
-        except Exception as ex:
-            logger.error("Update CSV after delete failed: {}", ex)
+            from infrastructure.manifest_repository import ManifestRepository
+            ManifestRepository().remove_from_review(manifest_path, file_paths)
+        except Exception as exc:
+            logger.warning("Failed to sync removed paths to manifest: {}", exc)
+
+    def set_decision(self, items: list[dict], new_decision: str) -> None:
+        """Set user_decision for the given file items in memory and in SQLite."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            return
+        from infrastructure.manifest_repository import ManifestRepository
+        repo = ManifestRepository()
+        for item in items:
+            if item.get("type") != "file":
+                continue
+            file_path = item["path"]
+            for group in self.vm.groups:
+                for rec in group.items:
+                    if rec.file_path == file_path:
+                        rec.user_decision = new_decision
+                        break
+            repo.update_decision(manifest_path, file_path, new_decision)
+        self.ui_updater.refresh_tree(self.vm.groups)
+        self.status_reporter.show_status(f"Decision set to '{new_decision}'")
+
+    def batch_set_decision(self, new_decision: str) -> None:
+        """Set user_decision for all Sel-checked files."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            QMessageBox.information(self.parent, "Set Action", "No manifest loaded.")
+            return
+        checked_paths: list[str] = []
+        provider = self.checked_paths_provider
+        if provider is not None:
+            if callable(provider):
+                checked_paths = provider()
+            elif hasattr(provider, "gather_checked_paths"):
+                checked_paths = provider.gather_checked_paths()
+        if not checked_paths:
+            QMessageBox.information(self.parent, "Set Action", "No files selected (use Sel checkboxes).")
+            return
+        from infrastructure.manifest_repository import ManifestRepository
+        repo = ManifestRepository()
+        count = 0
+        for group in self.vm.groups:
+            for rec in group.items:
+                if rec.file_path in checked_paths:
+                    rec.user_decision = new_decision
+                    repo.update_decision(manifest_path, rec.file_path, new_decision)
+                    count += 1
+        self.ui_updater.refresh_tree(self.vm.groups)
+        self.status_reporter.show_status(f"Set '{new_decision}' for {count} file(s)")
+
+    def execute_action(self) -> None:
+        """Open the Execute Action review dialog and run planned operations."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            QMessageBox.information(self.parent, "Execute Action", "No manifest loaded.")
+            return
+        from PySide6.QtWidgets import QDialog
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self.vm.groups, manifest_path, self.parent)
+        if dlg.exec() == QDialog.Accepted:
+            if dlg.deleted_paths:
+                # prune_singles=False: manifest single-item groups must persist
+                self.vm.remove_deleted_and_prune(dlg.deleted_paths, prune_singles=False)
+            self.ui_updater.refresh_tree(self.vm.groups)
+            total = len(dlg.deleted_paths) + len(dlg.executed_paths)
+            self.status_reporter.show_status(f"Executed {total} action(s)")
+
