@@ -18,9 +18,10 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 │  2. REVIEW (photo-manager)                                                  │
 │     GUI: File > Open Manifest…                                              │
 │     Inspect every group — col 0 shows match type (exact / similar / empty) │
-│     Mark files with Sel checkboxes, then use                               │
-│       File > Set Action > delete / keep  to record your decision           │
-│     Right-click a single file → Set Action → delete / keep (per-file)     │
+│     Mark files with Sel checkboxes or highlight rows, then use            │
+│       File > Set Action to Selected (Sel) Files > delete / keep           │
+│       File > Set Action to Activated Files > delete / keep                │
+│     Right-click a single file → Set Action → delete / keep (per-file)    │
 │     File > Save Manifest Decisions… persists decisions to the manifest     │
 │                                                                             │
 │     CLI alternative: python review.py … for REVIEW_DUPLICATE triage       │
@@ -100,18 +101,21 @@ The tree shows all files loaded from the manifest.
 |--------|---------|
 | **Match** (col 0) | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
 | **Sel** | Checkbox — select files for batch actions |
-| **Action** (col 8) | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **Action** (col 2) | Your decision: `delete` / `keep` / *(empty = undecided)* |
 
 **Setting decisions:**
 
 - *Per file*: right-click a file → **Set Action → delete** or **keep**.
-- *Batch*: tick **Sel** on the files you want to act on, then
-  **File › Set Action › delete** (or **keep**) applies to all checked files.
+- *By Sel checkboxes*: tick **Sel** on the files you want, then
+  **File › Set Action to Selected (Sel) Files › delete** (or **keep**).
+- *By highlight*: click or multi-select rows in the tree, then
+  **File › Set Action to Activated Files › delete** (or **keep**).
 
 ### Step 3 — Save decisions
 
-**File › Save Manifest Decisions…** writes `delete` / `keep` decisions back
-to the SQLite manifest.  Decisions persist across sessions.
+**File › Save Manifest Decisions…** opens a file picker. Choose the same
+path to save in-place or a new path to export a copy. Decisions are written
+to the chosen file, and subsequent saves default to that location.
 
 ### Step 4 — Execute actions
 
@@ -229,7 +233,7 @@ photo-manager/
 │   │   └── workers/
 │   │       └── scan_worker.py         # Background QThread for scan pipeline
 │   └── viewmodels/
-│       └── main_vm.py       # Groups/marks logic; loads CSV or manifest
+│       └── main_vm.py       # Groups/marks logic; loads manifest
 │
 ├── core/                    # Models + service interfaces
 │   └── models.py            # PhotoRecord (action, user_decision), PhotoGroup
@@ -238,7 +242,7 @@ photo-manager/
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 190+ tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 200+ tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
@@ -247,12 +251,13 @@ photo-manager/
     ├── test_manifest_repository.py
     ├── test_settings.py
     ├── test_utils.py
-    ├── test_csv_repository.py
     ├── test_delete_service.py
     ├── test_scanner_exif.py
     ├── test_scanner_manifest.py
     ├── test_main_vm.py
-    ├── test_file_operations.py  # set_decision, batch_set_decision
+    ├── test_file_operations.py  # set_decision, batch_set_decision, set_decision_to_highlighted
+    ├── test_sort_service.py
+    ├── test_selection_service.py
     ├── test_execute_action_dialog.py
     └── test_context_menu.py
 ```

@@ -52,6 +52,7 @@ class FileOperationsHandler:
         ui_updater: UIUpdateCallback,
         status_reporter: StatusReporter,
         checked_paths_provider: object | None = None,
+        highlighted_items_provider: object | None = None,
     ) -> None:
         self.vm = vm
         self.deleter = delete_service
@@ -61,6 +62,8 @@ class FileOperationsHandler:
         self.status_reporter = status_reporter
         # Optional callable or object with gather_checked_paths() to pull UI state
         self.checked_paths_provider = checked_paths_provider
+        # Optional callable returning list[dict] of highlighted (tree-selected) items
+        self.highlighted_items_provider = highlighted_items_provider
 
     def import_manifest(self) -> None:
         """Open a migration_manifest.sqlite and load REVIEW_DUPLICATE groups."""
@@ -78,12 +81,18 @@ class FileOperationsHandler:
             self.ui_updater.show_groups_summary(self.vm.groups)
             self.ui_updater.refresh_tree(self.vm.groups)
 
-            # Enable "Save Manifest Decisions" and remember the open manifest path
+            # Enable manifest-dependent menu actions
             self._manifest_path = path
-            try:
-                self.parent.menu_controller.enable_action("save_manifest", True)
-            except AttributeError:
-                pass
+            _manifest_actions = (
+                "save_manifest", "execute_action",
+                "set_action_hl_delete", "set_action_hl_keep",
+                "set_action_sel_delete", "set_action_sel_keep",
+            )
+            for _act in _manifest_actions:
+                try:
+                    self.parent.menu_controller.enable_action(_act, True)
+                except AttributeError:
+                    pass
 
             n_groups = self.vm.group_count
             n_items = sum(len(g.items) for g in self.vm.groups)
@@ -98,10 +107,22 @@ class FileOperationsHandler:
             self.status_reporter.show_status("Open manifest failed")
 
     def save_manifest_decisions(self) -> None:
-        """Write current is_mark state back to the open manifest."""
+        """Export current decisions to a (possibly new) manifest file."""
+        import os
+        import shutil
+
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             QMessageBox.information(self.parent, "Save Manifest", "No manifest open.")
+            return
+
+        save_path, _ = QFileDialog.getSaveFileName(
+            self.parent,
+            "Save Manifest Decisions",
+            manifest_path,
+            "SQLite Files (*.sqlite *.db);;All Files (*)",
+        )
+        if not save_path:
             return
 
         try:
@@ -116,9 +137,16 @@ class FileOperationsHandler:
             if hasattr(self.vm, "update_marks_from_checked_paths"):
                 self.vm.update_marks_from_checked_paths(checked_paths)
 
+            # Copy manifest to new location if saving elsewhere
+            if os.path.normcase(os.path.normpath(save_path)) != os.path.normcase(
+                os.path.normpath(manifest_path)
+            ):
+                shutil.copy2(manifest_path, save_path)
+
             from infrastructure.manifest_repository import ManifestRepository
-            updated = ManifestRepository().save(manifest_path, self.vm.groups)
-            logger.info("Manifest decisions saved: {} rows updated", updated)
+            updated = ManifestRepository().save(save_path, self.vm.groups)
+            self._manifest_path = save_path
+            logger.info("Manifest decisions saved to {}: {} rows updated", save_path, updated)
             QMessageBox.information(
                 self.parent, "Save Manifest", f"Saved decisions for {updated} file(s)."
             )
@@ -385,6 +413,25 @@ class FileOperationsHandler:
                     count += 1
         self.ui_updater.refresh_tree(self.vm.groups)
         self.status_reporter.show_status(f"Set '{new_decision}' for {count} file(s)")
+
+    def set_decision_to_highlighted(self, new_decision: str) -> None:
+        """Set user_decision for tree-highlighted (activated) file rows."""
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            QMessageBox.information(self.parent, "Set Action", "No manifest loaded.")
+            return
+        items: list[dict] = []
+        provider = self.highlighted_items_provider
+        if provider is not None:
+            if callable(provider):
+                items = provider()
+            elif hasattr(provider, "get_selected_items"):
+                items = provider.get_selected_items()
+        file_items = [it for it in items if it.get("type") == "file"]
+        if not file_items:
+            QMessageBox.information(self.parent, "Set Action", "No activated files.")
+            return
+        self.set_decision(file_items, new_decision)
 
     def execute_action(self) -> None:
         """Open the Execute Action review dialog and run planned operations."""

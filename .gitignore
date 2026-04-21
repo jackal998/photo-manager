@@ -91,6 +91,7 @@ logs/
 settings.local.json
 
 # Databases
+*.sqlite
 *.sqlite3
 *.db
 *.db-journal

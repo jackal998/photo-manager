@@ -251,5 +251,6 @@ class ManifestRepository:
         try:
             conn.executemany(_REMOVE_FROM_REVIEW_SQL, [(p,) for p in file_paths])
             conn.commit()
+            conn.execute("VACUUM")
         finally:
             conn.close()

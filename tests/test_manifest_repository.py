@@ -543,3 +543,51 @@ class TestRemoveFromReview:
         paths = {r.file_path for r in records}
         assert str(cand) not in paths
         assert str(ref) in paths   # ref's own MOVE row now loads as standalone
+
+
+class TestMarkExecuted:
+    def _read_executed(self, db, path: str) -> int:
+        import sqlite3 as _sq
+        with _sq.connect(db) as conn:
+            row = conn.execute(
+                "SELECT executed FROM migration_manifest WHERE source_path = ?", (path,)
+            ).fetchone()
+        return row[0] if row else -1
+
+    def test_marks_single_path_executed(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().mark_executed(str(db), ["/a.jpg"])
+        assert self._read_executed(db, "/a.jpg") == 1
+
+    def test_marks_multiple_paths(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": "/b.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().mark_executed(str(db), ["/a.jpg", "/b.jpg"])
+        assert self._read_executed(db, "/a.jpg") == 1
+        assert self._read_executed(db, "/b.jpg") == 1
+
+    def test_noop_for_unknown_path(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().mark_executed(str(db), ["/does_not_exist.jpg"])
+        assert self._read_executed(db, "/a.jpg") == 0
+
+    def test_does_not_affect_other_rows(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": "/b.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().mark_executed(str(db), ["/a.jpg"])
+        assert self._read_executed(db, "/a.jpg") == 1
+        assert self._read_executed(db, "/b.jpg") == 0

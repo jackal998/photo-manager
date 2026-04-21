@@ -11,7 +11,7 @@
 - **鎖定**: 僅 App 內部狀態，不改動檔案屬性
 - **匯出 FileSize**: 一律重新讀取實體檔案大小，以 Bytes（整數）輸出
 - **資料量級**: 約 20,000 組群、50,000 檔案（需虛擬化、懶載入與快取）
-- **分群來源**: 一律由 CSV 提供；本 App 不做相似/重複分析
+- **分群來源**: 由 migration_manifest.sqlite 提供；本 App 不做相似/重複分析
 - **Select/UnSelect**: 「Select by Field/Regex」對話框支援批次選擇/取消選擇
 - **群組全選刪除策略**: 允許，但跳出強烈警告並需二次確認
 
@@ -31,24 +31,7 @@
 
 ---
 
-## 2. CSV 規格與匯出規則
-
-- 欄位（順序固定）：
-  - `GroupNumber, IsMark, IsLocked, FolderPath, FilePath, Capture Date, Modified Date, Creation Date, Shot Date, FileSize`
-- 匯入：
-  - 標頭對應必須；缺欄/型別錯誤以容錯策略處理並記錄日誌；忽略其他欄位
-  - `FileSize` 欄位若為人類可讀字串（如 "1.44MB"），匯入後將在內部以檔案實際大小覆寫（Bytes），若已經是Bytes（整數），則直接使用
-  - `Capture Date`：沿用舊欄位，視為來源拍攝日期備援
-  - `Creation Date`：以檔案系統建立時間 `os.path.getctime` 取得（Windows 即建立時間）；匯入時若 CSV 無此欄位或空值，內部以檔案系統值覆寫
-  - `Shot Date`：以 EXIF `DateTimeOriginal` 為主；匯入時若 CSV 無此欄位或空值，先嘗試 EXIF；若無 EXIF，則以 `Capture Date` 值備援
-- 匯出：
-  - 欄位順序維持一致
-  - `FileSize` 一律輸出實際檔案大小 Bytes（整數）
-  - 日期欄位一律輸出格式：`YYYY-MM-DD HH:MM:SS`；無值輸出空字串
-
----
-
-## 3. 系統架構
+## 2. 系統架構
 
 - 分層：`App(UI) → Core(商業邏輯) → Infrastructure(IO/外部)`
 - 依賴注入：簡易 Service Locator 或 `dependency-injector`
@@ -57,7 +40,7 @@
 ```mermaid
 flowchart LR
   UI[PySide6 Views/ViewModels] --> Core[Core Services & Rule Engine]
-  Core --> Repo[CSV Repository]
+  Core --> Repo[ManifestRepository]
   Core --> Img[ImageService (Shell/WIC, Cache)]
   Core --> Del[DeleteService (Recycle Bin)]
   Core --> Cfg[Settings]
@@ -80,7 +63,7 @@ photo_manager/
     services/         # 介面與共用服務（I*）
     utils/            # 轉換、比較器、型別輔助
   infrastructure/
-    csv_repository.py # 讀寫 CSV
+    manifest_repository.py # 讀寫 migration_manifest.sqlite
     image_service.py  # 縮圖/原圖載入、快取、Shell/WIC
     delete_service.py # 回收桶刪除、檢查
     settings.py       # 設定載入/驗證
@@ -118,7 +101,7 @@ photo_manager/
 | 欄位 | 來源 | 用途 | 可變？ |
 |------|------|------|-------|
 | `action` | Scanner 寫入，manifest 載入 | 分類標籤（col 0 Match 顯示依據） | 否（唯讀）|
-| `user_decision` | 使用者透過 Set Action 設定 | 實際檔案操作（col 8 Action 顯示依據）| 是 |
+| `user_decision` | 使用者透過 Set Action 設定 | 實際檔案操作（col 2 Action 顯示依據）| 是 |
 
 ---
 
@@ -151,7 +134,7 @@ photo_manager/
 對話框提供簡化批次選擇/取消選擇能力（Rule v0 為「UI-based Selection Rules」）：
 
 - 元件：
-  - 下拉選單 `Field`：列出主清單顯示的所有欄位（如 Group、File Name、Folder、Size(Bytes) 等可匹配項）
+  - 下拉選單 `Field`：列出主清單顯示的所有欄位（如 Match、Action、File Name、Folder、Size(Bytes)、Group Count、Creation Date、Shot Date 等可匹配項）
   - 文字框 `Regex`：接受使用者輸入，支援標準正則（RE），即時校驗格式
   - 按鈕：`Select`、`Unselect`
 - 行為：
@@ -174,10 +157,10 @@ photo_manager/
   - 預覽捲動：若影像高度大於可見高度，使用垂直捲動條以完整檢視
 - 操作：
   - 勾選/取消勾選（Selected）
-  - 功能表：`File > Import/Export/ Delete Selected…`、`Select > Select by Field/Regex/…`
+  - 功能表：`File > Delete Selected…`、`File > Set Action to Activated Files > delete/keep`、`File > Set Action to Selected (Sel) Files > delete/keep`、`Select > Select by Field/Regex/…`
   - 刪除：
     - 摘要：顯示受影響群組/全部群組、將刪除檔案/總檔案；若包含全選群組，列出群組清單並需勾選同意
-    - 執行：送回收桶（略過 locked）；寫刪除 CSV；自清單移除成功刪除檔案；移除僅剩單檔之群組；詢問是否覆寫來源 CSV
+    - 執行：送回收桶（略過 locked）；自清單移除成功刪除檔案；移除僅剩單檔之群組
 - 虛擬化與懶載入：
   - 群組先載入索引，展開時才載入子項（可選）
   - 縮圖在可見範圍內懶載入，背景預取鄰近項
@@ -269,7 +252,7 @@ photo_manager/
 ## 16. 里程碑與 DoD
 
 - M1 最小可用版本（Week 1）
-  - 匯入/匯出 CSV、群組樹與列表（檔案列具 Selected 勾選）、單/群縮圖預覽（含快取）、基本排序（Qt 內建）、Select 對話框（Field/Regex 的 Select/Unselect）、刪除（摘要/強制確認/回收桶/自動 CSV Log/清單修剪/詢問覆寫 CSV）
+  - 載入 manifest、群組樹與列表（檔案列具 Selected 勾選）、單/群縮圖預覽（含快取）、基本排序（Qt 內建）、Select 對話框（Field/Regex 的 Select/Unselect）、Set Action via Activated Files 或 Selected (Sel) Files（delete/keep）、Save Manifest Decisions（另存新檔對話框）、Execute Action（回收桶/清單修剪）
   - DoD：50k 筆可順暢瀏覽與基本操作；文件與打包指引齊備
 - M2 穩定與優化（Week 2）
   - 進階篩選、更多聚合器、設定面板、操作日誌匯出、UI 優化
@@ -296,11 +279,12 @@ GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileS
 
 ## 19. 定義與術語
 
-- **Selected（Sel）**：UI Sel 勾選框狀態，用於批次操作目標選擇
+- **Activated Files（Highlighted）**：樹狀視圖中以點擊或多選反白的列（`QTreeView` selectionModel rows）；透過 `File > Set Action to Activated Files` 批次設定 user_decision
+- **Selected（Sel）**：UI Sel 勾選框狀態，用於批次操作目標選擇；透過 `File > Set Action to Selected (Sel) Files` 批次設定 user_decision
 - **Marked（IsMark）**：`is_mark == True`（CSV workflow 使用；manifest workflow 中由 Sel 取代）
 - **Locked（IsLocked）**：`is_locked == True`（僅 App 內狀態；Delete service 跳過 locked 項目；manifest workflow 中目前一律為 False）
 - **action**：Scanner 分類（`EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `KEEP` / `UNDATED`）；唯讀，col 0 "Match" 顯示
-- **user_decision**：使用者決定（`"delete"` / `"keep"` / `""`）；col 8 "Action" 顯示；透過 Set Action 設定
+- **user_decision**：使用者決定（`"delete"` / `"keep"` / `""` / `"removed"`）；col 2 "Action" 顯示；透過 Set Action 設定；`"removed"` 為系統內部哨兵值，表示已從審查清單移除
 
 ---
 
@@ -377,7 +361,7 @@ python scan.py ... --limit 200 --dry-run   # bounded debug run
 | `hamming_distance` | INTEGER | Distance to `duplicate_of`'s phash |
 | `duplicate_of` | TEXT | source_path of kept file |
 | `executed` | INTEGER | 0=pending 1=done |
-| `user_decision` | TEXT | User's planned file operation: `delete` / `keep` / `""` (undecided) |
+| `user_decision` | TEXT | User's planned file operation: `delete` / `keep` / `""` (undecided) / `"removed"` (hidden from review) |
 
 `user_decision` is added automatically to older manifests (pre-existing DBs
 lacking the column are migrated via `ALTER TABLE … ADD COLUMN` on first load).

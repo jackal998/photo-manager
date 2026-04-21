@@ -61,7 +61,7 @@ def _rec(path: str, group: int = 1, decision: str = "") -> PhotoRecord:
     )
 
 
-def _make_handler(vm, manifest_path: str | None, checked_paths=None):
+def _make_handler(vm, manifest_path: str | None, checked_paths=None, highlighted_items=None):
     """Build a FileOperationsHandler with all Qt deps mocked."""
     from app.views.handlers.file_operations import FileOperationsHandler
 
@@ -78,6 +78,7 @@ def _make_handler(vm, manifest_path: str | None, checked_paths=None):
         ui_updater=ui_updater,
         status_reporter=status_reporter,
         checked_paths_provider=checked_paths,
+        highlighted_items_provider=highlighted_items,
     )
     if manifest_path:
         handler._manifest_path = manifest_path
@@ -364,3 +365,134 @@ class TestRemoveFromList:
         handler.batch_set_decision("delete")
 
         assert recs[0].user_decision == "delete"
+
+
+# ── set_decision_to_highlighted ───────────────────────────────────────────────
+
+class TestSetDecisionToHighlighted:
+    def test_sets_decision_for_highlighted_files(self, tmp_path):
+        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        hl_provider = lambda: [{"type": "file", "path": "/a.jpg"}]
+        handler, _, _ = _make_handler(vm, str(db), highlighted_items=hl_provider)
+
+        handler.set_decision_to_highlighted("keep")
+
+        assert recs[0].user_decision == "keep"
+        assert recs[1].user_decision == ""
+
+    def test_updates_sqlite_for_highlighted_files(self, tmp_path):
+        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        hl_provider = lambda: [{"type": "file", "path": "/a.jpg"}]
+        handler, _, _ = _make_handler(vm, str(db), highlighted_items=hl_provider)
+
+        handler.set_decision_to_highlighted("delete")
+
+        assert _read_decision(db, "/a.jpg") == "delete"
+        assert _read_decision(db, "/b.jpg") == ""
+
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_skips_group_type_items(self, _mock, tmp_path):
+        recs = [_rec("/a.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        hl_provider = lambda: [{"type": "group", "group_number": 1}]
+        handler, _, _ = _make_handler(vm, str(db), highlighted_items=hl_provider)
+
+        handler.set_decision_to_highlighted("delete")
+
+        assert recs[0].user_decision == ""
+
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_no_manifest_noop(self, _mock, tmp_path):
+        recs = [_rec("/a.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        hl_provider = lambda: [{"type": "file", "path": "/a.jpg"}]
+        handler, ui_updater, _ = _make_handler(vm, manifest_path=None, highlighted_items=hl_provider)
+
+        handler.set_decision_to_highlighted("delete")
+
+        assert recs[0].user_decision == ""
+        ui_updater.refresh_tree.assert_not_called()
+
+    def test_no_highlighted_files_shows_message(self, tmp_path):
+        recs = [_rec("/a.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        hl_provider = lambda: []
+        handler, _, _ = _make_handler(vm, str(db), highlighted_items=hl_provider)
+
+        with patch("PySide6.QtWidgets.QMessageBox.information"):
+            handler.set_decision_to_highlighted("delete")
+
+        assert recs[0].user_decision == ""
+
+    def test_provider_with_get_selected_items_method(self, tmp_path):
+        """highlighted_items_provider can be an object with get_selected_items()."""
+        recs = [_rec("/a.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        provider = SimpleNamespace(get_selected_items=lambda: [{"type": "file", "path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db), highlighted_items=provider)
+
+        handler.set_decision_to_highlighted("keep")
+
+        assert recs[0].user_decision == "keep"
+
+
+# ── save_manifest_decisions ───────────────────────────────────────────────────
+
+class TestSaveManifestDecisions:
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_saves_to_same_path_in_place(self, _mock, tmp_path):
+        """Saving to the same file writes decisions without copying."""
+        recs = [_rec("/a.jpg", decision="keep")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=(str(db), "")):
+            handler.save_manifest_decisions()
+
+        assert _read_decision(db, "/a.jpg") == "keep"
+        assert handler._manifest_path == str(db)
+
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_saves_to_different_path_copies_and_writes(self, _mock, tmp_path):
+        """Saving to a new path copies the source manifest and writes decisions."""
+        recs = [_rec("/a.jpg", decision="delete")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        new_path = str(tmp_path / "exported.sqlite")
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=(new_path, "")):
+            handler.save_manifest_decisions()
+
+        assert _read_decision(Path(new_path), "/a.jpg") == "delete"
+        assert handler._manifest_path == new_path
+
+    def test_dialog_cancel_is_noop(self, tmp_path):
+        """Cancelling the save dialog leaves the manifest unchanged."""
+        recs = [_rec("/a.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=("", "")):
+            handler.save_manifest_decisions()
+
+        assert _read_decision(db, "/a.jpg") == ""
+
+    def test_no_manifest_shows_message(self, tmp_path):
+        """With no manifest open, shows an info dialog and returns."""
+        vm = SimpleNamespace(groups=[])
+        handler, _, _ = _make_handler(vm, manifest_path=None)
+
+        with patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+            handler.save_manifest_decisions()
+
+        mock_info.assert_called_once()
