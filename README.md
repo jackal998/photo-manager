@@ -131,6 +131,7 @@ window) showing all groups for final review.
 - Click **Execute** to carry out all decisions:
   - `delete` → file sent to the recycle bin (`send2trash`)
   - `keep` → marked as executed in the manifest (no file operation)
+  - Files that no longer exist on disk are skipped and listed in a warning dialog.
 
 All decision changes are batch-persisted to SQLite in a single transaction
 immediately before execution.
@@ -203,6 +204,26 @@ Decisions persist immediately — the session is resumable at any time.
 - **Google Takeout numbering** — `IMG_9556(1).HEIC` handled correctly
 - **Edited variants** — `-已編輯`, `-edited`, etc. excluded from pair matching
 - **Batch EXIF** — exiftool `-stay_open` chunked at 500 files/call for speed
+- **Cached metadata** — `file_size_bytes`, `shot_date`, `creation_date`, `mtime` written
+  to the manifest at scan time; load reads from SQLite with zero filesystem round-trips
+
+---
+
+## Performance
+
+| Scenario | Load time |
+|----------|-----------|
+| Old manifest (no cached columns) | 10+ min on NAS (filesystem stat per row) |
+| New manifest (cached columns) | **< 1 second** (pure SQLite read) |
+
+**How it works:** The scanner stores `file_size_bytes`, `shot_date`, `creation_date`, and
+`mtime` in the manifest at scan time (when files are local). On subsequent opens,
+`ManifestRepository.load()` reads these from SQLite — no `os.stat()` or Pillow EXIF
+calls per row. Old manifests without these columns auto-migrate and fall back to the
+original filesystem reads transparently (re-scan once to get the speed benefit).
+
+Manifest loading runs in a **background `QThread`** (`ManifestLoadWorker`) so the UI
+stays responsive while the manifest opens.
 
 ---
 
@@ -240,7 +261,8 @@ photo-manager/
 │   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
 │   │   │   └── group_deletion_check_dialog.py  # Safety check for complete-group deletes
 │   │   └── workers/
-│   │       └── scan_worker.py         # Background QThread for scan pipeline
+│   │       ├── scan_worker.py         # Background QThread for scan pipeline
+│   │       └── manifest_load_worker.py  # Background QThread for manifest load
 │   └── viewmodels/
 │       └── main_vm.py       # Groups/marks logic; loads manifest
 │
@@ -269,7 +291,8 @@ photo-manager/
     ├── test_selection_service.py
     ├── test_execute_action_dialog.py
     ├── test_group_deletion_check_dialog.py
-    └── test_context_menu.py
+    ├── test_context_menu.py
+    └── test_manifest_load_worker.py
 ```
 
 ---
