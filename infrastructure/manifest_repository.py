@@ -232,6 +232,17 @@ class ManifestRepository:
         finally:
             conn.close()
 
+    def batch_update_decisions(self, manifest_path: str, decisions: dict[str, str]) -> None:
+        """Update user_decision for multiple rows in a single transaction."""
+        if not decisions:
+            return
+        conn = sqlite3.connect(manifest_path)
+        try:
+            conn.executemany(_UPDATE_DECISION_SQL, [(v, k) for k, v in decisions.items()])
+            conn.commit()
+        finally:
+            conn.close()
+
     def mark_executed(self, manifest_path: str, file_paths: list[str]) -> None:
         """Mark a list of rows as executed=1."""
         conn = sqlite3.connect(manifest_path)

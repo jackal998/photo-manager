@@ -46,10 +46,9 @@ class MainWindow(QMainWindow):
         vm: Any,
         image_service: Any | None = None,
         settings: Any | None = None,
-        delete_service: Any | None = None,
     ) -> None:
         super().__init__()
-        self._initialize_services(vm, image_service, settings, delete_service)
+        self._initialize_services(vm, image_service, settings)
 
         # Setup components
         self._setup_components()
@@ -68,12 +67,10 @@ class MainWindow(QMainWindow):
         vm: Any,
         image_service: Any | None,
         settings: Any | None,
-        delete_service: Any | None,
     ) -> None:
         self._vm = vm
         self._img = image_service
         self._settings = settings
-        self._deleter = delete_service
 
         # Initialize thumbnail size from settings
         self._thumb_size: int = 512
@@ -105,7 +102,6 @@ class MainWindow(QMainWindow):
         # Initialize file operations handler
         self.file_operations = FileOperationsHandler(
             vm=self._vm,
-            delete_service=self._deleter,
             settings=self._settings,
             parent_widget=self,
             ui_updater=self.ui_updater,
@@ -157,13 +153,6 @@ class MainWindow(QMainWindow):
         self._preview = PreviewPane(right_widget, self._runner, thumb_size=self._thumb_size)
         right_layout.addWidget(self._preview)
 
-        # Register preview handle releaser with delete service (if available)
-        try:
-            if self._deleter is not None and hasattr(self._deleter, "set_handle_releaser"):
-                self._deleter.set_handle_releaser(self._preview.release_file_handles)
-        except Exception:
-            pass
-
         # Setup main layout with splitter
         central = self.layout_manager.setup_main_layout(center_widget, right_widget)
         self.setCentralWidget(central)
@@ -187,7 +176,6 @@ class MainWindow(QMainWindow):
             "scan_sources": self.on_scan_sources,
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
-            "delete": self.on_delete_selected,
             "set_action_hl_delete": lambda: self.file_operations.set_decision_to_highlighted("delete"),
             "set_action_hl_keep": lambda: self.file_operations.set_decision_to_highlighted("keep"),
             "set_action_sel_delete": lambda: self.file_operations.batch_set_decision("delete"),
@@ -293,11 +281,6 @@ class MainWindow(QMainWindow):
     def on_save_manifest(self) -> None:
         """Handle Save Manifest Decisions action."""
         self.file_operations.save_manifest_decisions()
-
-    def on_delete_selected(self) -> None:
-        """Handle delete selected action."""
-        selected_paths = self.selection_controller.gather_checked_paths()
-        self.file_operations.delete_selected_files(selected_paths)
 
     def on_execute_action(self) -> None:
         """Handle Execute Action — open review dialog and run planned operations."""
@@ -617,10 +600,6 @@ class ActionHandlersImpl:
         self.file_ops = file_operations
         self.selection = selection_controller
         self.dialog = dialog_handler
-
-    def delete_files(self, items: list[dict]) -> None:
-        """Delete files from items list."""
-        self.file_ops.delete_files(items)
 
     def select_files(self, items: list[dict]) -> None:
         """Select files from items list."""

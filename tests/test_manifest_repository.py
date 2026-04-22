@@ -442,6 +442,39 @@ class TestManifestRepositoryUpdateDecision:
         assert row[0] == "keep"
 
 
+class TestBatchUpdateDecisions:
+    def test_updates_multiple_rows_in_one_call(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/b.jpg", "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/c.jpg", "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+        ])
+        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": "keep"})
+
+        conn = sqlite3.connect(db)
+        rows = {r[0]: r[1] for r in conn.execute(
+            "SELECT source_path, user_decision FROM migration_manifest"
+        ).fetchall()}
+        conn.close()
+        assert rows["/a.jpg"] == "delete"
+        assert rows["/b.jpg"] == "keep"
+        assert rows["/c.jpg"] == ""  # untouched
+
+    def test_noop_on_empty_dict(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "user_decision": "keep",
+                  "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+        ])
+        ManifestRepository().batch_update_decisions(str(db), {})
+
+        conn = sqlite3.connect(db)
+        row = conn.execute(
+            "SELECT user_decision FROM migration_manifest WHERE source_path = '/a.jpg'"
+        ).fetchone()
+        conn.close()
+        assert row[0] == "keep"  # unchanged
+
+
 class TestRemoveFromReview:
     """remove_from_review() and the load() filter for user_decision='removed'."""
 

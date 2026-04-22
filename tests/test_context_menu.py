@@ -2,9 +2,10 @@
 
 Covers:
   - _SETTABLE_DECISIONS constant is exactly ("delete", "keep")
-  - ActionHandlers protocol has set_decision method
+  - ActionHandlers protocol has set_decision method (no delete_files)
   - set_decision callback is wired for single-file right-click
-  - Multi-selection menu does NOT expose "Set Action" (file-level only)
+  - Multi-selection menu does NOT expose "Set Action" or "Delete Files"
+  - Direct-delete actions ("Delete File", "Delete Files") are absent
 """
 
 from __future__ import annotations
@@ -30,15 +31,18 @@ class TestActionHandlersProtocol:
         from app.views.handlers.context_menu import ActionHandlers
         assert "set_decision" in dir(ActionHandlers)
 
+    def test_protocol_does_not_have_delete_files(self):
+        """delete_files is removed — direct delete is no longer in the context menu."""
+        from app.views.handlers.context_menu import ActionHandlers
+        assert "delete_files" not in dir(ActionHandlers)
+
     def test_protocol_does_not_have_set_action(self):
         """The old set_action name must not appear in the protocol."""
         from app.views.handlers.context_menu import ActionHandlers
-        # set_action is the old name — it should no longer be in the protocol
         annotations = getattr(ActionHandlers, "__protocol_attrs__", None)
         if annotations is not None:
             assert "set_action" not in annotations
         else:
-            # Fallback: just ensure set_decision is the callable that exists
             assert hasattr(ActionHandlers, "set_decision")
 
 
@@ -62,12 +66,10 @@ class TestContextMenuSetDecisionRouting:
         handler, mock_handlers = self._make_handler(qapp)
         item = {"type": "file", "path": "/a.jpg"}
 
-        # Call the internal menu-building method directly
         from PySide6.QtWidgets import QMenu
         menu = QMenu()
         handler._create_single_selection_menu(menu, item)
 
-        # Find the Set Action submenu and trigger "delete"
         set_action_menu = None
         for action in menu.actions():
             if action.menu() and "Action" in action.text():
@@ -94,7 +96,6 @@ class TestContextMenuSetDecisionRouting:
         menu = QMenu()
         handler._create_single_selection_menu(menu, item)
 
-        # Keep the parent menu alive to prevent Qt from GC-ing the submenu
         set_action_action = next(
             (a for a in menu.actions() if a.menu() and "Action" in a.text()),
             None,
@@ -122,10 +123,44 @@ class TestContextMenuSetDecisionRouting:
             {"type": "file", "path": "/b.jpg"},
         ]
         menu = QMenu()
-        handler._create_multi_selection_menu(menu, items, files_only=True)
+        handler._create_multi_selection_menu(menu, items)
 
         menu_texts = [a.text() for a in menu.actions()]
         assert not any("Action" in t for t in menu_texts), (
             "Multi-selection menu must not include 'Set Action'; "
             "batch decision is done via File menu"
+        )
+
+
+# ── no direct-delete actions ───────────────────────────────────────────────
+
+class TestContextMenuNoDirectDelete:
+    """Verify direct-delete actions are absent; use Set Action + Execute Action instead."""
+
+    def _make_handler(self, qapp):
+        from PySide6.QtWidgets import QTreeView
+        from app.views.handlers.context_menu import ContextMenuHandler
+        return ContextMenuHandler(QTreeView(), MagicMock(), MagicMock(), MagicMock())
+
+    def test_single_file_menu_has_no_delete_file_action(self, qapp):
+        from PySide6.QtWidgets import QMenu
+        handler = self._make_handler(qapp)
+        item = {"type": "file", "path": "/a.jpg"}
+        menu = QMenu()
+        handler._create_single_selection_menu(menu, item)
+
+        top_level_texts = [a.text() for a in menu.actions() if not a.isSeparator()]
+        assert "Delete File" not in top_level_texts
+
+    def test_multi_file_menu_has_no_delete_files_action(self, qapp):
+        from PySide6.QtWidgets import QMenu
+        handler = self._make_handler(qapp)
+        items = [{"type": "file", "path": "/a.jpg"}, {"type": "file", "path": "/b.jpg"}]
+        menu = QMenu()
+        handler._create_multi_selection_menu(menu, items)
+
+        texts = [a.text() for a in menu.actions() if not a.isSeparator()]
+        assert "Delete Files" not in texts
+        assert not any("Delete" in t for t in texts), (
+            "Multi-selection menu must not contain any Delete action"
         )
