@@ -55,44 +55,62 @@ class FileOperationsHandler:
         self.highlighted_items_provider = highlighted_items_provider
 
     def import_manifest(self) -> None:
-        """Open a migration_manifest.sqlite and load REVIEW_DUPLICATE groups."""
+        """Open a migration_manifest.sqlite in a background worker (non-blocking)."""
         path, _ = QFileDialog.getOpenFileName(
             self.parent, "Open Manifest", "", "SQLite Files (*.sqlite *.db);;All Files (*)"
         )
         if not path:
             return
+        self._start_manifest_load(path)
 
-        try:
-            from infrastructure.manifest_repository import ManifestRepository
-            manifest_repo = ManifestRepository()
-            self.vm.load_from_repo(manifest_repo, path)
-            self.ui_updater.show_group_counts(self.vm.group_count)
-            self.ui_updater.show_groups_summary(self.vm.groups)
-            self.ui_updater.refresh_tree(self.vm.groups)
+    def _start_manifest_load(self, path: str) -> None:
+        """Begin a background load for the manifest at *path*."""
+        from app.views.workers.manifest_load_worker import ManifestLoadWorker
 
-            self._manifest_path = path
-            _manifest_actions = (
-                "save_manifest", "execute_action",
-                "set_action_hl_delete", "set_action_hl_keep",
-                "set_action_sel_delete", "set_action_sel_keep",
-            )
-            for _act in _manifest_actions:
-                try:
-                    self.parent.menu_controller.enable_action(_act, True)
-                except AttributeError:
-                    pass
+        self.status_reporter.show_status("Opening manifest…", 0)
+        self._set_manifest_actions_enabled(False)
 
-            n_groups = self.vm.group_count
-            n_items = sum(len(g.items) for g in self.vm.groups)
-            logger.info("Opened manifest: {} | groups={} items={}", path, n_groups, n_items)
-            self.status_reporter.show_status(
-                f"Opened manifest: {n_groups} pairs to review ({n_items} files)"
-            )
+        default_sort = getattr(self.vm, "_default_sort", [])
+        worker = ManifestLoadWorker(path, default_sort, parent=self.parent)
+        worker.progress.connect(lambda msg: self.status_reporter.show_status(msg, 0))
+        worker.finished.connect(lambda groups: self._on_manifest_loaded(groups, path))
+        worker.failed.connect(self._on_manifest_failed)
+        worker.start()
+        # Keep reference so the worker is not garbage-collected
+        self._load_worker = worker
 
-        except Exception as ex:
-            logger.exception("Open manifest failed: {}", ex)
-            QMessageBox.critical(self.parent, "Open Manifest Error", str(ex))
-            self.status_reporter.show_status("Open manifest failed")
+    def _on_manifest_loaded(self, groups: list, path: str) -> None:
+        self.vm.groups = groups
+        self._manifest_path = path
+        self.ui_updater.refresh_tree(groups)
+        self.ui_updater.show_group_counts(self.vm.group_count)
+        self.ui_updater.show_groups_summary(groups)
+        self._set_manifest_actions_enabled(True)
+
+        n_groups = self.vm.group_count
+        n_items = sum(len(g.items) for g in groups)
+        logger.info("Opened manifest: {} | groups={} items={}", path, n_groups, n_items)
+        self.status_reporter.show_status(
+            f"Opened manifest: {n_groups} pairs to review ({n_items} files)"
+        )
+
+    def _on_manifest_failed(self, error: str) -> None:
+        logger.error("Open manifest failed: {}", error)
+        QMessageBox.critical(self.parent, "Open Manifest Error", error)
+        self.status_reporter.show_status("Open manifest failed")
+        self._set_manifest_actions_enabled(False)
+
+    def _set_manifest_actions_enabled(self, enabled: bool) -> None:
+        _manifest_actions = (
+            "save_manifest", "execute_action",
+            "set_action_hl_delete", "set_action_hl_keep",
+            "set_action_sel_delete", "set_action_sel_keep",
+        )
+        for act in _manifest_actions:
+            try:
+                self.parent.menu_controller.enable_action(act, enabled)
+            except AttributeError:
+                pass
 
     def save_manifest_decisions(self) -> None:
         """Export current decisions to a (possibly new) manifest file."""
