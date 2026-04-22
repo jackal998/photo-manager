@@ -32,7 +32,8 @@ from infrastructure.utils import get_exif_datetime_original, get_filesystem_crea
 
 _LOAD_ALL_SQL = """
 SELECT id, source_path, source_label, duplicate_of, hamming_distance, reason,
-       action, executed, user_decision
+       action, executed, user_decision,
+       file_size_bytes, shot_date, creation_date, mtime
 FROM   migration_manifest
 ORDER  BY
     CASE action
@@ -46,6 +47,16 @@ ORDER  BY
     hamming_distance,
     id
 """
+
+# Migration list: (column_name, DDL_snippet)
+# Applied in order — safe to re-run (ALTER TABLE silently fails if column exists).
+_MIGRATIONS = [
+    ("user_decision",   "TEXT    NOT NULL DEFAULT ''"),
+    ("file_size_bytes", "INTEGER"),
+    ("shot_date",       "TEXT"),
+    ("creation_date",   "TEXT"),
+    ("mtime",           "TEXT"),
+]
 
 _SAVE_SQL = """
 UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
@@ -72,27 +83,56 @@ def _photo_record(
     action: str = "",
     read_exif: bool = True,
     user_decision: str = "",
+    db_file_size: "int | None" = None,
+    db_shot_date: "str | None" = None,
+    db_creation_date: "str | None" = None,
+    db_mtime: "str | None" = None,
 ) -> PhotoRecord:
-    """Build a PhotoRecord from a source_path, reading metadata from disk.
+    """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
-    Raises FileNotFoundError if the source file does not exist.
-    read_exif=False skips the Pillow EXIF call for performance on bulk rows.
+    When the four db_* parameters are populated (new manifests), no filesystem
+    stat calls are made — load time drops from minutes to milliseconds on NAS.
+    When they are None (old manifests), falls back to the original filesystem
+    reads so older manifests still work without re-scanning.
+
+    The file-existence check has been removed; missing files are handled at
+    execute time instead (ExecuteActionDialog._delete_file).
     """
-    if not Path(source_path).exists():
-        raise FileNotFoundError(f"Source file not found: {source_path}")
+    from datetime import datetime
+
     folder = str(Path(source_path).parent) + os.sep
-    shot = get_exif_datetime_original(source_path) if read_exif else None
-    creation = get_filesystem_creation_datetime(source_path)
-    try:
-        size = int(os.path.getsize(source_path))
-    except OSError:
-        size = 0
-    try:
-        mtime = os.path.getmtime(source_path)
-        from datetime import datetime
-        modified = datetime.fromtimestamp(mtime)
-    except OSError:
-        modified = None
+
+    # file_size_bytes — DB first, filesystem fallback
+    if db_file_size is not None:
+        size: int = db_file_size
+    else:
+        try:
+            size = int(os.path.getsize(source_path))
+        except OSError:
+            size = 0
+
+    # shot_date — DB first, Pillow EXIF fallback (only for REVIEW_DUPLICATE)
+    if db_shot_date is not None:
+        shot = datetime.fromisoformat(db_shot_date)
+    elif read_exif:
+        shot = get_exif_datetime_original(source_path)
+    else:
+        shot = None
+
+    # creation_date — DB first, getctime fallback
+    if db_creation_date is not None:
+        creation = datetime.fromisoformat(db_creation_date)
+    else:
+        creation = get_filesystem_creation_datetime(source_path)
+
+    # mtime — DB first, getmtime fallback
+    if db_mtime is not None:
+        modified = datetime.fromisoformat(db_mtime)
+    else:
+        try:
+            modified = datetime.fromtimestamp(os.path.getmtime(source_path))
+        except OSError:
+            modified = None
 
     return PhotoRecord(
         group_number=group_number,
@@ -130,14 +170,16 @@ class ManifestRepository:
         conn = sqlite3.connect(manifest_path)
         conn.row_factory = sqlite3.Row
         try:
-            # Migrate older DBs that lack user_decision column
-            try:
-                conn.execute(
-                    "ALTER TABLE migration_manifest ADD COLUMN user_decision TEXT DEFAULT ''"
-                )
-                conn.commit()
-            except Exception:
-                pass  # column already exists
+            # Auto-migrate: add any missing columns (safe to re-run — silently
+            # ignored if the column already exists).
+            for col, ddl in _MIGRATIONS:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE migration_manifest ADD COLUMN {col} {ddl}"
+                    )
+                    conn.commit()
+                except Exception:
+                    pass  # column already exists
             all_rows = conn.execute(_LOAD_ALL_SQL).fetchall()
         finally:
             conn.close()
@@ -178,6 +220,12 @@ class ManifestRepository:
             # Only read EXIF for REVIEW_DUPLICATE — avoids opening thousands of files
             read_exif = action == "REVIEW_DUPLICATE"
 
+            # DB-cached metadata (None for old manifests → filesystem fallback)
+            db_file_size = row["file_size_bytes"]
+            db_shot_date = row["shot_date"]
+            db_creation_date = row["creation_date"]
+            db_mtime = row["mtime"]
+
             try:
                 yield _photo_record(
                     source_path=source_path,
@@ -187,12 +235,18 @@ class ManifestRepository:
                     action=action,
                     read_exif=read_exif,
                     user_decision=user_decision,
+                    db_file_size=db_file_size,
+                    db_shot_date=db_shot_date,
+                    db_creation_date=db_creation_date,
+                    db_mtime=db_mtime,
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("Skipping {}: {}", source_path, exc)
                 continue
 
             if is_pair and ref_path and ref_path not in removed_paths:
+                # For the reference row, use the same DB metadata if the ref
+                # path matches — otherwise fall back (ref may be a different file).
                 try:
                     yield _photo_record(
                         source_path=ref_path,

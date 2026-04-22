@@ -28,6 +28,27 @@ CREATE TABLE migration_manifest (
 );
 """
 
+_DDL_WITH_METADATA = """
+CREATE TABLE migration_manifest (
+    id               INTEGER PRIMARY KEY,
+    source_path      TEXT NOT NULL,
+    source_label     TEXT NOT NULL,
+    dest_path        TEXT,
+    action           TEXT NOT NULL,
+    source_hash      TEXT,
+    phash            TEXT,
+    hamming_distance INTEGER,
+    duplicate_of     TEXT,
+    reason           TEXT,
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    file_size_bytes  INTEGER,
+    shot_date        TEXT,
+    creation_date    TEXT,
+    mtime            TEXT
+);
+"""
+
 _DDL_NO_USER_DECISION = """
 CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,
@@ -157,7 +178,13 @@ class TestManifestRepositoryLoad:
         group_numbers = {r.group_number for r in records}
         assert len(group_numbers) == 1  # both in same group
 
-    def test_skips_row_with_missing_source_file(self, tmp_path):
+    def test_yields_row_for_missing_source_file(self, tmp_path):
+        """load() yields rows even when the source file does not exist on disk.
+
+        The existence check was moved to execute time (ExecuteActionDialog._delete_file)
+        so that opening a manifest on a NAS doesn't require 40 K stat() round-trips.
+        Missing files are reported to the user only when they click Execute.
+        """
         ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(ref)
 
@@ -165,9 +192,10 @@ class TestManifestRepositoryLoad:
             _row({"source_path": str(tmp_path / "missing.jpg"), "duplicate_of": str(ref)}),
             _ref_row({"source_path": str(ref)}),
         ])
-        # Should not raise; missing candidate is skipped gracefully
+        # Missing candidate is now yielded — no existence check at load time
         records = list(ManifestRepository().load(str(db)))
-        assert all(r.file_path != str(tmp_path / "missing.jpg") for r in records)
+        paths = {r.file_path for r in records}
+        assert str(tmp_path / "missing.jpg") in paths
 
     def test_move_row_yields_single_record(self, tmp_path):
         f = tmp_path / "photo.jpg"
@@ -624,3 +652,133 @@ class TestMarkExecuted:
         ManifestRepository().mark_executed(str(db), ["/a.jpg"])
         assert self._read_executed(db, "/a.jpg") == 1
         assert self._read_executed(db, "/b.jpg") == 0
+
+
+class TestLoadFromDB:
+    """load() reads cached metadata from DB columns instead of filesystem."""
+
+    def _row_with_metadata(self, path: str, **kwargs) -> dict:
+        base = {
+            "source_path": path,
+            "source_label": "jdrive",
+            "dest_path": None,
+            "action": "MOVE",
+            "hamming_distance": None,
+            "duplicate_of": None,
+            "reason": "unique",
+            "executed": 0,
+            "user_decision": "",
+            "file_size_bytes": None,
+            "shot_date": None,
+            "creation_date": None,
+            "mtime": None,
+        }
+        return {**base, **kwargs}
+
+    def test_load_uses_db_file_size_not_filesystem(self, tmp_path):
+        """When file_size_bytes is stored in DB, getsize() must NOT be called."""
+        from unittest.mock import patch
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            self._row_with_metadata(str(f), file_size_bytes=12345),
+        ], ddl=_DDL_WITH_METADATA)
+
+        with patch("os.path.getsize", side_effect=OSError("blocked")):
+            records = list(ManifestRepository().load(str(db)))
+
+        assert len(records) == 1
+        assert records[0].file_size_bytes == 12345
+
+    def test_load_uses_db_shot_date_not_pillow(self, tmp_path):
+        """When shot_date is in DB, Pillow EXIF must NOT be called."""
+        from datetime import datetime
+        from unittest.mock import patch
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            self._row_with_metadata(str(f),
+                action="REVIEW_DUPLICATE",
+                duplicate_of=str(tmp_path / "ref.jpg"),
+                hamming_distance=3,
+                shot_date="2022-06-15T10:30:00",
+                file_size_bytes=100,
+                creation_date="2022-01-01T00:00:00",
+                mtime="2022-01-01T00:00:00"),
+        ], ddl=_DDL_WITH_METADATA)
+
+        with patch("infrastructure.manifest_repository.get_exif_datetime_original",
+                   return_value=datetime(2000, 1, 1)):
+            records = list(ManifestRepository().load(str(db)))
+
+        paths = {r.file_path for r in records}
+        assert str(f) in paths
+        rec = next(r for r in records if r.file_path == str(f))
+        assert rec.shot_date == datetime(2022, 6, 15, 10, 30, 0)
+
+    def test_load_uses_db_creation_date(self, tmp_path):
+        """When creation_date is in DB, getctime() must NOT be called."""
+        from datetime import datetime
+        from unittest.mock import patch
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            self._row_with_metadata(str(f),
+                creation_date="2023-03-01T08:00:00",
+                file_size_bytes=100,
+                mtime="2023-03-01T08:00:00"),
+        ], ddl=_DDL_WITH_METADATA)
+
+        with patch("infrastructure.manifest_repository.get_filesystem_creation_datetime",
+                   return_value=datetime(2000, 1, 1)):
+            records = list(ManifestRepository().load(str(db)))
+
+        assert len(records) == 1
+        assert records[0].creation_date == datetime(2023, 3, 1, 8, 0, 0)
+
+    def test_load_uses_db_mtime(self, tmp_path):
+        """When mtime is in DB, os.path.getmtime() must NOT be called."""
+        from datetime import datetime
+        from unittest.mock import patch
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            self._row_with_metadata(str(f),
+                mtime="2023-06-01T12:00:00",
+                file_size_bytes=100,
+                creation_date="2023-01-01T00:00:00"),
+        ], ddl=_DDL_WITH_METADATA)
+
+        with patch("os.path.getmtime", return_value=0.0):
+            records = list(ManifestRepository().load(str(db)))
+
+        assert len(records) == 1
+        assert records[0].modified_date == datetime(2023, 6, 1, 12, 0, 0)
+
+    def test_load_falls_back_to_filesystem_when_db_columns_null(self, tmp_path):
+        """Old manifests (NULL metadata) still use filesystem reads (regression guard)."""
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            self._row_with_metadata(str(f)),  # all 4 = NULL
+        ], ddl=_DDL_WITH_METADATA)
+
+        records = list(ManifestRepository().load(str(db)))
+        assert len(records) == 1
+        import os
+        assert records[0].file_size_bytes == os.path.getsize(str(f))
+
+    def test_load_skips_no_existence_check(self, tmp_path):
+        """Nonexistent files must be yielded — existence check moved to execute time."""
+        db = _make_manifest(tmp_path, [
+            self._row_with_metadata(
+                "/nonexistent/photo.jpg",
+                file_size_bytes=100,
+                creation_date="2023-01-01T00:00:00",
+                mtime="2023-01-01T00:00:00",
+            ),
+        ], ddl=_DDL_WITH_METADATA)
+
+        records = list(ManifestRepository().load(str(db)))
+        paths = {r.file_path for r in records}
+        assert "/nonexistent/photo.jpg" in paths

@@ -31,6 +31,7 @@ class ExecuteActionDialog(QDialog):
         self._manifest_path = manifest_path
         self.deleted_paths: list[str] = []
         self.executed_paths: list[str] = []
+        self._missing_paths: list[str] = []
         self._build_ui()
 
     # ------------------------------------------------------------------ helpers
@@ -221,9 +222,28 @@ class ExecuteActionDialog(QDialog):
                 except Exception as exc:
                     logger.warning("Failed to mark executed in manifest: {}", exc)
 
+        if self._missing_paths:
+            from PySide6.QtWidgets import QMessageBox
+            missing_list = "\n".join(self._missing_paths[:20])
+            suffix = (
+                f"\n…and {len(self._missing_paths) - 20} more"
+                if len(self._missing_paths) > 20
+                else ""
+            )
+            QMessageBox.warning(
+                self,
+                "Files Not Found",
+                f"The following files could not be found and were skipped:\n\n"
+                f"{missing_list}{suffix}",
+            )
+
         self.accept()
 
     def _delete_file(self, path: str) -> None:
+        if not os.path.exists(path):
+            self._missing_paths.append(path)
+            logger.warning("File not found, skipping delete: {}", path)
+            return
         try:
             try:
                 import send2trash

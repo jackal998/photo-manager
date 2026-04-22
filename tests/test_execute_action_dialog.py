@@ -306,3 +306,22 @@ class TestGroupDeletionCheck:
         # /b.jpg has no decision → not all records are "delete" → NOT complete
         complete = dlg._complete_delete_groups()
         assert 1 not in complete
+
+
+# ── _delete_file: missing file handling ────────────────────────────────────
+
+class TestMissingFileHandling:
+    def test_missing_file_added_to_missing_paths(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog([], manifest_path=None)
+        dlg._delete_file("/nonexistent/photo.jpg")
+        assert "/nonexistent/photo.jpg" in dlg._missing_paths
+        assert "/nonexistent/photo.jpg" not in dlg.deleted_paths
+
+    def test_missing_file_not_trashed(self, qapp):
+        from unittest.mock import patch
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog([], manifest_path=None)
+        with patch("send2trash.send2trash") as mock_trash:
+            dlg._delete_file("/nonexistent/photo.jpg")
+        mock_trash.assert_not_called()
