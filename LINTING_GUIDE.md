@@ -1,4 +1,4 @@
-Linting & Formatting Guide (Python 3.10+)
+Linting & Formatting Guide (Python 3.11+)
 
 This guide standardizes tooling for formatting, import management, and static analysis, and shows how to install, configure, and run them manually or automatically.
 
@@ -21,7 +21,7 @@ This unified script executes all linters and provides a consolidated report.
 
 ## Installation
 
-Use your project interpreter (Python 3.10+). Optionally create a venv first.
+Use your project interpreter (Python 3.11+). Optionally create a venv first.
 
 ```bash
 python -m pip install --upgrade pip
@@ -41,7 +41,7 @@ The repo contains a `pyproject.toml` with unified settings. Key excerpts:
 ```toml
 [tool.black]
 line-length = 100
-target-version = ["py310"]
+target-version = ["py311"]
 
 [tool.isort]
 profile = "black"
@@ -52,7 +52,7 @@ known_first_party = ["app", "core", "infrastructure"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 fix = true
 
 [tool.ruff.lint]
@@ -64,7 +64,7 @@ known-first-party = ["app", "core", "infrastructure"]
 combine-as-imports = true
 
 [tool.pylint.main]
-py-version = "3.10"
+py-version = "3.11"
 extension-pkg-allow-list = ["PySide6", "PIL"]
 
 [tool.pylint.design]

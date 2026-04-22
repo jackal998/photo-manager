@@ -1,4 +1,4 @@
-請用 Python 3.10+，嚴格遵循 Google Python Style Guide，並符合以下要點：
+請用 Python 3.11+，嚴格遵循 Google Python Style Guide，並符合以下要點：
 
 - 格式與靜態檢查
   - 以自動格式化工具（Black + isort + Ruff + Pylint）統一格式和檢查。

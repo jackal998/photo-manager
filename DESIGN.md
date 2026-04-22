@@ -34,7 +34,7 @@
 ## 2. 系統架構
 
 - 分層：`App(UI) → Core(商業邏輯) → Infrastructure(IO/外部)`
-- 依賴注入：簡易 Service Locator 或 `dependency-injector`
+- 服務在 `main.py` 中直接實例化並注入（不使用框架）
 - 日誌：`loguru`（檔案輪替）
 
 ```mermaid
@@ -44,34 +44,77 @@ flowchart LR
   Core --> Img[ImageService (Shell/WIC, Cache)]
   Core --> Del[DeleteService (Recycle Bin)]
   Core --> Cfg[Settings]
-```text
+```
 
 ---
 
 ## 4. 專案結構（目錄）
 
 ```text
-photo_manager/
+photo-manager/
+  run.bat                  # Launch GUI (activates .venv automatically)
+  main.py                  # PySide6 GUI entry point
+  scan.py                  # Deduplication scanner CLI
+  review.py                # REVIEW_DUPLICATE triage CLI
+  pyproject.toml           # Tool configuration (Black, isort, Ruff, Pylint)
+  settings.json            # User configuration (source paths, thumbnail cache, …)
+
+  scanner/                 # Scanner engine (no Qt dependency)
+    media.py               # Extensions, magic-byte detection, filename parsing
+    walker.py              # Directory walk + Live Photo pairing
+    hasher.py              # SHA-256 + pHash (Pillow / pillow-heif / rawpy)
+    exif.py                # Batch EXIF date reads via exiftool -stay_open
+    dedup.py               # Classification: exact → format → near-dup → UNDATED
+    manifest.py            # SQLite writer + summary printer
+
   app/
-    views/            # MainWindow, GroupPanel, PhotoTable, PreviewPane, RulePanel
-    viewmodels/       # MainVM, GroupVM, PhotoVM, RuleVM, Commands
-    models/           # 僅 UI 狀態（排序/篩選/視圖設定）
-    widgets/          # 縮圖格、對話框、進度指示
+    views/
+      main_window.py       # Main window — wires all components
+      tree_model_builder.py
+      constants.py         # Column indices and header labels
+      components/
+        menu_controller.py
+        tree_controller.py
+        selection_controller.py
+      handlers/
+        file_operations.py  # set_decision, batch_set_decision, execute_action
+        context_menu.py     # Right-click Set Action routing
+      dialogs/
+        scan_dialog.py
+        execute_action_dialog.py
+        group_deletion_check_dialog.py  # Safety check for complete-group deletes
+        select_dialog.py                # Select by Field/Regex dialog
+        filters_dialog.py  # [deprecated — legacy stub, pragma: no cover]
+        rules_dialog.py    # [deprecated — legacy stub, pragma: no cover]
+      workers/
+        scan_worker.py          # Background QThread for scan pipeline
+        manifest_load_worker.py # Background QThread for manifest load
+    viewmodels/
+      main_vm.py           # Groups/marks logic; loads manifest
+
   core/
-    models.py         # PhotoRecord, PhotoGroup 等
-    rules/            # Rule, Condition, Action, RuleEngine, Commands(undo/redo)
-    services/         # 介面與共用服務（I*）
-    utils/            # 轉換、比較器、型別輔助
+    models.py              # PhotoRecord (action, user_decision), PhotoGroup
+    rules/                 # [orphaned — empty, no implementation]
+    services/
+      interfaces.py        # DeleteResult, DeletePlan, IListService
+      selection_service.py # RegexSelectionService
+      sort_service.py      # SortService
+
   infrastructure/
-    manifest_repository.py # 讀寫 migration_manifest.sqlite
-    image_service.py  # 縮圖/原圖載入、快取、Shell/WIC
-    delete_service.py # 回收桶刪除、檢查
-    settings.py       # 設定載入/驗證
-    logging.py        # 日誌初始化
-  schemas/
-    rules.schema.json # 規則 JSON Schema（AI/驗證用）
-  samples/            # 範例 CSV 與規則（後續實作時補）
-  main.py             # App 入口、組態注入、啟動 UI
+    manifest_repository.py  # load/save/batch_update_decisions; mark_executed()
+    delete_service.py
+    settings.py
+
+  tests/                   # 270+ tests
+    conftest.py
+    test_dedup.py           test_hasher.py          test_walker.py
+    test_review.py          test_manifest_repository.py
+    test_scanner_manifest.py  test_scanner_exif.py
+    test_settings.py        test_utils.py           test_delete_service.py
+    test_main_vm.py         test_file_operations.py test_sort_service.py
+    test_selection_service.py  test_context_menu.py
+    test_execute_action_dialog.py  test_group_deletion_check_dialog.py
+    test_manifest_load_worker.py
 ```
 
 ---
@@ -107,25 +150,17 @@ photo_manager/
 
 ## 6. 服務介面（Core → Infrastructure）
 
-- `IPhotoRepository`
-  - `load(csv_path:str) -> Iterable[PhotoRecord]`
-  - `save(csv_path:str, groups:Iterable[PhotoGroup]) -> None`
-- `IImageService`
-  - `get_thumbnail(path:str, size:int) -> QImage | bytes`
-  - `get_preview(path:str, max_side:int) -> QImage | bytes`
-  - 具備磁碟+記憶體 LRU 快取；快取鍵：`sha1(path + mtime + size)`
-- `IDeleteService`
-  - `plan_delete(groups, selected_paths) -> DeletePlan`（略過 locked，彙總受影響群組/筆數、偵測全選群組）
-  - `delete_to_recycle(paths:list[str]) -> DeleteResult`
-  - `execute_delete(groups, plan, log_dir=None) -> DeleteResult`（執行並寫出 CSV 紀錄）
-- `IRuleService`
-  - `execute(groups, rule) -> Command`（可 `undo()`/`redo()`）
-- `ISortService`
-  - 多鍵排序組態與執行
-- `ISettings`
-  - 讀寫 `settings.json`（縮圖尺寸、快取大小、刪除策略、預設排序等）
-- `IUndoRedoService`
-  - `push(cmd:Command)`, `undo()`, `redo()`, 邏輯限定於狀態變更（非刪除）
+`core/services/interfaces.py` 定義跨層共用的資料類別與服務介面：
+
+- `DeleteResult` — 刪除操作結果（`success_paths`、`failed`）
+- `DeletePlan` — 計劃刪除操作（`delete_paths`、`group_summaries`）
+- `DeletePlanGroupSummary` — 單群組刪除摘要（`group_number`、`selected_count`、`is_full_delete`）
+- `RemoveResult` — 從清單移除的結果（`success_paths`、`failed`）
+- `IListService` — 從清單移除檔案的介面（`remove_from_list`）
+
+排序與選取服務在 `core/services/sort_service.py`（`SortService`）與 `core/services/selection_service.py`（`RegexSelectionService`）中實作。
+
+縮圖與影像服務在 `infrastructure/` 中以具體類別實作（無抽象介面）。
 
 ---
 
@@ -157,7 +192,7 @@ photo_manager/
   - 預覽捲動：若影像高度大於可見高度，使用垂直捲動條以完整檢視
 - 操作：
   - 勾選/取消勾選（Selected）
-  - 功能表：`File > Delete Selected…`、`File > Set Action to Activated Files > delete/keep`、`File > Set Action to Selected (Sel) Files > delete/keep`、`Select > Select by Field/Regex/…`
+  - 功能表：`File > Set Action to Activated Files > delete/keep`、`File > Set Action to Selected (Sel) Files > delete/keep`、`File > Execute Action…`、`Select > Select by Field/Regex/…`
   - 刪除：
     - 摘要：顯示受影響群組/全部群組、將刪除檔案/總檔案；若包含全選群組，列出群組清單並需勾選同意
     - 執行：送回收桶（略過 locked）；自清單移除成功刪除檔案；移除僅剩單檔之群組
@@ -216,6 +251,8 @@ photo_manager/
   - `sorting.defaults`（欄位/方向陣列）
   - `ui.locale`（"zh-TW"）
 - 所有字串集中管理，預設中文
+
+> **注意**：`delete.confirm_group_full_delete` 與 `ui.locale` 目前儲存於 `settings.json` 但尚未被應用程式碼讀取。
 
 ---
 
@@ -328,9 +365,11 @@ Format priority (FORMAT_DUPLICATE): `heic > jpeg > png > others`
 ### GUI integration
 
 `ScanDialog` (in `app/views/dialogs/`) lets the user pick source folders and
-runs `ScanWorker` (a `QThread`) in the background. On completion it calls
-`MainWindow._load_manifest_from_path()` which invokes `ManifestRepository.load()`
-to map all rows into the `PhotoGroup`/`PhotoRecord` tree.
+runs `ScanWorker` (a `QThread`) in the background. On completion the manifest
+path is passed to `ManifestLoadWorker` (a `QThread` in `app/views/workers/`),
+which calls `ManifestRepository.load()` in the background and emits
+`finished(list[PhotoGroup])` when done. `FileOperationsHandler` receives the
+signal and populates the review tree — keeping the UI fully responsive during load.
 
 `ManifestRepository.save()` writes `user_decision` values (`delete`/`keep`/`""`) back
 to the manifest for each record.  The `action` column (scanner classification) is
@@ -362,6 +401,11 @@ python scan.py ... --limit 200 --dry-run   # bounded debug run
 | `duplicate_of` | TEXT | source_path of kept file |
 | `executed` | INTEGER | 0=pending 1=done |
 | `user_decision` | TEXT | User's planned file operation: `delete` / `keep` / `""` (undecided) / `"removed"` (hidden from review) |
+| `file_size_bytes` | INTEGER | Cached at scan time; NULL in pre-existing manifests (auto-migrated) |
+| `shot_date` | TEXT | ISO 8601 from EXIF DateTimeOriginal; NULL if not available |
+| `creation_date` | TEXT | ISO 8601 filesystem ctime at scan time |
+| `mtime` | TEXT | ISO 8601 filesystem mtime at scan time |
 
-`user_decision` is added automatically to older manifests (pre-existing DBs
-lacking the column are migrated via `ALTER TABLE … ADD COLUMN` on first load).
+All five nullable columns (`user_decision`, `file_size_bytes`, `shot_date`,
+`creation_date`, `mtime`) are added automatically to older manifests via
+`ALTER TABLE … ADD COLUMN` migrations on first load.
