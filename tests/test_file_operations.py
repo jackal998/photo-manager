@@ -72,7 +72,6 @@ def _make_handler(vm, manifest_path: str | None, checked_paths=None, highlighted
 
     handler = FileOperationsHandler(
         vm=vm,
-        delete_service=MagicMock(),
         settings=MagicMock(),
         parent_widget=parent,
         ui_updater=ui_updater,
@@ -496,3 +495,66 @@ class TestSaveManifestDecisions:
             handler.save_manifest_decisions()
 
         mock_info.assert_called_once()
+
+
+# ── batch SQL verification ─────────────────────────────────────────────────
+
+class TestBatchSQLCalls:
+    """Verify set_decision and batch_set_decision use batch_update_decisions, not per-row updates."""
+
+    def test_set_decision_calls_batch_update_once(self, tmp_path):
+        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch(
+            "infrastructure.manifest_repository.ManifestRepository.batch_update_decisions"
+        ) as mock_batch:
+            handler.set_decision(
+                [{"type": "file", "path": "/a.jpg"}, {"type": "file", "path": "/b.jpg"}],
+                "delete",
+            )
+
+        mock_batch.assert_called_once()
+        batch_arg = mock_batch.call_args[0][1]
+        assert batch_arg == {"/a.jpg": "delete", "/b.jpg": "delete"}
+
+    def test_batch_set_decision_calls_batch_update_once(self, tmp_path):
+        recs = [_rec("/a.jpg"), _rec("/b.jpg"), _rec("/c.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [
+            {"source_path": "/a.jpg"},
+            {"source_path": "/b.jpg"},
+            {"source_path": "/c.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db), checked_paths=lambda: ["/a.jpg", "/b.jpg"])
+
+        with patch(
+            "infrastructure.manifest_repository.ManifestRepository.batch_update_decisions"
+        ) as mock_batch:
+            handler.batch_set_decision("keep")
+
+        mock_batch.assert_called_once()
+        batch_arg = mock_batch.call_args[0][1]
+        assert batch_arg == {"/a.jpg": "keep", "/b.jpg": "keep"}
+        assert "/c.jpg" not in batch_arg
+
+
+# ── constructor ────────────────────────────────────────────────────────────
+
+class TestConstructor:
+    def test_handler_constructed_without_delete_service(self):
+        """FileOperationsHandler no longer requires a delete_service argument."""
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+        vm = SimpleNamespace(groups=[])
+        handler = FileOperationsHandler(
+            vm=vm,
+            settings=MagicMock(),
+            parent_widget=MagicMock(),
+            ui_updater=MagicMock(),
+            status_reporter=MagicMock(),
+        )
+        assert handler is not None
+        assert not hasattr(handler, "deleter")

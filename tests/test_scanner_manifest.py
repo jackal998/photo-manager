@@ -130,3 +130,96 @@ class TestPrintSummary:
         print_summary([])
         out = capsys.readouterr().out
         assert "0" in out
+
+
+# ── TestManifestSchemaColumns ───────────────────────────────────────────────
+
+class TestManifestSchemaColumns:
+    """Scanner stores file metadata in the manifest at write time."""
+
+    def _cols(self, out: Path) -> set[str]:
+        with sqlite3.connect(out) as conn:
+            return {row[1] for row in conn.execute("PRAGMA table_info(migration_manifest)").fetchall()}
+
+    def test_manifest_has_file_size_bytes_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "file_size_bytes" in self._cols(out)
+
+    def test_manifest_has_shot_date_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "shot_date" in self._cols(out)
+
+    def test_manifest_has_creation_date_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "creation_date" in self._cols(out)
+
+    def test_manifest_has_mtime_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "mtime" in self._cols(out)
+
+    def test_write_manifest_stores_file_size_bytes(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="MOVE", source_hash="abc",
+            phash=None, hamming_distance=None, duplicate_of=None, reason="",
+            file_size_bytes=12345,
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            val = conn.execute("SELECT file_size_bytes FROM migration_manifest").fetchone()[0]
+        assert val == 12345
+
+    def test_write_manifest_stores_shot_date(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="MOVE", source_hash="abc",
+            phash=None, hamming_distance=None, duplicate_of=None, reason="",
+            shot_date="2023-01-15T10:30:00",
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            val = conn.execute("SELECT shot_date FROM migration_manifest").fetchone()[0]
+        assert val == "2023-01-15T10:30:00"
+
+    def test_make_row_populates_file_size(self, tmp_path):
+        from unittest.mock import MagicMock
+        from scanner.dedup import _make_row, HashResult
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"x" * 500)
+        hr = HashResult(
+            record=MagicMock(path=f, source_label="jdrive", file_type="jpeg", pair_partner=None),
+            sha256="abc", phash=None, exif_date=None,
+        )
+        result = _make_row(hr, "MOVE")
+        assert result.file_size_bytes == 500
+
+    def test_make_row_populates_shot_date_from_exif_date(self, tmp_path):
+        from datetime import datetime
+        from unittest.mock import MagicMock
+        from scanner.dedup import _make_row, HashResult
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+        hr = HashResult(
+            record=MagicMock(path=f, source_label="jdrive", file_type="jpeg", pair_partner=None),
+            sha256="abc", phash=None, exif_date=datetime(2023, 1, 15, 10, 30, 0),
+        )
+        result = _make_row(hr, "MOVE")
+        assert result.shot_date == "2023-01-15T10:30:00"
+
+    def test_make_row_shot_date_none_when_no_exif(self, tmp_path):
+        from unittest.mock import MagicMock
+        from scanner.dedup import _make_row, HashResult
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+        hr = HashResult(
+            record=MagicMock(path=f, source_label="jdrive", file_type="jpeg", pair_partner=None),
+            sha256="abc", phash=None, exif_date=None,
+        )
+        result = _make_row(hr, "MOVE")
+        assert result.shot_date is None

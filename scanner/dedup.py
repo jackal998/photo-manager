@@ -67,6 +67,11 @@ class ManifestRow:
     hamming_distance: Optional[int]
     duplicate_of: Optional[str]
     reason: str
+    # Cached at scan time — eliminates all filesystem I/O at load time
+    file_size_bytes: Optional[int] = None
+    shot_date: Optional[str] = None      # ISO 8601 from EXIF DateTimeOriginal
+    creation_date: Optional[str] = None  # ISO 8601 filesystem ctime
+    mtime: Optional[str] = None          # ISO 8601 filesystem mtime
 
 
 # ---------------------------------------------------------------------------
@@ -255,8 +260,24 @@ def _make_row(
     hamming: Optional[int] = None,
     dest: Optional[str] = None,
 ) -> ManifestRow:
+    import os
+    from datetime import datetime as _dt
+    from infrastructure.utils import get_filesystem_creation_datetime
+
+    path_str = str(hr.record.path)
+    try:
+        _size: Optional[int] = os.path.getsize(path_str)
+    except OSError:
+        _size = None
+    try:
+        _mtime: Optional[str] = _dt.fromtimestamp(os.path.getmtime(path_str)).isoformat()
+    except OSError:
+        _mtime = None
+    _ctime = get_filesystem_creation_datetime(path_str)
+    _shot: Optional[str] = hr.exif_date.isoformat() if hr.exif_date else None
+
     return ManifestRow(
-        source_path=str(hr.record.path),
+        source_path=path_str,
         source_label=hr.record.source_label,
         dest_path=dest,
         action=action,
@@ -265,6 +286,10 @@ def _make_row(
         hamming_distance=int(hamming) if hamming is not None else None,
         duplicate_of=duplicate_of,
         reason=reason,
+        file_size_bytes=_size,
+        shot_date=_shot,
+        creation_date=_ctime.isoformat() if _ctime else None,
+        mtime=_mtime,
     )
 
 

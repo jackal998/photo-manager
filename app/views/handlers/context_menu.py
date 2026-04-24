@@ -19,10 +19,6 @@ _SETTABLE_DECISIONS = ("delete", "keep")
 class ActionHandlers(Protocol):
     """Protocol for action handler callbacks."""
 
-    def delete_files(self, items: list[dict]) -> None:
-        """Delete files from items list."""
-        ...
-
     def select_files(self, items: list[dict]) -> None:
         """Select files from items list."""
         ...
@@ -68,14 +64,6 @@ class ContextMenuHandler:
         action_handlers: ActionHandlers,
         parent_widget: Any,
     ) -> None:
-        """Initialize with tree view and action handlers.
-
-        Args:
-            tree_view: The QTreeView to manage context menus for
-            tree_item_provider: Provider for getting selected items
-            action_handlers: Handler for context menu actions
-            parent_widget: Parent widget for menu creation
-        """
         self.tree = tree_view
         self.item_provider = tree_item_provider
         self.handlers = action_handlers
@@ -87,44 +75,25 @@ class ContextMenuHandler:
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
 
     def _on_context_menu(self, point: QPoint) -> None:
-        """Handle context menu request at the given point.
-
-        Args:
-            point: Point where context menu was requested
-        """
         index = self.tree.indexAt(point)
         if not index.isValid():
-            return  # Only show menu for valid rows
+            return
 
-        # Get all selected items
         selected_items = self.item_provider.get_selected_items()
         if not selected_items:
             return
 
         menu = QMenu(self.parent)
 
-        # Analyze selection
-        files_only = all(item["type"] == "file" for item in selected_items)
-
         if len(selected_items) == 1:
             self._create_single_selection_menu(menu, selected_items[0])
         else:
-            self._create_multi_selection_menu(menu, selected_items, files_only)
+            self._create_multi_selection_menu(menu, selected_items)
 
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
     def _create_single_selection_menu(self, menu: QMenu, item: dict) -> None:
-        """Create context menu for single item selection.
-
-        Args:
-            menu: QMenu to populate
-            item: Selected item dictionary
-        """
         if item["type"] == "file":
-            # File-specific actions
-            delete_action = menu.addAction("Delete File")
-            delete_action.triggered.connect(lambda: self.handlers.delete_files([item]))
-
             # Add Select/Unselect file options
             select_file_action = menu.addAction("Select File")
             select_file_action.triggered.connect(lambda: self.handlers.select_files([item]))
@@ -153,7 +122,6 @@ class ContextMenuHandler:
                     folder = os.path.dirname(norm_path) or norm_path
                     if not folder:
                         return
-                    # Use Windows Explorer to open folder and select the file if possible
                     if os.name == "nt":
                         try:
                             if os.path.exists(norm_path):
@@ -165,7 +133,6 @@ class ContextMenuHandler:
                         except Exception:
                             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
                     else:
-                        # Cross-platform fallback
                         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
                 except Exception:
                     try:
@@ -176,7 +143,6 @@ class ContextMenuHandler:
             open_folder_action.triggered.connect(_open_folder)
 
         elif item["type"] == "group":
-            # Group-specific actions
             select_files_action = menu.addAction("Select Files")
             select_files_action.triggered.connect(lambda: self.handlers.select_files([item]))
 
@@ -190,22 +156,7 @@ class ContextMenuHandler:
         remove_action = menu.addAction("Remove from List")
         remove_action.triggered.connect(lambda: self.handlers.remove_items_from_list([item]))
 
-    def _create_multi_selection_menu(
-        self, menu: QMenu, selected_items: list[dict], files_only: bool
-    ) -> None:
-        """Create context menu for multiple item selection.
-
-        Args:
-            menu: QMenu to populate
-            selected_items: List of selected items
-            files_only: Whether selection contains only files
-        """
-        if files_only:
-            # Only files selected - include delete option
-            delete_action = menu.addAction("Delete Files")
-            delete_action.triggered.connect(lambda: self.handlers.delete_files(selected_items))
-
-        # Common multi-selection actions
+    def _create_multi_selection_menu(self, menu: QMenu, selected_items: list[dict]) -> None:
         select_files_action = menu.addAction("Select Files")
         select_files_action.triggered.connect(lambda: self.handlers.select_files(selected_items))
 
