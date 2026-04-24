@@ -259,7 +259,10 @@ photo-manager/
 │   │   ├── dialogs/
 │   │   │   ├── scan_dialog.py              # Scan Sources dialog
 │   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
-│   │   │   └── group_deletion_check_dialog.py  # Safety check for complete-group deletes
+│   │   │   ├── group_deletion_check_dialog.py  # Safety check for complete-group deletes
+│   │   │   ├── select_dialog.py            # Select by Field/Regex dialog
+│   │   │   ├── filters_dialog.py           # [deprecated — legacy stub]
+│   │   │   └── rules_dialog.py             # [deprecated — legacy stub]
 │   │   └── workers/
 │   │       ├── scan_worker.py         # Background QThread for scan pipeline
 │   │       └── manifest_load_worker.py  # Background QThread for manifest load
@@ -267,13 +270,19 @@ photo-manager/
 │       └── main_vm.py       # Groups/marks logic; loads manifest
 │
 ├── core/                    # Models + service interfaces
-│   └── models.py            # PhotoRecord (action, user_decision), PhotoGroup
+│   ├── models.py            # PhotoRecord (action, user_decision), PhotoGroup
+│   └── services/
+│       ├── interfaces.py    # DeleteResult, DeletePlan, IListService
+│       ├── selection_service.py  # RegexSelectionService
+│       └── sort_service.py  # SortService
 ├── infrastructure/          # I/O: manifest repo, delete service, settings
-│   └── manifest_repository.py  # load/save/batch_update_decisions; mark_executed()
+│   ├── manifest_repository.py  # load/save/batch_update_decisions; mark_executed()
+│   ├── delete_service.py
+│   └── settings.py
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 200+ tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 270+ tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
