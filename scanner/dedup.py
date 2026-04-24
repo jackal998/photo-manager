@@ -1,4 +1,4 @@
-"""Classify files as KEEP/MOVE/EXACT/REVIEW_DUPLICATE/UNDATED.
+"""Classify files as MOVE/EXACT/REVIEW_DUPLICATE/UNDATED.
 
 Classification rules:
   SHA-256 match                          → EXACT (exact duplicate)
@@ -6,9 +6,11 @@ Classification rules:
   pHash hamming == 0, one RAW + lossy    → MOVE both (complementary)
   pHash hamming 1–threshold              → REVIEW_DUPLICATE
   no EXIF date                           → UNDATED
-  otherwise                              → MOVE (or KEEP for iphone source)
+  otherwise                              → MOVE
 
-Source priority: iphone > takeout > jdrive
+Source priority: positional (index 0 = highest priority).
+  Pass ``source_priority`` dict to ``classify()``; omit it for auto-inference
+  from the order labels first appear in the input records.
 Format priority (lossy only): heic > jpeg > png > others
 """
 
@@ -31,8 +33,6 @@ from scanner.walker import FileRecord
 # ---------------------------------------------------------------------------
 # Priority tables
 # ---------------------------------------------------------------------------
-
-SOURCE_PRIORITY = {"iphone": 0, "takeout": 1, "jdrive": 2}
 
 FORMAT_PRIORITY = {"heic": 0, "jpeg": 1, "png": 2, "gif": 3, "webp": 4, "raw": -1}
 # raw is intentionally -1 (not comparable with lossy — RAW+lossy always co-exist)
@@ -79,40 +79,64 @@ class ManifestRow:
 # ---------------------------------------------------------------------------
 
 
-def classify(records: list[HashResult], threshold: int = 10) -> list[ManifestRow]:
+def classify(
+    records: list[HashResult],
+    threshold: int = 10,
+    source_priority: dict[str, int] | None = None,
+) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
 
-    iPhone files always receive KEEP (already in place; used as dedup reference).
+    Args:
+        records: All hashed file records to classify.
+        threshold: Maximum Hamming distance to flag as REVIEW_DUPLICATE.
+        source_priority: Mapping of source label → priority integer (lower wins).
+            When ``None``, priority is inferred from the order labels first appear
+            in ``records`` (first seen = priority 0).
     """
+    if source_priority is None:
+        seen: dict[str, int] = {}
+        for hr in records:
+            label = hr.record.source_label
+            if label not in seen:
+                seen[label] = len(seen)
+        source_priority = seen
+
     rows: dict[Path, ManifestRow] = {}
 
     # Pass 1: exact SHA-256 duplicates
-    _classify_exact(records, rows)
+    _classify_exact(records, rows, source_priority)
 
     # Pass 2: pHash-based (cross-format + near-duplicate)
-    _classify_phash(records, rows, threshold)
+    _classify_phash(records, rows, threshold, source_priority)
 
-    # Pass 3: remaining unclassified files
+    # Pass 3: remaining unclassified files — all sources treated equally
     for hr in records:
         if hr.record.path in rows:
             continue
-        if hr.record.source_label == "iphone":
-            rows[hr.record.path] = _make_row(hr, "KEEP", reason="iphone source — stays in place")
-        elif hr.exif_date is None:
+        if hr.exif_date is None:
             rows[hr.record.path] = _make_row(hr, "UNDATED", reason="no EXIF DateTimeOriginal")
         else:
             rows[hr.record.path] = _make_row(
                 hr, "MOVE", reason="unique", dest=_dest_path(hr)
             )
 
-    # Pass 4: propagate SKIP/KEEP to Live Photo MOV partners
+    # Pass 4: propagate EXACT/KEEP actions to Live Photo MOV partners
     _propagate_pairs(records, rows)
 
     return list(rows.values())
 
 
-def _classify_exact(records: list[HashResult], rows: dict[Path, ManifestRow]) -> None:
-    """Group by SHA-256; mark lower-priority copies as SKIP."""
+def _priority(label: str, source_priority: dict[str, int]) -> int:
+    """Return sort priority for a source label (lower integer = higher priority)."""
+    return source_priority.get(label, len(source_priority))
+
+
+def _classify_exact(
+    records: list[HashResult],
+    rows: dict[Path, ManifestRow],
+    source_priority: dict[str, int],
+) -> None:
+    """Group by SHA-256; mark lower-priority copies as EXACT."""
     by_hash: dict[str, list[HashResult]] = {}
     for hr in records:
         by_hash.setdefault(hr.sha256, []).append(hr)
@@ -120,7 +144,7 @@ def _classify_exact(records: list[HashResult], rows: dict[Path, ManifestRow]) ->
     for group in by_hash.values():
         if len(group) < 2:
             continue
-        group.sort(key=lambda h: (SOURCE_PRIORITY.get(h.record.source_label, 99),))
+        group.sort(key=lambda h: _priority(h.record.source_label, source_priority))
         keeper = group[0]
         for duplicate in group[1:]:
             rows[duplicate.record.path] = _make_row(
@@ -132,7 +156,10 @@ def _classify_exact(records: list[HashResult], rows: dict[Path, ManifestRow]) ->
 
 
 def _classify_phash(
-    records: list[HashResult], rows: dict[Path, ManifestRow], threshold: int
+    records: list[HashResult],
+    rows: dict[Path, ManifestRow],
+    threshold: int,
+    source_priority: dict[str, int],
 ) -> None:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE."""
     # Only consider records not already classified and with a valid pHash
@@ -147,14 +174,17 @@ def _classify_phash(
     for group in by_phash.values():
         if len(group) < 2:
             continue
-        _classify_format_group(group, rows)
+        _classify_format_group(group, rows, source_priority)
 
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold
-    # Use bucket approach: compare within pHash prefix buckets to limit O(n²)
-    _classify_near_duplicates(candidates, rows, threshold)
+    _classify_near_duplicates(candidates, rows, threshold, source_priority)
 
 
-def _classify_format_group(group: list[HashResult], rows: dict[Path, ManifestRow]) -> None:
+def _classify_format_group(
+    group: list[HashResult],
+    rows: dict[Path, ManifestRow],
+    source_priority: dict[str, int],
+) -> None:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority."""
     has_raw = any(hr.record.file_type == "raw" for hr in group)
     lossy = [hr for hr in group if hr.record.file_type in LOSSY_TYPES]
@@ -169,7 +199,7 @@ def _classify_format_group(group: list[HashResult], rows: dict[Path, ManifestRow
     # All lossy FORMAT_DUPLICATE: keep highest-format × highest-source-priority
     lossy.sort(key=lambda h: (
         FORMAT_PRIORITY.get(h.record.file_type, 99),
-        SOURCE_PRIORITY.get(h.record.source_label, 99),
+        _priority(h.record.source_label, source_priority),
     ))
     keeper = lossy[0]
     for duplicate in lossy[1:]:
@@ -186,7 +216,10 @@ def _classify_format_group(group: list[HashResult], rows: dict[Path, ManifestRow
 
 
 def _classify_near_duplicates(
-    candidates: list[HashResult], rows: dict[Path, ManifestRow], threshold: int
+    candidates: list[HashResult],
+    rows: dict[Path, ManifestRow],
+    threshold: int,
+    source_priority: dict[str, int],
 ) -> None:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE."""
     if not _IMAGEHASH_AVAILABLE:
@@ -206,7 +239,7 @@ def _classify_near_duplicates(
                 # Flag the lower-priority file as REVIEW_DUPLICATE
                 ordered = sorted(
                     [hr_a, hr_b],
-                    key=lambda h: SOURCE_PRIORITY.get(h.record.source_label, 99),
+                    key=lambda h: _priority(h.record.source_label, source_priority),
                 )
                 flagged = ordered[1]
                 if flagged.record.path not in rows:

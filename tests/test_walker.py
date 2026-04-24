@@ -110,3 +110,46 @@ class TestLivePhotoPairing:
         records = scan_sources({"test": tmp_path})
         heic = next(r for r in records if r.path.suffix.upper() == ".HEIC")
         assert heic.pair_partner is not None
+
+
+class TestFlatScan:
+    def test_flat_scan_finds_top_level_file(self, tmp_path):
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "photo.jpg")
+        records = scan_sources({"test": tmp_path}, recursive_map={"test": False})
+        assert len(records) == 1
+
+    def test_flat_scan_ignores_nested_file(self, tmp_path):
+        from scanner.walker import scan_sources
+        subdir = tmp_path / "sub"
+        subdir.mkdir()
+        _write_jpeg(subdir / "photo.jpg")
+        records = scan_sources({"test": tmp_path}, recursive_map={"test": False})
+        assert records == []
+
+    def test_recursive_map_none_means_all_recursive(self, tmp_path):
+        """Omitting recursive_map preserves existing fully-recursive behaviour."""
+        from scanner.walker import scan_sources
+        subdir = tmp_path / "sub"
+        subdir.mkdir()
+        _write_jpeg(subdir / "nested.jpg")
+        records = scan_sources({"test": tmp_path})   # no recursive_map
+        assert len(records) == 1
+
+    def test_recursive_map_per_source(self, tmp_path):
+        from scanner.walker import scan_sources
+        flat_dir = tmp_path / "flat"
+        rec_dir = tmp_path / "rec"
+        flat_dir.mkdir()
+        rec_dir.mkdir()
+        (flat_dir / "sub").mkdir()
+        (rec_dir / "sub").mkdir()
+        _write_jpeg(flat_dir / "sub" / "a.jpg")   # nested in flat — excluded
+        _write_jpeg(rec_dir / "sub" / "b.jpg")    # nested in recursive — included
+        records = scan_sources(
+            {"flat": flat_dir, "rec": rec_dir},
+            recursive_map={"flat": False, "rec": True},
+        )
+        labels = {r.source_label for r in records}
+        assert "flat" not in labels
+        assert "rec" in labels
