@@ -21,7 +21,7 @@ class FileRecord:
     """A single media file discovered during a source scan."""
 
     path: Path
-    source_label: str        # 'iphone' | 'takeout' | 'jdrive'
+    source_label: str        # user-supplied label (e.g. folder name or custom key)
     file_type: str           # 'jpeg' | 'heic' | 'raw' | 'png' | 'mp4' | 'mov' | …
     pair_partner: Optional[Path] = None  # MOV partner for Live Photo HEIC, or vice versa
     misnamed: bool = False   # True if magic bytes differ from file extension
@@ -30,27 +30,46 @@ class FileRecord:
 def scan_sources(
     sources: dict[str, Path],
     limit: int | None = None,
+    recursive_map: dict[str, bool] | None = None,
 ) -> list[FileRecord]:
     """Walk each source directory and return all discovered FileRecords.
 
     Args:
         sources: Mapping of label → root path.
         limit: If set, stop after this many files per source (for debug/dry-run).
+        recursive_map: Optional per-label recursive flag.  ``True`` (or absent)
+            means walk all subdirectories; ``False`` means top-level files only.
+            When ``None`` all sources are scanned recursively (original behaviour).
     """
     records: list[FileRecord] = []
     for label, root in sources.items():
         if not root.exists():
             raise FileNotFoundError(f"Source directory not found: {root}")
-        records.extend(_scan_dir(root, label, limit=limit))
+        recursive = True if recursive_map is None else recursive_map.get(label, True)
+        records.extend(_scan_dir(root, label, limit=limit, recursive=recursive))
     return records
 
 
-def _scan_dir(root: Path, label: str, limit: int | None = None) -> list[FileRecord]:
-    """Recursively walk root and return FileRecords with Live Photo pairs resolved."""
+def _scan_dir(
+    root: Path,
+    label: str,
+    limit: int | None = None,
+    recursive: bool = True,
+) -> list[FileRecord]:
+    """Walk root and return FileRecords with Live Photo pairs resolved.
+
+    Args:
+        root: Root directory to scan.
+        label: Source label assigned to every returned record.
+        limit: Stop after this many files (for debug/dry-run).
+        recursive: When ``True`` walk all subdirectories (default); when
+            ``False`` scan only the immediate files in ``root``.
+    """
     # Collect all media files grouped by directory for efficient pairing
     by_dir: dict[Path, list[Path]] = {}
     total = 0
-    for path in root.rglob("*"):
+    glob_fn = root.rglob if recursive else root.glob
+    for path in glob_fn("*"):
         if not path.is_file():
             continue
         if path.name.lower() in SKIP_FILENAMES:

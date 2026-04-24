@@ -54,45 +54,60 @@ def _hr(
 
 
 # ---------------------------------------------------------------------------
-# KEEP for iPhone source
-# ---------------------------------------------------------------------------
-
-class TestIphoneKeep:
-    def test_iphone_always_keep(self):
-        hr = _hr("/iphone/IMG_001.HEIC", source_label="iphone", exif_date=_dt())
-        rows = classify([hr])
-        assert rows[0].action == "KEEP"
-
-    def test_iphone_keep_even_when_duplicate_elsewhere(self):
-        iphone = _hr("/iphone/IMG_001.HEIC", sha256="abc", source_label="iphone",
-                     exif_date=_dt())
-        jdrive = _hr("/jdrive/IMG_001.jpg", sha256="abc", source_label="jdrive",
-                     exif_date=_dt())
-        rows = _rows(classify([iphone, jdrive]))
-        assert rows["/iphone/IMG_001.HEIC"].action == "KEEP"
-        assert rows["/jdrive/IMG_001.jpg"].action == "EXACT"
-
-
-# ---------------------------------------------------------------------------
 # EXACT_DUPLICATE
 # ---------------------------------------------------------------------------
 
 class TestExactDuplicate:
     def test_lower_priority_source_skipped(self):
-        iphone = _hr("/iphone/a.jpg", sha256="same", source_label="iphone", exif_date=_dt())
-        takeout = _hr("/takeout/a.jpg", sha256="same", source_label="takeout", exif_date=_dt())
-        jdrive = _hr("/jdrive/a.jpg", sha256="same", source_label="jdrive", exif_date=_dt())
-        rows = _rows(classify([iphone, takeout, jdrive]))
-        assert rows["/iphone/a.jpg"].action == "KEEP"
-        assert rows["/takeout/a.jpg"].action == "EXACT"
-        assert rows["/jdrive/a.jpg"].action == "EXACT"
+        src_a = _hr("/src_a/a.jpg", sha256="same", source_label="src_a", exif_date=_dt())
+        src_b = _hr("/src_b/a.jpg", sha256="same", source_label="src_b", exif_date=_dt())
+        src_c = _hr("/src_c/a.jpg", sha256="same", source_label="src_c", exif_date=_dt())
+        rows = _rows(classify(
+            [src_a, src_b, src_c],
+            source_priority={"src_a": 0, "src_b": 1, "src_c": 2},
+        ))
+        assert rows["/src_a/a.jpg"].action == "MOVE"   # survivor — MOVE, not KEEP
+        assert rows["/src_b/a.jpg"].action == "EXACT"
+        assert rows["/src_c/a.jpg"].action == "EXACT"
 
     def test_skip_points_to_kept_file(self):
         a = _hr("/jdrive/a.jpg", sha256="x", source_label="jdrive", exif_date=_dt())
         b = _hr("/takeout/b.jpg", sha256="x", source_label="takeout", exif_date=_dt())
-        rows = _rows(classify([a, b]))
-        kept = "/takeout/b.jpg"  # takeout > jdrive
+        rows = _rows(classify([a, b], source_priority={"takeout": 0, "jdrive": 1}))
+        kept = "/takeout/b.jpg"  # takeout priority 0 > jdrive priority 1
         assert Path(rows["/jdrive/a.jpg"].duplicate_of).as_posix() == kept
+
+
+# ---------------------------------------------------------------------------
+# Dynamic source priority
+# ---------------------------------------------------------------------------
+
+class TestDynamicSourcePriority:
+    def test_first_source_wins_exact_dup(self):
+        """Source with priority 0 wins; lower-priority copy gets EXACT."""
+        a = _hr("/src_a/photo.jpg", sha256="same", source_label="src_a", exif_date=_dt())
+        b = _hr("/src_b/photo.jpg", sha256="same", source_label="src_b", exif_date=_dt())
+        rows = _rows(classify([a, b], source_priority={"src_a": 0, "src_b": 1}))
+        assert rows["/src_a/photo.jpg"].action == "MOVE"
+        assert rows["/src_b/photo.jpg"].action == "EXACT"
+
+    def test_second_source_priority_reversed(self):
+        """With reversed priority, src_b wins."""
+        a = _hr("/src_a/photo.jpg", sha256="same", source_label="src_a", exif_date=_dt())
+        b = _hr("/src_b/photo.jpg", sha256="same", source_label="src_b", exif_date=_dt())
+        rows = _rows(classify([a, b], source_priority={"src_a": 1, "src_b": 0}))
+        assert rows["/src_b/photo.jpg"].action == "MOVE"
+        assert rows["/src_a/photo.jpg"].action == "EXACT"
+
+    def test_no_source_priority_auto_infers_from_order(self):
+        """Without explicit source_priority, first-seen label gets priority 0."""
+        first = _hr("/first/photo.jpg", sha256="dup", source_label="first_src",
+                    exif_date=_dt())
+        second = _hr("/second/photo.jpg", sha256="dup", source_label="second_src",
+                     exif_date=_dt())
+        rows = _rows(classify([first, second]))   # no source_priority
+        assert rows["/first/photo.jpg"].action == "MOVE"   # first-seen wins
+        assert rows["/second/photo.jpg"].action == "EXACT"
 
 
 # ---------------------------------------------------------------------------
@@ -159,10 +174,10 @@ class TestUndated:
         rows = classify([hr])
         assert rows[0].action == "UNDATED"
 
-    def test_iphone_undated_still_keep(self):
-        hr = _hr("/iphone/IMG.HEIC", source_label="iphone", exif_date=None)
+    def test_undated_file_from_any_source_becomes_undated(self):
+        hr = _hr("/any_source/IMG.HEIC", source_label="any_source", exif_date=None)
         rows = classify([hr])
-        assert rows[0].action == "KEEP"
+        assert rows[0].action == "UNDATED"
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +199,7 @@ class TestLivePhotoPair:
         orig = _hr(str(orig_heic_path), sha256="x", source_label="iphone",
                    file_type="heic", exif_date=_dt())
 
-        rows = _rows(classify([heic, mov, orig]))
+        rows = _rows(classify([heic, mov, orig], source_priority={"iphone": 0, "jdrive": 1}))
         assert rows[heic_path.as_posix()].action == "EXACT"
         assert rows[mov_path.as_posix()].action == "EXACT"
 

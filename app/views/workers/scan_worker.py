@@ -22,14 +22,18 @@ class ScanWorker(QThread):
 
     def __init__(
         self,
-        sources: dict[str, str],   # label → path string
+        sources: dict[str, str],                    # label → path string
         output_path: str,
+        recursive_map: dict[str, bool] | None = None,
+        source_priority: dict[str, int] | None = None,
         threshold: int = 10,
         limit: int | None = None,
     ) -> None:
         super().__init__()
         self.sources = {k: Path(v) for k, v in sources.items() if v.strip()}
         self.output_path = Path(output_path)
+        self.recursive_map = recursive_map or {}
+        self.source_priority = source_priority   # None → auto-inferred in classify()
         self.threshold = threshold
         self.limit = limit
 
@@ -59,8 +63,13 @@ class ScanWorker(QThread):
         self._emit(f"Scanning {len(self.sources)} source(s)…")
         records = []
         for label, root in self.sources.items():
-            self._emit(f"  Walking {label}: {root} …")
-            partial = scan_sources({label: root}, limit=self.limit)
+            mode = "flat" if self.recursive_map.get(label) is False else "recursive"
+            self._emit(f"  Walking {label} ({mode}): {root} …")
+            partial = scan_sources(
+                {label: root},
+                limit=self.limit,
+                recursive_map={label: self.recursive_map.get(label, True)},
+            )
             self._emit(f"  → {len(partial):,} files")
             records.extend(partial)
         self._emit(f"  Total: {len(records):,} media files")
@@ -111,7 +120,11 @@ class ScanWorker(QThread):
 
         # --- 4. Classify ---
         self._emit("Classifying…")
-        rows = classify(hash_results, threshold=self.threshold)
+        rows = classify(
+            hash_results,
+            threshold=self.threshold,
+            source_priority=self.source_priority,
+        )
 
         # Capture print_summary output and re-emit as progress
         buf = io.StringIO()
