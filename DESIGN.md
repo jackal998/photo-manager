@@ -105,7 +105,7 @@ photo-manager/
     delete_service.py
     settings.py
 
-  tests/                   # 270+ tests
+  tests/                   # 308+ tests
     conftest.py
     test_dedup.py           test_hasher.py          test_walker.py
     test_review.py          test_manifest_repository.py
@@ -114,7 +114,7 @@ photo-manager/
     test_main_vm.py         test_file_operations.py test_sort_service.py
     test_selection_service.py  test_context_menu.py
     test_execute_action_dialog.py  test_group_deletion_check_dialog.py
-    test_manifest_load_worker.py
+    test_manifest_load_worker.py    test_scan_dialog.py
 ```
 
 ---
@@ -132,7 +132,7 @@ photo-manager/
   - `creation_date:datetime|None` — 檔案系統建立時間
   - `shot_date:datetime|None` — EXIF DateTimeOriginal
   - `file_size_bytes:int`（以 `os.path.getsize` 重新讀取）
-  - `action:str` — Scanner 分類（唯讀）：`EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `KEEP` / `UNDATED` / `""` (reference role)
+  - `action:str` — Scanner 分類（唯讀）：`EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `UNDATED` / `""` (all sources treated equally; no source receives KEEP)
   - `user_decision:str` — 使用者操作決定（可寫）：`"delete"` / `"keep"` / `""` (undecided)
 - `PhotoGroup`
   - `group_number:int`
@@ -244,6 +244,8 @@ photo-manager/
 ## 12. 設定與國際化
 
 - `settings.json`：
+  - `sources.list`（`[{"path": "…", "recursive": true}, …]`）— 掃描來源資料夾清單（新格式）；優先順序由索引決定（index 0 最高）
+  - `sources.output`（manifest 輸出路徑）
   - `thumbnail_size`（256/512/1024）
   - `thumbnail_mem_cache`（如 512）
   - `thumbnail_disk_cache_dir`
@@ -251,6 +253,7 @@ photo-manager/
   - `sorting.defaults`（欄位/方向陣列）
   - `ui.locale`（"zh-TW"）
 - 所有字串集中管理，預設中文
+- 舊格式（`sources.iphone` / `sources.takeout` / `sources.jdrive`）在首次開啟掃描對話框時自動遷移至 `sources.list`；舊鍵保留但已不再寫入。
 
 > **注意**：`delete.confirm_group_full_delete` 與 `ui.locale` 目前儲存於 `settings.json` 但尚未被應用程式碼讀取。
 
@@ -359,17 +362,24 @@ scan_sources()  →  batch_read_dates()  →  compute_sha256/phash()  →  class
 | No EXIF DateTimeOriginal | `UNDATED` |
 | Otherwise | `MOVE` |
 
-Source priority (EXACT_DUPLICATE): `iphone > takeout > jdrive`  
-Format priority (FORMAT_DUPLICATE): `heic > jpeg > png > others`
+**Source priority** (EXACT_DUPLICATE): positional — determined by the order sources
+appear in the scan dialog or `--source` CLI flags (index 0 = highest priority).
+Passed to `classify()` as `source_priority: dict[str, int]`; auto-inferred from
+record order when omitted. No source receives a hardcoded `KEEP` action.  
+**Format priority** (FORMAT_DUPLICATE): `heic > jpeg > png > others`
 
 ### GUI integration
 
-`ScanDialog` (in `app/views/dialogs/`) lets the user pick source folders and
-runs `ScanWorker` (a `QThread`) in the background. On completion the manifest
-path is passed to `ManifestLoadWorker` (a `QThread` in `app/views/workers/`),
-which calls `ManifestRepository.load()` in the background and emits
-`finished(list[PhotoGroup])` when done. `FileOperationsHandler` receives the
-signal and populates the review tree — keeping the UI fully responsive during load.
+`ScanDialog` (in `app/views/dialogs/`) embeds a `_FolderTreePanel`
+(`QFileSystemModel` + `QTreeView`, directories only) and a `_SourceListWidget`
+(`QTableWidget` with per-source Recursive checkbox and ↑↓ priority reorder).
+Any number of source folders can be added; order determines dedup priority.
+The dialog runs `ScanWorker` (a `QThread`) in the background, passing
+`recursive_map` and `source_priority` built from the source list. On completion
+the manifest path is passed to `ManifestLoadWorker` (a `QThread` in
+`app/views/workers/`), which calls `ManifestRepository.load()` in the background
+and emits `finished(list[PhotoGroup])` when done. `FileOperationsHandler` receives
+the signal and populates the review tree — keeping the UI fully responsive during load.
 
 `ManifestRepository.save()` writes `user_decision` values (`delete`/`keep`/`""`) back
 to the manifest for each record.  The `action` column (scanner classification) is
@@ -378,10 +388,16 @@ never modified by the GUI.
 ### CLI
 
 ```bash
+# Recursive sources (priority: first listed = highest)
 python scan.py \
-  --source iphone="\NAS\Photos\MobileBackup" \
-  --source takeout="D:\Downloads\Takeout" \
-  --source jdrive="J:\圖片" \
+  --source photos="\NAS\Photos\MobileBackup" \
+  --source archive="D:\Archive" \
+  --output migration_manifest.sqlite
+
+# Mix recursive + flat (non-recursive) sources
+python scan.py \
+  --source archive="D:\Archive" \
+  --source-flat inbox="D:\Inbox" \
   --output migration_manifest.sqlite
 
 python scan.py ... --limit 200 --dry-run   # bounded debug run
@@ -392,9 +408,9 @@ python scan.py ... --limit 200 --dry-run   # bounded debug run
 | Column | Type | Notes |
 |--------|------|-------|
 | `source_path` | TEXT | Absolute path |
-| `source_label` | TEXT | `iphone` / `takeout` / `jdrive` |
+| `source_label` | TEXT | Auto-generated from folder basename (e.g. `Photos`, `Takeout`) |
 | `dest_path` | TEXT | NULL for EXACT/UNDATED |
-| `action` | TEXT | Scanner classification: `EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `KEEP` / `UNDATED` |
+| `action` | TEXT | Scanner classification: `EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `UNDATED` |
 | `source_hash` | TEXT | SHA-256 hex |
 | `phash` | TEXT | 64-bit perceptual hash hex; NULL for video |
 | `hamming_distance` | INTEGER | Distance to `duplicate_of`'s phash |
