@@ -20,7 +20,11 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
     duplicate_of     TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0,
-    user_decision    TEXT    NOT NULL DEFAULT ''
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    file_size_bytes  INTEGER,
+    shot_date        TEXT,
+    creation_date    TEXT,
+    mtime            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
 CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
@@ -30,8 +34,9 @@ CREATE INDEX IF NOT EXISTS idx_action      ON migration_manifest(action);
 _INSERT = """
 INSERT INTO migration_manifest
     (source_path, source_label, dest_path, action, source_hash,
-     phash, hamming_distance, duplicate_of, reason)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     phash, hamming_distance, duplicate_of, reason,
+     file_size_bytes, shot_date, creation_date, mtime)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)
 """
 
 
@@ -56,6 +61,10 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
                     r.hamming_distance,
                     r.duplicate_of,
                     r.reason,
+                    r.file_size_bytes,
+                    r.shot_date,
+                    r.creation_date,
+                    r.mtime,
                 )
                 for r in rows
             ],

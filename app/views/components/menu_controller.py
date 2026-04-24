@@ -42,7 +42,6 @@ class MenuController:
         self.actions["save_manifest"] = file_menu.addAction("Save Manifest Decisions…")
         self.actions["save_manifest"].setEnabled(False)
         file_menu.addSeparator()
-        self.actions["delete"] = file_menu.addAction("Delete Selected…")
         hl_submenu = file_menu.addMenu("Set Action to Activated Files")
         hl_submenu.setEnabled(False)
         self.actions["set_action_hl_delete"] = hl_submenu.addAction("delete")
@@ -77,7 +76,6 @@ class MenuController:
         self.window.setMenuBar(menubar)
 
         # Store actions as window attributes for backward compatibility
-        self.window.action_delete = self.actions["delete"]
         self.window.action_exit = self.actions["exit"]
         self.window.action_select_by = self.actions["select_by"]
         self.window.action_remove_from_list = self.actions["remove_from_list"]
@@ -99,9 +97,6 @@ class MenuController:
 
         if "save_manifest" in handlers:
             self.actions["save_manifest"].triggered.connect(handlers["save_manifest"])
-
-        if "delete" in handlers:
-            self.actions["delete"].triggered.connect(handlers["delete"])
 
         if "set_action_hl_delete" in handlers:
             self.actions["set_action_hl_delete"].triggered.connect(handlers["set_action_hl_delete"])

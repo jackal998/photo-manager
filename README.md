@@ -27,8 +27,10 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 │     CLI alternative: python review.py … for REVIEW_DUPLICATE triage       │
 │                                                                             │
 │  3. EXECUTE (photo-manager)                                                 │
-│     File > Execute Action…  opens a review dialog listing all planned      │
-│     operations.  Confirm to:                                                │
+│     File > Execute Action…  opens a full tree review (same columns as      │
+│     the main window).  Right-click rows to change decisions before          │
+│     confirming.  Groups where every file is marked delete trigger a        │
+│     safety dialog (regex-based decision flip available).  Confirm to:      │
 │       • delete → send file to recycle bin                                  │
 │       • keep   → mark as executed in the manifest                          │
 │                                                                             │
@@ -119,13 +121,20 @@ to the chosen file, and subsequent saves default to that location.
 
 ### Step 4 — Execute actions
 
-**File › Execute Action…** opens a confirmation dialog listing every planned
-operation.  Click **Execute** to carry out:
+**File › Execute Action…** opens a full tree view (same columns as the main
+window) showing all groups for final review.
 
-- `delete` → file is sent to the recycle bin (`send2trash`)
-- `keep` → marked as executed in the manifest (no file operation)
+- Right-click any file row → **Set Action** → change its decision before executing.
+- If every file in a group is marked `delete`, an amber warning banner appears.
+  Clicking **Execute** then opens a safety review dialog where you can type a
+  regex to flip matching files from `delete` → `keep` before proceeding.
+- Click **Execute** to carry out all decisions:
+  - `delete` → file sent to the recycle bin (`send2trash`)
+  - `keep` → marked as executed in the manifest (no file operation)
+  - Files that no longer exist on disk are skipped and listed in a warning dialog.
 
-After execution, the manifest reflects which files were processed.
+All decision changes are batch-persisted to SQLite in a single transaction
+immediately before execution.
 
 ---
 
@@ -195,6 +204,26 @@ Decisions persist immediately — the session is resumable at any time.
 - **Google Takeout numbering** — `IMG_9556(1).HEIC` handled correctly
 - **Edited variants** — `-已編輯`, `-edited`, etc. excluded from pair matching
 - **Batch EXIF** — exiftool `-stay_open` chunked at 500 files/call for speed
+- **Cached metadata** — `file_size_bytes`, `shot_date`, `creation_date`, `mtime` written
+  to the manifest at scan time; load reads from SQLite with zero filesystem round-trips
+
+---
+
+## Performance
+
+| Scenario | Load time |
+|----------|-----------|
+| Old manifest (no cached columns) | 10+ min on NAS (filesystem stat per row) |
+| New manifest (cached columns) | **< 1 second** (pure SQLite read) |
+
+**How it works:** The scanner stores `file_size_bytes`, `shot_date`, `creation_date`, and
+`mtime` in the manifest at scan time (when files are local). On subsequent opens,
+`ManifestRepository.load()` reads these from SQLite — no `os.stat()` or Pillow EXIF
+calls per row. Old manifests without these columns auto-migrate and fall back to the
+original filesystem reads transparently (re-scan once to get the speed benefit).
+
+Manifest loading runs in a **background `QThread`** (`ManifestLoadWorker`) so the UI
+stays responsive while the manifest opens.
 
 ---
 
@@ -228,17 +257,19 @@ photo-manager/
 │   │   │   ├── file_operations.py     # set_decision, batch_set_decision, execute_action
 │   │   │   └── context_menu.py        # Right-click Set Action routing
 │   │   ├── dialogs/
-│   │   │   ├── scan_dialog.py         # Scan Sources dialog
-│   │   │   └── execute_action_dialog.py  # Review + execute delete/keep operations
+│   │   │   ├── scan_dialog.py              # Scan Sources dialog
+│   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
+│   │   │   └── group_deletion_check_dialog.py  # Safety check for complete-group deletes
 │   │   └── workers/
-│   │       └── scan_worker.py         # Background QThread for scan pipeline
+│   │       ├── scan_worker.py         # Background QThread for scan pipeline
+│   │       └── manifest_load_worker.py  # Background QThread for manifest load
 │   └── viewmodels/
 │       └── main_vm.py       # Groups/marks logic; loads manifest
 │
 ├── core/                    # Models + service interfaces
 │   └── models.py            # PhotoRecord (action, user_decision), PhotoGroup
-├── infrastructure/          # I/O: CSV repo, manifest repo, delete service, settings
-│   └── manifest_repository.py  # load/save user_decision; update_decision(); mark_executed()
+├── infrastructure/          # I/O: manifest repo, delete service, settings
+│   └── manifest_repository.py  # load/save/batch_update_decisions; mark_executed()
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
@@ -259,7 +290,9 @@ photo-manager/
     ├── test_sort_service.py
     ├── test_selection_service.py
     ├── test_execute_action_dialog.py
-    └── test_context_menu.py
+    ├── test_group_deletion_check_dialog.py
+    ├── test_context_menu.py
+    └── test_manifest_load_worker.py
 ```
 
 ---
