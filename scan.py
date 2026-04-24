@@ -1,15 +1,20 @@
 """scan.py — Deduplication scanner CLI.
 
-Walks 3 source directories, computes SHA-256 + pHash for every media file,
-detects exact duplicates, cross-format duplicates, and near-duplicates, then
-writes a non-destructive migration_manifest.sqlite for human review.
+Walks one or more source directories, computes SHA-256 + pHash for every media
+file, detects exact duplicates, cross-format duplicates, and near-duplicates,
+then writes a non-destructive migration_manifest.sqlite for human review.
 
 Usage examples:
-  # Full scan
+  # Full recursive scan (all subdirectories included)
   python scan.py \\
-    --source iphone="C:\\path\\to\\iphone\\backup" \\
-    --source takeout="C:\\path\\to\\google\\takeout" \\
-    --source jdrive="C:\\path\\to\\photo\\library" \\
+    --source photos="C:\\path\\to\\photo\\library" \\
+    --source backup="\\\\NAS\\Photos\\MobileBackup" \\
+    --output migration_manifest.sqlite
+
+  # Mix recursive + top-level-only sources
+  python scan.py \\
+    --source archive="D:\\Archive" \\
+    --source-flat inbox="D:\\Inbox" \\
     --output migration_manifest.sqlite
 
   # Summary only, no DB written
@@ -53,8 +58,16 @@ def main() -> int:
         "--source",
         action="append",
         metavar="LABEL=PATH",
-        required=True,
-        help="Source to scan, e.g. iphone='\\\\NAS\\Photos\\MobileBackup\\iPhone' (repeatable)",
+        help="Recursive source to scan, e.g. photos='D:\\Pictures' (repeatable). "
+             "Sources are listed in priority order (first = highest priority).",
+    )
+    parser.add_argument(
+        "--source-flat",
+        action="append",
+        metavar="LABEL=PATH",
+        dest="source_flat",
+        help="Like --source but scans only the immediate folder (non-recursive). "
+             "Flat sources are listed after --source entries in priority order.",
     )
     parser.add_argument(
         "--output",
@@ -83,10 +96,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if not args.source and not args.source_flat:
+        parser.error("at least one --source or --source-flat is required")
+
     sources: dict[str, Path] = {}
-    for raw in args.source:
+    recursive_map: dict[str, bool] = {}
+    source_priority: dict[str, int] = {}
+    priority = 0
+
+    for raw in (args.source or []):
         label, path = _parse_source(raw)
         sources[label] = path
+        recursive_map[label] = True
+        source_priority[label] = priority
+        priority += 1
+
+    for raw in (args.source_flat or []):
+        label, path = _parse_source(raw)
+        sources[label] = path
+        recursive_map[label] = False
+        source_priority[label] = priority
+        priority += 1
 
     # --- Import scanner modules (deferred so --help works without dependencies) ---
     from scanner.walker import scan_sources
@@ -103,8 +133,13 @@ def main() -> int:
     print(f"Scanning {len(sources)} source(s){limit_note}…", flush=True)
     records = []
     for label, root in sources.items():
-        print(f"  Walking {label}: {root} …", end=" ", flush=True)
-        partial = scan_sources({label: root}, limit=args.limit)
+        mode = "flat" if recursive_map.get(label) is False else "recursive"
+        print(f"  Walking {label} ({mode}): {root} …", end=" ", flush=True)
+        partial = scan_sources(
+            {label: root},
+            limit=args.limit,
+            recursive_map={label: recursive_map.get(label, True)},
+        )
         print(f"{len(partial):,} files", flush=True)
         records.extend(partial)
     print(f"  Total: {len(records):,} media files", flush=True)
@@ -148,7 +183,7 @@ def main() -> int:
         print("  Hashing done.", flush=True)
 
     print("Classifying…", flush=True)
-    rows = classify(hash_results, threshold=args.threshold)
+    rows = classify(hash_results, threshold=args.threshold, source_priority=source_priority)
 
     print_summary(rows)
 

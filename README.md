@@ -12,7 +12,7 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. SCAN (photo-manager)                                                    │
 │     GUI: File > Scan Sources…  —or—  CLI: python scan.py …                │
-│     Walks iphone / takeout / jdrive, hashes every file,                    │
+│     Walks any number of source folders, hashes every file,                 │
 │     writes  migration_manifest.sqlite                                       │
 │                                                                             │
 │  2. REVIEW (photo-manager)                                                  │
@@ -84,16 +84,18 @@ The PySide6 desktop app is the primary interface. Launch it with `run.bat`.
 
 **File › Scan Sources…** opens the scan dialog.
 
-1. Fill in (or Browse to) each source folder:
-   - **iphone** — iPhone backup folder (NAS or local)
-   - **takeout** — Google Takeout export folder
-   - **jdrive** — J:\圖片 archive (or any third source)
-   - **output** — path for `migration_manifest.sqlite`
-2. Click **Start Scan**. Progress is streamed to the log pane.
-3. When the scan finishes, click **Close & Load** — the manifest loads
+1. Browse the embedded folder tree to find source directories.
+   - Double-click or press **+ Add Selected Folder** to add a folder to the list.
+   - Use **↑ / ↓** buttons to reorder sources (top row = highest dedup priority).
+   - Tick or untick the **Recursive** checkbox per source — recursive scans all
+     subdirectories; unticked scans only the immediate folder.
+   - Use **×** to remove a source; **Remove All** to clear the list.
+2. Set the **Save manifest to** path (defaults to `migration_manifest.sqlite`).
+3. Click **Start Scan**. Progress is streamed to the log pane.
+4. When the scan finishes, click **Close & Load** — the manifest loads
    directly into the review tree.
 
-Source paths are remembered in `settings.json` for the next session.
+Source paths are persisted to `settings.json` (`sources.list`) between sessions.
 
 ### Step 2 — Review groups
 
@@ -143,11 +145,16 @@ immediately before execution.
 ### `scan.py` — Deduplication scanner
 
 ```powershell
-# Full scan
+# Full recursive scan (sources listed in priority order)
 python scan.py `
-  --source iphone="\\NAS\Photos\MobileBackup\iPhone" `
-  --source takeout="D:\Downloads\Takeout\Google 相簿" `
-  --source jdrive="J:\圖片" `
+  --source photos="\\NAS\Photos\MobileBackup" `
+  --source archive="D:\Archive" `
+  --output migration_manifest.sqlite
+
+# Mix recursive + flat (non-recursive) sources
+python scan.py `
+  --source archive="D:\Archive" `
+  --source-flat inbox="D:\Inbox" `
   --output migration_manifest.sqlite
 
 # Bounded debug run — stops after 200 files per source
@@ -185,17 +192,16 @@ Decisions persist immediately — the session is resumable at any time.
 | pHash hamming = 0, one RAW + one lossy | `MOVE` both (complementary — always kept together) |
 | pHash hamming 1–threshold | `REVIEW_DUPLICATE` — needs human triage |
 | No EXIF `DateTimeOriginal` | `UNDATED` |
-| iPhone source | `KEEP` (reference copy, stays in place) |
 | Everything else | `MOVE` |
 
-**Source priority** (exact duplicates): `iphone > takeout > jdrive`  
+**Source priority** (exact duplicates): positional — order in the scan dialog (top = highest priority) or `--source` CLI flag order. No source receives a hardcoded `KEEP`.  
 **Format priority** (FORMAT_DUPLICATE): `heic > jpeg > png > others`
 
 ---
 
 ## Scanner features
 
-- **SHA-256** exact duplicate detection across all three sources
+- **SHA-256** exact duplicate detection across all source folders
 - **pHash** (imagehash) cross-format detection — JPEG vs HEIC vs RAW vs PNG
 - **Hamming distance** configurable near-duplicate threshold
 - **Live Photo pairs** — same-stem HEIC + MOV treated as an atomic unit
@@ -282,7 +288,7 @@ photo-manager/
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 270+ tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 308+ tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
@@ -301,7 +307,8 @@ photo-manager/
     ├── test_execute_action_dialog.py
     ├── test_group_deletion_check_dialog.py
     ├── test_context_menu.py
-    └── test_manifest_load_worker.py
+    ├── test_manifest_load_worker.py
+    └── test_scan_dialog.py      # _auto_label, _SourceListWidget, ScanDialog settings
 ```
 
 ---
@@ -311,10 +318,12 @@ photo-manager/
 ```json
 {
   "sources": {
-    "iphone":  "",
-    "takeout": "",
-    "jdrive":  "",
-    "output":  "migration_manifest.sqlite"
+    "list": [
+      { "path": "D:\\Archive",           "recursive": true  },
+      { "path": "\\\\NAS\\MobileBackup", "recursive": true  },
+      { "path": "D:\\Inbox",             "recursive": false }
+    ],
+    "output": "migration_manifest.sqlite"
   },
   "thumbnail_size": 512,
   "sorting": {
@@ -326,7 +335,12 @@ photo-manager/
 }
 ```
 
-Source paths set via **File › Scan Sources…** are saved here automatically.
+Source paths and recursive flags set via **File › Scan Sources…** are saved here
+automatically. List order determines dedup priority (index 0 = highest priority).
+
+> **Migration**: if `settings.json` contains the old `sources.iphone` / `sources.takeout` /
+> `sources.jdrive` keys, they are automatically converted to `sources.list` format on
+> the first open of the Scan Sources dialog.
 
 ---
 
