@@ -133,7 +133,7 @@ photo-manager/
   - `shot_date:datetime|None` — EXIF DateTimeOriginal
   - `file_size_bytes:int`（以 `os.path.getsize` 重新讀取）
   - `action:str` — Scanner 分類（唯讀）：`EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `UNDATED` / `""` (all sources treated equally; no source receives KEEP)
-  - `user_decision:str` — 使用者操作決定（可寫）：`"delete"` / `"keep"` / `""` (undecided)
+  - `user_decision:str` — 使用者操作決定（可寫）：`"delete"` / `""` (undecided / keep — displayed as "keep (remove action)")
 - `PhotoGroup`
   - `group_number:int`
   - `items:list[PhotoRecord]`
@@ -192,7 +192,9 @@ photo-manager/
   - 預覽捲動：若影像高度大於可見高度，使用垂直捲動條以完整檢視
 - 操作：
   - 勾選/取消勾選（Selected）
-  - 功能表：`File > Set Action to Activated Files > delete/keep`、`File > Set Action to Selected (Sel) Files > delete/keep`、`File > Execute Action…`、`Select > Select by Field/Regex/…`
+  - 功能表：`File > Set Action to Selected (Sel) Files > delete/keep (remove action)`、`File > Execute Action…`、`Select > Select by Field/Regex/…`
+  - 右鍵選單（多選）：`Set Action > delete/keep (remove action)`（取代原 File 選單的 "Set Action to Activated Files" 子選單）
+  - SelectDialog 現支援 `initial_field` 參數與內嵌 Set Action 列（Field + Regex → Action），並透過 `setActionRequested` signal 回傳結果
   - 刪除：
     - 摘要：顯示受影響群組/全部群組、將刪除檔案/總檔案；若包含全選群組，列出群組清單並需勾選同意
     - 執行：送回收桶（略過 locked）；自清單移除成功刪除檔案；移除僅剩單檔之群組
@@ -319,12 +321,12 @@ GroupNumber,IsMark,IsLocked,FolderPath,FilePath,Capture Date,Modified Date,FileS
 
 ## 19. 定義與術語
 
-- **Activated Files（Highlighted）**：樹狀視圖中以點擊或多選反白的列（`QTreeView` selectionModel rows）；透過 `File > Set Action to Activated Files` 批次設定 user_decision
+- **Activated Files（Highlighted）**：樹狀視圖中以點擊或多選反白的列（`QTreeView` selectionModel rows）；透過右鍵選單 Set Action 批次設定 user_decision
 - **Selected（Sel）**：UI Sel 勾選框狀態，用於批次操作目標選擇；透過 `File > Set Action to Selected (Sel) Files` 批次設定 user_decision
 - **Marked（IsMark）**：`is_mark == True`（CSV workflow 使用；manifest workflow 中由 Sel 取代）
 - **Locked（IsLocked）**：`is_locked == True`（僅 App 內狀態；Delete service 跳過 locked 項目；manifest workflow 中目前一律為 False）
 - **action**：Scanner 分類（`EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `KEEP` / `UNDATED`）；唯讀，col 0 "Match" 顯示
-- **user_decision**：使用者決定（`"delete"` / `"keep"` / `""` / `"removed"`）；col 2 "Action" 顯示；透過 Set Action 設定；`"removed"` 為系統內部哨兵值，表示已從審查清單移除
+- **user_decision**：使用者決定（`"delete"` / `""` (undecided / displayed as "keep (remove action)") / `"removed"`）；col 2 "Action" 顯示；透過 Set Action 設定；`"removed"` 為系統內部哨兵值，表示已從審查清單移除
 
 ---
 
@@ -416,7 +418,7 @@ python scan.py ... --limit 200 --dry-run   # bounded debug run
 | `hamming_distance` | INTEGER | Distance to `duplicate_of`'s phash |
 | `duplicate_of` | TEXT | source_path of kept file |
 | `executed` | INTEGER | 0=pending 1=done |
-| `user_decision` | TEXT | User's planned file operation: `delete` / `keep` / `""` (undecided) / `"removed"` (hidden from review) |
+| `user_decision` | TEXT | User's planned file operation: `delete` / `""` (undecided; displayed as "keep (remove action)") / `"removed"` (hidden from review) |
 | `file_size_bytes` | INTEGER | Cached at scan time; NULL in pre-existing manifests (auto-migrated) |
 | `shot_date` | TEXT | ISO 8601 from EXIF DateTimeOriginal; NULL if not available |
 | `creation_date` | TEXT | ISO 8601 filesystem ctime at scan time |
