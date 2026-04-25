@@ -405,6 +405,68 @@ class TestSetDecisionToHighlighted:
 
         assert recs[0].user_decision == ""
 
+
+# ── _get_record_field — Action field mapping ──────────────────────────────────
+
+class TestGetRecordFieldActionMapping:
+    """_get_record_field("Action", rec) must read user_decision, not action.
+
+    The "Action" column in the tree (COL_ACTION=2) displays user_decision.
+    Select/Unselect reads the visual tree model so it always matched correctly;
+    Set Action uses _get_record_field which previously mapped to rec.action
+    (scanner classification) — causing no matches for values like "delete".
+    """
+
+    def _make_rec(self, action: str, user_decision: str) -> PhotoRecord:
+        return PhotoRecord(
+            group_number=1,
+            is_mark=False,
+            is_locked=False,
+            folder_path="/photos",
+            file_path="/photos/a.jpg",
+            capture_date=None,
+            modified_date=None,
+            file_size_bytes=1000,
+            action=action,
+            user_decision=user_decision,
+        )
+
+    def test_action_field_reads_user_decision(self):
+        from app.views.handlers.file_operations import _get_record_field
+        rec = self._make_rec(action="MOVE", user_decision="delete")
+        assert _get_record_field(rec, "Action") == "delete"
+
+    def test_action_field_does_not_read_scanner_action(self):
+        from app.views.handlers.file_operations import _get_record_field
+        rec = self._make_rec(action="MOVE", user_decision="delete")
+        assert _get_record_field(rec, "Action") != "MOVE"
+
+    def test_action_field_empty_when_undecided(self):
+        from app.views.handlers.file_operations import _get_record_field
+        rec = self._make_rec(action="REVIEW_DUPLICATE", user_decision="")
+        # Empty user_decision returns None (falsy guard in _get_record_field)
+        result = _get_record_field(rec, "Action")
+        assert result == "" or result is None
+
+    def test_set_decision_by_regex_matches_user_decision(self, tmp_path):
+        """Regression: set_decision_by_regex with field=Action must match user_decision."""
+        db = _make_db(tmp_path, [
+            {"source_path": "/a.jpg", "action": "MOVE"},
+            {"source_path": "/b.jpg", "action": "EXACT"},
+        ])
+        rec_a = _rec("/a.jpg", decision="delete")
+        rec_a.action = "MOVE"
+        rec_b = _rec("/b.jpg", decision="")
+        rec_b.action = "EXACT"
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec_a, rec_b])])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        # Set action="" (clear) for files where user_decision currently == "delete"
+        handler.set_decision_by_regex("Action", "^delete$", "")
+
+        assert rec_a.user_decision == "", "delete→'' clear should work"
+        assert rec_b.user_decision == "", "undecided should be unchanged"
+
     @patch("PySide6.QtWidgets.QMessageBox.information")
     def test_no_manifest_noop(self, _mock, tmp_path):
         recs = [_rec("/a.jpg")]

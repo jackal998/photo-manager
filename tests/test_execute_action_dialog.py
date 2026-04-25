@@ -325,3 +325,167 @@ class TestMissingFileHandling:
         with patch("send2trash.send2trash") as mock_trash:
             dlg._delete_file("/nonexistent/photo.jpg")
         mock_trash.assert_not_called()
+
+
+# ── group filtering ────────────────────────────────────────────────────────
+
+class TestGroupFiltering:
+    """Only groups with ≥1 decided file should appear in the tree."""
+
+    def _src_model(self, dlg):
+        model = dlg._tree.model()
+        return model.sourceModel() if hasattr(model, "sourceModel") else model
+
+    def test_only_decided_groups_shown(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [
+            _group(_rec("/a.jpg", "delete"), number=1),
+            _group(_rec("/b.jpg", ""), number=2),
+        ]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert self._src_model(dlg).rowCount() == 1
+
+    def test_undecided_groups_not_in_tree(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [
+            _group(_rec("/a.jpg", ""), number=1),
+            _group(_rec("/b.jpg", ""), number=2),
+        ]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert self._src_model(dlg).rowCount() == 0
+
+    def test_all_decided_groups_shown(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [
+            _group(_rec("/a.jpg", "delete"), number=1),
+            _group(_rec("/b.jpg", "delete"), number=2),
+        ]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert self._src_model(dlg).rowCount() == 2
+
+    def test_decided_records_still_uses_all_groups(self, qapp):
+        """_decided_records() must iterate self._groups, not the filtered display list."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [
+            _group(_rec("/a.jpg", "delete"), number=1),
+            _group(_rec("/b.jpg", ""), number=2),
+        ]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        decided = dlg._decided_records()
+        assert len(decided) == 1
+        assert decided[0][1].file_path == "/a.jpg"
+
+
+# ── Select by Field/Regex button ───────────────────────────────────────────
+
+class TestSelectByRegexButton:
+    def test_select_by_regex_button_exists(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from PySide6.QtWidgets import QPushButton
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        buttons = dlg.findChildren(QPushButton)
+        button_texts = [b.text() for b in buttons]
+        assert any("Field/Regex" in t for t in button_texts), (
+            f"No 'Select by Field/Regex' button found. Buttons: {button_texts}"
+        )
+
+
+# ── _set_decision_by_regex ─────────────────────────────────────────────────
+
+class TestSetDecisionByRegex:
+    def test_set_delete_by_filename_regex(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/photos/IMG_001.jpg", ""),
+            _rec("/photos/RAW_001.dng", ""),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        dlg._set_decision_by_regex("File Name", r"^IMG_", "delete")
+
+        assert groups[0].items[0].user_decision == "delete"
+        assert groups[0].items[1].user_decision == ""
+
+    def test_set_empty_clears_decision(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/a.jpg", "delete"),
+            _rec("/b.jpg", "delete"),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        dlg._set_decision_by_regex("File Name", r"^a\.jpg$", "")
+
+        assert groups[0].items[0].user_decision == ""
+        assert groups[0].items[1].user_decision == "delete"
+
+    def test_action_field_matches_user_decision_not_scanner_action(self, qapp):
+        """Action field regex matches user_decision (the bug fix must be in effect)."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        rec_a = _rec("/a.jpg", "delete")
+        rec_a.action = "MOVE"
+        rec_b = _rec("/b.jpg", "")
+        rec_b.action = "EXACT"
+        groups = [_group(rec_a, rec_b)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        # Clear "delete" using Action field — must match user_decision, not rec.action
+        dlg._set_decision_by_regex("Action", "^delete$", "")
+
+        assert groups[0].items[0].user_decision == "", "should have cleared 'delete'"
+        assert groups[0].items[1].user_decision == ""
+
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_no_match_shows_information(self, mock_info, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", ""))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_decision_by_regex("File Name", r"^no_match_xyz$", "delete")
+        mock_info.assert_called_once()
+
+    @patch("PySide6.QtWidgets.QMessageBox.warning")
+    def test_invalid_regex_shows_warning(self, mock_warn, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", ""))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_decision_by_regex("File Name", "[invalid(", "delete")
+        mock_warn.assert_called_once()
+
+    def test_tree_updates_after_set_decision(self, qapp):
+        """After setting a decision by regex, the tree gains the newly-decided group."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [
+            _group(_rec("/a.jpg", ""), number=1),
+            _group(_rec("/b.jpg", ""), number=2),
+        ]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        model_before = dlg._tree.model()
+        src_before = model_before.sourceModel() if hasattr(model_before, "sourceModel") else model_before
+        assert src_before.rowCount() == 0   # nothing decided yet
+
+        dlg._set_decision_by_regex("File Name", r"^a\.jpg$", "delete")
+
+        model_after = dlg._tree.model()
+        src_after = model_after.sourceModel() if hasattr(model_after, "sourceModel") else model_after
+        assert src_after.rowCount() == 1    # group 1 now visible
+
+
+# ── context menu uses _SETTABLE_DECISIONS tuples ───────────────────────────
+
+class TestContextMenuDecisions:
+    def test_settable_decisions_constant_exists(self, qapp):
+        from app.views.dialogs.execute_action_dialog import _SETTABLE_DECISIONS
+        assert isinstance(_SETTABLE_DECISIONS, list)
+        assert all(isinstance(t, tuple) and len(t) == 2 for t in _SETTABLE_DECISIONS)
+
+    def test_keep_remove_action_value_is_empty_string(self, qapp):
+        from app.views.dialogs.execute_action_dialog import _SETTABLE_DECISIONS
+        keep_entry = next((t for t in _SETTABLE_DECISIONS if "keep" in t[0].lower()), None)
+        assert keep_entry is not None, "No 'keep' entry in _SETTABLE_DECISIONS"
+        assert keep_entry[1] == "", f"Expected '' but got {keep_entry[1]!r}"
+
+    def test_delete_decision_value_is_delete(self, qapp):
+        from app.views.dialogs.execute_action_dialog import _SETTABLE_DECISIONS
+        del_entry = next((t for t in _SETTABLE_DECISIONS if t[1] == "delete"), None)
+        assert del_entry is not None
