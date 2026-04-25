@@ -42,15 +42,10 @@ class MenuController:
         self.actions["save_manifest"] = file_menu.addAction("Save Manifest Decisions…")
         self.actions["save_manifest"].setEnabled(False)
         file_menu.addSeparator()
-        hl_submenu = file_menu.addMenu("Set Action to Activated Files")
-        hl_submenu.setEnabled(False)
-        self.actions["set_action_hl_delete"] = hl_submenu.addAction("delete")
-        self.actions["set_action_hl_keep"] = hl_submenu.addAction("keep")
-        self._set_action_hl_submenu = hl_submenu
         sel_submenu = file_menu.addMenu("Set Action to Selected (Sel) Files")
         sel_submenu.setEnabled(False)
         self.actions["set_action_sel_delete"] = sel_submenu.addAction("delete")
-        self.actions["set_action_sel_keep"] = sel_submenu.addAction("keep")
+        self.actions["set_action_sel_keep"] = sel_submenu.addAction("keep (remove action)")
         self._set_action_sel_submenu = sel_submenu
         self.actions["execute_action"] = file_menu.addAction("Execute Action…")
         self.actions["execute_action"].setEnabled(False)
@@ -97,12 +92,6 @@ class MenuController:
 
         if "save_manifest" in handlers:
             self.actions["save_manifest"].triggered.connect(handlers["save_manifest"])
-
-        if "set_action_hl_delete" in handlers:
-            self.actions["set_action_hl_delete"].triggered.connect(handlers["set_action_hl_delete"])
-
-        if "set_action_hl_keep" in handlers:
-            self.actions["set_action_hl_keep"].triggered.connect(handlers["set_action_hl_keep"])
 
         if "set_action_sel_delete" in handlers:
             self.actions["set_action_sel_delete"].triggered.connect(handlers["set_action_sel_delete"])
@@ -166,11 +155,7 @@ class MenuController:
         if action:
             action.setEnabled(enabled)
         # Keep parent submenus in sync with their child actions
-        if name in ("set_action_hl_delete", "set_action_hl_keep"):
-            submenu = getattr(self, "_set_action_hl_submenu", None)
-            if submenu is not None:
-                submenu.setEnabled(enabled)
-        elif name in ("set_action_sel_delete", "set_action_sel_keep"):
+        if name in ("set_action_sel_delete", "set_action_sel_keep"):
             submenu = getattr(self, "_set_action_sel_submenu", None)
             if submenu is not None:
                 submenu.setEnabled(enabled)

@@ -19,6 +19,19 @@ from app.views.constants import (
     COL_SIZE_BYTES,
 )
 
+# Maps tree column index → dialog field name.
+# COL_SEL (1) intentionally omitted — checkbox column is not a searchable field.
+_COL_TO_FIELD: dict[int, str] = {
+    COL_GROUP:         "Match",
+    COL_ACTION:        "Action",
+    COL_NAME:          "File Name",
+    COL_FOLDER:        "Folder",
+    COL_SIZE_BYTES:    "Size (Bytes)",
+    COL_GROUP_COUNT:   "Group Count",
+    COL_CREATION_DATE: "Creation Date",
+    COL_SHOT_DATE:     "Shot Date",
+}
+
 
 class TreeDataProvider(Protocol):
     """Protocol for tree data provider."""
@@ -54,20 +67,28 @@ class DialogHandler:
         parent_widget: QObject,
         tree_data_provider: TreeDataProvider,
         regex_handler: Callable[[str, str, bool], None],
+        action_handler: Callable[[str, str, str], None] | None = None,
     ) -> None:
         """Initialize with parent widget and data provider.
 
         Args:
             parent_widget: Parent widget for dialogs
             tree_data_provider: Provider for tree data access
-            regex_handler: Handler for regex selection operations
+            regex_handler: Handler for regex selection operations (field, pattern, make_checked)
+            action_handler: Optional handler for Set Action by regex (field, pattern, action_value)
         """
         self.parent = parent_widget
         self.tree_provider = tree_data_provider
         self.regex_handler = regex_handler
+        self.action_handler = action_handler
 
-    def show_select_dialog(self) -> None:
-        """Show the select by field/regex dialog with current row values."""
+    def show_select_dialog(self, clicked_col: int | None = None) -> None:
+        """Show the select by field/regex dialog with current row values.
+
+        Args:
+            clicked_col: Column index the user right-clicked on; used to pre-select
+                         the matching field in the dialog.  None falls back to "File Name".
+        """
         try:
             from app.views.dialogs.select_dialog import SelectDialog
         except Exception:
@@ -85,14 +106,20 @@ class DialogHandler:
             "Shot Date",
         ]
 
+        initial_field = _COL_TO_FIELD.get(clicked_col) if clicked_col is not None else None
         row_values = self._get_highlighted_row_values()
-        dlg = SelectDialog(fields=fields, parent=self.parent, row_values=row_values)
+        dlg = SelectDialog(
+            fields=fields, parent=self.parent,
+            row_values=row_values, initial_field=initial_field,
+        )
 
         # Connect dialog signals to handlers
         dlg.selectRequested.connect(lambda field, pattern: self.regex_handler(field, pattern, True))
         dlg.unselectRequested.connect(
             lambda field, pattern: self.regex_handler(field, pattern, False)
         )
+        if self.action_handler is not None:
+            dlg.setActionRequested.connect(self.action_handler)
 
         dlg.exec()
 
