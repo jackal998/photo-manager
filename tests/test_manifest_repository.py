@@ -21,7 +21,7 @@ CREATE TABLE migration_manifest (
     source_hash      TEXT,
     phash            TEXT,
     hamming_distance INTEGER,
-    duplicate_of     TEXT,
+    group_id         TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0,
     user_decision    TEXT    NOT NULL DEFAULT ''
@@ -38,7 +38,7 @@ CREATE TABLE migration_manifest (
     source_hash      TEXT,
     phash            TEXT,
     hamming_distance INTEGER,
-    duplicate_of     TEXT,
+    group_id         TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0,
     user_decision    TEXT    NOT NULL DEFAULT '',
@@ -59,7 +59,7 @@ CREATE TABLE migration_manifest (
     source_hash      TEXT,
     phash            TEXT,
     hamming_distance INTEGER,
-    duplicate_of     TEXT,
+    group_id         TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0
 );
@@ -83,13 +83,14 @@ def _make_manifest(tmp_path: Path, rows: list[dict], ddl: str = _DDL) -> Path:
 
 
 def _row(overrides: dict) -> dict:
+    """Create a REVIEW_DUPLICATE row defaulting to group_id='/group/a'."""
     base = {
         "source_path": "/source/a.jpg",
         "source_label": "jdrive",
         "dest_path": None,
         "action": "REVIEW_DUPLICATE",
         "hamming_distance": 5,
-        "duplicate_of": "/reference/a.jpg",
+        "group_id": "/group/a",
         "reason": "near-duplicate (hamming=5)",
         "executed": 0,
         "user_decision": "",
@@ -98,13 +99,14 @@ def _row(overrides: dict) -> dict:
 
 
 def _ref_row(overrides: dict = {}) -> dict:
+    """Create a companion MOVE row that shares the same default group_id."""
     base = {
         "source_path": "/reference/a.jpg",
         "source_label": "takeout",
         "dest_path": "2024/20240601_takeout/a.jpg",
         "action": "MOVE",
         "hamming_distance": None,
-        "duplicate_of": None,
+        "group_id": "/group/a",
         "reason": "unique",
         "executed": 0,
         "user_decision": "",
@@ -129,9 +131,10 @@ class TestManifestRepositoryLoad:
         _make_jpeg(cand)
         _make_jpeg(ref)
 
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = list(ManifestRepository().load(str(db)))
         assert len(records) == 2
@@ -142,9 +145,10 @@ class TestManifestRepositoryLoad:
         _make_jpeg(cand)
         _make_jpeg(ref)
 
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = {r.file_path: r for r in ManifestRepository().load(str(db))}
         assert records[str(cand)].is_mark is False
@@ -156,9 +160,10 @@ class TestManifestRepositoryLoad:
         _make_jpeg(cand)
         _make_jpeg(ref)
 
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = {r.file_path: r for r in ManifestRepository().load(str(db))}
         assert records[str(ref)].is_locked is False
@@ -170,9 +175,10 @@ class TestManifestRepositoryLoad:
         _make_jpeg(cand)
         _make_jpeg(ref)
 
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = list(ManifestRepository().load(str(db)))
         group_numbers = {r.group_number for r in records}
@@ -188,58 +194,55 @@ class TestManifestRepositoryLoad:
         ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(ref)
 
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(tmp_path / "missing.jpg"), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(tmp_path / "missing.jpg"), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         # Missing candidate is now yielded — no existence check at load time
         records = list(ManifestRepository().load(str(db)))
         paths = {r.file_path for r in records}
         assert str(tmp_path / "missing.jpg") in paths
 
-    def test_move_row_yields_single_record(self, tmp_path):
+    def test_singleton_move_not_yielded(self, tmp_path):
+        """MOVE rows with no group_id are singletons — not shown in the review UI."""
         f = tmp_path / "photo.jpg"
         _make_jpeg(f)
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(f), "action": "MOVE", "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": str(f), "action": "MOVE", "group_id": None, "hamming_distance": None}),
         ])
         records = list(ManifestRepository().load(str(db)))
-        assert len(records) == 1
-        assert records[0].action == "MOVE"
-        assert records[0].is_mark is False
-        assert records[0].is_locked is False
+        assert len(records) == 0
 
-    def test_keep_row_not_locked(self, tmp_path):
+    def test_singleton_keep_not_yielded(self, tmp_path):
+        """KEEP rows with no group_id are not shown in the review UI."""
         f = tmp_path / "keep.jpg"
         _make_jpeg(f)
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(f), "action": "KEEP", "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": str(f), "action": "KEEP", "group_id": None, "hamming_distance": None}),
         ])
         records = list(ManifestRepository().load(str(db)))
-        assert len(records) == 1
-        assert records[0].is_locked is False
-        assert records[0].is_mark is False
+        assert len(records) == 0
 
-    def test_undated_row_yields_single_record(self, tmp_path):
+    def test_singleton_undated_not_yielded(self, tmp_path):
+        """UNDATED rows with no group_id are not shown in the review UI."""
         f = tmp_path / "undated.jpg"
         _make_jpeg(f)
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(f), "action": "UNDATED", "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": str(f), "action": "UNDATED", "group_id": None, "hamming_distance": None}),
         ])
         records = list(ManifestRepository().load(str(db)))
-        assert len(records) == 1
-        assert records[0].action == "UNDATED"
-        assert records[0].is_mark is False
-        assert records[0].is_locked is False
+        assert len(records) == 0
 
     def test_exact_row_yields_pair(self, tmp_path):
         cand = tmp_path / "jdrive" / "a.jpg"
         ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(cand)
         _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "action": "EXACT", "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "action": "EXACT", "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = list(ManifestRepository().load(str(db)))
         assert len(records) == 2
@@ -247,42 +250,44 @@ class TestManifestRepositoryLoad:
         assert by_path[str(cand)].is_mark is False
         assert by_path[str(ref)].is_locked is False
 
-    def test_ref_not_duplicated_as_standalone(self, tmp_path):
-        """A file appearing as duplicate_of in a SKIP pair must not also appear as a standalone row."""
+    def test_each_group_member_appears_exactly_once(self, tmp_path):
+        """Each file in a group must be yielded exactly once — no duplicates."""
         cand = tmp_path / "jdrive" / "a.jpg"
         ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(cand)
         _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "action": "SKIP", "duplicate_of": str(ref)}),
-            # ref has its own MOVE row — should NOT appear twice
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = list(ManifestRepository().load(str(db)))
-        ref_records = [r for r in records if r.file_path == str(ref)]
-        assert len(ref_records) == 1  # inline reference only, not also standalone
+        paths = [r.file_path for r in records]
+        assert len(paths) == len(set(paths))  # no duplicates
 
     def test_action_field_set_on_record(self, tmp_path):
         cand = tmp_path / "jdrive" / "a.jpg"
         ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(cand)
         _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = {r.file_path: r for r in ManifestRepository().load(str(db))}
         assert records[str(cand)].action == "REVIEW_DUPLICATE"
-        assert records[str(ref)].action == ""  # reference role — no action
+        assert records[str(ref)].action == "MOVE"   # each member keeps its own action
 
     def test_user_decision_defaults_to_empty_string(self, tmp_path):
         cand = tmp_path / "jdrive" / "a.jpg"
         ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(cand)
         _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref)}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = {r.file_path: r for r in ManifestRepository().load(str(db))}
         assert records[str(cand)].user_decision == ""
@@ -290,38 +295,55 @@ class TestManifestRepositoryLoad:
 
     def test_user_decision_preserved_on_load(self, tmp_path):
         cand = tmp_path / "jdrive" / "a.jpg"
+        ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(cand)
+        _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
             _row({
                 "source_path": str(cand),
-                "action": "MOVE",
-                "duplicate_of": None,
-                "hamming_distance": None,
+                "action": "REVIEW_DUPLICATE",
+                "group_id": gid,
+                "hamming_distance": 3,
                 "user_decision": "delete",
             }),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
-        records = list(ManifestRepository().load(str(db)))
-        assert records[0].user_decision == "delete"
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].user_decision == "delete"
 
     def test_user_decision_missing_column_migrated(self, tmp_path):
         """Older DBs without user_decision column are migrated automatically."""
         cand = tmp_path / "jdrive" / "a.jpg"
+        ref = tmp_path / "takeout" / "a.jpg"
         _make_jpeg(cand)
+        _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
             {
                 "source_path": str(cand),
                 "source_label": "jdrive",
                 "dest_path": None,
+                "action": "REVIEW_DUPLICATE",
+                "hamming_distance": 3,
+                "group_id": gid,
+                "reason": "near-dup",
+                "executed": 0,
+            },
+            {
+                "source_path": str(ref),
+                "source_label": "takeout",
+                "dest_path": None,
                 "action": "MOVE",
                 "hamming_distance": None,
-                "duplicate_of": None,
+                "group_id": gid,
                 "reason": "unique",
                 "executed": 0,
             },
         ], ddl=_DDL_NO_USER_DECISION)
         records = list(ManifestRepository().load(str(db)))
-        assert len(records) == 1
-        assert records[0].user_decision == ""
+        assert len(records) == 2
+        assert all(r.user_decision == "" for r in records)
 
 
 class TestManifestRepositorySave:
@@ -353,7 +375,7 @@ class TestManifestRepositorySave:
     def test_user_decision_written_to_db(self, tmp_path):
         """save() writes rec.user_decision to the DB."""
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "duplicate_of": "/reference/a.jpg"}),
+            _row({"source_path": "/source/a.jpg"}),
         ])
         group = PhotoGroup(group_number=1, items=[
             self._make_record("/source/a.jpg", "REVIEW_DUPLICATE", "delete"),
@@ -370,7 +392,7 @@ class TestManifestRepositorySave:
     def test_user_decision_keep_written(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         group = PhotoGroup(group_number=1, items=[
             self._make_record("/source/a.jpg", "MOVE", "keep"),
@@ -388,7 +410,7 @@ class TestManifestRepositorySave:
         """save() writes empty string when user_decision is unset."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "user_decision": "delete",
-                  "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+                  "group_id": None, "hamming_distance": None, "action": "MOVE"}),
         ])
         group = PhotoGroup(group_number=1, items=[
             self._make_record("/source/a.jpg", "MOVE", ""),
@@ -405,7 +427,7 @@ class TestManifestRepositorySave:
     def test_scanner_action_unchanged_by_save(self, tmp_path):
         """save() must not modify the scanner's action column."""
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "duplicate_of": "/reference/a.jpg"}),
+            _row({"source_path": "/source/a.jpg"}),
         ])
         group = PhotoGroup(group_number=1, items=[
             self._make_record("/source/a.jpg", "REVIEW_DUPLICATE", "delete"),
@@ -421,9 +443,9 @@ class TestManifestRepositorySave:
 
     def test_save_returns_row_count(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "duplicate_of": None,
+            _row({"source_path": "/source/a.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/source/b.jpg", "duplicate_of": None,
+            _row({"source_path": "/source/b.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
         ])
         group = PhotoGroup(group_number=1, items=[
@@ -437,9 +459,9 @@ class TestManifestRepositorySave:
 class TestManifestRepositoryUpdateDecision:
     def test_update_decision_sets_single_row(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "duplicate_of": None,
+            _row({"source_path": "/source/a.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/source/b.jpg", "duplicate_of": None,
+            _row({"source_path": "/source/b.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
         ])
         ManifestRepository().update_decision(str(db), "/source/a.jpg", "delete")
@@ -458,7 +480,7 @@ class TestManifestRepositoryUpdateDecision:
     def test_update_decision_overwrites_existing(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "user_decision": "delete",
-                  "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+                  "group_id": None, "hamming_distance": None, "action": "MOVE"}),
         ])
         ManifestRepository().update_decision(str(db), "/source/a.jpg", "keep")
 
@@ -473,9 +495,9 @@ class TestManifestRepositoryUpdateDecision:
 class TestBatchUpdateDecisions:
     def test_updates_multiple_rows_in_one_call(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/b.jpg", "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/c.jpg", "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/a.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/b.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/c.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
         ])
         ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": "keep"})
 
@@ -491,7 +513,7 @@ class TestBatchUpdateDecisions:
     def test_noop_on_empty_dict(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "user_decision": "keep",
-                  "duplicate_of": None, "hamming_distance": None, "action": "MOVE"}),
+                  "group_id": None, "hamming_distance": None, "action": "MOVE"}),
         ])
         ManifestRepository().batch_update_decisions(str(db), {})
 
@@ -508,7 +530,7 @@ class TestRemoveFromReview:
 
     def test_marks_user_decision_removed(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "duplicate_of": None,
+            _row({"source_path": "/a.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
         ])
         ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
@@ -522,11 +544,11 @@ class TestRemoveFromReview:
 
     def test_multiple_paths_marked(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "duplicate_of": None,
+            _row({"source_path": "/a.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/b.jpg", "duplicate_of": None,
+            _row({"source_path": "/b.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/c.jpg", "duplicate_of": None,
+            _row({"source_path": "/c.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
         ])
         ManifestRepository().remove_from_review(str(db), ["/a.jpg", "/c.jpg"])
@@ -548,62 +570,70 @@ class TestRemoveFromReview:
         _make_jpeg(f)
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(f), "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None,
+                  "group_id": None, "hamming_distance": None,
                   "user_decision": "removed"}),
         ])
         records = list(ManifestRepository().load(str(db)))
         assert all(r.file_path != str(f) for r in records)
 
-    def test_load_skips_removed_inline_reference(self, tmp_path):
-        """When the reference file is removed, its inline yield is also skipped."""
+    def test_load_skips_removed_group_member(self, tmp_path):
+        """When one group member is removed, it is excluded from load."""
         cand = tmp_path / "cand.jpg"
         ref = tmp_path / "ref.jpg"
         _make_jpeg(cand)
         _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref)}),
-            _ref_row({"source_path": str(ref), "user_decision": "removed"}),
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid, "user_decision": "removed"}),
         ])
         records = list(ManifestRepository().load(str(db)))
-        # Candidate loads but reference is skipped
+        # Only 1 member remains → group has <2 members → neither is yielded
         paths = {r.file_path for r in records}
-        assert str(cand) in paths
         assert str(ref) not in paths
+        assert str(cand) not in paths  # orphaned single is also skipped
 
     def test_load_non_removed_rows_unaffected(self, tmp_path):
+        """Non-removed group members still load; removed ones do not."""
         f_keep = tmp_path / "keep.jpg"
         f_del = tmp_path / "del.jpg"
+        f_other = tmp_path / "other.jpg"
         _make_jpeg(f_keep)
         _make_jpeg(f_del)
+        _make_jpeg(f_other)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(f_keep), "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None,
-                  "user_decision": "keep"}),
+            _row({"source_path": str(f_keep), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid, "hamming_distance": 3, "user_decision": ""}),
+            _row({"source_path": str(f_other), "action": "MOVE",
+                  "group_id": gid, "hamming_distance": None, "user_decision": ""}),
             _row({"source_path": str(f_del), "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None,
+                  "group_id": None, "hamming_distance": None,
                   "user_decision": "removed"}),
         ])
         records = list(ManifestRepository().load(str(db)))
         paths = {r.file_path for r in records}
         assert str(f_keep) in paths
+        assert str(f_other) in paths
         assert str(f_del) not in paths
 
-    def test_removed_candidate_reference_becomes_standalone(self, tmp_path):
-        """If a REVIEW_DUPLICATE candidate is removed, its reference should
-        reappear as a standalone row on next load (not be suppressed)."""
+    def test_removed_candidate_leaves_orphaned_group(self, tmp_path):
+        """If one group member is removed, the remaining single member is not yielded
+        (a group needs ≥2 active members to be shown in the review UI)."""
         cand = tmp_path / "cand.jpg"
         ref = tmp_path / "ref.jpg"
         _make_jpeg(cand)
         _make_jpeg(ref)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "duplicate_of": str(ref),
+            _row({"source_path": str(cand), "group_id": gid,
                   "user_decision": "removed"}),
-            _ref_row({"source_path": str(ref)}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
         ])
         records = list(ManifestRepository().load(str(db)))
         paths = {r.file_path for r in records}
-        assert str(cand) not in paths
-        assert str(ref) in paths   # ref's own MOVE row now loads as standalone
+        assert str(cand) not in paths  # was removed
+        assert str(ref) not in paths   # orphaned single — group < 2 members
 
 
 class TestMarkExecuted:
@@ -618,7 +648,7 @@ class TestMarkExecuted:
     def test_marks_single_path_executed(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg"])
         assert self._read_executed(db, "/a.jpg") == 1
@@ -626,9 +656,9 @@ class TestMarkExecuted:
     def test_marks_multiple_paths(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
             _row({"source_path": "/b.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg", "/b.jpg"])
         assert self._read_executed(db, "/a.jpg") == 1
@@ -637,7 +667,7 @@ class TestMarkExecuted:
     def test_noop_for_unknown_path(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/does_not_exist.jpg"])
         assert self._read_executed(db, "/a.jpg") == 0
@@ -645,9 +675,9 @@ class TestMarkExecuted:
     def test_does_not_affect_other_rows(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
             _row({"source_path": "/b.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg"])
         assert self._read_executed(db, "/a.jpg") == 1
@@ -664,7 +694,7 @@ class TestLoadFromDB:
             "dest_path": None,
             "action": "MOVE",
             "hamming_distance": None,
-            "duplicate_of": None,
+            "group_id": None,
             "reason": "unique",
             "executed": 0,
             "user_decision": "",
@@ -679,29 +709,41 @@ class TestLoadFromDB:
         """When file_size_bytes is stored in DB, getsize() must NOT be called."""
         from unittest.mock import patch
         f = tmp_path / "photo.jpg"
+        f2 = tmp_path / "photo2.jpg"
         _make_jpeg(f)
+        _make_jpeg(f2)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            self._row_with_metadata(str(f), file_size_bytes=12345),
+            self._row_with_metadata(str(f), file_size_bytes=12345, group_id=gid),
+            self._row_with_metadata(str(f2), file_size_bytes=999, group_id=gid),
         ], ddl=_DDL_WITH_METADATA)
 
         with patch("os.path.getsize", side_effect=OSError("blocked")):
             records = list(ManifestRepository().load(str(db)))
 
-        assert len(records) == 1
-        assert records[0].file_size_bytes == 12345
+        rec = next(r for r in records if r.file_path == str(f))
+        assert rec.file_size_bytes == 12345
 
     def test_load_uses_db_shot_date_not_pillow(self, tmp_path):
         """When shot_date is in DB, Pillow EXIF must NOT be called."""
         from datetime import datetime
         from unittest.mock import patch
         f = tmp_path / "photo.jpg"
+        f2 = tmp_path / "photo2.jpg"
         _make_jpeg(f)
+        _make_jpeg(f2)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
             self._row_with_metadata(str(f),
                 action="REVIEW_DUPLICATE",
-                duplicate_of=str(tmp_path / "ref.jpg"),
+                group_id=gid,
                 hamming_distance=3,
                 shot_date="2022-06-15T10:30:00",
+                file_size_bytes=100,
+                creation_date="2022-01-01T00:00:00",
+                mtime="2022-01-01T00:00:00"),
+            self._row_with_metadata(str(f2),
+                group_id=gid,
                 file_size_bytes=100,
                 creation_date="2022-01-01T00:00:00",
                 mtime="2022-01-01T00:00:00"),
@@ -721,11 +763,20 @@ class TestLoadFromDB:
         from datetime import datetime
         from unittest.mock import patch
         f = tmp_path / "photo.jpg"
+        f2 = tmp_path / "photo2.jpg"
         _make_jpeg(f)
+        _make_jpeg(f2)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
             self._row_with_metadata(str(f),
+                group_id=gid,
                 creation_date="2023-03-01T08:00:00",
                 file_size_bytes=100,
+                mtime="2023-03-01T08:00:00"),
+            self._row_with_metadata(str(f2),
+                group_id=gid,
+                file_size_bytes=100,
+                creation_date="2023-03-01T08:00:00",
                 mtime="2023-03-01T08:00:00"),
         ], ddl=_DDL_WITH_METADATA)
 
@@ -733,47 +784,71 @@ class TestLoadFromDB:
                    return_value=datetime(2000, 1, 1)):
             records = list(ManifestRepository().load(str(db)))
 
-        assert len(records) == 1
-        assert records[0].creation_date == datetime(2023, 3, 1, 8, 0, 0)
+        rec = next(r for r in records if r.file_path == str(f))
+        assert rec.creation_date == datetime(2023, 3, 1, 8, 0, 0)
 
     def test_load_uses_db_mtime(self, tmp_path):
         """When mtime is in DB, os.path.getmtime() must NOT be called."""
         from datetime import datetime
         from unittest.mock import patch
         f = tmp_path / "photo.jpg"
+        f2 = tmp_path / "photo2.jpg"
         _make_jpeg(f)
+        _make_jpeg(f2)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
             self._row_with_metadata(str(f),
+                group_id=gid,
                 mtime="2023-06-01T12:00:00",
                 file_size_bytes=100,
                 creation_date="2023-01-01T00:00:00"),
+            self._row_with_metadata(str(f2),
+                group_id=gid,
+                file_size_bytes=100,
+                creation_date="2023-01-01T00:00:00",
+                mtime="2023-01-01T00:00:00"),
         ], ddl=_DDL_WITH_METADATA)
 
         with patch("os.path.getmtime", return_value=0.0):
             records = list(ManifestRepository().load(str(db)))
 
-        assert len(records) == 1
-        assert records[0].modified_date == datetime(2023, 6, 1, 12, 0, 0)
+        rec = next(r for r in records if r.file_path == str(f))
+        assert rec.modified_date == datetime(2023, 6, 1, 12, 0, 0)
 
     def test_load_falls_back_to_filesystem_when_db_columns_null(self, tmp_path):
         """Old manifests (NULL metadata) still use filesystem reads (regression guard)."""
         f = tmp_path / "photo.jpg"
+        f2 = tmp_path / "photo2.jpg"
         _make_jpeg(f)
+        _make_jpeg(f2)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            self._row_with_metadata(str(f)),  # all 4 = NULL
+            self._row_with_metadata(str(f), group_id=gid),   # all 4 metadata = NULL
+            self._row_with_metadata(str(f2), group_id=gid),
         ], ddl=_DDL_WITH_METADATA)
 
         records = list(ManifestRepository().load(str(db)))
-        assert len(records) == 1
         import os
-        assert records[0].file_size_bytes == os.path.getsize(str(f))
+        rec = next(r for r in records if r.file_path == str(f))
+        assert rec.file_size_bytes == os.path.getsize(str(f))
 
     def test_load_skips_no_existence_check(self, tmp_path):
         """Nonexistent files must be yielded — existence check moved to execute time."""
+        f2 = tmp_path / "real.jpg"
+        _make_jpeg(f2)
+        gid = "/group/a"
         db = _make_manifest(tmp_path, [
             self._row_with_metadata(
                 "/nonexistent/photo.jpg",
+                group_id=gid,
                 file_size_bytes=100,
+                creation_date="2023-01-01T00:00:00",
+                mtime="2023-01-01T00:00:00",
+            ),
+            self._row_with_metadata(
+                str(f2),
+                group_id=gid,
+                file_size_bytes=200,
                 creation_date="2023-01-01T00:00:00",
                 mtime="2023-01-01T00:00:00",
             ),
@@ -794,7 +869,7 @@ class TestConnectionPragmas:
     def test_wal_enabled_after_batch_update(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "keep"})
         assert self._journal_mode(db) == "wal"
@@ -802,7 +877,7 @@ class TestConnectionPragmas:
     def test_wal_enabled_after_save(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         group = PhotoGroup(group_number=1, items=[
             PhotoRecord(
@@ -818,7 +893,7 @@ class TestConnectionPragmas:
     def test_wal_enabled_after_mark_executed(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg"])
         assert self._journal_mode(db) == "wal"
@@ -826,7 +901,7 @@ class TestConnectionPragmas:
     def test_wal_enabled_after_update_decision(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().update_decision(str(db), "/a.jpg", "delete")
         assert self._journal_mode(db) == "wal"
@@ -834,7 +909,7 @@ class TestConnectionPragmas:
     def test_wal_enabled_after_remove_from_review(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
         assert self._journal_mode(db) == "wal"
@@ -847,11 +922,11 @@ class TestSaveUsesExecutemany:
         """save() must return the number of records passed, regardless of batch size."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
             _row({"source_path": "/b.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
             _row({"source_path": "/c.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         groups = [PhotoGroup(group_number=1, items=[
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,
@@ -872,9 +947,9 @@ class TestSaveUsesExecutemany:
         """Correctness check: executemany saves every record."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
             _row({"source_path": "/b.jpg", "action": "MOVE",
-                  "duplicate_of": None, "hamming_distance": None}),
+                  "group_id": None, "hamming_distance": None}),
         ])
         groups = [PhotoGroup(group_number=1, items=[
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,

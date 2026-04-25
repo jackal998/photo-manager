@@ -46,11 +46,12 @@ def _connect(path: str) -> sqlite3.Connection:
     return conn
 
 _LOAD_ALL_SQL = """
-SELECT id, source_path, source_label, duplicate_of, hamming_distance, reason,
+SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        action, executed, user_decision,
        file_size_bytes, shot_date, creation_date, mtime
 FROM   migration_manifest
 ORDER  BY
+    group_id NULLS LAST,
     CASE action
         WHEN 'REVIEW_DUPLICATE' THEN 1
         WHEN 'EXACT'            THEN 2
@@ -59,7 +60,6 @@ ORDER  BY
         WHEN 'MOVE'             THEN 5
         ELSE 6
     END,
-    hamming_distance,
     id
 """
 
@@ -71,6 +71,7 @@ _MIGRATIONS = [
     ("shot_date",       "TEXT"),
     ("creation_date",   "TEXT"),
     ("mtime",           "TEXT"),
+    ("group_id",        "TEXT"),
 ]
 
 _UPDATE_DECISION_SQL = """
@@ -167,13 +168,18 @@ class ManifestRepository:
     # ------------------------------------------------------------------ load
 
     def load(self, manifest_path: str) -> Iterator[PhotoRecord]:
-        """Yield PhotoRecords for every row in the manifest.
+        """Yield PhotoRecords for every row in a similarity group (group_id IS NOT NULL).
 
-        Ordering: REVIEW_DUPLICATE → EXACT → KEEP → UNDATED → MOVE.
-        Paired rows (EXACT / REVIEW_DUPLICATE with duplicate_of) yield
-        candidate first, then the reference inline.  Files that already appear
-        as references are not also yielded as standalone rows.
+        Rows are grouped by group_id; each group is assigned a sequential
+        group_number.  Groups that end up with only one surviving member (i.e.,
+        the partner was removed) are skipped.  Singleton rows (group_id IS NULL,
+        e.g. MOVE / UNDATED with no near-duplicate) are not yielded — the UI
+        focuses on files that need review.
+
+        Ordering within a group: REVIEW_DUPLICATE → EXACT → KEEP → UNDATED → MOVE.
         """
+        from collections import defaultdict
+
         path = Path(manifest_path)
         if not path.exists():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
@@ -195,81 +201,43 @@ class ManifestRepository:
         finally:
             conn.close()
 
-        # Paths explicitly removed from the review list — excluded from load.
-        # Checked in Python (not SQL) so the inline reference-yield guard can
-        # also consult this set.
-        removed_paths: set[str] = {
-            row["source_path"] for row in all_rows if (row["user_decision"] or "") == "removed"
-        }
-
-        # Collect every path that appears as a duplicate_of reference in a pair.
-        # Only consider non-removed candidates when building this set, so that
-        # a removed candidate's reference can appear as a standalone row.
-        ref_paths: set[str] = set()
+        # Group rows by group_id, skipping removed and singletons (no group_id).
+        by_group: dict[str, list] = defaultdict(list)
         for row in all_rows:
             if (row["user_decision"] or "") == "removed":
                 continue
-            if row["action"] in ("REVIEW_DUPLICATE", "EXACT") and row["duplicate_of"]:
-                ref_paths.add(row["duplicate_of"])
+            gid = row["group_id"]
+            if gid:
+                by_group[gid].append(row)
 
-        for row in all_rows:
-            action: str = row["action"]
-            group_number: int = row["id"]
-            source_path: str = row["source_path"]
-            ref_path: str | None = row["duplicate_of"]
-            is_pair = bool(ref_path) and action in ("REVIEW_DUPLICATE", "EXACT")
-            user_decision: str = row["user_decision"] or ""
-
-            # Skip rows dismissed via "Remove from List"
-            if user_decision == "removed":
-                continue
-
-            # Skip standalone emit for files already shown as pair references
-            if source_path in ref_paths and not is_pair:
-                continue
-
-            # Only read EXIF for REVIEW_DUPLICATE — avoids opening thousands of files
-            read_exif = action == "REVIEW_DUPLICATE"
-
-            # DB-cached metadata (None for old manifests → filesystem fallback)
-            db_file_size = row["file_size_bytes"]
-            db_shot_date = row["shot_date"]
-            db_creation_date = row["creation_date"]
-            db_mtime = row["mtime"]
-
-            try:
-                yield _photo_record(
-                    source_path=source_path,
-                    group_number=group_number,
-                    is_mark=False,
-                    is_locked=False,
-                    action=action,
-                    read_exif=read_exif,
-                    user_decision=user_decision,
-                    db_file_size=db_file_size,
-                    db_shot_date=db_shot_date,
-                    db_creation_date=db_creation_date,
-                    db_mtime=db_mtime,
-                )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Skipping {}: {}", source_path, exc)
-                continue
-
-            if is_pair and ref_path and ref_path not in removed_paths:
-                # For the reference row, use the same DB metadata if the ref
-                # path matches — otherwise fall back (ref may be a different file).
+        # Assign sequential group_number over sorted group_ids; skip orphaned singles.
+        group_number = 0
+        for gid in sorted(by_group):
+            db_rows = by_group[gid]
+            if len(db_rows) < 2:
+                continue  # partner was removed; skip orphan
+            group_number += 1
+            for row in db_rows:
+                action: str = row["action"]
+                source_path: str = row["source_path"]
+                user_decision: str = row["user_decision"] or ""
+                read_exif = action == "REVIEW_DUPLICATE"
                 try:
                     yield _photo_record(
-                        source_path=ref_path,
+                        source_path=source_path,
                         group_number=group_number,
                         is_mark=False,
                         is_locked=False,
-                        action="",   # reference role — action belongs to the candidate
+                        action=action,
                         read_exif=read_exif,
-                        user_decision="",  # ref has no independent decision
+                        user_decision=user_decision,
+                        db_file_size=row["file_size_bytes"],
+                        db_shot_date=row["shot_date"],
+                        db_creation_date=row["creation_date"],
+                        db_mtime=row["mtime"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.warning("Skipping reference {}: {}", ref_path, exc)
+                    logger.warning("Skipping {}: {}", source_path, exc)
 
     # ------------------------------------------------------------------ save
 

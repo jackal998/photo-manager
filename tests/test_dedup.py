@@ -205,6 +205,72 @@ class TestLivePhotoPair:
 
 
 # ---------------------------------------------------------------------------
+# group_id — transitive connected-component assignment
+# ---------------------------------------------------------------------------
+
+class TestGroupId:
+    def test_isolated_file_has_no_group_id(self):
+        hr = _hr("/jdrive/solo.jpg", sha256="unique_hash", exif_date=_dt())
+        rows = classify([hr])
+        assert rows[0].group_id is None
+
+    def test_exact_duplicate_pair_shares_group_id(self):
+        a = _hr("/a/photo.jpg", sha256="same", source_label="src_a", exif_date=_dt())
+        b = _hr("/b/photo.jpg", sha256="same", source_label="src_b", exif_date=_dt())
+        rows = _rows(classify([a, b], source_priority={"src_a": 0, "src_b": 1}))
+        assert rows["/a/photo.jpg"].group_id is not None
+        assert rows["/b/photo.jpg"].group_id is not None
+        assert rows["/a/photo.jpg"].group_id == rows["/b/photo.jpg"].group_id
+
+    def test_near_duplicate_pair_shares_group_id(self):
+        import imagehash
+        base = imagehash.hex_to_hash("0" * 16)
+        near = imagehash.hex_to_hash("f" + "0" * 15)
+        a = _hr("/a.jpg", sha256="s1", phash=str(base), source_label="takeout", exif_date=_dt())
+        b = _hr("/b.jpg", sha256="s2", phash=str(near), source_label="jdrive", exif_date=_dt())
+        rows = _rows(classify([a, b], threshold=10))
+        assert rows["/a.jpg"].group_id is not None
+        assert rows["/b.jpg"].group_id is not None
+        assert rows["/a.jpg"].group_id == rows["/b.jpg"].group_id
+
+    def test_transitive_grouping_three_files(self):
+        """A near-dup of B, and B near-dup of C → all three in the same group."""
+        import imagehash
+        # Three hashes: a~b (distance≈4), b~c (distance≈4), but a and c may not match
+        h_a = imagehash.hex_to_hash("0000000000000000")
+        h_b = imagehash.hex_to_hash("000000000000000f")  # 4 bits from a
+        h_c = imagehash.hex_to_hash("00000000000000ff")  # 4 bits from b (8 from a)
+        a = _hr("/a.jpg", sha256="s1", phash=str(h_a), source_label="src", exif_date=_dt())
+        b = _hr("/b.jpg", sha256="s2", phash=str(h_b), source_label="src", exif_date=_dt())
+        c = _hr("/c.jpg", sha256="s3", phash=str(h_c), source_label="src", exif_date=_dt())
+        # threshold=5: a~b (dist=4) ✓, b~c (dist=4) ✓, a~c (dist=8) beyond threshold
+        rows = _rows(classify([a, b, c], threshold=5))
+        gids = {rows[p].group_id for p in ("/a.jpg", "/b.jpg", "/c.jpg")}
+        assert None not in gids, "All three should have a group_id"
+        assert len(gids) == 1, "All three should share the same group_id"
+
+    def test_live_photo_pair_shares_group_id(self):
+        heic_path = Path("/iphone/IMG.HEIC")
+        mov_path = Path("/iphone/IMG.MOV")
+        orig_path = Path("/jdrive/IMG.HEIC")
+
+        heic = _hr(str(heic_path), sha256="x", source_label="jdrive",
+                   file_type="heic", exif_date=_dt(), pair_partner=mov_path)
+        mov = _hr(str(mov_path), sha256="y", phash=None,
+                  source_label="jdrive", file_type="mov", exif_date=_dt(),
+                  pair_partner=heic_path)
+        orig = _hr(str(orig_path), sha256="x", source_label="iphone",
+                   file_type="heic", exif_date=_dt())
+
+        rows = _rows(classify([heic, mov, orig], source_priority={"iphone": 0, "jdrive": 1}))
+        heic_gid = rows[heic_path.as_posix()].group_id
+        mov_gid = rows[mov_path.as_posix()].group_id
+        assert heic_gid is not None
+        assert mov_gid is not None
+        assert heic_gid == mov_gid
+
+
+# ---------------------------------------------------------------------------
 # dest_path
 # ---------------------------------------------------------------------------
 

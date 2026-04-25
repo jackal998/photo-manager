@@ -18,7 +18,7 @@ CREATE TABLE migration_manifest (
     source_hash      TEXT,
     phash            TEXT,
     hamming_distance INTEGER,
-    duplicate_of     TEXT,
+    group_id         TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0,
     user_decision    TEXT    NOT NULL DEFAULT ''
@@ -49,7 +49,7 @@ def _default(overrides: dict) -> dict:
         "dest_path": None,
         "action": "REVIEW_DUPLICATE",
         "hamming_distance": 5,
-        "duplicate_of": "/reference/a.jpg",
+        "group_id": "/group/a",
         "reason": "near-duplicate (hamming=5)",
         "executed": 0,
         "user_decision": "",
