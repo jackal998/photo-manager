@@ -47,6 +47,8 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
         output.unlink()
 
     with sqlite3.connect(output) as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         conn.executescript(_DDL)
         conn.executemany(
             _INSERT,

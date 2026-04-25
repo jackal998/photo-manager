@@ -12,7 +12,7 @@ from loguru import logger
 _FIELD_TO_ATTR: dict[str, str] = {
     "File Name":     "file_path",      # basename extracted in _get_record_field
     "Folder":        "folder_path",
-    "Action":        "action",
+    "Action":        "user_decision",
     "Size (Bytes)":  "file_size_bytes",
     "Creation Date": "creation_date",
     "Shot Date":     "shot_date",

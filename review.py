@@ -30,6 +30,8 @@ def _open(path: Path) -> sqlite3.Connection:
         raise FileNotFoundError(f"Manifest not found: {path}")
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
