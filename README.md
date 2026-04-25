@@ -288,7 +288,7 @@ photo-manager/
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 308+ tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 335+ tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
@@ -308,7 +308,8 @@ photo-manager/
     ├── test_group_deletion_check_dialog.py
     ├── test_context_menu.py
     ├── test_manifest_load_worker.py
-    └── test_scan_dialog.py      # _auto_label, _SourceListWidget, ScanDialog settings
+    ├── test_scan_dialog.py      # _auto_label, _SourceListWidget, ScanDialog settings
+    └── test_select_dialog.py    # initial_field, Set Action signal, settable decision options
 ```
 
 ---

@@ -8,6 +8,31 @@ from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 from loguru import logger
 
+# Maps SelectDialog field names → PhotoRecord attribute names.
+_FIELD_TO_ATTR: dict[str, str] = {
+    "File Name":     "file_path",      # basename extracted in _get_record_field
+    "Folder":        "folder_path",
+    "Action":        "action",
+    "Size (Bytes)":  "file_size_bytes",
+    "Creation Date": "creation_date",
+    "Shot Date":     "shot_date",
+}
+
+
+def _get_record_field(rec: Any, field: str) -> str | None:
+    """Return the string value of a record's field, or None if unavailable."""
+    from pathlib import Path
+
+    attr = _FIELD_TO_ATTR.get(field)
+    if attr is None:
+        return None
+    val = getattr(rec, attr, None)
+    if val is None:
+        return None
+    if field == "File Name":
+        return Path(str(val)).name
+    return str(val)
+
 
 class UIUpdateCallback(Protocol):
     """Protocol for UI update callbacks."""
@@ -327,6 +352,40 @@ class FileOperationsHandler:
             QMessageBox.information(self.parent, "Set Action", "No activated files.")
             return
         self.set_decision(file_items, new_decision)
+
+    def set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
+        """Find all file rows where field matches regex and set their user_decision.
+
+        Args:
+            field: Field name (e.g. "File Name", "Folder", "Action").
+            pattern: Regex pattern (case-insensitive).
+            new_decision: Value to write — "delete" or "" (clears any existing decision).
+        """
+        import re as _re
+
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            QMessageBox.information(self.parent, "Set Action", "No manifest loaded.")
+            return
+
+        try:
+            rx = _re.compile(pattern, _re.IGNORECASE)
+        except _re.error as exc:
+            QMessageBox.warning(self.parent, "Invalid Regex", str(exc))
+            return
+
+        matching: list[dict] = []
+        for group in self.vm.groups:
+            for rec in group.items:
+                value = _get_record_field(rec, field)
+                if value is not None and rx.search(value):
+                    matching.append({"type": "file", "path": rec.file_path})
+
+        if not matching:
+            QMessageBox.information(self.parent, "Set Action", "No files matched the pattern.")
+            return
+
+        self.set_decision(matching, new_decision)
 
     def execute_action(self) -> None:
         """Open the Execute Action review dialog and run planned operations."""

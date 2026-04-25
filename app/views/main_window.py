@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
             parent_widget=self,
             tree_data_provider=self.tree_data_provider,
             regex_handler=self._apply_select_regex,
+            action_handler=self._apply_action_by_regex,
         )
 
         # Action handlers for context menu
@@ -176,10 +177,8 @@ class MainWindow(QMainWindow):
             "scan_sources": self.on_scan_sources,
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
-            "set_action_hl_delete": lambda: self.file_operations.set_decision_to_highlighted("delete"),
-            "set_action_hl_keep": lambda: self.file_operations.set_decision_to_highlighted("keep"),
             "set_action_sel_delete": lambda: self.file_operations.batch_set_decision("delete"),
-            "set_action_sel_keep": lambda: self.file_operations.batch_set_decision("keep"),
+            "set_action_sel_keep": lambda: self.file_operations.batch_set_decision(""),
             "execute_action": self.on_execute_action,
             "select_by": self.on_open_select_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
@@ -263,7 +262,6 @@ class MainWindow(QMainWindow):
             n = self._vm.group_count
             for _act in (
                 "execute_action",
-                "set_action_hl_delete", "set_action_hl_keep",
                 "set_action_sel_delete", "set_action_sel_keep",
             ):
                 try:
@@ -453,6 +451,10 @@ class MainWindow(QMainWindow):
         highlighted_items = self.tree_controller.get_selected_items()
         self.file_operations.remove_from_list_toolbar(checked_paths, highlighted_items)
 
+    def _apply_action_by_regex(self, field: str, pattern: str, action_value: str) -> None:
+        """Apply an action to all files matching field/regex from the SelectDialog."""
+        self.file_operations.set_decision_by_regex(field, pattern, action_value)
+
     def _apply_select_regex(self, field: str, pattern: str, make_checked: bool) -> None:
         """Apply regex selection to files.
 
@@ -613,9 +615,9 @@ class ActionHandlersImpl:
         """Remove items from list."""
         self.file_ops.remove_items_from_list(items)
 
-    def show_select_dialog(self) -> None:
+    def show_select_dialog(self, clicked_col: int | None = None) -> None:
         """Show select by field/regex dialog."""
-        self.dialog.show_select_dialog()
+        self.dialog.show_select_dialog(clicked_col=clicked_col)
 
     def set_decision(self, items: list[dict], decision: str) -> None:
         """Set user decision (delete/keep) for file items."""

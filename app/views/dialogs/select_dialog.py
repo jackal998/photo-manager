@@ -13,20 +13,33 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+# Mirrors context_menu._SETTABLE_DECISIONS — kept here to avoid a circular import.
+_SETTABLE_DECISIONS: list[tuple[str, str]] = [
+    ("delete",               "delete"),
+    ("keep (remove action)", ""),      # sets user_decision="" — clears any existing decision
+]
+
 
 class SelectDialog(QDialog):
-    """Simple dialog to emit select/unselect requests for field+regex.
+    """Dialog to select/unselect rows by field+regex and optionally set an action.
 
     Signals:
         selectRequested(str, str): Emitted when user clicks Select.
         unselectRequested(str, str): Emitted when user clicks Unselect.
+        setActionRequested(str, str, str): Emitted when user clicks Set Action
+            (field, regex, action_value).
     """
 
-    selectRequested = Signal(str, str)  # field, regex
-    unselectRequested = Signal(str, str)  # field, regex
+    selectRequested = Signal(str, str)      # field, regex
+    unselectRequested = Signal(str, str)    # field, regex
+    setActionRequested = Signal(str, str, str)  # field, regex, action_value
 
     def __init__(
-        self, fields: list[str], parent=None, row_values: dict[str, str] | None = None
+        self,
+        fields: list[str],
+        parent=None,
+        row_values: dict[str, str] | None = None,
+        initial_field: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Select by Field/Regex")
@@ -58,24 +71,44 @@ class SelectDialog(QDialog):
         tips.setWordWrap(True)
         root.addWidget(tips)
 
+        # ── Select / Unselect ──────────────────────────────────────────────
         btns = QHBoxLayout()
         self.btn_select = QPushButton("Select")
         self.btn_unselect = QPushButton("Unselect")
-        self.btn_close = QPushButton("Close")
         btns.addWidget(self.btn_select)
         btns.addWidget(self.btn_unselect)
         btns.addStretch(1)
-        btns.addWidget(self.btn_close)
         root.addLayout(btns)
+
+        # ── Set Action ─────────────────────────────────────────────────────
+        action_row = QHBoxLayout()
+        action_row.addWidget(QLabel("Set Action:"))
+        self._action_combo = QComboBox()
+        for label, _value in _SETTABLE_DECISIONS:
+            self._action_combo.addItem(label)
+        action_row.addWidget(self._action_combo)
+        self._btn_set_action = QPushButton("Set Action")
+        action_row.addWidget(self._btn_set_action)
+        action_row.addStretch(1)
+        root.addLayout(action_row)
+
+        # ── Close ──────────────────────────────────────────────────────────
+        close_row = QHBoxLayout()
+        self.btn_close = QPushButton("Close")
+        close_row.addStretch(1)
+        close_row.addWidget(self.btn_close)
+        root.addLayout(close_row)
 
         self.btn_close.clicked.connect(self.accept)
         self.btn_select.clicked.connect(self._emit_select)
         self.btn_unselect.clicked.connect(self._emit_unselect)
+        self._btn_set_action.clicked.connect(self._emit_set_action)
 
-        # Defaults:
-        # - Field => Folder
-        # - Regex => exact of current row field if available; else blank
-        self._set_default_field("File Name")
+        # Default field: use initial_field if provided and valid, else "File Name"
+        if initial_field and self.combo.findText(initial_field) >= 0:
+            self._set_default_field(initial_field)
+        else:
+            self._set_default_field("File Name")
         self.combo.currentTextChanged.connect(self._on_field_changed)
         self._apply_exact_regex_for_current_field()
 
@@ -88,6 +121,13 @@ class SelectDialog(QDialog):
         field = self.combo.currentText()
         pattern = self.regex.text()
         self.unselectRequested.emit(field, pattern)
+
+    def _emit_set_action(self) -> None:
+        field = self.combo.currentText()
+        pattern = self.regex.text()
+        idx = self._action_combo.currentIndex()
+        _label, value = _SETTABLE_DECISIONS[idx]
+        self.setActionRequested.emit(field, pattern, value)
 
     # Internals
     def _set_default_field(self, field_name: str) -> None:
