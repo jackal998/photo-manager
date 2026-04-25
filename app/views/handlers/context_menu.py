@@ -10,13 +10,8 @@ from PySide6.QtCore import QPoint, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMenu, QTreeView
 
+from app.views.constants import SETTABLE_DECISIONS as _SETTABLE_DECISIONS
 from app.views.media_utils import normalize_windows_path
-
-
-_SETTABLE_DECISIONS: list[tuple[str, str]] = [
-    ("delete",               "delete"),
-    ("keep (remove action)", ""),      # sets user_decision="" — clears any existing decision
-]
 
 
 class ActionHandlers(Protocol):

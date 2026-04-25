@@ -17,14 +17,8 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
-from app.views.constants import COL_NAME, PATH_ROLE
+from app.views.constants import COL_NAME, PATH_ROLE, SETTABLE_DECISIONS as _SETTABLE_DECISIONS
 from app.views.tree_model_builder import build_model
-
-# Mirrors context_menu._SETTABLE_DECISIONS — kept here to avoid a circular import.
-_SETTABLE_DECISIONS: list[tuple[str, str]] = [
-    ("delete",               "delete"),
-    ("keep (remove action)", ""),      # sets user_decision="" — clears any existing decision
-]
 
 
 class ExecuteActionDialog(QDialog):
@@ -137,6 +131,13 @@ class ExecuteActionDialog(QDialog):
                 "No decisions set — use 'Set Action' to mark files for deletion."
             )
 
+    def _refresh_ui_after_decision_change(self) -> None:
+        """Rebuild tree, update summary, and sync Execute button + warning banner."""
+        self._rebuild_tree_model()
+        self._update_summary()
+        self._btn_box.button(QDialogButtonBox.Ok).setEnabled(bool(self._decided_records()))
+        self._refresh_warning_banner()
+
     def _refresh_warning_banner(self) -> None:
         complete = self._complete_delete_groups()
         if complete:
@@ -176,11 +177,7 @@ class ExecuteActionDialog(QDialog):
                 if rec.file_path == path:
                     rec.user_decision = decision
                     break
-        self._rebuild_tree_model()
-        self._update_summary()
-        has_decisions = bool(self._decided_records())
-        self._btn_box.button(QDialogButtonBox.Ok).setEnabled(has_decisions)
-        self._refresh_warning_banner()
+        self._refresh_ui_after_decision_change()
 
     # ------------------------------------------------------------------ select by regex
 
@@ -220,7 +217,6 @@ class ExecuteActionDialog(QDialog):
                     batch[rec.file_path] = new_decision
 
         if not batch:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.information(self, "Set Action", "No files matched the pattern.")
             return
 
@@ -231,10 +227,7 @@ class ExecuteActionDialog(QDialog):
             except Exception as exc:
                 logger.warning("Failed to persist batch decisions: {}", exc)
 
-        self._rebuild_tree_model()
-        self._update_summary()
-        self._btn_box.button(QDialogButtonBox.Ok).setEnabled(bool(self._decided_records()))
-        self._refresh_warning_banner()
+        self._refresh_ui_after_decision_change()
 
     # ------------------------------------------------------------------ execute
 
