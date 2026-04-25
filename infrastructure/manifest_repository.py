@@ -30,6 +30,21 @@ from loguru import logger
 from core.models import PhotoGroup, PhotoRecord
 from infrastructure.utils import get_exif_datetime_original, get_filesystem_creation_datetime
 
+
+def _connect(path: str) -> sqlite3.Connection:
+    """Open a SQLite connection with performance pragmas.
+
+    WAL mode is persisted in the DB file after the first write connection.
+    synchronous=NORMAL is session-level (safe for local desktop use —
+    survives OS crashes but not power loss mid-write, which is acceptable here).
+    """
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA cache_size = -32000")   # 32 MB page cache
+    conn.execute("PRAGMA temp_store = MEMORY")
+    return conn
+
 _LOAD_ALL_SQL = """
 SELECT id, source_path, source_label, duplicate_of, hamming_distance, reason,
        action, executed, user_decision,
@@ -57,10 +72,6 @@ _MIGRATIONS = [
     ("creation_date",   "TEXT"),
     ("mtime",           "TEXT"),
 ]
-
-_SAVE_SQL = """
-UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
-"""
 
 _UPDATE_DECISION_SQL = """
 UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
@@ -167,7 +178,7 @@ class ManifestRepository:
         if not path.exists():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
-        conn = sqlite3.connect(manifest_path)
+        conn = _connect(manifest_path)
         conn.row_factory = sqlite3.Row
         try:
             # Auto-migrate: add any missing columns (safe to re-run — silently
@@ -264,22 +275,25 @@ class ManifestRepository:
 
     def save(self, manifest_path: str, groups: Iterable[PhotoGroup]) -> int:
         """Write user_decision for every record back to the manifest."""
-        conn = sqlite3.connect(manifest_path)
-        updated = 0
+        params = [
+            (rec.user_decision, rec.file_path)
+            for group in groups
+            for rec in group.items
+        ]
+        if not params:
+            return 0
+        conn = _connect(manifest_path)
         try:
-            for group in groups:
-                for rec in group.items:
-                    cursor = conn.execute(_SAVE_SQL, (rec.user_decision, rec.file_path))
-                    updated += cursor.rowcount
+            conn.executemany(_UPDATE_DECISION_SQL, params)
             conn.commit()
         finally:
             conn.close()
-        logger.info("Manifest decisions saved: {} rows updated", updated)
-        return updated
+        logger.info("Manifest decisions saved: {} rows updated", len(params))
+        return len(params)
 
     def update_decision(self, manifest_path: str, file_path: str, decision: str) -> None:
         """Update user_decision for a single row (right-click set action)."""
-        conn = sqlite3.connect(manifest_path)
+        conn = _connect(manifest_path)
         try:
             conn.execute(_UPDATE_DECISION_SQL, (decision, file_path))
             conn.commit()
@@ -290,7 +304,7 @@ class ManifestRepository:
         """Update user_decision for multiple rows in a single transaction."""
         if not decisions:
             return
-        conn = sqlite3.connect(manifest_path)
+        conn = _connect(manifest_path)
         try:
             conn.executemany(_UPDATE_DECISION_SQL, [(v, k) for k, v in decisions.items()])
             conn.commit()
@@ -299,7 +313,7 @@ class ManifestRepository:
 
     def mark_executed(self, manifest_path: str, file_paths: list[str]) -> None:
         """Mark a list of rows as executed=1."""
-        conn = sqlite3.connect(manifest_path)
+        conn = _connect(manifest_path)
         try:
             conn.executemany(_MARK_EXECUTED_SQL, [(p,) for p in file_paths])
             conn.commit()
@@ -310,12 +324,13 @@ class ManifestRepository:
         """Mark rows as removed from the review list (user_decision='removed').
 
         Removed rows are excluded from future load() calls so they do not
-        reappear when the manifest is reopened.
+        reappear when the manifest is reopened.  VACUUM is intentionally omitted:
+        rows are marked (UPDATE), not deleted, so SQLite has no freed pages to
+        reclaim and a VACUUM call would be a no-op at the cost of a full DB rewrite.
         """
-        conn = sqlite3.connect(manifest_path)
+        conn = _connect(manifest_path)
         try:
             conn.executemany(_REMOVE_FROM_REVIEW_SQL, [(p,) for p in file_paths])
             conn.commit()
-            conn.execute("VACUUM")
         finally:
             conn.close()

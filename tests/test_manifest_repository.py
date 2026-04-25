@@ -782,3 +782,148 @@ class TestLoadFromDB:
         records = list(ManifestRepository().load(str(db)))
         paths = {r.file_path for r in records}
         assert "/nonexistent/photo.jpg" in paths
+
+
+class TestConnectionPragmas:
+    """All repository write operations must open connections with WAL + NORMAL."""
+
+    def _journal_mode(self, db) -> str:
+        with sqlite3.connect(db) as conn:
+            return conn.execute("PRAGMA journal_mode").fetchone()[0]
+
+    def test_wal_enabled_after_batch_update(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "keep"})
+        assert self._journal_mode(db) == "wal"
+
+    def test_wal_enabled_after_save(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        group = PhotoGroup(group_number=1, items=[
+            PhotoRecord(
+                group_number=1, is_mark=False, is_locked=False,
+                folder_path="", file_path="/a.jpg",
+                capture_date=None, modified_date=None, file_size_bytes=0,
+                action="MOVE", user_decision="keep",
+            )
+        ])
+        ManifestRepository().save(str(db), [group])
+        assert self._journal_mode(db) == "wal"
+
+    def test_wal_enabled_after_mark_executed(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().mark_executed(str(db), ["/a.jpg"])
+        assert self._journal_mode(db) == "wal"
+
+    def test_wal_enabled_after_update_decision(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().update_decision(str(db), "/a.jpg", "delete")
+        assert self._journal_mode(db) == "wal"
+
+    def test_wal_enabled_after_remove_from_review(self, tmp_path):
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
+        assert self._journal_mode(db) == "wal"
+
+
+class TestSaveUsesExecutemany:
+    """save() must delegate to executemany(), not one execute() per row."""
+
+    def test_save_return_count_equals_record_count(self, tmp_path):
+        """save() must return the number of records passed, regardless of batch size."""
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": "/b.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": "/c.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        groups = [PhotoGroup(group_number=1, items=[
+            PhotoRecord(group_number=1, is_mark=False, is_locked=False,
+                        folder_path="", file_path=p,
+                        capture_date=None, modified_date=None, file_size_bytes=0,
+                        action="MOVE", user_decision="keep")
+            for p in ("/a.jpg", "/b.jpg", "/c.jpg")
+        ])]
+        count = ManifestRepository().save(str(db), groups)
+        assert count == 3
+
+    def test_save_empty_groups_returns_zero(self, tmp_path):
+        db = _make_manifest(tmp_path, [])
+        count = ManifestRepository().save(str(db), [])
+        assert count == 0
+
+    def test_save_still_writes_all_decisions(self, tmp_path):
+        """Correctness check: executemany saves every record."""
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+            _row({"source_path": "/b.jpg", "action": "MOVE",
+                  "duplicate_of": None, "hamming_distance": None}),
+        ])
+        groups = [PhotoGroup(group_number=1, items=[
+            PhotoRecord(group_number=1, is_mark=False, is_locked=False,
+                        folder_path="", file_path="/a.jpg",
+                        capture_date=None, modified_date=None, file_size_bytes=0,
+                        action="MOVE", user_decision="keep"),
+            PhotoRecord(group_number=1, is_mark=False, is_locked=False,
+                        folder_path="", file_path="/b.jpg",
+                        capture_date=None, modified_date=None, file_size_bytes=0,
+                        action="MOVE", user_decision="delete"),
+        ])]
+        count = ManifestRepository().save(str(db), groups)
+        assert count == 2
+
+        with sqlite3.connect(db) as conn:
+            rows = {r[0]: r[1] for r in conn.execute(
+                "SELECT source_path, user_decision FROM migration_manifest"
+            ).fetchall()}
+        assert rows["/a.jpg"] == "keep"
+        assert rows["/b.jpg"] == "delete"
+
+
+class TestRemoveFromReviewNoVacuum:
+    """remove_from_review() must NOT call VACUUM (rows are marked, not deleted)."""
+
+    def test_vacuum_absent_from_source(self):
+        """remove_from_review() must not execute VACUUM.
+
+        Rows are marked (UPDATE), not deleted, so VACUUM reclaims nothing —
+        it would just be a costly full DB rewrite for zero benefit.
+        """
+        import ast
+        import inspect
+        from infrastructure.manifest_repository import ManifestRepository
+
+        src = inspect.getsource(ManifestRepository.remove_from_review)
+        # Dedent so ast.parse sees a valid top-level function definition.
+        import textwrap
+        tree = ast.parse(textwrap.dedent(src))
+
+        # Collect all string constants used as SQL arguments to conn.execute / executemany.
+        sql_strings: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        sql_strings.append(arg.value)
+
+        for sql in sql_strings:
+            assert "VACUUM" not in sql.upper(), (
+                f"remove_from_review() still executes VACUUM via: {sql!r}"
+            )
