@@ -13,11 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-# Mirrors context_menu._SETTABLE_DECISIONS — kept here to avoid a circular import.
-_SETTABLE_DECISIONS: list[tuple[str, str]] = [
-    ("delete",               "delete"),
-    ("keep (remove action)", ""),      # sets user_decision="" — clears any existing decision
-]
+from app.views.constants import SETTABLE_DECISIONS as _SETTABLE_DECISIONS
 
 
 class SelectDialog(QDialog):

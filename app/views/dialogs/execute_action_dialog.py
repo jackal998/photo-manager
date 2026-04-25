@@ -11,17 +11,18 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QMenu,
+    QPushButton,
     QTreeView,
     QVBoxLayout,
 )
 from loguru import logger
 
-from app.views.constants import COL_NAME, PATH_ROLE
+from app.views.constants import COL_NAME, PATH_ROLE, SETTABLE_DECISIONS as _SETTABLE_DECISIONS
 from app.views.tree_model_builder import build_model
 
 
 class ExecuteActionDialog(QDialog):
-    """Shows all groups for final review; executes file decisions on confirm."""
+    """Shows groups with decisions for final review; executes file decisions on confirm."""
 
     def __init__(self, groups: list, manifest_path: str | None, parent=None) -> None:
         super().__init__(parent)
@@ -32,9 +33,17 @@ class ExecuteActionDialog(QDialog):
         self.deleted_paths: list[str] = []
         self.executed_paths: list[str] = []
         self._missing_paths: list[str] = []
+        self._src_model = None   # source model kept for apply_select_regex
         self._build_ui()
 
     # ------------------------------------------------------------------ helpers
+
+    def _groups_with_decisions(self) -> list:
+        """Return only groups where ≥1 file has user_decision set."""
+        return [
+            g for g in self._groups
+            if any(getattr(r, "user_decision", "") for r in getattr(g, "items", []))
+        ]
 
     def _decided_records(self) -> list[tuple]:
         """Return (group, rec) pairs where user_decision is set."""
@@ -64,6 +73,10 @@ class ExecuteActionDialog(QDialog):
         self._summary_label = QLabel()
         self._update_summary()
         layout.addWidget(self._summary_label)
+
+        select_btn = QPushButton("Select by Field/Regex…")
+        select_btn.clicked.connect(self._show_select_dialog)
+        layout.addWidget(select_btn)
 
         self._tree = QTreeView()
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -98,24 +111,32 @@ class ExecuteActionDialog(QDialog):
         self._refresh_warning_banner()
 
     def _rebuild_tree_model(self) -> None:
-        model, proxy = build_model(self._groups)
+        groups = self._groups_with_decisions()
+        model, proxy = build_model(groups)
+        self._src_model = model          # keep reference for apply_select_regex
         self._tree.setModel(proxy if proxy is not None else model)
         self._tree.expandAll()
 
     def _update_summary(self) -> None:
         decided = self._decided_records()
         n_delete = sum(1 for _, rec in decided if rec.user_decision == "delete")
-        n_keep = sum(1 for _, rec in decided if rec.user_decision == "keep")
         if decided:
             self._summary_label.setText(
                 f"<b>{len(decided)}</b> file(s) with decisions: "
-                f"{n_delete} delete, {n_keep} keep. "
+                f"{n_delete} delete. "
                 "Right-click a file row to change its decision."
             )
         else:
             self._summary_label.setText(
-                "No decisions set — use 'Set Action' to mark files first."
+                "No decisions set — use 'Set Action' to mark files for deletion."
             )
+
+    def _refresh_ui_after_decision_change(self) -> None:
+        """Rebuild tree, update summary, and sync Execute button + warning banner."""
+        self._rebuild_tree_model()
+        self._update_summary()
+        self._btn_box.button(QDialogButtonBox.Ok).setEnabled(bool(self._decided_records()))
+        self._refresh_warning_banner()
 
     def _refresh_warning_banner(self) -> None:
         complete = self._complete_delete_groups()
@@ -143,10 +164,10 @@ class ExecuteActionDialog(QDialog):
             return
         menu = QMenu(self)
         set_menu = menu.addMenu("Set Action")
-        for decision in ("delete", "keep"):
-            act = set_menu.addAction(decision)
+        for label, value in _SETTABLE_DECISIONS:
+            act = set_menu.addAction(label)
             act.triggered.connect(
-                lambda _checked=False, d=decision, p=path: self._set_decision(p, d)
+                lambda _checked=False, _v=value, _p=path: self._set_decision(_p, _v)
             )
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
@@ -156,11 +177,57 @@ class ExecuteActionDialog(QDialog):
                 if rec.file_path == path:
                     rec.user_decision = decision
                     break
-        self._rebuild_tree_model()
-        self._update_summary()
-        has_decisions = bool(self._decided_records())
-        self._btn_box.button(QDialogButtonBox.Ok).setEnabled(has_decisions)
-        self._refresh_warning_banner()
+        self._refresh_ui_after_decision_change()
+
+    # ------------------------------------------------------------------ select by regex
+
+    def _show_select_dialog(self) -> None:
+        from app.views.dialogs.select_dialog import SelectDialog
+        from app.views.selection_service import apply_select_regex
+
+        fields = ["Action", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
+        dlg = SelectDialog(fields=fields, parent=self)
+        dlg.selectRequested.connect(
+            lambda f, p: apply_select_regex(self._src_model, f, p, True)
+        )
+        dlg.unselectRequested.connect(
+            lambda f, p: apply_select_regex(self._src_model, f, p, False)
+        )
+        dlg.setActionRequested.connect(self._set_decision_by_regex)
+        dlg.exec()
+
+    def _set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
+        """Find all file rows where field matches pattern and set user_decision."""
+        import re as _re
+        from PySide6.QtWidgets import QMessageBox
+        from app.views.handlers.file_operations import _get_record_field
+
+        try:
+            rx = _re.compile(pattern, _re.IGNORECASE)
+        except _re.error as exc:
+            QMessageBox.warning(self, "Invalid Regex", str(exc))
+            return
+
+        batch: dict[str, str] = {}
+        for group in self._groups:          # search full list, not just displayed
+            for rec in getattr(group, "items", []):
+                value = _get_record_field(rec, field)
+                if value is not None and rx.search(value):
+                    rec.user_decision = new_decision
+                    batch[rec.file_path] = new_decision
+
+        if not batch:
+            QMessageBox.information(self, "Set Action", "No files matched the pattern.")
+            return
+
+        if self._manifest_path:
+            try:
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().batch_update_decisions(self._manifest_path, batch)
+            except Exception as exc:
+                logger.warning("Failed to persist batch decisions: {}", exc)
+
+        self._refresh_ui_after_decision_change()
 
     # ------------------------------------------------------------------ execute
 

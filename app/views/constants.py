@@ -41,3 +41,12 @@ DEFAULT_THUMB_SIZE: int = 512  # overridable by settings.json
 GRID_MIN_THUMB_PX: int = 200
 GRID_SPACING_PX: int = 4
 GRID_MARGIN_RATIO: float = 0.05  # left/right and top/bottom
+
+
+# User-settable decision options used by context menus and SelectDialog.
+# Each tuple is (display_label, stored_value).  "keep (remove action)" stores ""
+# (empty) — undecided is the natural no-op; the label clarifies intent to the user.
+SETTABLE_DECISIONS: list[tuple[str, str]] = [
+    ("delete",               "delete"),
+    ("keep (remove action)", ""),
+]
