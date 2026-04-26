@@ -199,6 +199,46 @@ Decisions persist immediately — the session is resumable at any time.
 
 ---
 
+## Similarity detection — what it catches and what it misses
+
+The scanner uses two signals in sequence:
+
+1. **pHash** (perceptual hash) — a 64-bit fingerprint of the image's macro brightness structure (DCT coefficients). Two images are candidates if their Hamming distance ≤ threshold (default 10 bits out of 64).
+2. **Mean-color gate** — computes the average RGB of each image and rejects the pair when the colors differ by more than ~30 units (L2). This prevents images that share a similar composition but are clearly different colors from being flagged.
+
+Neither signal reads faces, object identity, or text.
+
+### What WILL be grouped as `REVIEW_DUPLICATE`
+
+| Scenario | Why |
+|----------|-----|
+| Same photo saved as both JPEG and HEIC | Identical pHash, similar mean color |
+| Same photo re-exported at different quality | pHash changes by ≤ a few bits |
+| Burst shots of a static scene | Near-identical DCT structure |
+| Minor brightness / contrast edits | DCT coefficients shift only slightly |
+| Light crop or small rotation of a photo | pHash remains close when the main subject is unchanged |
+| Photos of a uniformly white/black background | Very similar DCT → may group unrelated screenshots if mean color also matches |
+
+### What will NOT be grouped (false negatives)
+
+| Scenario | Why |
+|----------|-----|
+| Eyes open vs eyes closed | Pupil/eyelid change many DCT coefficients — Hamming distance grows beyond threshold |
+| Standing vs sitting / different pose | Body position changes the spatial frequency content significantly |
+| Hand-drawn annotation or sticker overlaid on a photo | The added lines/color shift both pHash and mean color |
+| Heavy filter (sepia, high-contrast B&W) | Mean-color gate rejects the pair even when pHash is close |
+| Major crop that removes the primary subject | pHash diverges once the dominant structure changes |
+| Screenshot of a chat → same app, different content | Usually different pHash; but a uniform-background chat UI may slip through if content area is small |
+
+### Tuning the threshold
+
+Lower `--similarity-threshold` (e.g. 6) → fewer false positives, more false negatives.  
+Higher threshold (e.g. 14) → more pairs flagged, including pose/blink variants — but also more noise.
+
+The default of 10 is calibrated for a personal photo library where the main risk is missing a true duplicate. All flagged pairs land in `REVIEW_DUPLICATE` for human triage — nothing is deleted automatically.
+
+---
+
 ## Scanner features
 
 - **SHA-256** exact duplicate detection across all source folders
