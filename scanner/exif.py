@@ -62,7 +62,7 @@ _VALID_SENTINEL = "-"
 _ZERO_DATE = "0000:00:00 00:00:00"
 
 
-def _parse_exif_date(raw: str) -> Optional[datetime]:
+def parse_exif_date(raw: str) -> Optional[datetime]:
     raw = raw.strip()
     if not raw or raw == _VALID_SENTINEL or raw.startswith(_ZERO_DATE[:4] + ":"):
         return None
@@ -98,7 +98,11 @@ def batch_read_dates(
 
 
 def _read_chunk(paths: list[Path], et: ExiftoolProcess) -> dict[Path, Optional[datetime]]:
-    args = ["-DateTimeOriginal", "-CreateDate", "-QuickTime:CreateDate", "-s3", "-f"]
+    # -fast: stop scanning after the first EXIF/metadata block — date tags are always
+    # there for camera files, so this is safe and avoids reading whole files over NAS.
+    # Edge case: MOV/MP4 files with the moov atom at the file end may lose their
+    # QuickTime:CreateDate; they fall back to CreateDate which is usually present anyway.
+    args = ["-DateTimeOriginal", "-CreateDate", "-QuickTime:CreateDate", "-s3", "-f", "-fast"]
     args += [str(p) for p in paths]
     output = et.execute(args)
 
@@ -110,9 +114,9 @@ def _read_chunk(paths: list[Path], et: ExiftoolProcess) -> dict[Path, Optional[d
         if base + 2 >= len(lines):
             result[path] = None
             continue
-        dt_orig = _parse_exif_date(lines[base])
-        create = _parse_exif_date(lines[base + 1])
-        qt_create = _parse_exif_date(lines[base + 2])
+        dt_orig = parse_exif_date(lines[base])
+        create = parse_exif_date(lines[base + 1])
+        qt_create = parse_exif_date(lines[base + 2])
         result[path] = dt_orig or create or qt_create
 
     return result
