@@ -94,6 +94,15 @@ def main() -> int:
         metavar="N",
         help="Cap to N files per source — for debugging without reading the full network share",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Parallel file-hashing workers (default: 4). "
+             "Tune to storage type: NAS → 4–8, local SSD → 2–4, local HDD → 1–2. "
+             "Use 1 to disable parallelism.",
+    )
     args = parser.parse_args()
 
     if not args.source and not args.source_flat:
@@ -119,9 +128,10 @@ def main() -> int:
         priority += 1
 
     # --- Import scanner modules (deferred so --help works without dependencies) ---
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from scanner.walker import scan_sources
-    from scanner.hasher import compute_sha256, compute_phash
-    from scanner.exif import ExiftoolProcess, batch_read_dates
+    from scanner.hasher import compute_hashes
+    from scanner.exif import ExiftoolProcess, batch_read_dates, parse_exif_date
     from scanner.dedup import HashResult, classify
     from scanner.manifest import write_manifest, print_summary
 
@@ -144,43 +154,63 @@ def main() -> int:
         records.extend(partial)
     print(f"  Total: {len(records):,} media files", flush=True)
 
-    # --- Batch EXIF date extraction via exiftool (chunked) ---
-    all_paths = [r.path for r in records]
+    # --- Hash + PIL EXIF (parallel) ---
+    # Each worker reads the file once: SHA-256, pHash, and EXIF date for JPEG/PNG
+    # are all extracted from the same in-memory buffer.
+    # HEIC / RAW / MOV / MP4 return no date here — a targeted exiftool batch follows.
     chunk_size = 500
-    n_chunks = (len(all_paths) + chunk_size - 1) // chunk_size
-    print(f"Reading EXIF dates ({len(all_paths):,} files, {n_chunks} chunk(s))…", flush=True)
-    try:
-        with ExiftoolProcess() as et:
-            dates = {}
-            for i in range(0, len(all_paths), chunk_size):
-                chunk = all_paths[i: i + chunk_size]
-                dates.update(batch_read_dates(chunk, et, chunk_size=chunk_size))
-                done = min(i + chunk_size, len(all_paths))
-                print(f"  EXIF {done:,}/{len(all_paths):,}", end="\r", flush=True)
-            print(f"  EXIF done — {sum(1 for v in dates.values() if v):,} dates found", flush=True)
-    except FileNotFoundError:
-        print(
-            "\nWARNING: exiftool not found on PATH — EXIF dates unavailable.\n"
-            "Install from https://exiftool.org/ and ensure it is in your PATH.",
-            file=sys.stderr,
-        )
-        dates = {p: None for p in all_paths}
+    _EXIFTOOL_TYPES = frozenset(("heic", "raw", "mov", "mp4"))
 
-    # --- Compute SHA-256 + pHash ---
-    print(f"Hashing {len(records):,} files…", flush=True)
-    hash_results: list[HashResult] = []
-    iterable = tqdm(records, desc="Hashing", unit="file") if _TQDM else records
-    for record in iterable:
-        sha256 = compute_sha256(record.path)
-        phash = compute_phash(record.path, record.file_type)
-        hash_results.append(HashResult(
-            record=record,
-            sha256=sha256,
-            phash=phash,
-            exif_date=dates.get(record.path),
-        ))
+    print(f"Hashing {len(records):,} files (workers={args.workers})…", flush=True)
+    hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
+
+    def _hash_one(idx_record: tuple) -> tuple:
+        idx, record = idx_record
+        sha256, phash, mean_color, raw_date = compute_hashes(record.path, record.file_type)
+        pil_date = parse_exif_date(raw_date) if raw_date else None
+        return idx, HashResult(record=record, sha256=sha256, phash=phash, mean_color=mean_color, exif_date=pil_date)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)}
+        iterable = tqdm(as_completed(futures), total=len(records), desc="Hashing", unit="file") \
+            if _TQDM else as_completed(futures)
+        for future in iterable:
+            idx, result = future.result()
+            hash_results[idx] = result
+            done += 1
+            if not _TQDM and (done % 500 == 0 or done == len(records)):
+                print(f"  Hashed {done:,}/{len(records):,}", end="\r", flush=True)
     if not _TQDM:
-        print("  Hashing done.", flush=True)
+        print(f"  Hashed {len(records):,}/{len(records):,}", flush=True)
+
+    # --- exiftool for HEIC / RAW / MOV / MP4 only ---
+    # JPEG and PNG dates are already populated from the PIL pass above.
+    et_records = [r for r in hash_results if r.exif_date is None
+                  and r.record.file_type in _EXIFTOOL_TYPES]
+    if et_records:
+        et_paths = [r.record.path for r in et_records]
+        n_chunks = (len(et_paths) + chunk_size - 1) // chunk_size
+        print(f"EXIF via exiftool for {len(et_paths):,} non-JPEG files ({n_chunks} chunk(s))…",
+              flush=True)
+        try:
+            with ExiftoolProcess() as et:
+                dates: dict = {}
+                for i in range(0, len(et_paths), chunk_size):
+                    chunk = et_paths[i: i + chunk_size]
+                    dates.update(batch_read_dates(chunk, et, chunk_size=chunk_size))
+                    done_et = min(i + chunk_size, len(et_paths))
+                    print(f"  EXIF {done_et:,}/{len(et_paths):,}", end="\r", flush=True)
+            found = sum(1 for v in dates.values() if v)
+            print(f"  EXIF done — {found:,} dates found", flush=True)
+            for r in et_records:
+                r.exif_date = dates.get(r.record.path)
+        except FileNotFoundError:
+            print(
+                "\nWARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video unavailable.\n"
+                "Install from https://exiftool.org/ and ensure it is in your PATH.",
+                file=sys.stderr,
+            )
 
     print("Classifying…", flush=True)
     rows = classify(hash_results, threshold=args.threshold, source_priority=source_priority)

@@ -150,3 +150,108 @@ class TestComputePhash:
             result = compute_phash(f, "raw")
 
         assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# compute_hashes — combined single-read API
+# ---------------------------------------------------------------------------
+
+class TestComputeHashes:
+    def test_returns_tuple_sha_phash_date_for_jpeg(self, tmp_path):
+        """compute_hashes returns (sha256, phash, colorhash, raw_date) for a JPEG."""
+        from scanner.hasher import compute_hashes
+        f = tmp_path / "img.jpg"
+        _write_jpeg(f, color=(100, 180, 60))
+        sha, ph, _, _date = compute_hashes(f, "jpeg")
+        assert isinstance(sha, str) and len(sha) == 64
+        assert isinstance(ph, str) and len(ph) == 16
+
+    def test_sha_matches_compute_sha256(self, tmp_path):
+        """SHA-256 from compute_hashes equals compute_sha256 on same file."""
+        from scanner.hasher import compute_hashes, compute_sha256
+        f = tmp_path / "img.jpg"
+        _write_jpeg(f)
+        sha_combined, *_ = compute_hashes(f, "jpeg")
+        assert sha_combined == compute_sha256(f)
+
+    def test_phash_matches_compute_phash(self, tmp_path):
+        """pHash from compute_hashes equals compute_phash on same file."""
+        from scanner.hasher import compute_hashes, compute_phash
+        f = tmp_path / "img.jpg"
+        _write_jpeg(f, color=(200, 80, 40))
+        _, ph_combined, *_ = compute_hashes(f, "jpeg")
+        assert ph_combined == compute_phash(f, "jpeg")
+
+    def test_video_returns_none_phash_and_none_date(self, tmp_path):
+        """Videos: pHash, colorhash, and date are None; SHA-256 is still computed."""
+        from scanner.hasher import compute_hashes, compute_sha256
+        f = tmp_path / "clip.mov"
+        f.write_bytes(b"fake video data " * 100)
+        sha, ph, ch, dt = compute_hashes(f, "mov")
+        assert ph is None
+        assert ch is None
+        assert dt is None
+        assert sha == compute_sha256(f)
+
+    def test_png_single_read(self, tmp_path):
+        """PNG is handled via the BytesIO path (same as JPEG)."""
+        from scanner.hasher import compute_hashes, compute_sha256, compute_phash
+        f = tmp_path / "img.png"
+        _write_png(f)
+        sha, ph, *_ = compute_hashes(f, "png")
+        assert sha == compute_sha256(f)
+        assert ph == compute_phash(f, "png")
+
+    def test_corrupt_image_returns_sha_none_phash(self, tmp_path):
+        """Unreadable image bytes: SHA is computed; pHash, colorhash, and date are None."""
+        from scanner.hasher import compute_hashes
+        f = tmp_path / "bad.jpg"
+        f.write_bytes(b"\xff\xd8" + b"\x00" * 50)  # JPEG magic but corrupt body
+        sha, ph, ch, dt = compute_hashes(f, "jpeg")
+        assert len(sha) == 64
+        assert ph is None
+        assert ch is None
+        assert dt is None
+
+    def test_mean_color_returned_for_jpeg(self, tmp_path):
+        """compute_hashes returns a 'R,G,B' mean_color string for a valid JPEG."""
+        from scanner.hasher import compute_hashes
+        f = tmp_path / "img.jpg"
+        _write_jpeg(f)
+        _, _, ch, _ = compute_hashes(f, "jpeg")
+        assert ch is not None
+        assert isinstance(ch, str)
+        parts = ch.split(",")
+        assert len(parts) == 3
+        assert all(p.isdigit() for p in parts)
+
+    def test_mean_color_none_for_video(self, tmp_path):
+        """Videos return None mean_color (no PIL decode)."""
+        from scanner.hasher import compute_hashes
+        f = tmp_path / "clip.mov"
+        f.write_bytes(b"fake video data " * 100)
+        _, _, ch, _ = compute_hashes(f, "mov")
+        assert ch is None
+
+    def test_jpeg_with_exif_date_returns_raw_date_string(self, tmp_path):
+        """JPEG with DateTimeOriginal EXIF → raw_date_str returned in 4th element."""
+        from scanner.hasher import compute_hashes
+        from PIL import Image
+
+        img = _make_image()
+        exif = img.getexif()
+        exif.get_ifd(0x8769)[36867] = "2024:06:15 10:30:00"  # ExifIFD DateTimeOriginal
+        f = tmp_path / "dated.jpg"
+        img.save(str(f), "JPEG", exif=exif.tobytes())
+
+        _, _, _, raw_date = compute_hashes(f, "jpeg")
+        assert raw_date == "2024:06:15 10:30:00"
+
+    def test_jpeg_without_exif_date_returns_none_date(self, tmp_path):
+        """JPEG with no date EXIF → raw_date_str is None."""
+        from scanner.hasher import compute_hashes
+        f = tmp_path / "nodated.jpg"
+        _write_jpeg(f)
+        _, _, _, raw_date = compute_hashes(f, "jpeg")
+        # Plain solid-colour JPEG written by PIL has no DateTimeOriginal
+        assert raw_date is None

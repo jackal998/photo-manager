@@ -28,6 +28,7 @@ class ScanWorker(QThread):
         source_priority: dict[str, int] | None = None,
         threshold: int = 10,
         limit: int | None = None,
+        workers: int = 4,
     ) -> None:
         super().__init__()
         self.sources = {k: Path(v) for k, v in sources.items() if v.strip()}
@@ -36,6 +37,7 @@ class ScanWorker(QThread):
         self.source_priority = source_priority   # None → auto-inferred in classify()
         self.threshold = threshold
         self.limit = limit
+        self.workers = workers
 
     def run(self) -> None:
         try:
@@ -47,9 +49,11 @@ class ScanWorker(QThread):
         self.progress.emit(msg)
 
     def _run_pipeline(self) -> None:
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from scanner.walker import scan_sources
-        from scanner.hasher import compute_sha256, compute_phash
-        from scanner.exif import ExiftoolProcess, batch_read_dates
+        from scanner.hasher import compute_hashes
+        from scanner.exif import ExiftoolProcess, batch_read_dates, parse_exif_date
         from scanner.dedup import HashResult, classify
         from scanner.manifest import write_manifest, print_summary
         import io
@@ -78,45 +82,68 @@ class ScanWorker(QThread):
             self.failed.emit("No media files found in the selected source folders.")
             return
 
-        # --- 2. EXIF dates ---
-        all_paths = [r.path for r in records]
+        # --- 2. Hash + PIL EXIF (parallel) ---
+        # One file read per image: SHA-256, pHash, and EXIF date for JPEG/PNG
+        # are extracted from the same in-memory buffer.
         chunk_size = 500
-        n_chunks = (len(all_paths) + chunk_size - 1) // chunk_size
-        self._emit(f"Reading EXIF dates ({len(all_paths):,} files, {n_chunks} chunk(s))…")
-        try:
-            with ExiftoolProcess() as et:
-                dates = {}
-                for i in range(0, len(all_paths), chunk_size):
-                    chunk = all_paths[i: i + chunk_size]
-                    dates.update(batch_read_dates(chunk, et, chunk_size=chunk_size))
-                    done = min(i + chunk_size, len(all_paths))
-                    self._emit(f"  EXIF {done:,}/{len(all_paths):,}")
-            found = sum(1 for v in dates.values() if v)
-            self._emit(f"  EXIF done — {found:,} dates found")
-        except FileNotFoundError:
-            self._emit(
-                "WARNING: exiftool not found on PATH — EXIF dates unavailable.\n"
-                "Install from https://exiftool.org/ and add to PATH."
-            )
-            dates = {p: None for p in all_paths}
+        _EXIFTOOL_TYPES = frozenset(("heic", "raw", "mov", "mp4"))
+        cancel_flag = threading.Event()
 
-        # --- 3. Hash ---
-        self._emit(f"Hashing {len(records):,} files…")
-        hash_results: list[HashResult] = []
-        for idx, record in enumerate(records):
-            if self.isInterruptionRequested():
-                self.failed.emit("Scan cancelled.")
-                return
-            sha256 = compute_sha256(record.path)
-            phash = compute_phash(record.path, record.file_type)
-            hash_results.append(HashResult(
-                record=record,
-                sha256=sha256,
-                phash=phash,
-                exif_date=dates.get(record.path),
-            ))
-            if (idx + 1) % 100 == 0 or (idx + 1) == len(records):
-                self._emit(f"  Hashed {idx + 1:,}/{len(records):,}")
+        def _hash_one(idx_record: tuple) -> tuple:
+            idx, record = idx_record
+            if cancel_flag.is_set():
+                return idx, None
+            sha256, phash, mean_color, raw_date = compute_hashes(record.path, record.file_type)
+            pil_date = parse_exif_date(raw_date) if raw_date else None
+            return idx, HashResult(record=record, sha256=sha256, phash=phash, mean_color=mean_color, exif_date=pil_date)
+
+        self._emit(f"Hashing {len(records):,} files (workers={self.workers})…")
+        hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
+        done = 0
+
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            futures = {pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)}
+            for future in as_completed(futures):
+                if self.isInterruptionRequested():
+                    cancel_flag.set()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    self.failed.emit("Scan cancelled.")
+                    return
+                idx, result = future.result()
+                if result is not None:
+                    hash_results[idx] = result
+                done += 1
+                if done % 100 == 0 or done == len(records):
+                    self._emit(f"  Hashed {done:,}/{len(records):,}")
+
+        # Remove any None slots (cancelled futures that didn't run)
+        hash_results = [r for r in hash_results if r is not None]
+
+        # --- 3. exiftool for HEIC / RAW / MOV / MP4 only ---
+        # JPEG and PNG dates already populated from the PIL pass above.
+        et_records = [r for r in hash_results if r.exif_date is None
+                      and r.record.file_type in _EXIFTOOL_TYPES]
+        if et_records:
+            et_paths = [r.record.path for r in et_records]
+            n_chunks = (len(et_paths) + chunk_size - 1) // chunk_size
+            self._emit(f"EXIF via exiftool for {len(et_paths):,} non-JPEG files ({n_chunks} chunk(s))…")
+            try:
+                with ExiftoolProcess() as et:
+                    dates: dict = {}
+                    for i in range(0, len(et_paths), chunk_size):
+                        chunk = et_paths[i: i + chunk_size]
+                        dates.update(batch_read_dates(chunk, et, chunk_size=chunk_size))
+                        done_et = min(i + chunk_size, len(et_paths))
+                        self._emit(f"  EXIF {done_et:,}/{len(et_paths):,}")
+                found = sum(1 for v in dates.values() if v)
+                self._emit(f"  EXIF done — {found:,} dates found")
+                for r in et_records:
+                    r.exif_date = dates.get(r.record.path)
+            except FileNotFoundError:
+                self._emit(
+                    "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video unavailable.\n"
+                    "Install from https://exiftool.org/ and add to PATH."
+                )
 
         # --- 4. Classify ---
         self._emit("Classifying…")
