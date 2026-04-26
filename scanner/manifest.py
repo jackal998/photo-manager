@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
     source_hash      TEXT,
     phash            TEXT,
     hamming_distance INTEGER,
-    duplicate_of     TEXT,
+    group_id         TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0,
     user_decision    TEXT    NOT NULL DEFAULT '',
@@ -29,12 +29,13 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
 CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
 CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
 CREATE INDEX IF NOT EXISTS idx_action      ON migration_manifest(action);
+CREATE INDEX IF NOT EXISTS idx_group_id    ON migration_manifest(group_id);
 """
 
 _INSERT = """
 INSERT INTO migration_manifest
     (source_path, source_label, dest_path, action, source_hash,
-     phash, hamming_distance, duplicate_of, reason,
+     phash, hamming_distance, group_id, reason,
      file_size_bytes, shot_date, creation_date, mtime)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)
 """
@@ -61,7 +62,7 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
                     r.source_hash,
                     r.phash,
                     r.hamming_distance,
-                    r.duplicate_of,
+                    r.group_id,
                     r.reason,
                     r.file_size_bytes,
                     r.shot_date,
@@ -89,4 +90,12 @@ def print_summary(rows: list[ManifestRow]) -> None:
     other = total - sum(counts[a] for a in ("KEEP", "MOVE", "EXACT", "REVIEW_DUPLICATE", "UNDATED"))
     if other:
         print(f"  {'other':<20}: {other:>7,}")
+    print("────────────────────────────────────────────────────")
+
+    n_groups = len({r.group_id for r in rows if r.group_id})
+    n_grouped = sum(1 for r in rows if r.group_id)
+    print(f"\n── Group Summary ───────────────────────────────────")
+    print(f"  Groups (≥2 similar files) : {n_groups:>7,}")
+    print(f"  Files in groups           : {n_grouped:>7,}")
+    print(f"  Isolated (no match)       : {total - n_grouped:>7,}")
     print("────────────────────────────────────────────────────\n")

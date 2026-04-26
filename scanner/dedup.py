@@ -65,13 +65,14 @@ class ManifestRow:
     source_hash: str
     phash: Optional[str]
     hamming_distance: Optional[int]
-    duplicate_of: Optional[str]
+    duplicate_of: Optional[str]   # transient — used for union-find edges; NOT written to DB
     reason: str
     # Cached at scan time — eliminates all filesystem I/O at load time
     file_size_bytes: Optional[int] = None
     shot_date: Optional[str] = None      # ISO 8601 from EXIF DateTimeOriginal
     creation_date: Optional[str] = None  # ISO 8601 filesystem ctime
     mtime: Optional[str] = None          # ISO 8601 filesystem mtime
+    group_id: Optional[str] = None       # canonical root path of connected component; written to DB
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +123,9 @@ def classify(
 
     # Pass 4: propagate EXACT/KEEP actions to Live Photo MOV partners
     _propagate_pairs(records, rows)
+
+    # Pass 5: assign group_id via transitive closure over duplicate_of edges
+    _assign_group_ids(rows)
 
     return list(rows.values())
 
@@ -229,8 +233,9 @@ def _classify_near_duplicates(
     hashes = [(hr, imagehash.hex_to_hash(hr.phash)) for hr in unclassified if hr.phash]
 
     for i, (hr_a, hash_a) in enumerate(hashes):
-        if hr_a.record.path in rows:
-            continue
+        # Do NOT skip hr_a when it is already classified — it can still serve as
+        # a comparator so that transitively-similar files (hr_b similar to hr_a
+        # which is similar to an earlier file) are connected into the same group.
         for hr_b, hash_b in hashes[i + 1:]:
             if hr_b.record.path in rows:
                 continue
@@ -278,6 +283,45 @@ def _propagate_pairs(records: list[HashResult], rows: dict[Path, ManifestRow]) -
                     duplicate_of=own_row.duplicate_of or str(hr.record.path),
                     reason=f"Live Photo pair partner of {hr.record.path.name}",
                 )
+
+
+def _assign_group_ids(rows: dict[Path, ManifestRow]) -> None:
+    """Assign group_id via union-find over duplicate_of edges.
+
+    Files transitively connected (A→B, B→C) all receive the same group_id —
+    the lexicographically smallest source_path in the component.
+    Isolated files (no similarity edge) receive group_id = None.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while x in parent:
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            if ra < rb:
+                parent[rb] = ra
+            else:
+                parent[ra] = rb
+
+    for row in rows.values():
+        if row.duplicate_of:
+            union(row.source_path, row.duplicate_of)
+
+    # Collect every path that participates in at least one edge
+    has_edge: set[str] = set()
+    for row in rows.values():
+        if row.duplicate_of:
+            has_edge.add(row.source_path)
+            has_edge.add(row.duplicate_of)
+
+    for row in rows.values():
+        if row.source_path in has_edge:
+            row.group_id = find(row.source_path)
+        # else: stays None (isolated file)
 
 
 # ---------------------------------------------------------------------------

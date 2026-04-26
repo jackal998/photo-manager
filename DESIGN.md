@@ -349,7 +349,7 @@ scan_sources()  →  batch_read_dates()  →  compute_sha256/phash()  →  class
 | `scanner.walker` | `scanner/walker.py` | rglob each source dir; detect media type; pair Live Photos (same-stem HEIC+MOV); yield `FileRecord` |
 | `scanner.exif` | `scanner/exif.py` | Persistent exiftool `-stay_open` process; batch EXIF reads (chunked ≤500/call) |
 | `scanner.hasher` | `scanner/hasher.py` | SHA-256 (all files) + pHash via `imagehash` (photos only; RAW uses embedded JPEG thumb) |
-| `scanner.dedup` | `scanner/dedup.py` | Group by SHA-256 → EXACT_DUPLICATE; group by pHash → FORMAT_DUPLICATE or REVIEW_DUPLICATE; apply RAW+lossy exception; propagate Live Photo pairs |
+| `scanner.dedup` | `scanner/dedup.py` | Group by SHA-256 → EXACT; group by pHash → EXACT (format dup) or REVIEW_DUPLICATE; apply RAW+lossy exception; propagate Live Photo pairs; assign `group_id` via union-find (transitive closure over similarity edges) |
 | `scanner.manifest` | `scanner/manifest.py` | Write SQLite `migration_manifest`; `print_summary` action counts |
 | `scanner.media` | `scanner/media.py` | `MEDIA_EXTENSIONS`, `SKIP_FILENAMES`, Live Photo pair logic, `_magic_type` |
 
@@ -415,8 +415,8 @@ python scan.py ... --limit 200 --dry-run   # bounded debug run
 | `action` | TEXT | Scanner classification: `EXACT` / `REVIEW_DUPLICATE` / `MOVE` / `UNDATED` |
 | `source_hash` | TEXT | SHA-256 hex |
 | `phash` | TEXT | 64-bit perceptual hash hex; NULL for video |
-| `hamming_distance` | INTEGER | Distance to `duplicate_of`'s phash |
-| `duplicate_of` | TEXT | source_path of kept file |
+| `hamming_distance` | INTEGER | Hamming distance to nearest similar file |
+| `group_id` | TEXT | Canonical root path of the connected similarity component; all files in the same group share this value; NULL for isolated files (MOVE / UNDATED with no match) |
 | `executed` | INTEGER | 0=pending 1=done |
 | `user_decision` | TEXT | User's planned file operation: `delete` / `""` (undecided; displayed as "keep (remove action)") / `"removed"` (hidden from review) |
 | `file_size_bytes` | INTEGER | Cached at scan time; NULL in pre-existing manifests (auto-migrated) |
@@ -424,6 +424,6 @@ python scan.py ... --limit 200 --dry-run   # bounded debug run
 | `creation_date` | TEXT | ISO 8601 filesystem ctime at scan time |
 | `mtime` | TEXT | ISO 8601 filesystem mtime at scan time |
 
-All five nullable columns (`user_decision`, `file_size_bytes`, `shot_date`,
-`creation_date`, `mtime`) are added automatically to older manifests via
+All six nullable columns (`user_decision`, `file_size_bytes`, `shot_date`,
+`creation_date`, `mtime`, `group_id`) are added automatically to older manifests via
 `ALTER TABLE … ADD COLUMN` migrations on first load.

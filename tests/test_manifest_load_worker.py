@@ -10,7 +10,7 @@ from scanner.dedup import ManifestRow
 from scanner.manifest import write_manifest
 
 
-def _make_row(path: str) -> ManifestRow:
+def _make_row(path: str, group_id: str | None = None) -> ManifestRow:
     return ManifestRow(
         source_path=path,
         source_label="jdrive",
@@ -21,6 +21,7 @@ def _make_row(path: str) -> ManifestRow:
         hamming_distance=None,
         duplicate_of=None,
         reason="unique",
+        group_id=group_id,
     )
 
 
@@ -36,9 +37,12 @@ class TestManifestLoadWorker:
         from app.views.workers.manifest_load_worker import ManifestLoadWorker
 
         f = tmp_path / "photo.jpg"
+        f2 = tmp_path / "photo2.jpg"
         f.write_bytes(b"fake")
+        f2.write_bytes(b"fake2")
         db = tmp_path / "manifest.sqlite"
-        write_manifest([_make_row(str(f))], db)
+        gid = str(f)
+        write_manifest([_make_row(str(f), group_id=gid), _make_row(str(f2), group_id=gid)], db)
 
         finished_groups: list = []
         worker = ManifestLoadWorker(str(db), [], parent=None)
@@ -46,7 +50,8 @@ class TestManifestLoadWorker:
         self._run_worker(qapp, worker)
 
         assert len(finished_groups) == 1
-        assert finished_groups[0].items[0].file_path == str(f)
+        paths = {r.file_path for r in finished_groups[0].items}
+        assert str(f) in paths
 
     def test_worker_emits_failed_on_bad_path(self, qapp):
         """Worker emits failed signal when the manifest path does not exist."""
