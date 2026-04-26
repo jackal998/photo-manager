@@ -87,8 +87,8 @@ logs/
 .env.*
 !.env.example
 
-# Local settings (keep committed settings.json)
-settings.local.json
+# Local settings — machine-specific paths, not committed
+settings.json
 
 # Databases
 *.sqlite

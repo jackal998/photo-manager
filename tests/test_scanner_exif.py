@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from scanner.exif import _parse_exif_date, batch_read_dates, _read_chunk
+from scanner.exif import parse_exif_date as _parse_exif_date, batch_read_dates, _read_chunk
 
 
-# ── _parse_exif_date ───────────────────────────────────────────────────────
+# ── parse_exif_date ────────────────────────────────────────────────────────
 
 class TestParseExifDate:
     def test_valid_date(self):
