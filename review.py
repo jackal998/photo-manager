@@ -38,7 +38,7 @@ def _open(path: Path) -> sqlite3.Connection:
 def _pending_reviews(conn: sqlite3.Connection, show_all: bool) -> list[sqlite3.Row]:
     where = "" if show_all else "AND executed = 0"
     return conn.execute(
-        f"SELECT id, source_path, source_label, duplicate_of, hamming_distance, "
+        f"SELECT id, source_path, source_label, group_id, hamming_distance, "
         f"       phash, reason, action, executed "
         f"FROM migration_manifest "
         f"WHERE action = 'REVIEW_DUPLICATE' {where} "
@@ -55,12 +55,13 @@ def _set_action(conn: sqlite3.Connection, row_id: int, action: str) -> None:
     conn.commit()
 
 
-def _lookup(conn: sqlite3.Connection, source_path: str) -> Optional[sqlite3.Row]:
+def _group_members(conn: sqlite3.Connection, group_id: str) -> list[sqlite3.Row]:
+    """Return all rows sharing the given group_id (excluding the candidate itself)."""
     return conn.execute(
         "SELECT source_path, source_label, action, dest_path "
-        "FROM migration_manifest WHERE source_path = ?",
-        (source_path,),
-    ).fetchone()
+        "FROM migration_manifest WHERE group_id = ?",
+        (group_id,),
+    ).fetchall()
 
 
 # ---------------------------------------------------------------------------
@@ -76,19 +77,21 @@ def _fmt_row(row: sqlite3.Row) -> str:
     return f"  [{label}] {name}  ({action}, {status})"
 
 
-def _show_pair(candidate: sqlite3.Row, reference_row: Optional[sqlite3.Row]) -> None:
+def _show_candidate(candidate: sqlite3.Row, members: list[sqlite3.Row]) -> None:
     dist = candidate["hamming_distance"]
     print(f"\n{'─' * 60}")
     print(f"  hamming distance : {dist}")
     print(f"\n  CANDIDATE (to review):")
     print(f"  [{candidate['source_label']}] {candidate['source_path']}")
     print(f"  reason: {candidate['reason']}")
-    print(f"\n  REFERENCE (kept):")
-    if reference_row:
-        print(f"  [{reference_row['source_label']}] {reference_row['source_path']}")
-        print(f"  action: {reference_row['action']}")
+    others = [m for m in members if m["source_path"] != candidate["source_path"]]
+    if others:
+        print(f"\n  GROUP MEMBERS ({len(others)} other file(s)):")
+        for m in others:
+            print(f"  [{m['source_label']}] {m['source_path']}  (action: {m['action']})")
     else:
-        print(f"  {candidate['duplicate_of']}  (not in manifest)")
+        gid = candidate["group_id"]
+        print(f"\n  group_id: {gid}  (no other members in manifest)")
     print()
 
 
@@ -113,8 +116,8 @@ def _review_loop(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> None:
         if candidate["executed"] == 1:
             continue  # already resolved in this session
 
-        reference = _lookup(conn, candidate["duplicate_of"]) if candidate["duplicate_of"] else None
-        _show_pair(candidate, reference)
+        members = _group_members(conn, candidate["group_id"]) if candidate["group_id"] else []
+        _show_candidate(candidate, members)
 
         remaining = sum(1 for r in rows[i:] if r["executed"] == 0)
         print(f"  [{i + 1}/{total}]  {remaining - 1} remaining after this")

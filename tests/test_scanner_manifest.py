@@ -100,9 +100,40 @@ class TestWriteManifest:
         )], out)
         with sqlite3.connect(out) as conn:
             row = conn.execute(
-                "SELECT phash, hamming_distance, duplicate_of FROM migration_manifest"
+                "SELECT phash, hamming_distance FROM migration_manifest"
             ).fetchone()
-        assert row == ("aabbccdd", 5, "/b.jpg")
+        assert row == ("aabbccdd", 5)
+
+    def test_group_id_column_exists(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        cols = {r[1] for r in sqlite3.connect(out).execute(
+            "PRAGMA table_info(migration_manifest)"
+        ).fetchall()}
+        assert "group_id" in cols
+
+    def test_duplicate_of_column_absent(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        cols = {r[1] for r in sqlite3.connect(out).execute(
+            "PRAGMA table_info(migration_manifest)"
+        ).fetchall()}
+        assert "duplicate_of" not in cols
+
+    def test_group_id_stored(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="REVIEW_DUPLICATE", source_hash="abc",
+            phash="aabbccdd", hamming_distance=5,
+            duplicate_of="/b.jpg",  # transient — NOT written to DB
+            reason="near-dup",
+            group_id="/a.jpg",
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            val = conn.execute("SELECT group_id FROM migration_manifest").fetchone()[0]
+        assert val == "/a.jpg"
 
 
 # ── print_summary ──────────────────────────────────────────────────────────
