@@ -39,6 +39,7 @@ def _hr(
     path: str,
     sha256: str = "aaa",
     phash: str | None = "0000000000000000",
+    mean_color: str | None = None,
     exif_date: datetime | None = None,
     source_label: str = "jdrive",
     file_type: str = "jpeg",
@@ -49,6 +50,7 @@ def _hr(
                        pair_partner=pair_partner),
         sha256=sha256,
         phash=phash,
+        mean_color=mean_color,
         exif_date=exif_date,
     )
 
@@ -162,6 +164,45 @@ class TestNearDuplicate:
         # threshold=3 → distance 4 is beyond threshold
         rows = _rows(classify([a, b], threshold=3))
         assert rows["/b.jpg"].action != "REVIEW_DUPLICATE"
+
+    def test_mean_color_mismatch_rejects_false_positive(self):
+        """pHash near-duplicate with very different mean_color is NOT flagged."""
+        import imagehash
+        base = imagehash.hex_to_hash("0" * 16)
+        near = imagehash.hex_to_hash("f" + "0" * 15)   # hamming=4, within threshold
+        # Mean colors with L2 ≈ 280 (>> threshold 30) — clearly different colors
+        a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color="10,20,30",
+                source_label="takeout", exif_date=_dt())
+        b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color="200,180,160",
+                source_label="takeout", exif_date=_dt())
+        rows = _rows(classify([a, b], threshold=10))
+        assert rows["/b.jpg"].action != "REVIEW_DUPLICATE"
+
+    def test_mean_color_match_confirms_near_duplicate(self):
+        """pHash near-duplicate with similar mean_color IS flagged."""
+        import imagehash
+        base = imagehash.hex_to_hash("0" * 16)
+        near = imagehash.hex_to_hash("f" + "0" * 15)   # hamming=4, within threshold
+        # Mean colors with L2 ≈ 6 (<< threshold 30) — same color palette
+        a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color="100,120,140",
+                source_label="takeout", exif_date=_dt())
+        b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color="105,118,142",
+                source_label="takeout", exif_date=_dt())
+        rows = _rows(classify([a, b], threshold=10))
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
+
+    def test_missing_mean_color_falls_back_to_phash_only(self):
+        """If mean_color is None for either file, gate is skipped (pHash-only behavior)."""
+        import imagehash
+        base = imagehash.hex_to_hash("0" * 16)
+        near = imagehash.hex_to_hash("f" + "0" * 15)
+        a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color=None,
+                source_label="takeout", exif_date=_dt())
+        b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color=None,
+                source_label="takeout", exif_date=_dt())
+        rows = _rows(classify([a, b], threshold=10))
+        # No mean_color → gate not applied → flagged on pHash alone
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
 
 
 # ---------------------------------------------------------------------------

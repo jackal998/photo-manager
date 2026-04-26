@@ -37,6 +37,73 @@ def compute_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def compute_hashes(path: Path, file_type: str) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
+    """Single file read: ``(sha256, phash, mean_color, raw_exif_date)``. One network round-trip.
+
+    mean_color is the average RGB of the image, computed from the same PIL image as
+    pHash via a 1×1 LANCZOS downscale — no extra file open, no degenerate edge cases.
+    Stored as ``"R,G,B"`` (e.g. ``"132,133,114"``). Used as a false-positive gate in
+    near-duplicate classification: two images with similar pHash but very different mean
+    colors are almost certainly not duplicates.
+
+    ``raw_date_str`` is ``None`` for RAW/video; callers pass those to exiftool.
+    For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
+    """
+    if file_type in ("mp4", "mov", "gif", "skip"):
+        return compute_sha256(path), None, None, None
+
+    # Single read: derive all four values from memory.
+    data = path.read_bytes()
+    sha = hashlib.sha256(data).hexdigest()
+
+    if not _HASH_AVAILABLE:
+        return sha, None, None, None
+
+    img: Optional[Image.Image] = None
+    raw_date: Optional[str] = None
+
+    if file_type == "raw":
+        img = _load_raw_preview_from_bytes(data)
+        if img is None:
+            # rawpy.open_buffer not available in this version; re-use path-based loader.
+            img = _load_raw_preview(path)
+        # RAW EXIF dates are not reliably readable via PIL — caller uses exiftool.
+    else:
+        try:
+            with Image.open(io.BytesIO(data)) as pil_img:
+                # Extract date BEFORE convert() — that creates a new image without EXIF.
+                raw_date = _raw_exif_date(pil_img)
+                img = pil_img.convert("RGB")
+                img.load()
+        except (OSError, ValueError):
+            img = None
+
+    if img is None:
+        return sha, None, None, raw_date
+    try:
+        tiny = img.resize((1, 1), Image.LANCZOS)
+        mc = tiny.getpixel((0, 0))[:3]
+        return sha, str(imagehash.phash(img)), f"{mc[0]},{mc[1]},{mc[2]}", raw_date
+    except (ValueError, TypeError):
+        return sha, None, None, raw_date
+
+
+def _raw_exif_date(img: "Image.Image") -> Optional[str]:
+    """Return the raw ``DateTimeOriginal`` string from a PIL image's EXIF, or None.
+
+    Checks ExifIFD (sub-IFD 0x8769) first, then falls back to main IFD tag 306
+    (DateTime).  No parsing — returns the raw "YYYY:MM:DD HH:MM:SS" string so
+    that callers can use their own date-parsing logic.
+    """
+    try:
+        exif = img.getexif()
+        exif_ifd = exif.get_ifd(0x8769)          # ExifIFD sub-IFD
+        raw = exif_ifd.get(36867) or exif.get(36867) or exif.get(306)  # DateTimeOriginal / DateTime
+        return str(raw) if raw else None
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
 def compute_phash(path: Path, file_type: str) -> Optional[str]:
     """Compute a 64-bit perceptual hash for image files.
 
@@ -44,6 +111,9 @@ def compute_phash(path: Path, file_type: str) -> Optional[str]:
 
     RAW files: try embedded JPEG preview first (fast), fall back to full decode.
     HEIC: requires pillow-heif registered (done at module import).
+
+    Prefer ``compute_hashes()`` when SHA-256 is also needed — it reads the file
+    only once instead of twice.
     """
     if not _HASH_AVAILABLE:
         return None
@@ -70,9 +140,11 @@ def compute_phash(path: Path, file_type: str) -> Optional[str]:
 
 
 def _load_raw_preview(path: Path) -> Optional[Image.Image]:
-    """Load a PIL Image from a RAW file's embedded JPEG thumbnail.
+    """Load a PIL Image from a RAW file's embedded JPEG thumbnail (path-based).
 
     Falls back to full rawpy decode if no thumbnail is present.
+    Used directly by ``compute_phash``; ``compute_hashes`` prefers
+    ``_load_raw_preview_from_bytes`` to avoid a second file read.
     """
     if not _RAWPY_AVAILABLE:
         return None
@@ -90,4 +162,29 @@ def _load_raw_preview(path: Path) -> Optional[Image.Image]:
             rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
             return Image.fromarray(rgb).convert("RGB")
     except (OSError, ValueError):
+        return None
+
+
+def _load_raw_preview_from_bytes(data: bytes) -> Optional[Image.Image]:
+    """Load a PIL Image from RAW bytes using rawpy.open_buffer (no second file read).
+
+    Returns None if rawpy.open_buffer is unavailable (older rawpy versions);
+    the caller falls back to _load_raw_preview() in that case.
+    """
+    if not _RAWPY_AVAILABLE:
+        return None
+    try:
+        with rawpy.open_buffer(data) as raw:
+            try:
+                thumb = raw.extract_thumb()
+                if thumb.format == rawpy.ThumbFormat.JPEG:
+                    img = Image.open(io.BytesIO(thumb.data)).convert("RGB")
+                    img.load()
+                    return img
+            except rawpy.LibRawNoThumbnailError:
+                pass
+            rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
+            return Image.fromarray(rgb).convert("RGB")
+    except (OSError, ValueError, AttributeError):
+        # AttributeError → rawpy.open_buffer not available in this rawpy build.
         return None

@@ -52,6 +52,7 @@ class HashResult:
     sha256: str
     phash: Optional[str]       # None for video or hash failure
     exif_date: Optional[datetime]
+    mean_color: Optional[str] = None  # "R,G,B" average pixel; None for video/RAW/failure
 
 
 @dataclass
@@ -78,6 +79,18 @@ class ManifestRow:
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
+
+# Mean-color L2 distance threshold for near-duplicate false-positive gate.
+# Mean color is the 1×1 LANCZOS-downscaled RGB ("R,G,B" string).
+# Genuinely different-colored images: L2 >> 30; same image in different formats: L2 < 10.
+_MEAN_COLOR_THRESHOLD = 30
+
+
+def _mean_color_distance(a: str, b: str) -> float:
+    """L2 distance between two mean-color strings ("R,G,B")."""
+    ra, ga, ba = (int(x) for x in a.split(","))
+    rb, gb, bb = (int(x) for x in b.split(","))
+    return ((ra - rb) ** 2 + (ga - gb) ** 2 + (ba - bb) ** 2) ** 0.5
 
 
 def classify(
@@ -241,6 +254,12 @@ def _classify_near_duplicates(
                 continue
             distance = hash_a - hash_b
             if 0 < distance <= threshold:
+                # Mean-color gate: reject if average colors clearly differ.
+                # Catches pHash false positives (similar DCT structure, different colors).
+                # Gate is skipped when either file lacks mean_color (RAW, hash failure).
+                if hr_a.mean_color and hr_b.mean_color:
+                    if _mean_color_distance(hr_a.mean_color, hr_b.mean_color) > _MEAN_COLOR_THRESHOLD:
+                        continue
                 # Flag the lower-priority file as REVIEW_DUPLICATE
                 ordered = sorted(
                     [hr_a, hr_b],
