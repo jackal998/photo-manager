@@ -52,7 +52,9 @@ class HashResult:
     sha256: str
     phash: Optional[str]       # None for video or hash failure
     exif_date: Optional[datetime]
-    mean_color: Optional[str] = None  # "R,G,B" average pixel; None for video/RAW/failure
+    mean_color: Optional[str] = None   # "R,G,B" average pixel; None for video/RAW/failure
+    pixel_width: Optional[int] = None  # image width in pixels; None for video/failure
+    pixel_height: Optional[int] = None # image height in pixels; None for video/failure
 
 
 @dataclass
@@ -74,6 +76,8 @@ class ManifestRow:
     creation_date: Optional[str] = None  # ISO 8601 filesystem ctime
     mtime: Optional[str] = None          # ISO 8601 filesystem mtime
     group_id: Optional[str] = None       # canonical root path of connected component; written to DB
+    pixel_width: Optional[int] = None    # image width in pixels; written to DB
+    pixel_height: Optional[int] = None   # image height in pixels; written to DB
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +389,8 @@ def _make_row(
         shot_date=_shot,
         creation_date=_ctime.isoformat() if _ctime else None,
         mtime=_mtime,
+        pixel_width=hr.pixel_width,
+        pixel_height=hr.pixel_height,
     )
 
 
