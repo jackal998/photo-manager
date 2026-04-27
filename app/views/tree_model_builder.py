@@ -92,11 +92,7 @@ def build_model(
         # reorders groups by their "best" file's value (first file after in-group sort).
         # Min-priority wins for ranked fields (delete=1 < keep=2 < ""=3); max wins for size.
         try:
-            group_row[COL_GROUP].setData(
-                min((_ACTION_SORT.get(getattr(it, "action", ""), 6) for it in items_list),
-                    default=6),
-                SORT_ROLE,
-            )
+            group_row[COL_GROUP].setData(group_number, SORT_ROLE)
         except Exception:
             pass
         try:
