@@ -57,7 +57,10 @@ cd photo-manager
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+copy settings.json.example settings.json   # local config — never committed
 ```
+
+`settings.json` is gitignored. It may contain personal folder paths; edit it to add your sources after copying.
 
 ### Launch (GUI)
 

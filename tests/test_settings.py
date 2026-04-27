@@ -97,9 +97,10 @@ def test_save_preserves_existing_keys(settings_file):
     assert reloaded["sources"]["iphone"] == "/nas/iphone"
 
 
-def test_missing_file_raises():
-    with pytest.raises(FileNotFoundError):
-        JsonSettings(Path("/does/not/exist/settings.json"))
+def test_missing_file_returns_empty_settings():
+    s = JsonSettings(Path("/does/not/exist/settings.json"))
+    assert s.get("thumbnail_size") is None
+    assert s.get("thumbnail_size", 512) == 512
 
 
 def test_malformed_json_raises(tmp_path):

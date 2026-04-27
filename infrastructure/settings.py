@@ -13,7 +13,8 @@ class JsonSettings:
     def __init__(self, settings_path: str | Path) -> None:
         self._path = Path(settings_path)
         if not self._path.exists():
-            raise FileNotFoundError(f"settings.json not found: {self._path}")
+            self._data: dict = {}
+            return
         with self._path.open("r", encoding="utf-8") as f:
             self._data = json.load(f)
 
