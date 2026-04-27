@@ -225,28 +225,20 @@ class ExecuteActionDialog(QDialog):
     # ------------------------------------------------------------------ execute
 
     def _on_execute_requested(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
         complete = self._complete_delete_groups()
         if complete:
-            ops = [
-                {
-                    "path": rec.file_path,
-                    "decision": rec.user_decision,
-                    "group_number": group.group_number,
-                }
-                for group in self._groups
-                for rec in getattr(group, "items", [])
-                if getattr(rec, "user_decision", "")
-            ]
-            from app.views.dialogs.group_deletion_check_dialog import GroupDeletionCheckDialog
-            dlg = GroupDeletionCheckDialog(ops, complete, self._manifest_path, self)
-            if dlg.exec() != QDialog.Accepted:
+            group_list = ", ".join(str(g) for g in complete)
+            reply = QMessageBox.question(
+                self,
+                "All Files Will Be Deleted",
+                f"Group(s) {group_list} will have EVERY file deleted.\n\n"
+                "Files will be sent to the Recycle Bin. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
                 return
-            for path, new_decision in dlg.overrides.items():
-                for group in self._groups:
-                    for rec in getattr(group, "items", []):
-                        if rec.file_path == path:
-                            rec.user_decision = new_decision
-                            break
         self._on_execute()
 
     def _on_execute(self) -> None:
