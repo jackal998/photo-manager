@@ -162,7 +162,7 @@ class TestComputeHashes:
         from scanner.hasher import compute_hashes
         f = tmp_path / "img.jpg"
         _write_jpeg(f, color=(100, 180, 60))
-        sha, ph, _, _date = compute_hashes(f, "jpeg")
+        sha, ph, _, _date, *_ = compute_hashes(f, "jpeg")
         assert isinstance(sha, str) and len(sha) == 64
         assert isinstance(ph, str) and len(ph) == 16
 
@@ -187,7 +187,7 @@ class TestComputeHashes:
         from scanner.hasher import compute_hashes, compute_sha256
         f = tmp_path / "clip.mov"
         f.write_bytes(b"fake video data " * 100)
-        sha, ph, ch, dt = compute_hashes(f, "mov")
+        sha, ph, ch, dt, *_ = compute_hashes(f, "mov")
         assert ph is None
         assert ch is None
         assert dt is None
@@ -207,7 +207,7 @@ class TestComputeHashes:
         from scanner.hasher import compute_hashes
         f = tmp_path / "bad.jpg"
         f.write_bytes(b"\xff\xd8" + b"\x00" * 50)  # JPEG magic but corrupt body
-        sha, ph, ch, dt = compute_hashes(f, "jpeg")
+        sha, ph, ch, dt, *_ = compute_hashes(f, "jpeg")
         assert len(sha) == 64
         assert ph is None
         assert ch is None
@@ -218,7 +218,7 @@ class TestComputeHashes:
         from scanner.hasher import compute_hashes
         f = tmp_path / "img.jpg"
         _write_jpeg(f)
-        _, _, ch, _ = compute_hashes(f, "jpeg")
+        _, _, ch, *_ = compute_hashes(f, "jpeg")
         assert ch is not None
         assert isinstance(ch, str)
         parts = ch.split(",")
@@ -230,7 +230,7 @@ class TestComputeHashes:
         from scanner.hasher import compute_hashes
         f = tmp_path / "clip.mov"
         f.write_bytes(b"fake video data " * 100)
-        _, _, ch, _ = compute_hashes(f, "mov")
+        _, _, ch, *_ = compute_hashes(f, "mov")
         assert ch is None
 
     def test_jpeg_with_exif_date_returns_raw_date_string(self, tmp_path):
@@ -244,7 +244,7 @@ class TestComputeHashes:
         f = tmp_path / "dated.jpg"
         img.save(str(f), "JPEG", exif=exif.tobytes())
 
-        _, _, _, raw_date = compute_hashes(f, "jpeg")
+        _, _, _, raw_date, *_ = compute_hashes(f, "jpeg")
         assert raw_date == "2024:06:15 10:30:00"
 
     def test_jpeg_without_exif_date_returns_none_date(self, tmp_path):
@@ -252,6 +252,6 @@ class TestComputeHashes:
         from scanner.hasher import compute_hashes
         f = tmp_path / "nodated.jpg"
         _write_jpeg(f)
-        _, _, _, raw_date = compute_hashes(f, "jpeg")
+        _, _, _, raw_date, *_ = compute_hashes(f, "jpeg")
         # Plain solid-colour JPEG written by PIL has no DateTimeOriginal
         assert raw_date is None

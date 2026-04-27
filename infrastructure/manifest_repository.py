@@ -48,7 +48,8 @@ def _connect(path: str) -> sqlite3.Connection:
 _LOAD_ALL_SQL = """
 SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        action, executed, user_decision,
-       file_size_bytes, shot_date, creation_date, mtime
+       file_size_bytes, shot_date, creation_date, mtime,
+       pixel_width, pixel_height
 FROM   migration_manifest
 ORDER  BY
     group_id NULLS LAST,
@@ -72,6 +73,8 @@ _MIGRATIONS = [
     ("creation_date",   "TEXT"),
     ("mtime",           "TEXT"),
     ("group_id",        "TEXT"),
+    ("pixel_width",     "INTEGER"),
+    ("pixel_height",    "INTEGER"),
 ]
 
 _UPDATE_DECISION_SQL = """
@@ -100,6 +103,8 @@ def _photo_record(
     db_creation_date: "str | None" = None,
     db_mtime: "str | None" = None,
     hamming_distance: "int | None" = None,
+    db_pixel_width: "int | None" = None,
+    db_pixel_height: "int | None" = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
@@ -161,6 +166,8 @@ def _photo_record(
         action=action,
         user_decision=user_decision,
         hamming_distance=hamming_distance,
+        pixel_width=db_pixel_width,
+        pixel_height=db_pixel_height,
     )
 
 
@@ -238,6 +245,8 @@ class ManifestRepository:
                         db_creation_date=row["creation_date"],
                         db_mtime=row["mtime"],
                         hamming_distance=row["hamming_distance"],
+                        db_pixel_width=row["pixel_width"],
+                        db_pixel_height=row["pixel_height"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)
