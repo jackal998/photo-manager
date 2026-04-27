@@ -25,8 +25,10 @@ CREATE TABLE migration_manifest (
     source_label     TEXT NOT NULL DEFAULT 'test',
     dest_path        TEXT,
     action           TEXT NOT NULL DEFAULT 'MOVE',
+    source_hash      TEXT,
+    phash            TEXT,
     hamming_distance INTEGER,
-    duplicate_of     TEXT,
+    group_id         TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0,
     user_decision    TEXT    NOT NULL DEFAULT ''

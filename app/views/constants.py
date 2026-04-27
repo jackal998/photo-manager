@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 
 # Column headers and indices
 HEADERS: list[str] = [
-    "Match",
+    "Similarity",
     "Sel",
     "Action",
     "File Name",

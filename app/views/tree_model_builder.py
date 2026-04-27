@@ -35,35 +35,24 @@ _DECISION_SORT: dict[str, int] = {
     "keep": 2,
 }  # "" (undecided) → 3
 
-_ACTION_TO_MATCH = {
-    "EXACT": "exact",
-    "REVIEW_DUPLICATE": "similar",
-}
+def _hamming_to_pct(hamming: int | None) -> str:
+    """Convert pHash Hamming distance to a similarity percentage string."""
+    if hamming is None:
+        return "~dup"
+    return f"{round((64 - hamming) / 64 * 100)}%"
 
 
-def _group_match_label(items: list) -> str:
-    """Derive group-level match label from its files."""
-    for item in items:
-        if getattr(item, "action", "") == "EXACT":
-            return "exact"
-    for item in items:
-        if getattr(item, "action", "") == "REVIEW_DUPLICATE":
-            return "similar"
-    return ""
+def _file_similarity(action: str, record: object) -> str:
+    """Return similarity label for a file row.
 
-
-def _file_match_label(action: str, group_items: list) -> str:
-    """Derive file-level match label; reference files inherit from siblings."""
-    label = _ACTION_TO_MATCH.get(action, "")
-    if label:
-        return label
-    if action == "":  # reference role — inherit from sibling candidate
-        for sibling in group_items:
-            sib = getattr(sibling, "action", "")
-            inherited = _ACTION_TO_MATCH.get(sib, "")
-            if inherited:
-                return inherited
-    return ""
+    EXACT → "100%"; REVIEW_DUPLICATE → percentage from hamming_distance.
+    Any other action (KEEP, MOVE, UNDATED, "") is the reference/source file → "Ref".
+    """
+    if action == "EXACT":
+        return "100%"
+    if action == "REVIEW_DUPLICATE":
+        return _hamming_to_pct(getattr(record, "hamming_distance", None))
+    return "Ref"
 
 
 def build_model(
@@ -81,9 +70,8 @@ def build_model(
         items_list = getattr(g, "items", []) or []
         first = items_list[0] if items_list else None
 
-        # Col 0 at group row shows the overall match type for the group
-        group_match = _group_match_label(items_list)
-        group_item = QStandardItem(group_match)
+        # Col 0 at group row: "Group N" label
+        group_item = QStandardItem(f"Group {group_number}")
         group_item.setEditable(False)
 
         group_count_val = len(items_list)
@@ -184,9 +172,9 @@ def build_model(
             shot_txt = shot_dt.strftime("%Y-%m-%d %H:%M:%S") if shot_dt else ""
             creation_txt = creation_dt.strftime("%Y-%m-%d %H:%M:%S") if creation_dt else ""
 
-            # Col 0 at file row: match type, with sibling-inherit for reference files
+            # Col 0 at file row: similarity % for duplicates, "Ref" for the source file
             file_action = getattr(p, "action", "") or ""
-            file_match = _file_match_label(file_action, items_list)
+            file_match = _file_similarity(file_action, p)
 
             # Col 2: user's decision (delete / keep / "")
             item_decision = getattr(p, "user_decision", "") or ""
