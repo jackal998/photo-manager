@@ -70,8 +70,18 @@ def compute_hashes(
         if img is None:
             # rawpy.open_buffer not available in this version; re-use path-based loader.
             img = _load_raw_preview(path)
-        if img is not None:
-            px_w, px_h = img.size
+        # True sensor dimensions come from rawpy metadata, not the embedded thumbnail.
+        # Thumbnails are typically low-res previews (e.g. 1024×768 for a 12 MP DNG).
+        if _RAWPY_AVAILABLE:
+            try:
+                with rawpy.open_buffer(data) as raw:
+                    px_w, px_h = raw.sizes.width, raw.sizes.height
+            except (OSError, ValueError, AttributeError):
+                try:
+                    with rawpy.imread(str(path)) as raw:
+                        px_w, px_h = raw.sizes.width, raw.sizes.height
+                except (OSError, ValueError):
+                    pass
         # RAW EXIF dates are not reliably readable via PIL — caller uses exiftool.
     else:
         try:

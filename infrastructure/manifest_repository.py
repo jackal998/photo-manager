@@ -51,6 +51,7 @@ SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        file_size_bytes, shot_date, creation_date, mtime,
        pixel_width, pixel_height
 FROM   migration_manifest
+WHERE  executed = 0
 ORDER  BY
     group_id NULLS LAST,
     CASE action
