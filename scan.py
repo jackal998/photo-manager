@@ -166,9 +166,12 @@ def main() -> int:
 
     def _hash_one(idx_record: tuple) -> tuple:
         idx, record = idx_record
-        sha256, phash, mean_color, raw_date = compute_hashes(record.path, record.file_type)
+        sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
         pil_date = parse_exif_date(raw_date) if raw_date else None
-        return idx, HashResult(record=record, sha256=sha256, phash=phash, mean_color=mean_color, exif_date=pil_date)
+        return idx, HashResult(
+            record=record, sha256=sha256, phash=phash, mean_color=mean_color,
+            exif_date=pil_date, pixel_width=px_w, pixel_height=px_h,
+        )
 
     done = 0
     with ThreadPoolExecutor(max_workers=args.workers) as pool:

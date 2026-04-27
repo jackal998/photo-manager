@@ -95,9 +95,12 @@ class ScanWorker(QThread):
             idx, record = idx_record
             if cancel_flag.is_set():
                 return idx, None
-            sha256, phash, mean_color, raw_date = compute_hashes(record.path, record.file_type)
+            sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
             pil_date = parse_exif_date(raw_date) if raw_date else None
-            return idx, HashResult(record=record, sha256=sha256, phash=phash, mean_color=mean_color, exif_date=pil_date)
+            return idx, HashResult(
+                record=record, sha256=sha256, phash=phash, mean_color=mean_color,
+                exif_date=pil_date, pixel_width=px_w, pixel_height=px_h,
+            )
 
         self._emit(f"Hashing {len(records):,} files (workers={self.workers})…")
         hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]

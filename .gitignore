@@ -93,8 +93,12 @@ settings.json
 # Databases
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 
 # Temporary files
 tmp/

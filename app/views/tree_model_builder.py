@@ -13,6 +13,7 @@ from app.views.constants import (
     COL_GROUP,
     COL_GROUP_COUNT,
     COL_NAME,
+    COL_RESOLUTION,
     COL_SEL,
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
@@ -76,15 +77,16 @@ def build_model(
 
         group_count_val = len(items_list)
         group_row = [
-            group_item,                              # COL_GROUP  (0)
-            QStandardItem(""),                       # COL_SEL    (1)
-            QStandardItem(""),                       # COL_ACTION (2) — decision at file level
-            QStandardItem(""),                       # COL_NAME   (3)
-            QStandardItem(""),                       # COL_FOLDER (4)
+            group_item,                              # COL_GROUP      (0)
+            QStandardItem(""),                       # COL_SEL        (1)
+            QStandardItem(""),                       # COL_ACTION     (2) — decision at file level
+            QStandardItem(""),                       # COL_NAME       (3)
+            QStandardItem(""),                       # COL_FOLDER     (4)
             QStandardItem(""),                       # COL_SIZE_BYTES (5)
             QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (6)
             QStandardItem(""),                       # COL_CREATION_DATE (7)
-            QStandardItem(""),                       # COL_SHOT_DATE (8)
+            QStandardItem(""),                       # COL_SHOT_DATE  (8)
+            QStandardItem(""),                       # COL_RESOLUTION (9) — group level empty
         ]
         for it in group_row:
             it.setEditable(False)
@@ -160,6 +162,14 @@ def build_model(
             group_row[COL_SHOT_DATE].setData(min(sd_timestamps, default=0), SORT_ROLE)
         except Exception:
             pass
+        try:
+            megapixels = [
+                (getattr(it, "pixel_width", None) or 0) * (getattr(it, "pixel_height", None) or 0)
+                for it in items_list
+            ]
+            group_row[COL_RESOLUTION].setData(max(megapixels, default=0), SORT_ROLE)
+        except Exception:
+            pass
 
         model.appendRow(group_row)
 
@@ -171,6 +181,10 @@ def build_model(
             creation_dt = getattr(p, "creation_date", None)
             shot_txt = shot_dt.strftime("%Y-%m-%d %H:%M:%S") if shot_dt else ""
             creation_txt = creation_dt.strftime("%Y-%m-%d %H:%M:%S") if creation_dt else ""
+            px_w = getattr(p, "pixel_width", None)
+            px_h = getattr(p, "pixel_height", None)
+            resolution_txt = f"{px_w}×{px_h}" if px_w and px_h else ""
+            resolution_mp = (px_w or 0) * (px_h or 0)
 
             # Col 0 at file row: similarity % for duplicates, "Ref" for the source file
             file_action = getattr(p, "action", "") or ""
@@ -190,15 +204,16 @@ def build_model(
                 pass
 
             child_row = [
-                QStandardItem(file_match),          # COL_GROUP  (0) — match type
-                check,                               # COL_SEL    (1)
-                QStandardItem(item_decision),        # COL_ACTION (2) — user decision
-                QStandardItem(name),                 # COL_NAME   (3)
-                QStandardItem(folder),               # COL_FOLDER (4)
+                QStandardItem(file_match),           # COL_GROUP      (0) — match type
+                check,                               # COL_SEL        (1)
+                QStandardItem(item_decision),        # COL_ACTION     (2) — user decision
+                QStandardItem(name),                 # COL_NAME       (3)
+                QStandardItem(folder),               # COL_FOLDER     (4)
                 QStandardItem(str(size_num)),        # COL_SIZE_BYTES (5)
                 QStandardItem(""),                   # COL_GROUP_COUNT (6) — group level only
                 QStandardItem(creation_txt),         # COL_CREATION_DATE (7)
-                QStandardItem(shot_txt),             # COL_SHOT_DATE (8)
+                QStandardItem(shot_txt),             # COL_SHOT_DATE  (8)
+                QStandardItem(resolution_txt),       # COL_RESOLUTION (9)
             ]
 
             try:
@@ -235,6 +250,10 @@ def build_model(
                 child_row[COL_SHOT_DATE].setData(
                     int(shot_dt.timestamp()) if shot_dt else 0, SORT_ROLE
                 )
+            except Exception:
+                pass
+            try:
+                child_row[COL_RESOLUTION].setData(resolution_mp, SORT_ROLE)
             except Exception:
                 pass
             try:

@@ -37,55 +37,61 @@ def compute_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def compute_hashes(path: Path, file_type: str) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
-    """Single file read: ``(sha256, phash, mean_color, raw_exif_date)``. One network round-trip.
+def compute_hashes(
+    path: Path, file_type: str
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
+    """Single file read: ``(sha256, phash, mean_color, raw_exif_date, width, height)``.
 
-    mean_color is the average RGB of the image, computed from the same PIL image as
-    pHash via a 1×1 LANCZOS downscale — no extra file open, no degenerate edge cases.
-    Stored as ``"R,G,B"`` (e.g. ``"132,133,114"``). Used as a false-positive gate in
-    near-duplicate classification: two images with similar pHash but very different mean
-    colors are almost certainly not duplicates.
-
+    All six values are derived from one in-memory read — no extra file open.
+    ``width``/``height`` are the pixel dimensions of the decoded image (or ``None``
+    for video/skip and on decode failure).  For RAW files the embedded JPEG preview
+    dimensions are used (accurate for relative comparisons).
+    ``mean_color`` is the average RGB via a 1×1 LANCZOS downscale.
     ``raw_date_str`` is ``None`` for RAW/video; callers pass those to exiftool.
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
     """
     if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None
+        return compute_sha256(path), None, None, None, None, None
 
-    # Single read: derive all four values from memory.
+    # Single read: derive all six values from memory.
     data = path.read_bytes()
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
-        return sha, None, None, None
+        return sha, None, None, None, None, None
 
     img: Optional[Image.Image] = None
     raw_date: Optional[str] = None
+    px_w: Optional[int] = None
+    px_h: Optional[int] = None
 
     if file_type == "raw":
         img = _load_raw_preview_from_bytes(data)
         if img is None:
             # rawpy.open_buffer not available in this version; re-use path-based loader.
             img = _load_raw_preview(path)
+        if img is not None:
+            px_w, px_h = img.size
         # RAW EXIF dates are not reliably readable via PIL — caller uses exiftool.
     else:
         try:
             with Image.open(io.BytesIO(data)) as pil_img:
                 # Extract date BEFORE convert() — that creates a new image without EXIF.
                 raw_date = _raw_exif_date(pil_img)
+                px_w, px_h = pil_img.size
                 img = pil_img.convert("RGB")
                 img.load()
         except (OSError, ValueError):
             img = None
 
     if img is None:
-        return sha, None, None, raw_date
+        return sha, None, None, raw_date, None, None
     try:
         tiny = img.resize((1, 1), Image.LANCZOS)
         mc = tiny.getpixel((0, 0))[:3]
-        return sha, str(imagehash.phash(img)), f"{mc[0]},{mc[1]},{mc[2]}", raw_date
+        return sha, str(imagehash.phash(img)), f"{mc[0]},{mc[1]},{mc[2]}", raw_date, px_w, px_h
     except (ValueError, TypeError):
-        return sha, None, None, raw_date
+        return sha, None, None, raw_date, None, None
 
 
 def _raw_exif_date(img: "Image.Image") -> Optional[str]:
