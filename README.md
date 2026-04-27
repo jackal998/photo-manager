@@ -394,9 +394,5 @@ photo-manager/
 Source paths and recursive flags set via **File › Scan Sources…** are saved here
 automatically. List order determines dedup priority (index 0 = highest priority).
 
-> **Migration**: if `settings.json` contains the old `sources.iphone` / `sources.takeout` /
-> `sources.jdrive` keys, they are automatically converted to `sources.list` format on
-> the first open of the Scan Sources dialog.
-
 ---
 
