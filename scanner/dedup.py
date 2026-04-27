@@ -80,12 +80,6 @@ class ManifestRow:
 # Classification
 # ---------------------------------------------------------------------------
 
-# Mean-color L2 distance threshold for near-duplicate false-positive gate.
-# Mean color is the 1×1 LANCZOS-downscaled RGB ("R,G,B" string).
-# Genuinely different-colored images: L2 >> 30; same image in different formats: L2 < 10.
-_MEAN_COLOR_THRESHOLD = 30
-
-
 def _mean_color_distance(a: str, b: str) -> float:
     """L2 distance between two mean-color strings ("R,G,B")."""
     ra, ga, ba = (int(x) for x in a.split(","))
@@ -96,6 +90,7 @@ def _mean_color_distance(a: str, b: str) -> float:
 def classify(
     records: list[HashResult],
     threshold: int = 10,
+    mean_color_threshold: int = 30,
     source_priority: dict[str, int] | None = None,
 ) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
@@ -103,6 +98,8 @@ def classify(
     Args:
         records: All hashed file records to classify.
         threshold: Maximum Hamming distance to flag as REVIEW_DUPLICATE.
+        mean_color_threshold: L2 distance gate for mean-color false-positive rejection.
+            0 disables the gate; higher values are more permissive.
         source_priority: Mapping of source label → priority integer (lower wins).
             When ``None``, priority is inferred from the order labels first appear
             in ``records`` (first seen = priority 0).
@@ -121,7 +118,7 @@ def classify(
     _classify_exact(records, rows, source_priority)
 
     # Pass 2: pHash-based (cross-format + near-duplicate)
-    _classify_phash(records, rows, threshold, source_priority)
+    _classify_phash(records, rows, threshold, source_priority, mean_color_threshold)
 
     # Pass 3: remaining unclassified files — all sources treated equally
     for hr in records:
@@ -177,6 +174,7 @@ def _classify_phash(
     rows: dict[Path, ManifestRow],
     threshold: int,
     source_priority: dict[str, int],
+    mean_color_threshold: int = 30,
 ) -> None:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE."""
     # Only consider records not already classified and with a valid pHash
@@ -194,7 +192,7 @@ def _classify_phash(
         _classify_format_group(group, rows, source_priority)
 
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold
-    _classify_near_duplicates(candidates, rows, threshold, source_priority)
+    _classify_near_duplicates(candidates, rows, threshold, source_priority, mean_color_threshold)
 
 
 def _classify_format_group(
@@ -237,6 +235,7 @@ def _classify_near_duplicates(
     rows: dict[Path, ManifestRow],
     threshold: int,
     source_priority: dict[str, int],
+    mean_color_threshold: int = 30,
 ) -> None:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE."""
     if not _IMAGEHASH_AVAILABLE:
@@ -257,8 +256,8 @@ def _classify_near_duplicates(
                 # Mean-color gate: reject if average colors clearly differ.
                 # Catches pHash false positives (similar DCT structure, different colors).
                 # Gate is skipped when either file lacks mean_color (RAW, hash failure).
-                if hr_a.mean_color and hr_b.mean_color:
-                    if _mean_color_distance(hr_a.mean_color, hr_b.mean_color) > _MEAN_COLOR_THRESHOLD:
+                if mean_color_threshold > 0 and hr_a.mean_color and hr_b.mean_color:
+                    if _mean_color_distance(hr_a.mean_color, hr_b.mean_color) > mean_color_threshold:
                         continue
                 # Flag the lower-priority file as REVIEW_DUPLICATE
                 ordered = sorted(

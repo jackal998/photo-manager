@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSlider,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -298,6 +300,10 @@ class ScanDialog(QDialog):
         self._log_widget: QPlainTextEdit
         self._btn_scan: QPushButton
         self._btn_close: QPushButton
+        self._phash_slider: QSlider
+        self._phash_spin: QSpinBox
+        self._color_slider: QSlider
+        self._color_spin: QSpinBox
 
         self._build_ui()
         self._load_from_settings()
@@ -340,6 +346,65 @@ class ScanDialog(QDialog):
         browse_out_btn.clicked.connect(self._browse_output)
         output_row.addWidget(browse_out_btn)
         root.addLayout(output_row)
+
+        # Grouping parameters
+        params_group = QGroupBox("Grouping Parameters")
+        params_layout = QVBoxLayout(params_group)
+
+        # pHash threshold
+        phash_label = QLabel("<b>pHash Similarity Threshold</b> (default: 10, range: 1–20)")
+        phash_desc = QLabel(
+            "Perceptual hash Hamming distance between two images. "
+            "A 64-bit pHash means images can differ by at most this many bits before being "
+            "flagged as near-duplicates. <b>Lower = stricter</b> (fewer groups, less noise); "
+            "<b>higher = more permissive</b> (catches more slightly-edited pairs)."
+        )
+        phash_desc.setWordWrap(True)
+        phash_desc.setStyleSheet("color: #555;")
+        phash_row = QHBoxLayout()
+        self._phash_slider = QSlider(Qt.Orientation.Horizontal)
+        self._phash_slider.setRange(1, 20)
+        self._phash_slider.setValue(10)
+        self._phash_spin = QSpinBox()
+        self._phash_spin.setRange(1, 20)
+        self._phash_spin.setValue(10)
+        self._phash_spin.setFixedWidth(60)
+        self._phash_slider.valueChanged.connect(self._phash_spin.setValue)
+        self._phash_spin.valueChanged.connect(self._phash_slider.setValue)
+        phash_row.addWidget(self._phash_slider, stretch=1)
+        phash_row.addWidget(self._phash_spin)
+        params_layout.addWidget(phash_label)
+        params_layout.addWidget(phash_desc)
+        params_layout.addLayout(phash_row)
+
+        # Mean-color threshold
+        color_label = QLabel("<b>Mean Color Gate</b> (default: 30, range: 0–100)")
+        color_desc = QLabel(
+            "L2 distance between the average RGB color of two images. "
+            "After the pHash check, images whose mean colors differ by more than this value "
+            "are excluded from grouping — catching pHash false positives where similar "
+            "DCT structure but different colors were matched. "
+            "<b>0 = disabled</b>; <b>higher = more permissive</b> color gate."
+        )
+        color_desc.setWordWrap(True)
+        color_desc.setStyleSheet("color: #555;")
+        color_row = QHBoxLayout()
+        self._color_slider = QSlider(Qt.Orientation.Horizontal)
+        self._color_slider.setRange(0, 100)
+        self._color_slider.setValue(30)
+        self._color_spin = QSpinBox()
+        self._color_spin.setRange(0, 100)
+        self._color_spin.setValue(30)
+        self._color_spin.setFixedWidth(60)
+        self._color_slider.valueChanged.connect(self._color_spin.setValue)
+        self._color_spin.valueChanged.connect(self._color_slider.setValue)
+        color_row.addWidget(self._color_slider, stretch=1)
+        color_row.addWidget(self._color_spin)
+        params_layout.addWidget(color_label)
+        params_layout.addWidget(color_desc)
+        params_layout.addLayout(color_row)
+
+        root.addWidget(params_group)
 
         self._log_widget = QPlainTextEdit()
         self._log_widget.setReadOnly(True)
@@ -471,6 +536,8 @@ class ScanDialog(QDialog):
             output_path=output,
             recursive_map=recursive_map,
             source_priority=source_priority,
+            threshold=self._phash_slider.value(),
+            mean_color_threshold=self._color_slider.value(),
         )
         self._worker.progress.connect(self._log)
         self._worker.finished.connect(self._on_finished)

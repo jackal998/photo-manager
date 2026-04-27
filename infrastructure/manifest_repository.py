@@ -99,6 +99,7 @@ def _photo_record(
     db_shot_date: "str | None" = None,
     db_creation_date: "str | None" = None,
     db_mtime: "str | None" = None,
+    hamming_distance: "int | None" = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
@@ -159,6 +160,7 @@ def _photo_record(
         shot_date=shot,
         action=action,
         user_decision=user_decision,
+        hamming_distance=hamming_distance,
     )
 
 
@@ -235,6 +237,7 @@ class ManifestRepository:
                         db_shot_date=row["shot_date"],
                         db_creation_date=row["creation_date"],
                         db_mtime=row["mtime"],
+                        hamming_distance=row["hamming_distance"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)

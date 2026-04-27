@@ -27,6 +27,7 @@ class ScanWorker(QThread):
         recursive_map: dict[str, bool] | None = None,
         source_priority: dict[str, int] | None = None,
         threshold: int = 10,
+        mean_color_threshold: int = 30,
         limit: int | None = None,
         workers: int = 4,
     ) -> None:
@@ -36,6 +37,7 @@ class ScanWorker(QThread):
         self.recursive_map = recursive_map or {}
         self.source_priority = source_priority   # None → auto-inferred in classify()
         self.threshold = threshold
+        self.mean_color_threshold = mean_color_threshold
         self.limit = limit
         self.workers = workers
 
@@ -150,6 +152,7 @@ class ScanWorker(QThread):
         rows = classify(
             hash_results,
             threshold=self.threshold,
+            mean_color_threshold=self.mean_color_threshold,
             source_priority=self.source_priority,
         )
 
