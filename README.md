@@ -281,27 +281,38 @@ photo-manager/
 ├── main.py                  # PySide6 GUI entry point
 ├── scan.py                  # Deduplication scanner CLI
 ├── review.py                # REVIEW_DUPLICATE triage CLI
+├── run_all_linters.py       # Runs Black, isort, Ruff, Pylint in sequence
 │
 ├── scanner/                 # Scanner engine (no Qt dependency)
 │   ├── media.py             # Extensions, magic-byte detection, filename parsing
 │   ├── walker.py            # Directory walk + Live Photo pairing
-│   ├── hasher.py            # SHA-256 + pHash (Pillow / pillow-heif / rawpy)
+│   ├── hasher.py            # SHA-256 + pHash + mean-color; single file read
 │   ├── exif.py              # Batch EXIF date reads via exiftool -stay_open
-│   ├── dedup.py             # Classification: exact → format → near-dup → UNDATED
+│   ├── dedup.py             # Classification: exact → format → near-dup → UNDATED; mean-color gate
 │   └── manifest.py          # SQLite writer + summary printer
 │
 ├── app/                     # PySide6 GUI
 │   ├── views/
-│   │   ├── main_window.py   # Main window — wires all components
+│   │   ├── main_window.py         # Main window — wires all components
 │   │   ├── tree_model_builder.py  # Builds QStandardItemModel from groups
-│   │   ├── constants.py     # Column indices and header labels
+│   │   ├── constants.py           # Column indices and header labels
+│   │   ├── preview_pane.py        # Image/video preview; grid + single-file modes
+│   │   ├── image_tasks.py         # Background image loading tasks
+│   │   ├── media_utils.py         # Media type helpers for the views layer
+│   │   ├── selection_service.py   # apply_select_regex — wraps RegexSelectionService
 │   │   ├── components/
-│   │   │   ├── menu_controller.py     # Menu creation + "Set Action" submenu
-│   │   │   ├── tree_controller.py     # Tree view interactions
+│   │   │   ├── menu_controller.py      # Menu creation + "Set Action" submenu
+│   │   │   ├── tree_controller.py      # Tree view interactions
 │   │   │   └── selection_controller.py
 │   │   ├── handlers/
-│   │   │   ├── file_operations.py     # set_decision, batch_set_decision, execute_action
-│   │   │   └── context_menu.py        # Right-click Set Action routing
+│   │   │   ├── file_operations.py      # set_decision, batch_set_decision, execute_action
+│   │   │   ├── context_menu.py         # Right-click Set Action routing
+│   │   │   └── dialog_handler.py       # Dialog lifecycle coordination
+│   │   ├── layout/
+│   │   │   └── layout_manager.py       # Window layout initialisation
+│   │   ├── widgets/
+│   │   │   ├── group_media_controller.py  # Grid thumbnail controller per group
+│   │   │   └── video_player.py            # Embedded video player widget
 │   │   ├── dialogs/
 │   │   │   ├── scan_dialog.py              # Scan Sources dialog
 │   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
@@ -310,25 +321,33 @@ photo-manager/
 │   │   │   ├── filters_dialog.py           # [deprecated — legacy stub]
 │   │   │   └── rules_dialog.py             # [deprecated — legacy stub]
 │   │   └── workers/
-│   │       ├── scan_worker.py         # Background QThread for scan pipeline
-│   │       └── manifest_load_worker.py  # Background QThread for manifest load
+│   │       ├── scan_worker.py              # Background QThread for scan pipeline
+│   │       └── manifest_load_worker.py     # Background QThread for manifest load
 │   └── viewmodels/
-│       └── main_vm.py       # Groups/marks logic; loads manifest
+│       ├── main_vm.py       # Groups/marks logic; loads manifest
+│       └── photo_vm.py      # Per-photo view model
 │
 ├── core/                    # Models + service interfaces
-│   ├── models.py            # PhotoRecord (action, user_decision), PhotoGroup
+│   ├── models.py            # PhotoRecord (action, user_decision, group_id), PhotoGroup
 │   └── services/
-│       ├── interfaces.py    # DeleteResult, DeletePlan, IListService
+│       ├── interfaces.py         # DeleteResult, DeletePlan, IListService
 │       ├── selection_service.py  # RegexSelectionService
-│       └── sort_service.py  # SortService
-├── infrastructure/          # I/O: manifest repo, delete service, settings
-│   ├── manifest_repository.py  # load/save/batch_update_decisions; mark_executed()
-│   ├── delete_service.py
-│   └── settings.py
+│       └── sort_service.py       # SortService
+│
+├── infrastructure/          # I/O: manifest repo, delete service, image cache
+│   ├── manifest_repository.py   # load/save/batch_update_decisions; mark_executed()
+│   ├── delete_service.py         # Recycle-bin deletion + audit CSV logging
+│   ├── image_service.py          # Thumbnail loading; disk + memory LRU cache
+│   ├── logging.py                # loguru configuration and file rotation
+│   ├── settings.py               # settings.json loader
+│   └── utils.py                  # Shared utilities
+│
+├── scripts/
+│   └── make_qa_images.py    # Generates controlled near-dup test images for QA
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 360+ tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 374 tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
