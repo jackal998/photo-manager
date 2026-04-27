@@ -17,20 +17,19 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 │                                                                             │
 │  2. REVIEW (photo-manager)                                                  │
 │     GUI: File > Open Manifest…                                              │
-│     Inspect every group — col 0 shows match type (exact / similar / empty) │
-│     Mark files with Sel checkboxes or highlight rows, then use            │
-│       File > Set Action to Selected (Sel) Files > delete / keep           │
-│       File > Set Action to Activated Files > delete / keep                │
-│     Right-click a single file → Set Action → delete / keep (per-file)    │
+│     Inspect every group — col 0 (Similarity) shows match strength          │
+│     Set decisions per file or in bulk:                                      │
+│       Right-click a file → Set Action → delete / keep                     │
+│       Action > Set Action by Field/Regex… → regex batch across any column  │
 │     File > Save Manifest Decisions… persists decisions to the manifest     │
 │                                                                             │
 │     CLI alternative: python review.py … for REVIEW_DUPLICATE triage       │
 │                                                                             │
 │  3. EXECUTE (photo-manager)                                                 │
-│     File > Execute Action…  opens a full tree review (same columns as      │
+│     Action > Execute Action…  opens a full tree review (same columns as    │
 │     the main window).  Right-click rows to change decisions before          │
-│     confirming.  Groups where every file is marked delete trigger a        │
-│     safety dialog (regex-based decision flip available).  Confirm to:      │
+│     confirming.  If every file in a group is marked delete, a              │
+│     confirmation dialog appears before proceeding.  Confirm to:            │
 │       • delete → send file to recycle bin                                  │
 │       • keep   → mark as executed in the manifest                          │
 │                                                                             │
@@ -103,17 +102,21 @@ The tree shows all files loaded from the manifest.
 
 | Column | Meaning |
 |--------|---------|
-| **Match** (col 0) | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
-| **Sel** | Checkbox — select files for batch actions |
-| **Action** (col 2) | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
+| **Action** | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **File Name** | File name |
+| **Folder** | Containing directory |
+| **Size (Bytes)** | File size |
+| **Group Count** | Number of files in the duplicate group |
+| **Creation Date** | File creation date |
+| **Shot Date** | EXIF `DateTimeOriginal` |
+| **Resolution** | Pixel dimensions (e.g. `4032×3024`) |
 
 **Setting decisions:**
 
 - *Per file*: right-click a file → **Set Action → delete** or **keep**.
-- *By Sel checkboxes*: tick **Sel** on the files you want, then
-  **File › Set Action to Selected (Sel) Files › delete** (or **keep**).
 - *By highlight*: click or multi-select rows in the tree, then
-  **File › Set Action to Activated Files › delete** (or **keep**).
+  **Action › Set Action to Activated Files › delete** (or **keep**).
 
 ### Step 3 — Save decisions
 
@@ -123,13 +126,12 @@ to the chosen file, and subsequent saves default to that location.
 
 ### Step 4 — Execute actions
 
-**File › Execute Action…** opens a full tree view (same columns as the main
+**Action › Execute Action…** opens a full tree view (same columns as the main
 window) showing all groups for final review.
 
 - Right-click any file row → **Set Action** → change its decision before executing.
-- If every file in a group is marked `delete`, an amber warning banner appears.
-  Clicking **Execute** then opens a safety review dialog where you can type a
-  regex to flip matching files from `delete` → `keep` before proceeding.
+- If every file in a group is marked `delete`, an amber warning banner appears
+  in the dialog. Clicking **Execute** shows a confirmation prompt before proceeding.
 - Click **Execute** to carry out all decisions:
   - `delete` → file sent to the recycle bin (`send2trash`)
   - `keep` → marked as executed in the manifest (no file operation)
@@ -299,13 +301,11 @@ photo-manager/
 │   │   ├── preview_pane.py        # Image/video preview; grid + single-file modes
 │   │   ├── image_tasks.py         # Background image loading tasks
 │   │   ├── media_utils.py         # Media type helpers for the views layer
-│   │   ├── selection_service.py   # apply_select_regex — wraps RegexSelectionService
 │   │   ├── components/
 │   │   │   ├── menu_controller.py      # Menu creation + "Set Action" submenu
-│   │   │   ├── tree_controller.py      # Tree view interactions
-│   │   │   └── selection_controller.py
+│   │   │   └── tree_controller.py      # Tree view interactions
 │   │   ├── handlers/
-│   │   │   ├── file_operations.py      # set_decision, batch_set_decision, execute_action
+│   │   │   ├── file_operations.py      # set_decision, execute_action
 │   │   │   ├── context_menu.py         # Right-click Set Action routing
 │   │   │   └── dialog_handler.py       # Dialog lifecycle coordination
 │   │   ├── layout/
@@ -316,8 +316,7 @@ photo-manager/
 │   │   ├── dialogs/
 │   │   │   ├── scan_dialog.py              # Scan Sources dialog
 │   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
-│   │   │   ├── group_deletion_check_dialog.py  # Safety check for complete-group deletes
-│   │   │   ├── select_dialog.py            # Select by Field/Regex dialog
+│   │   │   ├── select_dialog.py            # Set Action by Field/Regex dialog
 │   │   │   ├── filters_dialog.py           # [deprecated — legacy stub]
 │   │   │   └── rules_dialog.py             # [deprecated — legacy stub]
 │   │   └── workers/
@@ -331,7 +330,6 @@ photo-manager/
 │   ├── models.py            # PhotoRecord (action, user_decision, group_id), PhotoGroup
 │   └── services/
 │       ├── interfaces.py         # DeleteResult, DeletePlan, IListService
-│       ├── selection_service.py  # RegexSelectionService
 │       └── sort_service.py       # SortService
 │
 ├── infrastructure/          # I/O: manifest repo, delete service, image cache
@@ -347,7 +345,7 @@ photo-manager/
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 374 tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 341 tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
@@ -360,11 +358,9 @@ photo-manager/
     ├── test_scanner_exif.py
     ├── test_scanner_manifest.py
     ├── test_main_vm.py
-    ├── test_file_operations.py  # set_decision, batch_set_decision, set_decision_to_highlighted
+    ├── test_file_operations.py  # set_decision, execute_action
     ├── test_sort_service.py
-    ├── test_selection_service.py
     ├── test_execute_action_dialog.py
-    ├── test_group_deletion_check_dialog.py
     ├── test_context_menu.py
     ├── test_manifest_load_worker.py
     ├── test_scan_dialog.py      # _auto_label, _SourceListWidget, ScanDialog settings
