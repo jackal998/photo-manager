@@ -1,7 +1,7 @@
-"""Tests for FileOperationsHandler.set_decision and batch_set_decision.
+"""Tests for FileOperationsHandler.set_decision and related operations.
 
-These tests exercise the set_decision/batch_set_decision workflow against a
-real SQLite manifest DB, using mocks for Qt widgets and the VM layer.
+These tests exercise the set_decision workflow against a real SQLite manifest DB,
+using mocks for Qt widgets and the VM layer.
 """
 
 from __future__ import annotations
@@ -188,66 +188,6 @@ class TestSetDecision:
         assert _read_decision(db, "/b.jpg") == "keep"
 
 
-# ── batch_set_decision ─────────────────────────────────────────────────────
-
-class TestBatchSetDecision:
-    def test_sets_decision_for_checked_paths(self, tmp_path):
-        recs = [_rec("/a.jpg"), _rec("/b.jpg"), _rec("/c.jpg")]
-        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
-        db = _make_db(tmp_path, [
-            {"source_path": "/a.jpg"},
-            {"source_path": "/b.jpg"},
-            {"source_path": "/c.jpg"},
-        ])
-        handler, _, _ = _make_handler(vm, str(db), checked_paths=lambda: ["/a.jpg", "/c.jpg"])
-
-        handler.batch_set_decision("delete")
-
-        assert recs[0].user_decision == "delete"
-        assert recs[1].user_decision == ""      # unchecked — untouched
-        assert recs[2].user_decision == "delete"
-
-    def test_updates_sqlite_for_checked_paths(self, tmp_path):
-        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
-        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
-        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
-        handler, _, _ = _make_handler(vm, str(db), checked_paths=lambda: ["/a.jpg"])
-
-        handler.batch_set_decision("keep")
-
-        assert _read_decision(db, "/a.jpg") == "keep"
-        assert _read_decision(db, "/b.jpg") == ""
-
-    def test_refreshes_tree(self, tmp_path):
-        recs = [_rec("/a.jpg")]
-        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
-        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
-        handler, ui_updater, _ = _make_handler(vm, str(db), checked_paths=lambda: ["/a.jpg"])
-
-        handler.batch_set_decision("delete")
-
-        ui_updater.refresh_tree.assert_called_once()
-
-    def test_reports_count_in_status(self, tmp_path):
-        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
-        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
-        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
-        handler, _, status_reporter = _make_handler(
-            vm, str(db), checked_paths=lambda: ["/a.jpg", "/b.jpg"]
-        )
-
-        handler.batch_set_decision("delete")
-
-        msg = status_reporter.show_status.call_args[0][0]
-        assert "2" in msg
-
-    @patch("PySide6.QtWidgets.QMessageBox.information")
-    def test_no_manifest_shows_message(self, mock_info, tmp_path):
-        vm = SimpleNamespace(groups=[])
-        handler, _, _ = _make_handler(vm, manifest_path=None)
-
-        handler.batch_set_decision("delete")
-
 
 # ── remove_from_list (DB sync) ─────────────────────────────────────────────
 
@@ -303,8 +243,8 @@ class TestRemoveFromList:
         assert _read_decision(db, "/a.jpg") == "removed"
         assert _read_decision(db, "/b.jpg") == "removed"
 
-    def test_remove_via_toolbar_checked_paths_updates_db(self, tmp_path):
-        """remove_from_list_toolbar with checked_paths writes 'removed' to SQLite."""
+    def test_remove_via_toolbar_highlighted_updates_db(self, tmp_path):
+        """remove_from_list_toolbar with highlighted items writes 'removed' to SQLite."""
         from app.viewmodels.main_vm import MainVM
         from unittest.mock import MagicMock
 
@@ -315,57 +255,22 @@ class TestRemoveFromList:
         vm.groups = [PhotoGroup(group_number=1, items=[rec_a, rec_b])]
         handler, _, _ = _make_handler(vm, str(db))
 
-        handler.remove_from_list_toolbar(checked_paths=["/a.jpg"], highlighted_items=[])
+        handler.remove_from_list_toolbar([{"type": "file", "path": "/a.jpg"}])
 
         assert _read_decision(db, "/a.jpg") == "removed"
         assert _read_decision(db, "/b.jpg") == ""
 
     @patch("PySide6.QtWidgets.QMessageBox.information")
-    def test_no_checked_paths_shows_message(self, mock_info, tmp_path):
+    def test_no_items_shows_message(self, mock_info, tmp_path):
         recs = [_rec("/a.jpg")]
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
-        handler, _, _ = _make_handler(vm, str(db), checked_paths=lambda: [])
+        handler, _, _ = _make_handler(vm, str(db))
 
-        handler.batch_set_decision("delete")
+        handler.remove_from_list_toolbar([])
 
         mock_info.assert_called_once()
         assert recs[0].user_decision == ""
-
-    def test_works_across_multiple_groups(self, tmp_path):
-        recs_g1 = [_rec("/a.jpg", group=1), _rec("/b.jpg", group=1)]
-        recs_g2 = [_rec("/c.jpg", group=2)]
-        vm = SimpleNamespace(groups=[
-            PhotoGroup(group_number=1, items=recs_g1),
-            PhotoGroup(group_number=2, items=recs_g2),
-        ])
-        db = _make_db(tmp_path, [
-            {"source_path": "/a.jpg"},
-            {"source_path": "/b.jpg"},
-            {"source_path": "/c.jpg"},
-        ])
-        handler, _, _ = _make_handler(
-            vm, str(db), checked_paths=lambda: ["/a.jpg", "/c.jpg"]
-        )
-
-        handler.batch_set_decision("keep")
-
-        assert recs_g1[0].user_decision == "keep"
-        assert recs_g1[1].user_decision == ""
-        assert recs_g2[0].user_decision == "keep"
-
-    def test_provider_with_gather_method(self, tmp_path):
-        """checked_paths_provider can be an object with gather_checked_paths()."""
-        recs = [_rec("/a.jpg")]
-        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
-        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
-
-        provider = SimpleNamespace(gather_checked_paths=lambda: ["/a.jpg"])
-        handler, _, _ = _make_handler(vm, str(db), checked_paths=provider)
-
-        handler.batch_set_decision("delete")
-
-        assert recs[0].user_decision == "delete"
 
 
 # ── set_decision_to_highlighted ───────────────────────────────────────────────
@@ -564,7 +469,7 @@ class TestSaveManifestDecisions:
 # ── batch SQL verification ─────────────────────────────────────────────────
 
 class TestBatchSQLCalls:
-    """Verify set_decision and batch_set_decision use batch_update_decisions, not per-row updates."""
+    """Verify set_decision uses batch_update_decisions, not per-row updates."""
 
     def test_set_decision_calls_batch_update_once(self, tmp_path):
         recs = [_rec("/a.jpg"), _rec("/b.jpg")]
@@ -583,26 +488,6 @@ class TestBatchSQLCalls:
         mock_batch.assert_called_once()
         batch_arg = mock_batch.call_args[0][1]
         assert batch_arg == {"/a.jpg": "delete", "/b.jpg": "delete"}
-
-    def test_batch_set_decision_calls_batch_update_once(self, tmp_path):
-        recs = [_rec("/a.jpg"), _rec("/b.jpg"), _rec("/c.jpg")]
-        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
-        db = _make_db(tmp_path, [
-            {"source_path": "/a.jpg"},
-            {"source_path": "/b.jpg"},
-            {"source_path": "/c.jpg"},
-        ])
-        handler, _, _ = _make_handler(vm, str(db), checked_paths=lambda: ["/a.jpg", "/b.jpg"])
-
-        with patch(
-            "infrastructure.manifest_repository.ManifestRepository.batch_update_decisions"
-        ) as mock_batch:
-            handler.batch_set_decision("keep")
-
-        mock_batch.assert_called_once()
-        batch_arg = mock_batch.call_args[0][1]
-        assert batch_arg == {"/a.jpg": "keep", "/b.jpg": "keep"}
-        assert "/c.jpg" not in batch_arg
 
 
 # ── constructor ────────────────────────────────────────────────────────────

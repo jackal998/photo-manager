@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
 from loguru import logger
 
 from app.views.components.menu_controller import MenuController
-from app.views.components.selection_controller import SelectionController
 
 # Import extracted components
 from app.views.components.tree_controller import TreeController
@@ -94,11 +93,6 @@ class MainWindow(QMainWindow):
         self.status_reporter = StatusReporterImpl(self)
         self.ui_updater = UIUpdaterImpl(self)
 
-        # Initialize selection controller
-        self.selection_controller = SelectionController(
-            self.tree_controller, self._vm, self.status_reporter
-        )
-
         # Initialize file operations handler
         self.file_operations = FileOperationsHandler(
             vm=self._vm,
@@ -106,7 +100,7 @@ class MainWindow(QMainWindow):
             parent_widget=self,
             ui_updater=self.ui_updater,
             status_reporter=self.status_reporter,
-            checked_paths_provider=self.selection_controller,
+            checked_paths_provider=None,
             highlighted_items_provider=self.tree_controller,
         )
 
@@ -117,14 +111,12 @@ class MainWindow(QMainWindow):
         self.dialog_handler = DialogHandler(
             parent_widget=self,
             tree_data_provider=self.tree_data_provider,
-            regex_handler=self._apply_select_regex,
             action_handler=self._apply_action_by_regex,
         )
 
         # Action handlers for context menu
         self.action_handlers = ActionHandlersImpl(
             file_operations=self.file_operations,
-            selection_controller=self.selection_controller,
             dialog_handler=self.dialog_handler,
         )
 
@@ -177,10 +169,8 @@ class MainWindow(QMainWindow):
             "scan_sources": self.on_scan_sources,
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
-            "set_action_sel_delete": lambda: self.file_operations.batch_set_decision("delete"),
-            "set_action_sel_keep": lambda: self.file_operations.batch_set_decision(""),
             "execute_action": self.on_execute_action,
-            "select_by": self.on_open_select_dialog,
+            "action_by_regex": self.on_open_action_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
             "exit": self.close,
             "open_latest_log": self._open_latest_log,
@@ -260,14 +250,10 @@ class MainWindow(QMainWindow):
             except AttributeError:
                 pass
             n = self._vm.group_count
-            for _act in (
-                "execute_action",
-                "set_action_sel_delete", "set_action_sel_keep",
-            ):
-                try:
-                    self.menu_controller.enable_action(_act, True)
-                except AttributeError:
-                    pass
+            try:
+                self.menu_controller.enable_action("execute_action", True)
+            except AttributeError:
+                pass
             self.statusBar().showMessage(f"Loaded manifest: {n} group(s)", 5000)
         except Exception as exc:
             QMessageBox.critical(self, "Load Manifest Error", str(exc))
@@ -284,9 +270,9 @@ class MainWindow(QMainWindow):
         """Handle Execute Action — open review dialog and run planned operations."""
         self.file_operations.execute_action()
 
-    def on_open_select_dialog(self) -> None:
-        """Handle open select dialog action."""
-        self.dialog_handler.show_select_dialog()
+    def on_open_action_dialog(self) -> None:
+        """Handle open Set Action by Field/Regex dialog."""
+        self.dialog_handler.show_action_dialog()
 
     # PRESERVED: Tree selection change handler
 
@@ -447,23 +433,12 @@ class MainWindow(QMainWindow):
 
     def _remove_from_list_toolbar(self) -> None:
         """Handle remove from list toolbar action."""
-        checked_paths = self.selection_controller.gather_checked_paths()
         highlighted_items = self.tree_controller.get_selected_items()
-        self.file_operations.remove_from_list_toolbar(checked_paths, highlighted_items)
+        self.file_operations.remove_from_list_toolbar(highlighted_items)
 
     def _apply_action_by_regex(self, field: str, pattern: str, action_value: str) -> None:
-        """Apply an action to all files matching field/regex from the SelectDialog."""
+        """Apply an action to all files matching field/regex from the ActionDialog."""
         self.file_operations.set_decision_by_regex(field, pattern, action_value)
-
-    def _apply_select_regex(self, field: str, pattern: str, make_checked: bool) -> None:
-        """Apply regex selection to files.
-
-        Args:
-            field: Field name to match against
-            pattern: Regex pattern
-            make_checked: Whether to check or uncheck matches
-        """
-        self.selection_controller.apply_regex_selection(field, pattern, make_checked, self)
 
     def _on_header_clicked(self, logical_index: int) -> None:
         """Handle tree header clicks to maintain sort state.
@@ -596,28 +571,18 @@ class ActionHandlersImpl:
     def __init__(
         self,
         file_operations: FileOperationsHandler,
-        selection_controller: SelectionController,
         dialog_handler: DialogHandler,
     ):
         self.file_ops = file_operations
-        self.selection = selection_controller
         self.dialog = dialog_handler
-
-    def select_files(self, items: list[dict]) -> None:
-        """Select files from items list."""
-        self.selection.select_files(items)
-
-    def unselect_files(self, items: list[dict]) -> None:
-        """Unselect files from items list."""
-        self.selection.unselect_files(items)
 
     def remove_items_from_list(self, items: list[dict]) -> None:
         """Remove items from list."""
         self.file_ops.remove_items_from_list(items)
 
-    def show_select_dialog(self, clicked_col: int | None = None) -> None:
-        """Show select by field/regex dialog."""
-        self.dialog.show_select_dialog(clicked_col=clicked_col)
+    def show_action_dialog(self, clicked_col: int | None = None) -> None:
+        """Show set action by field/regex dialog."""
+        self.dialog.show_action_dialog(clicked_col=clicked_col)
 
     def set_decision(self, items: list[dict], decision: str) -> None:
         """Set user decision (delete/keep) for file items."""

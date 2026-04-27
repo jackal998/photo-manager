@@ -129,7 +129,6 @@ class FileOperationsHandler:
         _manifest_actions = (
             "save_manifest", "execute_action",
             "set_action_hl_delete", "set_action_hl_keep",
-            "set_action_sel_delete", "set_action_sel_keep",
         )
         for act in _manifest_actions:
             try:
@@ -157,16 +156,6 @@ class FileOperationsHandler:
             return
 
         try:
-            checked_paths: list[str] = []
-            provider = self.checked_paths_provider
-            if provider is not None:
-                if callable(provider):
-                    checked_paths = provider()
-                elif hasattr(provider, "gather_checked_paths"):
-                    checked_paths = provider.gather_checked_paths()
-            if hasattr(self.vm, "update_marks_from_checked_paths"):
-                self.vm.update_marks_from_checked_paths(checked_paths)
-
             if os.path.normcase(os.path.normpath(save_path)) != os.path.normcase(
                 os.path.normpath(manifest_path)
             ):
@@ -186,19 +175,9 @@ class FileOperationsHandler:
             QMessageBox.critical(self.parent, "Save Manifest Error", str(ex))
             self.status_reporter.show_status("Save manifest failed")
 
-    def remove_from_list_toolbar(
-        self, checked_paths: list[str], highlighted_items: list[dict]
-    ) -> None:
-        """Remove selected files or groups from the list via toolbar."""
+    def remove_from_list_toolbar(self, highlighted_items: list[dict]) -> None:
+        """Remove highlighted items from the list via toolbar."""
         try:
-            if checked_paths:
-                logger.info("Removing {} checked files from list via toolbar", len(checked_paths))
-                self.vm.remove_from_list(checked_paths)
-                self.ui_updater.refresh_tree(self.vm.groups)
-                self._sync_removed_to_db(checked_paths)
-                self.status_reporter.show_status(f"Removed {len(checked_paths)} file(s) from list")
-                return
-
             if highlighted_items:
                 logger.info(
                     "Removing {} highlighted items from list via toolbar", len(highlighted_items)
@@ -227,7 +206,7 @@ class FileOperationsHandler:
             QMessageBox.information(
                 self.parent,
                 "Remove from List",
-                "No items selected. Please check files or select rows first.",
+                "No items selected. Please select rows first.",
             )
 
         except Exception as e:
@@ -304,35 +283,6 @@ class FileOperationsHandler:
             ManifestRepository().batch_update_decisions(manifest_path, batch)
         self.ui_updater.refresh_tree(self.vm.groups)
         self.status_reporter.show_status(f"Decision set to '{new_decision}'")
-
-    def batch_set_decision(self, new_decision: str) -> None:
-        """Set user_decision for all Sel-checked files."""
-        manifest_path = getattr(self, "_manifest_path", None)
-        if not manifest_path:
-            QMessageBox.information(self.parent, "Set Action", "No manifest loaded.")
-            return
-        checked_paths: list[str] = []
-        provider = self.checked_paths_provider
-        if provider is not None:
-            if callable(provider):
-                checked_paths = provider()
-            elif hasattr(provider, "gather_checked_paths"):
-                checked_paths = provider.gather_checked_paths()
-        if not checked_paths:
-            QMessageBox.information(self.parent, "Set Action", "No files selected (use Sel checkboxes).")
-            return
-        batch: dict[str, str] = {}
-        for group in self.vm.groups:
-            for rec in group.items:
-                if rec.file_path in checked_paths:
-                    rec.user_decision = new_decision
-                    batch[rec.file_path] = new_decision
-        count = len(batch)
-        if batch:
-            from infrastructure.manifest_repository import ManifestRepository
-            ManifestRepository().batch_update_decisions(manifest_path, batch)
-        self.ui_updater.refresh_tree(self.vm.groups)
-        self.status_reporter.show_status(f"Set '{new_decision}' for {count} file(s)")
 
     def set_decision_to_highlighted(self, new_decision: str) -> None:
         """Set user_decision for tree-highlighted (activated) file rows."""
