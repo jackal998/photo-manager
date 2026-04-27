@@ -2,11 +2,11 @@
 
 Covers:
   - _SETTABLE_DECISIONS constant is list of (label, value) tuples
-  - ActionHandlers protocol has set_decision + show_select_dialog(clicked_col)
+  - ActionHandlers protocol has set_decision + show_action_dialog(clicked_col)
   - set_decision callback is wired for single-file right-click
   - Multi-selection menu DOES expose "Set Action"
   - "keep (remove action)" passes "" as the decision value
-  - Clicked column is forwarded to show_select_dialog
+  - Clicked column is forwarded to show_action_dialog
   - Direct-delete actions ("Delete File", "Delete Files") are absent
 """
 
@@ -203,9 +203,9 @@ class TestMultiSelectSetAction:
 
 
 class TestClickedColumnPassthrough:
-    """Clicked column index must be forwarded to show_select_dialog."""
+    """Clicked column index must be forwarded to show_action_dialog."""
 
-    def test_show_select_dialog_receives_clicked_col(self, qapp):
+    def test_show_action_dialog_receives_clicked_col(self, qapp):
         from PySide6.QtWidgets import QMenu, QTreeView
         from app.views.handlers.context_menu import ContextMenuHandler
 
@@ -222,9 +222,9 @@ class TestClickedColumnPassthrough:
         assert select_action is not None
         select_action.trigger()
 
-        mock_handlers.show_select_dialog.assert_called_once_with(clicked_col=4)
+        mock_handlers.show_action_dialog.assert_called_once_with(clicked_col=4)
 
-    def test_show_select_dialog_defaults_col_none(self, qapp):
+    def test_show_action_dialog_defaults_col_none(self, qapp):
         from PySide6.QtWidgets import QMenu, QTreeView
         from app.views.handlers.context_menu import ContextMenuHandler
 
@@ -239,7 +239,7 @@ class TestClickedColumnPassthrough:
         assert select_action is not None
         select_action.trigger()
 
-        mock_handlers.show_select_dialog.assert_called_once_with(clicked_col=None)
+        mock_handlers.show_action_dialog.assert_called_once_with(clicked_col=None)
 
 
 # ── no direct-delete actions ───────────────────────────────────────────────

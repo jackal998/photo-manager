@@ -33,7 +33,7 @@ class ExecuteActionDialog(QDialog):
         self.deleted_paths: list[str] = []
         self.executed_paths: list[str] = []
         self._missing_paths: list[str] = []
-        self._src_model = None   # source model kept for apply_select_regex
+        self._src_model = None
         self._build_ui()
 
     # ------------------------------------------------------------------ helpers
@@ -113,7 +113,7 @@ class ExecuteActionDialog(QDialog):
     def _rebuild_tree_model(self) -> None:
         groups = self._groups_with_decisions()
         model, proxy = build_model(groups)
-        self._src_model = model          # keep reference for apply_select_regex
+        self._src_model = model
         self._tree.setModel(proxy if proxy is not None else model)
         self._tree.expandAll()
 
@@ -179,20 +179,13 @@ class ExecuteActionDialog(QDialog):
                     break
         self._refresh_ui_after_decision_change()
 
-    # ------------------------------------------------------------------ select by regex
+    # ------------------------------------------------------------------ set action by regex
 
     def _show_select_dialog(self) -> None:
-        from app.views.dialogs.select_dialog import SelectDialog
-        from app.views.selection_service import apply_select_regex
+        from app.views.dialogs.select_dialog import ActionDialog
 
         fields = ["Action", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
-        dlg = SelectDialog(fields=fields, parent=self)
-        dlg.selectRequested.connect(
-            lambda f, p: apply_select_regex(self._src_model, f, p, True)
-        )
-        dlg.unselectRequested.connect(
-            lambda f, p: apply_select_regex(self._src_model, f, p, False)
-        )
+        dlg = ActionDialog(fields=fields, parent=self)
         dlg.setActionRequested.connect(self._set_decision_by_regex)
         dlg.exec()
 
