@@ -18,20 +18,45 @@ from app.views.media_utils import is_video, normalize_windows_path
 from app.views.widgets.group_media_controller import GroupMediaController
 from app.views.widgets.video_player import VideoPlayerWidget
 
+_RAW_EXTENSIONS = frozenset((".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".rw2"))
+
+
+def _raw_sensor_dims(path: str) -> tuple[int, int]:
+    """Return (width, height) from rawpy metadata for RAW/DNG files, or (0, 0).
+
+    rawpy reads the sensor size from the RAW metadata, not from an embedded
+    JPEG thumbnail, so this always reflects the true capture resolution.
+    """
+    try:
+        import rawpy  # type: ignore
+        with rawpy.imread(path) as raw:
+            w, h = raw.sizes.width, raw.sizes.height
+            if w > 0 and h > 0:
+                return w, h
+    except Exception:
+        pass
+    return 0, 0
+
 
 def _read_resolution(path: str) -> str | None:
-    """Return "W*H" pixel dimensions for an image file, or None on failure.
+    """Return "W×H" pixel dimensions for an image file, or None on failure.
 
-    Tries QImageReader first (header-only I/O). Falls back to PIL because
-    QImageReader silently fails for HEIC and other formats that require
-    Qt plugins not bundled by default.
+    For RAW/DNG files rawpy is tried first — QImageReader has no DNG decoder
+    and PIL's TIFF reader returns the embedded thumbnail dimensions instead of
+    the true sensor size.  For other formats: QImageReader (header-only I/O),
+    then PIL as fallback for HEIC and other Qt-unsupported formats.
     """
+    ext = path.lower().rsplit(".", 1)[-1] if "." in path else ""
+    if f".{ext}" in _RAW_EXTENSIONS:
+        w, h = _raw_sensor_dims(path)
+        if w > 0 and h > 0:
+            return f"{w}×{h}"
     try:
         r = QImageReader(path)
         sz = r.size()
         w, h = sz.width(), sz.height()
         if w > 0 and h > 0:
-            return f"{w}*{h}"
+            return f"{w}×{h}"
     except Exception:
         pass
     try:
@@ -44,7 +69,7 @@ def _read_resolution(path: str) -> str | None:
         with Image.open(path) as img:
             w, h = img.size
             if w > 0 and h > 0:
-                return f"{w}*{h}"
+                return f"{w}×{h}"
     except Exception:
         pass
     return None
@@ -200,6 +225,11 @@ class PreviewPane(QWidget):
         # Tuple layout: (path, name, folder, size_txt, creation_txt, shot_txt, resolution)
         # resolution is "W*H" for images, "" for videos.
         def _image_dims(path: str) -> tuple[int, int]:
+            ext = path.lower().rsplit(".", 1)[-1] if "." in path else ""
+            if f".{ext}" in _RAW_EXTENSIONS:
+                w, h = _raw_sensor_dims(path)
+                if w > 0 and h > 0:
+                    return w, h
             try:
                 sz = QImageReader(path).size()
                 w, h = sz.width(), sz.height()
