@@ -11,30 +11,30 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. SCAN (photo-manager)                                                    │
-│     GUI: File > Scan Sources…  —or—  CLI: python scan.py …                │
-│     Walks any number of source folders, hashes every file,                 │
+│     GUI: File > Scan Sources…  —or—  CLI: python scan.py …                  │
+│     Walks any number of source folders, hashes every file,                  │
 │     writes  migration_manifest.sqlite                                       │
 │                                                                             │
 │  2. REVIEW (photo-manager)                                                  │
 │     GUI: File > Open Manifest…                                              │
-│     Inspect every group — col 0 (Similarity) shows match strength          │
+│     Inspect every group — col 0 (Similarity) shows match strength           │
 │     Set decisions per file or in bulk:                                      │
-│       Right-click a file → Set Action → delete / keep                     │
-│       Action > Set Action by Field/Regex… → regex batch across any column  │
-│     File > Save Manifest Decisions… persists decisions to the manifest     │
+│       Right-click a file → Set Action → delete / keep                       │
+│       Action > Set Action by Field/Regex… → regex batch across any column   │
+│     File > Save Manifest Decisions… persists decisions to the manifest      │
 │                                                                             │
-│     CLI alternative: python review.py … for REVIEW_DUPLICATE triage       │
+│     CLI alternative: python review.py … for REVIEW_DUPLICATE triage         │
 │                                                                             │
 │  3. EXECUTE (photo-manager)                                                 │
-│     Action > Execute Action…  opens a full tree review (same columns as    │
+│     Action > Execute Action…  opens a full tree review (same columns as     │
 │     the main window).  Right-click rows to change decisions before          │
-│     confirming.  If every file in a group is marked delete, a              │
-│     confirmation dialog appears before proceeding.  Confirm to:            │
-│       • delete → send file to recycle bin                                  │
-│       • keep   → mark as executed in the manifest                          │
+│     confirming.  If every file in a group is marked delete, a               │
+│     confirmation dialog appears before proceeding.  Confirm to:             │
+│       • delete → send file to recycle bin                                   │
+│       • keep   → mark as executed in the manifest                           │
 │                                                                             │
 │  4. MIGRATE (photo-transfer)                                                │
-│     python migrate.py --manifest migration_manifest.sqlite --dest-root … │
+│     python migrate.py --manifest migration_manifest.sqlite --dest-root …    │
 │     Copies every MOVE row to the destination tree                           │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
