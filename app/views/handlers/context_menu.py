@@ -17,20 +17,12 @@ from app.views.media_utils import normalize_windows_path
 class ActionHandlers(Protocol):
     """Protocol for action handler callbacks."""
 
-    def select_files(self, items: list[dict]) -> None:
-        """Select files from items list."""
-        ...
-
-    def unselect_files(self, items: list[dict]) -> None:
-        """Unselect files from items list."""
-        ...
-
     def remove_items_from_list(self, items: list[dict]) -> None:
         """Remove items from list."""
         ...
 
-    def show_select_dialog(self, clicked_col: int | None = None) -> None:
-        """Show select by field/regex dialog."""
+    def show_action_dialog(self, clicked_col: int | None = None) -> None:
+        """Show set action by field/regex dialog."""
         ...
 
     def set_decision(self, items: list[dict], decision: str) -> None:
@@ -47,13 +39,7 @@ class TreeItemProvider(Protocol):
 
 
 class ContextMenuHandler:
-    """Manages context menu creation and actions.
-
-    This class encapsulates all context menu functionality including:
-    - Context menu setup and policy
-    - Dynamic menu creation based on selection
-    - Action routing to appropriate handlers
-    """
+    """Manages context menu creation and actions."""
 
     def __init__(
         self,
@@ -95,15 +81,7 @@ class ContextMenuHandler:
         self, menu: QMenu, item: dict, clicked_col: int | None = None
     ) -> None:
         if item["type"] == "file":
-            # Add Select/Unselect file options
-            select_file_action = menu.addAction("Select File")
-            select_file_action.triggered.connect(lambda: self.handlers.select_files([item]))
-
-            unselect_file_action = menu.addAction("Unselect File")
-            unselect_file_action.triggered.connect(lambda: self.handlers.unselect_files([item]))
-
             # Set Action submenu
-            menu.addSeparator()
             set_action_menu = menu.addMenu("Set Action")
             for label, value in _SETTABLE_DECISIONS:
                 a = set_action_menu.addAction(label)
@@ -143,33 +121,18 @@ class ContextMenuHandler:
 
             open_folder_action.triggered.connect(_open_folder)
 
-        elif item["type"] == "group":
-            select_files_action = menu.addAction("Select Files")
-            select_files_action.triggered.connect(lambda: self.handlers.select_files([item]))
-
-            unselect_files_action = menu.addAction("Unselect Files")
-            unselect_files_action.triggered.connect(lambda: self.handlers.unselect_files([item]))
-
         # Common actions for single selection
-        select_action = menu.addAction("Select by Field/Regex")
-        select_action.triggered.connect(
-            lambda: self.handlers.show_select_dialog(clicked_col=clicked_col)
+        menu.addSeparator()
+        action_dialog_action = menu.addAction("Set Action by Field/Regex…")
+        action_dialog_action.triggered.connect(
+            lambda: self.handlers.show_action_dialog(clicked_col=clicked_col)
         )
 
         remove_action = menu.addAction("Remove from List")
         remove_action.triggered.connect(lambda: self.handlers.remove_items_from_list([item]))
 
     def _create_multi_selection_menu(self, menu: QMenu, selected_items: list[dict]) -> None:
-        select_files_action = menu.addAction("Select Files")
-        select_files_action.triggered.connect(lambda: self.handlers.select_files(selected_items))
-
-        unselect_files_action = menu.addAction("Unselect Files")
-        unselect_files_action.triggered.connect(
-            lambda: self.handlers.unselect_files(selected_items)
-        )
-
         # Set Action submenu — only applies to file-type items
-        menu.addSeparator()
         set_action_menu = menu.addMenu("Set Action")
         file_items = [it for it in selected_items if it.get("type") == "file"]
         for label, value in _SETTABLE_DECISIONS:

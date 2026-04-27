@@ -9,29 +9,14 @@ from PySide6.QtWidgets import QMainWindow, QMenuBar
 
 
 class MenuController:
-    """Manages main window menu creation and action connections.
-
-    This class encapsulates all menu-related functionality including:
-    - Menu structure creation
-    - Action creation and organization
-    - Action-to-handler connection management
-    """
+    """Manages main window menu creation and action connections."""
 
     def __init__(self, main_window: QMainWindow) -> None:
-        """Initialize with main window reference.
-
-        Args:
-            main_window: The QMainWindow to create menus for
-        """
         self.window = main_window
         self.actions: dict[str, QAction] = {}
 
     def setup_menus(self) -> dict[str, QAction]:
-        """Create all menus and return action references.
-
-        Returns:
-            Dictionary mapping action names to QAction instances
-        """
+        """Create all menus and return action references."""
         menubar = QMenuBar(self.window)
 
         # File Menu
@@ -42,19 +27,14 @@ class MenuController:
         self.actions["save_manifest"] = file_menu.addAction("Save Manifest Decisions…")
         self.actions["save_manifest"].setEnabled(False)
         file_menu.addSeparator()
-        sel_submenu = file_menu.addMenu("Set Action to Selected (Sel) Files")
-        sel_submenu.setEnabled(False)
-        self.actions["set_action_sel_delete"] = sel_submenu.addAction("delete")
-        self.actions["set_action_sel_keep"] = sel_submenu.addAction("keep (remove action)")
-        self._set_action_sel_submenu = sel_submenu
-        self.actions["execute_action"] = file_menu.addAction("Execute Action…")
-        self.actions["execute_action"].setEnabled(False)
-        file_menu.addSeparator()
         self.actions["exit"] = file_menu.addAction("Exit")
 
-        # Select Menu
-        select_menu = menubar.addMenu("Select")
-        self.actions["select_by"] = select_menu.addAction("Select by Field/Regex…")
+        # Action Menu
+        action_menu = menubar.addMenu("Action")
+        self.actions["action_by_regex"] = action_menu.addAction("Set Action by Field/Regex…")
+        action_menu.addSeparator()
+        self.actions["execute_action"] = action_menu.addAction("Execute Action…")
+        self.actions["execute_action"].setEnabled(False)
 
         # List Menu
         list_menu = menubar.addMenu("List")
@@ -72,98 +52,25 @@ class MenuController:
 
         # Store actions as window attributes for backward compatibility
         self.window.action_exit = self.actions["exit"]
-        self.window.action_select_by = self.actions["select_by"]
         self.window.action_remove_from_list = self.actions["remove_from_list"]
 
         return self.actions
 
     def connect_actions(self, handlers: dict[str, Callable]) -> None:
-        """Connect menu actions to their handler methods.
-
-        Args:
-            handlers: Dictionary mapping action names to handler callables
-        """
-        # File menu actions
-        if "scan_sources" in handlers:
-            self.actions["scan_sources"].triggered.connect(handlers["scan_sources"])
-
-        if "open_manifest" in handlers:
-            self.actions["open_manifest"].triggered.connect(handlers["open_manifest"])
-
-        if "save_manifest" in handlers:
-            self.actions["save_manifest"].triggered.connect(handlers["save_manifest"])
-
-        if "set_action_sel_delete" in handlers:
-            self.actions["set_action_sel_delete"].triggered.connect(handlers["set_action_sel_delete"])
-
-        if "set_action_sel_keep" in handlers:
-            self.actions["set_action_sel_keep"].triggered.connect(handlers["set_action_sel_keep"])
-
-        if "execute_action" in handlers:
-            self.actions["execute_action"].triggered.connect(handlers["execute_action"])
-
-        if "exit" in handlers:
-            self.actions["exit"].triggered.connect(handlers["exit"])
-        else:
-            # Default exit behavior
-            self.actions["exit"].triggered.connect(self.window.close)
-
-        # Select menu actions
-        if "select_by" in handlers:
-            self.actions["select_by"].triggered.connect(handlers["select_by"])
-
-        # List menu actions
-        if "remove_from_list" in handlers:
-            self.actions["remove_from_list"].triggered.connect(handlers["remove_from_list"])
-
-        # Log menu actions
-        if "open_latest_log" in handlers:
-            self.actions["open_latest_log"].triggered.connect(handlers["open_latest_log"])
-
-        if "open_latest_delete_log" in handlers:
-            self.actions["open_latest_delete_log"].triggered.connect(
-                handlers["open_latest_delete_log"]
-            )
-
-        if "open_log_directory" in handlers:
-            self.actions["open_log_directory"].triggered.connect(handlers["open_log_directory"])
-
-        if "open_delete_log_directory" in handlers:
-            self.actions["open_delete_log_directory"].triggered.connect(
-                handlers["open_delete_log_directory"]
-            )
+        """Connect menu actions to their handler methods."""
+        for name, action in self.actions.items():
+            if name in handlers:
+                action.triggered.connect(handlers[name])
+            elif name == "exit":
+                action.triggered.connect(self.window.close)
 
     def get_action(self, name: str) -> QAction | None:
-        """Get a specific action by name.
-
-        Args:
-            name: Action name
-
-        Returns:
-            QAction instance or None if not found
-        """
         return self.actions.get(name)
 
     def enable_action(self, name: str, enabled: bool = True) -> None:
-        """Enable or disable a specific action.
-
-        Args:
-            name: Action name
-            enabled: Whether to enable the action
-        """
         action = self.actions.get(name)
         if action:
             action.setEnabled(enabled)
-        # Keep parent submenus in sync with their child actions
-        if name in ("set_action_sel_delete", "set_action_sel_keep"):
-            submenu = getattr(self, "_set_action_sel_submenu", None)
-            if submenu is not None:
-                submenu.setEnabled(enabled)
 
     def get_all_actions(self) -> dict[str, QAction]:
-        """Get all actions.
-
-        Returns:
-            Dictionary of all actions
-        """
         return self.actions.copy()

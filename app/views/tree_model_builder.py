@@ -14,7 +14,6 @@ from app.views.constants import (
     COL_GROUP_COUNT,
     COL_NAME,
     COL_RESOLUTION,
-    COL_SEL,
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
     HEADERS,
@@ -69,7 +68,6 @@ def build_model(
     for g in groups:
         group_number = int(getattr(g, "group_number", 0) or 0)
         items_list = getattr(g, "items", []) or []
-        first = items_list[0] if items_list else None
 
         # Col 0 at group row: "Group N" label
         group_item = QStandardItem(f"Group {group_number}")
@@ -78,15 +76,14 @@ def build_model(
         group_count_val = len(items_list)
         group_row = [
             group_item,                              # COL_GROUP      (0)
-            QStandardItem(""),                       # COL_SEL        (1)
-            QStandardItem(""),                       # COL_ACTION     (2) — decision at file level
-            QStandardItem(""),                       # COL_NAME       (3)
-            QStandardItem(""),                       # COL_FOLDER     (4)
-            QStandardItem(""),                       # COL_SIZE_BYTES (5)
-            QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (6)
-            QStandardItem(""),                       # COL_CREATION_DATE (7)
-            QStandardItem(""),                       # COL_SHOT_DATE  (8)
-            QStandardItem(""),                       # COL_RESOLUTION (9) — group level empty
+            QStandardItem(""),                       # COL_ACTION     (1) — decision at file level
+            QStandardItem(""),                       # COL_NAME       (2)
+            QStandardItem(""),                       # COL_FOLDER     (3)
+            QStandardItem(""),                       # COL_SIZE_BYTES (4)
+            QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (5)
+            QStandardItem(""),                       # COL_CREATION_DATE (6)
+            QStandardItem(""),                       # COL_SHOT_DATE  (7)
+            QStandardItem(""),                       # COL_RESOLUTION (8) — group level empty
         ]
         for it in group_row:
             it.setEditable(False)
@@ -100,11 +97,6 @@ def build_model(
                     default=6),
                 SORT_ROLE,
             )
-        except Exception:
-            pass
-        try:
-            marked_count = sum(1 for it in items_list if getattr(it, "is_mark", False))
-            group_row[COL_SEL].setData(marked_count, SORT_ROLE)
         except Exception:
             pass
         try:
@@ -190,38 +182,23 @@ def build_model(
             file_action = getattr(p, "action", "") or ""
             file_match = _file_similarity(file_action, p)
 
-            # Col 2: user's decision (delete / keep / "")
+            # Col 1: user's decision (delete / keep / "")
             item_decision = getattr(p, "user_decision", "") or ""
 
-            check = QStandardItem("")
-            check.setEditable(False)
-            check.setCheckable(True)
-            is_marked = False
-            try:
-                is_marked = bool(getattr(p, "is_mark", False))
-                check.setCheckState(Qt.Checked if is_marked else Qt.Unchecked)
-            except Exception:
-                pass
-
             child_row = [
-                QStandardItem(file_match),           # COL_GROUP      (0) — match type
-                check,                               # COL_SEL        (1)
-                QStandardItem(item_decision),        # COL_ACTION     (2) — user decision
-                QStandardItem(name),                 # COL_NAME       (3)
-                QStandardItem(folder),               # COL_FOLDER     (4)
-                QStandardItem(str(size_num)),        # COL_SIZE_BYTES (5)
-                QStandardItem(""),                   # COL_GROUP_COUNT (6) — group level only
-                QStandardItem(creation_txt),         # COL_CREATION_DATE (7)
-                QStandardItem(shot_txt),             # COL_SHOT_DATE  (8)
-                QStandardItem(resolution_txt),       # COL_RESOLUTION (9)
+                QStandardItem(file_match),           # COL_GROUP      (0) — similarity
+                QStandardItem(item_decision),        # COL_ACTION     (1) — user decision
+                QStandardItem(name),                 # COL_NAME       (2)
+                QStandardItem(folder),               # COL_FOLDER     (3)
+                QStandardItem(str(size_num)),        # COL_SIZE_BYTES (4)
+                QStandardItem(""),                   # COL_GROUP_COUNT (5) — group level only
+                QStandardItem(creation_txt),         # COL_CREATION_DATE (6)
+                QStandardItem(shot_txt),             # COL_SHOT_DATE  (7)
+                QStandardItem(resolution_txt),       # COL_RESOLUTION (8)
             ]
 
             try:
                 child_row[COL_GROUP].setData(_ACTION_SORT.get(file_action, 6), SORT_ROLE)
-            except Exception:
-                pass
-            try:
-                child_row[COL_SEL].setData(1 if is_marked else 0, SORT_ROLE)
             except Exception:
                 pass
             try:
