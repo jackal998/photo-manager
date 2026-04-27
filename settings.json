@@ -24,6 +24,16 @@
     "iphone": "D:/Downloads/Takeout/Google 相簿",
     "takeout": "//linxiaoyun/J/圖片",
     "jdrive": "//linxiaoyun/home/Photos",
-    "output": "C:/Users/J/repository/photo-manager/migration_manifest.sqlite"
+    "output": "C:/Users/J/repository/photo-manager/migration_manifest.sqlite",
+    "list": [
+      {
+        "path": "D:/Downloads/Takeout/Google 相簿/QA_1",
+        "recursive": true
+      },
+      {
+        "path": "D:/Downloads/Takeout/Google 相簿/_",
+        "recursive": true
+      }
+    ]
   }
 }

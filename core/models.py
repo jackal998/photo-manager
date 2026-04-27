@@ -32,6 +32,7 @@ class PhotoRecord:
     action: str = ""
     # User's planned file operation (delete | keep | "" = undecided)
     user_decision: str = ""
+    hamming_distance: int | None = None
 
 
 @dataclass

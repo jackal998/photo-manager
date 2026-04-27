@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import QGridLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 from loguru import logger
 
@@ -17,6 +17,49 @@ from app.views.image_tasks import ImageTaskRunner
 from app.views.media_utils import is_video, normalize_windows_path
 from app.views.widgets.group_media_controller import GroupMediaController
 from app.views.widgets.video_player import VideoPlayerWidget
+
+
+def _read_resolution(path: str) -> str | None:
+    """Return "W*H" pixel dimensions for an image file, or None on failure.
+
+    Tries QImageReader first (header-only I/O). Falls back to PIL because
+    QImageReader silently fails for HEIC and other formats that require
+    Qt plugins not bundled by default.
+    """
+    try:
+        r = QImageReader(path)
+        sz = r.size()
+        w, h = sz.width(), sz.height()
+        if w > 0 and h > 0:
+            return f"{w}*{h}"
+    except Exception:
+        pass
+    try:
+        from PIL import Image
+        try:
+            from pillow_heif import register_heif_opener
+            register_heif_opener()
+        except ImportError:
+            pass
+        with Image.open(path) as img:
+            w, h = img.size
+            if w > 0 and h > 0:
+                return f"{w}*{h}"
+    except Exception:
+        pass
+    return None
+
+
+def _format_info_html(rows: list[tuple[str, str]]) -> str:
+    """Render (label, value) pairs as an HTML two-column table for QLabel."""
+    if not rows:
+        return ""
+    cells = "".join(
+        f"<tr><td style='color:#888;padding-right:8px;white-space:nowrap'>{lbl}</td>"
+        f"<td>{val}</td></tr>"
+        for lbl, val in rows
+    )
+    return f"<table>{cells}</table>"
 
 
 class PreviewPane(QWidget):
@@ -43,6 +86,13 @@ class PreviewPane(QWidget):
         self._preview_layout = QVBoxLayout(self._preview_container)
         self._preview_layout.setContentsMargins(0, 0, 0, 0)
 
+        # Persistent file info header (shown for both image and video single-view)
+        self._single_info_label = QLabel()
+        self._single_info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self._single_info_label.setWordWrap(True)
+        self._single_info_label.setVisible(False)
+        self._preview_layout.addWidget(self._single_info_label)
+
         self._single_label = QLabel("(preview)")
         self._single_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._single_label.setMinimumHeight(200)
@@ -56,7 +106,7 @@ class PreviewPane(QWidget):
         self._grid_labels: dict[str, QLabel] = {}
         self._grid_container: QWidget | None = None
         self._grid_layout: QGridLayout | None = None
-        self._grid_items: list[tuple[str, str, str, str]] = []
+        self._grid_items: list[tuple[str, str, str, str, str, str, str]] = []
         self._single_pm: QPixmap | None = None
 
         # Video support
@@ -80,25 +130,42 @@ class PreviewPane(QWidget):
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         if is_video(path):
-            # Show video player
+            # Show video player with info header above
             try:
-                # For video, allow container to resize with viewport
                 self.preview_area.setWidgetResizable(True)
                 self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                if info and isinstance(info, dict):
+                    name = info.get("name") or ""
+                    folder = info.get("folder") or ""
+                    size_txt = info.get("size") or ""
+                    creation = info.get("creation") or ""
+                    shot = info.get("shot") or ""
+                    info_rows: list[tuple[str, str]] = []
+                    if name:      info_rows.append(("Name", name))
+                    if folder:    info_rows.append(("Folder", folder))
+                    if size_txt:  info_rows.append(("Size", f"{size_txt} Bytes"))
+                    if creation:  info_rows.append(("Created", creation))
+                    if shot:      info_rows.append(("Shot", shot))
+                    html = _format_info_html(info_rows)
+                    if html:
+                        self._single_info_label.setTextFormat(Qt.RichText)
+                        self._single_info_label.setText(html)
+                        self._single_info_label.setVisible(True)
                 self._single_video_player = VideoPlayerWidget(path, self._preview_container)
                 self._preview_layout.addWidget(self._single_video_player)
                 self._single_label.setVisible(False)
-                # Autoplay on show
                 try:
                     self._single_video_player.play()
                 except Exception:
                     pass
             except Exception as ex:
                 logger.error("Failed to load video {}: {}", path, ex)
+                self._single_info_label.clear()
+                self._single_info_label.setVisible(False)
                 self._single_label.setVisible(True)
                 self._single_label.setText("Video file not found or cannot be played")
         else:
-            # Show image preview with optional info block
+            # Show image preview with persistent info block
             self._single_label.setVisible(True)
             if info and isinstance(info, dict):
                 name = info.get("name") or ""
@@ -106,21 +173,20 @@ class PreviewPane(QWidget):
                 size_txt = info.get("size") or ""
                 creation = info.get("creation") or ""
                 shot = info.get("shot") or ""
-                parts = [
-                    p
-                    for p in [
-                        name,
-                        folder,
-                        f"{size_txt} Bytes" if size_txt else "",
-                        creation and f"Created: {creation}" or "",
-                        shot and f"Shot: {shot}" or "",
-                    ]
-                    if p
-                ]
-                header = "\n".join(parts)
-                self._single_label.setText(header + ("\n\nLoading…" if header else "Loading…"))
-            else:
-                self._single_label.setText("Loading…")
+                res = _read_resolution(normalize_windows_path(path))
+                info_rows: list[tuple[str, str]] = []
+                if name:      info_rows.append(("Name", name))
+                if folder:    info_rows.append(("Folder", folder))
+                if size_txt:  info_rows.append(("Size", f"{size_txt} Bytes"))
+                if res:       info_rows.append(("Resolution", res))
+                if creation:  info_rows.append(("Created", creation))
+                if shot:      info_rows.append(("Shot", shot))
+                html = _format_info_html(info_rows)
+                if html:
+                    self._single_info_label.setTextFormat(Qt.RichText)
+                    self._single_info_label.setText(html)
+                    self._single_info_label.setVisible(True)
+            self._single_label.setText("Loading…")
             self._current_single_token = self._runner.request_single_preview(path)
 
     def show_grid(
@@ -129,46 +195,79 @@ class PreviewPane(QWidget):
         self.clear()
         self.preview_area.setWidgetResizable(True)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # Normalize paths and pre-sort tiles by aspect category and size to pack better
-        normalized: list[tuple[str, str, str, str, str, str]] = []
+        # Normalize paths; read image dimensions once per image (header-only) for both
+        # aspect-ratio sort and resolution display — avoids double QImageReader opens.
+        # Tuple layout: (path, name, folder, size_txt, creation_txt, shot_txt, resolution)
+        # resolution is "W*H" for images, "" for videos.
+        def _image_dims(path: str) -> tuple[int, int]:
+            try:
+                sz = QImageReader(path).size()
+                w, h = sz.width(), sz.height()
+                if w > 0 and h > 0:
+                    return w, h
+            except Exception:
+                pass
+            try:
+                from PIL import Image
+                try:
+                    from pillow_heif import register_heif_opener
+                    register_heif_opener()
+                except ImportError:
+                    pass
+                with Image.open(path) as img:
+                    w, h = img.size
+                    if w > 0 and h > 0:
+                        return w, h
+            except Exception:
+                pass
+            return 0, 0
+
+        def _size_key(path: str) -> int:
+            try:
+                import os
+                return int(os.path.getsize(path))
+            except Exception:
+                return 0
+
+        normalized: list[tuple[str, str, str, str, str, str, str]] = []
         for it in items:
             if len(it) == 4:
                 p, n, f, s = it  # type: ignore
-                normalized.append((normalize_windows_path(p), n, f, s, "", ""))
+                normalized.append((normalize_windows_path(p), n, f, s, "", "", ""))
             else:
                 p, n, f, s, c, sh = it  # type: ignore
-                normalized.append((normalize_windows_path(p), n, f, s, c or "", sh or ""))
+                normalized.append((normalize_windows_path(p), n, f, s, c or "", sh or "", ""))
 
-        def _aspect_bucket(path: str) -> int:
+        # Compute dimensions once per image; attach resolution string to each tuple.
+        result: list[tuple[str, str, str, str, str, str, str]] = []
+        for it in normalized:
+            p = it[0]
+            if not is_video(p):
+                w, h = _image_dims(p)
+                res = f"{w}*{h}" if w > 0 else ""
+            else:
+                res = ""
+            result.append((p, it[1], it[2], it[3], it[4], it[5], res))
+
+        # Videos first by aspect (landscape→square→portrait), then larger first; images after.
+        videos = [it for it in result if is_video(it[0])]
+        images = [it for it in result if not is_video(it[0])]
+
+        def _aspect_bucket_from_res(res: str) -> int:
             # 0: landscape, 1: square/unknown, 2: portrait
-            try:
-                from PySide6.QtGui import QImageReader
-
-                r = QImageReader(path)
-                sz = r.size()
-                w, h = sz.width(), sz.height()
-                if w > 0 and h > 0:
+            if res:
+                try:
+                    w, h = (int(x) for x in res.split("*"))
                     if w > h:
                         return 0
                     if w == h:
                         return 1
                     return 2
-            except Exception:
-                pass
+                except Exception:
+                    pass
             return 1
 
-        def _size_key(path: str) -> int:
-            try:
-                import os
-
-                return int(os.path.getsize(path))
-            except Exception:
-                return 0
-
-        # Videos first by aspect (landscape -> square -> portrait), then larger files first; keep images after videos
-        videos = [it for it in normalized if is_video(it[0])]
-        images = [it for it in normalized if not is_video(it[0])]
-        videos.sort(key=lambda it: (_aspect_bucket(it[0]), -_size_key(it[0])))
+        videos.sort(key=lambda it: (_aspect_bucket_from_res(it[6]), -_size_key(it[0])))
         self._grid_items = videos + images
 
         self._grid_container = QWidget()
@@ -185,7 +284,7 @@ class PreviewPane(QWidget):
         has_videos = any(is_video(it[0]) for it in self._grid_items)
 
         for i, it in enumerate(self._grid_items):
-            p, name, folder, size_txt, creation_txt, shot_txt = it
+            p, name, folder, size_txt, creation_txt, shot_txt, res = it
             r, c = divmod(i, cols)
             tile = QWidget()
             v = QVBoxLayout(tile)
@@ -216,17 +315,18 @@ class PreviewPane(QWidget):
                 v.addWidget(img_lbl)
                 self._grid_pending_video_labels[p] = img_lbl
 
-                # Add duration to info if available
-                extra = []
-                if creation_txt:
-                    extra.append(f"Created: {creation_txt}")
-                if shot_txt:
-                    extra.append(f"Shot: {shot_txt}")
-                extra_txt = ("\n" + "\n".join(extra)) if extra else ""
-                info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}\n(Duration: --:--)")
+                tile_rows: list[tuple[str, str]] = []
+                if name:         tile_rows.append(("Name", name))
+                if folder:       tile_rows.append(("Folder", folder))
+                if size_txt:     tile_rows.append(("Size", f"{size_txt} Bytes"))
+                if creation_txt: tile_rows.append(("Created", creation_txt))
+                if shot_txt:     tile_rows.append(("Shot", shot_txt))
+                tile_rows.append(("Duration", "--:--"))
+                info = QLabel(_format_info_html(tile_rows))
+                info.setTextFormat(Qt.RichText)
                 info.setWordWrap(True)
                 v.addWidget(info)
-                info.setObjectName("info_label")  # Give it a unique object name
+                info.setObjectName("info_label")
 
                 self._grid_layout.addWidget(tile, r, c)
                 token = self._runner.request_grid_thumbnail(p, thumb_side)
@@ -237,15 +337,17 @@ class PreviewPane(QWidget):
                 img_lbl.setFixedSize(thumb_side, thumb_side)
                 img_lbl.setAlignment(Qt.AlignCenter)
                 v.addWidget(img_lbl)
-                extra = []
-                if creation_txt:
-                    extra.append(f"Created: {creation_txt}")
-                if shot_txt:
-                    extra.append(f"Shot: {shot_txt}")
-                extra_txt = ("\n" + "\n".join(extra)) if extra else ""
-                info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}")
+                tile_rows: list[tuple[str, str]] = []
+                if name:         tile_rows.append(("Name", name))
+                if folder:       tile_rows.append(("Folder", folder))
+                if size_txt:     tile_rows.append(("Size", f"{size_txt} Bytes"))
+                if res:          tile_rows.append(("Resolution", res))
+                if creation_txt: tile_rows.append(("Created", creation_txt))
+                if shot_txt:     tile_rows.append(("Shot", shot_txt))
+                info = QLabel(_format_info_html(tile_rows))
+                info.setTextFormat(Qt.RichText)
                 info.setWordWrap(True)
-                info.setObjectName("info_label")  # Give it a unique object name
+                info.setObjectName("info_label")
                 v.addWidget(info)
                 self._grid_layout.addWidget(tile, r, c)
                 token = self._runner.request_grid_thumbnail(p, thumb_side)
@@ -301,6 +403,8 @@ class PreviewPane(QWidget):
             self._grid_layout = None
         self._grid_labels.clear()
         self._grid_items = []
+        self._single_info_label.clear()
+        self._single_info_label.setVisible(False)
         self._single_label.clear()
         self._single_label.setVisible(False)
         self._single_pm = None
@@ -513,7 +617,7 @@ class PreviewPane(QWidget):
             has_videos = any(is_video(it[0]) for it in self._grid_items)
 
             for i, it in enumerate(self._grid_items):
-                p, name, folder, size_txt, creation_txt, shot_txt = it
+                p, name, folder, size_txt, creation_txt, shot_txt, res = it
                 r, c = divmod(i, cols)
                 tile = QWidget()
                 v = QVBoxLayout(tile)
@@ -559,7 +663,7 @@ class PreviewPane(QWidget):
                     token = self._runner.request_grid_thumbnail(p, thumb_side)
                     self._grid_labels[token] = img_lbl
                 else:
-                    # Image tile
+                    # Image tile — resolution comes from cached _grid_items, no extra I/O
                     img_lbl = QLabel("Loading…")
                     img_lbl.setFixedSize(thumb_side, thumb_side)
                     img_lbl.setAlignment(Qt.AlignCenter)
@@ -570,7 +674,8 @@ class PreviewPane(QWidget):
                     if shot_txt:
                         extra.append(f"Shot: {shot_txt}")
                     extra_txt = ("\n" + "\n".join(extra)) if extra else ""
-                    info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}")
+                    res_txt = f"\n{res}" if res else ""
+                    info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{res_txt}{extra_txt}")
                     info.setWordWrap(True)
                     info.setObjectName("info_label")
                     v.addWidget(info)
