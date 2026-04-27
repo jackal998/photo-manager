@@ -43,9 +43,9 @@ def compute_hashes(
     """Single file read: ``(sha256, phash, mean_color, raw_exif_date, width, height)``.
 
     All six values are derived from one in-memory read — no extra file open.
-    ``width``/``height`` are the pixel dimensions of the decoded image (or ``None``
-    for video/skip and on decode failure).  For RAW files the embedded JPEG preview
-    dimensions are used (accurate for relative comparisons).
+    ``width``/``height`` are the pixel dimensions of the image (or ``None``
+    for video/skip and on decode failure).  For RAW files the true sensor
+    dimensions are read from ``raw.sizes`` via rawpy (not the embedded thumbnail).
     ``mean_color`` is the average RGB via a 1×1 LANCZOS downscale.
     ``raw_date_str`` is ``None`` for RAW/video; callers pass those to exiftool.
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
