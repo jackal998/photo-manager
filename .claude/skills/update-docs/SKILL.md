@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: Use after implementing any fix or new feature in photo-manager to keep documentation in sync. Checks README.md, pyproject.toml, and python_style_guide.md against what actually changed. Applies only surgical edits to affected sections.
+description: Use after implementing any fix or new feature in photo-manager to keep documentation in sync. Checks README.md and pyproject.toml against what actually changed. Applies only surgical edits to affected sections.
 origin: local
 ---
 
@@ -27,7 +27,6 @@ Activate this skill after implementing any non-trivial change to photo-manager s
 |------|---------------|--------------------------|
 | `README.md` | Project structure tree, test list, test count | `## Project structure` block; `tests/` subtree; `# NNN tests` comment |
 | `pyproject.toml` | Python version for Black / Ruff / Pylint | `target-version = ["py3XX"]`, `target-version = "py3XX"`, `py-version = "3.XX"` |
-| `python_style_guide.md` | Python version requirement | First line `請用 Python 3.XX+` |
 
 ---
 
@@ -57,7 +56,6 @@ Work through every item below. Check only the items relevant to your change.
 
 ### Python version bumped?
 - [ ] `pyproject.toml` — update `target-version` (Black + Ruff) and `py-version` (Pylint)
-- [ ] `python_style_guide.md` — update first line
 
 ### Background worker / major flow changed?
 - [ ] New `QThread` worker → add to `README.md` workers/ subtree
