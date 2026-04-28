@@ -57,6 +57,7 @@ cd photo-manager
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install -r dev-requirements.txt        # pytest, black, ruff, pylint
 copy settings.json.example settings.json   # local config — never committed
 ```
 
