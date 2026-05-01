@@ -104,6 +104,12 @@ settings.local.json
 *.db-shm
 *.db-wal
 
+# Exceptions: QA fixtures that intentionally test walker skip rules.
+# Placed after the Thumbs.db / desktop.ini / *.db rules so the negations
+# win the last-match contest.
+!qa/sandbox/walker-exclusions/Thumbs.db
+!qa/sandbox/walker-exclusions/desktop.ini
+
 # Temporary files
 tmp/
 temp/
