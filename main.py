@@ -15,6 +15,12 @@ from infrastructure.logging import init_logging
 from infrastructure.settings import JsonSettings
 
 BASE_DIR = Path(__file__).parent
+# QA / test runs may point at an alternative config root by setting
+# PHOTO_MANAGER_HOME. When unset, we keep the historical behavior of
+# reading settings.json from the repo root. Relative paths are
+# resolved against the repo root so the env var is robust to cwd.
+_home_env = os.environ.get("PHOTO_MANAGER_HOME")
+CONFIG_HOME = (BASE_DIR / _home_env).resolve() if _home_env else BASE_DIR
 
 
 def _parse_default_sort(settings: JsonSettings) -> list[tuple[str, bool]]:
@@ -32,7 +38,7 @@ def _parse_default_sort(settings: JsonSettings) -> list[tuple[str, bool]]:
 
 def main() -> int:
     init_logging()
-    settings = JsonSettings(BASE_DIR / "settings.json")
+    settings = JsonSettings(CONFIG_HOME / "settings.json")
 
     app = QApplication(sys.argv)
 

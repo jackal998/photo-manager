@@ -1,0 +1,29 @@
+{
+  "_comment": "Isolated config for /qa-explore. The QA agent loads this by setting PHOTO_MANAGER_HOME=<repo>/qa before launching main.py. Never references real photo folders. Schema matches scan_dialog.py:451-456 — sources.list is a list of {path, recursive} dicts.",
+  "thumbnail_size": 256,
+  "thumbnail_mem_cache": 128,
+  "thumbnail_disk_cache_dir": "qa/.thumb-cache",
+  "sorting": {
+    "defaults": [
+      { "field": "file_size_bytes", "asc": false }
+    ]
+  },
+  "sources": {
+    "list": [
+      { "path": "qa/sandbox/unique", "recursive": true },
+      { "path": "qa/sandbox/near-duplicates", "recursive": true },
+      { "path": "qa/sandbox/empty", "recursive": true },
+      { "path": "qa/sandbox/corrupted", "recursive": true },
+      { "path": "qa/sandbox/huge", "recursive": true },
+      { "path": "qa/sandbox/formats", "recursive": true },
+      { "path": "qa/sandbox/exif-edge", "recursive": true },
+      { "path": "qa/sandbox/format-dup", "recursive": true },
+      { "path": "qa/sandbox/multi-source-a", "recursive": true },
+      { "path": "qa/sandbox/multi-source-b", "recursive": true },
+      { "path": "qa/sandbox/walker-exclusions", "recursive": true },
+      { "path": "qa/sandbox/videos", "recursive": true },
+      { "path": "qa/sandbox/live-photo", "recursive": true }
+    ],
+    "output": "qa/run-manifest.sqlite"
+  }
+}
