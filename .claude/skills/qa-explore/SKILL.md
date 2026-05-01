@@ -35,9 +35,9 @@ observations grounded in screenshots — never in source code.
   branches. (Reading `git log` is technically allowed by the project
   CLAUDE.md but you don't need it.)
 - **No source edits.** Writes restricted to:
-  - `qa/screenshots/<timestamp>/**` (local scratch, gitignored)
   - `qa/sandbox/**` (only via `scripts/make_qa_sandbox.py`)
   - GitHub issues created via `gh issue create` (gated)
+  Screenshots stay in-context (inline-only); no files written.
 
 ## Stop conditions
 
@@ -89,9 +89,12 @@ If everything is already populated, skip the regen and move on.
 ## Phase 3 — Plan
 
 Print the full scenario menu (below). Ask the user which scenarios to
-run this session. Default: all 5. Accept any subset.
+run this session. **Don't default to all** — the 15-min cap means
+3–5 scenarios is realistic. Recommend a starter set if the user asks.
 
 ### Standard scenario menu
+
+**Core flow** (do most of the time):
 
 | # | Title | Folder | What it probes |
 |---|---|---|---|
@@ -101,14 +104,29 @@ run this session. Default: all 5. Accept any subset.
 | 4 | Corrupted file handling | `corrupted/` | Hash/EXIF error paths, user-facing error msg |
 | 5 | Heavy preview interaction | `huge/` | Large-image perf, keyboard nav, resize, rapid clicks |
 
-Create the local screenshot scratch dir now (use Bash):
+**Format and metadata coverage** (rotate in periodically):
 
-```
-mkdir -p qa/screenshots/<YYYY-MM-DD-HHMM>
-```
+| # | Title | Folder(s) | What it probes |
+|---|---|---|---|
+| 6 | Multi-format scan | `formats/` | HEIC, PNG, GIF, WebP, TIFF: thumbnails render, dates extracted (GIF has none — verify graceful handling) |
+| 7 | Format duplicate (HEIC vs JPG of same scene) | `format-dup/` | FORMAT_DUPLICATE classifier — HEIC should win, JPG marked as the dup |
+| 8 | EXIF edge cases | `exif-edge/` | Date column for: timezone offset, sub-second, CreateDate-only, DateTime tag-only, zero sentinel, dash sentinel |
+| 9 | Walker exclusion rules | `walker-exclusions/` | Only the 2 real photos appear; sidecar.json, Thumbs.db, desktop.ini correctly skipped |
 
-Use the local time when you start. Hold this `<timestamp>` value; the
-issue bodies in Phase 5 will reference it for any saved frames.
+**Cross-cutting** (probe deeper integrations):
+
+| # | Title | Folder(s) | What it probes |
+|---|---|---|---|
+| 10 | Multi-source priority + cross-source dedup | `multi-source-a/` AND `multi-source-b/` (both in one scan) | EXACT_DUPLICATE across sources, near-dup grouping, source-order priority |
+| 11 | Video + Live Photo | `videos/` AND `live-photo/` | MP4/MOV recognized, no pHash for video, IMG_0001 HEIC+MOV pair grouped, action propagation |
+
+**Recommended starter sets:**
+
+- "Smoke test" (~10 min): scenarios 1, 2, 9
+- "Format coverage" (~12 min): scenarios 1, 6, 8
+- "Stress probe" (~12 min): scenarios 3, 5, 11
+
+If the user asks "what should I run?", suggest the smoke test.
 
 ## Phase 4 — Explore (per scenario)
 
@@ -150,33 +168,29 @@ For each chosen scenario:
    Wait ~3 seconds before the first screenshot — the window takes a
    moment to appear.
 
-4. **Drive via screenshot → reason → act → screenshot**. Two screenshot
-   modes — pick deliberately, don't save everything:
+4. **Drive via screenshot → reason → act → screenshot.** Use
+   `mcp__computer-use__screenshot` **without `save_to_disk`** — the
+   image goes into your context for reasoning, and that's enough.
+   Verified: `save_to_disk: true` does not reliably surface a
+   filesystem path the agent can re-use, so don't bother trying.
 
-   **(a) Inline-only** (default for most frames). Just call
-   `mcp__computer-use__screenshot` without `save_to_disk`. The image
-   appears in your context for reasoning. No files written. Use this
-   for routine "did the click land" frames.
+   Findings are textual. The "Screenshot path" line in the issue
+   body is **optional and usually omitted**. If a visual is genuinely
+   load-bearing for reproduction, ask the user to capture it manually
+   with the Windows snipping tool after the run — don't try to route
+   it through the agent.
 
-   **(b) Save-to-disk** (only for frames that anchor a finding —
-   typically 1–3 per scenario). Call with `save_to_disk: true`. The
-   tool result includes the absolute path of the saved PNG (something
-   like `C:\Users\<user>\AppData\Local\Temp\...\screenshot_<N>.png`).
-   Move it into the local scratch dir using Bash, with a slug name:
+   **What NOT to screenshot** (these are noise; skip them):
+   - successful clicks landing on the right element
+   - hover states, cursor moves, focus rings
+   - routine scrolling between identical states
+   - the same dialog 3 times in a row while you reason about it
+   - the desktop / start menu / taskbar (you're never testing those)
 
-   ```bash
-   mkdir -p qa/screenshots/<timestamp>
-   mv "<path returned by tool>" qa/screenshots/<timestamp>/s<N>-<step>-<slug>.png
-   ```
-
-   `qa/screenshots/` is gitignored — these frames are local-only
-   scratch space. Reference the path in the GitHub issue body so the
-   user can drag-drop attach later in the GitHub UI. Do not try to
-   upload screenshots through the API.
-
-   If the tool result doesn't surface the saved path clearly, omit
-   the screenshot field from the issue body. The textual steps are
-   what matters; visual evidence is a nice-to-have.
+   **What IS worth a screenshot** (sparingly — once each):
+   - the moment a finding becomes visible (the bug frame)
+   - dialog text you need to quote in the issue body
+   - unexpected visual state you want to confirm before acting
 
 5. **Be a human, not a script.** Try the obvious path first. Then
    probe edges:
@@ -245,12 +259,13 @@ ask list, so the user re-approves per call; that's by design).
 - **Actual:** ...
 - **Heuristic:** Nielsen #N — <name>  *(UX findings only, otherwise omit)*
 - **Confidence:** high | medium | low
-- **Screenshot path** (local, if saved): `qa/screenshots/<ts>/<file>.png`
-  *(The user can drag-drop attach manually in the GitHub UI.)*
 
 ---
 *Filed by `/qa-explore` on YYYY-MM-DD.*
 ```
+
+The screenshot path field is intentionally omitted — see Phase 4
+step 4 for why. The user can grab a screenshot manually if needed.
 
 **Confidence calibration:**
 - **high** = reproduced ≥2 times, observation is unambiguous
@@ -277,7 +292,6 @@ git operations, no PR. The user triages from the issues list.
 | Run sandbox script | Bash | Phase 2 (gated) |
 | Launch main.py | Bash, `run_in_background: true` | Phase 4 (gated, every time) |
 | Screenshot / click / type | `mcp__computer-use__*` | Phase 4 |
-| Save screenshot scratch | Bash `mv` to `qa/screenshots/<ts>/` | Phase 4 (gitignored, optional) |
 | File findings | Bash `gh issue create` | Phase 5 (gated, batch-approved) |
 
 ## Reference

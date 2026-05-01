@@ -5,8 +5,11 @@ A Claude-driven exploratory tester for the PySide6 desktop app.
 ## What it is
 
 `/qa-explore` launches `main.py`, drives the UI via the `computer-use`
-MCP, and writes a findings report. It is a curious human tester, not a
-suite of assertions: each finding is grounded in a screenshot.
+MCP, and files findings as GitHub issues. It is a curious human tester,
+not a suite of assertions: each finding is grounded in observed
+behavior. Screenshots stay inline in the agent's context (used for
+reasoning); they're not saved to disk because `save_to_disk` doesn't
+reliably surface a usable path in this environment.
 
 ## What it isn't
 
@@ -65,9 +68,12 @@ side-effects beyond what's already happened.
 - Phase 1 (orient): ~30 s
 - Phase 2 (fixtures): ~30 s if regen needed, else instant
 - Phase 4 (explore): ~3–5 min per scenario, hard-capped at ~15 min total
-- Phase 5 (report): ~1 min
+- Phase 5 (report): ~1 min per finding to file as a GitHub issue
 
-A typical full 5-scenario run: 15–20 min wall-clock including approvals.
+The skill ships with 11 standard scenarios across three groups (core,
+format/metadata, cross-cutting). Realistic per-run picks: **3–5
+scenarios**, ~12–18 min wall-clock including approvals. The agent
+recommends the "Smoke test" set (#1, #2, #9) if you're unsure.
 
 ## Output
 
@@ -79,10 +85,13 @@ issue is titled `[QA] <one-line title>` and contains:
 - Expected vs Actual
 - Heuristic (Nielsen # for UX findings)
 - Confidence (high / medium / low)
-- Optional local screenshot path (the agent saves anchor frames to
-  `qa/screenshots/<timestamp>/`, gitignored — drag-drop attach in
-  the GitHub UI if you want them on the issue)
 - Footer: `Filed by /qa-explore on YYYY-MM-DD`
+
+Screenshots are intentionally **not** attached or referenced — the
+`computer-use` `save_to_disk` flag doesn't surface a stable path in
+this environment, so the agent uses inline-only screenshots for
+reasoning and lets the user grab visual evidence manually if a
+specific issue benefits from it.
 
 ### Approval flow at the end of a run
 
