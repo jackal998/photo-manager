@@ -45,5 +45,36 @@ max-line-length = 100
 [tool.pylint.variables]
 additional-builtins = ["Data1", "Data2", "Data3", "Data4"]
 
+[tool.pytest.ini_options]
+addopts = "-q --cov=. --cov-report=term-missing --cov-config=pyproject.toml"
+testpaths = ["tests"]
 
+[tool.coverage.run]
+branch = true
+source = ["scanner", "core", "infrastructure", "app"]
+omit = [
+  "tests/*",
+  "scripts/*",
+  ".claude/*",
+  # Top-level entry-point scripts and dev tooling
+  "main.py",
+  "scan.py",
+  "review.py",
+  "run_all_linters.py",
+  # Qt/UI glue and bootstrap — low test ROI
+  "infrastructure/image_service.py",
+  "infrastructure/logging.py",
+  "app/views/workers/scan_worker.py",
+  "app/views/media_utils.py",
+  # Unused legacy module
+  "app/viewmodels/photo_vm.py",
+]
 
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+]
+fail_under = 75

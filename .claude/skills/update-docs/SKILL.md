@@ -68,6 +68,8 @@ Work through every item below. Check only the items relevant to your change.
 2. For each checked item above, read the relevant doc section.
 3. Apply **surgical edits** — replace only the stale sentence/row/bullet; do not rewrite entire sections.
 4. After all edits, run `python -m pytest tests/ -q --tb=short` to confirm no regressions.
+   If coverage drops below the configured `fail_under` threshold in `pyproject.toml`,
+   add tests for the new code before committing.
 5. Commit the doc changes alongside the code change (or as an immediate follow-up commit on the same branch).
 
 ---
