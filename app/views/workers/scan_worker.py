@@ -90,12 +90,18 @@ class ScanWorker(QThread):
         chunk_size = 500
         _EXIFTOOL_TYPES = frozenset(("heic", "raw", "mov", "mp4"))
         cancel_flag = threading.Event()
+        skipped: list[tuple[Path, str, str]] = []  # (path, exc type, exc msg)
 
         def _hash_one(idx_record: tuple) -> tuple:
             idx, record = idx_record
             if cancel_flag.is_set():
                 return idx, None
-            sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
+            try:
+                sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # One bad file must never abort the whole scan — log + skip.
+                skipped.append((record.path, type(exc).__name__, str(exc)))
+                return idx, None
             pil_date = parse_exif_date(raw_date) if raw_date else None
             return idx, HashResult(
                 record=record, sha256=sha256, phash=phash, mean_color=mean_color,
@@ -121,8 +127,15 @@ class ScanWorker(QThread):
                 if done % 100 == 0 or done == len(records):
                     self._emit(f"  Hashed {done:,}/{len(records):,}")
 
-        # Remove any None slots (cancelled futures that didn't run)
+        # Remove any None slots (cancelled futures that didn't run, or skipped files)
         hash_results = [r for r in hash_results if r is not None]
+
+        if skipped:
+            self._emit(f"  Skipped {len(skipped):,} unreadable file(s):")
+            for p, exc_type, exc_msg in skipped[:10]:
+                self._emit(f"    {p}  [{exc_type}: {exc_msg}]")
+            if len(skipped) > 10:
+                self._emit(f"    … and {len(skipped) - 10:,} more")
 
         # --- 3. exiftool for HEIC / RAW / MOV / MP4 only ---
         # JPEG and PNG dates already populated from the PIL pass above.

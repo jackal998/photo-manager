@@ -255,3 +255,36 @@ class TestComputeHashes:
         _, _, _, raw_date, *_ = compute_hashes(f, "jpeg")
         # Plain solid-colour JPEG written by PIL has no DateTimeOriginal
         assert raw_date is None
+
+    def test_raw_unsupported_format_returns_sha_only(self, tmp_path):
+        """Misrouted RAW (e.g. non-camera TIFF) → LibRawFileUnsupportedError must not propagate.
+
+        Regression for issue #46: rawpy.LibRawFileUnsupportedError used to abort
+        the whole scan. Now it degrades to a sha-only record (same shape as a
+        corrupted JPEG) and the caller can continue.
+        """
+        import rawpy as _rawpy
+
+        from scanner.hasher import compute_hashes, compute_sha256
+
+        f = tmp_path / "fake.tif"
+        f.write_bytes(b"II*\x00" + b"\x00" * 64)  # TIFF magic but unparseable
+
+        unsupported = _rawpy.LibRawFileUnsupportedError("Unsupported file format or not RAW file")
+
+        with patch("scanner.hasher.rawpy") as mock_rawpy, \
+             patch("scanner.hasher._RAWPY_AVAILABLE", True):
+            # Preserve the real exception class so isinstance/except matches.
+            mock_rawpy.LibRawError = _rawpy.LibRawError
+            mock_rawpy.LibRawNoThumbnailError = _rawpy.LibRawNoThumbnailError
+            mock_rawpy.open_buffer.side_effect = unsupported
+            mock_rawpy.imread.side_effect = unsupported
+
+            sha, ph, ch, dt, w, h = compute_hashes(f, "raw")
+
+        assert sha == compute_sha256(f)
+        assert ph is None
+        assert ch is None
+        assert dt is None
+        assert w is None
+        assert h is None
