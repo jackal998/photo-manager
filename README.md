@@ -77,6 +77,10 @@ run.bat          # activates .venv and starts main.py
 .venv\Scripts\python -m pytest
 ```
 
+The default `pytest` invocation runs with coverage (configured in `pyproject.toml`)
+and fails if branch coverage drops below the `fail_under` threshold. CI runs the
+same command on every push and pull request to `master` via `.github/workflows/tests.yml`.
+
 ---
 
 ## Usage — GUI
@@ -347,7 +351,7 @@ photo-manager/
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 341 tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 391 tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
@@ -359,6 +363,7 @@ photo-manager/
     ├── test_delete_service.py
     ├── test_scanner_exif.py
     ├── test_scanner_manifest.py
+    ├── test_scanner_media.py    # magic-byte detection, Takeout filename parsing
     ├── test_main_vm.py
     ├── test_file_operations.py  # set_decision, execute_action
     ├── test_sort_service.py
