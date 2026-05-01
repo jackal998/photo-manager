@@ -18,7 +18,13 @@
       "Bash(git reset --hard*)",
       "Bash(git reset --hard)",
       "Bash(git rebase*)",
-      "Bash(git rebase)"
+      "Bash(git rebase)",
+      "Bash(git commit --amend*)",
+      "Bash(gh pr create*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh pr close*)",
+      "Bash(gh issue create*)",
+      "Bash(gh issue close*)"
     ],
     "additionalDirectories": [
       "<USER_HOME>/.claude"

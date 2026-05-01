@@ -43,6 +43,88 @@ class TestScanSources:
         records = scan_sources({"test": tmp_path})
         assert not records
 
+    def test_skips_symlinked_file(self, tmp_path):
+        """Files reached via a symlink/junction are excluded from the manifest.
+
+        Without this guard, the recycle-bin step would later route files outside
+        the configured source root through send2trash.
+        """
+        from scanner.walker import scan_sources
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        real = outside / "real.jpg"
+        _write_jpeg(real)
+
+        source = tmp_path / "source"
+        source.mkdir()
+        _write_jpeg(source / "regular.jpg")
+
+        link = source / "link.jpg"
+        try:
+            link.symlink_to(real)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlink creation not permitted in this environment: {exc}")
+
+        records = scan_sources({"test": source})
+        names = [r.path.name for r in records]
+
+        assert "regular.jpg" in names
+        assert "link.jpg" not in names
+
+    def test_skips_files_under_symlinked_dir(self, tmp_path):
+        """Files inside a symlinked/junctioned subdirectory are excluded too."""
+        from scanner.walker import scan_sources
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        _write_jpeg(outside / "buried.jpg")
+
+        source = tmp_path / "source"
+        source.mkdir()
+        _write_jpeg(source / "kept.jpg")
+
+        link_dir = source / "linked_sub"
+        try:
+            link_dir.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlink creation not permitted in this environment: {exc}")
+
+        records = scan_sources({"test": source})
+        names = [r.path.name for r in records]
+
+        assert "kept.jpg" in names
+        assert "buried.jpg" not in names
+
+    def test_skips_files_when_path_reports_as_symlink(self, tmp_path, monkeypatch):
+        """Mock-driven coverage so the skip-symlink guard runs even where
+        actually creating a symlink requires admin/developer mode (Windows).
+        """
+        from pathlib import Path
+
+        from scanner.walker import scan_sources
+
+        source = tmp_path / "source"
+        source.mkdir()
+        _write_jpeg(source / "kept.jpg")
+        fake_link = source / "fakelink.jpg"
+        _write_jpeg(fake_link)
+
+        original_is_symlink = Path.is_symlink
+
+        def mocked_is_symlink(self):
+            if self == fake_link:
+                return True
+            return original_is_symlink(self)
+
+        monkeypatch.setattr(Path, "is_symlink", mocked_is_symlink)
+
+        records = scan_sources({"test": source})
+        names = [r.path.name for r in records]
+
+        assert "kept.jpg" in names
+        assert "fakelink.jpg" not in names
+
     def test_source_label_assigned(self, tmp_path):
         from scanner.walker import scan_sources
         _write_jpeg(tmp_path / "a.jpg")

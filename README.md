@@ -320,9 +320,7 @@ photo-manager/
 │   │   ├── dialogs/
 │   │   │   ├── scan_dialog.py              # Scan Sources dialog
 │   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
-│   │   │   ├── select_dialog.py            # Set Action by Field/Regex dialog
-│   │   │   ├── filters_dialog.py           # [deprecated — legacy stub]
-│   │   │   └── rules_dialog.py             # [deprecated — legacy stub]
+│   │   │   └── select_dialog.py            # Set Action by Field/Regex dialog
 │   │   └── workers/
 │   │       ├── scan_worker.py              # Background QThread for scan pipeline
 │   │       └── manifest_load_worker.py     # Background QThread for manifest load
@@ -333,7 +331,7 @@ photo-manager/
 ├── core/                    # Models + service interfaces
 │   ├── models.py            # PhotoRecord (action, user_decision, group_id), PhotoGroup
 │   └── services/
-│       ├── interfaces.py         # DeleteResult, DeletePlan, IListService
+│       ├── interfaces.py         # DeleteResult, DeletePlan, DeletePlanGroupSummary
 │       └── sort_service.py       # SortService
 │
 ├── infrastructure/          # I/O: manifest repo, delete service, image cache
