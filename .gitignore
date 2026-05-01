@@ -90,6 +90,9 @@ logs/
 # Local settings — machine-specific paths, not committed
 settings.json
 settings.local.json
+# Exception: qa/settings.json is the QA-isolated config — committed
+# intentionally, only references qa/sandbox/ paths, no PII.
+!qa/settings.json
 
 # Databases
 *.sqlite

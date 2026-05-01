@@ -1,0 +1,11 @@
+# QA runtime artifacts — generated, never commit
+.thumb-cache/
+run-manifest.sqlite
+run-manifest.sqlite-journal
+run-manifest.sqlite-wal
+run-manifest.sqlite-shm
+
+# Local screenshot scratch — frames the QA agent saves for finding
+# anchors. Never committed; user can drag-drop attach to GitHub
+# issues manually.
+screenshots/
