@@ -163,10 +163,16 @@ def main() -> int:
 
     print(f"Hashing {len(records):,} files (workers={args.workers})…", flush=True)
     hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
+    skipped: list[tuple] = []  # (path, exc type, exc msg)
 
     def _hash_one(idx_record: tuple) -> tuple:
         idx, record = idx_record
-        sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
+        try:
+            sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # One bad file must never abort the whole scan — log + skip.
+            skipped.append((record.path, type(exc).__name__, str(exc)))
+            return idx, None
         pil_date = parse_exif_date(raw_date) if raw_date else None
         return idx, HashResult(
             record=record, sha256=sha256, phash=phash, mean_color=mean_color,
@@ -186,6 +192,15 @@ def main() -> int:
                 print(f"  Hashed {done:,}/{len(records):,}", end="\r", flush=True)
     if not _TQDM:
         print(f"  Hashed {len(records):,}/{len(records):,}", flush=True)
+
+    # Drop skipped slots (None entries) before downstream stages.
+    hash_results = [r for r in hash_results if r is not None]
+    if skipped:
+        print(f"  Skipped {len(skipped):,} unreadable file(s):", file=sys.stderr, flush=True)
+        for p, exc_type, exc_msg in skipped[:10]:
+            print(f"    {p}  [{exc_type}: {exc_msg}]", file=sys.stderr, flush=True)
+        if len(skipped) > 10:
+            print(f"    … and {len(skipped) - 10:,} more", file=sys.stderr, flush=True)
 
     # --- exiftool for HEIC / RAW / MOV / MP4 only ---
     # JPEG and PNG dates are already populated from the PIL pass above.

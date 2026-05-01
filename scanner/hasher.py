@@ -76,11 +76,11 @@ def compute_hashes(
             try:
                 with rawpy.open_buffer(data) as raw:
                     px_w, px_h = raw.sizes.width, raw.sizes.height
-            except (OSError, ValueError, AttributeError):
+            except (OSError, ValueError, AttributeError, rawpy.LibRawError):
                 try:
                     with rawpy.imread(str(path)) as raw:
                         px_w, px_h = raw.sizes.width, raw.sizes.height
-                except (OSError, ValueError):
+                except (OSError, ValueError, rawpy.LibRawError):
                     pass
         # RAW EXIF dates are not reliably readable via PIL — caller uses exiftool.
     else:
@@ -177,7 +177,7 @@ def _load_raw_preview(path: Path) -> Optional[Image.Image]:
             # Full decode fallback — slower but always works
             rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
             return Image.fromarray(rgb).convert("RGB")
-    except (OSError, ValueError):
+    except (OSError, ValueError, rawpy.LibRawError):
         return None
 
 
@@ -201,6 +201,6 @@ def _load_raw_preview_from_bytes(data: bytes) -> Optional[Image.Image]:
                 pass
             rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
             return Image.fromarray(rgb).convert("RGB")
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, rawpy.LibRawError):
         # AttributeError → rawpy.open_buffer not available in this rawpy build.
         return None
