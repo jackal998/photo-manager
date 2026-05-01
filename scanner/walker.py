@@ -50,6 +50,21 @@ def scan_sources(
     return records
 
 
+def _traverses_symlink(path: Path, root: Path) -> bool:
+    """Return True if path or any directory between path and root is a symlink/junction.
+
+    Without this guard, the scanner would pull files reached via symlinks or
+    Windows junction points into the manifest, and the recycle-bin step would
+    later route them out of the configured source root via send2trash.
+    """
+    current = path
+    while current != root and current != current.parent:
+        if current.is_symlink():
+            return True
+        current = current.parent
+    return False
+
+
 def _scan_dir(
     root: Path,
     label: str,
@@ -71,6 +86,8 @@ def _scan_dir(
     glob_fn = root.rglob if recursive else root.glob
     for path in glob_fn("*"):
         if not path.is_file():
+            continue
+        if _traverses_symlink(path, root):
             continue
         if path.name.lower() in SKIP_FILENAMES:
             continue

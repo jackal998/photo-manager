@@ -89,6 +89,7 @@ logs/
 
 # Local settings — machine-specific paths, not committed
 settings.json
+settings.local.json
 
 # Databases
 *.sqlite

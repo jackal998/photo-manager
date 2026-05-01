@@ -453,22 +453,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error("Failed to track header click: {}", e)
 
-    # PRESERVED: Legacy methods for backward compatibility
-
-    def on_edit_rules(self) -> None:  # pragma: no cover
-        """Legacy method preserved for compatibility."""
-        from app.views.dialogs.rules_dialog import RulesDialog
-
-        dlg = RulesDialog(self)
-        dlg.exec()
-
-    def on_edit_filters(self) -> None:  # pragma: no cover
-        """Legacy method preserved for compatibility."""
-        from app.views.dialogs.filters_dialog import FiltersDialog
-
-        dlg = FiltersDialog(self)
-        dlg.exec()
-
     def _open_latest_log(self) -> None:
         """Open the latest log file."""
         from infrastructure.logging import open_latest_log
