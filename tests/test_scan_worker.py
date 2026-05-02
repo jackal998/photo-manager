@@ -193,6 +193,88 @@ class TestScanWorkerCorruptImage:
         assert "bad_truncated.jpg" not in paths, \
             f"corrupt file should be excluded from manifest, but found in: {paths}"
 
+    def test_gif_not_flagged_as_corrupt(self, qapp, tmp_path):
+        """GIFs must NOT be flagged as ImageDecodeError.
+
+        Regression for #75: scanner/hasher.compute_hashes intentionally
+        returns ``phash=None`` for GIFs (early-return at hasher.py:53).
+        The #57 fix originally treated any non-video with phash=None as
+        corrupt, which false-positived 100% of GIF inputs and silently
+        dropped them from the manifest with a misleading error.
+        """
+        import sqlite3
+
+        from app.views.workers.scan_worker import ScanWorker
+
+        gif = tmp_path / "good.gif"
+        # Tiny valid GIF (1×1 transparent pixel).
+        Image.new("RGB", (8, 8), (200, 0, 0)).save(gif, "GIF")
+
+        out = tmp_path / "manifest.sqlite"
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=1,
+        )
+        progress: list[str] = []
+        worker.progress.connect(progress.append)
+        worker.run()
+
+        # The GIF should NOT appear in any "Skipped … unreadable" log line
+        # nor be tagged with the synthetic ImageDecodeError marker.
+        for line in progress:
+            assert "good.gif" not in line or "ImageDecodeError" not in line, (
+                f"GIF should not be flagged as corrupt: {line!r}"
+            )
+
+        # And it must reach the manifest.
+        with sqlite3.connect(out) as conn:
+            paths = [Path(p).name for (p,) in conn.execute(
+                "SELECT source_path FROM migration_manifest"
+            )]
+        assert "good.gif" in paths, \
+            f"GIF should be in manifest, not excluded as corrupt: {paths}"
+
+    def test_non_camera_tiff_not_flagged_as_corrupt(self, qapp, tmp_path):
+        """Non-camera-RAW TIFFs (Photoshop / scanner output) must NOT be flagged.
+
+        Regression for #75: TIFF maps to file_type='raw' (scanner/media.py),
+        and rawpy fails on synthetic / non-camera TIFFs — so phash ends up
+        None. The #57 fix originally treated that as corruption, which
+        silently dropped legitimate non-RAW TIFFs from real user libraries.
+        """
+        import sqlite3
+
+        from app.views.workers.scan_worker import ScanWorker
+
+        tiff = tmp_path / "scan_output.tif"
+        # Synthetic TIFF — PIL writes it cleanly but rawpy can't parse it.
+        Image.new("RGB", (32, 32), (50, 100, 150)).save(tiff, "TIFF")
+
+        out = tmp_path / "manifest.sqlite"
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=1,
+        )
+        progress: list[str] = []
+        worker.progress.connect(progress.append)
+        worker.run()
+
+        for line in progress:
+            assert "scan_output.tif" not in line or "ImageDecodeError" not in line, (
+                f"non-camera-RAW TIFF should not be flagged as corrupt: {line!r}"
+            )
+
+        with sqlite3.connect(out) as conn:
+            paths = [Path(p).name for (p,) in conn.execute(
+                "SELECT source_path FROM migration_manifest"
+            )]
+        assert "scan_output.tif" in paths, \
+            f"TIFF should be in manifest, not excluded as corrupt: {paths}"
+
 
 class TestScanWorkerLogging:
     def test_scan_progress_and_errors_forwarded_to_loguru(
