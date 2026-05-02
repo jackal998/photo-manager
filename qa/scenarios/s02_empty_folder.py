@@ -33,7 +33,7 @@ def main() -> int:
     wins = [t for _, _, t in _uia.list_process_windows(pid)]
     print(f"  open_windows={wins!r}")
     # Did anything pop up? (empty-state dialog, message, etc.)
-    extra = [t for t in wins if t not in ("Photo Manager - M1", "Scan Sources")]
+    extra = [t for t in wins if t not in ("Photo Manager", "Scan Sources")]
     print(f"  extra_dialogs={extra!r}")
 
     print("step: close_dialog")

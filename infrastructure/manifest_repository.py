@@ -55,9 +55,9 @@ WHERE  executed = 0
 ORDER  BY
     group_id NULLS LAST,
     CASE action
-        WHEN 'REVIEW_DUPLICATE' THEN 1
-        WHEN 'EXACT'            THEN 2
-        WHEN 'KEEP'             THEN 3
+        WHEN 'KEEP'             THEN 1
+        WHEN 'REVIEW_DUPLICATE' THEN 2
+        WHEN 'EXACT'            THEN 3
         WHEN 'UNDATED'          THEN 4
         WHEN 'MOVE'             THEN 5
         ELSE 6
@@ -186,7 +186,9 @@ class ManifestRepository:
         e.g. MOVE / UNDATED with no near-duplicate) are not yielded — the UI
         focuses on files that need review.
 
-        Ordering within a group: REVIEW_DUPLICATE → EXACT → KEEP → UNDATED → MOVE.
+        Ordering within a group: KEEP → REVIEW_DUPLICATE → EXACT → UNDATED → MOVE.
+        Reference / primary file (KEEP) sits at the top so users scanning a
+        group top-down see the "winner" first (#55).
         """
         from collections import defaultdict
 
