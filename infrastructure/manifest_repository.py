@@ -54,13 +54,21 @@ FROM   migration_manifest
 WHERE  executed = 0
 ORDER  BY
     group_id NULLS LAST,
+    -- "Ref tier" first (KEEP / MOVE / UNDATED / unset all render as "Ref"
+    -- in the tree per app/views/tree_model_builder._file_similarity), then
+    -- duplicates by similarity. Putting the reference / primary file at the
+    -- top of its group is what users mean when they say "winner first" (#55,
+    -- #76). Earlier we moved only KEEP to position 1, but real-world primaries
+    -- in dedup groups are almost always MOVE — so KEEP-only didn't move the
+    -- displayed Ref to the top.
     CASE action
         WHEN 'KEEP'             THEN 1
+        WHEN 'MOVE'             THEN 1
+        WHEN 'UNDATED'          THEN 1
+        WHEN ''                 THEN 1
         WHEN 'REVIEW_DUPLICATE' THEN 2
         WHEN 'EXACT'            THEN 3
-        WHEN 'UNDATED'          THEN 4
-        WHEN 'MOVE'             THEN 5
-        ELSE 6
+        ELSE 4
     END,
     id
 """
@@ -186,9 +194,10 @@ class ManifestRepository:
         e.g. MOVE / UNDATED with no near-duplicate) are not yielded — the UI
         focuses on files that need review.
 
-        Ordering within a group: KEEP → REVIEW_DUPLICATE → EXACT → UNDATED → MOVE.
-        Reference / primary file (KEEP) sits at the top so users scanning a
-        group top-down see the "winner" first (#55).
+        Ordering within a group: any action that renders as "Ref" in the
+        tree (KEEP / MOVE / UNDATED / unset) → REVIEW_DUPLICATE → EXACT.
+        Reference / primary file sits at the top so users scanning a group
+        top-down see the "winner" first (#55, #76).
         """
         from collections import defaultdict
 
