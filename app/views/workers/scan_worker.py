@@ -152,7 +152,16 @@ class ScanWorker(QThread):
         # raising but PIL couldn't produce a pHash — the file is truncated or
         # corrupt. Route to the same skip channel as exception failures so the
         # user sees them in the log instead of getting a misleading UNDATED row.
-        _IMAGE_TYPES = frozenset(("jpeg", "heic", "raw", "png", "gif", "webp"))
+        #
+        # Restricted to formats where PIL is the primary decoder and a missing
+        # pHash unambiguously means decode-failure:
+        #   - GIF excluded: compute_hashes always returns phash=None for GIF
+        #     (intentional early-return at scanner/hasher.py:53), so flagging
+        #     phash=None as corruption false-positives 100% of the time (#75).
+        #   - RAW excluded: rawpy is the decoder, and rawpy fails on legitimate
+        #     non-camera-RAW TIFFs (Photoshop / scanner output) — flagging
+        #     those as corrupt drops real user files from the manifest (#75).
+        _IMAGE_TYPES = frozenset(("jpeg", "heic", "png", "webp"))
         corrupt_paths: set[Path] = set()
         for r in hash_results:
             if r.record.file_type in _IMAGE_TYPES and r.phash is None:
