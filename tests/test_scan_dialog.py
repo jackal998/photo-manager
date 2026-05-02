@@ -369,3 +369,75 @@ class TestBuildSources:
         assert len(sources) == 2
         assert "Photos" in sources
         assert "Photos_2" in sources
+
+
+# ---------------------------------------------------------------------------
+# Layout / picker UX (#50 + #40)
+# ---------------------------------------------------------------------------
+
+
+class TestSourceListLayout:
+    def test_source_list_has_minimum_height(self, qapp):
+        """#50 — source list table must reserve room for ~6 rows minimum."""
+        widget = _SourceListWidget()
+        assert widget._table.minimumHeight() >= 180
+
+
+class TestPathFieldEntry:
+    """#40 — typing/pasting an absolute path should add it to the source list."""
+
+    def test_empty_path_is_silently_ignored(self, qapp):
+        from app.views.dialogs.scan_dialog import _FolderTreePanel
+
+        panel = _FolderTreePanel()
+        emitted: list[str] = []
+        panel.folder_requested.connect(emitted.append)
+
+        panel._path_field.setText("")
+        panel._on_add_typed()
+        panel._path_field.setText("   ")
+        panel._on_add_typed()
+        assert emitted == []
+
+    def test_nonexistent_path_is_silently_ignored(self, qapp, tmp_path):
+        from app.views.dialogs.scan_dialog import _FolderTreePanel
+
+        panel = _FolderTreePanel()
+        emitted: list[str] = []
+        panel.folder_requested.connect(emitted.append)
+
+        panel._path_field.setText(str(tmp_path / "definitely_does_not_exist"))
+        panel._on_add_typed()
+        assert emitted == []
+
+    def test_valid_path_emits_folder_requested_and_clears_field(self, qapp, tmp_path):
+        from app.views.dialogs.scan_dialog import _FolderTreePanel
+
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+
+        panel = _FolderTreePanel()
+        emitted: list[str] = []
+        panel.folder_requested.connect(emitted.append)
+
+        panel._path_field.setText(str(real_dir))
+        panel._on_add_typed()
+
+        assert emitted == [str(real_dir)]
+        assert panel._path_field.text() == ""
+
+    def test_quoted_path_is_stripped(self, qapp, tmp_path):
+        """Windows users often paste paths from Explorer with surrounding quotes."""
+        from app.views.dialogs.scan_dialog import _FolderTreePanel
+
+        real_dir = tmp_path / "with spaces"
+        real_dir.mkdir()
+
+        panel = _FolderTreePanel()
+        emitted: list[str] = []
+        panel.folder_requested.connect(emitted.append)
+
+        panel._path_field.setText(f'"{real_dir}"')
+        panel._on_add_typed()
+
+        assert emitted == [str(real_dir)]
