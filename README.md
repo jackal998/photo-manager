@@ -77,9 +77,39 @@ run.bat          # activates .venv and starts main.py
 .venv\Scripts\python -m pytest
 ```
 
-The default `pytest` invocation runs with coverage (configured in `pyproject.toml`)
-and fails if branch coverage drops below the `fail_under` threshold. CI runs the
-same command on every push and pull request to `master` via `.github/workflows/tests.yml`.
+This runs **layer 1** (unit + mock-based). Coverage is configured in
+`pyproject.toml`; the build fails if global branch coverage drops below
+80% **or** any single tracked module drops below 70% (per-file gate
+enforced by `scripts/check_coverage_per_file.py`, run as a CI step
+right after `pytest`). CI runs this on every push and pull request to
+`master` via `.github/workflows/tests.yml`.
+
+Two more test layers exist locally:
+
+```powershell
+# Layer 2 — real binaries (exiftool, send2trash, rawpy / pillow-heif).
+# Skip-if-missing, so safe to run anywhere; gives real value only when
+# the binaries are installed (typically your dev box, not CI runners).
+.venv\Scripts\python -m pytest -m integration
+
+# Layer 3 — full GUI exercise via /qa-explore. Drives main.py through
+# scripted scenarios to catch UI / state-transition / copy regressions.
+.venv\Scripts\python -m qa.scenarios._batch
+```
+
+**The full strategy — what each layer catches, what it misses, and the
+per-module residual risk — lives in [`docs/testing.md`](docs/testing.md).**
+Read that before adding tests for a new feature. Short version:
+
+| Layer | Catches | Misses |
+|---|---|---|
+| 1 — Unit + mocks (CI) | Refactoring bugs, parser logic | Real third-party behavior |
+| 2 — Integration (local) | Boundary drift with real `exiftool` / `send2trash` / `rawpy` | GUI behavior |
+| 3 — `/qa-explore` (local) | Label drift, dialog regressions, state-transition bugs | Anything off the scripted path |
+
+**No test padding.** A test that exists only to clear a coverage gate
+is metric gaming, not engineering — see the testing rules in
+[`CLAUDE.md`](CLAUDE.md) for the explicit list of patterns to avoid.
 
 ---
 

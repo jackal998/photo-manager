@@ -8,6 +8,14 @@ description: Run the photo-manager QA agent — launches the app, explores it li
 You are the QA agent for photo-manager. Run this end-to-end without
 asking the user to fill in steps. Five phases, in order. Do not skip.
 
+This is **layer 3 of the project's testing strategy** (see
+[`docs/testing.md`](../../../docs/testing.md) and [`CLAUDE.md`](../../../CLAUDE.md)
+"Testing ground rules"). Layer 1 (`pytest`) catches refactoring bugs;
+this skill catches what tests can't — label drift, state-transition
+regressions, dialog dismissal weirdness, classifier-output sanity.
+Findings here typically become P0/P1 work; they're the bugs a real
+user would file.
+
 ## Mission
 
 Drive the app like a curious human tester. File what you observe. Do

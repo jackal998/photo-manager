@@ -18,6 +18,11 @@ Activate this skill after implementing any non-trivial change to photo-manager s
 - After bumping the Python version
 - After adding or removing a `settings.json` key
 - After deprecating or deleting code
+- After **any change that shifts what each test layer covers**:
+  - Adding or removing an entry in `[tool.coverage.run] omit`
+  - Adding a `tests/integration/` test (layer 2)
+  - Adding or modifying a `qa/scenarios/sNN_*.py` driver (layer 3)
+  - A module's layer-1 coverage changes by ≥5pp (e.g. lifted from 73 → 90)
 
 ---
 
@@ -25,8 +30,10 @@ Activate this skill after implementing any non-trivial change to photo-manager s
 
 | File | What it tracks | Sections / spots to check |
 |------|---------------|--------------------------|
-| `README.md` | Project structure tree, test list, test count | `## Project structure` block; `tests/` subtree; `# NNN tests` comment |
-| `pyproject.toml` | Python version for Black / Ruff / Pylint | `target-version = ["py3XX"]`, `target-version = "py3XX"`, `py-version = "3.XX"` |
+| `README.md` | Project structure tree, test list, test count, "Run tests" section | `## Project structure` block; `tests/` subtree; `# NNN tests` comment; layer-summary table in "Run tests" |
+| `pyproject.toml` | Python version for Black / Ruff / Pylint; coverage `omit` list (each entry needs a justification + cross-layer pointer) | `target-version = ["py3XX"]`, `target-version = "py3XX"`, `py-version = "3.XX"`; `[tool.coverage.run] omit = [...]` comments |
+| `docs/testing.md` | The 3-layer model + per-module residual-risk table — canonical answer to "what's covered, what's not, what's the risk" | Per-module rows under each section (`scanner/`, `core/`, `infrastructure/`, `app/`); "Open work" list at the end |
+| `CLAUDE.md` | Hard testing rules (no padding, 3 layers, 70% per-file floor, 3-trigger rule for new features) | "Testing ground rules" section — only update if the policy itself changes |
 
 ---
 

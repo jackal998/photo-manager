@@ -2,6 +2,25 @@
 
 A Claude-driven exploratory tester for the PySide6 desktop app.
 
+## Where this fits
+
+The project's testing strategy has three layers (full detail in
+[`../testing.md`](../testing.md)):
+
+| Layer | What | Where it runs |
+|---|---|---|
+| 1 — Unit + mocks | `pytest` | CI + local |
+| 2 — Real binaries | `pytest -m integration` | Local only |
+| **3 — `/qa-explore`** (this) | full-GUI exploratory testing | Local only; CI possible per [#74](https://github.com/jackal998/photo-manager/issues/74) |
+
+Layer 1 verifies our parsers, dispatch, and pure logic against mocked
+boundaries. Layer 2 (when built — see #74's prerequisites) verifies the
+boundaries themselves. **Layer 3 is the only layer that exercises what
+a user actually does** — clicking menus, reading dialog text, watching
+state transitions. Bugs that only surface here (label drift, dead
+buttons, status bar regressions, dialog dismissal weirdness) are
+exactly what `pytest` cannot catch by construction.
+
 ## What it is
 
 `/qa-explore` launches `main.py`, drives the UI via the **Windows UI
