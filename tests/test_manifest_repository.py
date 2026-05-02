@@ -1005,17 +1005,50 @@ class TestRemoveFromReviewNoVacuum:
 
 
 class TestInGroupRowOrdering:
-    """#55 — KEEP (the reference/primary file) sits at the top of its group."""
+    """#55 + #76 — the file rendered as "Ref" sits at the top of its group.
 
-    def test_keep_appears_before_review_duplicate_and_exact(self, tmp_path):
+    `_file_similarity` (in `app/views/tree_model_builder.py`) renders any
+    action other than EXACT and REVIEW_DUPLICATE as "Ref". So the SQL
+    ordering puts every "Ref tier" action (KEEP / MOVE / UNDATED / unset)
+    at position 1, ahead of REVIEW_DUPLICATE (2) and EXACT (3).
+    """
+
+    def test_move_primary_appears_before_review_duplicate_and_exact(self, tmp_path):
+        """The s07/s10 case: dedup classifier labels the primary as MOVE.
+
+        Regression for #76. The original #55 fix moved only KEEP to position 1,
+        but `dedup.classify` actually assigns MOVE to most real-world primaries
+        — so KEEP-only didn't move the displayed Ref to the top in practice.
+        """
+        ref = tmp_path / "ref" / "primary.jpg"
+        review = tmp_path / "review" / "near.jpg"
+        exact = tmp_path / "exact" / "dup.jpg"
+        for p in (ref, review, exact):
+            _make_jpeg(p)
+        gid = "/group/move-primary"
+        db = _make_manifest(tmp_path, [
+            # Insert in non-priority order; SQL ordering must still put MOVE first.
+            _row({"source_path": str(review), "action": "REVIEW_DUPLICATE", "group_id": gid}),
+            _row({"source_path": str(exact), "action": "EXACT", "group_id": gid,
+                  "hamming_distance": None}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        actions = [r.action for r in records]
+        assert actions[0] == "MOVE", \
+            f"MOVE primary (rendered as Ref) should be at top of group; got order {actions}"
+        assert actions == ["MOVE", "REVIEW_DUPLICATE", "EXACT"]
+
+    def test_keep_primary_appears_before_review_duplicate_and_exact(self, tmp_path):
+        """KEEP primary case (rarer in practice) — also a Ref tier action."""
         ref = tmp_path / "ref" / "ref.jpg"
         review = tmp_path / "review" / "near.jpg"
         exact = tmp_path / "exact" / "dup.jpg"
         for p in (ref, review, exact):
             _make_jpeg(p)
-        gid = "/group/order-test"
+        gid = "/group/keep-primary"
         db = _make_manifest(tmp_path, [
-            # Insert in non-priority order; SQL ordering should still put KEEP first.
             _row({"source_path": str(review), "action": "REVIEW_DUPLICATE", "group_id": gid}),
             _row({"source_path": str(exact), "action": "EXACT", "group_id": gid,
                   "hamming_distance": None}),
@@ -1024,7 +1057,6 @@ class TestInGroupRowOrdering:
         ])
         records = list(ManifestRepository().load(str(db)))
         actions = [r.action for r in records]
-        # KEEP must be first; the rest follow per the documented order.
         assert actions[0] == "KEEP", \
-            f"reference file should be at top of group; got order {actions}"
+            f"KEEP primary (rendered as Ref) should be at top of group; got order {actions}"
         assert actions == ["KEEP", "REVIEW_DUPLICATE", "EXACT"]

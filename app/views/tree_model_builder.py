@@ -22,15 +22,20 @@ from app.views.constants import (
 )
 
 # Numeric sort priorities — lower value = sorted first (ascending).
-# KEEP (the reference / primary file) sits at the top of its group so users
-# scanning top-down see the "winner" first (#55).
+#
+# "Ref tier" — every action whose `_file_similarity` renders as "Ref" (KEEP /
+# MOVE / UNDATED / unset) shares position 1 so the reference / primary file
+# of a group always lands at the top, regardless of which classifier branch
+# assigned its action. This is what users mean by "winner first" (#55, #76).
+# REVIEW_DUPLICATE and EXACT follow, sorted by closeness to the reference.
 _ACTION_SORT: dict[str, int] = {
     "KEEP": 1,
+    "MOVE": 1,
+    "UNDATED": 1,
+    "": 1,
     "REVIEW_DUPLICATE": 2,
     "EXACT": 3,
-    "UNDATED": 4,
-    "MOVE": 5,
-}  # missing / "" → 6
+}  # missing key → 1 (treated as Ref tier, matching `_file_similarity`)
 
 _DECISION_SORT: dict[str, int] = {
     "delete": 1,
@@ -196,7 +201,7 @@ def build_model(
             ]
 
             try:
-                child_row[COL_GROUP].setData(_ACTION_SORT.get(file_action, 6), SORT_ROLE)
+                child_row[COL_GROUP].setData(_ACTION_SORT.get(file_action, 1), SORT_ROLE)
             except Exception:
                 pass
             try:
