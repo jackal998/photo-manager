@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
+from loguru import logger
 
 
 class ScanWorker(QThread):
@@ -50,9 +51,16 @@ class ScanWorker(QThread):
         try:
             self._run_pipeline()
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            # Log with traceback so the rotating app_<date>.log captures the
+            # full forensic context — the dialog log box clears on close.
+            logger.exception("Scan pipeline failed: {}", exc)
             self.failed.emit(str(exc))
 
     def _emit(self, msg: str) -> None:
+        # Forward every progress line to loguru so the rotating app_<date>.log
+        # has a persistent record for users reporting "the scan stopped" —
+        # the dialog log box is transient and disappears on close.
+        logger.info("scan: {}", msg)
         self.progress.emit(msg)
 
     def _run_pipeline(self) -> None:
@@ -127,6 +135,7 @@ class ScanWorker(QThread):
                 if self.isInterruptionRequested():
                     cancel_flag.set()
                     pool.shutdown(wait=False, cancel_futures=True)
+                    logger.warning("Scan cancelled by user during hashing pass")
                     self.failed.emit("Scan cancelled.")
                     return
                 idx, result = future.result()

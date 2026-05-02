@@ -11,6 +11,9 @@ Coverage:
 - issue #57 regression — silent image-decode failures (truncated /
   corrupt JPEGs that compute_hashes returns from without raising) are
   routed to the skip channel instead of being misclassified as UNDATED.
+- issue #49 regression — scan progress and errors are forwarded to
+  loguru so the rotating ``app_<date>.log`` captures forensic context
+  (the dialog log box is transient and disappears on close).
 """
 
 from __future__ import annotations
@@ -189,3 +192,55 @@ class TestScanWorkerCorruptImage:
         assert "good.jpg" in paths, f"good file missing from manifest: {paths}"
         assert "bad_truncated.jpg" not in paths, \
             f"corrupt file should be excluded from manifest, but found in: {paths}"
+
+
+class TestScanWorkerLogging:
+    def test_scan_progress_and_errors_forwarded_to_loguru(
+        self, qapp, tmp_path
+    ):
+        """Progress lines and per-file skip records flow through loguru.
+
+        Regression for issue #49: scan errors used to live only in the
+        dialog's transient log box, so "the scan stopped" reports had no
+        artifact to attach. After the fix, every progress emission lands
+        in the rotating ``app_<date>.log`` (via loguru) — and a corrupt
+        file (#57) shows up there with its path and synthetic exception
+        type for forensics.
+        """
+        from loguru import logger
+
+        from app.views.workers.scan_worker import ScanWorker
+
+        # Same fixture shape as the corrupt-image test — one valid JPEG
+        # plus one truncated JPEG so we exercise both progress lines and
+        # per-file skip-record forwarding.
+        good = tmp_path / "good.jpg"
+        bad = tmp_path / "bad_truncated.jpg"
+        _write_jpeg(good, color=(0, 128, 255))
+        full = tmp_path / "_full.jpg"
+        Image.new("RGB", (200, 150), (200, 100, 50)).save(full, "JPEG")
+        bad.write_bytes(full.read_bytes()[:1024])
+        full.unlink()
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda msg: captured.append(str(msg)), level="INFO")
+        try:
+            worker = ScanWorker(
+                sources={"src": str(tmp_path)},
+                output_path=str(tmp_path / "manifest.sqlite"),
+                recursive_map={"src": False},
+                workers=2,
+            )
+            worker.run()
+        finally:
+            logger.remove(sink_id)
+
+        joined = "\n".join(captured)
+        assert "scan: " in joined, \
+            f"scan progress should be tagged with 'scan: ' prefix in loguru: {joined!r}"
+        assert "Done." in joined, \
+            f"final 'Done.' terminator should land in loguru: {joined!r}"
+        assert "bad_truncated.jpg" in joined, \
+            f"corrupt file path should land in loguru for forensics: {joined!r}"
+        assert "ImageDecodeError" in joined, \
+            f"synthetic exception type should land in loguru: {joined!r}"
