@@ -21,11 +21,13 @@ from app.views.constants import (
     SORT_ROLE,
 )
 
-# Numeric sort priorities — lower value = sorted first (ascending)
+# Numeric sort priorities — lower value = sorted first (ascending).
+# KEEP (the reference / primary file) sits at the top of its group so users
+# scanning top-down see the "winner" first (#55).
 _ACTION_SORT: dict[str, int] = {
-    "REVIEW_DUPLICATE": 1,
-    "EXACT": 2,
-    "KEEP": 3,
+    "KEEP": 1,
+    "REVIEW_DUPLICATE": 2,
+    "EXACT": 3,
     "UNDATED": 4,
     "MOVE": 5,
 }  # missing / "" → 6

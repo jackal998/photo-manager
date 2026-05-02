@@ -1002,3 +1002,29 @@ class TestRemoveFromReviewNoVacuum:
             assert "VACUUM" not in sql.upper(), (
                 f"remove_from_review() still executes VACUUM via: {sql!r}"
             )
+
+
+class TestInGroupRowOrdering:
+    """#55 — KEEP (the reference/primary file) sits at the top of its group."""
+
+    def test_keep_appears_before_review_duplicate_and_exact(self, tmp_path):
+        ref = tmp_path / "ref" / "ref.jpg"
+        review = tmp_path / "review" / "near.jpg"
+        exact = tmp_path / "exact" / "dup.jpg"
+        for p in (ref, review, exact):
+            _make_jpeg(p)
+        gid = "/group/order-test"
+        db = _make_manifest(tmp_path, [
+            # Insert in non-priority order; SQL ordering should still put KEEP first.
+            _row({"source_path": str(review), "action": "REVIEW_DUPLICATE", "group_id": gid}),
+            _row({"source_path": str(exact), "action": "EXACT", "group_id": gid,
+                  "hamming_distance": None}),
+            _row({"source_path": str(ref), "action": "KEEP", "group_id": gid,
+                  "hamming_distance": None}),
+        ])
+        records = list(ManifestRepository().load(str(db)))
+        actions = [r.action for r in records]
+        # KEEP must be first; the rest follow per the documented order.
+        assert actions[0] == "KEEP", \
+            f"reference file should be at top of group; got order {actions}"
+        assert actions == ["KEEP", "REVIEW_DUPLICATE", "EXACT"]

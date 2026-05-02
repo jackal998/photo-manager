@@ -9,8 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QLabel,
     QMainWindow,
     QMessageBox,
     QTreeView,
@@ -130,14 +131,26 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self) -> None:
         """Setup the main UI components and layout."""
-        self.setWindowTitle("Photo Manager - M1")
+        self.setWindowTitle("Photo Manager")
 
         # Setup tree properties
         self.tree_controller.setup_tree_properties()
 
         # Create layout sections
         center_widget, center_layout = self.layout_manager.create_tree_section()
+        # First-run hint — visible until the first manifest loads. Once a
+        # manifest is loaded (even if it produces zero groups), the user has
+        # discovered the menu and the label is hidden permanently (#42).
+        self._empty_state_label = QLabel(
+            "No manifest loaded.\n\nFile → Scan Sources… to begin."
+        )
+        self._empty_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_state_label.setStyleSheet(
+            "color: #888; font-size: 14px; padding: 40px;"
+        )
+        center_layout.addWidget(self._empty_state_label)
         center_layout.addWidget(self.tree)
+        self.tree.setVisible(False)
 
         right_widget, right_layout = self.layout_manager.create_preview_section()
 
@@ -199,6 +212,13 @@ class MainWindow(QMainWindow):
         Args:
             groups: List of group objects to display
         """
+        # First manifest load — hide the first-run hint and reveal the tree.
+        # Stays hidden afterwards even if a later load produces zero groups,
+        # because the user has clearly already discovered the entry point.
+        if self._empty_state_label.isVisible():
+            self._empty_state_label.setVisible(False)
+            self.tree.setVisible(True)
+
         self.tree_controller.refresh_model(groups)
 
         # Reconnect selection handler after model reset

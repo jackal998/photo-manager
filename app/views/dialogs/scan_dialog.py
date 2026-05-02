@@ -593,7 +593,10 @@ class ScanDialog(QDialog):
         """Handle scan completion: switch Close button to Close & Load."""
         self.manifest_path = manifest_path
         self._btn_scan.setEnabled(True)
-        self._btn_close.setText("Close & Load")
+        # `&&` escapes the ampersand so Qt doesn't interpret it as a mnemonic
+        # prefix and silently drop it on display (which produced the "Close
+        # double-space Load" bug — #54).
+        self._btn_close.setText("Close && Load")
         self._btn_close.clicked.disconnect()
         self._btn_close.clicked.connect(self._load_and_close)
 
