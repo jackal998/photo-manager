@@ -66,8 +66,6 @@ omit = [
   "infrastructure/logging.py",
   "app/views/workers/scan_worker.py",
   "app/views/media_utils.py",
-  # Unused legacy module
-  "app/viewmodels/photo_vm.py",
 ]
 
 [tool.coverage.report]

@@ -329,8 +329,7 @@ photo-manager/
 │   │       ├── scan_worker.py              # Background QThread for scan pipeline
 │   │       └── manifest_load_worker.py     # Background QThread for manifest load
 │   └── viewmodels/
-│       ├── main_vm.py       # Groups/marks logic; loads manifest
-│       └── photo_vm.py      # Per-photo view model
+│       └── main_vm.py       # Groups/marks logic; loads manifest
 │
 ├── core/                    # Models + service interfaces
 │   ├── models.py            # PhotoRecord (action, user_decision, group_id), PhotoGroup
