@@ -28,9 +28,11 @@ observations grounded in screenshots — never in source code.
   `qa/sandbox/`) and writes its manifest to `qa/run-manifest.sqlite`.
   The user's root `settings.json` and `migration_manifest.sqlite` are
   not touched.
-- **Every `python main.py` launch is gated.** Pause and ask the user
-  in chat before each one, even within the same session, even if they
-  approved the previous launch. State the scenario number + title.
+- **Every `python main.py` launch is gated.** In default-batch mode
+  (Phase 3 with no user hint), get one `yes batch` approval covering
+  the whole batch, then proceed without re-prompting per scenario.
+  In subset/manual mode, pause and ask before each individual launch.
+  State the scenario number + title.
 - **No git commands at all.** No commits, no `git status`, no
   branches. (Reading `git log` is technically allowed by the project
   CLAUDE.md but you don't need it.)
@@ -88,9 +90,19 @@ If everything is already populated, skip the regen and move on.
 
 ## Phase 3 — Plan
 
-Print the full scenario menu (below). Ask the user which scenarios to
-run this session. **Don't default to all** — the 15-min cap means
-3–5 scenarios is realistic. Recommend a starter set if the user asks.
+**Default behavior — invoked with no additional prompt:** run **all
+11 scenarios** in batch via `qa.scenarios._batch`. Don't print the
+menu, don't ask which to run. Get one `yes batch` approval up front
+(per the gate rule below) and proceed. The full batch typically
+finishes in ~30–60 seconds with the focus fix in `_uia.py`.
+
+**Invoked with hints** (e.g. `/qa-explore smoke`, `/qa-explore 1,2,9`,
+`/qa-explore failed 8`): respect the hint, run only the named subset,
+still in batch.
+
+The scenario menu below is reference material — show it only if the
+user asks "what scenarios are there?" or wants to pick a subset
+manually.
 
 ### Standard scenario menu
 
@@ -120,13 +132,16 @@ run this session. **Don't default to all** — the 15-min cap means
 | 10 | Multi-source priority + cross-source dedup | `multi-source-a/` AND `multi-source-b/` (both in one scan) | EXACT_DUPLICATE across sources, near-dup grouping, source-order priority |
 | 11 | Video + Live Photo | `videos/` AND `live-photo/` | MP4/MOV recognized, no pHash for video, IMG_0001 HEIC+MOV pair grouped, action propagation |
 
-**Recommended starter sets:**
+**Subsets** (offer only when user asks for a smaller run):
 
-- "Smoke test" (~10 min): scenarios 1, 2, 9
-- "Format coverage" (~12 min): scenarios 1, 6, 8
-- "Stress probe" (~12 min): scenarios 3, 5, 11
+- "Smoke test": scenarios 1, 2, 9
+- "Format coverage": scenarios 1, 6, 8
+- "Stress probe": scenarios 3, 5, 11
+- "Failed 8": scenarios 3, 4, 5, 7, 8, 9, 10, 11 — historical re-batch
+  pattern when the first run hit harness flakes on most scenarios.
 
-If the user asks "what should I run?", suggest the smoke test.
+If the user asks "what should I run?", suggest **all** (the default).
+The full batch is fast enough to be the standard mode now.
 
 ## Phase 4 — Explore (per scenario)
 
@@ -254,9 +269,13 @@ for surprising states or edge cases the driver doesn't cover.
 For each scenario:
 
 1. **Pause and ask** in chat: `"About to launch main.py for scenario
-   N: <title>. OK?"` — wait for explicit yes. Do not batch this across
-   scenarios. (If the user asks for an end-to-end batch run, get a
-   single explicit "yes" up front for the whole batch and proceed.)
+   N: <title>. OK?"` — wait for explicit yes. In default-batch mode
+   (Phase 3 with no user hint) or when the user explicitly requests
+   an end-to-end batch run, get a single `yes batch` up front for
+   the whole batch and proceed without re-prompting per scenario.
+   The Phase-3 default for `/qa-explore` with no args **is** the
+   batch path — go straight to that prompt rather than asking which
+   scenarios to run.
 
 2. **Configure source folders** for this scenario (allowlisted, no prompt):
    ```
