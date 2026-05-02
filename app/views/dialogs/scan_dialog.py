@@ -66,8 +66,10 @@ def _auto_label(name: str, existing: set[str]) -> str:
 class _FolderTreePanel(QWidget):
     """Embedded filesystem tree for browsing and selecting source folders.
 
-    Emits ``folder_requested(path)`` when the user double-clicks a folder
-    or presses the "Add Selected Folder" button.
+    Emits ``folder_requested(path)`` when the user adds a folder via:
+      - double-click in the tree
+      - "Add Selected Folder" button
+      - typing/pasting a path into the path field and pressing Enter / "+ Add"
     """
 
     folder_requested = Signal(str)
@@ -76,12 +78,27 @@ class _FolderTreePanel(QWidget):
         super().__init__(parent)
         self._model: QFileSystemModel
         self._tree: QTreeView
+        self._path_field: QLineEdit
         self._build_ui()
 
     def _build_ui(self) -> None:
-        """Construct the directory tree view and add button."""
+        """Construct the directory tree view, path entry, and add button."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Path entry — lets the user paste / type an absolute path instead of
+        # scrolling the tree 10+ levels deep to a known fixture.
+        path_row = QHBoxLayout()
+        path_row.addWidget(QLabel("Path:"))
+        self._path_field = QLineEdit()
+        self._path_field.setPlaceholderText("Paste or type an absolute folder path…")
+        self._path_field.returnPressed.connect(self._on_add_typed)
+        path_add_btn = QPushButton("+ Add")
+        path_add_btn.setFixedWidth(80)
+        path_add_btn.clicked.connect(self._on_add_typed)
+        path_row.addWidget(self._path_field, stretch=1)
+        path_row.addWidget(path_add_btn)
+        layout.addLayout(path_row)
 
         self._model = QFileSystemModel(self)
         self._model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
@@ -114,6 +131,20 @@ class _FolderTreePanel(QWidget):
         if index.isValid():
             path = self._model.filePath(index)
             self.folder_requested.emit(path)
+
+    def _on_add_typed(self) -> None:
+        """Emit ``folder_requested`` for the path typed/pasted into the field.
+
+        Silently no-ops on empty input or non-existent directories so the
+        dialog doesn't bark at the user mid-typing.
+        """
+        raw = self._path_field.text().strip().strip('"')
+        if not raw:
+            return
+        if not Path(raw).is_dir():
+            return
+        self.folder_requested.emit(raw)
+        self._path_field.clear()
 
     def _on_double_click(self, index: QModelIndex) -> None:
         """Emit ``folder_requested`` on double-click."""
@@ -163,6 +194,10 @@ class _SourceListWidget(QWidget):
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
+        # Reserve enough vertical room for ~6 rows so the list isn't a 2-row
+        # sliver when many sources are configured. The QSplitter parent still
+        # lets the user grow / shrink it.
+        self._table.setMinimumHeight(180)
         layout.addWidget(self._table)
 
     # ------------------------------------------------------------------ public API
@@ -333,7 +368,9 @@ class ScanDialog(QDialog):
 
         self._source_list = _SourceListWidget(self)
         splitter.addWidget(self._source_list)
-        splitter.setSizes([320, 160])
+        # Give the source list more initial room so a multi-source config
+        # isn't squashed into a 2-row sliver. User can still drag.
+        splitter.setSizes([280, 240])
         root.addWidget(splitter, stretch=1)
 
         output_row = QHBoxLayout()

@@ -39,6 +39,10 @@ class MenuController:
         # List Menu
         list_menu = menubar.addMenu("List")
         self.actions["remove_from_list"] = list_menu.addAction("Remove from List")
+        # Disabled until a manifest loads — gives the user a visible-but-greyed
+        # entry instead of a menu that appears empty / no-op before any data is
+        # present. Re-enabled in MainWindow._load_manifest_from_path.
+        self.actions["remove_from_list"].setEnabled(False)
 
         # Log Menu
         log_menu = menubar.addMenu("Log")

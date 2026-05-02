@@ -239,22 +239,40 @@ class MainWindow(QMainWindow):
 
     def _load_manifest_from_path(self, manifest_path: str) -> None:
         """Load a manifest directly (called after scan completes or from Open Manifest)."""
+        import sqlite3
+
         from infrastructure.manifest_repository import ManifestRepository
         try:
             self._vm.load_from_repo(ManifestRepository(), manifest_path)
             self.file_operations._manifest_path = manifest_path
             self.show_groups_summary(self._vm.groups)
             self.refresh_tree(self._vm.groups)
-            try:
-                self.menu_controller.enable_action("save_manifest", True)
-            except AttributeError:
-                pass
+            for action in ("save_manifest", "execute_action", "remove_from_list"):
+                try:
+                    self.menu_controller.enable_action(action, True)
+                except AttributeError:
+                    pass
             n = self._vm.group_count
+            # Surface isolated files in the status bar so users whose scan
+            # produced zero near-duplicate groups don't see an empty review
+            # pane with no explanation. Isolated = total manifest rows
+            # minus rows that ended up in any group.
+            isolated = 0
             try:
-                self.menu_controller.enable_action("execute_action", True)
-            except AttributeError:
+                with sqlite3.connect(manifest_path) as conn:
+                    total = conn.execute(
+                        "SELECT COUNT(*) FROM migration_manifest"
+                    ).fetchone()[0] or 0
+                grouped = sum(len(g.items) for g in self._vm.groups)
+                isolated = max(0, total - grouped)
+            except (sqlite3.Error, OSError):
                 pass
-            self.statusBar().showMessage(f"Loaded manifest: {n} group(s)", 5000)
+            parts = [f"{n} group(s)"]
+            if isolated:
+                parts.append(f"{isolated:,} isolated file(s)")
+            self.statusBar().showMessage(
+                f"Loaded manifest: {', '.join(parts)}", 10000
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Load Manifest Error", str(exc))
 
