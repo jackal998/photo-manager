@@ -106,6 +106,24 @@ def force_foreground(hwnd: int) -> None:
     _user32.SwitchToThisWindow(hwnd, True)
 
 
+def _focus(wrapper: UIAWrapper) -> None:
+    """Bring `wrapper`'s top-level window to the foreground before a click.
+
+    Pure pywinauto `set_focus()` does the AttachThreadInput dance, which is
+    far more reliable than Win32 `SwitchToThisWindow` against Windows'
+    foreground-lock heuristic. Falls back to SwitchToThisWindow if set_focus
+    raises (e.g. transient menu popups during teardown).
+    """
+    try:
+        wrapper.set_focus()
+    except Exception:
+        try:
+            _user32.SwitchToThisWindow(wrapper.handle, True)
+        except Exception:
+            pass
+    time.sleep(0.05)
+
+
 # ---------------------------------------------------------------------------
 # Connection helpers
 # ---------------------------------------------------------------------------
@@ -131,7 +149,7 @@ def open_menu(win: UIAWrapper, menu_title: str) -> UIAWrapper:
     Caller is responsible for clicking an item in the popup; the popup
     closes when an item is clicked or focus moves away.
     """
-    force_foreground(win.handle)
+    _focus(win)
     time.sleep(0.3)
     win.child_window(title=menu_title, control_type="MenuItem").click_input()
     time.sleep(0.5)
@@ -143,6 +161,7 @@ def open_menu(win: UIAWrapper, menu_title: str) -> UIAWrapper:
 
 def click_menu_item(popup: UIAWrapper, item_title: str) -> None:
     """Click a popup menu item. invoke() raises COMError on these — use click_input."""
+    _focus(popup)
     popup.child_window(title=item_title, control_type="MenuItem").click_input()
 
 
@@ -345,6 +364,7 @@ def run_scan_and_wait(
     """Click Start Scan, poll log until 'Done.' or error. Returns (full_log, elapsed)."""
     start_btn = dlg.child_window(title=SCAN_BTN_START, control_type="Button")
     log_edit = dlg.child_window(auto_id=SCAN_AID_LOG, control_type="Edit")
+    _focus(dlg)
     t0 = time.time()
     start_btn.invoke()
     log = wait_for_text_in(log_edit, ["Done.", "Error", "Failed"], timeout=timeout)
@@ -368,12 +388,14 @@ def extract_summary(log: str) -> list[str]:
 def close_and_load_manifest(dlg: UIAWrapper) -> None:
     """Click 'Close & Load' (post-scan dialog button)."""
     btn = dlg.child_window(title=SCAN_BTN_CLOSE_LOAD, control_type="Button")
+    _focus(dlg)
     btn.invoke()
     time.sleep(1.0)
 
 
 def cancel_scan_dialog(dlg: UIAWrapper) -> None:
     """Click the title-bar Close (×) to cancel a scan or close pre-scan."""
+    _focus(dlg)
     # Locale-named close button on the title bar
     try:
         for b in dlg.descendants(control_type="Button"):

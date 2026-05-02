@@ -41,11 +41,14 @@ When classification is ambiguous, treat as gated, not as ungated.
 
 So the gates aren't either too tight or too loose:
 
-- Reading public docs (npm, PyPI, GitHub via WebFetch) is NOT gated
-- Reading files inside `node_modules` / `.venv` is NOT gated
-- `git log`, `git status`, `git diff` are NOT gated
+- Reading public docs (npm, PyPI, GitHub via WebFetch) is allowed (auto-approved)
+- Reading files inside `node_modules` / `.venv` is allowed (auto-approved)
+- Read-only git commands are allowed (auto-approved): `git status`,
+  `git log`, `git diff`, `git show`, `git blame`, `git branch`,
+  `git branch --show-current`, `git remote show`
 - `pip install`, `npm install`, `git clone <url>` ARE gated
-- `git push`, `git reset --hard`, `git rebase` ARE gated
+- `git push`, `git reset --hard`, `git rebase`, `git checkout --`,
+  `git pull` ARE gated
 
 ## Mid-task pause protocol
 
