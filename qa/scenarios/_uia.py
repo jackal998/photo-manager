@@ -189,6 +189,95 @@ def read_result_rows(win: UIAWrapper, y_min: int = 600) -> list[GroupedRow]:
 
 
 # ---------------------------------------------------------------------------
+# Main-window state probes (first-run hint #42, status bar #58, menu #52)
+# ---------------------------------------------------------------------------
+
+
+def read_status_bar_text(win: UIAWrapper) -> str:
+    """Return the main window's QStatusBar message, or '' if empty/absent.
+
+    QMainWindow.statusBar().showMessage(text, timeout) shows text for
+    timeout ms then clears. Probes immediately after a state transition
+    typically still see the message; probes long after see ''.
+    """
+    try:
+        sb = win.child_window(control_type="StatusBar")
+        direct = (sb.window_text() or "").strip()
+        if direct:
+            return direct
+        for child in sb.descendants():
+            try:
+                t = (child.window_text() or "").strip()
+                if t:
+                    return t
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
+def read_main_window_state(win: UIAWrapper) -> dict:
+    """Probe state used by gap-fill checks (#42 first-run, #58 status bar).
+
+    Returns:
+        empty_state_visible: True if the "No manifest loaded" hint label
+            is in the UIA tree and visible (#42).
+        tree_visible: True if the result-tree QTreeView is visible.
+        status_bar_text: current QStatusBar message (#58).
+    """
+    state = {
+        "empty_state_visible": False,
+        "tree_visible": False,
+        "status_bar_text": read_status_bar_text(win),
+    }
+    for it in win.descendants():
+        try:
+            t = it.window_text() or ""
+            if "No manifest loaded" in t:
+                try:
+                    state["empty_state_visible"] = bool(it.is_visible())
+                except Exception:
+                    state["empty_state_visible"] = True
+                break
+        except Exception:
+            continue
+    try:
+        for tree in win.descendants(control_type="Tree"):
+            try:
+                if tree.is_visible():
+                    state["tree_visible"] = True
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return state
+
+
+def probe_menu_items(win: UIAWrapper, menu_title: str) -> list[tuple[str, bool]]:
+    """Open `menu_title`, return [(item_title, enabled)], dismiss popup.
+
+    Used to verify menu enable/disable transitions like #52 ("Remove from
+    List" greyed pre-manifest, enabled after manifest loads).
+    """
+    popup = open_menu(win, menu_title)
+    out: list[tuple[str, bool]] = []
+    for it in popup.descendants(control_type="MenuItem"):
+        try:
+            title = (it.window_text() or "").strip()
+            if title:
+                out.append((title, bool(it.is_enabled())))
+        except Exception:
+            continue
+    # Dismiss popup with Esc — same pattern s01 already uses inline.
+    _user32.keybd_event(0x1B, 0, 0, 0)
+    _user32.keybd_event(0x1B, 0, 2, 0)
+    time.sleep(0.2)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Wait helpers
 # ---------------------------------------------------------------------------
 

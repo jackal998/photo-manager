@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 PY = str(REPO / ".venv" / "Scripts" / "python.exe")
 
 ALL_SCENARIOS = [
+    "s01_happy_path",
     "s02_empty_folder",
     "s03_cancel_scan",
     "s04_corrupted",
