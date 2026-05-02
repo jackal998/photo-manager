@@ -11,14 +11,19 @@ class ScanWorker(QThread):
     """Runs scan.py pipeline in a background thread.
 
     Signals:
-        progress(str)  — one-line status update for the UI log
-        finished(str)  — emitted with manifest_path on success
-        failed(str)    — emitted with error message on failure
+        progress(str)        — one-line status update for the UI log
+        finished(str)        — emitted with manifest_path on success
+        failed(str)          — emitted with error message on real failure
+        completed_empty()    — scan ran cleanly but found 0 media files
+                               (kept distinct from `failed` so the dialog
+                               can avoid misclassifying a benign empty
+                               input as an error)
     """
 
     progress = Signal(str)
     finished = Signal(str)
     failed = Signal(str)
+    completed_empty = Signal()
 
     def __init__(
         self,
@@ -81,7 +86,11 @@ class ScanWorker(QThread):
         self._emit(f"  Total: {len(records):,} media files")
 
         if not records:
-            self.failed.emit("No media files found in the selected source folders.")
+            # Empty input is a benign success, not a failure: the user picked
+            # folders that simply have no media. Log a neutral terminator and
+            # signal the dialog to re-enable Start Scan without a red modal.
+            self._emit("Done. No media files found — nothing to scan.")
+            self.completed_empty.emit()
             return
 
         # --- 2. Hash + PIL EXIF (parallel) ---

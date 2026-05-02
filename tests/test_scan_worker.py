@@ -1,8 +1,13 @@
 """Tests for app/views/workers/scan_worker.py — ScanWorker pipeline behaviour.
 
-Focus: regression test for issue #46 — one bad file must never abort the whole
-scan. Verifies that a per-file ``compute_hashes`` exception is logged and
-skipped, and the pipeline still produces a manifest.
+Coverage:
+
+- issue #46 regression — one bad file must never abort the whole scan
+  (per-file ``compute_hashes`` exception is logged and skipped, manifest
+  still written).
+- issues #51 + #56 regression — an empty input folder is treated as a
+  benign success (``completed_empty`` signal, "Done." log line, no
+  ``failed`` emission, no modal).
 """
 
 from __future__ import annotations
@@ -71,3 +76,50 @@ class TestScanWorkerSkipsBadFile:
             f"skip summary missing from progress: {progress!r}"
         assert any("bad.tif" in m for m in progress), \
             f"skipped file path should appear in progress: {progress!r}"
+
+
+class TestScanWorkerEmptyInput:
+    def test_empty_folder_signals_completed_empty_not_failed(self, qapp, tmp_path):
+        """An empty source folder is a benign success, not a failure.
+
+        Regression for issues #51 (red 'Scan Failed' modal misclassified the
+        case) and #56 (QA driver polling for 'Done.' / 'Error' / 'Failed'
+        timed out because the log only contained 'ERROR:' from the failure
+        path).
+
+        Expectations:
+          - ``completed_empty`` fires exactly once.
+          - ``failed`` does NOT fire.
+          - ``finished`` does NOT fire (no manifest written).
+          - The progress log contains a 'Done.' terminator so the QA
+            driver's case-sensitive match succeeds.
+        """
+        from app.views.workers.scan_worker import ScanWorker
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+
+        worker = ScanWorker(
+            sources={"src": str(empty_dir)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+        )
+
+        progress: list[str] = []
+        finished: list[str] = []
+        failed: list[str] = []
+        completed_empty_calls: list[None] = []
+        worker.progress.connect(progress.append)
+        worker.finished.connect(finished.append)
+        worker.failed.connect(failed.append)
+        worker.completed_empty.connect(lambda: completed_empty_calls.append(None))
+
+        worker.run()
+
+        assert not failed, f"Empty input must not emit `failed`; got: {failed}"
+        assert not finished, f"Empty input must not emit `finished`; got: {finished}"
+        assert len(completed_empty_calls) == 1, \
+            f"`completed_empty` should fire exactly once; got {len(completed_empty_calls)}"
+        assert any("Done." in m for m in progress), \
+            f"progress log must contain a 'Done.' terminator: {progress!r}"

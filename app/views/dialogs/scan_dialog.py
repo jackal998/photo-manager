@@ -542,6 +542,7 @@ class ScanDialog(QDialog):
         self._worker.progress.connect(self._log)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
+        self._worker.completed_empty.connect(self._on_completed_empty)
         self._worker.start()
 
     def _log(self, msg: str) -> None:
@@ -564,6 +565,10 @@ class ScanDialog(QDialog):
         self._log(f"\nERROR: {error}")
         self._btn_scan.setEnabled(True)
         QMessageBox.critical(self, "Scan Failed", error)
+
+    def _on_completed_empty(self) -> None:
+        """Empty input is benign — re-enable Start Scan, no modal."""
+        self._btn_scan.setEnabled(True)
 
     def _load_and_close(self) -> None:
         """Call the completion callback and close the dialog."""
