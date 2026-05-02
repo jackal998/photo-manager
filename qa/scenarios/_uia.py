@@ -52,7 +52,7 @@ ACTION_EXECUTE = "Execute Action…"
 # Scan dialog
 SCAN_DIALOG_TITLE = "Scan Sources"
 SCAN_BTN_START = "Start Scan"
-SCAN_BTN_CLOSE_LOAD = "Close  Load"   # NB: literal double-space, see finding #1
+SCAN_BTN_CLOSE_LOAD = "Close & Load"   # exact UIA accessible name; mirrors scan_dialog.setText("Close && Load")
 SCAN_BTN_BROWSE = "Browse…"
 SCAN_BTN_REMOVE_ALL = "Remove All"
 SCAN_BTN_ADD_SELECTED = "+ Add Selected Folder"
@@ -277,7 +277,7 @@ def extract_summary(log: str) -> list[str]:
 
 
 def close_and_load_manifest(dlg: UIAWrapper) -> None:
-    """Click 'Close  Load' (post-scan dialog button)."""
+    """Click 'Close & Load' (post-scan dialog button)."""
     btn = dlg.child_window(title=SCAN_BTN_CLOSE_LOAD, control_type="Button")
     btn.invoke()
     time.sleep(1.0)
