@@ -1,0 +1,9 @@
+# QA-only dependencies. Not needed at app runtime — install only when
+# running `/qa-explore` or driving the UI from a script.
+#
+#     .venv/Scripts/python.exe -m pip install -r qa/requirements.txt
+#
+# pywinauto reads the Windows UI Automation tree, which PySide6 widgets
+# expose for free via QAccessible. Lets the QA agent locate and click
+# elements by name + control_type instead of by pixel coordinates.
+pywinauto>=0.6.9
