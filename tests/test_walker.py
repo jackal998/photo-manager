@@ -235,3 +235,32 @@ class TestFlatScan:
         labels = {r.source_label for r in records}
         assert "flat" not in labels
         assert "rec" in labels
+
+
+class TestWalkerExclusionsFixture:
+    """Pin the qa/sandbox/walker-exclusions/ fixture's expected walker output.
+
+    The fixture mixes 2 real JPEGs with the three skip patterns documented
+    on `scanner/walker.py` and `scanner/media.py`:
+
+      - real_photo_a.jpg.json   (Google Takeout sidecar — non-media extension)
+      - Thumbs.db               (Windows thumbnail cache — SKIP_FILENAMES)
+      - desktop.ini             (Windows folder config — SKIP_FILENAMES)
+
+    If any of the three skip rules regresses, the count flips from 2 to 3+
+    and this test fails immediately rather than silently letting noise
+    into hash comparisons. Companion to QA scenario s09_walker_exclusions.
+    """
+
+    def test_walker_exclusions_fixture_returns_only_real_photos(self):
+        from scanner.walker import scan_sources
+
+        fixture = Path(__file__).resolve().parent.parent / "qa" / "sandbox" / "walker-exclusions"
+        if not fixture.is_dir():
+            pytest.skip(f"fixture not present: {fixture}")
+
+        records = scan_sources({"wx": fixture}, recursive_map={"wx": True})
+        names = sorted(r.path.name for r in records)
+        assert names == ["real_photo_a.jpg", "real_photo_b.jpg"], (
+            f"walker leaked excluded files into the result set: {names}"
+        )
