@@ -507,3 +507,113 @@ class TestConstructor:
         )
         assert handler is not None
         assert not hasattr(handler, "deleter")
+
+
+# ── manifest-load callbacks ────────────────────────────────────────────────
+
+
+class TestManifestLoadCallbacks:
+    """Cover _on_manifest_loaded / _on_manifest_failed / _set_manifest_actions_enabled.
+
+    These run as the worker's signals fire on the GUI thread; they're plain
+    callables with simple signatures, so unit-test them directly with mocks.
+    """
+
+    def test_on_manifest_loaded_updates_vm_and_ui(self, tmp_path):
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[], group_count=0)
+        ui = MagicMock()
+        status = MagicMock()
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=ui, status_reporter=status,
+        )
+
+        groups = [
+            PhotoGroup(group_number=1, items=[_rec("/a.jpg"), _rec("/b.jpg")]),
+            PhotoGroup(group_number=2, items=[_rec("/c.jpg")]),
+        ]
+        # Stand in for the path the worker reports back.
+        path = str(tmp_path / "m.sqlite")
+        # group_count is read off the VM, not derived — wire it.
+        vm.group_count = len(groups)
+
+        handler._on_manifest_loaded(groups, path)
+
+        assert vm.groups is groups
+        assert handler._manifest_path == path
+        ui.refresh_tree.assert_called_once_with(groups)
+        ui.show_group_counts.assert_called_once_with(2)
+        ui.show_groups_summary.assert_called_once_with(groups)
+        # Status text mentions group count and total file count (3).
+        status.show_status.assert_called_once()
+        status_msg = status.show_status.call_args[0][0]
+        assert "2" in status_msg and "3" in status_msg
+
+    def test_on_manifest_failed_logs_and_disables_actions(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[])
+        status = MagicMock()
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=MagicMock(), status_reporter=status,
+        )
+
+        with patch("PySide6.QtWidgets.QMessageBox.critical") as crit:
+            handler._on_manifest_failed("disk on fire")
+
+        crit.assert_called_once()
+        # Critical dialog body carries the error text.
+        assert "disk on fire" in crit.call_args[0][2]
+        # Status updated to a failure message.
+        status.show_status.assert_called_once()
+        # Manifest-dependent actions disabled.
+        assert parent.menu_controller.enable_action.called
+        for call in parent.menu_controller.enable_action.call_args_list:
+            assert call[0][1] is False
+
+    def test_set_manifest_actions_enabled_toggles_each_action(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[])
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=parent,
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+
+        handler._set_manifest_actions_enabled(True)
+        called = {c[0][0] for c in parent.menu_controller.enable_action.call_args_list}
+        assert called == {
+            "save_manifest", "execute_action",
+            "set_action_hl_delete", "set_action_hl_keep",
+        }
+        for c in parent.menu_controller.enable_action.call_args_list:
+            assert c[0][1] is True
+
+    def test_set_manifest_actions_enabled_swallows_attribute_error(self):
+        """The except AttributeError branch — parent without menu_controller still works."""
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[])
+        parent = MagicMock()
+        # Make every enable_action call raise AttributeError so the except catches.
+        parent.menu_controller.enable_action.side_effect = AttributeError("no such action")
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=parent,
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+
+        # Must not raise.
+        handler._set_manifest_actions_enabled(True)
