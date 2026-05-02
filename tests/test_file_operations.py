@@ -617,3 +617,141 @@ class TestManifestLoadCallbacks:
 
         # Must not raise.
         handler._set_manifest_actions_enabled(True)
+
+
+# ── remove_*_from_list (toolbar + items) error branches ──────────────────
+
+
+class TestRemoveFromListErrorBranches:
+    """Cover the try/except trailers in remove_from_list_toolbar / remove_items_from_list."""
+
+    def test_remove_from_list_toolbar_no_selection_shows_info(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        vm = SimpleNamespace(groups=[])
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.remove_from_list_toolbar([])
+        info.assert_called_once()
+
+    def test_remove_from_list_toolbar_exception_handled(self):
+        """If vm.remove_from_list raises, surface as critical dialog, don't crash."""
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        vm = MagicMock()
+        vm.groups = []
+        vm.remove_from_list.side_effect = RuntimeError("vm broke")
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        with patch("PySide6.QtWidgets.QMessageBox.critical") as crit:
+            handler.remove_from_list_toolbar(
+                [{"type": "file", "path": "/a.jpg"}]
+            )
+        crit.assert_called_once()
+        assert "Remove from list failed" in crit.call_args[0][2]
+
+    def test_remove_items_from_list_exception_handled(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        vm = MagicMock()
+        vm.groups = []
+        vm.remove_from_list.side_effect = RuntimeError("vm broke")
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        with patch("PySide6.QtWidgets.QMessageBox.critical") as crit:
+            handler.remove_items_from_list(
+                [{"type": "file", "path": "/a.jpg"}]
+            )
+        crit.assert_called_once()
+
+
+# ── set_decision_by_regex (action-by-field/regex bulk apply) ──────────────
+
+
+class TestSetDecisionByRegex:
+    def test_no_manifest_loaded_shows_info(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        vm = SimpleNamespace(groups=[])
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.set_decision_by_regex("File Name", ".*", "delete")
+        info.assert_called_once()
+
+    def test_invalid_regex_warns_user(self, tmp_path):
+        rec = _rec("/photos/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/photos/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        with patch("PySide6.QtWidgets.QMessageBox.warning") as warn:
+            handler.set_decision_by_regex("File Name", "[unclosed", "delete")
+        warn.assert_called_once()
+        assert warn.call_args[0][1] == "Invalid Regex"
+
+    def test_no_match_shows_info(self, tmp_path):
+        rec = _rec("/photos/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/photos/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.set_decision_by_regex("File Name", "wont_match_xyz", "delete")
+        info.assert_called_once()
+        assert "No files matched" in info.call_args[0][2]
+
+    def test_matching_files_get_decision_set(self, tmp_path):
+        rec_match = _rec("/photos/IMG_keep.jpg")
+        rec_skip = _rec("/photos/other.jpg")
+        vm = SimpleNamespace(groups=[
+            PhotoGroup(group_number=1, items=[rec_match, rec_skip]),
+        ])
+        db = _make_db(tmp_path, [
+            {"source_path": "/photos/IMG_keep.jpg"},
+            {"source_path": "/photos/other.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_regex("File Name", r"IMG_keep", "keep")
+
+        assert rec_match.user_decision == "keep"
+        assert rec_skip.user_decision == ""
+
+
+# ── execute_action / save_manifest guards ─────────────────────────────────
+
+
+class TestEntryPointGuards:
+    def test_execute_action_no_manifest_shows_info(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        vm = SimpleNamespace(groups=[])
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.execute_action()
+        info.assert_called_once()
+        assert "No manifest loaded" in info.call_args[0][2]
+
+    def test_save_manifest_no_manifest_shows_info(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        vm = SimpleNamespace(groups=[])
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.save_manifest_decisions()
+        info.assert_called_once()
+        assert "No manifest open" in info.call_args[0][2]

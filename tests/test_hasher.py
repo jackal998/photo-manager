@@ -288,3 +288,90 @@ class TestComputeHashes:
         assert dt is None
         assert w is None
         assert h is None
+
+
+# ── Coverage of guard branches: _HASH_AVAILABLE, _RAWPY_AVAILABLE, ───────
+#    imagehash.phash failure, _raw_exif_date exception swallow ───────────
+
+
+class TestGuardBranches:
+    def test_compute_hashes_returns_sha_only_when_pil_unavailable(self, tmp_path, monkeypatch):
+        """When PIL/imagehash failed to import, compute_hashes returns just SHA."""
+        from scanner import hasher
+        f = tmp_path / "a.jpg"
+        from PIL import Image as _Img
+        _Img.new("RGB", (10, 10)).save(f, "JPEG")
+
+        monkeypatch.setattr(hasher, "_HASH_AVAILABLE", False)
+        sha, ph, mc, dt, w, h = hasher.compute_hashes(f, "jpeg")
+        assert sha == hasher.compute_sha256(f)
+        assert (ph, mc, dt, w, h) == (None, None, None, None, None)
+
+    def test_compute_phash_returns_none_when_pil_unavailable(self, tmp_path, monkeypatch):
+        from scanner import hasher
+        f = tmp_path / "a.jpg"
+        from PIL import Image as _Img
+        _Img.new("RGB", (10, 10)).save(f, "JPEG")
+
+        monkeypatch.setattr(hasher, "_HASH_AVAILABLE", False)
+        assert hasher.compute_phash(f, "jpeg") is None
+
+    def test_compute_phash_returns_none_for_decode_failure(self, tmp_path):
+        """Truncated JPEG → PIL.Image.load raises → compute_phash returns None."""
+        from scanner.hasher import compute_phash
+        from PIL import Image as _Img
+        full = tmp_path / "_full.jpg"
+        _Img.new("RGB", (200, 150), (10, 20, 30)).save(full, "JPEG")
+        bad = tmp_path / "bad.jpg"
+        bad.write_bytes(full.read_bytes()[:512])
+        full.unlink()
+        assert compute_phash(bad, "jpeg") is None
+
+    def test_compute_hashes_returns_sha_when_imagehash_phash_raises(
+        self, tmp_path, monkeypatch
+    ):
+        """imagehash.phash() raising ValueError → falls through to (sha, None, ...)."""
+        from scanner import hasher
+        f = tmp_path / "a.jpg"
+        from PIL import Image as _Img
+        _Img.new("RGB", (10, 10)).save(f, "JPEG")
+
+        def boom(_img):
+            raise ValueError("simulated phash failure")
+
+        monkeypatch.setattr(hasher.imagehash, "phash", boom)
+        sha, ph, mc, dt, w, h = hasher.compute_hashes(f, "jpeg")
+        assert sha == hasher.compute_sha256(f)
+        assert ph is None
+        assert mc is None
+
+    def test_compute_phash_returns_none_when_imagehash_phash_raises(
+        self, tmp_path, monkeypatch
+    ):
+        from scanner import hasher
+        f = tmp_path / "a.jpg"
+        from PIL import Image as _Img
+        _Img.new("RGB", (10, 10)).save(f, "JPEG")
+
+        monkeypatch.setattr(hasher.imagehash, "phash", lambda _i: (_ for _ in ()).throw(TypeError("nope")))
+        assert hasher.compute_phash(f, "jpeg") is None
+
+    def test_raw_exif_date_swallows_exception(self, monkeypatch):
+        """_raw_exif_date returns None if any EXIF call raises."""
+        from scanner.hasher import _raw_exif_date
+
+        class _Img:
+            def getexif(self):
+                raise RuntimeError("synthetic EXIF crash")
+
+        assert _raw_exif_date(_Img()) is None
+
+    def test_load_raw_preview_returns_none_when_rawpy_unavailable(self, tmp_path, monkeypatch):
+        from scanner import hasher
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", False)
+        assert hasher._load_raw_preview(tmp_path / "x.dng") is None
+
+    def test_load_raw_preview_from_bytes_returns_none_when_rawpy_unavailable(self, monkeypatch):
+        from scanner import hasher
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", False)
+        assert hasher._load_raw_preview_from_bytes(b"anything") is None

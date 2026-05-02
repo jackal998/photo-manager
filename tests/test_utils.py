@@ -108,3 +108,122 @@ class TestGetExifDatetimeOriginal:
 
         result = get_exif_datetime_original(str(f))
         assert result == datetime(2025, 3, 21, 11, 22, 33)
+
+    def test_returns_none_when_pil_unavailable(self, tmp_path, monkeypatch):
+        """The `if Image is None: return None` early-return branch.
+
+        Simulates the PIL-not-installed environment without uninstalling
+        the package — patches `infrastructure.utils.Image` to None to take
+        the guard branch.
+        """
+        f = tmp_path / "any.jpg"
+        Image.new("RGB", (10, 10)).save(str(f), "JPEG")
+
+        import infrastructure.utils as utils_mod
+        monkeypatch.setattr(utils_mod, "Image", None)
+
+        assert get_exif_datetime_original(str(f)) is None
+
+    def test_returns_none_when_getexif_missing(self, tmp_path, monkeypatch):
+        """`if not exif: return None` — when getattr finds no getexif method.
+
+        Patches Image.open to return an object without a `getexif` attribute,
+        forcing `getattr(im, "getexif", None)` to be falsy.
+        """
+        import infrastructure.utils as utils_mod
+
+        class _StubImage:
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def fake_open(_path):
+            return _StubImage()
+
+        monkeypatch.setattr(utils_mod.Image, "open", fake_open)
+
+        assert get_exif_datetime_original(str(tmp_path / "doesnt-matter.jpg")) is None
+
+    def test_rawpy_fallback_for_dng_returns_datetime(self, tmp_path, monkeypatch):
+        """When PIL fails on a .dng path, the rawpy fallback path runs."""
+        import infrastructure.utils as utils_mod
+
+        def raise_pil(_):
+            raise OSError("simulated PIL failure")
+        monkeypatch.setattr(utils_mod.Image, "open", raise_pil)
+
+        if not utils_mod.RAWPY_AVAILABLE:
+            pytest.skip("rawpy not installed in this environment")
+
+        target = datetime(2022, 6, 12, 8, 30, 0)
+
+        class _StubMetadata:
+            timestamp = target
+            shooting_datetime = None
+
+        class _StubRaw:
+            metadata = _StubMetadata()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(utils_mod.rawpy, "imread", lambda _path: _StubRaw())
+
+        result = get_exif_datetime_original(str(tmp_path / "fake.dng"))
+        assert result == target
+
+    def test_rawpy_fallback_returns_none_when_metadata_absent(
+        self, tmp_path, monkeypatch
+    ):
+        """rawpy returns a raw with no useful metadata → fallback returns None."""
+        import infrastructure.utils as utils_mod
+
+        def raise_pil(_):
+            raise OSError("PIL failed")
+        monkeypatch.setattr(utils_mod.Image, "open", raise_pil)
+
+        if not utils_mod.RAWPY_AVAILABLE:
+            pytest.skip("rawpy not installed")
+
+        class _StubRaw:
+            metadata = None
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(utils_mod.rawpy, "imread", lambda _: _StubRaw())
+
+        assert get_exif_datetime_original(str(tmp_path / "x.dng")) is None
+
+    def test_rawpy_fallback_handles_epoch_timestamp(self, tmp_path, monkeypatch):
+        """When metadata.timestamp is a numeric epoch, fromtimestamp() converts."""
+        import infrastructure.utils as utils_mod
+
+        def raise_pil(_):
+            raise OSError("PIL failed")
+        monkeypatch.setattr(utils_mod.Image, "open", raise_pil)
+
+        if not utils_mod.RAWPY_AVAILABLE:
+            pytest.skip("rawpy not installed")
+
+        epoch = 1_700_000_000.0
+        expected = datetime.fromtimestamp(epoch)
+
+        class _StubMetadata:
+            timestamp = epoch
+            shooting_datetime = None
+
+        class _StubRaw:
+            metadata = _StubMetadata()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(utils_mod.rawpy, "imread", lambda _: _StubRaw())
+
+        result = get_exif_datetime_original(str(tmp_path / "x.dng"))
+        assert result == expected

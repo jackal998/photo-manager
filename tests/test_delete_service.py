@@ -107,6 +107,90 @@ class TestDeleteToRecycle:
             svc.delete_to_recycle([str(f)])
         assert released == [True]
 
+    def test_handle_releaser_exception_swallowed(self, tmp_path):
+        """A failing handle_releaser must not block the delete."""
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+        svc = DeleteService()
+        svc.set_handle_releaser(lambda: (_ for _ in ()).throw(OSError("boom")))
+        with patch("infrastructure.delete_service.send2trash") as mock_trash:
+            result = svc.delete_to_recycle([str(f)])
+        mock_trash.assert_called_once()
+        assert str(f) in result.success_paths
+
+    def test_falls_back_to_original_path_when_normalized_fails(self, tmp_path):
+        """Method 1 (normalized) raises OSError → Method 2 (original path) succeeds."""
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+        call_count = [0]
+
+        def trash_fail_then_succeed(p):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise OSError("simulated normalized-path failure")
+            # second call (original path) succeeds
+
+        svc = DeleteService()
+        with patch(
+            "infrastructure.delete_service.send2trash",
+            side_effect=trash_fail_then_succeed,
+        ):
+            result = svc.delete_to_recycle([str(f)])
+        assert str(f) in result.success_paths
+        assert result.failed == []
+        assert call_count[0] == 2
+
+    def test_falls_back_to_absolute_path_when_first_two_fail(self, tmp_path):
+        """Method 1 + 2 raise OSError → Method 3 (absolute path) succeeds."""
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+        call_count = [0]
+
+        def trash(p):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise OSError(f"failure #{call_count[0]}")
+
+        svc = DeleteService()
+        with patch(
+            "infrastructure.delete_service.send2trash",
+            side_effect=trash,
+        ):
+            result = svc.delete_to_recycle([str(f)])
+        assert str(f) in result.success_paths
+        assert call_count[0] == 3
+
+    def test_all_three_methods_failing_records_failure(self, tmp_path):
+        """When every fallback path raises, the file is recorded as failed."""
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+
+        svc = DeleteService()
+        with patch(
+            "infrastructure.delete_service.send2trash",
+            side_effect=OSError("permanent failure"),
+        ):
+            result = svc.delete_to_recycle([str(f)])
+        assert result.success_paths == []
+        assert len(result.failed) == 1
+        assert result.failed[0][0] == str(f)
+        assert "Multiple delete failures" in result.failed[0][1]
+
+    def test_runtime_error_on_normalized_path_recorded_as_failure(self, tmp_path):
+        """RuntimeError on Method 1 short-circuits to failure (no fallback)."""
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+
+        svc = DeleteService()
+        with patch(
+            "infrastructure.delete_service.send2trash",
+            side_effect=RuntimeError("kernel said no"),
+        ):
+            result = svc.delete_to_recycle([str(f)])
+        assert result.success_paths == []
+        assert len(result.failed) == 1
+        assert "Unexpected error" in result.failed[0][1]
+
 
 # ── execute_delete ─────────────────────────────────────────────────────────
 

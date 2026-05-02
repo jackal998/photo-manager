@@ -489,3 +489,78 @@ class TestContextMenuDecisions:
         from app.views.dialogs.execute_action_dialog import _SETTABLE_DECISIONS
         del_entry = next((t for t in _SETTABLE_DECISIONS if t[1] == "delete"), None)
         assert del_entry is not None
+
+
+# ── _on_execute_requested (confirmation gate) ─────────────────────────────
+
+
+class TestOnExecuteRequestedConfirmation:
+    """Tests for the confirmation prompt that fires before destructive execute."""
+
+    def test_no_complete_delete_groups_calls_through(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        # Group with one delete + one keep — not "complete delete"
+        rec_d = _rec("/a.jpg", "delete")
+        rec_k = _rec("/b.jpg", "keep")
+        g = _group(rec_d, rec_k)
+        dlg = ExecuteActionDialog([g], manifest_path=None)
+        try:
+            with patch.object(dlg, "_on_execute") as on_exec:
+                dlg._on_execute_requested()
+            on_exec.assert_called_once()
+        finally:
+            dlg.close()
+
+    def test_complete_delete_group_yes_continues(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from PySide6.QtWidgets import QMessageBox as _QMB
+
+        g = _group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "delete"))
+        dlg = ExecuteActionDialog([g], manifest_path=None)
+        try:
+            with (
+                patch("PySide6.QtWidgets.QMessageBox.question", return_value=_QMB.Yes) as q,
+                patch.object(dlg, "_on_execute") as on_exec,
+            ):
+                dlg._on_execute_requested()
+            q.assert_called_once()
+            on_exec.assert_called_once()
+        finally:
+            dlg.close()
+
+    def test_complete_delete_group_no_aborts(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from PySide6.QtWidgets import QMessageBox as _QMB
+
+        g = _group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "delete"))
+        dlg = ExecuteActionDialog([g], manifest_path=None)
+        try:
+            with (
+                patch("PySide6.QtWidgets.QMessageBox.question", return_value=_QMB.No),
+                patch.object(dlg, "_on_execute") as on_exec,
+            ):
+                dlg._on_execute_requested()
+            on_exec.assert_not_called()
+        finally:
+            dlg.close()
+
+
+# ── _set_decision_by_regex persist-failure swallow ────────────────────────
+
+
+class TestSetDecisionByRegexPersistFailure:
+    def test_persistence_failure_does_not_block_in_memory_update(self, qapp, tmp_path):
+        """When batch_update_decisions raises, the in-memory rec.user_decision
+        is still set — failure is logged but the dialog stays usable."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        rec = _rec("/photos/IMG.jpg")
+        g = _group(rec)
+        # Manifest path that doesn't exist → batch_update_decisions raises.
+        dlg = ExecuteActionDialog([g], manifest_path=str(tmp_path / "missing.sqlite"))
+        try:
+            dlg._set_decision_by_regex("File Name", r"IMG", "delete")
+            assert rec.user_decision == "delete"
+        finally:
+            dlg.close()

@@ -274,3 +274,261 @@ class TestContextMenuNoDirectDelete:
         assert not any("Delete" in t for t in texts), (
             "Multi-selection menu must not contain any Delete action"
         )
+
+
+# ── setup_context_menu / _on_context_menu (Qt wiring) ────────────────────
+
+
+class TestContextMenuPolicyAndSlot:
+    def test_setup_sets_context_menu_policy_and_connects_signal(self, qapp):
+        """setup_context_menu must set CustomContextMenu and wire the signal."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QTreeView
+        from app.views.handlers.context_menu import ContextMenuHandler
+
+        tree = QTreeView()
+        handler = ContextMenuHandler(tree, MagicMock(), MagicMock(), MagicMock())
+        handler.setup_context_menu()
+
+        assert tree.contextMenuPolicy() == Qt.CustomContextMenu
+
+    def test_on_context_menu_invalid_index_returns_silently(self, qapp):
+        """Clicking on empty area (invalid index) → no menu opens, no calls."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtWidgets import QTreeView
+        from app.views.handlers.context_menu import ContextMenuHandler
+
+        tree = QTreeView()
+        provider = MagicMock()
+        handlers = MagicMock()
+        handler = ContextMenuHandler(tree, provider, handlers, MagicMock())
+
+        # No model attached → indexAt returns invalid
+        handler._on_context_menu(QPoint(10, 10))
+        provider.get_selected_items.assert_not_called()
+
+    def test_on_context_menu_no_selection_returns_silently(self, qapp):
+        """Valid click but provider returns []; no menu, no handler calls."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QStandardItem, QStandardItemModel
+        from PySide6.QtWidgets import QTreeView
+        from app.views.handlers.context_menu import ContextMenuHandler
+
+        tree = QTreeView()
+        model = QStandardItemModel()
+        model.appendRow(QStandardItem("row"))
+        tree.setModel(model)
+
+        provider = MagicMock()
+        provider.get_selected_items.return_value = []
+        handlers = MagicMock()
+
+        handler = ContextMenuHandler(tree, provider, handlers, MagicMock())
+        # Click at the item's known position (item's rect)
+        idx = model.index(0, 0)
+        rect = tree.visualRect(idx)
+        # Even if rect is empty (tree not shown), patch indexAt to return idx
+        from unittest.mock import patch as _patch
+        with _patch.object(tree, "indexAt", return_value=idx):
+            handler._on_context_menu(QPoint(0, 0))
+
+        provider.get_selected_items.assert_called_once()
+        handlers.set_decision.assert_not_called()
+
+    def test_on_context_menu_dispatches_single_selection_menu(self, qapp):
+        """Single-item selection → _create_single_selection_menu is called."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QStandardItem, QStandardItemModel
+        from PySide6.QtWidgets import QTreeView
+        from app.views.handlers.context_menu import ContextMenuHandler
+
+        tree = QTreeView()
+        model = QStandardItemModel()
+        model.appendRow(QStandardItem("row"))
+        tree.setModel(model)
+
+        provider = MagicMock()
+        provider.get_selected_items.return_value = [{"type": "file", "path": "/a.jpg"}]
+        # QMenu(parent) requires a real QWidget — MagicMock fails the type check.
+        from PySide6.QtWidgets import QWidget
+        parent = QWidget()
+        handler = ContextMenuHandler(tree, provider, MagicMock(), parent)
+
+        from unittest.mock import patch as _patch
+        with (
+            _patch.object(tree, "indexAt", return_value=model.index(0, 0)),
+            _patch.object(handler, "_create_single_selection_menu") as single,
+            _patch.object(handler, "_create_multi_selection_menu") as multi,
+            _patch("app.views.handlers.context_menu.QMenu.exec", return_value=None),
+        ):
+            handler._on_context_menu(QPoint(0, 0))
+
+        single.assert_called_once()
+        multi.assert_not_called()
+
+    def test_on_context_menu_dispatches_multi_selection_menu(self, qapp):
+        """Multiple selected items → _create_multi_selection_menu is called."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QStandardItem, QStandardItemModel
+        from PySide6.QtWidgets import QTreeView, QWidget
+        from app.views.handlers.context_menu import ContextMenuHandler
+
+        tree = QTreeView()
+        model = QStandardItemModel()
+        model.appendRow(QStandardItem("row"))
+        tree.setModel(model)
+
+        provider = MagicMock()
+        provider.get_selected_items.return_value = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "file", "path": "/b.jpg"},
+        ]
+        parent = QWidget()
+        handler = ContextMenuHandler(tree, provider, MagicMock(), parent)
+
+        from unittest.mock import patch as _patch
+        with (
+            _patch.object(tree, "indexAt", return_value=model.index(0, 0)),
+            _patch.object(handler, "_create_single_selection_menu") as single,
+            _patch.object(handler, "_create_multi_selection_menu") as multi,
+            _patch("app.views.handlers.context_menu.QMenu.exec", return_value=None),
+        ):
+            handler._on_context_menu(QPoint(0, 0))
+
+        single.assert_not_called()
+        multi.assert_called_once()
+
+
+# ── group-type single-selection branch ────────────────────────────────────
+
+
+class TestGroupSingleSelection:
+    """Right-clicking a group row (item['type'] != 'file') skips the
+    file-only Set Action submenu and the Open Folder action — but the
+    common actions (Set Action by Field/Regex…, Remove from List) are
+    still present."""
+
+    def test_group_item_skips_file_only_actions(self, qapp):
+        from PySide6.QtWidgets import QMenu, QTreeView
+        from app.views.handlers.context_menu import ContextMenuHandler
+
+        handler = ContextMenuHandler(
+            QTreeView(), MagicMock(), MagicMock(), MagicMock()
+        )
+        menu = QMenu()
+        handler._create_single_selection_menu(
+            menu, {"type": "group", "group_number": 1}, clicked_col=0
+        )
+
+        # Walk visible actions in order — "Set Action" submenu and
+        # "Open Folder" must NOT appear; the common actions DO appear.
+        labels = [a.text() for a in menu.actions() if a.text()]
+        assert "Set Action" not in labels
+        assert "Open Folder" not in labels
+        assert "Set Action by Field/Regex…" in labels
+        assert "Remove from List" in labels
+
+
+# ── _open_folder nested function (Open Folder action) ────────────────────
+
+
+class TestOpenFolderAction:
+    """Cover the _open_folder helper bound to the 'Open Folder' menu action.
+
+    All file-system / shell side effects (subprocess.Popen, QDesktopServices)
+    are mocked so the tests don't open Explorer windows.
+    """
+
+    def _build_menu_and_open_folder_action(self, qapp, file_path: str):
+        from PySide6.QtWidgets import QMenu, QTreeView, QWidget
+        from app.views.handlers.context_menu import ContextMenuHandler
+
+        parent = QWidget()
+        handler = ContextMenuHandler(QTreeView(), MagicMock(), MagicMock(), parent)
+        menu = QMenu(parent)
+        handler._create_single_selection_menu(
+            menu, {"type": "file", "path": file_path}, clicked_col=0
+        )
+        # The "Open Folder" action is the second non-submenu top-level entry.
+        for action in menu.actions():
+            if action.text() == "Open Folder":
+                return action
+        raise AssertionError("Open Folder action not found")
+
+    def test_empty_path_is_noop(self, qapp):
+        from unittest.mock import patch as _patch
+        action = self._build_menu_and_open_folder_action(qapp, "")
+        with (
+            _patch("subprocess.Popen") as popen,
+            _patch("app.views.handlers.context_menu.QDesktopServices.openUrl") as open_url,
+        ):
+            action.trigger()
+        popen.assert_not_called()
+        open_url.assert_not_called()
+
+    def test_existing_file_on_windows_uses_explorer_select(self, qapp, tmp_path, monkeypatch):
+        """When the file exists on Windows, subprocess.Popen(['explorer', '/select,', path])."""
+        from unittest.mock import patch as _patch
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"data")
+
+        action = self._build_menu_and_open_folder_action(qapp, str(f))
+
+        # Pretend we're on Windows even when running tests on something else.
+        monkeypatch.setattr("os.name", "nt")
+        with _patch("subprocess.Popen") as popen:
+            action.trigger()
+        popen.assert_called_once()
+        args = popen.call_args[0][0]
+        assert args[0] == "explorer"
+        assert args[1] == "/select,"
+
+    def test_missing_file_on_windows_falls_back_to_folder(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """File doesn't exist but its containing folder does → Popen(['explorer', folder])."""
+        from unittest.mock import patch as _patch
+        f = tmp_path / "missing.jpg"   # never created
+        action = self._build_menu_and_open_folder_action(qapp, str(f))
+
+        monkeypatch.setattr("os.name", "nt")
+        with _patch("subprocess.Popen") as popen:
+            action.trigger()
+        popen.assert_called_once()
+        args = popen.call_args[0][0]
+        assert args[0] == "explorer"
+        # Single-arg form (no /select,) when only the folder exists.
+        assert "/select," not in args
+
+    def test_non_windows_uses_qdesktopservices(self, qapp, tmp_path, monkeypatch):
+        """On non-Windows the helper falls through to QDesktopServices.openUrl."""
+        from unittest.mock import patch as _patch
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"data")
+
+        action = self._build_menu_and_open_folder_action(qapp, str(f))
+        monkeypatch.setattr("os.name", "posix")
+        with (
+            _patch("subprocess.Popen") as popen,
+            _patch("app.views.handlers.context_menu.QDesktopServices.openUrl") as open_url,
+        ):
+            action.trigger()
+        popen.assert_not_called()
+        open_url.assert_called_once()
+
+    def test_subprocess_failure_falls_back_to_qdesktopservices(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """If explorer Popen raises, the helper falls back to QDesktopServices."""
+        from unittest.mock import patch as _patch
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"data")
+
+        action = self._build_menu_and_open_folder_action(qapp, str(f))
+        monkeypatch.setattr("os.name", "nt")
+        with (
+            _patch("subprocess.Popen", side_effect=OSError("explorer broke")),
+            _patch("app.views.handlers.context_menu.QDesktopServices.openUrl") as open_url,
+        ):
+            action.trigger()
+        open_url.assert_called_once()

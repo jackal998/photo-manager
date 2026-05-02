@@ -46,7 +46,7 @@ max-line-length = 100
 additional-builtins = ["Data1", "Data2", "Data3", "Data4"]
 
 [tool.pytest.ini_options]
-addopts = "-q --cov=. --cov-report=term-missing --cov-config=pyproject.toml"
+addopts = "-q --cov=. --cov-report=term-missing --cov-report=json --cov-config=pyproject.toml"
 testpaths = ["tests"]
 
 [tool.coverage.run]
@@ -56,16 +56,16 @@ omit = [
   "tests/*",
   "scripts/*",
   ".claude/*",
-  # Top-level entry-point scripts and dev tooling
-  "main.py",
-  "scan.py",
-  "review.py",
-  "run_all_linters.py",
-  # Qt/UI glue and bootstrap — low test ROI
-  "infrastructure/image_service.py",
-  "infrastructure/logging.py",
-  "app/views/workers/scan_worker.py",
-  "app/views/media_utils.py",
+  # `omit` is reserved for files that genuinely cannot be exercised inside
+  # the test process — argparse + sys.exit shells, hardware-bound services,
+  # module-level Qt/loguru bootstrap. Anything testable belongs OUT of this
+  # list and must clear the per-file coverage floor.
+  "main.py",                           # argparse + sys.exit shell over already-tested code
+  "scan.py",                           # ditto
+  "review.py",                         # ditto
+  "run_all_linters.py",                # dev tooling shell
+  "infrastructure/image_service.py",   # depends on running QApplication for decoding
+  "infrastructure/logging.py",         # module-level loguru setup, no testable surface
 ]
 
 [tool.coverage.report]
