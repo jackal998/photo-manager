@@ -1,4 +1,4 @@
-"""ViewModel for orchestrating CSV IO and grouping/sorting logic."""
+"""ViewModel for grouping and sorting photo records loaded from a manifest."""
 
 from __future__ import annotations
 

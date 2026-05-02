@@ -8,7 +8,7 @@ from datetime import datetime
 
 @dataclass
 class PhotoRecord:
-    """A single photo row originating from CSV or other sources."""
+    """A single photo row loaded from a manifest."""
 
     group_number: int
     is_mark: bool
@@ -28,7 +28,7 @@ class PhotoRecord:
     dpi_width: int | None = None
     dpi_height: int | None = None
     orientation: int | None = None
-    # Scanner classification (populated when loaded from manifest; empty for CSV)
+    # Scanner classification (populated when loaded from manifest)
     action: str = ""
     # User's planned file operation (delete | keep | "" = undecided)
     user_decision: str = ""
