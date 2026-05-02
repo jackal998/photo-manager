@@ -139,6 +139,23 @@ class ScanWorker(QThread):
         # Remove any None slots (cancelled futures that didn't run, or skipped files)
         hash_results = [r for r in hash_results if r is not None]
 
+        # Detect silent image-decode failures: compute_hashes returned without
+        # raising but PIL couldn't produce a pHash — the file is truncated or
+        # corrupt. Route to the same skip channel as exception failures so the
+        # user sees them in the log instead of getting a misleading UNDATED row.
+        _IMAGE_TYPES = frozenset(("jpeg", "heic", "raw", "png", "gif", "webp"))
+        corrupt_paths: set[Path] = set()
+        for r in hash_results:
+            if r.record.file_type in _IMAGE_TYPES and r.phash is None:
+                skipped.append((
+                    r.record.path,
+                    "ImageDecodeError",
+                    "image file could not be decoded (truncated or corrupt)",
+                ))
+                corrupt_paths.add(r.record.path)
+        if corrupt_paths:
+            hash_results = [r for r in hash_results if r.record.path not in corrupt_paths]
+
         if skipped:
             self._emit(f"  Skipped {len(skipped):,} unreadable file(s):")
             for p, exc_type, exc_msg in skipped[:10]:

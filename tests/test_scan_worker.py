@@ -8,6 +8,9 @@ Coverage:
 - issues #51 + #56 regression — an empty input folder is treated as a
   benign success (``completed_empty`` signal, "Done." log line, no
   ``failed`` emission, no modal).
+- issue #57 regression — silent image-decode failures (truncated /
+  corrupt JPEGs that compute_hashes returns from without raising) are
+  routed to the skip channel instead of being misclassified as UNDATED.
 """
 
 from __future__ import annotations
@@ -123,3 +126,66 @@ class TestScanWorkerEmptyInput:
             f"`completed_empty` should fire exactly once; got {len(completed_empty_calls)}"
         assert any("Done." in m for m in progress), \
             f"progress log must contain a 'Done.' terminator: {progress!r}"
+
+
+class TestScanWorkerCorruptImage:
+    def test_truncated_jpeg_is_logged_and_excluded_from_manifest(
+        self, qapp, tmp_path
+    ):
+        """A truncated JPEG should be logged as ImageDecodeError, not silently UNDATED.
+
+        Regression for issue #57: ``compute_hashes`` returns successfully for a
+        truncated JPEG (sha256 from raw bytes works) but PIL can't extract a
+        pHash. Pre-fix, the file landed in the manifest with action=UNDATED,
+        visually indistinguishable from a JPG that simply has no EXIF date.
+        """
+        import sqlite3
+
+        from app.views.workers.scan_worker import ScanWorker
+
+        # Two files: one valid JPEG, one truncated JPEG (1 KB cut).
+        good = tmp_path / "good.jpg"
+        bad = tmp_path / "bad_truncated.jpg"
+        _write_jpeg(good, color=(0, 128, 255))
+
+        # Build a real JPEG, then truncate it so PIL.Image.load() fails.
+        full = tmp_path / "_full.jpg"
+        Image.new("RGB", (200, 150), (200, 100, 50)).save(full, "JPEG")
+        bad.write_bytes(full.read_bytes()[:1024])
+        full.unlink()
+
+        out = tmp_path / "manifest.sqlite"
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=2,
+        )
+
+        progress: list[str] = []
+        finished: list[str] = []
+        failed: list[str] = []
+        worker.progress.connect(progress.append)
+        worker.finished.connect(finished.append)
+        worker.failed.connect(failed.append)
+
+        worker.run()
+
+        assert not failed, f"Scan must not have failed; got: {failed}"
+        assert finished == [str(out)], f"finished signal wrong: {finished}"
+
+        # Log surfaces the corrupt file with the synthetic exception type.
+        assert any("ImageDecodeError" in m for m in progress), \
+            f"progress should flag corrupt file as ImageDecodeError: {progress!r}"
+        assert any("bad_truncated.jpg" in m for m in progress), \
+            f"corrupt file path should appear in progress: {progress!r}"
+
+        # Manifest contains the good file, NOT the corrupt one. Query SQLite
+        # directly because ManifestRepository.load() filters to grouped rows.
+        with sqlite3.connect(out) as conn:
+            paths = [Path(p).name for (p,) in conn.execute(
+                "SELECT source_path FROM migration_manifest"
+            )]
+        assert "good.jpg" in paths, f"good file missing from manifest: {paths}"
+        assert "bad_truncated.jpg" not in paths, \
+            f"corrupt file should be excluded from manifest, but found in: {paths}"
