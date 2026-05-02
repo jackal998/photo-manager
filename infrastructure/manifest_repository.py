@@ -56,18 +56,16 @@ ORDER  BY
     group_id NULLS LAST,
     -- "Ref tier" first (KEEP / MOVE / UNDATED / unset all render as "Ref"
     -- in the tree per app/views/tree_model_builder._file_similarity), then
-    -- duplicates by similarity. Putting the reference / primary file at the
-    -- top of its group is what users mean when they say "winner first" (#55,
-    -- #76). Earlier we moved only KEEP to position 1, but real-world primaries
-    -- in dedup groups are almost always MOVE — so KEEP-only didn't move the
-    -- displayed Ref to the top.
+    -- duplicates in descending similarity: EXACT (100%) before
+    -- REVIEW_DUPLICATE (near-match). Top-down a group reads as "winner"
+    -- → strongest match → weaker matches (#55, #76).
     CASE action
         WHEN 'KEEP'             THEN 1
         WHEN 'MOVE'             THEN 1
         WHEN 'UNDATED'          THEN 1
         WHEN ''                 THEN 1
-        WHEN 'REVIEW_DUPLICATE' THEN 2
-        WHEN 'EXACT'            THEN 3
+        WHEN 'EXACT'            THEN 2
+        WHEN 'REVIEW_DUPLICATE' THEN 3
         ELSE 4
     END,
     id
@@ -195,9 +193,9 @@ class ManifestRepository:
         focuses on files that need review.
 
         Ordering within a group: any action that renders as "Ref" in the
-        tree (KEEP / MOVE / UNDATED / unset) → REVIEW_DUPLICATE → EXACT.
+        tree (KEEP / MOVE / UNDATED / unset) → EXACT → REVIEW_DUPLICATE.
         Reference / primary file sits at the top so users scanning a group
-        top-down see the "winner" first (#55, #76).
+        top-down see the "winner" first, then strongest match (#55, #76).
         """
         from collections import defaultdict
 

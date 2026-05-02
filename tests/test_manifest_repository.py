@@ -1010,7 +1010,8 @@ class TestInGroupRowOrdering:
     `_file_similarity` (in `app/views/tree_model_builder.py`) renders any
     action other than EXACT and REVIEW_DUPLICATE as "Ref". So the SQL
     ordering puts every "Ref tier" action (KEEP / MOVE / UNDATED / unset)
-    at position 1, ahead of REVIEW_DUPLICATE (2) and EXACT (3).
+    at position 1, then EXACT (2 — strongest match), then REVIEW_DUPLICATE
+    (3 — weaker), so a group reads top-down as Ref → 100% → near-matches.
     """
 
     def test_move_primary_appears_before_review_duplicate_and_exact(self, tmp_path):
@@ -1038,7 +1039,7 @@ class TestInGroupRowOrdering:
         actions = [r.action for r in records]
         assert actions[0] == "MOVE", \
             f"MOVE primary (rendered as Ref) should be at top of group; got order {actions}"
-        assert actions == ["MOVE", "REVIEW_DUPLICATE", "EXACT"]
+        assert actions == ["MOVE", "EXACT", "REVIEW_DUPLICATE"]
 
     def test_keep_primary_appears_before_review_duplicate_and_exact(self, tmp_path):
         """KEEP primary case (rarer in practice) — also a Ref tier action."""
@@ -1059,4 +1060,4 @@ class TestInGroupRowOrdering:
         actions = [r.action for r in records]
         assert actions[0] == "KEEP", \
             f"KEEP primary (rendered as Ref) should be at top of group; got order {actions}"
-        assert actions == ["KEEP", "REVIEW_DUPLICATE", "EXACT"]
+        assert actions == ["KEEP", "EXACT", "REVIEW_DUPLICATE"]
