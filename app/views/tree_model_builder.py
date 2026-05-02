@@ -27,14 +27,17 @@ from app.views.constants import (
 # MOVE / UNDATED / unset) shares position 1 so the reference / primary file
 # of a group always lands at the top, regardless of which classifier branch
 # assigned its action. This is what users mean by "winner first" (#55, #76).
-# REVIEW_DUPLICATE and EXACT follow, sorted by closeness to the reference.
+#
+# Duplicates follow in descending similarity: EXACT (100%) before
+# REVIEW_DUPLICATE (near-match), so a group reads top-down as
+# Ref → strongest match → weaker matches.
 _ACTION_SORT: dict[str, int] = {
     "KEEP": 1,
     "MOVE": 1,
     "UNDATED": 1,
     "": 1,
-    "REVIEW_DUPLICATE": 2,
-    "EXACT": 3,
+    "EXACT": 2,
+    "REVIEW_DUPLICATE": 3,
 }  # missing key → 1 (treated as Ref tier, matching `_file_similarity`)
 
 _DECISION_SORT: dict[str, int] = {
