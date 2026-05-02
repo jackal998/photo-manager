@@ -116,3 +116,140 @@ class TestBatchReadDates:
 
         result = batch_read_dates(paths, et, chunk_size=3)
         assert set(result.keys()) == set(paths)
+
+
+# ── ExiftoolProcess (mocked subprocess so tests run without exiftool) ────
+
+
+class TestExiftoolProcess:
+    """Cover ExiftoolProcess by mocking subprocess.Popen.
+
+    These tests exercise the lifecycle without requiring exiftool on PATH —
+    important because windows-latest CI runners don't have it installed,
+    while a local dev box typically does.
+    """
+
+    def _make_mock_proc(self, output_lines: list[str]) -> MagicMock:
+        """Build a mock subprocess with stdout/stdin behaviour that
+        ExiftoolProcess.execute() expects (one line per readline, ending
+        with the {ready} sentinel)."""
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdout = MagicMock()
+        # Append the {ready} sentinel that ExiftoolProcess looks for.
+        lines_iter = iter(output_lines + ["{ready}\n"])
+        proc.stdout.readline.side_effect = lambda: next(lines_iter, "")
+        return proc
+
+    def test_init_invokes_exiftool_in_stay_open_mode(self, monkeypatch):
+        """ExiftoolProcess.__init__ runs subprocess.Popen with -stay_open True."""
+        from scanner import exif
+
+        captured: list[list[str]] = []
+
+        def fake_popen(args, **kwargs):
+            captured.append(args)
+            return self._make_mock_proc([])
+
+        monkeypatch.setattr(exif.subprocess, "Popen", fake_popen)
+        exif.ExiftoolProcess()
+
+        assert len(captured) == 1
+        assert captured[0][:3] == ["exiftool", "-stay_open", "True"]
+
+    def test_execute_returns_lines_until_ready_sentinel(self, monkeypatch):
+        """execute() collects readline output until '{ready}' is hit."""
+        from scanner import exif
+
+        proc = self._make_mock_proc(["2024:06:15 10:30:00\n", "-\n", "-\n"])
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+
+        et = exif.ExiftoolProcess()
+        out = et.execute(["-DateTimeOriginal", "/fake/img.jpg"])
+
+        # stdin write was called with the args + -execute trailer
+        proc.stdin.write.assert_called()
+        write_arg = proc.stdin.write.call_args[0][0]
+        assert "-execute" in write_arg
+        assert "/fake/img.jpg" in write_arg
+
+        # Output is the joined readline lines (sans the {ready} sentinel)
+        assert "2024:06:15 10:30:00" in out
+        assert "{ready}" not in out
+
+    def test_execute_stops_on_empty_readline(self, monkeypatch):
+        """If readline returns '' (EOF), execute breaks out of the loop."""
+        from scanner import exif
+
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdout = MagicMock()
+        # Readline returns one line then EOF — no {ready} sentinel.
+        proc.stdout.readline.side_effect = ["line1\n", ""]
+
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+        et = exif.ExiftoolProcess()
+        out = et.execute(["-DateTimeOriginal"])
+        assert "line1" in out
+
+    def test_close_sends_stay_open_false(self, monkeypatch):
+        """close() writes '-stay_open\nFalse\n' and waits for the process."""
+        from scanner import exif
+
+        proc = self._make_mock_proc([])
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+        et = exif.ExiftoolProcess()
+
+        et.close()
+
+        # Last write should request stay_open=False
+        all_writes = [c[0][0] for c in proc.stdin.write.call_args_list]
+        assert any("-stay_open" in w and "False" in w for w in all_writes)
+        proc.wait.assert_called_once()
+
+    def test_close_kills_on_wait_failure(self, monkeypatch):
+        """If wait() raises (e.g. timeout), close() falls back to kill."""
+        from scanner import exif
+
+        proc = self._make_mock_proc([])
+        proc.wait.side_effect = Exception("synthetic wait failure")
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+        et = exif.ExiftoolProcess()
+
+        et.close()  # must not raise
+        proc.kill.assert_called_once()
+
+    def test_context_manager_calls_close_on_exit(self, monkeypatch):
+        from scanner import exif
+
+        proc = self._make_mock_proc([])
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+
+        with exif.ExiftoolProcess() as et:
+            assert isinstance(et, exif.ExiftoolProcess)
+
+        # close() writes the stay_open=False signal on exit
+        all_writes = [c[0][0] for c in proc.stdin.write.call_args_list]
+        assert any("-stay_open" in w and "False" in w for w in all_writes)
+
+
+# ── _read_chunk short-output guard ───────────────────────────────────────
+
+
+class TestReadChunkShortOutput:
+    """If exiftool returns fewer lines than expected (e.g. crashed mid-batch),
+    each path past the available output gets None (covers lines 115-116)."""
+
+    def test_short_output_yields_none_for_remaining_paths(self):
+        from scanner.exif import _read_chunk
+
+        paths = [Path(f"/fake/img{i}.jpg") for i in range(3)]
+        # Only enough output for the first path (3 lines).
+        et = MagicMock()
+        et.execute.return_value = "\n".join(["2024:06:15 10:30:00", "-", "-"])
+
+        result = _read_chunk(paths, et)
+        # The first path resolves; the remaining two get None (short output).
+        assert result[paths[0]] is not None
+        assert result[paths[1]] is None
+        assert result[paths[2]] is None
