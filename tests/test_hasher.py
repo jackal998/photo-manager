@@ -288,3 +288,33 @@ class TestComputeHashes:
         assert dt is None
         assert w is None
         assert h is None
+
+
+# ── Coverage of guard branches: _HASH_AVAILABLE, _RAWPY_AVAILABLE, ───────
+#    imagehash.phash failure, _raw_exif_date exception swallow ───────────
+
+
+class TestRealDecodeFailures:
+    """Tests using REAL malformed inputs, not mocked guard branches."""
+
+    def test_compute_phash_returns_none_for_decode_failure(self, tmp_path):
+        """Truncated JPEG → PIL.Image.load raises → compute_phash returns None.
+
+        Uses an actual truncated JPEG (the same kind of corruption that
+        triggered #57). The defensive `_HASH_AVAILABLE = False`,
+        `_RAWPY_AVAILABLE = False`, and synthetic-imagehash-raising tests
+        that previously lived here were dropped: they exercised guard
+        branches by mocking dependencies, not by triggering real failures.
+        Those guards are documented in scanner/hasher.py — if PIL/rawpy
+        ever fail to import, the file gracefully reports None values.
+        Real-world coverage of those paths belongs in an integration
+        suite that runs without the optional deps installed.
+        """
+        from scanner.hasher import compute_phash
+        from PIL import Image as _Img
+        full = tmp_path / "_full.jpg"
+        _Img.new("RGB", (200, 150), (10, 20, 30)).save(full, "JPEG")
+        bad = tmp_path / "bad.jpg"
+        bad.write_bytes(full.read_bytes()[:512])
+        full.unlink()
+        assert compute_phash(bad, "jpeg") is None

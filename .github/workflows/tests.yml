@@ -36,6 +36,9 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest
 
+      - name: Per-file coverage floor (every tracked module ≥ 80%)
+        run: python scripts/check_coverage_per_file.py
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4

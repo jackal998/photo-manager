@@ -46,7 +46,7 @@ max-line-length = 100
 additional-builtins = ["Data1", "Data2", "Data3", "Data4"]
 
 [tool.pytest.ini_options]
-addopts = "-q --cov=. --cov-report=term-missing --cov-config=pyproject.toml"
+addopts = "-q --cov=. --cov-report=term-missing --cov-report=json --cov-config=pyproject.toml"
 testpaths = ["tests"]
 
 [tool.coverage.run]
@@ -56,16 +56,19 @@ omit = [
   "tests/*",
   "scripts/*",
   ".claude/*",
-  # Top-level entry-point scripts and dev tooling
-  "main.py",
-  "scan.py",
-  "review.py",
-  "run_all_linters.py",
-  # Qt/UI glue and bootstrap — low test ROI
-  "infrastructure/image_service.py",
-  "infrastructure/logging.py",
-  "app/views/workers/scan_worker.py",
-  "app/views/media_utils.py",
+  # `omit` is reserved for files that genuinely cannot be exercised
+  # inside the layer-1 test process. Each entry below carries (a) why
+  # it isn't reachable from unit tests, and (b) where it IS covered
+  # (layer-2 integration / layer-3 qa-explore / manual). Anything NOT
+  # in this list must clear the per-file 70% floor enforced by
+  # scripts/check_coverage_per_file.py. See docs/testing.md for the
+  # full layer model.
+  "main.py",                          # argparse + sys.exit shell; covered by qa-explore launching the real app
+  "scan.py",                          # CLI shell over scanner.* (layer-1 tested); manual smoke before release
+  "review.py",                        # CLI shell over scanner/review logic; manual
+  "run_all_linters.py",               # dev tooling shell, not user-facing
+  "infrastructure/image_service.py",  # requires running QApplication for decode; covered by qa-explore preview pane (s05)
+  "infrastructure/logging.py",        # module-level loguru sink setup; no executable surface beyond import
 ]
 
 [tool.coverage.report]

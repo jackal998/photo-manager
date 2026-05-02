@@ -108,3 +108,86 @@ class TestGetExifDatetimeOriginal:
 
         result = get_exif_datetime_original(str(f))
         assert result == datetime(2025, 3, 21, 11, 22, 33)
+
+    def test_rawpy_fallback_for_dng_returns_datetime(self, tmp_path, monkeypatch):
+        """When PIL fails on a .dng path, the rawpy fallback path runs."""
+        import infrastructure.utils as utils_mod
+
+        def raise_pil(_):
+            raise OSError("simulated PIL failure")
+        monkeypatch.setattr(utils_mod.Image, "open", raise_pil)
+
+        if not utils_mod.RAWPY_AVAILABLE:
+            pytest.skip("rawpy not installed in this environment")
+
+        target = datetime(2022, 6, 12, 8, 30, 0)
+
+        class _StubMetadata:
+            timestamp = target
+            shooting_datetime = None
+
+        class _StubRaw:
+            metadata = _StubMetadata()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(utils_mod.rawpy, "imread", lambda _path: _StubRaw())
+
+        result = get_exif_datetime_original(str(tmp_path / "fake.dng"))
+        assert result == target
+
+    def test_rawpy_fallback_returns_none_when_metadata_absent(
+        self, tmp_path, monkeypatch
+    ):
+        """rawpy returns a raw with no useful metadata → fallback returns None."""
+        import infrastructure.utils as utils_mod
+
+        def raise_pil(_):
+            raise OSError("PIL failed")
+        monkeypatch.setattr(utils_mod.Image, "open", raise_pil)
+
+        if not utils_mod.RAWPY_AVAILABLE:
+            pytest.skip("rawpy not installed")
+
+        class _StubRaw:
+            metadata = None
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(utils_mod.rawpy, "imread", lambda _: _StubRaw())
+
+        assert get_exif_datetime_original(str(tmp_path / "x.dng")) is None
+
+    def test_rawpy_fallback_handles_epoch_timestamp(self, tmp_path, monkeypatch):
+        """When metadata.timestamp is a numeric epoch, fromtimestamp() converts."""
+        import infrastructure.utils as utils_mod
+
+        def raise_pil(_):
+            raise OSError("PIL failed")
+        monkeypatch.setattr(utils_mod.Image, "open", raise_pil)
+
+        if not utils_mod.RAWPY_AVAILABLE:
+            pytest.skip("rawpy not installed")
+
+        epoch = 1_700_000_000.0
+        expected = datetime.fromtimestamp(epoch)
+
+        class _StubMetadata:
+            timestamp = epoch
+            shooting_datetime = None
+
+        class _StubRaw:
+            metadata = _StubMetadata()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(utils_mod.rawpy, "imread", lambda _: _StubRaw())
+
+        result = get_exif_datetime_original(str(tmp_path / "x.dng"))
+        assert result == expected
