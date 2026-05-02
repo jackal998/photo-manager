@@ -1,23 +1,32 @@
-"""Per-file coverage floor — gate against any single tracked file slipping
-below threshold.
+"""Per-file coverage floor — gate against any tracked file slipping below
+threshold on the unit test layer.
 
-The pyproject ``[tool.coverage.report] fail_under`` setting is GLOBAL: a
-single module at 0% can be hidden by everything else being well-covered.
-This script reads ``coverage.json`` (produced by pytest's --cov-report=json)
-and asserts that EVERY tracked module clears ``PER_FILE_FLOOR``.
+Scope: layer-1 tests only (unit + mock-based, runs on CI). Higher layers
+(real-binary integration tests, full-GUI qa-explore) cover boundary
+behaviors mocks cannot reach. See docs/testing.md for the layer model
+and what each layer catches.
 
-There is intentionally no grandfather / allowlist for low-coverage files.
-The only escape is the ``omit`` list in pyproject's ``[tool.coverage.run]``
-section, which is reserved for files that genuinely cannot be exercised
-inside the test process (argparse + sys.exit shells, hardware-bound
-services, module-level Qt/loguru bootstrap). Adding to omit is a
-deliberate, reviewable change — not a per-file slip.
+Why 70% (not 80%)?
+  Per-file 80% pushes contributors to write tests that exercise defensive
+  `except: pass` branches and ImportError fallbacks by mocking the
+  dependencies. Those tests cover code without catching bugs — gaming
+  the metric is then the only honest way to clear CI. 70% leaves room for
+  each file's genuinely-defensive tail (ImportError guards, pathological-
+  input fallbacks) while still failing on any module whose primary logic
+  is untested.
+
+Why no per-file allowlist / grandfather list?
+  The only escape valve is the ``omit`` list in pyproject's
+  ``[tool.coverage.run]``. Each ``omit`` entry MUST justify itself with a
+  comment (why it can't run in tests) and ideally a pointer to where it
+  IS covered (integration suite, qa-explore scenario, manual). Adding a
+  path to omit is a deliberate, reviewable change — not a silent slip.
 
 Run after pytest:
     .venv/Scripts/python.exe -m pytest
     .venv/Scripts/python.exe scripts/check_coverage_per_file.py
 
-Or as a CI step in .github/workflows/tests.yml after the pytest step.
+CI runs this as a step right after pytest in tests.yml.
 """
 
 from __future__ import annotations
@@ -27,7 +36,7 @@ import sys
 from pathlib import Path
 
 
-PER_FILE_FLOOR = 80.0   # percent
+PER_FILE_FLOOR = 70.0   # percent — see module docstring for rationale
 ROOT = Path(__file__).resolve().parent.parent
 COVERAGE_JSON = ROOT / "coverage.json"
 

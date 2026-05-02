@@ -109,42 +109,6 @@ class TestGetExifDatetimeOriginal:
         result = get_exif_datetime_original(str(f))
         assert result == datetime(2025, 3, 21, 11, 22, 33)
 
-    def test_returns_none_when_pil_unavailable(self, tmp_path, monkeypatch):
-        """The `if Image is None: return None` early-return branch.
-
-        Simulates the PIL-not-installed environment without uninstalling
-        the package — patches `infrastructure.utils.Image` to None to take
-        the guard branch.
-        """
-        f = tmp_path / "any.jpg"
-        Image.new("RGB", (10, 10)).save(str(f), "JPEG")
-
-        import infrastructure.utils as utils_mod
-        monkeypatch.setattr(utils_mod, "Image", None)
-
-        assert get_exif_datetime_original(str(f)) is None
-
-    def test_returns_none_when_getexif_missing(self, tmp_path, monkeypatch):
-        """`if not exif: return None` — when getattr finds no getexif method.
-
-        Patches Image.open to return an object without a `getexif` attribute,
-        forcing `getattr(im, "getexif", None)` to be falsy.
-        """
-        import infrastructure.utils as utils_mod
-
-        class _StubImage:
-            def __enter__(self):
-                return self
-            def __exit__(self, *a):
-                return False
-
-        def fake_open(_path):
-            return _StubImage()
-
-        monkeypatch.setattr(utils_mod.Image, "open", fake_open)
-
-        assert get_exif_datetime_original(str(tmp_path / "doesnt-matter.jpg")) is None
-
     def test_rawpy_fallback_for_dng_returns_datetime(self, tmp_path, monkeypatch):
         """When PIL fails on a .dng path, the rawpy fallback path runs."""
         import infrastructure.utils as utils_mod

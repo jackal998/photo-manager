@@ -56,16 +56,19 @@ omit = [
   "tests/*",
   "scripts/*",
   ".claude/*",
-  # `omit` is reserved for files that genuinely cannot be exercised inside
-  # the test process — argparse + sys.exit shells, hardware-bound services,
-  # module-level Qt/loguru bootstrap. Anything testable belongs OUT of this
-  # list and must clear the per-file coverage floor.
-  "main.py",                           # argparse + sys.exit shell over already-tested code
-  "scan.py",                           # ditto
-  "review.py",                         # ditto
-  "run_all_linters.py",                # dev tooling shell
-  "infrastructure/image_service.py",   # depends on running QApplication for decoding
-  "infrastructure/logging.py",         # module-level loguru setup, no testable surface
+  # `omit` is reserved for files that genuinely cannot be exercised
+  # inside the layer-1 test process. Each entry below carries (a) why
+  # it isn't reachable from unit tests, and (b) where it IS covered
+  # (layer-2 integration / layer-3 qa-explore / manual). Anything NOT
+  # in this list must clear the per-file 70% floor enforced by
+  # scripts/check_coverage_per_file.py. See docs/testing.md for the
+  # full layer model.
+  "main.py",                          # argparse + sys.exit shell; covered by qa-explore launching the real app
+  "scan.py",                          # CLI shell over scanner.* (layer-1 tested); manual smoke before release
+  "review.py",                        # CLI shell over scanner/review logic; manual
+  "run_all_linters.py",               # dev tooling shell, not user-facing
+  "infrastructure/image_service.py",  # requires running QApplication for decode; covered by qa-explore preview pane (s05)
+  "infrastructure/logging.py",        # module-level loguru sink setup; no executable surface beyond import
 ]
 
 [tool.coverage.report]

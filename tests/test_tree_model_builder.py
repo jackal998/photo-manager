@@ -184,41 +184,6 @@ class TestBuildModel:
         assert "Group 42" in model.item(0, 0).text()
         assert model.item(0, 0).rowCount() == 0
 
-    def test_setdata_failure_does_not_crash(self, qapp, monkeypatch):
-        """If QStandardItem.setData raises (synthetic), every per-row
-        try/except wrapper catches it and the model is still constructed.
-
-        Exercises the defensive `except: pass` branches around setData calls
-        for both group rows and child rows, across all columns.
-        """
-        from datetime import datetime
-        from PySide6.QtGui import QStandardItem
-
-        original_setData = QStandardItem.setData
-
-        def raising_setData(self, value, role):
-            # Raise on SORT_ROLE assignments so the except branches run; let
-            # the default-role calls (used for visible text) still succeed
-            # so the rest of build_model can complete.
-            from app.views.constants import SORT_ROLE
-            if role == SORT_ROLE:
-                raise RuntimeError("synthetic setData failure")
-            return original_setData(self, value, role)
-
-        monkeypatch.setattr(QStandardItem, "setData", raising_setData)
-
-        rec = _rec(
-            file_path="/p/a.jpg",
-            shot_date=datetime(2024, 5, 1, 12, 0, 0),
-            creation_date=datetime(2024, 5, 1, 11, 0, 0),
-            pixel_width=320, pixel_height=240,
-        )
-        # Must not raise; every setData(SORT_ROLE) inside try/except is
-        # silently swallowed.
-        model, _ = build_model([_group([rec])])
-        assert model.rowCount() == 1
-        assert model.item(0, 0).rowCount() == 1
-
     def test_proxy_failure_returns_none_proxy(self, qapp, monkeypatch):
         """If QSortFilterProxyModel construction throws, build_model returns
         (model, None) — the caller is documented to handle proxy=None."""
