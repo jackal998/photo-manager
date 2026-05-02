@@ -218,7 +218,7 @@ class TestRemoveFromList:
         rec_a = _rec("/a.jpg", group=1)
         vm = MainVM(MagicMock())
         vm.groups = [PhotoGroup(group_number=1, items=[rec_a])]
-        # No manifest_path set — CSV workflow
+        # No manifest_path set — nothing to write to
         handler, _, _ = _make_handler(vm, manifest_path=None)
 
         handler.remove_items_from_list([{"type": "file", "path": "/a.jpg"}])

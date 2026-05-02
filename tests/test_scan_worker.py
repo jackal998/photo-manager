@@ -46,7 +46,7 @@ class TestScanWorkerSkipsBadFile:
 
         monkeypatch.setattr(_hasher, "compute_hashes", fake_compute)
 
-        out = tmp_path / "manifest.csv"
+        out = tmp_path / "manifest.sqlite"
         worker = ScanWorker(
             sources={"src": str(tmp_path)},
             output_path=str(out),

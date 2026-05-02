@@ -383,52 +383,6 @@ class MainWindow(QMainWindow):
         """
         self._preview.on_image_loaded(token, path, image)
 
-    # PRESERVED: Close event handler
-
-    def closeEvent(self, event) -> None:
-        """Handle application close event to prompt for source file update.
-
-        Args:
-            event: Close event
-        """
-        try:
-            # Check if there are any changes that might need saving
-            source_path = self._vm.get_source_csv_path()
-            if source_path and self._vm.groups:
-                # Ask user if they want to update the source file
-                reply = QMessageBox.question(
-                    self,
-                    "Update Source File",
-                    f"Do you want to update the source CSV file with the current list?\n\n{source_path}",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                    QMessageBox.No,
-                )
-
-                if reply == QMessageBox.Yes:
-                    try:
-                        # Use the same export path used by the menu export (with dialogs)
-                        self.file_operations.export_csv_to_path(source_path)
-                        logger.info("Source file updated on exit: {}", source_path)
-                    except Exception as ex:
-                        logger.error("Failed to update source file on exit: {}", ex)
-                        QMessageBox.warning(
-                            self, "Update Failed", f"Failed to update source file:\n{str(ex)}"
-                        )
-                        event.ignore()
-                        return
-                elif reply == QMessageBox.Cancel:
-                    event.ignore()
-                    return
-                # If No, continue with closing without saving
-
-            # Accept the close event
-            event.accept()
-
-        except Exception as ex:
-            logger.error("Close event handler failed: {}", ex)
-            # In case of error, just accept the close event
-            event.accept()
-
     # Private methods
 
     def _remove_from_list_toolbar(self) -> None:
