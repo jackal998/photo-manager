@@ -404,6 +404,24 @@ def close_and_load_manifest(dlg: UIAWrapper) -> None:
     time.sleep(1.0)
 
 
+def _find_filename_edit(native_dlg: UIAWrapper) -> UIAWrapper:
+    """Find the filename Edit in a Windows native Open/Save dialog.
+
+    Returns the only Edit nested inside a ComboBox descendant. The native
+    dialog has two ComboBoxes: filename (with editable Edit) and "Save as
+    type:" / "Files of type:" (no Edit). Picking by structure makes the
+    lookup locale-independent — works regardless of OS display language.
+    """
+    for combo in native_dlg.descendants(control_type="ComboBox"):
+        try:
+            edits = combo.descendants(control_type="Edit")
+            if edits:
+                return edits[0]
+        except Exception:
+            continue
+    raise RuntimeError("filename Edit (ComboBox > Edit) not found in native dialog")
+
+
 def save_manifest_via_native_dialog(
     pid: int, target_path: str, dialog_timeout: float = 10
 ) -> None:
@@ -414,9 +432,8 @@ def save_manifest_via_native_dialog(
        (so IMEs like bopomofo can't intercept) and bypasses the
        locale-specific ComboBox label name.
     3. Press Enter to invoke Save.
-    4. Wait for the result QMessageBox (success "Save Manifest" or
-       failure "Save Manifest Error") and dismiss it with Enter.
-       Raises if the result was the error dialog.
+    4. Wait briefly for "Save Manifest Error" critical dialog. Success
+       returns silently — caller verifies via status bar / file existence.
     """
     from pywinauto.keyboard import send_keys
 
@@ -425,21 +442,7 @@ def save_manifest_via_native_dialog(
     _focus(save_dlg)
     time.sleep(0.5)
 
-    # Find the filename Edit: the only Edit nested inside a ComboBox in the
-    # native Save dialog. (The other ComboBox is "Save as type:", which has
-    # no editable Edit descendant.) Locale-independent.
-    filename_edit = None
-    for combo in save_dlg.descendants(control_type="ComboBox"):
-        try:
-            edits = combo.descendants(control_type="Edit")
-            if edits:
-                filename_edit = edits[0]
-                break
-        except Exception:
-            continue
-    if filename_edit is None:
-        raise RuntimeError("filename Edit (ComboBox > Edit) not found in Save dialog")
-
+    filename_edit = _find_filename_edit(save_dlg)
     # Set value via UIA's ValuePattern — bypasses keyboard, focus, and IME.
     # Avoids both IME interception (bopomofo, etc.) and the locale-specific
     # name of the filename ComboBox label.
@@ -480,6 +483,77 @@ def save_manifest_via_native_dialog(
     send_keys("{ENTER}")
     time.sleep(0.3)
     raise RuntimeError("Save dialog reported an error — see error_text above")
+
+
+def open_manifest_via_native_dialog(
+    pid: int, target_path: str, dialog_timeout: float = 10
+) -> str:
+    """Drive the native QFileDialog opened by File > Open Manifest….
+
+    Mirrors save_manifest_via_native_dialog: drive filename via UIA's
+    ValuePattern (bypasses IME and locale label drift), press Enter to
+    accept. The manifest load is async (ManifestLoadWorker); this helper
+    polls actively for the result so the caller doesn't have to race the
+    3000ms default status-bar timeout.
+
+    Returns the status bar text observed at success ("Opened manifest: …")
+    so the caller can assert on it without re-polling. Raises RuntimeError
+    if the load failed (Open Manifest Error dialog appeared) or if neither
+    a success-status nor an error-dialog appeared within the grace window.
+    """
+    from pywinauto.keyboard import send_keys
+
+    open_hwnd = wait_for_dialog(pid, "Open Manifest", timeout=dialog_timeout)
+    open_dlg = connect_by_handle(open_hwnd)
+    _focus(open_dlg)
+    time.sleep(0.5)
+
+    filename_edit = _find_filename_edit(open_dlg)
+    filename_edit.iface_value.SetValue(str(target_path))
+    time.sleep(0.2)
+    send_keys("{ENTER}")
+
+    # Poll for either a success status-bar transition or an error dialog.
+    # Active polling avoids the race where the worker's 3000ms-timeout
+    # status message expires before the caller gets a chance to read it.
+    grace = min(10.0, dialog_timeout)
+    deadline = time.time() + grace
+    last_status = ""
+    while time.time() < deadline:
+        # Error window?
+        for hwnd, _cls, t in list_process_windows(pid):
+            if t == "Open Manifest Error":
+                error_dlg = connect_by_handle(hwnd)
+                for label in error_dlg.descendants(control_type="Text"):
+                    try:
+                        txt = (label.window_text() or "").strip()
+                        if txt:
+                            print(f"  error_text: {txt}", flush=True)
+                    except Exception:
+                        continue
+                _focus(error_dlg)
+                time.sleep(0.2)
+                send_keys("{ENTER}")
+                time.sleep(0.3)
+                raise RuntimeError(
+                    "Open Manifest dialog reported an error — see error_text above"
+                )
+        # Status bar settled to success?
+        try:
+            main_app = Application(backend="uia").connect(
+                title_re=WINDOW_TITLE_RE, timeout=0.5
+            )
+            main_win = main_app.top_window()
+            last_status = read_status_bar_text(main_win)
+            if "Opened manifest:" in last_status:
+                return last_status
+        except Exception:
+            pass
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"open manifest did not complete within {grace}s; "
+        f"last_status={last_status!r}"
+    )
 
 
 def open_execute_action_dialog(win: UIAWrapper) -> tuple[UIAWrapper, int]:

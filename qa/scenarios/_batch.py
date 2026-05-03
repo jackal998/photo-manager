@@ -38,6 +38,7 @@ ALL_SCENARIOS = [
     "s13_execute_action",
     "s14_action_by_regex",
     "s15_context_menu",
+    "s16_open_manifest",
 ]
 
 
