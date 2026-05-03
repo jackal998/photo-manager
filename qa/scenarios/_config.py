@@ -27,6 +27,7 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     "s10_multi_source":    ["qa/sandbox/multi-source-a", "qa/sandbox/multi-source-b"],
     "s11_video_live":      ["qa/sandbox/videos", "qa/sandbox/live-photo"],
     "s12_save_manifest":   ["qa/sandbox/near-duplicates"],
+    "s13_execute_action":  ["qa/sandbox/_disposable/s13_source"],
 }
 
 
