@@ -35,6 +35,7 @@ ALL_SCENARIOS = [
     "s10_multi_source",
     "s11_video_live",
     "s12_save_manifest",
+    "s13_execute_action",
 ]
 
 

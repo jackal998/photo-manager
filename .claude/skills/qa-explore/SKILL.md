@@ -99,7 +99,7 @@ If everything is already populated, skip the regen and move on.
 ## Phase 3 — Plan
 
 **Default behavior — invoked with no additional prompt:** run **all
-12 scenarios** in batch via `qa.scenarios._batch`. Don't print the
+13 scenarios** in batch via `qa.scenarios._batch`. Don't print the
 menu, don't ask which to run. Get one `yes batch` approval up front
 (per the gate rule below) and proceed. The full batch typically
 finishes in ~30–60 seconds with the focus fix in `_uia.py`.
@@ -515,6 +515,7 @@ running.
 | 10 | Multi-source priority + dedup | `qa.scenarios.s10_multi_source` | ✓ ready |
 | 11 | Video + Live Photo | `qa.scenarios.s11_video_live` | ✓ ready |
 | 12 | Save Manifest Decisions | `qa.scenarios.s12_save_manifest` | ✓ ready |
+| 13 | Execute Action (destructive — sends to recycle bin) | `qa.scenarios.s13_execute_action` | ✓ ready |
 
 Source-folder configuration is per-scenario. Before launching the
 app, write the right `qa/settings.json` by running:
@@ -537,7 +538,7 @@ output.
 in one go, use `qa.scenarios._batch`:
 
 ```
-.venv/Scripts/python.exe -m qa.scenarios._batch              # all 12 (s01–s12)
+.venv/Scripts/python.exe -m qa.scenarios._batch              # all 13 (s01–s13)
 .venv/Scripts/python.exe -m qa.scenarios._batch s04_corrupted s09_walker_exclusions
 ```
 

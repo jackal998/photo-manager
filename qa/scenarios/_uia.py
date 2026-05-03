@@ -62,6 +62,17 @@ SCAN_AID_SOURCE_TABLE = (
     "QApplication.ScanDialog.QSplitter._SourceListWidget.QTableWidget"
 )
 
+# Execute Action dialog
+EXECUTE_DIALOG_TITLE = "Execute Actions — Review"
+EXECUTE_BTN = "Execute"
+EXECUTE_BTN_SELECT_BY_REGEX = "Select by Field/Regex…"
+EXECUTE_CONFIRM_TITLE = "All Files Will Be Deleted"
+
+# Set Action by Field/Regex dialog (inner — opened from Execute dialog)
+ACTION_DIALOG_TITLE = "Set Action by Field/Regex"
+ACTION_DIALOG_BTN_APPLY = "Apply"
+ACTION_DIALOG_BTN_CLOSE = "Close"
+
 
 # ---------------------------------------------------------------------------
 # Win32 plumbing — needed because Qt menu popups are top-level windows but
@@ -474,6 +485,127 @@ def save_manifest_via_native_dialog(
     time.sleep(0.3)
     if matched_title == "Save Manifest Error":
         raise RuntimeError("Save dialog reported an error — see error_text above")
+
+
+def open_execute_action_dialog(win: UIAWrapper) -> tuple[UIAWrapper, int]:
+    """Open Action > Execute Action… and return (dialog_wrapper, dialog_hwnd)."""
+    pid = win.process_id()
+    menu_path(win, MENU_ACTION, ACTION_EXECUTE)
+    hwnd = wait_for_dialog(pid, EXECUTE_DIALOG_TITLE, timeout=5)
+    return connect_by_handle(hwnd), hwnd
+
+
+def mark_all_via_regex(
+    execute_dlg: UIAWrapper,
+    field: str,
+    regex: str,
+    action_label: str,
+    dialog_timeout: float = 5,
+) -> None:
+    """Open the inner Set Action by Field/Regex dialog from inside the
+    Execute Action dialog, set field+regex+action, click Apply, then Close.
+
+    `field` is the visible text in the Field combo (e.g. "File Name").
+    `regex` is set via UIA's ValuePattern to bypass IME (see save-manifest
+    helper for the same rationale).
+    `action_label` is the visible label in the Set Action combo
+    (e.g. "delete" — see SETTABLE_DECISIONS in app/views/constants.py).
+    """
+    pid = execute_dlg.process_id()
+    select_btn = execute_dlg.child_window(
+        title=EXECUTE_BTN_SELECT_BY_REGEX, control_type="Button"
+    )
+    _focus(execute_dlg)
+    select_btn.click_input()
+
+    action_hwnd = wait_for_dialog(pid, ACTION_DIALOG_TITLE, timeout=dialog_timeout)
+    action_dlg = connect_by_handle(action_hwnd)
+    _focus(action_dlg)
+    time.sleep(0.3)
+
+    # Two ComboBoxes in this dialog: Field combo (top) and Set Action combo
+    # (bottom). Order is deterministic — find them by position (top-most first).
+    combos = sorted(
+        action_dlg.descendants(control_type="ComboBox"),
+        key=lambda c: c.rectangle().top,
+    )
+    if len(combos) < 2:
+        raise RuntimeError(
+            f"action dialog: expected >= 2 ComboBoxes, found {len(combos)}"
+        )
+    field_combo, action_combo = combos[0], combos[1]
+    field_combo.select(field)
+    time.sleep(0.1)
+
+    # Regex line edit — set via ValuePattern to bypass IME interception.
+    edits = action_dlg.descendants(control_type="Edit")
+    if not edits:
+        raise RuntimeError("action dialog: no Edit control found for regex")
+    # Filter out Edits inside ComboBoxes (those belong to the combos, not
+    # the standalone QLineEdit).
+    standalone_edits = []
+    for e in edits:
+        try:
+            parent = e.parent()
+            if parent.element_info.control_type != "ComboBox":
+                standalone_edits.append(e)
+        except Exception:
+            standalone_edits.append(e)
+    if not standalone_edits:
+        raise RuntimeError("action dialog: no standalone Edit (regex line) found")
+    regex_edit = standalone_edits[0]
+    regex_edit.iface_value.SetValue(regex)
+    time.sleep(0.1)
+
+    action_combo.select(action_label)
+    time.sleep(0.1)
+
+    apply_btn = action_dlg.child_window(
+        title=ACTION_DIALOG_BTN_APPLY, control_type="Button"
+    )
+    apply_btn.click_input()
+    time.sleep(0.3)
+
+    close_btn = action_dlg.child_window(
+        title=ACTION_DIALOG_BTN_CLOSE, control_type="Button"
+    )
+    close_btn.click_input()
+    time.sleep(0.3)
+
+
+def execute_and_confirm(
+    execute_dlg: UIAWrapper, dialog_timeout: float = 10
+) -> None:
+    """Click Execute on the Execute Action dialog, then Yes on the
+    'All Files Will Be Deleted' confirmation QMessageBox.
+
+    Returns when the Execute Action dialog has accepted (closed) — that's
+    the signal that send2trash + mark_executed have completed.
+    """
+    pid = execute_dlg.process_id()
+    execute_btn = execute_dlg.child_window(title=EXECUTE_BTN, control_type="Button")
+    _focus(execute_dlg)
+    execute_btn.click_input()
+
+    confirm_hwnd = wait_for_dialog(pid, EXECUTE_CONFIRM_TITLE, timeout=dialog_timeout)
+    confirm_dlg = connect_by_handle(confirm_hwnd)
+    _focus(confirm_dlg)
+    time.sleep(0.2)
+    yes_btn = confirm_dlg.child_window(title="Yes", control_type="Button")
+    yes_btn.click_input()
+    time.sleep(0.3)
+
+    # Wait for the Execute dialog to close (signals execution completed).
+    deadline = time.time() + dialog_timeout
+    while time.time() < deadline:
+        windows = [t for _, _, t in list_process_windows(pid)]
+        if EXECUTE_DIALOG_TITLE not in windows:
+            return
+        time.sleep(0.2)
+    raise TimeoutError(
+        f"Execute Action dialog did not close within {dialog_timeout}s after "
+        f"confirming the deletion prompt"
+    )
 
 
 def cancel_scan_dialog(dlg: UIAWrapper) -> None:
