@@ -29,6 +29,7 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     "s12_save_manifest":   ["qa/sandbox/near-duplicates"],
     "s13_execute_action":  ["qa/sandbox/_disposable/s13_source"],
     "s14_action_by_regex": ["qa/sandbox/near-duplicates"],
+    "s15_context_menu":    ["qa/sandbox/near-duplicates"],
 }
 
 

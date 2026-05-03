@@ -665,3 +665,159 @@ def cancel_scan_dialog(dlg: UIAWrapper) -> None:
                 return
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Context-menu helpers (s15) — right-click on result-tree rows, navigate
+# cascading popup menus.
+# ---------------------------------------------------------------------------
+
+# Context-menu labels — set by ContextMenuHandler from
+# app/views/constants.SETTABLE_DECISIONS. English-only; no Qt translations.
+CTX_SET_ACTION = "Set Action"
+CTX_DELETE = "delete"
+CTX_KEEP = "keep (remove action)"
+
+_VK_CONTROL = 0x11
+_KEYEVENTF_KEYUP = 0x0002
+
+
+def _key_down(vk: int) -> None:
+    _user32.keybd_event(vk, 0, 0, 0)
+
+
+def _key_up(vk: int) -> None:
+    _user32.keybd_event(vk, 0, _KEYEVENTF_KEYUP, 0)
+
+
+def _list_popup_hwnds(pid: int) -> list[int]:
+    """Return all popup-class top-level windows owned by pid."""
+    return [hwnd for hwnd, cls, _ in list_process_windows(pid) if "Popup" in cls]
+
+
+def _row_anchor(win: UIAWrapper, basename: str, y_min: int = 600) -> tuple[int, int]:
+    """Return screen (cx, cy) for the file row whose cell text equals `basename`.
+
+    Walks the same TreeItem set as `read_result_rows`. Picks the cell whose
+    visible text exactly matches `basename` (the File Name column) and
+    returns a point inside its row, suitable for click_input / right_click.
+    """
+    items = win.descendants(control_type="TreeItem")
+    for it in items:
+        try:
+            txt = (it.window_text() or "").strip()
+            r = it.rectangle()
+            if txt == basename and r.top >= y_min:
+                cx = r.left + max(20, (r.right - r.left) // 2)
+                cy = r.top + (r.bottom - r.top) // 2
+                return cx, cy
+        except Exception:
+            continue
+    raise RuntimeError(
+        f"row with basename {basename!r} not found at y >= {y_min}"
+    )
+
+
+def left_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> None:
+    """Left-click the file row whose File Name cell equals `basename`.
+
+    Used to seed selection before right-click — QAbstractItemView's default
+    selectionCommand returns NoUpdate for right-click, so without a prior
+    left-click `customContextMenuRequested` fires with no selection and the
+    handler bails out (see context_menu._on_context_menu).
+    """
+    import pywinauto.mouse
+
+    cx, cy = _row_anchor(win, basename, y_min=y_min)
+    _focus(win)
+    pywinauto.mouse.click(button="left", coords=(cx, cy))
+    time.sleep(0.2)
+
+
+def ctrl_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> None:
+    """Ctrl+click the file row to extend selection (ExtendedSelection mode).
+
+    Uses Win32 keybd_event for the modifier so it bypasses any IME
+    interception on Latin keystrokes (per the bopomofo rule in CLAUDE.md;
+    modifier keys aren't intercepted but we use the same primitive
+    everywhere for consistency).
+    """
+    import pywinauto.mouse
+
+    cx, cy = _row_anchor(win, basename, y_min=y_min)
+    _focus(win)
+    _key_down(_VK_CONTROL)
+    try:
+        pywinauto.mouse.click(button="left", coords=(cx, cy))
+    finally:
+        _key_up(_VK_CONTROL)
+    time.sleep(0.2)
+
+
+def right_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> None:
+    """Right-click the file row whose File Name cell equals `basename`.
+
+    Caller is responsible for any prior selection setup (left-click or
+    ctrl-click). After this call, the QMenu popup is open and ready for
+    `select_popup_menu_path`.
+    """
+    import pywinauto.mouse
+
+    cx, cy = _row_anchor(win, basename, y_min=y_min)
+    _focus(win)
+    pywinauto.mouse.right_click(coords=(cx, cy))
+    time.sleep(0.4)
+
+
+def select_popup_menu_path(
+    pid: int, labels: list[str], timeout: float = 5
+) -> None:
+    """Navigate a chain of popup menus by accessible-name labels.
+
+    Expects a Qt popup to already be open (e.g. after `right_click_tree_row`).
+    Each label is clicked in succession; between non-leaf clicks, waits for
+    a NEW popup window (different hwnd than any previously seen) to appear,
+    then descends into it. Submenus are top-level Win32 popup windows in
+    Qt, not nested QWidgets, so we navigate by hwnd.
+    """
+    if not labels:
+        raise ValueError("labels must be non-empty")
+
+    seen: set[int] = set()
+    deadline = time.time() + timeout
+
+    cur_hwnd: int | None = None
+    while time.time() < deadline:
+        popups = _list_popup_hwnds(pid)
+        if popups:
+            cur_hwnd = popups[0]
+            break
+        time.sleep(0.1)
+    if cur_hwnd is None:
+        raise TimeoutError("no popup window appeared")
+    seen.add(cur_hwnd)
+
+    for i, label in enumerate(labels):
+        popup = connect_by_handle(cur_hwnd)
+        popup.child_window(title=label, control_type="MenuItem").click_input()
+        time.sleep(0.3)
+        if i == len(labels) - 1:
+            return  # leaf clicked; menu auto-dismisses
+
+        # Wait for the submenu (a fresh popup hwnd not in `seen`).
+        sub_hwnd: int | None = None
+        sub_deadline = time.time() + 3
+        while time.time() < sub_deadline:
+            for hwnd in _list_popup_hwnds(pid):
+                if hwnd not in seen:
+                    sub_hwnd = hwnd
+                    break
+            if sub_hwnd is not None:
+                break
+            time.sleep(0.1)
+        if sub_hwnd is None:
+            raise TimeoutError(
+                f"submenu for {label!r} did not appear within 3s"
+            )
+        seen.add(sub_hwnd)
+        cur_hwnd = sub_hwnd
