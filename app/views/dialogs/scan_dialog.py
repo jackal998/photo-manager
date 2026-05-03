@@ -469,15 +469,17 @@ class ScanDialog(QDialog):
 
     def _browse_output(self) -> None:
         """Open a save-file dialog to choose the manifest output path."""
+        from app.views.handlers.file_operations import MANIFEST_FILE_FILTER
+
         start = self._output_field.text() or "migration_manifest.sqlite"
         chosen, _ = QFileDialog.getSaveFileName(
             self,
             "Save Manifest As",
             start,
-            "SQLite manifest (*.sqlite);;All files (*)",
+            MANIFEST_FILE_FILTER,
         )
         if chosen:
-            if not chosen.lower().endswith(".sqlite"):
+            if not chosen.lower().endswith((".sqlite", ".db")):
                 chosen += ".sqlite"
             self._output_field.setText(chosen)
 

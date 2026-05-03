@@ -8,6 +8,14 @@ from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 from loguru import logger
 
+from app.views.components.status_messages import report_count
+
+# Single source of truth for the QFileDialog filter string used wherever
+# the app opens or saves a manifest. Keeping this centralized avoids the
+# scan-dialog vs. save-decisions mismatch that previously rejected .db
+# in one place and accepted it in the other.
+MANIFEST_FILE_FILTER = "SQLite Files (*.sqlite *.db);;All Files (*)"
+
 # Maps SelectDialog field names → PhotoRecord attribute names.
 _FIELD_TO_ATTR: dict[str, str] = {
     "File Name":     "file_path",      # basename extracted in _get_record_field
@@ -82,7 +90,7 @@ class FileOperationsHandler:
     def import_manifest(self) -> None:
         """Open a migration_manifest.sqlite in a background worker (non-blocking)."""
         path, _ = QFileDialog.getOpenFileName(
-            self.parent, "Open Manifest", "", "SQLite Files (*.sqlite *.db);;All Files (*)"
+            self.parent, "Open Manifest", "", MANIFEST_FILE_FILTER
         )
         if not path:
             return
@@ -126,15 +134,10 @@ class FileOperationsHandler:
         self._set_manifest_actions_enabled(False)
 
     def _set_manifest_actions_enabled(self, enabled: bool) -> None:
-        _manifest_actions = (
-            "save_manifest", "execute_action",
-            "set_action_hl_delete", "set_action_hl_keep",
-        )
-        for act in _manifest_actions:
-            try:
-                self.parent.menu_controller.enable_action(act, enabled)
-            except AttributeError:
-                pass
+        try:
+            self.parent.menu_controller.set_manifest_actions(enabled)
+        except AttributeError:
+            pass
 
     def save_manifest_decisions(self) -> None:
         """Export current decisions to a (possibly new) manifest file."""
@@ -151,7 +154,7 @@ class FileOperationsHandler:
             self.parent,
             "Save Manifest Decisions",
             manifest_path,
-            "SQLite Files (*.sqlite *.db);;All Files (*)",
+            MANIFEST_FILE_FILTER,
         )
         if not save_path:
             return
@@ -175,10 +178,10 @@ class FileOperationsHandler:
             updated = ManifestRepository().save(save_path, self.vm.groups)
             self._manifest_path = save_path
             logger.info("Manifest decisions saved to {}: {} rows updated", save_path, updated)
-            QMessageBox.information(
-                self.parent, "Save Manifest", f"Saved decisions for {updated} file(s)."
-            )
-            self.status_reporter.show_status(f"Manifest saved ({updated} decisions written)")
+            # Dropped the redundant QMessageBox here — the status-bar write below
+            # already reports success and modal noise broke the "all completed
+            # actions report via status bar only" convention.
+            report_count(self.status_reporter, "Saved", updated, "decision")
 
         except Exception as ex:
             logger.exception("Save manifest failed: {}", ex)
@@ -210,7 +213,9 @@ class FileOperationsHandler:
 
                 self.ui_updater.refresh_tree(self.vm.groups)
                 self._sync_removed_to_db(paths_for_db)
-                self.status_reporter.show_status("Removed items from list")
+                report_count(
+                    self.status_reporter, "Removed", len(highlighted_items), "item from list"
+                )
                 return
 
             QMessageBox.information(
@@ -221,7 +226,7 @@ class FileOperationsHandler:
 
         except Exception as e:
             logger.error("Remove from list via toolbar failed: {}", e)
-            QMessageBox.critical(self.parent, "Error", f"Remove from list failed: {str(e)}")
+            QMessageBox.critical(self.parent, "Remove from List Error", f"Remove from list failed: {str(e)}")
 
     def remove_items_from_list(self, items: list[dict]) -> None:
         """Remove multiple items (files and/or groups) from the list."""
@@ -255,11 +260,11 @@ class FileOperationsHandler:
             self._sync_removed_to_db(paths_for_db)
 
             total_removed = len(file_paths) + len(group_numbers)
-            self.status_reporter.show_status(f"Removed {total_removed} item(s) from list")
+            report_count(self.status_reporter, "Removed", total_removed, "item from list")
 
         except Exception as e:
             logger.error("Remove items from list failed: {}", e)
-            QMessageBox.critical(self.parent, "Error", f"Remove from list failed: {str(e)}")
+            QMessageBox.critical(self.parent, "Remove from List Error", f"Remove from list failed: {str(e)}")
 
     def _sync_removed_to_db(self, file_paths: list[str]) -> None:
         """Mark file_paths as removed in the manifest DB (manifest workflow only)."""
@@ -298,7 +303,7 @@ class FileOperationsHandler:
         """Set user_decision for tree-highlighted (activated) file rows."""
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
-            QMessageBox.information(self.parent, "Set Action", "No manifest loaded.")
+            QMessageBox.information(self.parent, "Set Action — No Manifest", "No manifest loaded.")
             return
         items: list[dict] = []
         provider = self.highlighted_items_provider
@@ -309,7 +314,7 @@ class FileOperationsHandler:
                 items = provider.get_selected_items()
         file_items = [it for it in items if it.get("type") == "file"]
         if not file_items:
-            QMessageBox.information(self.parent, "Set Action", "No activated files.")
+            QMessageBox.information(self.parent, "Set Action — No Selection", "No activated files.")
             return
         self.set_decision(file_items, new_decision)
 
@@ -325,7 +330,7 @@ class FileOperationsHandler:
 
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
-            QMessageBox.information(self.parent, "Set Action", "No manifest loaded.")
+            QMessageBox.information(self.parent, "Set Action — No Manifest", "No manifest loaded.")
             return
 
         try:
@@ -342,7 +347,7 @@ class FileOperationsHandler:
                     matching.append({"type": "file", "path": rec.file_path})
 
         if not matching:
-            QMessageBox.information(self.parent, "Set Action", "No files matched the pattern.")
+            QMessageBox.information(self.parent, "Set Action — No Match", "No files matched the pattern.")
             return
 
         self.set_decision(matching, new_decision)
@@ -360,4 +365,4 @@ class FileOperationsHandler:
                 self.vm.remove_deleted_and_prune(dlg.deleted_paths, prune_singles=False)
             self.ui_updater.refresh_tree(self.vm.groups)
             total = len(dlg.deleted_paths) + len(dlg.executed_paths)
-            self.status_reporter.show_status(f"Executed {total} action(s)")
+            report_count(self.status_reporter, "Executed", total, "action")

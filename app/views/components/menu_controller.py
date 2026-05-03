@@ -7,6 +7,16 @@ from collections.abc import Callable
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMainWindow, QMenuBar
 
+# Actions that are only meaningful with a manifest loaded. Both the
+# scan-then-load path (main_window) and the Open-Manifest path
+# (file_operations) flip these together so users see the same enabled set
+# regardless of how the manifest was acquired.
+MANIFEST_ACTIONS: tuple[str, ...] = (
+    "save_manifest",
+    "execute_action",
+    "remove_from_list",
+)
+
 
 class MenuController:
     """Manages main window menu creation and action connections."""
@@ -75,6 +85,11 @@ class MenuController:
         action = self.actions.get(name)
         if action:
             action.setEnabled(enabled)
+
+    def set_manifest_actions(self, enabled: bool) -> None:
+        """Flip every manifest-gated menu action to *enabled* in one call."""
+        for name in MANIFEST_ACTIONS:
+            self.enable_action(name, enabled)
 
     def get_all_actions(self) -> dict[str, QAction]:
         return self.actions.copy()

@@ -70,7 +70,7 @@ class DialogHandler:
         try:
             from app.views.dialogs.select_dialog import ActionDialog
         except Exception:
-            QMessageBox.critical(self.parent, "Set Action", "Action dialog not available.")
+            QMessageBox.critical(self.parent, "Set Action — Internal Error", "Action dialog not available.")
             return
 
         fields = [

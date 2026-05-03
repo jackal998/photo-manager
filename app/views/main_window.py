@@ -267,11 +267,10 @@ class MainWindow(QMainWindow):
             self.file_operations._manifest_path = manifest_path
             self.show_groups_summary(self._vm.groups)
             self.refresh_tree(self._vm.groups)
-            for action in ("save_manifest", "execute_action", "remove_from_list"):
-                try:
-                    self.menu_controller.enable_action(action, True)
-                except AttributeError:
-                    pass
+            try:
+                self.menu_controller.set_manifest_actions(True)
+            except AttributeError:
+                pass
             n = self._vm.group_count
             # Surface isolated files in the status bar so users whose scan
             # produced zero near-duplicate groups don't see an empty review
