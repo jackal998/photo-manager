@@ -10,16 +10,19 @@ The project's testing strategy has three layers (full detail in
 | Layer | What | Where it runs |
 |---|---|---|
 | 1 — Unit + mocks | `pytest` | CI + local |
-| 2 — Real binaries | `pytest -m integration` | Local only |
+| 2 — Real binaries (on-demand spot-tests) | `pytest -m integration` | Local only |
 | **3 — `/qa-explore`** (this) | full-GUI exploratory testing | Local only; CI possible per [#74](https://github.com/jackal998/photo-manager/issues/74) |
 
 Layer 1 verifies our parsers, dispatch, and pure logic against mocked
-boundaries. Layer 2 (when built — see #74's prerequisites) verifies the
-boundaries themselves. **Layer 3 is the only layer that exercises what
-a user actually does** — clicking menus, reading dialog text, watching
-state transitions. Bugs that only surface here (label drift, dead
-buttons, status bar regressions, dialog dismissal weirdness) are
-exactly what `pytest` cannot catch by construction.
+boundaries. Layer 2 is on-demand — added reactively as spot-tests when
+a specific boundary bug surfaces, not maintained as a proactive suite.
+**Layer 3 is the primary safety net for boundaries and user flows
+combined**: it exercises what a user actually does — clicking menus,
+reading dialog text, watching state transitions — AND drives the real
+`exiftool` / `send2trash` / `rawpy` boundaries on happy paths via real
+fixtures. Bugs that only surface here (label drift, dead buttons,
+status bar regressions, dialog dismissal weirdness) are exactly what
+`pytest` cannot catch by construction.
 
 ## What it is
 

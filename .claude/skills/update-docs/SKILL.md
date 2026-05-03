@@ -20,7 +20,9 @@ Activate this skill after implementing any non-trivial change to photo-manager s
 - After deprecating or deleting code
 - After **any change that shifts what each test layer covers**:
   - Adding or removing an entry in `[tool.coverage.run] omit`
-  - Adding a `tests/integration/` test (layer 2)
+  - Adding a `tests/integration/` test (layer 2 spot-add — record it
+    in `docs/testing.md` per-module table; layer 2 is on-demand, not
+    a maintained suite, so each addition is an event worth noting)
   - Adding or modifying a `qa/scenarios/sNN_*.py` driver (layer 3)
   - A module's layer-1 coverage changes by ≥5pp (e.g. lifted from 73 → 90)
 
