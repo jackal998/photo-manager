@@ -16,9 +16,9 @@ Drives the Open Manifest flow end-to-end, both happy and error paths:
     s16_corrupt.sqlite → File → Open Manifest… → drive to corrupt
     path → confirm "Open Manifest Error" critical dialog appears →
     confirm status bar reports "Open manifest failed" → confirm
-    manifest-gated menu items are now disabled (current observed
-    behavior — note it leaves the previously-loaded manifest's
-    actions disabled too; that's a follow-up UX bug, not s16's job).
+    manifest-gated menu items REMAIN ENABLED because the previously-
+    loaded manifest is still in memory (#108: failed loads must not
+    strand a prior valid manifest's actions disabled).
 
 Catches drift in: Open Manifest menu label / dialog title /
 ManifestLoadWorker signal chain (progress / finished / failed) /
@@ -129,17 +129,17 @@ def main() -> int:
         print("WARN: status bar did not echo 'Open manifest failed' (may have cleared on timeout)")
 
     print("step: invariant_actions_after_error")
-    # _on_manifest_failed disables manifest-gated actions. Documenting the
-    # current behavior — even though this leaves the previously-loaded
-    # manifest's actions disabled (a separate UX issue worth filing if you
-    # see the WARN below), capture it as the observed state so future drift
-    # surfaces.
+    # #108: a failed Open Manifest must not strand the previously-loaded
+    # manifest's actions disabled. The user opened a corrupt B while A was
+    # active; after dismissing the error they're back to reviewing A, so
+    # A's manifest-gated actions stay enabled.
     inv_actions_post = _invariants.assert_manifest_actions_consistent(
-        win, expected_enabled=False
+        win, expected_enabled=True
     )
     if not inv_actions_post:
-        print("WARN: manifest actions did NOT settle to disabled after failure "
-              "(unexpected — _on_manifest_failed should disable them)")
+        print("FAIL: prior manifest's actions were stranded disabled after a "
+              "failed Open Manifest (regression of #108)")
+        return 1
 
     print("scenario: s16_open_manifest DONE")
     return 0
