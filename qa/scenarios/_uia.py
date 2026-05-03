@@ -701,30 +701,57 @@ def _list_popup_hwnds(pid: int) -> list[int]:
     return [hwnd for hwnd, cls, _ in list_process_windows(pid) if "Popup" in cls]
 
 
-def _row_anchor(win: UIAWrapper, basename: str, y_min: int = 600) -> tuple[int, int]:
+def _result_tree(win: UIAWrapper) -> UIAWrapper:
+    """Return the main result QTreeView (the largest visible Tree control).
+
+    The main window has one TreeView showing scan results. Other Tree
+    controls only exist inside dialogs (e.g. ScanDialog's filesystem tree)
+    which should be closed by the time callers reach for a row anchor.
+    Picking the largest-area visible Tree is robust to that — even if a
+    transient dialog is open, the result tree still dominates.
+    """
+    candidates: list[tuple[int, UIAWrapper]] = []
+    for t in win.descendants(control_type="Tree"):
+        try:
+            if not t.is_visible():
+                continue
+            r = t.rectangle()
+            area = max(0, (r.right - r.left)) * max(0, (r.bottom - r.top))
+            candidates.append((area, t))
+        except Exception:
+            continue
+    if not candidates:
+        raise RuntimeError("no visible Tree control found in main window")
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    return candidates[0][1]
+
+
+def _row_anchor(win: UIAWrapper, basename: str) -> tuple[int, int]:
     """Return screen (cx, cy) for the file row whose cell text equals `basename`.
 
-    Walks the same TreeItem set as `read_result_rows`. Picks the cell whose
-    visible text exactly matches `basename` (the File Name column) and
-    returns a point inside its row, suitable for click_input / right_click.
+    Scopes the search to the result tree's own descendants. Robust to
+    layout shifts (Ref-tier rows moving to top of group post-#78, header
+    height changes, DPI scaling) — no hardcoded screen-Y threshold.
     """
-    items = win.descendants(control_type="TreeItem")
+    tree = _result_tree(win)
+    items = tree.descendants(control_type="TreeItem")
     for it in items:
         try:
             txt = (it.window_text() or "").strip()
-            r = it.rectangle()
-            if txt == basename and r.top >= y_min:
+            if txt == basename:
+                r = it.rectangle()
                 cx = r.left + max(20, (r.right - r.left) // 2)
                 cy = r.top + (r.bottom - r.top) // 2
                 return cx, cy
         except Exception:
             continue
     raise RuntimeError(
-        f"row with basename {basename!r} not found at y >= {y_min}"
+        f"row with basename {basename!r} not found in result tree "
+        f"(scanned {len(items)} TreeItem(s))"
     )
 
 
-def left_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> None:
+def left_click_tree_row(win: UIAWrapper, basename: str) -> None:
     """Left-click the file row whose File Name cell equals `basename`.
 
     Used to seed selection before right-click — QAbstractItemView's default
@@ -734,13 +761,13 @@ def left_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> Non
     """
     import pywinauto.mouse
 
-    cx, cy = _row_anchor(win, basename, y_min=y_min)
+    cx, cy = _row_anchor(win, basename)
     _focus(win)
     pywinauto.mouse.click(button="left", coords=(cx, cy))
     time.sleep(0.2)
 
 
-def ctrl_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> None:
+def ctrl_click_tree_row(win: UIAWrapper, basename: str) -> None:
     """Ctrl+click the file row to extend selection (ExtendedSelection mode).
 
     Uses Win32 keybd_event for the modifier so it bypasses any IME
@@ -750,7 +777,7 @@ def ctrl_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> Non
     """
     import pywinauto.mouse
 
-    cx, cy = _row_anchor(win, basename, y_min=y_min)
+    cx, cy = _row_anchor(win, basename)
     _focus(win)
     _key_down(_VK_CONTROL)
     try:
@@ -760,7 +787,7 @@ def ctrl_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> Non
     time.sleep(0.2)
 
 
-def right_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> None:
+def right_click_tree_row(win: UIAWrapper, basename: str) -> None:
     """Right-click the file row whose File Name cell equals `basename`.
 
     Caller is responsible for any prior selection setup (left-click or
@@ -769,7 +796,7 @@ def right_click_tree_row(win: UIAWrapper, basename: str, y_min: int = 600) -> No
     """
     import pywinauto.mouse
 
-    cx, cy = _row_anchor(win, basename, y_min=y_min)
+    cx, cy = _row_anchor(win, basename)
     _focus(win)
     pywinauto.mouse.right_click(coords=(cx, cy))
     time.sleep(0.4)
