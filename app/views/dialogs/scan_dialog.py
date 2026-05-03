@@ -619,7 +619,15 @@ class ScanDialog(QDialog):
         self.accept()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Stop any running scan worker before closing."""
+        """Stop any running scan worker before closing.
+
+        Kept (rather than removed per #97's audit) because the override has a
+        concrete job: a user clicking the title-bar X mid-scan must trigger
+        worker.requestInterruption() so the QThread shuts down cleanly. Without
+        this hook, the dialog dismisses but the worker keeps running on a
+        detached thread until the process exits — that's the partial-state
+        leak s03_cancel_scan was written to catch.
+        """
         if self._worker and self._worker.isRunning():
             self._worker.requestInterruption()
             self._worker.wait(3000)

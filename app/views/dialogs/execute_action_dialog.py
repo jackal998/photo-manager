@@ -101,8 +101,16 @@ class ExecuteActionDialog(QDialog):
         layout.addWidget(self._warning_banner)
 
         has_decisions = bool(self._decided_records())
+        # Dismiss-label convention across all three primary modals is "Close":
+        # ScanDialog uses "Close" (relabeled to "Close & Load" post-scan to
+        # signal the mode change); ActionDialog uses "Close" because Apply
+        # already committed each regex; this dialog reuses the same label so
+        # users moving between modals see one dismiss verb. The destructive
+        # intent is reinforced at the "All Files Will Be Deleted" confirmation
+        # that fires on Execute — not at this dismiss button.
         self._btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self._btn_box.button(QDialogButtonBox.Ok).setText("Execute")
+        self._btn_box.button(QDialogButtonBox.Cancel).setText("Close")
         self._btn_box.button(QDialogButtonBox.Ok).setEnabled(has_decisions)
         self._btn_box.accepted.connect(self._on_execute_requested)
         self._btn_box.rejected.connect(self.reject)
