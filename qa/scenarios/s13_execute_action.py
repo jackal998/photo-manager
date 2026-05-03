@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from qa.scenarios import _uia
+from qa.scenarios import _invariants, _uia
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO / "qa" / "sandbox" / "_disposable" / "s13_source"
@@ -113,8 +113,16 @@ def main() -> int:
     )
 
     print("step: execute_and_confirm")
-    _uia.execute_and_confirm(exec_dlg)
+    confirm_shape_ok: list[bool] = []
+
+    def _probe_confirm(box):
+        confirm_shape_ok.append(_invariants.assert_destructive_confirm_shape(box))
+
+    _uia.execute_and_confirm(exec_dlg, on_confirm_open=_probe_confirm)
     print("  execute_dialog_closed=True")
+    if not confirm_shape_ok or not confirm_shape_ok[0]:
+        print("FAIL: destructive-confirm dialog had wrong shape")
+        return 1
 
     print("step: verify_files_removed")
     still_present = [str(p) for p in fixture_paths if p.exists()]

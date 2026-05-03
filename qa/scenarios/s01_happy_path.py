@@ -19,7 +19,7 @@ from __future__ import annotations
 import ctypes
 import sys
 
-from qa.scenarios import _uia
+from qa.scenarios import _invariants, _uia
 
 
 def main() -> int:
@@ -77,6 +77,15 @@ def main() -> int:
     print(f"  tree_visible={post['tree_visible']}")
     print(f"  status_bar_text={post['status_bar_text']!r}")
 
+    # Invariant: status bar must match its expected shape RIGHT after load,
+    # before opening menus (which clear the QStatusBar message). The
+    # `post['status_bar_text']` capture above already saw the message; we
+    # poll once more here to double-check the regex matches.
+    print("step: invariant_status_bar")
+    inv_status = _invariants.assert_status_bar_matches(
+        win, r"Loaded manifest: \d+ group", within_s=2.0
+    )
+
     print("step: probe_list_menu_post_load")
     for title, enabled in _uia.probe_menu_items(win, _uia.MENU_LIST):
         print(f"  list_menu: title={title!r} enabled={enabled}")
@@ -84,6 +93,14 @@ def main() -> int:
     print("step: verify_action_menu_enabled")
     for title, enabled in _uia.probe_menu_items(win, _uia.MENU_ACTION):
         print(f"  action_menu: title={title!r} enabled={enabled}")
+
+    print("step: invariant_manifest_actions")
+    inv_actions = _invariants.assert_manifest_actions_consistent(
+        win, expected_enabled=True
+    )
+    if not (inv_status and inv_actions):
+        print("FAIL: post-load invariant(s) failed")
+        return 1
 
     print("scenario: s01_happy_path DONE")
     return 0

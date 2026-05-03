@@ -210,7 +210,7 @@ class ExecuteActionDialog(QDialog):
                     batch[rec.file_path] = new_decision
 
         if not batch:
-            QMessageBox.information(self, "Set Action", "No files matched the pattern.")
+            QMessageBox.information(self, "Set Action — No Match", "No files matched the pattern.")
             return
 
         if self._manifest_path:

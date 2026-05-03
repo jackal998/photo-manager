@@ -99,7 +99,7 @@ If everything is already populated, skip the regen and move on.
 ## Phase 3 — Plan
 
 **Default behavior — invoked with no additional prompt:** run **all
-13 scenarios** in batch via `qa.scenarios._batch`. Don't print the
+15 scenarios** in batch via `qa.scenarios._batch`. Don't print the
 menu, don't ask which to run. Get one `yes batch` approval up front
 (per the gate rule below) and proceed. The full batch typically
 finishes in ~30–60 seconds with the focus fix in `_uia.py`.
@@ -516,6 +516,16 @@ running.
 | 11 | Video + Live Photo | `qa.scenarios.s11_video_live` | ✓ ready |
 | 12 | Save Manifest Decisions | `qa.scenarios.s12_save_manifest` | ✓ ready |
 | 13 | Execute Action (destructive — sends to recycle bin) | `qa.scenarios.s13_execute_action` | ✓ ready |
+| 14 | Set Action by Field/Regex (menu-bar path) | `qa.scenarios.s14_action_by_regex` | ✓ ready |
+| 15 | Right-click context menu Set Action → delete / keep | `qa.scenarios.s15_context_menu` | ✓ ready |
+
+Several drivers also call cross-scenario invariant probes from
+`qa/scenarios/_invariants.py` — they assert that the status bar matches
+an expected shape after a manifest-changing action, that all
+manifest-gated menu items toggle as one set, and that destructive
+confirmation prompts have Yes/No buttons + a count in the body. Those
+probes print `inv: <name> ok=<bool> ...` lines to stdout. Failures
+escalate to the driver's existing FAIL/return-1 path.
 
 Source-folder configuration is per-scenario. Before launching the
 app, write the right `qa/settings.json` by running:
@@ -538,15 +548,15 @@ output.
 in one go, use `qa.scenarios._batch`:
 
 ```
-.venv/Scripts/python.exe -m qa.scenarios._batch              # all 13 (s01–s13)
+.venv/Scripts/python.exe -m qa.scenarios._batch              # all 15 (s01–s15)
 .venv/Scripts/python.exe -m qa.scenarios._batch s04_corrupted s09_walker_exclusions
 ```
 
 For each scenario it: configures `qa/settings.json` → launches
 `main.py` → waits 3.5 s → runs the driver → closes the window →
 waits for the subprocess to exit → moves to the next. Prints a final
-SUMMARY table with rc per scenario. The whole batch (12 scenarios)
-typically finishes in ~90–140 seconds. Each app launch is still a
+SUMMARY table with rc per scenario. The whole batch (15 scenarios)
+typically finishes in ~110–180 seconds. Each app launch is still a
 real launch — get the user's "yes batch" once before starting.
 
 **Optional optimization — skip the per-run Bash prompt.** Add this

@@ -615,12 +615,11 @@ class TestManifestLoadCallbacks:
         assert "disk on fire" in crit.call_args[0][2]
         # Status updated to a failure message.
         status.show_status.assert_called_once()
-        # Manifest-dependent actions disabled.
-        assert parent.menu_controller.enable_action.called
-        for call in parent.menu_controller.enable_action.call_args_list:
-            assert call[0][1] is False
+        # Manifest-dependent actions disabled via the shared controller call.
+        parent.menu_controller.set_manifest_actions.assert_called_once_with(False)
 
-    def test_set_manifest_actions_enabled_toggles_each_action(self):
+    def test_set_manifest_actions_enabled_delegates_to_controller(self):
+        """_set_manifest_actions_enabled forwards to MenuController.set_manifest_actions."""
         from app.views.handlers.file_operations import FileOperationsHandler
         from types import SimpleNamespace
 
@@ -633,23 +632,21 @@ class TestManifestLoadCallbacks:
         )
 
         handler._set_manifest_actions_enabled(True)
-        called = {c[0][0] for c in parent.menu_controller.enable_action.call_args_list}
-        assert called == {
-            "save_manifest", "execute_action",
-            "set_action_hl_delete", "set_action_hl_keep",
-        }
-        for c in parent.menu_controller.enable_action.call_args_list:
-            assert c[0][1] is True
+        parent.menu_controller.set_manifest_actions.assert_called_once_with(True)
+
+        parent.menu_controller.set_manifest_actions.reset_mock()
+        handler._set_manifest_actions_enabled(False)
+        parent.menu_controller.set_manifest_actions.assert_called_once_with(False)
 
     def test_set_manifest_actions_enabled_swallows_attribute_error(self):
-        """The except AttributeError branch — parent without menu_controller still works."""
+        """If parent has no menu_controller, the helper must not raise."""
         from app.views.handlers.file_operations import FileOperationsHandler
         from types import SimpleNamespace
 
         vm = SimpleNamespace(groups=[])
         parent = MagicMock()
-        # Make every enable_action call raise AttributeError so the except catches.
-        parent.menu_controller.enable_action.side_effect = AttributeError("no such action")
+        # Make set_manifest_actions raise AttributeError so the except catches.
+        parent.menu_controller.set_manifest_actions.side_effect = AttributeError("no controller")
         handler = FileOperationsHandler(
             vm=vm, settings=MagicMock(), parent_widget=parent,
             ui_updater=MagicMock(), status_reporter=MagicMock(),

@@ -154,6 +154,12 @@ Three triggers, three test homes:
    `qa/scenarios/_config.py:SCENARIO_SOURCES`
    → optionally a layer-1 unit test for any pure logic that backs the
    UI behavior
+   → if the change touches a behavior several scenarios already
+   exercise (status-bar shape, menu enable lifecycle, destructive
+   confirm semantics), reach for `qa/scenarios/_invariants.py` instead
+   of duplicating asserts. Each existing driver calls one or two of
+   these probes — adding a new probe there benefits every scenario
+   for free.
 
 ---
 
@@ -165,7 +171,7 @@ Three triggers, three test homes:
   bug surfaces. Don't pre-build the suite. The boundaries we touch
   (`exiftool` / `send2trash` / `rawpy` / `pillow-heif`) are stable
   enough that proactive coverage would mostly duplicate layer 3.
-- **Hardening layer 3.** Per [#80](https://github.com/jackal998/photo-manager/issues/80), add scenarios for Save Manifest, Execute Action (destructive), Set Action by Field/Regex, and right-click context-menu decisions. This is the primary safety investment going forward — covers user flows AND boundary happy paths in one go.
+- **Layer-3 hardening.** [#80](https://github.com/jackal998/photo-manager/issues/80) closed: scenarios for Save Manifest (s12), Execute Action (s13, destructive), Set Action by Field/Regex (s14), and right-click context-menu decisions (s15) all merged. Each driver now also calls cross-scenario probes from `qa/scenarios/_invariants.py` (status-bar shape, manifest-actions toggle consistency, destructive-confirm shape) — no maintained extra suite, just lines added inside the existing drivers.
 - **CI for layer 3.** [#74](https://github.com/jackal998/photo-manager/issues/74) tracks running `qa.scenarios._batch` on UI-touching PRs. Gated on layer-3 reliability — flaky required CI is worse than no CI.
 
 ---

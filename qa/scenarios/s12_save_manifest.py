@@ -4,11 +4,11 @@ Required source: qa/sandbox/near-duplicates (5 files → 1 group of 5).
 
 Drives the Save Manifest Decisions flow end-to-end:
   scan → close & load → File menu → Save Manifest Decisions… →
-  native Save dialog → success message box → status-bar verify →
+  native Save dialog → status-bar verify →
   open the saved sqlite and confirm the migration_manifest table is intact.
 
-Catches drift in: Save Manifest menu label / dialog title / success message
-text / status-bar copy / ManifestRepository.save() row count.
+Catches drift in: Save Manifest menu label / dialog title / status-bar copy
+("Saved N decisions") / ManifestRepository.save() row count.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from qa.scenarios import _uia
+from qa.scenarios import _invariants, _uia
 
 REPO = Path(__file__).resolve().parents[2]
 TARGET = REPO / "qa" / "sandbox" / "_disposable" / "s12_manifest.sqlite"
@@ -91,10 +91,11 @@ def main() -> int:
 
     print("step: verify_status_bar")
     _, win = _uia.connect_main()
-    status = _uia.read_status_bar_text(win)
-    print(f"  status_bar_text={status!r}")
-    if "Manifest saved" not in status:
-        print("WARN: status bar did not contain 'Manifest saved' (may have cleared on timeout)")
+    inv_status = _invariants.assert_status_bar_matches(
+        win, r"Saved \d+ decision", within_s=2.0
+    )
+    if not inv_status:
+        print("WARN: status bar did not contain 'Saved … decision(s)' (may have cleared on timeout)")
 
     print("scenario: s12_save_manifest DONE")
     return 0
