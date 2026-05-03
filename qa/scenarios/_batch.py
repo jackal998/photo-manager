@@ -34,6 +34,7 @@ ALL_SCENARIOS = [
     "s09_walker_exclusions",
     "s10_multi_source",
     "s11_video_live",
+    "s12_save_manifest",
 ]
 
 

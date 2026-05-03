@@ -140,6 +140,7 @@ class FileOperationsHandler:
         """Export current decisions to a (possibly new) manifest file."""
         import os
         import shutil
+        import sqlite3
 
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
@@ -159,6 +160,15 @@ class FileOperationsHandler:
             if os.path.normcase(os.path.normpath(save_path)) != os.path.normcase(
                 os.path.normpath(manifest_path)
             ):
+                # #91: scanner writes the manifest in WAL mode and may still
+                # hold an active connection with uncheckpointed writes in the
+                # -wal sibling. shutil.copy2 only copies the main .sqlite, so
+                # without a checkpoint the destination ends up with no schema.
+                ckpt_conn = sqlite3.connect(manifest_path)
+                try:
+                    ckpt_conn.execute("PRAGMA wal_checkpoint(FULL)")
+                finally:
+                    ckpt_conn.close()
                 shutil.copy2(manifest_path, save_path)
 
             from infrastructure.manifest_repository import ManifestRepository

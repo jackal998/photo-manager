@@ -99,7 +99,7 @@ If everything is already populated, skip the regen and move on.
 ## Phase 3 — Plan
 
 **Default behavior — invoked with no additional prompt:** run **all
-11 scenarios** in batch via `qa.scenarios._batch`. Don't print the
+12 scenarios** in batch via `qa.scenarios._batch`. Don't print the
 menu, don't ask which to run. Get one `yes batch` approval up front
 (per the gate rule below) and proceed. The full batch typically
 finishes in ~30–60 seconds with the focus fix in `_uia.py`.
@@ -259,6 +259,43 @@ popup.child_window(title="Scan Sources…", control_type="MenuItem").click_input
 with locale-specific names (e.g. `系統`, `最小化` on a zh-TW Windows).
 Ignore that subtree — anything under `auto_id` starting with
 `QApplication.MainWindow` is the real app.
+
+**Native (non-Qt) Windows dialogs are fully locale-translated.**
+QFileDialog opens a Windows Common Item Dialog whose control names are
+in the OS display language: on zh-TW Windows the filename ComboBox is
+`檔案名稱:`, not `File name:`. **Don't hard-code English titles for
+controls in native dialogs.** Use locale-independent discovery — for
+the Save dialog filename Edit, find "the only `ComboBox` descendant
+that contains an `Edit`" (the `Save as type:` ComboBox has no editable
+Edit, so this picks the right one regardless of locale). Qt-managed
+widgets (everything inside the main window, scan dialog, message
+boxes) keep their English names because those come from
+photo-manager's source — locale-translation only hits the OS dialogs.
+
+**Setting Edit values: prefer UIA `ValuePattern.SetValue` over typing.**
+Two reasons:
+1. **IMEs intercept keystrokes.** `pywinauto.keyboard.send_keys("hello")`
+   on a system with a phonetic IME active (bopomofo, pinyin, hangul,
+   kana) gets eaten by the IME and produces phonetic glyphs instead
+   of the Latin string. Modifier-key combos (Ctrl+A/Ctrl+V/Enter)
+   bypass IME, but free text doesn't. The user's session may have
+   any IME active — your driver can't assume Latin keystrokes land.
+2. **Focus is fragile.** Typing requires the right widget to have
+   focus *at the moment of the keystroke*. Native dialogs steal
+   focus, popups steal focus, taskbar tooltips steal focus.
+
+`ValuePattern.SetValue` is a UIA-level write that bypasses keyboard,
+focus, and IME entirely:
+
+```python
+filename_edit.iface_value.SetValue(str(target_path))
+```
+
+Use it whenever you need to set an Edit's content. Reserve `send_keys`
+for keystrokes the application interprets *as keystrokes* (Enter to
+confirm, Esc to cancel, Ctrl+S, arrow keys for navigation). The
+existing `qa/scenarios/_uia.save_manifest_via_native_dialog` is the
+reference pattern — copy from it.
 
 **When UIA returns nothing useful** (custom-painted widget, blank
 `Custom` element with no children): that's your cue to fall back to a
@@ -477,6 +514,7 @@ running.
 | 9 | Walker exclusion rules | `qa.scenarios.s09_walker_exclusions` | ✓ ready |
 | 10 | Multi-source priority + dedup | `qa.scenarios.s10_multi_source` | ✓ ready |
 | 11 | Video + Live Photo | `qa.scenarios.s11_video_live` | ✓ ready |
+| 12 | Save Manifest Decisions | `qa.scenarios.s12_save_manifest` | ✓ ready |
 
 Source-folder configuration is per-scenario. Before launching the
 app, write the right `qa/settings.json` by running:
@@ -499,15 +537,15 @@ output.
 in one go, use `qa.scenarios._batch`:
 
 ```
-.venv/Scripts/python.exe -m qa.scenarios._batch              # all 10 (s02–s11)
+.venv/Scripts/python.exe -m qa.scenarios._batch              # all 12 (s01–s12)
 .venv/Scripts/python.exe -m qa.scenarios._batch s04_corrupted s09_walker_exclusions
 ```
 
 For each scenario it: configures `qa/settings.json` → launches
 `main.py` → waits 3.5 s → runs the driver → closes the window →
 waits for the subprocess to exit → moves to the next. Prints a final
-SUMMARY table with rc per scenario. The whole batch (10 scenarios)
-typically finishes in ~80–120 seconds. Each app launch is still a
+SUMMARY table with rc per scenario. The whole batch (12 scenarios)
+typically finishes in ~90–140 seconds. Each app launch is still a
 real launch — get the user's "yes batch" once before starting.
 
 **Optional optimization — skip the per-run Bash prompt.** Add this
