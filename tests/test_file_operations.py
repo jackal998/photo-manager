@@ -443,6 +443,46 @@ class TestSaveManifestDecisions:
         assert _read_decision(Path(new_path), "/a.jpg") == "delete"
         assert handler._manifest_path == new_path
 
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_saves_when_source_has_uncheckpointed_wal(self, _mock, tmp_path):
+        """Regression for #91: source manifest with uncheckpointed WAL writes
+        must still produce a populated copy at the new path. Without the fix,
+        shutil.copy2 captured only the empty 4KB main .sqlite and save()
+        failed with 'no such table: migration_manifest'."""
+        recs = [_rec("/a.jpg", decision="delete")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+
+        db = tmp_path / "manifest.sqlite"
+        # Build the manifest in WAL mode and KEEP the connection open —
+        # mimics the scanner having just finished writing without checkpoint.
+        src_conn = sqlite3.connect(str(db))
+        try:
+            src_conn.execute("PRAGMA journal_mode = WAL")
+            src_conn.executescript(_DDL)
+            src_conn.execute(
+                "INSERT INTO migration_manifest (source_path, action) VALUES (?, ?)",
+                ("/a.jpg", "MOVE"),
+            )
+            src_conn.commit()
+            wal_path = Path(str(db) + "-wal")
+            assert wal_path.exists() and wal_path.stat().st_size > 0, (
+                "test setup: data should be in -wal sibling"
+            )
+
+            new_path = str(tmp_path / "exported.sqlite")
+            handler, _, _ = _make_handler(vm, str(db))
+
+            with patch(
+                "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+                return_value=(new_path, ""),
+            ):
+                handler.save_manifest_decisions()
+
+            assert _read_decision(Path(new_path), "/a.jpg") == "delete"
+            assert handler._manifest_path == new_path
+        finally:
+            src_conn.close()
+
     def test_dialog_cancel_is_noop(self, tmp_path):
         """Cancelling the save dialog leaves the manifest unchanged."""
         recs = [_rec("/a.jpg")]

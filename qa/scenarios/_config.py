@@ -26,6 +26,7 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     "s09_walker_exclusions": ["qa/sandbox/walker-exclusions"],
     "s10_multi_source":    ["qa/sandbox/multi-source-a", "qa/sandbox/multi-source-b"],
     "s11_video_live":      ["qa/sandbox/videos", "qa/sandbox/live-photo"],
+    "s12_save_manifest":   ["qa/sandbox/near-duplicates"],
 }
 
 

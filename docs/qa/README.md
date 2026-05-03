@@ -128,11 +128,11 @@ With the UIA-first drivers (current architecture):
 - Phase 1 (orient): ~10 s
 - Phase 2 (fixtures): ~30 s if regen needed, else instant
 - Phase 4 (explore): **~10–30 s per scenario** including launch +
-  scan + driver. The whole batch (10 scenarios via `_batch.py`) runs
-  end-to-end in ~80–120 s.
+  scan + driver. The whole batch (12 scenarios via `_batch.py`) runs
+  end-to-end in ~90–140 s.
 - Phase 5 (report): ~10–30 s per finding to file as a GitHub issue
 
-The skill ships with 11 standard scenarios. A batch run of all 10
+The skill ships with 12 standard scenarios. A batch run of all 11
 non-s01 scenarios via `python -m qa.scenarios._batch` is realistic;
 the user can also pick subsets ("Smoke test" #1/#2/#9 etc.).
 
@@ -151,6 +151,7 @@ the user can also pick subsets ("Smoke test" #1/#2/#9 etc.).
 | 9 | `qa.scenarios.s09_walker_exclusions` | `walker-exclusions` |
 | 10 | `qa.scenarios.s10_multi_source` | `multi-source-a`, `multi-source-b` |
 | 11 | `qa.scenarios.s11_video_live` | `videos`, `live-photo` |
+| 12 | `qa.scenarios.s12_save_manifest` | `near-duplicates` |
 
 Source-folder mapping lives in `qa/scenarios/_config.py`. To add a new
 scenario:

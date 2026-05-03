@@ -393,6 +393,89 @@ def close_and_load_manifest(dlg: UIAWrapper) -> None:
     time.sleep(1.0)
 
 
+def save_manifest_via_native_dialog(
+    pid: int, target_path: str, dialog_timeout: float = 10
+) -> None:
+    """Drive the native QFileDialog opened by File > Save Manifest Decisions….
+
+    1. Locate the filename Edit (ComboBox > Edit, locale-independent).
+    2. Set its value via UIA's ValuePattern.SetValue — bypasses keyboard
+       (so IMEs like bopomofo can't intercept) and bypasses the
+       locale-specific ComboBox label name.
+    3. Press Enter to invoke Save.
+    4. Wait for the result QMessageBox (success "Save Manifest" or
+       failure "Save Manifest Error") and dismiss it with Enter.
+       Raises if the result was the error dialog.
+    """
+    from pywinauto.keyboard import send_keys
+
+    save_hwnd = wait_for_dialog(pid, "Save Manifest Decisions", timeout=dialog_timeout)
+    save_dlg = connect_by_handle(save_hwnd)
+    _focus(save_dlg)
+    time.sleep(0.5)
+
+    # Find the filename Edit: the only Edit nested inside a ComboBox in the
+    # native Save dialog. (The other ComboBox is "Save as type:", which has
+    # no editable Edit descendant.) Locale-independent.
+    filename_edit = None
+    for combo in save_dlg.descendants(control_type="ComboBox"):
+        try:
+            edits = combo.descendants(control_type="Edit")
+            if edits:
+                filename_edit = edits[0]
+                break
+        except Exception:
+            continue
+    if filename_edit is None:
+        raise RuntimeError("filename Edit (ComboBox > Edit) not found in Save dialog")
+
+    # Set value via UIA's ValuePattern — bypasses keyboard, focus, and IME.
+    # Avoids both IME interception (bopomofo, etc.) and the locale-specific
+    # name of the filename ComboBox label.
+    filename_edit.iface_value.SetValue(str(target_path))
+    time.sleep(0.2)
+    send_keys("{ENTER}")
+
+    # Wait for either the success "Save Manifest" QMessageBox or the
+    # "Save Manifest Error" critical dialog. Both are dismissed with Enter.
+    # Surface the result so a failing scenario can tell which one appeared.
+    deadline = time.time() + dialog_timeout
+    info_hwnd = None
+    matched_title = None
+    while time.time() < deadline:
+        for hwnd, _cls, t in list_process_windows(pid):
+            if t in ("Save Manifest", "Save Manifest Error"):
+                info_hwnd = hwnd
+                matched_title = t
+                break
+        if info_hwnd:
+            break
+        time.sleep(0.2)
+    if info_hwnd is None:
+        windows = [t for _, _, t in list_process_windows(pid)]
+        raise TimeoutError(
+            f"neither 'Save Manifest' nor 'Save Manifest Error' appeared "
+            f"within {dialog_timeout}s; visible windows={windows!r}"
+        )
+    print(f"  result_dialog_title={matched_title!r}", flush=True)
+
+    info_dlg = connect_by_handle(info_hwnd)
+    if matched_title == "Save Manifest Error":
+        for label in info_dlg.descendants(control_type="Text"):
+            try:
+                txt = (label.window_text() or "").strip()
+                if txt:
+                    print(f"  error_text: {txt}", flush=True)
+            except Exception:
+                continue
+    _focus(info_dlg)
+    time.sleep(0.2)
+    send_keys("{ENTER}")
+    time.sleep(0.3)
+    if matched_title == "Save Manifest Error":
+        raise RuntimeError("Save dialog reported an error — see error_text above")
+
+
 def cancel_scan_dialog(dlg: UIAWrapper) -> None:
     """Click the title-bar Close (×) to cancel a scan or close pre-scan."""
     _focus(dlg)

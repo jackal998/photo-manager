@@ -109,7 +109,7 @@ calls out what would be uncaught even with a green CI.
 | `app/views/tree_model_builder.py` | 76% | s01, s06, s07, s10 | uncovered 24% is `setData()` `except: pass` defensive wrappers — only triggered if Qt's setData raises, which doesn't happen in practice |
 | `app/views/workers/manifest_load_worker.py` | 100% | every load | none |
 | `app/views/workers/scan_worker.py` | 91% | every scan scenario | minor — cancellation timing branch hard to test deterministically |
-| `app/views/handlers/file_operations.py` | 81% | s01 + every scenario that loads a manifest | uncovered 19% is QFileDialog interaction (file picker for save / open manifest) — covered by qa-explore but not asserted directly |
+| `app/views/handlers/file_operations.py` | 81% | s01 + every scenario that loads a manifest, plus s12 for Save Manifest Decisions end-to-end | uncovered 19% is QFileDialog interaction (file picker for open manifest) — Save Manifest is now driven by s12, with the WAL-checkpoint branch (#91) covered by both layer-1 unit test and the s12 layer-3 driver |
 | `app/views/handlers/context_menu.py` | 88% | s01 (menu probes) | low — `_open_folder` Windows + non-Windows + fallback paths covered; remaining 12% is Protocol stub bodies |
 | `app/views/dialogs/scan_dialog.py` | 84% | every scenario opens it | uncovered 16% is QFileDialog browse interaction + a few worker-signal branches |
 | `app/views/dialogs/execute_action_dialog.py` | 83% | s13 (planned, will exercise real send2trash through the GUI) | uncovered 17% is `_on_tree_context_menu` + the actual destructive `_on_execute` flow — qa-explore s13 will cover the happy path; spot-add a layer-2 test only if a destructive-flow bug surfaces that's hard to reproduce via the GUI |
