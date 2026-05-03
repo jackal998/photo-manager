@@ -95,7 +95,7 @@ not a synthetic test.
 | Layer | What | Where it runs | Catches |
 |---|---|---|---|
 | 1 — Unit + mocks | `tests/test_*.py` | CI (`pytest`) + local | Refactoring bugs, parser logic, dispatch errors |
-| 2 — Integration with real binaries | `tests/integration/test_*.py` (`@pytest.mark.integration`, skip-if-missing) | Local only — CI doesn't have `exiftool` / RAW codecs / etc. | Boundary drift between our mocks and the real third-party tool |
+| 2 — Integration with real binaries (on-demand — see `docs/testing.md`) | `tests/integration/test_*.py` (`@pytest.mark.integration`, skip-if-missing) | Local only — CI doesn't have `exiftool` / RAW codecs / etc. | Boundary error modes hard to reproduce via the GUI. **No maintained suite** — add a spot-test only when a specific bug surfaces. Layer 3 covers the boundary happy paths. |
 | 3 — End-to-end via `/qa-explore` | `qa/scenarios/sNN_*.py` | Local via `python -m qa.scenarios._batch` | Label drift, state-transition bugs, UX regressions |
 
 CI covers layer 1 only. Knowing which layer you're skimping on matters
@@ -109,8 +109,11 @@ Three triggers, three test homes:
    70% floor.
 2. **Touches a boundary** (subprocess, filesystem semantics,
    third-party lib whose behavior varies by version — `exiftool`,
-   `rawpy`, `pillow-heif`, `send2trash`) → unit test for our side AND a
-   layer-2 integration test (`@pytest.mark.skipif(not <tool>_available)`).
+   `rawpy`, `pillow-heif`, `send2trash`) → unit test for our side; let
+   qa-explore (layer 3) cover the boundary happy path. **Add a layer-2
+   spot-test only if you can name a specific failure mode that's hard
+   to trigger through the GUI** (e.g. exiftool returning malformed
+   output on a real corner-case file). Default: no extra test.
 3. **User-facing flow** (button, dialog, menu, status bar) → extend or
    add a `qa/scenarios/sNN_*.py` driver.
 

@@ -88,12 +88,16 @@ Two more test layers exist locally:
 
 ```powershell
 # Layer 2 — real binaries (exiftool, send2trash, rawpy / pillow-heif).
-# Skip-if-missing, so safe to run anywhere; gives real value only when
-# the binaries are installed (typically your dev box, not CI runners).
+# On-demand: tests/integration/ is created only when a specific
+# boundary bug needs a regression guard. Not maintained as a suite,
+# because layer 3 already covers the boundary happy paths via real
+# fixtures. Run when present:
 .venv\Scripts\python -m pytest -m integration
 
 # Layer 3 — full GUI exercise via /qa-explore. Drives main.py through
-# scripted scenarios to catch UI / state-transition / copy regressions.
+# scripted scenarios to catch UI / state-transition / copy regressions
+# AND validates real third-party boundaries (exiftool, send2trash) on
+# happy paths.
 .venv\Scripts\python -m qa.scenarios._batch
 ```
 
@@ -104,8 +108,8 @@ Read that before adding tests for a new feature. Short version:
 | Layer | Catches | Misses |
 |---|---|---|
 | 1 — Unit + mocks (CI) | Refactoring bugs, parser logic | Real third-party behavior |
-| 2 — Integration (local) | Boundary drift with real `exiftool` / `send2trash` / `rawpy` | GUI behavior |
-| 3 — `/qa-explore` (local) | Label drift, dialog regressions, state-transition bugs | Anything off the scripted path |
+| 2 — Integration (local, on-demand) | Spot-tests for specific boundary bugs already hit (exiftool / send2trash / rawpy edge cases) | GUI behavior; anything you haven't written a spot-test for |
+| 3 — `/qa-explore` (local) | Label drift, dialog regressions, state-transition bugs, boundary happy paths | Anything off the scripted path |
 
 **No test padding.** A test that exists only to clear a coverage gate
 is metric gaming, not engineering — see the testing rules in

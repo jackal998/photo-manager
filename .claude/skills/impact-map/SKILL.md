@@ -38,8 +38,12 @@ covered by an existing test.
 2. **Downstream dependencies** — what does the function call into? Note any
    I/O (DB, FS, subprocess, Qt) it relies on, since changes there cascade.
    Boundary calls (subprocess to `exiftool`, `send2trash`, `rawpy`,
-   `pillow-heif`, `Image.open` on edge formats) need *layer-2* tests, not
-   just unit-level mocks. See [`docs/testing.md`](../../../docs/testing.md).
+   `pillow-heif`, `Image.open` on edge formats) are covered at the
+   happy-path level by qa-explore scenarios with real fixtures (layer 3).
+   Flag a layer-2 spot-test only if you're introducing a new boundary
+   error mode that's hard to trigger through the GUI — otherwise let
+   layer 3 carry the safety. Layer 2 is on-demand; see
+   [`docs/testing.md`](../../../docs/testing.md).
 3. **Tests covering each call site, by layer** — for every caller in (1),
    identify which test exercises that path AND at which layer:
      - Layer 1 (`tests/test_*.py` — unit + mock)
@@ -74,7 +78,7 @@ A short table in chat, then proceed:
 | app/views/handlers/file_operations.py:127       | tests/test_file_operations.py::test_batch_update (L1)              | none                                       |
 | scanner/dedup.py:88                             | (no L1)                                                            | add test before changing signature         |
 | infrastructure/manifest_repository.py:204       | tests/test_manifest_repository.py::test_save (L1)                  | update assertion for new return shape      |
-| infrastructure/delete_service.py:67             | tests/test_delete_service.py (L1, mocked)  +  no L2                | add layer-2 integration test if behavior at the send2trash boundary is changing |
+| infrastructure/delete_service.py:67             | tests/test_delete_service.py (L1, mocked); qa-explore s13 (L3, planned)  | qa-explore s13 covers happy path through send2trash; add a layer-2 spot-test only for specific error modes (locked file, network drive, permission denied) |
 | qa/scenarios/_uia.py:55 (button title constant) | qa/scenarios/sNN_*.py drivers (L3)                                 | update constant + commit message; layer-3 batch will catch drift on next run |
 ```
 
