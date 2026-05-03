@@ -495,34 +495,18 @@ def open_execute_action_dialog(win: UIAWrapper) -> tuple[UIAWrapper, int]:
     return connect_by_handle(hwnd), hwnd
 
 
-def mark_all_via_regex(
-    execute_dlg: UIAWrapper,
-    field: str,
-    regex: str,
-    action_label: str,
-    dialog_timeout: float = 5,
+def _drive_action_dialog_form(
+    action_dlg: UIAWrapper, field: str, regex: str, action_label: str
 ) -> None:
-    """Open the inner Set Action by Field/Regex dialog from inside the
-    Execute Action dialog, set field+regex+action, click Apply, then Close.
+    """Fill the Set Action by Field/Regex dialog and submit.
 
-    `field` is the visible text in the Field combo (e.g. "File Name").
-    `regex` is set via UIA's ValuePattern to bypass IME (see save-manifest
-    helper for the same rationale).
-    `action_label` is the visible label in the Set Action combo
-    (e.g. "delete" — see SETTABLE_DECISIONS in app/views/constants.py).
+    Shared by both entry points (menu-bar standalone and Execute-dialog
+    inner). Caller must have already focused `action_dlg`.
+
+    Steps: select Field combo → SetValue regex → select Action combo →
+    Apply → Close. Regex uses UIA ValuePattern to bypass IME interception
+    of Latin keystrokes under bopomofo input.
     """
-    pid = execute_dlg.process_id()
-    select_btn = execute_dlg.child_window(
-        title=EXECUTE_BTN_SELECT_BY_REGEX, control_type="Button"
-    )
-    _focus(execute_dlg)
-    select_btn.click_input()
-
-    action_hwnd = wait_for_dialog(pid, ACTION_DIALOG_TITLE, timeout=dialog_timeout)
-    action_dlg = connect_by_handle(action_hwnd)
-    _focus(action_dlg)
-    time.sleep(0.3)
-
     # Two ComboBoxes in this dialog: Field combo (top) and Set Action combo
     # (bottom). Order is deterministic — find them by position (top-most first).
     combos = sorted(
@@ -571,6 +555,65 @@ def mark_all_via_regex(
     )
     close_btn.click_input()
     time.sleep(0.3)
+
+
+def mark_all_via_regex(
+    execute_dlg: UIAWrapper,
+    field: str,
+    regex: str,
+    action_label: str,
+    dialog_timeout: float = 5,
+) -> None:
+    """Open the inner Set Action by Field/Regex dialog from inside the
+    Execute Action dialog, set field+regex+action, click Apply, then Close.
+
+    `field` is the visible text in the Field combo (e.g. "File Name").
+    `regex` is set via UIA's ValuePattern to bypass IME (see save-manifest
+    helper for the same rationale).
+    `action_label` is the visible label in the Set Action combo
+    (e.g. "delete" — see SETTABLE_DECISIONS in app/views/constants.py).
+    """
+    pid = execute_dlg.process_id()
+    select_btn = execute_dlg.child_window(
+        title=EXECUTE_BTN_SELECT_BY_REGEX, control_type="Button"
+    )
+    _focus(execute_dlg)
+    select_btn.click_input()
+
+    action_hwnd = wait_for_dialog(pid, ACTION_DIALOG_TITLE, timeout=dialog_timeout)
+    action_dlg = connect_by_handle(action_hwnd)
+    _focus(action_dlg)
+    time.sleep(0.3)
+
+    _drive_action_dialog_form(action_dlg, field, regex, action_label)
+
+
+def mark_all_via_regex_standalone(
+    main_win: UIAWrapper,
+    field: str,
+    regex: str,
+    action_label: str,
+    dialog_timeout: float = 5,
+) -> None:
+    """Drive the standalone Set Action by Field/Regex flow from the menu bar.
+
+    Distinct from `mark_all_via_regex` — this opens the dialog via
+    Action menu → "Set Action by Field/Regex…" (no Execute Action dialog
+    in the picture). After Close, focus returns to the main window
+    rather than the Execute dialog.
+
+    Use for s14 (standalone Set Action) and any future scenario that
+    exercises bulk-decision assignment without entering Execute review.
+    """
+    pid = main_win.process_id()
+    menu_path(main_win, MENU_ACTION, ACTION_BY_REGEX)
+
+    action_hwnd = wait_for_dialog(pid, ACTION_DIALOG_TITLE, timeout=dialog_timeout)
+    action_dlg = connect_by_handle(action_hwnd)
+    _focus(action_dlg)
+    time.sleep(0.3)
+
+    _drive_action_dialog_form(action_dlg, field, regex, action_label)
 
 
 def execute_and_confirm(

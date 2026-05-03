@@ -28,6 +28,7 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     "s11_video_live":      ["qa/sandbox/videos", "qa/sandbox/live-photo"],
     "s12_save_manifest":   ["qa/sandbox/near-duplicates"],
     "s13_execute_action":  ["qa/sandbox/_disposable/s13_source"],
+    "s14_action_by_regex": ["qa/sandbox/near-duplicates"],
 }
 
 
