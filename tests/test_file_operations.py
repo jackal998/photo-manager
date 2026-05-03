@@ -595,6 +595,7 @@ class TestManifestLoadCallbacks:
         assert "2" in status_msg and "3" in status_msg
 
     def test_on_manifest_failed_logs_and_disables_actions(self):
+        """No prior manifest loaded → failure disables actions (first-load case)."""
         from app.views.handlers.file_operations import FileOperationsHandler
         from types import SimpleNamespace
 
@@ -615,8 +616,88 @@ class TestManifestLoadCallbacks:
         assert "disk on fire" in crit.call_args[0][2]
         # Status updated to a failure message.
         status.show_status.assert_called_once()
-        # Manifest-dependent actions disabled via the shared controller call.
+        # No prior manifest — failure disables actions via the shared controller.
         parent.menu_controller.set_manifest_actions.assert_called_once_with(False)
+
+    def test_on_manifest_failed_preserves_prior_manifest_actions(self, tmp_path):
+        """#108: failed load with a prior manifest loaded leaves its actions enabled.
+
+        Reproduces the bug from #108: user has manifest A loaded and clicks
+        Open Manifest…, picks a corrupt file, the load fails. Before the fix,
+        the failure callback unconditionally disabled actions, stranding the
+        user's still-valid manifest A inaccessible. After the fix, actions
+        stay enabled because A is still in memory.
+        """
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[])
+        status = MagicMock()
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=MagicMock(), status_reporter=status,
+        )
+        # Pretend manifest A is already loaded.
+        handler._manifest_path = str(tmp_path / "manifest_a.sqlite")
+
+        with patch("PySide6.QtWidgets.QMessageBox.critical"):
+            handler._on_manifest_failed("disk on fire")
+
+        # Status still reports the failure.
+        status.show_status.assert_called_once()
+        # But actions are NOT toggled — A's enabled state is preserved.
+        parent.menu_controller.set_manifest_actions.assert_not_called()
+
+    def test_start_manifest_load_disables_actions_when_no_prior_manifest(self, tmp_path):
+        """First-ever Open Manifest: optimistic disable while load is in flight."""
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[], _default_sort=[])
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+
+        with patch("app.views.workers.manifest_load_worker.ManifestLoadWorker") as worker_cls:
+            worker_cls.return_value = MagicMock()
+            handler._start_manifest_load(str(tmp_path / "new.sqlite"))
+
+        # No prior manifest — actions get disabled while the worker runs.
+        parent.menu_controller.set_manifest_actions.assert_called_once_with(False)
+
+    def test_start_manifest_load_preserves_prior_manifest_actions(self, tmp_path):
+        """#108: Open Manifest while A is loaded leaves A's actions enabled during the load.
+
+        Without this gating, the user momentarily loses access to A's actions
+        between picking B in the file dialog and B's worker firing finished /
+        failed. If B fails, A's actions never come back (covered by the
+        sibling _on_manifest_failed test above). If B succeeds, the flicker
+        is at least visible. Either way, prior-loaded A should stay enabled.
+        """
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[], _default_sort=[])
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        # Pretend manifest A is already loaded.
+        handler._manifest_path = str(tmp_path / "manifest_a.sqlite")
+
+        with patch("app.views.workers.manifest_load_worker.ManifestLoadWorker") as worker_cls:
+            worker_cls.return_value = MagicMock()
+            handler._start_manifest_load(str(tmp_path / "manifest_b.sqlite"))
+
+        # Prior manifest exists — start_manifest_load must NOT pre-emptively disable.
+        parent.menu_controller.set_manifest_actions.assert_not_called()
 
     def test_set_manifest_actions_enabled_delegates_to_controller(self):
         """_set_manifest_actions_enabled forwards to MenuController.set_manifest_actions."""

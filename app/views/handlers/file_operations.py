@@ -101,7 +101,13 @@ class FileOperationsHandler:
         from app.views.workers.manifest_load_worker import ManifestLoadWorker
 
         self.status_reporter.show_status("Opening manifest…", 0)
-        self._set_manifest_actions_enabled(False)
+        # Only disable manifest-gated actions if no prior manifest is loaded.
+        # When manifest A is already in memory and the user is opening B, leave
+        # A's actions enabled during the load — they're the user's safety net
+        # if B fails (#108). _on_manifest_loaded re-asserts enabled on success;
+        # _on_manifest_failed leaves them alone when a prior manifest exists.
+        if not getattr(self, "_manifest_path", None):
+            self._set_manifest_actions_enabled(False)
 
         default_sort = getattr(self.vm, "_default_sort", [])
         worker = ManifestLoadWorker(path, default_sort, parent=self.parent)
@@ -131,7 +137,12 @@ class FileOperationsHandler:
         logger.error("Open manifest failed: {}", error)
         QMessageBox.critical(self.parent, "Open Manifest Error", error)
         self.status_reporter.show_status("Open manifest failed")
-        self._set_manifest_actions_enabled(False)
+        # Only disable on failure if no prior manifest was loaded (#108). If a
+        # valid manifest is still in memory (self._manifest_path is set), the
+        # user is back to reviewing it after dismissing the error — leave its
+        # actions enabled rather than stranding them disabled.
+        if not getattr(self, "_manifest_path", None):
+            self._set_manifest_actions_enabled(False)
 
     def _set_manifest_actions_enabled(self, enabled: bool) -> None:
         try:
