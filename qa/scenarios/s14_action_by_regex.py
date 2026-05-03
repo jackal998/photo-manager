@@ -23,7 +23,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from qa.scenarios import _uia
+from qa.scenarios import _invariants, _uia
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
@@ -92,6 +92,11 @@ def main() -> int:
     _uia.mark_all_via_regex_standalone(
         win, field=FIELD, regex=REGEX, action_label=ACTION
     )
+
+    print("step: invariant_status_bar")
+    _, win = _uia.connect_main()
+    if not _invariants.assert_status_bar_matches(win, r"Decision set", within_s=2.0):
+        print("WARN: status bar did not echo 'Decision set' (may have cleared on timeout)")
 
     print("step: verify_decisions_after_apply")
     post = _read_decisions()

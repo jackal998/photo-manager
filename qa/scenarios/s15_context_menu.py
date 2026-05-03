@@ -22,7 +22,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from qa.scenarios import _uia
+from qa.scenarios import _invariants, _uia
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
@@ -145,6 +145,19 @@ def main() -> int:
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
+        return 1
+
+    print("step: invariants")
+    inv_status = _invariants.assert_status_bar_matches(
+        win, r"Decision set", within_s=2.0
+    )
+    inv_actions = _invariants.assert_manifest_actions_consistent(
+        win, expected_enabled=True
+    )
+    if not inv_status:
+        print("WARN: status bar did not echo 'Decision set' (may have cleared on timeout)")
+    if not inv_actions:
+        print("FAIL: manifest-gated menu items not all enabled post-decision")
         return 1
 
     print("scenario: s15_context_menu DONE")

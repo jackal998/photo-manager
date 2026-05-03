@@ -447,44 +447,39 @@ def save_manifest_via_native_dialog(
     time.sleep(0.2)
     send_keys("{ENTER}")
 
-    # Wait for either the success "Save Manifest" QMessageBox or the
-    # "Save Manifest Error" critical dialog. Both are dismissed with Enter.
-    # Surface the result so a failing scenario can tell which one appeared.
-    deadline = time.time() + dialog_timeout
-    info_hwnd = None
-    matched_title = None
+    # Success path no longer raises a "Save Manifest" QMessageBox — the
+    # status bar reports success via "Saved N decisions". The error path
+    # still surfaces a "Save Manifest Error" critical dialog. Poll briefly:
+    # if an Error dialog appears, dismiss + raise; otherwise return after a
+    # short grace window (the save handler runs synchronously, so 3s is
+    # plenty of time for the error to surface if it's going to).
+    grace = min(3.0, dialog_timeout)
+    deadline = time.time() + grace
+    error_hwnd = None
     while time.time() < deadline:
         for hwnd, _cls, t in list_process_windows(pid):
-            if t in ("Save Manifest", "Save Manifest Error"):
-                info_hwnd = hwnd
-                matched_title = t
+            if t == "Save Manifest Error":
+                error_hwnd = hwnd
                 break
-        if info_hwnd:
+        if error_hwnd:
             break
         time.sleep(0.2)
-    if info_hwnd is None:
-        windows = [t for _, _, t in list_process_windows(pid)]
-        raise TimeoutError(
-            f"neither 'Save Manifest' nor 'Save Manifest Error' appeared "
-            f"within {dialog_timeout}s; visible windows={windows!r}"
-        )
-    print(f"  result_dialog_title={matched_title!r}", flush=True)
+    if error_hwnd is None:
+        return  # success — caller verifies via status bar / file existence
 
-    info_dlg = connect_by_handle(info_hwnd)
-    if matched_title == "Save Manifest Error":
-        for label in info_dlg.descendants(control_type="Text"):
-            try:
-                txt = (label.window_text() or "").strip()
-                if txt:
-                    print(f"  error_text: {txt}", flush=True)
-            except Exception:
-                continue
-    _focus(info_dlg)
+    error_dlg = connect_by_handle(error_hwnd)
+    for label in error_dlg.descendants(control_type="Text"):
+        try:
+            txt = (label.window_text() or "").strip()
+            if txt:
+                print(f"  error_text: {txt}", flush=True)
+        except Exception:
+            continue
+    _focus(error_dlg)
     time.sleep(0.2)
     send_keys("{ENTER}")
     time.sleep(0.3)
-    if matched_title == "Save Manifest Error":
-        raise RuntimeError("Save dialog reported an error — see error_text above")
+    raise RuntimeError("Save dialog reported an error — see error_text above")
 
 
 def open_execute_action_dialog(win: UIAWrapper) -> tuple[UIAWrapper, int]:
@@ -617,10 +612,16 @@ def mark_all_via_regex_standalone(
 
 
 def execute_and_confirm(
-    execute_dlg: UIAWrapper, dialog_timeout: float = 10
+    execute_dlg: UIAWrapper,
+    dialog_timeout: float = 10,
+    on_confirm_open=None,
 ) -> None:
     """Click Execute on the Execute Action dialog, then Yes on the
     'All Files Will Be Deleted' confirmation QMessageBox.
+
+    *on_confirm_open*, if provided, is called with the open confirmation
+    dialog wrapper before Yes is clicked. Used by the destructive-confirm
+    invariant probe to inspect the dialog's shape (Yes/No buttons, body).
 
     Returns when the Execute Action dialog has accepted (closed) — that's
     the signal that send2trash + mark_executed have completed.
@@ -632,6 +633,11 @@ def execute_and_confirm(
 
     confirm_hwnd = wait_for_dialog(pid, EXECUTE_CONFIRM_TITLE, timeout=dialog_timeout)
     confirm_dlg = connect_by_handle(confirm_hwnd)
+    if on_confirm_open is not None:
+        try:
+            on_confirm_open(confirm_dlg)
+        except Exception as exc:
+            print(f"  on_confirm_open raised: {exc!r}")
     _focus(confirm_dlg)
     time.sleep(0.2)
     yes_btn = confirm_dlg.child_window(title="Yes", control_type="Button")
