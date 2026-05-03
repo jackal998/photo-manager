@@ -37,6 +37,7 @@ ALL_SCENARIOS = [
     "s12_save_manifest",
     "s13_execute_action",
     "s14_action_by_regex",
+    "s15_context_menu",
 ]
 
 
