@@ -22,6 +22,8 @@ from PySide6.QtCore import QThread, Signal
 
 from loguru import logger
 
+from app.views.components.status_messages import plural_form
+
 
 class ManifestLoadWorker(QThread):
     """Loads all rows from a manifest SQLite in a background thread.
@@ -73,5 +75,7 @@ class ManifestLoadWorker(QThread):
         if self._default_sort:
             SortService().sort(groups, self._default_sort)
 
-        self.progress.emit(f"Loaded {len(groups):,} group(s).")
+        self.progress.emit(
+            f"Loaded {len(groups):,} {plural_form(len(groups), 'group')}."
+        )
         self.finished.emit(groups)

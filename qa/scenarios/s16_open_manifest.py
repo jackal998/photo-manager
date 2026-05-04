@@ -83,9 +83,15 @@ def main() -> int:
     print(f"  status_at_load={status_at_load!r}")
 
     print("step: assert_status_shape")
-    # The helper returned the status text it observed at success — re-check
-    # the shape here so failures point at the regex, not at a polling race.
-    if not re.search(r"Opened manifest:.*pair.*file", status_at_load):
+    # Tight shape match — verifies the literal phrase "to review" and
+    # the parenthesised file count survive any future copy edits. Allows
+    # either singular ("1 pair") or plural ("5 pairs") on both nouns;
+    # the singular/plural correctness for N=1 is enforced by the
+    # tests/test_status_messages.py unit tests (#109).
+    if not re.search(
+        r"Opened manifest: \d+ pairs? to review \(\d+ files?\)",
+        status_at_load,
+    ):
         print(f"FAIL: status shape mismatch — got {status_at_load!r}")
         return 1
 
