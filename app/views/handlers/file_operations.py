@@ -226,7 +226,11 @@ class FileOperationsHandler:
                 self.ui_updater.refresh_tree(self.vm.groups)
                 self._sync_removed_to_db(paths_for_db)
                 report_count(
-                    self.status_reporter, "Removed", len(highlighted_items), "item from list"
+                    self.status_reporter,
+                    "Removed",
+                    len(highlighted_items),
+                    "item from list",
+                    plural="items from list",
                 )
                 return
 
@@ -272,7 +276,13 @@ class FileOperationsHandler:
             self._sync_removed_to_db(paths_for_db)
 
             total_removed = len(file_paths) + len(group_numbers)
-            report_count(self.status_reporter, "Removed", total_removed, "item from list")
+            report_count(
+                self.status_reporter,
+                "Removed",
+                total_removed,
+                "item from list",
+                plural="items from list",
+            )
 
         except Exception as e:
             logger.error("Remove items from list failed: {}", e)

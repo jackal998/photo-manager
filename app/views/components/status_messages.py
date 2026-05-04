@@ -62,11 +62,18 @@ def report_count(
     verb: str,
     count: int,
     noun: str,
+    plural: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_MS,
 ) -> None:
     """Report a completed action with a count. e.g. ``Removed 5 items``.
 
-    Pluralizes *noun* by appending ``s`` when count is not exactly 1.
+    Default pluralization appends ``s`` to *noun* when count is not
+    exactly 1. For irregular plurals (children) or multi-word phrases
+    where the bare suffix rule lands on the wrong word
+    ("item from list" → "item from lists"), pass *plural* explicitly:
+
+        report_count(reporter, "Removed", n, "item from list",
+                     plural="items from list")
     """
-    suffix = "" if count == 1 else "s"
-    reporter.show_status(f"{verb} {count} {noun}{suffix}", timeout)
+    form = noun if count == 1 else (plural or noun + "s")
+    reporter.show_status(f"{verb} {count} {form}", timeout)

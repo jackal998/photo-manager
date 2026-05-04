@@ -37,6 +37,7 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     # s18 doesn't run a scan; the source list is irrelevant.
     "s18_log_menu":            [],
     "s19_context_menu_open_folder": ["qa/sandbox/near-duplicates"],
+    "s21_list_menu_remove":         ["qa/sandbox/near-duplicates"],
 }
 
 

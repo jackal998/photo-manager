@@ -45,6 +45,31 @@ def test_report_count_custom_timeout():
     reporter.show_status.assert_called_once_with("Loaded 3 groups", 10000)
 
 
+def test_report_count_multi_word_noun_uses_explicit_plural():
+    """Caught by s21: the bare-suffix rule attaches 's' to the LAST word
+    of a multi-word noun, producing 'Removed 2 item from lists' instead
+    of 'Removed 2 items from list'. Callers fix this by passing the
+    correct plural form explicitly."""
+    reporter = MagicMock()
+    report_count(
+        reporter, "Removed", 2, "item from list", plural="items from list"
+    )
+    reporter.show_status.assert_called_once_with(
+        "Removed 2 items from list", DEFAULT_TIMEOUT_MS
+    )
+
+
+def test_report_count_singular_ignores_plural_arg():
+    """When count is 1, the singular form wins regardless of plural=."""
+    reporter = MagicMock()
+    report_count(
+        reporter, "Removed", 1, "item from list", plural="items from list"
+    )
+    reporter.show_status.assert_called_once_with(
+        "Removed 1 item from list", DEFAULT_TIMEOUT_MS
+    )
+
+
 # ── pluralize / plural_form (added for #109) ──────────────────────────────
 
 
