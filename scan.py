@@ -233,7 +233,7 @@ def main() -> int:
     print("Classifying…", flush=True)
     rows = classify(hash_results, threshold=args.threshold, source_priority=source_priority)
 
-    print_summary(rows)
+    print_summary(rows, skipped=len(skipped))
 
     if args.dry_run:
         print("--dry-run: manifest not written.", flush=True)

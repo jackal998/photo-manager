@@ -80,14 +80,30 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
         conn.commit()
 
 
-def print_summary(rows: list[ManifestRow]) -> None:
-    """Print an action-count summary table to stdout."""
+def print_summary(rows: list[ManifestRow], skipped: int = 0) -> None:
+    """Print an action-count summary table to stdout.
+
+    Args:
+        rows: Classified manifest rows (action breakdown is derived from these).
+        skipped: Count of files that were walked + hashed but excluded from
+            the manifest (unreadable / decode-failed). When > 0, a separate
+            ``Skipped (unreadable)`` line is printed so the headline number
+            reconciles with the ``Skipped N unreadable file(s):`` line that
+            scan_worker / scan.py emit earlier in the log (#87).
+
+    The headline label is ``Indexed in manifest`` — accurately describing
+    ``len(rows)``, which is the manifest row count, not a "files scanned"
+    count. The previous wording falsely implied 0 files were processed when
+    every file was decode-skipped (#87).
+    """
     from collections import Counter
     counts: Counter = Counter(r.action for r in rows)
     total = len(rows)
 
     print("\n── Migration Manifest Summary ──────────────────────")
-    print(f"  Total files scanned : {total:>7,}")
+    print(f"  Indexed in manifest : {total:>7,}")
+    if skipped:
+        print(f"  Skipped (unreadable): {skipped:>7,}")
     for action in ("KEEP", "MOVE", "EXACT", "REVIEW_DUPLICATE", "UNDATED"):
         n = counts.get(action, 0)
         pct = 100 * n / total if total else 0

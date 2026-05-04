@@ -162,6 +162,48 @@ class TestPrintSummary:
         out = capsys.readouterr().out
         assert "0" in out
 
+    # ── #87: headline label + skipped reconciliation ───────────────────────
+
+    def test_headline_label_is_indexed_in_manifest(self, capsys):
+        """The headline counts manifest rows, so the label must say so —
+        not 'Total files scanned' (which falsely implies files walked +
+        hashed). Catches the misleading-label bug from #87."""
+        print_summary([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")])
+        out = capsys.readouterr().out
+        assert "Indexed in manifest" in out
+        assert "Total files scanned" not in out
+
+    def test_skipped_line_omitted_when_zero(self, capsys):
+        """No skipped files → no Skipped line (avoids visual noise on the
+        happy path)."""
+        print_summary([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")])
+        out = capsys.readouterr().out
+        assert "Skipped (unreadable)" not in out
+
+    def test_skipped_line_appears_when_nonzero(self, capsys):
+        """The whole point of #87: when files were walked + hashed but
+        excluded from the manifest, surface the count so the headline
+        reconciles with the per-step log lines above."""
+        print_summary([], skipped=3)
+        out = capsys.readouterr().out
+        assert "Skipped (unreadable)" in out
+        assert "3" in out
+
+    def test_skipped_zero_value_not_printed(self, capsys):
+        """Explicit skipped=0 is the same as the default — no line printed."""
+        print_summary([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], skipped=0)
+        out = capsys.readouterr().out
+        assert "Skipped (unreadable)" not in out
+
+    def test_corrupt_only_scenario_reconciles(self, capsys):
+        """The exact #87 reproduction: 1 file walked, decode-failed → 0 in
+        manifest, 1 skipped. Both numbers must appear so the user can
+        reconcile against the 'Hashed 1/1' line earlier in the log."""
+        print_summary([], skipped=1)
+        out = capsys.readouterr().out
+        assert "Indexed in manifest :       0" in out
+        assert "Skipped (unreadable):       1" in out
+
 
 # ── TestManifestSchemaColumns ───────────────────────────────────────────────
 

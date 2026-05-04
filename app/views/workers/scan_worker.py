@@ -219,7 +219,7 @@ class ScanWorker(QThread):
         # Capture print_summary output and re-emit as progress
         buf = io.StringIO()
         with redirect_stdout(buf):
-            print_summary(rows)
+            print_summary(rows, skipped=len(skipped))
         for line in buf.getvalue().splitlines():
             self._emit(line)
 
