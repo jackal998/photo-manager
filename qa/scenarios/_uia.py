@@ -241,22 +241,47 @@ def force_foreground(hwnd: int) -> None:
     _user32.SwitchToThisWindow(hwnd, True)
 
 
-def _focus(wrapper: UIAWrapper) -> None:
-    """Bring `wrapper`'s top-level window to the foreground before a click.
+def _focus(wrapper: UIAWrapper, timeout: float = 1.5) -> None:
+    """Bring `wrapper`'s top-level window to the foreground, then *wait
+    until Windows actually honours it* before returning.
 
-    Pure pywinauto `set_focus()` does the AttachThreadInput dance, which is
-    far more reliable than Win32 `SwitchToThisWindow` against Windows'
-    foreground-lock heuristic. Falls back to SwitchToThisWindow if set_focus
-    raises (e.g. transient menu popups during teardown).
+    Why this matters: Windows enforces a foreground-lock heuristic — a
+    background process can call `SetForegroundWindow` and have it
+    silently no-op when another window owns foreground (e.g. the
+    terminal that launched this driver). The previous "fire and sleep
+    50 ms" version returned before the foreground change took effect,
+    so the next `click_input` was delivered to whatever window WAS
+    foreground (terminal/IDE) and the photo-manager click was lost.
+
+    This version retries `set_focus()` inside a poll loop until
+    `GetForegroundWindow()` matches the target HWND, then returns.
+    Falls through silently after `timeout` so the caller can still
+    attempt the click — the action layer (open_menu, etc.) has its
+    own retry to recover from the rare case where foreground refuses.
     """
-    try:
-        wrapper.set_focus()
-    except Exception:
-        try:
-            _user32.SwitchToThisWindow(wrapper.handle, True)
-        except Exception:
-            pass
-    time.sleep(0.05)
+    target = wrapper.handle
+    if _user32.GetForegroundWindow() == target:
+        return  # already foreground — don't perturb state
+
+    deadline = time.time() + timeout
+    last_set_focus_at = 0.0
+    while time.time() < deadline:
+        if _user32.GetForegroundWindow() == target:
+            return
+        # Retry set_focus at most every 200 ms — calling it every 50 ms
+        # piles up AttachThreadInput pairs faster than Windows can drain
+        # them, which thrashes focus state and can dismiss popups or
+        # delay the next click. 200 ms gives each call a fair chance.
+        if time.time() - last_set_focus_at > 0.2:
+            try:
+                wrapper.set_focus()
+            except Exception:
+                try:
+                    _user32.SwitchToThisWindow(target, True)
+                except Exception:
+                    pass
+            last_set_focus_at = time.time()
+        time.sleep(0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -281,17 +306,41 @@ def connect_by_handle(hwnd: int) -> UIAWrapper:
 def open_menu(win: UIAWrapper, menu_title: str) -> UIAWrapper:
     """Click a top-level menu and return the popup wrapper.
 
+    Retries up to 3 times because the foreground-lock heuristic on
+    Windows can swallow the first click_input if another window
+    (terminal, IDE) was foreground when the helper was called. Between
+    retries, send Esc to clear any stuck menu-bar-active state from a
+    swallowed click.
+
     Caller is responsible for clicking an item in the popup; the popup
     closes when an item is clicked or focus moves away.
     """
-    _focus(win)
-    time.sleep(0.3)
-    win.child_window(title=menu_title, control_type="MenuItem").click_input()
-    time.sleep(0.5)
-    popup_hwnd = find_popup(win.process_id())
-    if popup_hwnd is None:
-        raise RuntimeError(f"menu popup did not appear for {menu_title!r}")
-    return connect_by_handle(popup_hwnd)
+    pid = win.process_id()
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            _focus(win)
+            time.sleep(0.3 + attempt * 0.2)
+            win.child_window(
+                title=menu_title, control_type="MenuItem"
+            ).click_input()
+        except Exception as exc:
+            last_err = exc
+            time.sleep(0.3)
+            continue
+        time.sleep(0.5)
+        popup_hwnd = find_popup(pid)
+        if popup_hwnd is not None:
+            return connect_by_handle(popup_hwnd)
+        # No popup — bar may be in active mode from a swallowed click.
+        # Send Esc to reset before retrying.
+        _user32.keybd_event(0x1B, 0, 0, 0)
+        _user32.keybd_event(0x1B, 0, 2, 0)
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"menu popup did not appear for {menu_title!r} after 3 attempts"
+        + (f" (last click error: {last_err!r})" if last_err else "")
+    )
 
 
 def click_menu_item(popup: UIAWrapper, item_title: str) -> None:
@@ -424,7 +473,14 @@ def probe_menu_items(win: UIAWrapper, menu_title: str) -> list[tuple[str, bool]]
                 out.append((title, bool(it.is_enabled())))
         except Exception:
             continue
-    # Dismiss popup with Esc — same pattern s01 already uses inline.
+    # Dismiss popup with Esc TWICE — Qt's QMenuBar leaves the bar in
+    # "active mode" after a single Esc (popup closed, but the bar still
+    # has focus and swallows the next menu-bar click as an exit-active
+    # signal instead of opening a new popup). The second Esc exits
+    # active mode so subsequent open_menu calls behave normally.
+    _user32.keybd_event(0x1B, 0, 0, 0)
+    _user32.keybd_event(0x1B, 0, 2, 0)
+    time.sleep(0.1)
     _user32.keybd_event(0x1B, 0, 0, 0)
     _user32.keybd_event(0x1B, 0, 2, 0)
     time.sleep(0.2)
@@ -1017,6 +1073,45 @@ def _drive_action_dialog_form(
     time.sleep(0.3)
 
 
+def _click_btn_and_wait_for_dialog(
+    btn: UIAWrapper,
+    parent_dlg: UIAWrapper,
+    pid: int,
+    dialog_title: str,
+    attempts: int = 3,
+    per_attempt_timeout: float = 4.0,
+) -> int:
+    """Click a button and wait for a window titled ``dialog_title`` in pid.
+
+    Retries the click if the dialog does not appear within
+    ``per_attempt_timeout`` seconds. Used by helpers whose flake mode is
+    "click was swallowed and no dialog appeared" — the same family as
+    ``open_menu``'s popup-didn't-appear race, but for buttons that spawn
+    a dialog rather than a menu popup.
+
+    Re-clicking when the dialog has actually opened is a no-op (the
+    button is behind a modal child dialog), so the retry is safe.
+    """
+    last_err: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            _focus(parent_dlg)
+            btn.click_input()
+        except Exception as exc:
+            last_err = exc
+            time.sleep(0.3)
+            continue
+        try:
+            return wait_for_dialog(pid, dialog_title, timeout=per_attempt_timeout)
+        except TimeoutError as exc:
+            last_err = exc
+            time.sleep(0.3)
+    raise TimeoutError(
+        f"dialog {dialog_title!r} did not appear after {attempts} click "
+        f"attempts (last error: {last_err!r})"
+    )
+
+
 def mark_all_via_regex(
     execute_dlg: UIAWrapper,
     field: str,
@@ -1037,10 +1132,10 @@ def mark_all_via_regex(
     select_btn = execute_dlg.child_window(
         title=EXECUTE_BTN_SELECT_BY_REGEX, control_type="Button"
     )
-    _focus(execute_dlg)
-    select_btn.click_input()
-
-    action_hwnd = wait_for_dialog(pid, ACTION_DIALOG_TITLE, timeout=dialog_timeout)
+    action_hwnd = _click_btn_and_wait_for_dialog(
+        select_btn, execute_dlg, pid, ACTION_DIALOG_TITLE,
+        per_attempt_timeout=dialog_timeout,
+    )
     action_dlg = connect_by_handle(action_hwnd)
     _focus(action_dlg)
     time.sleep(0.3)
@@ -1093,10 +1188,10 @@ def execute_and_confirm(
     """
     pid = execute_dlg.process_id()
     execute_btn = execute_dlg.child_window(title=EXECUTE_BTN, control_type="Button")
-    _focus(execute_dlg)
-    execute_btn.click_input()
-
-    confirm_hwnd = wait_for_dialog(pid, EXECUTE_CONFIRM_TITLE, timeout=dialog_timeout)
+    confirm_hwnd = _click_btn_and_wait_for_dialog(
+        execute_btn, execute_dlg, pid, EXECUTE_CONFIRM_TITLE,
+        per_attempt_timeout=dialog_timeout,
+    )
     confirm_dlg = connect_by_handle(confirm_hwnd)
     if on_confirm_open is not None:
         try:
@@ -1288,13 +1383,26 @@ def right_click_tree_row(win: UIAWrapper, basename: str) -> None:
     Caller is responsible for any prior selection setup (left-click or
     ctrl-click). After this call, the QMenu popup is open and ready for
     `select_popup_menu_path`.
+
+    Retries up to 3 times if the popup doesn't appear — same flake mode
+    as ``open_menu`` (foreground/timing race swallowing the click). Sends
+    Esc between attempts in case a stuck menu-bar-active state from a
+    swallowed click is blocking the next one.
     """
     import pywinauto.mouse
 
     cx, cy = _row_anchor(win, basename)
-    _focus(win)
-    pywinauto.mouse.right_click(coords=(cx, cy))
-    time.sleep(0.4)
+    pid = win.process_id()
+    for attempt in range(3):
+        _focus(win)
+        pywinauto.mouse.right_click(coords=(cx, cy))
+        time.sleep(0.4)
+        if _list_popup_hwnds(pid):
+            return
+        # No popup — reset any stuck state before retrying.
+        _user32.keybd_event(0x1B, 0, 0, 0)
+        _user32.keybd_event(0x1B, 0, 2, 0)
+        time.sleep(0.3)
 
 
 def select_popup_menu_path(
