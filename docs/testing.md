@@ -163,6 +163,50 @@ Three triggers, three test homes:
 
 ---
 
+## Changing UI labels (and not breaking the QA batch)
+
+The qa-explore drivers couple to app/ source via three surfaces:
+**`qa/scenarios/_uia.py` constants** (button titles, dialog titles,
+menu items), **`qa/scenarios/_invariants.py`'s menu-item table**
+(hardcoded menu labels for the manifest-action invariant), and
+**inline strings inside individual scenario files** (status-bar regex,
+dialog body substrings).
+
+When you rename a button or change a dialog title in `app/`:
+
+1. Grep `qa/` for the old string (`grep -rn "Old Label" qa/`). That's
+   your blast radius. Update every match.
+2. Run the affected scenario(s) targeted: `python -m
+   qa.scenarios._batch sNN_xyz` — fast iteration vs. the full batch.
+3. If you forget step 1, [`tests/test_uia_label_coupling.py`](../tests/test_uia_label_coupling.py)
+   catches it at PR time. The test verifies every user-facing label
+   constant in `_uia.py` and every hardcoded label in `_invariants.py`
+   still appears somewhere in `app/*.py`. It runs in CI as a regular
+   pytest, so a stale `_uia.py` constant fails the test that gates
+   the merge.
+
+**What the lint test does NOT catch:**
+
+- Inline strings inside individual `qa/scenarios/sNN_*.py` files
+  (status-bar regex like `r"Removed N items from list"`, dialog body
+  substrings). Those are matched by intent rather than exact text and
+  live in arbitrary positions. Status-bar copy is centralized through
+  `app/views/components/status_messages.report_count`; the existing
+  `tests/test_status_messages.py` pins the formatter so callers (and
+  the regex they're matched by) stay coherent.
+- Auto IDs (`SCAN_AID_*`) — those are computed from the QObject
+  hierarchy at runtime. Renaming a class breaks the auto_id without
+  any source-text drift visible to a static check.
+- A constant could exist in `app/` but in an unrelated context — the
+  lint only verifies the string is present, not that it labels the
+  right widget.
+
+For comprehensive verification before merge, run the full batch:
+`python -m qa.scenarios._batch`. The lint test is the cheap, fast,
+CI-runnable subset that catches the most common drift class.
+
+---
+
 ## Open work
 
 - **Layer 2 is on-demand**, not on the roadmap. Add a spot-test under
