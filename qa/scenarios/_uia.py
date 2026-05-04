@@ -61,6 +61,9 @@ SCAN_AID_OUTPUT_PATH = "QApplication.ScanDialog.QLineEdit"
 SCAN_AID_SOURCE_TABLE = (
     "QApplication.ScanDialog.QSplitter._SourceListWidget.QTableWidget"
 )
+SCAN_AID_TREE_PATH_FIELD = (
+    "QApplication.ScanDialog.QSplitter.QGroupBox._FolderTreePanel.QLineEdit"
+)
 
 # Execute Action dialog
 EXECUTE_DIALOG_TITLE = "Execute Actions — Review"
@@ -402,6 +405,236 @@ def close_and_load_manifest(dlg: UIAWrapper) -> None:
     _focus(dlg)
     btn.invoke()
     time.sleep(1.0)
+
+
+# ---------------------------------------------------------------------------
+# ScanDialog source-list widget operations (s17) — drive _SourceListWidget
+# directly: add via tree-panel path field, reorder via ↑↓, toggle Recursive,
+# remove via ×. Y-coordinate sort makes per-row dispatch unambiguous because
+# the only QCheckBox / ↑ / ↓ / × controls in the dialog are the per-row ones.
+# ---------------------------------------------------------------------------
+
+
+def _find_tree_path_field(dlg: UIAWrapper) -> UIAWrapper:
+    """Return the _FolderTreePanel QLineEdit (where the user types a path).
+
+    Tries the auto_id constant first; falls back to "the QLineEdit whose
+    placeholder mentions 'absolute folder path'" so we survive auto_id
+    hierarchy drift if Qt re-parents the widget.
+    """
+    try:
+        edit = dlg.child_window(
+            auto_id=SCAN_AID_TREE_PATH_FIELD, control_type="Edit"
+        )
+        edit.element_info  # force resolution
+        return edit
+    except Exception:
+        pass
+    # Fallback — placeholder text comes from photo-manager source, locale-stable.
+    for edit in dlg.descendants(control_type="Edit"):
+        try:
+            help_text = (edit.legacy_properties().get("Help") or "").lower()
+            if "absolute folder path" in help_text:
+                return edit
+        except Exception:
+            continue
+    raise RuntimeError("tree-panel path field not found in ScanDialog")
+
+
+def add_source_via_path_field(dlg: UIAWrapper, path: str) -> None:
+    """Add a source folder via the tree-panel path field + ``+ Add`` button.
+
+    Sets the path text via UIA ValuePattern (IME-safe, focus-independent),
+    then clicks the adjacent ``+ Add`` QPushButton whose ``clicked`` signal
+    runs ``_on_add_typed``. We deliberately do NOT press Enter here:
+    ``Start Scan`` is the dialog's default button (``setDefault(True)``),
+    so any Enter keystroke that reaches the dialog instead of the focused
+    QLineEdit kicks off a scan with whatever's already in the source list.
+    Windows foreground-lock and IME races make that focus delivery
+    intermittent — the result was a stray scan running in the background,
+    holding the run-manifest.sqlite handle, and producing a ``Scan Failed``
+    QMessageBox later when the next scan tried to overwrite the file.
+    Clicking the dedicated button has no such race surface.
+    """
+    edit = _find_tree_path_field(dlg)
+    _focus(dlg)
+    edit.iface_value.SetValue(str(path))
+    time.sleep(0.1)
+
+    add_btn = next(
+        (
+            b
+            for b in dlg.descendants(control_type="Button")
+            if (b.window_text() or "").strip() == "+ Add"
+        ),
+        None,
+    )
+    if add_btn is None:
+        raise RuntimeError("'+ Add' button not found in ScanDialog")
+    try:
+        add_btn.invoke()
+    except Exception:
+        add_btn.click_input()
+    time.sleep(0.3)
+
+
+def _table_cells_by_row(dlg: UIAWrapper) -> list[list[tuple[int, int, int, int]]]:
+    """Return per-row cell rectangles, row-sorted top-to-bottom and
+    column-sorted left-to-right within each row.
+
+    Each cell is ``(left, top, right, bottom)`` in screen coordinates.
+    Used to locate row controls (Recursive checkbox, ↑/↓ pair, ×) by
+    pixel position — Qt's setCellWidget'd children are NOT exposed in
+    the UIA tree, so DataItem rectangles are the only reliable hook.
+    """
+    try:
+        table = dlg.child_window(
+            auto_id=SCAN_AID_SOURCE_TABLE, control_type="Table"
+        )
+    except Exception:
+        return []
+    raw: list[tuple[int, int, int, int]] = []
+    for it in table.descendants(control_type="DataItem"):
+        try:
+            r = it.rectangle()
+            raw.append((r.left, r.top, r.right, r.bottom))
+        except Exception:
+            continue
+    if not raw:
+        return []
+
+    raw.sort(key=lambda c: (c[1], c[0]))
+    rows: list[list[tuple[int, int, int, int]]] = []
+    cur: list[tuple[int, int, int, int]] = []
+    last_y = -10**9
+    for left, top, right, bottom in raw:
+        if abs(top - last_y) > 10:
+            if cur:
+                rows.append(sorted(cur, key=lambda c: c[0]))
+            cur = [(left, top, right, bottom)]
+            last_y = top
+        else:
+            cur.append((left, top, right, bottom))
+    if cur:
+        rows.append(sorted(cur, key=lambda c: c[0]))
+    return rows
+
+
+def read_source_paths(dlg: UIAWrapper) -> list[str]:
+    """Return source-table paths in row order (top-to-bottom).
+
+    Reads only column 1 (path text), which is a real QTableWidgetItem
+    and so is exposed in the UIA tree. The Recursive / ↑↓ / × cells
+    are setCellWidget'd and have no accessible state — callers cannot
+    read those, only act on them.
+    """
+    try:
+        table = dlg.child_window(
+            auto_id=SCAN_AID_SOURCE_TABLE, control_type="Table"
+        )
+    except Exception:
+        return []
+    candidates: list[tuple[int, str]] = []
+    for cell in table.descendants(control_type="DataItem"):
+        try:
+            txt = (cell.window_text() or "").strip()
+            if not txt or ("\\" not in txt and "/" not in txt):
+                continue
+            candidates.append((cell.rectangle().top, txt))
+        except Exception:
+            continue
+    candidates.sort(key=lambda c: c[0])
+    return [t for _, t in candidates]
+
+
+def click_source_row_button(dlg: UIAWrapper, row: int, kind: str) -> None:
+    """Click ↑ / ↓ / × on the given 0-indexed row by pixel coordinates.
+
+    ``kind`` is one of ``"up"``, ``"down"``, ``"remove"``.
+
+    setCellWidget'd buttons are not exposed in Qt's UIA tree, so we
+    target them by clicking inside the column DataItem rectangle:
+
+      - col 3 contains the ↑↓ pair side-by-side; click left third for
+        ↑, right third for ↓ (centered button widths are 26px each).
+      - col 4 contains the × button; click center.
+
+    After the click the table is rebuilt from scratch (see
+    _SourceListWidget._move / ._remove); callers should re-read row
+    state via read_source_paths.
+    """
+    import pywinauto.mouse
+
+    if kind not in {"up", "down", "remove"}:
+        raise ValueError(f"kind must be up|down|remove, got {kind!r}")
+
+    rows = _table_cells_by_row(dlg)
+    if row < 0 or row >= len(rows):
+        raise IndexError(f"row {row} out of range (have {len(rows)} rows)")
+    cells = rows[row]
+    if len(cells) < 5:
+        raise RuntimeError(
+            f"row {row} has only {len(cells)} cells; expected 5 "
+            f"(#, Path, Recursive, ↑↓, ×)"
+        )
+
+    if kind == "remove":
+        left, top, right, bottom = cells[4]
+    else:
+        left, top, right, bottom = cells[3]
+
+    cy = top + (bottom - top) // 2
+    if kind == "up":
+        # ↑ sits in the left half of column 3
+        cx = left + (right - left) // 4
+    elif kind == "down":
+        # ↓ sits in the right half of column 3
+        cx = left + 3 * (right - left) // 4
+    else:  # remove
+        cx = left + (right - left) // 2
+
+    _focus(dlg)
+    pywinauto.mouse.click(button="left", coords=(cx, cy))
+    time.sleep(0.3)
+
+
+def toggle_source_row_recursive(dlg: UIAWrapper, row: int) -> None:
+    """Toggle the Recursive checkbox in the given 0-indexed row.
+
+    setCellWidget'd checkboxes do not surface in the UIA tree, so we
+    click the center of the column-2 cell rectangle. Qt routes the
+    click to the cell widget (centered checkbox) which fires
+    stateChanged → _on_recursive_changed.
+
+    There is no UIA-level way to read the resulting toggle state back;
+    callers should treat this as fire-and-forget and verify the
+    behavioral effect through other channels (e.g. a subsequent scan
+    using non-recursive depth produces a different file count).
+    """
+    import pywinauto.mouse
+
+    rows = _table_cells_by_row(dlg)
+    if row < 0 or row >= len(rows):
+        raise IndexError(f"row {row} out of range (have {len(rows)} rows)")
+    cells = rows[row]
+    if len(cells) < 3:
+        raise RuntimeError(
+            f"row {row} has only {len(cells)} cells; expected at least 3"
+        )
+    left, top, right, bottom = cells[2]
+    cx = left + (right - left) // 2
+    cy = top + (bottom - top) // 2
+    _focus(dlg)
+    pywinauto.mouse.click(button="left", coords=(cx, cy))
+    time.sleep(0.2)
+
+
+def click_remove_all_sources(dlg: UIAWrapper) -> None:
+    """Click the 'Remove All' header button to empty the source list."""
+    btn = dlg.child_window(title=SCAN_BTN_REMOVE_ALL, control_type="Button")
+    _focus(dlg)
+    btn.click_input()
+    time.sleep(0.3)
 
 
 def _find_filename_edit(native_dlg: UIAWrapper) -> UIAWrapper:

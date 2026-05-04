@@ -31,6 +31,9 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     "s14_action_by_regex": ["qa/sandbox/near-duplicates"],
     "s15_context_menu":    ["qa/sandbox/near-duplicates"],
     "s16_open_manifest":   ["qa/sandbox/near-duplicates"],
+    # s17 starts from an empty source list — the driver populates it via the
+    # in-dialog widgets; that's the whole point of the scenario.
+    "s17_scan_dialog_widgets": [],
 }
 
 
