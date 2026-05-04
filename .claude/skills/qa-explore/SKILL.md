@@ -99,7 +99,7 @@ If everything is already populated, skip the regen and move on.
 ## Phase 3 — Plan
 
 **Default behavior — invoked with no additional prompt:** run **all
-17 scenarios** in batch via `qa.scenarios._batch`. Don't print the
+18 scenarios** in batch via `qa.scenarios._batch`. Don't print the
 menu, don't ask which to run. Get one `yes batch` approval up front
 (per the gate rule below) and proceed. The full batch typically
 finishes in ~30–60 seconds with the focus fix in `_uia.py`.
@@ -520,6 +520,7 @@ running.
 | 15 | Right-click context menu Set Action → delete / keep | `qa.scenarios.s15_context_menu` | ✓ ready |
 | 16 | File → Open Manifest async load (happy + error path) | `qa.scenarios.s16_open_manifest` | ✓ ready |
 | 17 | Scan dialog widgets (add / remove / reorder / recursive) | `qa.scenarios.s17_scan_dialog_widgets` | ✓ ready |
+| 18 | Log menu (Open Latest Log / Delete Log / Log Dir / Delete Log Dir) | `qa.scenarios.s18_log_menu` | ✓ ready |
 
 Several drivers also call cross-scenario invariant probes from
 `qa/scenarios/_invariants.py` — they assert that the status bar matches
@@ -550,14 +551,14 @@ output.
 in one go, use `qa.scenarios._batch`:
 
 ```
-.venv/Scripts/python.exe -m qa.scenarios._batch              # all 17 (s01–s17)
+.venv/Scripts/python.exe -m qa.scenarios._batch              # all 18 (s01–s18)
 .venv/Scripts/python.exe -m qa.scenarios._batch s04_corrupted s09_walker_exclusions
 ```
 
 For each scenario it: configures `qa/settings.json` → launches
 `main.py` → waits 3.5 s → runs the driver → closes the window →
 waits for the subprocess to exit → moves to the next. Prints a final
-SUMMARY table with rc per scenario. The whole batch (17 scenarios)
+SUMMARY table with rc per scenario. The whole batch (18 scenarios)
 typically finishes in ~120–200 seconds. Each app launch is still a
 real launch — get the user's "yes batch" once before starting.
 

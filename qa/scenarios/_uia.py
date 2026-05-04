@@ -45,6 +45,18 @@ FILE_OPEN_MANIFEST = "Open Manifest…"
 FILE_SAVE_MANIFEST = "Save Manifest Decisions…"
 FILE_EXIT = "Exit"
 
+# Log menu items (s18) — exact accessible names from menu_controller.py
+LOG_OPEN_LATEST_LOG = "Open Latest Log"
+LOG_OPEN_LATEST_DELETE_LOG = "Open Latest Delete Log"
+LOG_OPEN_LOG_DIRECTORY = "Open Log Directory"
+LOG_OPEN_DELETE_LOG_DIRECTORY = "Open Delete Log Directory"
+
+# Corresponding "Not Found" QMessageBox titles in main_window._open_*_log*
+LOG_TITLE_LOG_FILE_NOT_FOUND = "Log File Not Found"
+LOG_TITLE_DELETE_LOG_NOT_FOUND = "Delete Log Not Found"
+LOG_TITLE_LOG_DIR_NOT_FOUND = "Log Directory Not Found"
+LOG_TITLE_DELETE_LOG_DIR_NOT_FOUND = "Delete Log Directory Not Found"
+
 # Action menu items
 ACTION_BY_REGEX = "Set Action by Field/Regex…"
 ACTION_EXECUTE = "Execute Action…"
@@ -313,6 +325,43 @@ def probe_menu_items(win: UIAWrapper, menu_title: str) -> list[tuple[str, bool]]
 # ---------------------------------------------------------------------------
 # Wait helpers
 # ---------------------------------------------------------------------------
+
+
+def assert_no_dialog_within(
+    pid: int, title: str, seconds: float = 1.0
+) -> bool:
+    """Inverse of wait_for_dialog: True iff no window matching ``title``
+    appears in ``pid`` within the polling window. Useful when a click
+    *might* spawn an unwanted dialog (e.g. an unexpected Not-Found
+    QMessageBox from a Log menu happy path)."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        for _hwnd, _cls, t in list_process_windows(pid):
+            if t == title:
+                return False
+        time.sleep(0.1)
+    return True
+
+
+def dismiss_dialog_by_title(pid: int, title: str, timeout: float = 3) -> bool:
+    """Find a window with ``title`` in ``pid`` and dismiss it via Esc.
+
+    Returns True if the dialog was found and dismissed, False if it
+    never appeared. Used to clear a Not-Found QMessageBox after the
+    layer-3 driver has verified its title.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for hwnd, _cls, t in list_process_windows(pid):
+            if t == title:
+                dlg = connect_by_handle(hwnd)
+                _focus(dlg)
+                _user32.keybd_event(0x1B, 0, 0, 0)        # Esc down
+                _user32.keybd_event(0x1B, 0, 2, 0)        # Esc up
+                time.sleep(0.3)
+                return True
+        time.sleep(0.1)
+    return False
 
 
 def wait_for_dialog(pid: int, title: str, timeout: float = 10) -> int:

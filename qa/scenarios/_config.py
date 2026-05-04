@@ -34,6 +34,8 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     # s17 starts from an empty source list — the driver populates it via the
     # in-dialog widgets; that's the whole point of the scenario.
     "s17_scan_dialog_widgets": [],
+    # s18 doesn't run a scan; the source list is irrelevant.
+    "s18_log_menu":            [],
 }
 
 
