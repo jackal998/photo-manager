@@ -297,6 +297,30 @@ confirm, Esc to cancel, Ctrl+S, arrow keys for navigation). The
 existing `qa/scenarios/_uia.save_manifest_via_native_dialog` is the
 reference pattern — copy from it.
 
+**Foreground-lock pitfall — prefer existing `_uia` helpers over inline
+clicks.** Windows enforces a foreground-lock heuristic: when a
+background process (the batch runner, your `Bash` invocation) calls
+`SetForegroundWindow` while another window owns foreground, Windows
+*silently no-ops* the call. The change is asynchronous, so a naive
+"call `set_focus()`, sleep 50 ms, click" sequence sometimes fires the
+click before the photo-manager window is actually foreground — the
+click lands on the terminal/IDE and the photo-manager click is lost.
+The symptom moves with whichever click fluked: "menu popup didn't
+appear", "dialog didn't appear within Ns", "row not selected", etc.
+
+The shared helpers in `qa/scenarios/_uia.py` already handle this:
+`_focus()` polls `GetForegroundWindow()` until the target HWND
+matches (re-issuing `set_focus()` every 200 ms), and the
+click-then-wait helpers (`open_menu`, `right_click_tree_row`,
+`mark_all_via_regex`, `execute_and_confirm`,
+`_click_btn_and_wait_for_dialog`) verify the expected popup/dialog
+actually appeared and retry on miss. **Use them.** Reach for inline
+`pywinauto` only for read-only probes (`descendants`, `window_text`,
+`is_enabled`, `rectangle`) — those are observation, not state change,
+and don't suffer the race. Any inline click that expects a popup or
+dialog should be wrapped in the same verify-and-retry shape; if you
+find yourself writing one, lift it into a helper instead.
+
 **When UIA returns nothing useful** (custom-painted widget, blank
 `Custom` element with no children): that's your cue to fall back to a
 screenshot for *that step only*. Don't abandon UIA for the rest of the
@@ -549,6 +573,16 @@ to `SCENARIO_SOURCES` in `qa/scenarios/_config.py`. Keep drivers
 short — they should encode the canonical happy path, nothing more.
 Open-ended exploration is the LLM's job, on top of the driver's
 output.
+
+If your driver needs a NEW shared helper that issues a click and
+expects a window to appear afterwards (popup, dialog, context menu),
+mirror the verify-and-retry shape of `_click_btn_and_wait_for_dialog`
+or `right_click_tree_row` — fire the click, check the expected
+window appeared within a short per-attempt timeout, and retry up to
+3× on miss. "Click and assume" is a known flake source on Windows
+(see the foreground-lock note in Phase 4.0.5); treat the
+verify-and-retry pattern as a hard requirement for new helpers, not
+a stylistic choice.
 
 **Cleanup convention — drivers that spawn external shell windows
 (Notepad, Explorer, etc. via `os.startfile`, `explorer.exe`,
