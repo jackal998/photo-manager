@@ -120,30 +120,53 @@ def list_process_windows(pid: int) -> list[tuple[int, str, str]]:
     return out
 
 
-def list_explorer_windows() -> list[tuple[int, str]]:
-    """Return [(hwnd, title)] for every visible top-level Windows Explorer
-    window, regardless of process owner.
+# Default Win32 classes for top-level windows that QA drivers spawn as a
+# side effect of os.startfile / explorer.exe shell calls. Closing windows
+# of these classes is safe (they're file/folder viewers, not core shell
+# infrastructure like Progman or Shell_TrayWnd).
+DEFAULT_SHELL_CLASSES: tuple[str, ...] = (
+    "CabinetWClass",   # Windows File Explorer folder window
+    "Notepad",         # Built-in Notepad (default for .log / .txt)
+    "Notepad++",       # Notepad++ if user has it as default
+)
 
-    Identifies them by Win32 class ``CabinetWClass`` — what File Explorer
-    uses for its standard folder windows. Used by s19 to verify that the
-    ``Open Folder`` context-menu action spawned a new Explorer window.
-    Includes pre-existing user windows; callers should snapshot before
-    the action and diff after.
+
+def list_top_level_windows(
+    classes: tuple[str, ...] | None = None,
+) -> list[tuple[int, str, str]]:
+    """Return ``[(hwnd, win32_class, title)]`` for visible top-level windows.
+
+    If ``classes`` is given, return only windows whose Win32 class name
+    is in the tuple. Use this to snapshot before a click that spawns OS
+    shell windows, then diff after to find what appeared.
     """
-    out: list[tuple[int, str]] = []
+    out: list[tuple[int, str, str]] = []
 
     def cb(hwnd, _):
         if _user32.IsWindowVisible(hwnd):
             cls = ctypes.create_unicode_buffer(256)
             _user32.GetClassNameW(hwnd, cls, 256)
-            if cls.value == "CabinetWClass":
+            if classes is None or cls.value in classes:
                 title = ctypes.create_unicode_buffer(512)
                 _user32.GetWindowTextW(hwnd, title, 512)
-                out.append((hwnd, title.value))
+                out.append((hwnd, cls.value, title.value))
         return True
 
     _user32.EnumWindows(_WNDENUMPROC(cb), 0)
     return out
+
+
+def list_explorer_windows() -> list[tuple[int, str]]:
+    """Return [(hwnd, title)] for every visible top-level Windows Explorer
+    window, regardless of process owner.
+
+    Backward-compat wrapper — prefer ``list_top_level_windows`` for new
+    callers. Used by s19's title-shape assertion for the Open Folder action.
+    """
+    return [
+        (hwnd, title)
+        for hwnd, _cls, title in list_top_level_windows(("CabinetWClass",))
+    ]
 
 
 _WM_CLOSE = 0x0010
@@ -157,6 +180,53 @@ def close_window_by_hwnd(hwnd: int) -> None:
     out. ``WM_CLOSE`` only closes the targeted folder window.
     """
     _user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0)
+
+
+def close_new_shell_windows(
+    baseline: list[tuple[int, str, str]],
+    classes: tuple[str, ...] | None = None,
+) -> list[tuple[int, str, str]]:
+    """Snapshot-diff helper: close any shell windows that appeared since
+    ``baseline`` was captured.
+
+    Designed for drivers that intentionally spawn Notepad / Explorer /
+    similar viewers as a side effect of the action under test (s18 Log
+    menu, s19 Open Folder). Workflow::
+
+        baseline = list_top_level_windows(DEFAULT_SHELL_CLASSES)
+        # … perform the click that spawns the shell window …
+        time.sleep(1)
+        closed = close_new_shell_windows(baseline)
+
+    Args:
+        baseline: List of ``(hwnd, class, title)`` taken before the action.
+            Only ``hwnd`` is read; class/title are ignored, kept for
+            symmetry with the producer.
+        classes: Class allowlist for the *current* snapshot. Defaults to
+            ``DEFAULT_SHELL_CLASSES``. Pass a narrower tuple to scope
+            cleanup (e.g. ``("CabinetWClass",)`` to close only Explorer
+            spawns, leaving Notepad alone).
+
+    Returns:
+        ``[(hwnd, class, title)]`` for every window that was sent
+        WM_CLOSE — useful for logging "what we cleaned up".
+
+    Note: only windows in ``classes`` are considered. If the user's
+    default app for .log / .csv files is something other than Notepad
+    or Notepad++ (e.g. VSCode, Sublime), those windows are NOT
+    auto-closed. The driver should document that residual.
+    """
+    if classes is None:
+        classes = DEFAULT_SHELL_CLASSES
+    baseline_hwnds = {h for h, _, _ in baseline}
+    new = [
+        (h, c, t)
+        for h, c, t in list_top_level_windows(classes)
+        if h not in baseline_hwnds
+    ]
+    for hwnd, _cls, _title in new:
+        close_window_by_hwnd(hwnd)
+    return new
 
 
 def find_popup(pid: int) -> int | None:

@@ -18,20 +18,24 @@ Each item has two paths in main_window.py:_open_*_log*:
 
 Which path fires depends on the user's machine state — today's app log
 exists post-init_logging, but the delete-log dir only exists if the user
-has executed deletions. Either path is acceptable per item; this driver
-just verifies that nothing UNEXPECTED appears (a third title would mean
+has executed deletions before. Either path is acceptable per item; this
+driver verifies that nothing UNEXPECTED appears (a third title would mean
 copy drift or a misrouted handler).
 
-⚠️  Side effect: each click that hits the success path spawns a real
-Explorer / Notepad window in a separate process. Those windows persist
-after the test (they belong to OS shell processes that the QA harness
-can't track). Running the s18 driver leaks 1–4 OS windows onto the
-user's desktop — accepted as the cost of layer-3 coverage per #101.
+Cleanup (added in #102 follow-up): each click captures a baseline of
+top-level shell windows (CabinetWClass / Notepad / Notepad++) before
+clicking, then sends WM_CLOSE to any new ones in those classes after.
+This keeps the user's desktop clean across runs. Caveats:
+  - Windows that aren't in DEFAULT_SHELL_CLASSES (e.g. VSCode,
+    Sublime, EditPad if those are the user's default for .log/.csv)
+    are NOT auto-closed — the OS treats those as long-lived editors
+    where forced WM_CLOSE could surprise the user.
+  - WM_CLOSE is asynchronous; the post-test verification is best-effort.
 
 Mode B (forcibly emptying the log dirs to verify all four Not-Found
-warning copies) is explicitly out-of-scope per #101's "Constraints"
-section — the cleanup would be operator-destructive on the user's real
-PhotoManager appdata directory.
+warning copies deterministically) is explicitly out-of-scope per #101's
+"Constraints" section — the cleanup would be operator-destructive on
+the user's real PhotoManager appdata directory.
 
 Catches drift in: menu item titles (registered in
 app/views/components/menu_controller.py), QMessageBox warning titles
@@ -72,7 +76,8 @@ def main() -> int:
 
     for item, expected_not_found_title in _LOG_ITEMS:
         print(f"step: click {item!r}")
-        baseline = _photo_manager_window_titles(pid)
+        baseline_pm = _photo_manager_window_titles(pid)
+        baseline_shell = _uia.list_top_level_windows(_uia.DEFAULT_SHELL_CLASSES)
 
         try:
             _uia.menu_path(win, _uia.MENU_LOG, item)
@@ -80,18 +85,29 @@ def main() -> int:
             print(f"FAIL: menu navigation to Log > {item!r} raised {exc!r}")
             return 1
 
-        # Give either path (success → no dialog; not-found → QMessageBox)
-        # ~1s to settle. QMessageBox.warning is synchronous from the slot's
-        # perspective, but UIA enumeration of the new top-level window can
-        # lag the modal's actual show() by a few frames.
+        # Give either path (success → external shell window; not-found →
+        # PM-owned QMessageBox) ~1s to settle. Both modal show() and
+        # os.startfile spawn happen async-ish from the slot's perspective,
+        # but UIA + EnumWindows enumeration of new top-level windows can
+        # lag the show() by a few frames.
         time.sleep(1.0)
-        after = _photo_manager_window_titles(pid)
-        new_titles = after - baseline
-        print(f"  new_pm_windows={sorted(new_titles)!r}")
+        after_pm = _photo_manager_window_titles(pid)
+        new_pm_titles = after_pm - baseline_pm
+        print(f"  new_pm_windows={sorted(new_pm_titles)!r}")
 
-        if not new_titles:
-            print(f"  ok: success path (os.startfile spawned external window)")
-        elif new_titles == {expected_not_found_title}:
+        # Clean up any shell windows the click may have spawned BEFORE
+        # checking the PM-side outcome — keeps the desktop tidy even if
+        # an assertion below fails and we early-return.
+        closed = _uia.close_new_shell_windows(baseline_shell)
+        if closed:
+            print(
+                f"  closed_shell_windows="
+                f"{[(c, t) for _h, c, t in closed]!r}"
+            )
+
+        if not new_pm_titles:
+            print(f"  ok: success path (cleaned up {len(closed)} shell window(s))")
+        elif new_pm_titles == {expected_not_found_title}:
             print(f"  ok: not-found path with expected title — dismissing")
             if not _uia.dismiss_dialog_by_title(pid, expected_not_found_title):
                 print(
@@ -102,7 +118,7 @@ def main() -> int:
         else:
             print(
                 f"FAIL: unexpected dialogs after clicking {item!r}: "
-                f"{sorted(new_titles)!r} "
+                f"{sorted(new_pm_titles)!r} "
                 f"(expected either no new dialog OR exactly "
                 f"{{{expected_not_found_title!r}}})"
             )
