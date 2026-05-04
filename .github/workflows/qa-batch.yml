@@ -29,6 +29,12 @@ concurrency:
   group: qa-batch-${{ github.ref }}
   cancel-in-progress: true
 
+# Public-repo hardening: workflow is read-only, no write back to the repo,
+# no token-scoped operations. Locking permissions explicitly here keeps it
+# audit-ready and resilient to future GitHub default changes.
+permissions:
+  contents: read
+
 jobs:
   qa:
     runs-on: windows-latest

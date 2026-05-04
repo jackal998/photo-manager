@@ -20,7 +20,11 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PY = str(REPO / ".venv" / "Scripts" / "python.exe")
+# Inherit the Python that invoked us — works under .venv (the local-dev
+# convention), under a CI runner where actions/setup-python puts python on
+# PATH directly, and under any other venv layout (conda, pyenv-win, etc).
+# Previously hardcoded as REPO/.venv/Scripts/python.exe, which broke CI.
+PY = sys.executable
 
 ALL_SCENARIOS = [
     "s01_happy_path",
