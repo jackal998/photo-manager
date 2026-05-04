@@ -120,6 +120,45 @@ def list_process_windows(pid: int) -> list[tuple[int, str, str]]:
     return out
 
 
+def list_explorer_windows() -> list[tuple[int, str]]:
+    """Return [(hwnd, title)] for every visible top-level Windows Explorer
+    window, regardless of process owner.
+
+    Identifies them by Win32 class ``CabinetWClass`` — what File Explorer
+    uses for its standard folder windows. Used by s19 to verify that the
+    ``Open Folder`` context-menu action spawned a new Explorer window.
+    Includes pre-existing user windows; callers should snapshot before
+    the action and diff after.
+    """
+    out: list[tuple[int, str]] = []
+
+    def cb(hwnd, _):
+        if _user32.IsWindowVisible(hwnd):
+            cls = ctypes.create_unicode_buffer(256)
+            _user32.GetClassNameW(hwnd, cls, 256)
+            if cls.value == "CabinetWClass":
+                title = ctypes.create_unicode_buffer(512)
+                _user32.GetWindowTextW(hwnd, title, 512)
+                out.append((hwnd, title.value))
+        return True
+
+    _user32.EnumWindows(_WNDENUMPROC(cb), 0)
+    return out
+
+
+_WM_CLOSE = 0x0010
+
+
+def close_window_by_hwnd(hwnd: int) -> None:
+    """Politely ask a window to close via PostMessage(WM_CLOSE).
+
+    Does NOT use ``taskkill`` — explorer.exe is the user's shell process
+    (manages desktop, taskbar, system tray); killing it would log them
+    out. ``WM_CLOSE`` only closes the targeted folder window.
+    """
+    _user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0)
+
+
 def find_popup(pid: int) -> int | None:
     """Find the Qt menu popup window owned by pid (Win32 class contains 'Popup')."""
     for hwnd, cls, _title in list_process_windows(pid):
@@ -1068,6 +1107,7 @@ def cancel_scan_dialog(dlg: UIAWrapper) -> None:
 CTX_SET_ACTION = "Set Action"
 CTX_DELETE = "delete"
 CTX_KEEP = "keep (remove action)"
+CTX_OPEN_FOLDER = "Open Folder"
 
 _VK_CONTROL = 0x11
 _KEYEVENTF_KEYUP = 0x0002
