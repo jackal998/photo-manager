@@ -23,6 +23,40 @@ class _StatusReporter(Protocol):
     def show_status(self, message: str, timeout: int = DEFAULT_TIMEOUT_MS) -> None: ...
 
 
+def plural_form(n: int, singular: str, plural: str | None = None) -> str:
+    """Return the noun form (singular vs plural) without the count.
+
+    Use this when you need custom number formatting (thousands separator,
+    locale, etc.) at the call site::
+
+        f"{n:,} {plural_form(n, 'isolated file')}"   # "10,000 isolated files"
+
+    For the common case of plain ``"<n> <noun>"``, use ``pluralize`` instead.
+
+    The default plural is ``f"{singular}s"``. Pass an explicit ``plural``
+    only for irregular forms (geese, mice, children).
+    """
+    if n == 1:
+        return singular
+    return plural or singular + "s"
+
+
+def pluralize(n: int, singular: str, plural: str | None = None) -> str:
+    """Return ``"<n> <singular>"`` when n == 1, else ``"<n> <plural>"``.
+
+    Use this for status-bar messages that contain multiple count+noun
+    phrases (where ``report_count`` doesn't fit) or for irregular plurals
+    where appending ``s`` is wrong.
+
+    Examples:
+        ``pluralize(1, "pair")`` → ``"1 pair"``
+        ``pluralize(5, "pair")`` → ``"5 pairs"``
+        ``pluralize(3, "isolated file")`` → ``"3 isolated files"``
+        ``pluralize(2, "child", "children")`` → ``"2 children"``
+    """
+    return f"{n} {plural_form(n, singular, plural)}"
+
+
 def report_count(
     reporter: _StatusReporter,
     verb: str,

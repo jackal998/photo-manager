@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from loguru import logger
 
 from app.views.components.menu_controller import MenuController
+from app.views.components.status_messages import plural_form, pluralize
 
 # Import extracted components
 from app.views.components.tree_controller import TreeController
@@ -286,9 +287,11 @@ class MainWindow(QMainWindow):
                 isolated = max(0, total - grouped)
             except (sqlite3.Error, OSError):
                 pass
-            parts = [f"{n} group(s)"]
+            parts = [pluralize(n, "group")]
             if isolated:
-                parts.append(f"{isolated:,} isolated file(s)")
+                # Preserve thousands separator on isolated count — typical
+                # libraries can have tens of thousands of un-grouped files.
+                parts.append(f"{isolated:,} {plural_form(isolated, 'isolated file')}")
             self.statusBar().showMessage(
                 f"Loaded manifest: {', '.join(parts)}", 10000
             )

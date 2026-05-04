@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 from loguru import logger
 
-from app.views.components.status_messages import report_count
+from app.views.components.status_messages import pluralize, report_count
 
 # Single source of truth for the QFileDialog filter string used wherever
 # the app opens or saves a manifest. Keeping this centralized avoids the
@@ -130,7 +130,8 @@ class FileOperationsHandler:
         n_items = sum(len(g.items) for g in groups)
         logger.info("Opened manifest: {} | groups={} items={}", path, n_groups, n_items)
         self.status_reporter.show_status(
-            f"Opened manifest: {n_groups} pairs to review ({n_items} files)"
+            f"Opened manifest: {pluralize(n_groups, 'pair')} to review "
+            f"({pluralize(n_items, 'file')})"
         )
 
     def _on_manifest_failed(self, error: str) -> None:
