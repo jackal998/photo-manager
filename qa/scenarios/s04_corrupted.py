@@ -3,6 +3,14 @@
 Required sources: qa/sandbox/corrupted
 Probes: hash/EXIF error paths — does the scan tolerate a corrupted file,
 log a meaningful error, and continue?
+
+Catches drift in: post-#87 summary reconciliation. The fixture has 1
+truncated JPEG which decodes to phash=None and is excluded from the
+manifest. The summary must reconcile:
+  - "Indexed in manifest :       0"
+  - "Skipped (unreadable):       1"
+A regression that brings back the misleading "Total files scanned: 0"
+without a Skipped line gets caught here.
 """
 from __future__ import annotations
 
@@ -33,6 +41,21 @@ def main() -> int:
         k in l.lower() for k in ("error", "warning", "fail", "skip", "corrupt")
     )]
     print(f"  error_keyword_lines={len(err_lines)}")
+
+    # #87: the summary must reconcile with the per-step counts above.
+    print("step: assert_summary_reconciles")
+    if "Indexed in manifest" not in log:
+        print("FAIL: summary missing 'Indexed in manifest' headline (regression of #87)")
+        return 1
+    if "Total files scanned" in log:
+        print("FAIL: summary still uses old misleading 'Total files scanned' label (#87)")
+        return 1
+    if "Skipped (unreadable)" not in log:
+        print(
+            "FAIL: corrupt-only scan must surface a 'Skipped (unreadable)' "
+            "line so the headline 0 reconciles with 'Hashed 1/1' (#87)"
+        )
+        return 1
 
     print("step: close_dialog")
     try:
