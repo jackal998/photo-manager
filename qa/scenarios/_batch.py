@@ -42,6 +42,7 @@ ALL_SCENARIOS = [
     "s17_scan_dialog_widgets",
     "s18_log_menu",
     "s19_context_menu_open_folder",
+    "s21_list_menu_remove",
 ]
 
 
