@@ -1,0 +1,124 @@
+name: qa-batch
+
+# Run the layer-3 qa-explore batch on PRs that touch UI / scanner / qa surface.
+# Goal: catch driver-vs-app label drift and state-transition regressions
+# before merge, instead of relying on a manual `python -m qa.scenarios._batch`
+# discipline (#74).
+#
+# Status: NON-REQUIRED, informational. Per #74's acceptance criteria, this
+# workflow needs ≥10 consecutive flake-free runs on real PRs before being
+# promoted to a required status check via branch protection. Until then,
+# treat a red qa-batch as a signal to investigate, not a merge blocker.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/qa-batch.yml'
+      - 'app/views/**'
+      - 'qa/**'
+      - 'scanner/**'
+      - 'infrastructure/**'
+      - 'requirements.txt'
+      - 'dev-requirements.txt'
+      - 'qa/requirements.txt'
+      - 'scripts/make_qa_sandbox.py'
+      - 'scripts/make_qa_images.py'
+  workflow_dispatch: {}   # allow manual trigger from the Actions UI for debugging
+
+concurrency:
+  group: qa-batch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            dev-requirements.txt
+            qa/requirements.txt
+
+      # exiftool is a runtime boundary the scanner uses for HEIC / RAW / MOV /
+      # MP4 metadata. Chocolatey is preinstalled on windows-latest runners.
+      - name: Install exiftool
+        run: choco install exiftool -y --no-progress
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r dev-requirements.txt
+          pip install -r qa/requirements.txt
+
+      # Idempotent fixture builder. Generates qa/sandbox/ on a fresh checkout.
+      - name: Build qa sandbox fixtures
+        run: python scripts/make_qa_sandbox.py
+
+      - name: Run qa batch
+        id: batch
+        shell: pwsh
+        env:
+          QT_ACCESSIBILITY: '1'
+          # Pin DPI so pixel-coord clicks (s17, s20) match local-dev positions.
+          QT_SCALE_FACTOR: '1'
+          QT_AUTO_SCREEN_SCALE_FACTOR: '0'
+          # Force unbuffered stdout so the live log surfaces in the runner UI.
+          PYTHONUNBUFFERED: '1'
+          # Unicode arrows / ellipsis in driver output: avoid cp1252 encode errors.
+          PYTHONIOENCODING: 'utf-8'
+        run: |
+          python -m qa.scenarios._batch 2>&1 | Tee-Object -FilePath qa-batch.log
+          # Forward the batch's exit code; PowerShell pipes default to the
+          # tail-element rc which is Tee-Object's (always 0). The variable
+          # `$LASTEXITCODE` from the python invocation is what matters.
+          exit $LASTEXITCODE
+
+      # Always emit a per-scenario rc summary to the job page so triage from
+      # the PR is one click. Runs even on failure so we see WHICH scenarios
+      # failed without digging through the full log.
+      - name: Per-scenario summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path qa-batch.log) {
+            Add-Content $env:GITHUB_STEP_SUMMARY '## QA batch summary'
+            Add-Content $env:GITHUB_STEP_SUMMARY ''
+            Add-Content $env:GITHUB_STEP_SUMMARY '```'
+            Select-String -Path qa-batch.log -Pattern '^=====|^total:|^\s+\[(OK|FAIL)\]' |
+              ForEach-Object { $_.Line } |
+              Add-Content $env:GITHUB_STEP_SUMMARY
+            Add-Content $env:GITHUB_STEP_SUMMARY '```'
+          } else {
+            Add-Content $env:GITHUB_STEP_SUMMARY '## QA batch summary'
+            Add-Content $env:GITHUB_STEP_SUMMARY ''
+            Add-Content $env:GITHUB_STEP_SUMMARY '_qa-batch.log was not produced — see the "Run qa batch" step for setup-time errors._'
+          }
+
+      # Upload the full log so debugging a failed scenario doesn't require
+      # re-running CI. 7-day retention is plenty for triage cycles.
+      - name: Upload full batch log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-batch-log
+          path: qa-batch.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Belt-and-braces cleanup. The runner is ephemeral so this rarely
+      # matters, but a hung main.py from a flaky scenario can leave
+      # background processes that confuse subsequent steps within the same
+      # job. Always exit 0 — failure in cleanup must not mask the real result.
+      - name: Cleanup any leaked python.exe
+        if: always()
+        shell: pwsh
+        run: |
+          taskkill /F /IM python.exe /T 2>$null
+          exit 0
