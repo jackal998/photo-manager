@@ -39,6 +39,7 @@ ALL_SCENARIOS = [
     "s14_action_by_regex",
     "s15_context_menu",
     "s16_open_manifest",
+    "s17_scan_dialog_widgets",
 ]
 
 
