@@ -383,6 +383,64 @@ class TestSourceListLayout:
         assert widget._table.minimumHeight() >= 180
 
 
+# ---------------------------------------------------------------------------
+# Post-scan terminal-state focus (#86)
+# ---------------------------------------------------------------------------
+
+
+class TestPostScanCloseFocus:
+    """#86 — after a terminal scan event that produces no manifest (empty
+    input or hard failure), focus must move to the Close button so the
+    user has a visible "way out" cue rather than a UI that looks identical
+    to pre-scan state. Uses ``focusWidget()`` rather than ``hasFocus()``
+    because the latter requires the window to be active, while
+    ``focusWidget()`` tracks the last ``setFocus`` target on a top-level
+    widget regardless of visibility — fine for a unit test.
+    """
+
+    def _make_dialog(self, qapp, tmp_path):
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text('{"sources":{}}', encoding="utf-8")
+        return ScanDialog(JsonSettings(settings_path))
+
+    def test_completed_empty_focuses_close_button(self, qapp, tmp_path):
+        dlg = self._make_dialog(qapp, tmp_path)
+        dlg._on_completed_empty()
+        assert dlg.focusWidget() is dlg._btn_close
+
+    def test_completed_empty_re_enables_start_scan(self, qapp, tmp_path):
+        """Focus on Close must not foreclose retry — Start Scan stays
+        enabled so the user can fix the source list and re-scan."""
+        dlg = self._make_dialog(qapp, tmp_path)
+        dlg._btn_scan.setEnabled(False)
+        dlg._on_completed_empty()
+        assert dlg._btn_scan.isEnabled()
+
+    def test_failed_focuses_close_button(self, qapp, tmp_path, monkeypatch):
+        """Same focus cue after a real scan failure. Modal blocks in a real
+        run; no-op it for the test so the synchronous flow continues."""
+        from PySide6.QtWidgets import QMessageBox
+
+        monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        dlg._on_failed("simulated pipeline error")
+        assert dlg.focusWidget() is dlg._btn_close
+
+    def test_failed_re_enables_start_scan(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+
+        monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        dlg._btn_scan.setEnabled(False)
+        dlg._on_failed("simulated pipeline error")
+        assert dlg._btn_scan.isEnabled()
+
+
 class TestPathFieldEntry:
     """#40 — typing/pasting an absolute path should add it to the source list."""
 

@@ -607,10 +607,19 @@ class ScanDialog(QDialog):
         self._log(f"\nERROR: {error}")
         self._btn_scan.setEnabled(True)
         QMessageBox.critical(self, "Scan Failed", error)
+        # No manifest was produced; Close is the canonical exit. Pull focus
+        # there so the user has an obvious next action (focus ring + Enter
+        # dismisses) instead of a UI that looks identical to pre-scan (#86).
+        self._btn_close.setFocus()
 
     def _on_completed_empty(self) -> None:
         """Empty input is benign — re-enable Start Scan, no modal."""
         self._btn_scan.setEnabled(True)
+        # Same rationale as _on_failed (#86): no manifest produced, Close is
+        # the way out, focus gives the user a visible signal that the scan
+        # ended. Start Scan stays enabled so the user can fix sources and
+        # retry without dismissing the dialog.
+        self._btn_close.setFocus()
 
     def _load_and_close(self) -> None:
         """Call the completion callback and close the dialog."""

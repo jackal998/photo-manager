@@ -2,11 +2,14 @@
 
 Required sources: qa/sandbox/empty
 Probes: how the app handles a scan that finds zero files.
+
+Catches drift in: post-empty-scan focus cue (#86 — Close button must
+receive focus so the user has a visible exit), and the empty-state log
+line shape ("Done. No media files found — nothing to scan.").
 """
 from __future__ import annotations
 
 import sys
-import time
 
 from qa.scenarios import _uia
 
@@ -32,17 +35,26 @@ def main() -> int:
     pid = win.process_id()
     wins = [t for _, _, t in _uia.list_process_windows(pid)]
     print(f"  open_windows={wins!r}")
-    # Did anything pop up? (empty-state dialog, message, etc.)
     extra = [t for t in wins if t not in ("Photo Manager", "Scan Sources")]
     print(f"  extra_dialogs={extra!r}")
+    if extra:
+        print(f"FAIL: unexpected dialogs after empty scan: {extra!r}")
+        return 1
+
+    # #86 — Close is the canonical exit on the empty path; the source-side
+    # fix routes focus there so the user has a visible cue. Assert it.
+    print("step: assert_close_button_focused")
+    focused = _uia.focused_button_name(dlg)
+    print(f"  focused_button={focused!r}")
+    if focused != "Close":
+        print(
+            f"FAIL: expected 'Close' button to have focus after empty scan, "
+            f"got {focused!r} (regression of #86)"
+        )
+        return 1
 
     print("step: close_dialog")
-    try:
-        _uia.close_and_load_manifest(dlg)
-    except Exception as e:
-        print(f"  close_load_failed={e!r}")
-        # Fall back to title-bar close
-        _uia.cancel_scan_dialog(dlg)
+    _uia.close_scan_dialog_via_close_button(dlg)
 
     print("step: read_results")
     _, win = _uia.connect_main()

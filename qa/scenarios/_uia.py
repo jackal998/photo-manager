@@ -964,6 +964,35 @@ def execute_and_confirm(
     )
 
 
+def close_scan_dialog_via_close_button(dlg: UIAWrapper) -> None:
+    """Click the regular ``Close`` button (the one wired to ``self.reject``).
+
+    Distinct from ``close_and_load_manifest`` which clicks ``Close & Load``
+    on the post-success path. Use this on the empty-scan or failed-scan
+    paths where no manifest was produced — that's the canonical user exit
+    after #86 wired focus to this button.
+    """
+    btn = dlg.child_window(title="Close", control_type="Button")
+    _focus(dlg)
+    btn.invoke()
+    time.sleep(0.5)
+
+
+def focused_button_name(dlg: UIAWrapper) -> str:
+    """Return the title of whatever Button currently has UIA focus in dlg.
+
+    Returns ``""`` if no Button is focused. Used by s02 to assert that the
+    Close button is the focus target after an empty-scan completion (#86).
+    """
+    for btn in dlg.descendants(control_type="Button"):
+        try:
+            if btn.has_keyboard_focus():
+                return (btn.window_text() or "").strip()
+        except Exception:
+            continue
+    return ""
+
+
 def cancel_scan_dialog(dlg: UIAWrapper) -> None:
     """Click the title-bar Close (×) to cancel a scan or close pre-scan."""
     _focus(dlg)
