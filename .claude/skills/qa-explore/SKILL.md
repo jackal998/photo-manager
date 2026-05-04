@@ -548,6 +548,27 @@ short — they should encode the canonical happy path, nothing more.
 Open-ended exploration is the LLM's job, on top of the driver's
 output.
 
+**Cleanup convention — drivers that spawn external shell windows
+(Notepad, Explorer, etc. via `os.startfile`, `explorer.exe`,
+`QDesktopServices::openUrl`) MUST clean them up before returning.**
+Otherwise each batch run leaves windows piled up on the operator's
+desktop. The pattern, used by s18 and s19:
+
+```python
+baseline = _uia.list_top_level_windows(_uia.DEFAULT_SHELL_CLASSES)
+# … perform the click …
+time.sleep(1.0)
+closed = _uia.close_new_shell_windows(baseline)
+print(f"  closed_shell_windows={[(c, t) for _h, c, t in closed]!r}")
+```
+
+`close_new_shell_windows` sends `WM_CLOSE` (NEVER `taskkill` on
+explorer.exe — that nukes the user's whole shell). The default class
+allowlist (`DEFAULT_SHELL_CLASSES = ("CabinetWClass", "Notepad",
+"Notepad++")`) covers the windows we know how to close safely; if a
+user has a different default text editor (VSCode, Sublime), those
+windows leak — document the residual in the driver header.
+
 **Batch runner.** When the user wants to run several (or all) scenarios
 in one go, use `qa.scenarios._batch`:
 
