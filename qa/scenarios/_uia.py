@@ -1045,27 +1045,64 @@ def save_manifest_via_native_dialog(
     #      action) so it's the second-choice fallback, not the first.
     #   3. ``click_input`` (synthesized mouse) — historical desktop-
     #      session path, kept as a last resort.
+    # Multi-strategy fire. Each option fails differently; we need any
+    # of them to actually trigger the Save action.
     BM_CLICK = 0x00F5
-    fired = False
+    WM_KEYDOWN = 0x0100
+    WM_KEYUP = 0x0101
+    VK_RETURN = 0x0D
+
+    btn_hwnd = 0
     try:
-        hwnd = save_btn.handle
-        if hwnd:
-            # PostMessage queues the message and returns immediately.
-            # The dialog's own message pump will deliver BM_CLICK to
-            # the button when next idle.
-            ctypes.windll.user32.PostMessageW(hwnd, BM_CLICK, 0, 0)
+        btn_hwnd = save_btn.handle or 0
+    except Exception:
+        pass
+    print(f"  save_btn_hwnd={btn_hwnd}", flush=True)
+
+    fired = False
+
+    # Strategy 1: BM_CLICK via PostMessage if the button has a real HWND.
+    # Common Item Dialog buttons SOMETIMES expose a Win32 BUTTON; when
+    # they do this is the cleanest fire path.
+    if btn_hwnd:
+        try:
+            ctypes.windll.user32.PostMessageW(btn_hwnd, BM_CLICK, 0, 0)
             fired = True
+            print("  fire: PostMessage(BM_CLICK)", flush=True)
+        except Exception as exc:
+            print(f"  BM_CLICK post failed: {exc!r}", flush=True)
+
+    # Strategy 2: post VK_RETURN directly to the dialog. Native dialogs
+    # treat Enter as activate-default-button regardless of foreground or
+    # focus state, and the queued WM_KEY messages don't depend on mouse
+    # synthesis. Use this whenever BM_CLICK didn't fire OR as a belt-and-
+    # braces (always run when fired==True too — the dialog is idempotent
+    # against duplicate Save clicks once the file is written).
+    try:
+        dlg_hwnd = save_dlg.handle
+        if dlg_hwnd:
+            ctypes.windll.user32.PostMessageW(dlg_hwnd, WM_KEYDOWN, VK_RETURN, 0)
+            ctypes.windll.user32.PostMessageW(dlg_hwnd, WM_KEYUP, VK_RETURN, 0)
+            fired = True
+            print("  fire: PostMessage(WM_KEYDOWN/UP, VK_RETURN) to dialog", flush=True)
     except Exception as exc:
-        print(f"  BM_CLICK post failed: {exc!r}", flush=True)
+        print(f"  VK_RETURN post failed: {exc!r}", flush=True)
+
+    # Strategy 3: UIA Invoke pattern.
     if not fired:
         try:
             save_btn.iface_invoke.Invoke()
             fired = True
+            print("  fire: iface_invoke.Invoke", flush=True)
         except Exception as exc:
             print(f"  iface_invoke fallback failed: {exc!r}", flush=True)
+
+    # Strategy 4: synthesized mouse click. Last resort; doesn't always
+    # land on the runner but is the historical desktop-session path.
     if not fired:
         _focus(save_dlg)
         save_btn.click_input()
+        print("  fire: click_input", flush=True)
 
     # Poll until one of three end states. The success signal is the
     # ARTIFACT existing on disk (not just the dialog closing) — Qt's
