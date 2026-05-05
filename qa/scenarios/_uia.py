@@ -851,6 +851,38 @@ def click_remove_all_sources(dlg: UIAWrapper) -> None:
     time.sleep(0.3)
 
 
+def _find_dialog_button(dlg: UIAWrapper, title: str) -> UIAWrapper:
+    """Find a Button by ``title`` inside ``dlg``, picking the bottom-most match.
+
+    Disambiguates against locale-specific title-bar buttons that share the
+    same accessible name as the dialog's form-row buttons. Concrete case:
+    on a zh-TW Windows session the title-bar Close button reads "關閉" so a
+    plain ``dlg.child_window(title="Close", control_type="Button")`` resolves
+    cleanly to the Apply/Close form button. On en-US (e.g. GitHub's
+    ``windows-latest`` runners) the title-bar Close button is also "Close",
+    creating an ambiguous match that pywinauto's ``__resolve_control``
+    times out on rather than picking either.
+
+    The form-row buttons sit at the bottom of the dialog rect; the title-bar
+    button sits at the top. Sort by ``rectangle().top`` and take the
+    bottom-most. When only one Button matches the title (the zh-TW case),
+    "bottom-most" reduces to "the one button" — local behavior unchanged.
+
+    Raises ``RuntimeError`` when no Button matches the title.
+    """
+    candidates: list[tuple[int, UIAWrapper]] = []
+    for btn in dlg.descendants(control_type="Button"):
+        try:
+            if (btn.window_text() or "").strip() == title:
+                candidates.append((btn.rectangle().top, btn))
+        except Exception:
+            continue
+    if not candidates:
+        raise RuntimeError(f"no Button with title {title!r} found in dialog")
+    candidates.sort(key=lambda x: x[0])
+    return candidates[-1][1]
+
+
 def _find_filename_edit(native_dlg: UIAWrapper) -> UIAWrapper:
     """Find the filename Edit in a Windows native Open/Save dialog.
 
@@ -894,7 +926,12 @@ def save_manifest_via_native_dialog(
     # Avoids both IME interception (bopomofo, etc.) and the locale-specific
     # name of the filename ComboBox label.
     filename_edit.iface_value.SetValue(str(target_path))
-    time.sleep(0.2)
+    # 0.8s gives the native Save dialog time to validate the filename and
+    # enable its OK button before we press Enter. CI runners are noticeably
+    # slower at this validation than a desktop session — at 0.2s the Enter
+    # was occasionally landing on a still-disabled button and the save
+    # silently no-op'd. Local impact is +0.6s on s12 only; net trivial.
+    time.sleep(0.8)
     send_keys("{ENTER}")
 
     # Success path no longer raises a "Save Manifest" QMessageBox — the
@@ -1060,15 +1097,14 @@ def _drive_action_dialog_form(
     action_combo.select(action_label)
     time.sleep(0.1)
 
-    apply_btn = action_dlg.child_window(
-        title=ACTION_DIALOG_BTN_APPLY, control_type="Button"
-    )
+    # Use _find_dialog_button (bottom-most match) — on en-US Windows the
+    # title-bar Close button shares the form Close's accessible name and a
+    # plain child_window lookup goes ambiguous.
+    apply_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_APPLY)
     apply_btn.click_input()
     time.sleep(0.3)
 
-    close_btn = action_dlg.child_window(
-        title=ACTION_DIALOG_BTN_CLOSE, control_type="Button"
-    )
+    close_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_CLOSE)
     close_btn.click_input()
     time.sleep(0.3)
 
@@ -1225,7 +1261,11 @@ def close_scan_dialog_via_close_button(dlg: UIAWrapper) -> None:
     paths where no manifest was produced — that's the canonical user exit
     after #86 wired focus to this button.
     """
-    btn = dlg.child_window(title="Close", control_type="Button")
+    # _find_dialog_button picks the bottom-most "Close" — disambiguates
+    # against the en-US title-bar Close button whose accessible name is
+    # also "Close" (zh-TW renders it as "關閉" so locally there's only
+    # one match either way).
+    btn = _find_dialog_button(dlg, "Close")
     _focus(dlg)
     btn.invoke()
     time.sleep(0.5)
