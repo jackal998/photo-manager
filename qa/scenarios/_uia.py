@@ -884,6 +884,63 @@ def _find_dialog_button(dlg: UIAWrapper, title: str) -> UIAWrapper:
     return candidates[-1][1]
 
 
+def _find_native_dialog_action_button(native_dlg: UIAWrapper) -> UIAWrapper:
+    """Locate the action button (Save/Open/OK) of a native Common Item Dialog.
+
+    Locale-independent: identifies by structure, not visible text. Windows
+    Common Item Dialog's bottom row contains the action button + Cancel,
+    plus sometimes a navigation-pane toggle ("Hide Folders" / "Browse
+    Folders") on the far left.
+
+    Layout (right-to-left): Cancel (rightmost), action button (Save /
+    Open / OK), [optional] navigation toggle. So among the bottom-row
+    buttons, the action button is the **2nd-from-rightmost**.
+
+    Why not press Enter via ``send_keys``? On the GitHub-hosted
+    ``windows-latest`` runner foreground semantics differ from a real
+    desktop session; ``send_keys`` delivers globally to whatever is
+    foreground and intermittently misses the dialog, leaving the Save
+    unfired. ``click_input`` on a structurally-located button is
+    locale-independent and doesn't rely on foreground staying glued
+    to the dialog.
+
+    Raises ``RuntimeError`` (with a diagnostic listing every Button)
+    when the bottom row contains fewer than 2 buttons (no Cancel
+    pair to disambiguate against).
+    """
+    dlg_rect = native_dlg.rectangle()
+    candidates: list[tuple[int, int, UIAWrapper]] = []
+    for b in native_dlg.descendants(control_type="Button"):
+        try:
+            r = b.rectangle()
+            if r.top >= dlg_rect.bottom - 80:
+                candidates.append((r.left, r.top, b))
+        except Exception:
+            continue
+    if len(candidates) < 2:
+        all_btns: list[str] = []
+        for b in native_dlg.descendants(control_type="Button"):
+            try:
+                r = b.rectangle()
+                t = (b.window_text() or "").strip()
+                all_btns.append(
+                    f"title={t!r} rect=({r.left},{r.top},{r.right},{r.bottom})"
+                )
+            except Exception:
+                continue
+        raise RuntimeError(
+            f"native dialog: expected >= 2 bottom-row buttons "
+            f"(action + Cancel), got {len(candidates)}; "
+            f"dlg_rect={dlg_rect!r}; all_buttons={all_btns!r}"
+        )
+    # Sort descending by ``left`` (rightmost first). Cancel is the
+    # rightmost in every Common Item Dialog variant; the action button
+    # is immediately to its left, regardless of whether the optional
+    # navigation toggle is also present further to the left.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    return candidates[1][2]
+
+
 def _find_filename_edit(native_dlg: UIAWrapper) -> UIAWrapper:
     """Find the filename Edit in a Windows native Open/Save dialog.
 
@@ -928,20 +985,21 @@ def save_manifest_via_native_dialog(
     # name of the filename ComboBox label.
     filename_edit.iface_value.SetValue(str(target_path))
     # 0.8s gives the native Save dialog time to validate the filename and
-    # enable its OK button. On the desktop session 0.2s was enough; CI
-    # runners are slower and at 0.2s Enter occasionally landed before
+    # enable its action button. On the desktop session 0.2s was enough;
+    # CI runners are slower and at 0.2s the Save attempt landed before
     # validation completed.
     time.sleep(0.8)
-    # Re-assert foreground on the save dialog right before send_keys. On
-    # the runner the foreground window can drift away from the dialog
-    # during the validation sleep (the runner shell or another process
-    # taking foreground briefly). ``send_keys`` delivers Enter to whatever
-    # is foreground globally — without this, Enter goes to the wrong
-    # window and the Save dialog stays open. Locally the dialog is
-    # already foreground so ``_focus`` (post-#126) returns immediately
-    # without perturbing state.
+    # Click Save by structure, not by Enter. ``send_keys`` delivers
+    # globally to whatever Windows says is foreground, and on the
+    # GitHub-hosted ``windows-latest`` runner the foreground intermittently
+    # isn't the dialog — Enter then misses and the dialog stays open.
+    # Identifying the button by bottom-row position is locale-independent
+    # (so this still works on zh-TW where the button reads "存檔") and
+    # ``click_input`` delivers a real synthesized click that doesn't
+    # depend on foreground state staying glued to the dialog.
+    save_btn = _find_native_dialog_action_button(save_dlg)
     _focus(save_dlg)
-    send_keys("{ENTER}")
+    save_btn.click_input()
 
     # Poll until one of three end states. The success signal is the
     # ARTIFACT existing on disk (not just the dialog closing) — Qt's
