@@ -997,7 +997,39 @@ def save_manifest_via_native_dialog(
     # (so this still works on zh-TW where the button reads "存檔") and
     # ``click_input`` delivers a real synthesized click that doesn't
     # depend on foreground state staying glued to the dialog.
+    # Diagnostic: dialog rect + every Button + the picked button. Removed
+    # once CI is reliably green; until then, this is invaluable when the
+    # bottom-row heuristic picks the wrong control.
+    try:
+        dr = save_dlg.rectangle()
+        print(
+            f"  save_dlg_rect=({dr.left},{dr.top},{dr.right},{dr.bottom})",
+            flush=True,
+        )
+        for b in save_dlg.descendants(control_type="Button"):
+            try:
+                br = b.rectangle()
+                t = (b.window_text() or "").strip()
+                print(
+                    f"    btn title={t!r} "
+                    f"rect=({br.left},{br.top},{br.right},{br.bottom})",
+                    flush=True,
+                )
+            except Exception:
+                continue
+    except Exception:
+        pass
     save_btn = _find_native_dialog_action_button(save_dlg)
+    try:
+        sr = save_btn.rectangle()
+        st = (save_btn.window_text() or "").strip()
+        print(
+            f"  picked save_btn: title={st!r} "
+            f"rect=({sr.left},{sr.top},{sr.right},{sr.bottom})",
+            flush=True,
+        )
+    except Exception:
+        pass
     _focus(save_dlg)
     save_btn.click_input()
 
