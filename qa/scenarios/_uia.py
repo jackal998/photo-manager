@@ -968,12 +968,18 @@ def save_manifest_via_native_dialog(
     2. Set its value via UIA's ValuePattern.SetValue — bypasses keyboard
        (so IMEs like bopomofo can't intercept) and bypasses the
        locale-specific ComboBox label name.
-    3. Press Enter to invoke Save.
-    4. Wait briefly for "Save Manifest Error" critical dialog. Success
-       returns silently — caller verifies via status bar / file existence.
-    """
-    from pywinauto.keyboard import send_keys
+    3. Click the action button (Save/OK), located by bottom-row
+       structure (locale-independent).
+    4. Poll for the artifact appearing on disk (success), a "Save
+       Manifest Error" dialog (raise), or timeout (raise diagnostic).
 
+    Known limitation (#129): this helper does not work on the
+    GitHub-hosted ``windows-latest`` runner because the native
+    IFileSaveDialog modal loop only pumps COM messages and the runner
+    does not deliver real synthesized mouse / keyboard input. Locally
+    with a real desktop session it works fine; ``s12_save_manifest``
+    is the canonical scenario exercising this path.
+    """
     save_hwnd = wait_for_dialog(pid, "Save Manifest Decisions", timeout=dialog_timeout)
     save_dlg = connect_by_handle(save_hwnd)
     _focus(save_dlg)
@@ -984,140 +990,29 @@ def save_manifest_via_native_dialog(
     # Avoids both IME interception (bopomofo, etc.) and the locale-specific
     # name of the filename ComboBox label.
     filename_edit.iface_value.SetValue(str(target_path))
-    # 0.8s gives the native Save dialog time to validate the filename and
-    # enable its action button. On the desktop session 0.2s was enough;
-    # CI runners are slower and at 0.2s the Save attempt landed before
-    # validation completed.
+    # 0.8s gives the native Save dialog time to validate the filename
+    # and enable its action button. On a desktop session 0.2s was
+    # enough; CI runners are slower and at 0.2s the Save click landed
+    # before validation completed.
     time.sleep(0.8)
-
-    # Diagnostic: read back what the filename Edit actually contains
-    # post-SetValue + the action button's enabled state. Tells us
-    # whether SetValue took effect AND whether the dialog believes the
-    # filename is valid (action button enabled === valid).
-    try:
-        current_val = filename_edit.iface_value.CurrentValue
-        print(f"  filename_edit_value={current_val!r}", flush=True)
-    except Exception as exc:
-        print(f"  filename_edit_value: read failed: {exc!r}", flush=True)
-    # Click Save by structure, not by Enter. ``send_keys`` delivers
-    # globally to whatever Windows says is foreground, and on the
-    # GitHub-hosted ``windows-latest`` runner the foreground intermittently
-    # isn't the dialog — Enter then misses and the dialog stays open.
-    # Identifying the button by bottom-row position is locale-independent
-    # (so this still works on zh-TW where the button reads "存檔") and
-    # ``click_input`` delivers a real synthesized click that doesn't
-    # depend on foreground state staying glued to the dialog.
-    # Diagnostic: dialog rect + every Button + the picked button. Removed
-    # once CI is reliably green; until then, this is invaluable when the
-    # bottom-row heuristic picks the wrong control.
-    try:
-        dr = save_dlg.rectangle()
-        print(
-            f"  save_dlg_rect=({dr.left},{dr.top},{dr.right},{dr.bottom})",
-            flush=True,
-        )
-        for b in save_dlg.descendants(control_type="Button"):
-            try:
-                br = b.rectangle()
-                t = (b.window_text() or "").strip()
-                print(
-                    f"    btn title={t!r} "
-                    f"rect=({br.left},{br.top},{br.right},{br.bottom})",
-                    flush=True,
-                )
-            except Exception:
-                continue
-    except Exception:
-        pass
-    save_btn = _find_native_dialog_action_button(save_dlg)
-    try:
-        sr = save_btn.rectangle()
-        st = (save_btn.window_text() or "").strip()
-        print(
-            f"  picked save_btn: title={st!r} "
-            f"rect=({sr.left},{sr.top},{sr.right},{sr.bottom})",
-            flush=True,
-        )
-    except Exception:
-        pass
-    # Multi-strategy click. Three fallbacks because each fails in a
-    # different environment and we need at least one to land:
+    # Click the action button by structure (locale-independent — works
+    # whether the button reads "Save" or "存檔"). Click rather than
+    # send_keys("{ENTER}") because send_keys delivers globally to
+    # whatever Windows says is foreground; on a real desktop the dialog
+    # IS foreground but on the GitHub-hosted windows-latest runner that
+    # invariant doesn't hold and the Enter misses.
     #
-    #   1. Win32 ``PostMessage(BM_CLICK)`` to the button's window
-    #      procedure. Bypasses foreground / mouse / UIA entirely; this
-    #      is how Windows itself fires button actions internally.
-    #      ``PostMessage`` (not ``SendMessage``) so we don't block
-    #      waiting for the receiver to pump the message — the modal
-    #      dialog has its own event loop and a synchronous Send was
-    #      hanging the driver indefinitely on the runner.
-    #   2. UIA ``Invoke`` pattern. Sometimes a no-op on native Common
-    #      Item Dialog buttons (returns success but doesn't fire the
-    #      action) so it's the second-choice fallback, not the first.
-    #   3. ``click_input`` (synthesized mouse) — historical desktop-
-    #      session path, kept as a last resort.
-    # Multi-strategy fire. Each option fails differently; we need any
-    # of them to actually trigger the Save action.
-    BM_CLICK = 0x00F5
-    WM_KEYDOWN = 0x0100
-    WM_KEYUP = 0x0101
-    VK_RETURN = 0x0D
-
-    btn_hwnd = 0
-    btn_enabled = "?"
-    try:
-        btn_hwnd = save_btn.handle or 0
-    except Exception:
-        pass
-    try:
-        btn_enabled = "yes" if save_btn.is_enabled() else "no"
-    except Exception as exc:
-        btn_enabled = f"?({exc!r})"
-    print(f"  save_btn_hwnd={btn_hwnd} enabled={btn_enabled}", flush=True)
-
-    fired = False
-
-    # Strategy 1: BM_CLICK via PostMessage if the button has a real HWND.
-    # Common Item Dialog buttons SOMETIMES expose a Win32 BUTTON; when
-    # they do this is the cleanest fire path.
-    if btn_hwnd:
-        try:
-            ctypes.windll.user32.PostMessageW(btn_hwnd, BM_CLICK, 0, 0)
-            fired = True
-            print("  fire: PostMessage(BM_CLICK)", flush=True)
-        except Exception as exc:
-            print(f"  BM_CLICK post failed: {exc!r}", flush=True)
-
-    # Strategy 2: post VK_RETURN directly to the dialog. Native dialogs
-    # treat Enter as activate-default-button regardless of foreground or
-    # focus state, and the queued WM_KEY messages don't depend on mouse
-    # synthesis. Use this whenever BM_CLICK didn't fire OR as a belt-and-
-    # braces (always run when fired==True too — the dialog is idempotent
-    # against duplicate Save clicks once the file is written).
-    try:
-        dlg_hwnd = save_dlg.handle
-        if dlg_hwnd:
-            ctypes.windll.user32.PostMessageW(dlg_hwnd, WM_KEYDOWN, VK_RETURN, 0)
-            ctypes.windll.user32.PostMessageW(dlg_hwnd, WM_KEYUP, VK_RETURN, 0)
-            fired = True
-            print("  fire: PostMessage(WM_KEYDOWN/UP, VK_RETURN) to dialog", flush=True)
-    except Exception as exc:
-        print(f"  VK_RETURN post failed: {exc!r}", flush=True)
-
-    # Strategy 3: UIA Invoke pattern.
-    if not fired:
-        try:
-            save_btn.iface_invoke.Invoke()
-            fired = True
-            print("  fire: iface_invoke.Invoke", flush=True)
-        except Exception as exc:
-            print(f"  iface_invoke fallback failed: {exc!r}", flush=True)
-
-    # Strategy 4: synthesized mouse click. Last resort; doesn't always
-    # land on the runner but is the historical desktop-session path.
-    if not fired:
-        _focus(save_dlg)
-        save_btn.click_input()
-        print("  fire: click_input", flush=True)
+    # CI caveat (#129): this still fails on ``windows-latest`` runners
+    # specifically. The native Save dialog is a Windows IFileSaveDialog
+    # whose modal loop only pumps COM messages, and the runner doesn't
+    # deliver real synthesized mouse / keyboard input either.
+    # PostMessage(BM_CLICK), PostMessage(WM_KEYDOWN, VK_RETURN), and
+    # UIA Invoke all return success on the runner but the dialog never
+    # closes. Locally with a real desktop session ``click_input`` works
+    # fine and s12 passes.
+    save_btn = _find_native_dialog_action_button(save_dlg)
+    _focus(save_dlg)
+    save_btn.click_input()
 
     # Poll until one of three end states. The success signal is the
     # ARTIFACT existing on disk (not just the dialog closing) — Qt's
