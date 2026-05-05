@@ -928,11 +928,19 @@ def save_manifest_via_native_dialog(
     # name of the filename ComboBox label.
     filename_edit.iface_value.SetValue(str(target_path))
     # 0.8s gives the native Save dialog time to validate the filename and
-    # enable its OK button before we press Enter. CI runners are noticeably
-    # slower at this validation than a desktop session — at 0.2s the Enter
-    # was occasionally landing on a still-disabled button and the save
-    # silently no-op'd. Local impact is +0.6s on s12 only; net trivial.
+    # enable its OK button. On the desktop session 0.2s was enough; CI
+    # runners are slower and at 0.2s Enter occasionally landed before
+    # validation completed.
     time.sleep(0.8)
+    # Re-assert foreground on the save dialog right before send_keys. On
+    # the runner the foreground window can drift away from the dialog
+    # during the validation sleep (the runner shell or another process
+    # taking foreground briefly). ``send_keys`` delivers Enter to whatever
+    # is foreground globally — without this, Enter goes to the wrong
+    # window and the Save dialog stays open. Locally the dialog is
+    # already foreground so ``_focus`` (post-#126) returns immediately
+    # without perturbing state.
+    _focus(save_dlg)
     send_keys("{ENTER}")
 
     # Poll until one of three end states. The success signal is the
