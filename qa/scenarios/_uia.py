@@ -989,6 +989,16 @@ def save_manifest_via_native_dialog(
     # CI runners are slower and at 0.2s the Save attempt landed before
     # validation completed.
     time.sleep(0.8)
+
+    # Diagnostic: read back what the filename Edit actually contains
+    # post-SetValue + the action button's enabled state. Tells us
+    # whether SetValue took effect AND whether the dialog believes the
+    # filename is valid (action button enabled === valid).
+    try:
+        current_val = filename_edit.iface_value.CurrentValue
+        print(f"  filename_edit_value={current_val!r}", flush=True)
+    except Exception as exc:
+        print(f"  filename_edit_value: read failed: {exc!r}", flush=True)
     # Click Save by structure, not by Enter. ``send_keys`` delivers
     # globally to whatever Windows says is foreground, and on the
     # GitHub-hosted ``windows-latest`` runner the foreground intermittently
@@ -1053,11 +1063,16 @@ def save_manifest_via_native_dialog(
     VK_RETURN = 0x0D
 
     btn_hwnd = 0
+    btn_enabled = "?"
     try:
         btn_hwnd = save_btn.handle or 0
     except Exception:
         pass
-    print(f"  save_btn_hwnd={btn_hwnd}", flush=True)
+    try:
+        btn_enabled = "yes" if save_btn.is_enabled() else "no"
+    except Exception as exc:
+        btn_enabled = f"?({exc!r})"
+    print(f"  save_btn_hwnd={btn_hwnd} enabled={btn_enabled}", flush=True)
 
     fired = False
 
