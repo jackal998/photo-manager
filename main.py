@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImageReader
 from PySide6.QtWidgets import QApplication
 from loguru import logger
@@ -39,6 +40,15 @@ def _parse_default_sort(settings: JsonSettings) -> list[tuple[str, bool]]:
 def main() -> int:
     init_logging()
     settings = JsonSettings(CONFIG_HOME / "settings.json")
+
+    # Cross-platform QA / hosted-CI escape hatch (#129): the Windows native
+    # IFileSaveDialog and equivalent macOS NSSavePanel cannot be driven by
+    # synthesized input on hosted runners, but Qt's widget-based file dialog
+    # responds to UIA / AX normally. Setting this attribute before
+    # QApplication is constructed switches every QFileDialog in the process
+    # to the non-native variant — one switch, every platform.
+    if os.environ.get("PHOTO_MANAGER_QT_FILE_DIALOG") == "1":
+        QApplication.setAttribute(Qt.AA_DontUseNativeDialogs)
 
     app = QApplication(sys.argv)
 

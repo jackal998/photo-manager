@@ -79,6 +79,13 @@ jobs:
           PYTHONUNBUFFERED: '1'
           # Unicode arrows / ellipsis in driver output: avoid cp1252 encode errors.
           PYTHONIOENCODING: 'utf-8'
+          # Switch QFileDialog to Qt's non-native widget on hosted runners
+          # (#129). The Windows native IFileSaveDialog modal loop only pumps
+          # COM messages, so synthesized input from pywinauto / UIA is
+          # silently dropped on windows-latest. Qt's non-native dialog
+          # responds to UIA normally, so s12_save_manifest can drive it
+          # end-to-end here. Local users still get the native dialog.
+          PHOTO_MANAGER_QT_FILE_DIALOG: '1'
         run: |
           python -m qa.scenarios._batch 2>&1 | Tee-Object -FilePath qa-batch.log
           # Forward the batch's exit code; PowerShell pipes default to the

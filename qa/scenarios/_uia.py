@@ -885,29 +885,60 @@ def _find_dialog_button(dlg: UIAWrapper, title: str) -> UIAWrapper:
 
 
 def _find_native_dialog_action_button(native_dlg: UIAWrapper) -> UIAWrapper:
-    """Locate the action button (Save/Open/OK) of a native Common Item Dialog.
+    """Locate the action button (Save/Open/OK) of a Save dialog.
 
-    Locale-independent: identifies by structure, not visible text. Windows
-    Common Item Dialog's bottom row contains the action button + Cancel,
-    plus sometimes a navigation-pane toggle ("Hide Folders" / "Browse
-    Folders") on the far left.
+    Handles two tree shapes:
 
-    Layout (right-to-left): Cancel (rightmost), action button (Save /
-    Open / OK), [optional] navigation toggle. So among the bottom-row
-    buttons, the action button is the **2nd-from-rightmost**.
+    * **Windows native Common Item Dialog**: bottom row contains the
+      action button + Cancel, sometimes plus a navigation-pane toggle
+      ("Hide Folders" / "Browse Folders") on the far left. Layout
+      (right-to-left): Cancel (rightmost), action button, [optional]
+      toggle — so the action button is **2nd-from-rightmost**.
+
+    * **Qt non-native QFileDialog** (``AA_DontUseNativeDialogs``, see
+      #129): buttons live inside a ``QDialogButtonBox`` and may be
+      laid out **vertically** (Save above Cancel) or horizontally.
+      Qt orders the AcceptRole button first, so the topmost-leftmost
+      ``QPushButton`` inside the buttonBox is the action button —
+      locale-independent for either orientation.
+
+    Locale-independent: identifies by structure, not visible text.
 
     Why not press Enter via ``send_keys``? On the GitHub-hosted
     ``windows-latest`` runner foreground semantics differ from a real
     desktop session; ``send_keys`` delivers globally to whatever is
-    foreground and intermittently misses the dialog, leaving the Save
-    unfired. ``click_input`` on a structurally-located button is
-    locale-independent and doesn't rely on foreground staying glued
-    to the dialog.
+    foreground and intermittently misses the dialog. ``click_input``
+    on a structurally-located button is locale-independent and doesn't
+    rely on foreground staying glued to the dialog.
 
-    Raises ``RuntimeError`` (with a diagnostic listing every Button)
-    when the bottom row contains fewer than 2 buttons (no Cancel
-    pair to disambiguate against).
+    Raises ``RuntimeError`` with a full descendant tree dump (written
+    to a temp file to bypass console truncation) when neither pattern
+    yields the action button.
     """
+    # Qt branch: look for QDialogButtonBox (a control_type="Group" with
+    # class_name="QDialogButtonBox"). If present, the AcceptRole button
+    # is the first QPushButton inside it — topmost in vertical layout,
+    # leftmost in horizontal.
+    for grp in native_dlg.descendants(control_type="Group"):
+        try:
+            if (grp.element_info.class_name or "") != "QDialogButtonBox":
+                continue
+        except Exception:
+            continue
+        qt_buttons: list[tuple[int, int, UIAWrapper]] = []
+        for b in grp.descendants(control_type="Button"):
+            try:
+                if (b.element_info.class_name or "") != "QPushButton":
+                    continue
+                r = b.rectangle()
+                qt_buttons.append((r.top, r.left, b))
+            except Exception:
+                continue
+        if qt_buttons:
+            qt_buttons.sort(key=lambda c: (c[0], c[1]))
+            return qt_buttons[0][2]
+
+    # Native Common Item Dialog: 2nd-from-rightmost button in bottom 80px.
     dlg_rect = native_dlg.rectangle()
     candidates: list[tuple[int, int, UIAWrapper]] = []
     for b in native_dlg.descendants(control_type="Button"):
@@ -918,20 +949,38 @@ def _find_native_dialog_action_button(native_dlg: UIAWrapper) -> UIAWrapper:
         except Exception:
             continue
     if len(candidates) < 2:
-        all_btns: list[str] = []
-        for b in native_dlg.descendants(control_type="Button"):
-            try:
-                r = b.rectangle()
-                t = (b.window_text() or "").strip()
-                all_btns.append(
-                    f"title={t!r} rect=({r.left},{r.top},{r.right},{r.bottom})"
-                )
-            except Exception:
-                continue
+        # Dump the FULL descendant tree to a file (stdout truncates on
+        # Chinese chars in the qa-batch subprocess pipeline). Caller can
+        # cat /tmp/qa_dialog_tree.txt to triage.
+        import tempfile
+        dump_lines: list[str] = []
+        dump_lines.append(f"dlg_rect={dlg_rect!r} dlg_class={native_dlg.element_info.class_name!r}")
+        try:
+            for d in native_dlg.descendants():
+                try:
+                    r = d.rectangle()
+                    ct = d.element_info.control_type
+                    t = (d.window_text() or "").strip()
+                    aid = d.element_info.automation_id or ""
+                    cls = d.element_info.class_name or ""
+                    dump_lines.append(
+                        f"{ct} class={cls!r} title={t!r} aid={aid!r} "
+                        f"rect=({r.left},{r.top},{r.right},{r.bottom})"
+                    )
+                except Exception as ex:
+                    dump_lines.append(f"<descendant-error: {ex!r}>")
+                    continue
+        except Exception as ex:
+            dump_lines.append(f"<top-level-error: {ex!r}>")
+        dump_path = Path(tempfile.gettempdir()) / "qa_dialog_tree.txt"
+        try:
+            dump_path.write_text("\n".join(dump_lines), encoding="utf-8")
+        except Exception:
+            pass
         raise RuntimeError(
             f"native dialog: expected >= 2 bottom-row buttons "
             f"(action + Cancel), got {len(candidates)}; "
-            f"dlg_rect={dlg_rect!r}; all_buttons={all_btns!r}"
+            f"dlg_rect={dlg_rect!r}; full tree dumped to {dump_path}"
         )
     # Sort descending by ``left`` (rightmost first). Cancel is the
     # rightmost in every Common Item Dialog variant; the action button
@@ -942,13 +991,26 @@ def _find_native_dialog_action_button(native_dlg: UIAWrapper) -> UIAWrapper:
 
 
 def _find_filename_edit(native_dlg: UIAWrapper) -> UIAWrapper:
-    """Find the filename Edit in a Windows native Open/Save dialog.
+    """Find the filename Edit in a Save dialog — native or Qt non-native.
 
-    Returns the only Edit nested inside a ComboBox descendant. The native
-    dialog has two ComboBoxes: filename (with editable Edit) and "Save as
-    type:" / "Files of type:" (no Edit). Picking by structure makes the
-    lookup locale-independent — works regardless of OS display language.
+    Two tree shapes are possible:
+
+    * **Windows native IFileSaveDialog**: filename is the only Edit nested
+      inside a ComboBox descendant. The native dialog has two ComboBoxes —
+      filename (editable) and "Save as type:" (no Edit). Picking by structure
+      makes the lookup locale-independent.
+
+    * **Qt non-native QFileDialog** (when ``AA_DontUseNativeDialogs`` is set,
+      e.g. via ``PHOTO_MANAGER_QT_FILE_DIALOG=1`` for hosted CI runners that
+      can't drive the native COM modal — see #129): filename is a standalone
+      ``QLineEdit`` not nested in any ComboBox. The Look-in / file-type
+      ComboBoxes are siblings.
+
+    Strategy: try the native pattern first; if no ComboBox > Edit found,
+    fall back to "the only Edit not nested in a ComboBox" — that's Qt's
+    fileNameEdit. If neither yields a candidate, dump the tree for triage.
     """
+    # Native pattern: ComboBox > Edit
     for combo in native_dlg.descendants(control_type="ComboBox"):
         try:
             edits = combo.descendants(control_type="Edit")
@@ -956,29 +1018,86 @@ def _find_filename_edit(native_dlg: UIAWrapper) -> UIAWrapper:
                 return edits[0]
         except Exception:
             continue
-    raise RuntimeError("filename Edit (ComboBox > Edit) not found in native dialog")
+
+    # Qt fallback: standalone Edit (not nested in any ComboBox).
+    combo_edits: set[int] = set()
+    for combo in native_dlg.descendants(control_type="ComboBox"):
+        try:
+            for e in combo.descendants(control_type="Edit"):
+                combo_edits.add(e.handle or id(e))
+        except Exception:
+            continue
+    standalone: list[UIAWrapper] = []
+    for e in native_dlg.descendants(control_type="Edit"):
+        try:
+            key = e.handle or id(e)
+            if key not in combo_edits:
+                standalone.append(e)
+        except Exception:
+            continue
+    if len(standalone) == 1:
+        return standalone[0]
+    if len(standalone) > 1:
+        # Qt usually has exactly one fileNameEdit, but dialogs with extra
+        # search/filter inputs could surface multiples. Prefer the one whose
+        # auto_id contains "fileName" (Qt's auto-id for QFileDialog's
+        # filename input), else fall through to diagnostic dump.
+        for e in standalone:
+            try:
+                if "filename" in (e.element_info.automation_id or "").lower():
+                    return e
+            except Exception:
+                continue
+
+    # Diagnostic dump — neither shape matched. Dump every Edit and every
+    # ComboBox so we know what tree we're dealing with.
+    dump: list[str] = []
+    try:
+        for c in native_dlg.descendants(control_type="ComboBox"):
+            try:
+                aid = c.element_info.automation_id or ""
+                t = (c.window_text() or "").strip()
+                dump.append(f"ComboBox aid={aid!r} text={t!r}")
+            except Exception:
+                continue
+        for e in native_dlg.descendants(control_type="Edit"):
+            try:
+                aid = e.element_info.automation_id or ""
+                t = (e.window_text() or "").strip()
+                dump.append(f"Edit aid={aid!r} text={t!r}")
+            except Exception:
+                continue
+    except Exception:
+        pass
+    raise RuntimeError(
+        "filename Edit not found in dialog (tried native ComboBox>Edit and "
+        f"Qt standalone-Edit patterns); tree: {dump!r}"
+    )
 
 
 def save_manifest_via_native_dialog(
     pid: int, target_path: str, dialog_timeout: float = 10
 ) -> None:
-    """Drive the native QFileDialog opened by File > Save Manifest Decisions….
+    """Drive the QFileDialog opened by File > Save Manifest Decisions….
 
-    1. Locate the filename Edit (ComboBox > Edit, locale-independent).
+    1. Locate the filename Edit (native: ComboBox > Edit; Qt non-native:
+       standalone QLineEdit). Both shapes handled by ``_find_filename_edit``.
     2. Set its value via UIA's ValuePattern.SetValue — bypasses keyboard
        (so IMEs like bopomofo can't intercept) and bypasses the
        locale-specific ComboBox label name.
-    3. Click the action button (Save/OK), located by bottom-row
-       structure (locale-independent).
+    3. Click the action button (Save/OK), located by structure (native:
+       2nd-from-rightmost in bottom row; Qt: topmost in QDialogButtonBox).
+       Locale-independent for both.
     4. Poll for the artifact appearing on disk (success), a "Save
        Manifest Error" dialog (raise), or timeout (raise diagnostic).
 
-    Known limitation (#129): this helper does not work on the
-    GitHub-hosted ``windows-latest`` runner because the native
-    IFileSaveDialog modal loop only pumps COM messages and the runner
-    does not deliver real synthesized mouse / keyboard input. Locally
-    with a real desktop session it works fine; ``s12_save_manifest``
-    is the canonical scenario exercising this path.
+    CI dialog-driving (#129): hosted Windows runners cannot drive the
+    native IFileSaveDialog (COM modal loop doesn't pump WM_*; no real
+    synthesized input). The ``qa-batch`` workflow sets
+    ``PHOTO_MANAGER_QT_FILE_DIALOG=1`` so ``main.py`` opts the entire
+    process into Qt's non-native widget dialog, which responds to UIA
+    normally. Locally, env var unset → native dialog as users see it.
+    Same scenario, both platforms.
     """
     save_hwnd = wait_for_dialog(pid, "Save Manifest Decisions", timeout=dialog_timeout)
     save_dlg = connect_by_handle(save_hwnd)
@@ -1000,16 +1119,10 @@ def save_manifest_via_native_dialog(
     # send_keys("{ENTER}") because send_keys delivers globally to
     # whatever Windows says is foreground; on a real desktop the dialog
     # IS foreground but on the GitHub-hosted windows-latest runner that
-    # invariant doesn't hold and the Enter misses.
-    #
-    # CI caveat (#129): this still fails on ``windows-latest`` runners
-    # specifically. The native Save dialog is a Windows IFileSaveDialog
-    # whose modal loop only pumps COM messages, and the runner doesn't
-    # deliver real synthesized mouse / keyboard input either.
-    # PostMessage(BM_CLICK), PostMessage(WM_KEYDOWN, VK_RETURN), and
-    # UIA Invoke all return success on the runner but the dialog never
-    # closes. Locally with a real desktop session ``click_input`` works
-    # fine and s12 passes.
+    # invariant doesn't hold and the Enter misses. See #129 for the
+    # full diagnostic of why the native-dialog path fails on hosted
+    # runners and why the ``PHOTO_MANAGER_QT_FILE_DIALOG`` env var is
+    # the canonical fix for CI.
     save_btn = _find_native_dialog_action_button(save_dlg)
     _focus(save_dlg)
     save_btn.click_input()

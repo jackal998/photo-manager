@@ -134,20 +134,32 @@ sat queued forever and the driver hung for the full subprocess
 timeout. Use `PostMessageW` if you must, but see the next item — for
 native Common Item Dialogs it doesn't help anyway.
 
-### ❌ Driving native Windows Common Item Dialog on CI
+### ⚠️ Driving native Windows Common Item Dialog on CI — use the env-var escape hatch
 
 `QFileDialog.getSaveFileName` / `getOpenFileName` open a Windows
 `IFileSaveDialog` / `IFileOpenDialog` whose modal loop only pumps COM
 messages, AND the GitHub-hosted runner doesn't deliver synthesized
 mouse / keyboard input. `PostMessage(BM_CLICK)`, `PostMessage(WM_KEYDOWN,
 VK_RETURN)`, UIA `Invoke`, and `click_input` all return success but
-the dialog never closes. See [#129](https://github.com/jackal998/photo-manager/issues/129)
-for the full diagnostic.
+the dialog never closes. Iteration history in
+[#128](https://github.com/jackal998/photo-manager/pull/128) confirms
+every input hammer fails on hosted runners.
 
-If your scenario must drive a native dialog: locally it'll work; on
-CI it won't. Document the asymmetry in the helper docstring + in
-`docs/testing.md`'s "Known CI limitations" section. Don't try to
-defeat the platform.
+**Resolution ([#129](https://github.com/jackal998/photo-manager/issues/129)):**
+the `qa-batch` workflow sets `PHOTO_MANAGER_QT_FILE_DIALOG=1`. When
+that env var is set, `main.py` applies `Qt.AA_DontUseNativeDialogs`
+before constructing `QApplication` so every `QFileDialog` becomes
+Qt's non-native widget — which responds to UIA normally. Local users
+get the native dialog as before (env var unset → no change). The
+same flip works on macOS hosted runners (analogous `NSSavePanel`
+limitation).
+
+The `_find_filename_edit` and `_find_native_dialog_action_button`
+helpers in `_uia.py` handle both tree shapes — native Common Item
+Dialog and Qt `QDialogButtonBox` — so any new file-dialog-driving
+scenario inherits the dual support automatically. Don't try to drive
+the native dialog directly on CI; the platform isn't going to
+cooperate.
 
 ### ❌ Assuming `setCellWidget`'d Qt controls show up in UIA
 
@@ -218,9 +230,6 @@ When a scenario fails on CI but passes locally:
   Sometimes the next scenario's `menu_path(win, MENU_FILE, ...)` can't
   open the popup because the previous teardown didn't fully release
   foreground. Retry once before declaring a real failure.
-- **`s12_save_manifest` on CI** ([#129](https://github.com/jackal998/photo-manager/issues/129)).
-  Known-blocked by IFileSaveDialog limitation; locally green. Not a
-  regression.
 
 ## When you commit
 

@@ -221,32 +221,34 @@ in `qa/scenarios/`.
 
 ---
 
-## Known CI limitations
+## CI dialog-driving — `PHOTO_MANAGER_QT_FILE_DIALOG` ([#129](https://github.com/jackal998/photo-manager/issues/129))
 
-### `s12_save_manifest` fails on GitHub-hosted runners ([#129](https://github.com/jackal998/photo-manager/issues/129))
+The native Windows `IFileSaveDialog` / `IFileOpenDialog` modal loop
+only pumps COM messages — not regular `WM_*` — and GitHub-hosted
+Windows runners don't deliver synthesized mouse or keyboard input to
+it. So `PostMessage(BM_CLICK)`, `PostMessage(WM_KEYDOWN, VK_RETURN)`,
+UIA `Invoke`, and `click_input` all return success on the runner but
+the Save / Open action never fires (full iteration history in
+[#128](https://github.com/jackal998/photo-manager/pull/128)).
 
-The qa-batch workflow runs all 21 scenarios on `windows-latest` and
-**always reports `s12_save_manifest` as failing**. This is honest
-signalling, not a regression: the failure has a known root cause that
-hosted-runner constraints make unfixable without changing the app.
+**Resolution.** The `qa-batch` workflow sets
+`PHOTO_MANAGER_QT_FILE_DIALOG=1`. When that env var is `1`,
+`main.py` applies `Qt.AA_DontUseNativeDialogs` before constructing
+`QApplication`, so every `QFileDialog` in the process becomes Qt's
+widget-based dialog — which responds to UIA normally. Local users
+get the native dialog as before (env var unset → no behavior change).
 
-What's going on: the File → Save Manifest Decisions… flow opens a
-native Windows `IFileSaveDialog`. That dialog uses a COM modal loop
-which only pumps COM messages — not regular `WM_*` messages — and the
-hosted runner additionally doesn't deliver real synthesized mouse or
-keyboard input. So `PostMessage(BM_CLICK)`, `PostMessage(WM_KEYDOWN,
-VK_RETURN)`, UIA `Invoke`, and `click_input` all return success on
-the runner but the Save action never fires. See [#129](https://github.com/jackal998/photo-manager/issues/129)
-for the full diagnostic data and the alternatives evaluated.
+**Cross-platform value.** The same env var works for future macOS
+hosted-runner CI: the analogous `NSSavePanel` synthesized-input
+limitation lifts the same way — one switch, every platform. No
+per-OS QA-helper rewrite needed.
 
-Locally on a real Windows desktop session, `s12` runs green as part
-of the full 21-scenario batch — its drift coverage is intact.
-
-The PR-time CI signal works correctly for the other 20 scenarios:
-when a label or a state-transition shifts under any of those, the
-qa-batch job goes red on the relevant scenario and the workflow
-summary names it. Until [#129](https://github.com/jackal998/photo-manager/issues/129)
-resolves, treat a qa-batch failure on s12 alone as expected.
+The `_uia.py` filename-Edit and action-button locators carry parallel
+branches for both tree shapes — native Common Item Dialog
+(`ComboBox > Edit`, 2nd-from-rightmost bottom-row button) and Qt
+`QDialogButtonBox` (standalone `QLineEdit`, topmost button in the
+buttonBox). See `_find_filename_edit` and
+`_find_native_dialog_action_button` docstrings.
 
 ---
 
