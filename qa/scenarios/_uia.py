@@ -21,6 +21,7 @@ import ctypes
 import ctypes.wintypes
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 from pywinauto import Application
@@ -934,16 +935,24 @@ def save_manifest_via_native_dialog(
     time.sleep(0.8)
     send_keys("{ENTER}")
 
-    # Success path no longer raises a "Save Manifest" QMessageBox — the
-    # status bar reports success via "Saved N decisions". The error path
-    # still surfaces a "Save Manifest Error" critical dialog. Poll briefly:
-    # if an Error dialog appears, dismiss + raise; otherwise return after a
-    # short grace window (the save handler runs synchronously, so 3s is
-    # plenty of time for the error to surface if it's going to).
-    grace = min(3.0, dialog_timeout)
+    # Poll until one of three end states. The success signal is the
+    # ARTIFACT existing on disk (not just the dialog closing) — Qt's
+    # save handler writes the file after the dialog returns from
+    # getSaveFileName, so a dialog-close-only check can return before
+    # the write completes and leave callers seeing a missing file.
+    #
+    #   1. The target file appears on disk → Save fully completed.
+    #   2. "Save Manifest Error" appears → raise with the body text.
+    #   3. Neither, within the grace window → diagnose: if the Save
+    #      dialog is still open, Enter was lost; otherwise the save
+    #      attempt was accepted but produced no file (shouldn't happen).
+    target_p = Path(target_path)
+    grace = min(5.0, dialog_timeout)
     deadline = time.time() + grace
     error_hwnd = None
     while time.time() < deadline:
+        if target_p.exists():
+            return  # save fully completed; file is on disk
         for hwnd, _cls, t in list_process_windows(pid):
             if t == "Save Manifest Error":
                 error_hwnd = hwnd
@@ -952,7 +961,18 @@ def save_manifest_via_native_dialog(
             break
         time.sleep(0.2)
     if error_hwnd is None:
-        return  # success — caller verifies via status bar / file existence
+        titles_now = [t for _, _, t in list_process_windows(pid)]
+        if "Save Manifest Decisions" in titles_now:
+            raise RuntimeError(
+                f"Save Manifest dialog still open after {grace}s — Enter "
+                "likely missed the dialog (focus drift) or the OK button "
+                "never enabled (filename validation timing)"
+            )
+        raise RuntimeError(
+            f"Save Manifest dialog closed but {target_p} did not appear "
+            f"within {grace}s after Enter — save attempt was accepted "
+            "but produced no file"
+        )
 
     error_dlg = connect_by_handle(error_hwnd)
     for label in error_dlg.descendants(control_type="Text"):
