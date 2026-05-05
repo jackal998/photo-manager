@@ -207,6 +207,35 @@ CI-runnable subset that catches the most common drift class.
 
 ---
 
+## Known CI limitations
+
+### `s12_save_manifest` fails on GitHub-hosted runners ([#129](https://github.com/jackal998/photo-manager/issues/129))
+
+The qa-batch workflow runs all 21 scenarios on `windows-latest` and
+**always reports `s12_save_manifest` as failing**. This is honest
+signalling, not a regression: the failure has a known root cause that
+hosted-runner constraints make unfixable without changing the app.
+
+What's going on: the File → Save Manifest Decisions… flow opens a
+native Windows `IFileSaveDialog`. That dialog uses a COM modal loop
+which only pumps COM messages — not regular `WM_*` messages — and the
+hosted runner additionally doesn't deliver real synthesized mouse or
+keyboard input. So `PostMessage(BM_CLICK)`, `PostMessage(WM_KEYDOWN,
+VK_RETURN)`, UIA `Invoke`, and `click_input` all return success on
+the runner but the Save action never fires. See [#129](https://github.com/jackal998/photo-manager/issues/129)
+for the full diagnostic data and the alternatives evaluated.
+
+Locally on a real Windows desktop session, `s12` runs green as part
+of the full 21-scenario batch — its drift coverage is intact.
+
+The PR-time CI signal works correctly for the other 20 scenarios:
+when a label or a state-transition shifts under any of those, the
+qa-batch job goes red on the relevant scenario and the workflow
+summary names it. Until [#129](https://github.com/jackal998/photo-manager/issues/129)
+resolves, treat a qa-batch failure on s12 alone as expected.
+
+---
+
 ## Open work
 
 - **Layer 2 is on-demand**, not on the roadmap. Add a spot-test under

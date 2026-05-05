@@ -21,6 +21,7 @@ import ctypes
 import ctypes.wintypes
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 from pywinauto import Application
@@ -851,6 +852,95 @@ def click_remove_all_sources(dlg: UIAWrapper) -> None:
     time.sleep(0.3)
 
 
+def _find_dialog_button(dlg: UIAWrapper, title: str) -> UIAWrapper:
+    """Find a Button by ``title`` inside ``dlg``, picking the bottom-most match.
+
+    Disambiguates against locale-specific title-bar buttons that share the
+    same accessible name as the dialog's form-row buttons. Concrete case:
+    on a zh-TW Windows session the title-bar Close button reads "關閉" so a
+    plain ``dlg.child_window(title="Close", control_type="Button")`` resolves
+    cleanly to the Apply/Close form button. On en-US (e.g. GitHub's
+    ``windows-latest`` runners) the title-bar Close button is also "Close",
+    creating an ambiguous match that pywinauto's ``__resolve_control``
+    times out on rather than picking either.
+
+    The form-row buttons sit at the bottom of the dialog rect; the title-bar
+    button sits at the top. Sort by ``rectangle().top`` and take the
+    bottom-most. When only one Button matches the title (the zh-TW case),
+    "bottom-most" reduces to "the one button" — local behavior unchanged.
+
+    Raises ``RuntimeError`` when no Button matches the title.
+    """
+    candidates: list[tuple[int, UIAWrapper]] = []
+    for btn in dlg.descendants(control_type="Button"):
+        try:
+            if (btn.window_text() or "").strip() == title:
+                candidates.append((btn.rectangle().top, btn))
+        except Exception:
+            continue
+    if not candidates:
+        raise RuntimeError(f"no Button with title {title!r} found in dialog")
+    candidates.sort(key=lambda x: x[0])
+    return candidates[-1][1]
+
+
+def _find_native_dialog_action_button(native_dlg: UIAWrapper) -> UIAWrapper:
+    """Locate the action button (Save/Open/OK) of a native Common Item Dialog.
+
+    Locale-independent: identifies by structure, not visible text. Windows
+    Common Item Dialog's bottom row contains the action button + Cancel,
+    plus sometimes a navigation-pane toggle ("Hide Folders" / "Browse
+    Folders") on the far left.
+
+    Layout (right-to-left): Cancel (rightmost), action button (Save /
+    Open / OK), [optional] navigation toggle. So among the bottom-row
+    buttons, the action button is the **2nd-from-rightmost**.
+
+    Why not press Enter via ``send_keys``? On the GitHub-hosted
+    ``windows-latest`` runner foreground semantics differ from a real
+    desktop session; ``send_keys`` delivers globally to whatever is
+    foreground and intermittently misses the dialog, leaving the Save
+    unfired. ``click_input`` on a structurally-located button is
+    locale-independent and doesn't rely on foreground staying glued
+    to the dialog.
+
+    Raises ``RuntimeError`` (with a diagnostic listing every Button)
+    when the bottom row contains fewer than 2 buttons (no Cancel
+    pair to disambiguate against).
+    """
+    dlg_rect = native_dlg.rectangle()
+    candidates: list[tuple[int, int, UIAWrapper]] = []
+    for b in native_dlg.descendants(control_type="Button"):
+        try:
+            r = b.rectangle()
+            if r.top >= dlg_rect.bottom - 80:
+                candidates.append((r.left, r.top, b))
+        except Exception:
+            continue
+    if len(candidates) < 2:
+        all_btns: list[str] = []
+        for b in native_dlg.descendants(control_type="Button"):
+            try:
+                r = b.rectangle()
+                t = (b.window_text() or "").strip()
+                all_btns.append(
+                    f"title={t!r} rect=({r.left},{r.top},{r.right},{r.bottom})"
+                )
+            except Exception:
+                continue
+        raise RuntimeError(
+            f"native dialog: expected >= 2 bottom-row buttons "
+            f"(action + Cancel), got {len(candidates)}; "
+            f"dlg_rect={dlg_rect!r}; all_buttons={all_btns!r}"
+        )
+    # Sort descending by ``left`` (rightmost first). Cancel is the
+    # rightmost in every Common Item Dialog variant; the action button
+    # is immediately to its left, regardless of whether the optional
+    # navigation toggle is also present further to the left.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    return candidates[1][2]
+
+
 def _find_filename_edit(native_dlg: UIAWrapper) -> UIAWrapper:
     """Find the filename Edit in a Windows native Open/Save dialog.
 
@@ -878,12 +968,18 @@ def save_manifest_via_native_dialog(
     2. Set its value via UIA's ValuePattern.SetValue — bypasses keyboard
        (so IMEs like bopomofo can't intercept) and bypasses the
        locale-specific ComboBox label name.
-    3. Press Enter to invoke Save.
-    4. Wait briefly for "Save Manifest Error" critical dialog. Success
-       returns silently — caller verifies via status bar / file existence.
-    """
-    from pywinauto.keyboard import send_keys
+    3. Click the action button (Save/OK), located by bottom-row
+       structure (locale-independent).
+    4. Poll for the artifact appearing on disk (success), a "Save
+       Manifest Error" dialog (raise), or timeout (raise diagnostic).
 
+    Known limitation (#129): this helper does not work on the
+    GitHub-hosted ``windows-latest`` runner because the native
+    IFileSaveDialog modal loop only pumps COM messages and the runner
+    does not deliver real synthesized mouse / keyboard input. Locally
+    with a real desktop session it works fine; ``s12_save_manifest``
+    is the canonical scenario exercising this path.
+    """
     save_hwnd = wait_for_dialog(pid, "Save Manifest Decisions", timeout=dialog_timeout)
     save_dlg = connect_by_handle(save_hwnd)
     _focus(save_dlg)
@@ -894,19 +990,48 @@ def save_manifest_via_native_dialog(
     # Avoids both IME interception (bopomofo, etc.) and the locale-specific
     # name of the filename ComboBox label.
     filename_edit.iface_value.SetValue(str(target_path))
-    time.sleep(0.2)
-    send_keys("{ENTER}")
+    # 0.8s gives the native Save dialog time to validate the filename
+    # and enable its action button. On a desktop session 0.2s was
+    # enough; CI runners are slower and at 0.2s the Save click landed
+    # before validation completed.
+    time.sleep(0.8)
+    # Click the action button by structure (locale-independent — works
+    # whether the button reads "Save" or "存檔"). Click rather than
+    # send_keys("{ENTER}") because send_keys delivers globally to
+    # whatever Windows says is foreground; on a real desktop the dialog
+    # IS foreground but on the GitHub-hosted windows-latest runner that
+    # invariant doesn't hold and the Enter misses.
+    #
+    # CI caveat (#129): this still fails on ``windows-latest`` runners
+    # specifically. The native Save dialog is a Windows IFileSaveDialog
+    # whose modal loop only pumps COM messages, and the runner doesn't
+    # deliver real synthesized mouse / keyboard input either.
+    # PostMessage(BM_CLICK), PostMessage(WM_KEYDOWN, VK_RETURN), and
+    # UIA Invoke all return success on the runner but the dialog never
+    # closes. Locally with a real desktop session ``click_input`` works
+    # fine and s12 passes.
+    save_btn = _find_native_dialog_action_button(save_dlg)
+    _focus(save_dlg)
+    save_btn.click_input()
 
-    # Success path no longer raises a "Save Manifest" QMessageBox — the
-    # status bar reports success via "Saved N decisions". The error path
-    # still surfaces a "Save Manifest Error" critical dialog. Poll briefly:
-    # if an Error dialog appears, dismiss + raise; otherwise return after a
-    # short grace window (the save handler runs synchronously, so 3s is
-    # plenty of time for the error to surface if it's going to).
-    grace = min(3.0, dialog_timeout)
+    # Poll until one of three end states. The success signal is the
+    # ARTIFACT existing on disk (not just the dialog closing) — Qt's
+    # save handler writes the file after the dialog returns from
+    # getSaveFileName, so a dialog-close-only check can return before
+    # the write completes and leave callers seeing a missing file.
+    #
+    #   1. The target file appears on disk → Save fully completed.
+    #   2. "Save Manifest Error" appears → raise with the body text.
+    #   3. Neither, within the grace window → diagnose: if the Save
+    #      dialog is still open, Enter was lost; otherwise the save
+    #      attempt was accepted but produced no file (shouldn't happen).
+    target_p = Path(target_path)
+    grace = min(5.0, dialog_timeout)
     deadline = time.time() + grace
     error_hwnd = None
     while time.time() < deadline:
+        if target_p.exists():
+            return  # save fully completed; file is on disk
         for hwnd, _cls, t in list_process_windows(pid):
             if t == "Save Manifest Error":
                 error_hwnd = hwnd
@@ -915,7 +1040,18 @@ def save_manifest_via_native_dialog(
             break
         time.sleep(0.2)
     if error_hwnd is None:
-        return  # success — caller verifies via status bar / file existence
+        titles_now = [t for _, _, t in list_process_windows(pid)]
+        if "Save Manifest Decisions" in titles_now:
+            raise RuntimeError(
+                f"Save Manifest dialog still open after {grace}s — Enter "
+                "likely missed the dialog (focus drift) or the OK button "
+                "never enabled (filename validation timing)"
+            )
+        raise RuntimeError(
+            f"Save Manifest dialog closed but {target_p} did not appear "
+            f"within {grace}s after Enter — save attempt was accepted "
+            "but produced no file"
+        )
 
     error_dlg = connect_by_handle(error_hwnd)
     for label in error_dlg.descendants(control_type="Text"):
@@ -1060,15 +1196,14 @@ def _drive_action_dialog_form(
     action_combo.select(action_label)
     time.sleep(0.1)
 
-    apply_btn = action_dlg.child_window(
-        title=ACTION_DIALOG_BTN_APPLY, control_type="Button"
-    )
+    # Use _find_dialog_button (bottom-most match) — on en-US Windows the
+    # title-bar Close button shares the form Close's accessible name and a
+    # plain child_window lookup goes ambiguous.
+    apply_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_APPLY)
     apply_btn.click_input()
     time.sleep(0.3)
 
-    close_btn = action_dlg.child_window(
-        title=ACTION_DIALOG_BTN_CLOSE, control_type="Button"
-    )
+    close_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_CLOSE)
     close_btn.click_input()
     time.sleep(0.3)
 
@@ -1225,7 +1360,11 @@ def close_scan_dialog_via_close_button(dlg: UIAWrapper) -> None:
     paths where no manifest was produced — that's the canonical user exit
     after #86 wired focus to this button.
     """
-    btn = dlg.child_window(title="Close", control_type="Button")
+    # _find_dialog_button picks the bottom-most "Close" — disambiguates
+    # against the en-US title-bar Close button whose accessible name is
+    # also "Close" (zh-TW renders it as "關閉" so locally there's only
+    # one match either way).
+    btn = _find_dialog_button(dlg, "Close")
     _focus(dlg)
     btn.invoke()
     time.sleep(0.5)

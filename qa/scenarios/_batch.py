@@ -20,7 +20,11 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PY = str(REPO / ".venv" / "Scripts" / "python.exe")
+# Inherit the Python that invoked us — works under .venv (the local-dev
+# convention), under a CI runner where actions/setup-python puts python on
+# PATH directly, and under any other venv layout (conda, pyenv-win, etc).
+# Previously hardcoded as REPO/.venv/Scripts/python.exe, which broke CI.
+PY = sys.executable
 
 ALL_SCENARIOS = [
     "s01_happy_path",
@@ -93,9 +97,18 @@ def run_one(name: str) -> tuple[int, str]:
         driver_rc = r.returncode
         if driver_rc != 0:
             driver_err = "non-zero exit"
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         driver_err = "driver timeout"
         print(f"DRIVER TIMEOUT after 180s", flush=True)
+        # Surface whatever the driver printed before hanging — by default
+        # TimeoutExpired drops it on the floor, which makes hangs
+        # essentially undebuggable from CI logs.
+        if exc.stdout:
+            partial = exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode("utf-8", "replace")
+            print(f"DRIVER PARTIAL STDOUT:\n{partial}", flush=True)
+        if exc.stderr:
+            partial_err = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", "replace")
+            print(f"DRIVER PARTIAL STDERR:\n{partial_err.strip()[:2000]}", flush=True)
     except Exception as e:
         driver_err = repr(e)
         print(f"DRIVER EXC: {e!r}", flush=True)
