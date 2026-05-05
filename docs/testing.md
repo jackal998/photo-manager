@@ -207,6 +207,20 @@ CI-runnable subset that catches the most common drift class.
 
 ---
 
+## Authoring new QA scenarios
+
+Read [`qa/scenarios/AUTHORING.md`](../qa/scenarios/AUTHORING.md)
+before adding a new `sNN_*.py` driver. It captures the patterns we
+landed on and the no-go traps we hit while building the qa-batch CI
+workflow ([#74](https://github.com/jackal998/photo-manager/issues/74)
+/ [#128](https://github.com/jackal998/photo-manager/pull/128)) — every
+landmine in there cost a real iteration cycle.
+
+Co-located with the drivers so it's one Glob away when you're working
+in `qa/scenarios/`.
+
+---
+
 ## Known CI limitations
 
 ### `s12_save_manifest` fails on GitHub-hosted runners ([#129](https://github.com/jackal998/photo-manager/issues/129))
