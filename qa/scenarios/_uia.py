@@ -1030,8 +1030,24 @@ def save_manifest_via_native_dialog(
         )
     except Exception:
         pass
-    _focus(save_dlg)
-    save_btn.click_input()
+    # Try UIA Invoke pattern first — doesn't synthesize mouse events,
+    # which the GitHub runner doesn't reliably deliver to a real
+    # window. Fall back to click_input for environments where Invoke
+    # isn't supported on the button (and on a real desktop session
+    # both work; click_input there has been the historical path).
+    invoked = False
+    try:
+        save_btn.iface_invoke.Invoke()
+        invoked = True
+    except Exception as exc:
+        print(
+            f"  iface_invoke unavailable on save_btn ({exc!r}); "
+            f"falling back to click_input",
+            flush=True,
+        )
+    if not invoked:
+        _focus(save_dlg)
+        save_btn.click_input()
 
     # Poll until one of three end states. The success signal is the
     # ARTIFACT existing on disk (not just the dialog closing) — Qt's
