@@ -1,5 +1,5 @@
 {
-  "_comment": "Auto-written by qa.scenarios.configure for s01_happy_path.",
+  "_comment": "Seed for qa/settings.json. The QA batch runner (qa.scenarios.configure) rewrites qa/settings.json on every scenario, so this seed is only for direct main.py launches with PHOTO_MANAGER_HOME=qa on a fresh clone. Copy this file to qa/settings.json — JsonSettings already tolerates a missing file (returns empty dict), so this seed is purely for dev convenience.",
   "thumbnail_size": 256,
   "thumbnail_mem_cache": 128,
   "thumbnail_disk_cache_dir": "qa/.thumb-cache",
@@ -13,14 +13,6 @@
   },
   "sources": {
     "list": [
-      {
-        "path": "qa/sandbox/huge",
-        "recursive": true
-      },
-      {
-        "path": "qa/sandbox/near-duplicates",
-        "recursive": true
-      },
       {
         "path": "qa/sandbox/unique",
         "recursive": true

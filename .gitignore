@@ -88,12 +88,15 @@ logs/
 .env.*
 !.env.example
 
-# Local settings — machine-specific paths, not committed
+# Local settings — machine-specific paths, not committed.
+# qa/settings.json is also ignored: qa.scenarios.configure rewrites it
+# on every batch run, so committing it created perpetual drift. The
+# canonical seed lives at qa/settings.json.example — copy it to
+# qa/settings.json on a fresh clone if you want to launch main.py
+# directly with PHOTO_MANAGER_HOME=qa. Batch runs (qa.scenarios._batch)
+# don't need the seed; configure.py creates settings.json from scratch.
 settings.json
 settings.local.json
-# Exception: qa/settings.json is the QA-isolated config — committed
-# intentionally, only references qa/sandbox/ paths, no PII.
-!qa/settings.json
 
 # Databases
 *.sqlite

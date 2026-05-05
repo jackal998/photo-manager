@@ -272,6 +272,21 @@ widgets (everything inside the main window, scan dialog, message
 boxes) keep their English names because those come from
 photo-manager's source — locale-translation only hits the OS dialogs.
 
+**Hosted CI uses Qt's non-native QFileDialog ([#129](https://github.com/jackal998/photo-manager/issues/129)).**
+The qa-batch workflow sets `PHOTO_MANAGER_QT_FILE_DIALOG=1`, which
+makes `main.py` apply `Qt.AA_DontUseNativeDialogs` before constructing
+`QApplication` so every `QFileDialog` becomes Qt's widget-based dialog.
+Qt's dialog responds to UIA normally; the native dialog's COM modal
+loop on hosted runners silently drops synthesized input. The
+`_find_filename_edit` and `_find_native_dialog_action_button` helpers
+in `_uia.py` carry parallel branches for both tree shapes — native
+(`ComboBox > Edit` + 2nd-from-rightmost bottom-row button) and Qt
+(standalone `QLineEdit` + topmost button inside `QDialogButtonBox`) —
+so new file-dialog scenarios inherit dual support automatically.
+Local users get the native dialog as before; the env var only flips
+under qa-batch. The same flip will unblock macOS `NSSavePanel` on
+future hosted macOS CI — one switch, every platform.
+
 **Setting Edit values: prefer UIA `ValuePattern.SetValue` over typing.**
 Two reasons:
 1. **IMEs intercept keystrokes.** `pywinauto.keyboard.send_keys("hello")`
