@@ -1030,22 +1030,34 @@ def save_manifest_via_native_dialog(
         )
     except Exception:
         pass
-    # Try UIA Invoke pattern first — doesn't synthesize mouse events,
-    # which the GitHub runner doesn't reliably deliver to a real
-    # window. Fall back to click_input for environments where Invoke
-    # isn't supported on the button (and on a real desktop session
-    # both work; click_input there has been the historical path).
-    invoked = False
+    # Multi-strategy click. Three fallbacks because each fails in a
+    # different environment and we need at least one to land:
+    #
+    #   1. Win32 ``SendMessage(BM_CLICK)`` directly to the button's
+    #      window procedure. Bypasses foreground / mouse / UIA entirely;
+    #      this is how Windows itself fires button actions internally.
+    #      Most reliable on CI runners where mouse input is blackholed.
+    #   2. UIA ``Invoke`` pattern. Sometimes a no-op on native Common
+    #      Item Dialog buttons (returns success but doesn't fire the
+    #      action) so it's the second-choice fallback, not the first.
+    #   3. ``click_input`` (synthesized mouse) — historical desktop-
+    #      session path, kept as a last resort.
+    BM_CLICK = 0x00F5
+    fired = False
     try:
-        save_btn.iface_invoke.Invoke()
-        invoked = True
+        hwnd = save_btn.handle
+        if hwnd:
+            ctypes.windll.user32.SendMessageW(hwnd, BM_CLICK, 0, 0)
+            fired = True
     except Exception as exc:
-        print(
-            f"  iface_invoke unavailable on save_btn ({exc!r}); "
-            f"falling back to click_input",
-            flush=True,
-        )
-    if not invoked:
+        print(f"  BM_CLICK send failed: {exc!r}", flush=True)
+    if not fired:
+        try:
+            save_btn.iface_invoke.Invoke()
+            fired = True
+        except Exception as exc:
+            print(f"  iface_invoke fallback failed: {exc!r}", flush=True)
+    if not fired:
         _focus(save_dlg)
         save_btn.click_input()
 
