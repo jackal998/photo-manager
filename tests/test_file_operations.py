@@ -505,6 +505,121 @@ class TestSaveManifestDecisions:
 
         mock_info.assert_called_once()
 
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_dialog_uses_canonical_title(self, _mock, tmp_path):
+        """The Save Manifest dialog must open with caption 'Save Manifest Decisions'.
+
+        Drift in this literal at file_operations.py would silently break QA
+        scenario s12 (which finds the dialog by exact title) and confuse users
+        who see a renamed title. Asserts the call args of getSaveFileName so
+        the title literal can't drift unnoticed (#129 — replacement coverage
+        for s12 which cannot run on hosted Windows runners).
+        """
+        recs = [_rec("/a.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch(
+            "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+            return_value=("", ""),  # cancel; we only care about call args
+        ) as mock_dlg:
+            handler.save_manifest_decisions()
+
+        mock_dlg.assert_called_once()
+        title = mock_dlg.call_args.args[1]
+        assert title == "Save Manifest Decisions", (
+            f"dialog title drift: expected 'Save Manifest Decisions', got {title!r}"
+        )
+
+
+# ── load → decide → save round-trip ────────────────────────────────────────
+
+
+class TestSaveManifestLoadRoundTrip:
+    """Real sqlite -> ManifestRepository.load() -> save_manifest_decisions ->
+    real sqlite. Catches drift between the load and save sides that synthetic
+    SimpleNamespace fixtures miss — covers the end-to-end signal s12 catches
+    on a local desktop but cannot run on CI due to the IFileSaveDialog
+    limitation (#129)."""
+
+    @staticmethod
+    def _seed_grouped_manifest(tmp_path: Path) -> Path:
+        """Build a real grouped manifest with two rows in one near-duplicate group.
+
+        Mirrors the shape ManifestLoadWorker sees in production: one
+        REVIEW_DUPLICATE row + one Ref-tier row (MOVE) sharing a group_id.
+        Singletons would be filtered out by load(), so the pair is required.
+        """
+        from PIL import Image
+        cand = tmp_path / "cand.jpg"
+        ref = tmp_path / "ref.jpg"
+        for p in (cand, ref):
+            Image.new("RGB", (16, 16), (128, 64, 32)).save(p, "JPEG")
+        db = tmp_path / "src.sqlite"
+        with sqlite3.connect(db) as conn:
+            conn.executescript(_DDL)
+            gid = "/group/a"
+            conn.execute(
+                "INSERT INTO migration_manifest "
+                "(source_path, source_label, action, hamming_distance, "
+                "group_id, reason) VALUES (?, 'src', 'REVIEW_DUPLICATE', 5, ?, 'nd')",
+                (str(cand), gid),
+            )
+            conn.execute(
+                "INSERT INTO migration_manifest "
+                "(source_path, source_label, action, group_id, reason) "
+                "VALUES (?, 'src', 'MOVE', ?, 'unique')",
+                (str(ref), gid),
+            )
+            conn.commit()
+        return db
+
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_load_decide_save_roundtrip(self, _mock, tmp_path):
+        from collections import defaultdict
+        from infrastructure.manifest_repository import ManifestRepository
+
+        src_db = self._seed_grouped_manifest(tmp_path)
+
+        # Load via the real repository — exercises auto-migration, group
+        # filtering, and PhotoRecord construction from real DB rows.
+        records = list(ManifestRepository().load(str(src_db)))
+        assert len(records) == 2, (
+            f"expected 2 grouped records from load(), got {len(records)}"
+        )
+
+        # Re-group by group_number so save sees real PhotoGroup objects
+        # whose items came out of the load path (not hand-built fixtures).
+        by_gn: dict[int, list] = defaultdict(list)
+        for rec in records:
+            by_gn[rec.group_number].append(rec)
+        groups = [
+            PhotoGroup(group_number=gn, items=items)
+            for gn, items in by_gn.items()
+        ]
+
+        # Inject decisions on the loaded records.
+        cand_rec = next(r for r in records if r.file_path.endswith("cand.jpg"))
+        ref_rec = next(r for r in records if r.file_path.endswith("ref.jpg"))
+        cand_rec.user_decision = "delete"
+        ref_rec.user_decision = "keep"
+
+        # Save to a NEW path via the real handler (dialog mocked).
+        new_path = str(tmp_path / "exported.sqlite")
+        vm = SimpleNamespace(groups=groups)
+        handler, _, _ = _make_handler(vm, str(src_db))
+        with patch(
+            "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+            return_value=(new_path, ""),
+        ):
+            handler.save_manifest_decisions()
+
+        # Verify the loaded -> decided -> saved chain preserved decisions.
+        assert _read_decision(Path(new_path), cand_rec.file_path) == "delete"
+        assert _read_decision(Path(new_path), ref_rec.file_path) == "keep"
+        assert handler._manifest_path == new_path
+
 
 # ── batch SQL verification ─────────────────────────────────────────────────
 
