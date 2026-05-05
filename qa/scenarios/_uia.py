@@ -1033,10 +1033,13 @@ def save_manifest_via_native_dialog(
     # Multi-strategy click. Three fallbacks because each fails in a
     # different environment and we need at least one to land:
     #
-    #   1. Win32 ``SendMessage(BM_CLICK)`` directly to the button's
-    #      window procedure. Bypasses foreground / mouse / UIA entirely;
-    #      this is how Windows itself fires button actions internally.
-    #      Most reliable on CI runners where mouse input is blackholed.
+    #   1. Win32 ``PostMessage(BM_CLICK)`` to the button's window
+    #      procedure. Bypasses foreground / mouse / UIA entirely; this
+    #      is how Windows itself fires button actions internally.
+    #      ``PostMessage`` (not ``SendMessage``) so we don't block
+    #      waiting for the receiver to pump the message — the modal
+    #      dialog has its own event loop and a synchronous Send was
+    #      hanging the driver indefinitely on the runner.
     #   2. UIA ``Invoke`` pattern. Sometimes a no-op on native Common
     #      Item Dialog buttons (returns success but doesn't fire the
     #      action) so it's the second-choice fallback, not the first.
@@ -1047,10 +1050,13 @@ def save_manifest_via_native_dialog(
     try:
         hwnd = save_btn.handle
         if hwnd:
-            ctypes.windll.user32.SendMessageW(hwnd, BM_CLICK, 0, 0)
+            # PostMessage queues the message and returns immediately.
+            # The dialog's own message pump will deliver BM_CLICK to
+            # the button when next idle.
+            ctypes.windll.user32.PostMessageW(hwnd, BM_CLICK, 0, 0)
             fired = True
     except Exception as exc:
-        print(f"  BM_CLICK send failed: {exc!r}", flush=True)
+        print(f"  BM_CLICK post failed: {exc!r}", flush=True)
     if not fired:
         try:
             save_btn.iface_invoke.Invoke()

@@ -97,9 +97,18 @@ def run_one(name: str) -> tuple[int, str]:
         driver_rc = r.returncode
         if driver_rc != 0:
             driver_err = "non-zero exit"
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         driver_err = "driver timeout"
         print(f"DRIVER TIMEOUT after 180s", flush=True)
+        # Surface whatever the driver printed before hanging — by default
+        # TimeoutExpired drops it on the floor, which makes hangs
+        # essentially undebuggable from CI logs.
+        if exc.stdout:
+            partial = exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode("utf-8", "replace")
+            print(f"DRIVER PARTIAL STDOUT:\n{partial}", flush=True)
+        if exc.stderr:
+            partial_err = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", "replace")
+            print(f"DRIVER PARTIAL STDERR:\n{partial_err.strip()[:2000]}", flush=True)
     except Exception as e:
         driver_err = repr(e)
         print(f"DRIVER EXC: {e!r}", flush=True)
