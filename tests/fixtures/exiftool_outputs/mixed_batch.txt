@@ -1,17 +1,15 @@
-======== qa/sandbox/formats/fmt_heic.heic
-2024:04:01 10:00:00
--
--
-======== qa/sandbox/unique/unique_00.jpg
-2024:01:01 12:00:00
--
--
-======== qa/sandbox/videos/dummy.mov
--
--
--
-======== qa/sandbox/videos/dummy.mp4
--
--
--
+[{
+  "SourceFile": "qa/sandbox/formats/fmt_heic.heic",
+  "EXIF:DateTimeOriginal": "2024:04:01 10:00:00"
+},
+{
+  "SourceFile": "qa/sandbox/unique/unique_00.jpg",
+  "EXIF:DateTimeOriginal": "2024:01:01 12:00:00"
+},
+{
+  "SourceFile": "qa/sandbox/videos/dummy.mov"
+},
+{
+  "SourceFile": "qa/sandbox/videos/dummy.mp4"
+}]
     4 image files read

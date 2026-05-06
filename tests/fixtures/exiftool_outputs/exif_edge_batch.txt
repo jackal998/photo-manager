@@ -1,25 +1,24 @@
-======== qa/sandbox/exif-edge/createdate_only.jpg
--
-2024:05:03 09:30:00
--
-======== qa/sandbox/exif-edge/dash_sentinel.jpg
--
--
--
-======== qa/sandbox/exif-edge/datetime_tag_only.jpg
--
--
--
-======== qa/sandbox/exif-edge/subsecond.jpg
-2024:05:02 09:30:00.500
--
--
-======== qa/sandbox/exif-edge/tz_offset.jpg
-2024:05:01 09:30:00+09:00
--
--
-======== qa/sandbox/exif-edge/zero_date_sentinel.jpg
-0000:00:00 00:00:00
--
--
+[{
+  "SourceFile": "qa/sandbox/exif-edge/createdate_only.jpg",
+  "EXIF:CreateDate": "2024:05:03 09:30:00"
+},
+{
+  "SourceFile": "qa/sandbox/exif-edge/dash_sentinel.jpg",
+  "EXIF:DateTimeOriginal": "-"
+},
+{
+  "SourceFile": "qa/sandbox/exif-edge/datetime_tag_only.jpg"
+},
+{
+  "SourceFile": "qa/sandbox/exif-edge/subsecond.jpg",
+  "EXIF:DateTimeOriginal": "2024:05:02 09:30:00.500"
+},
+{
+  "SourceFile": "qa/sandbox/exif-edge/tz_offset.jpg",
+  "EXIF:DateTimeOriginal": "2024:05:01 09:30:00+09:00"
+},
+{
+  "SourceFile": "qa/sandbox/exif-edge/zero_date_sentinel.jpg",
+  "EXIF:DateTimeOriginal": "0000:00:00 00:00:00"
+}]
     6 image files read

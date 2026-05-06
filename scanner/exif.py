@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -12,8 +14,29 @@ from typing import Optional
 class ExiftoolProcess:
     """Persistent exiftool process for batch EXIF reads.
 
-    Uses -stay_open True for performance — avoids subprocess overhead per file.
-    Pattern from sync_takeout.py.
+    Uses ``-stay_open True`` for performance — avoids subprocess overhead
+    per file. Pattern originally from ``sync_takeout.py``; revised after
+    photo-manager#145 to:
+
+    * Separate stdout and stderr on **distinct OS pipes** (not merged via
+      ``subprocess.STDOUT``). For any output large enough to fill the OS
+      pipe buffer (~64 KB on Linux/Windows — i.e. several hundred files
+      in one ``-stay_open`` batch) the kernel flushes stdout in chunks,
+      and exiftool's progress messages on stderr can splice INTO stdout
+      at the byte level. Concretely we have observed:
+      ``"EXIF:DateTimeOriginal": "2 3360 image files read\\n024:..."``
+      — the progress line spliced between bytes ``2`` and ``024:...`` of
+      a date string. With the old line-positional parser this corrupted
+      one date silently. Under JSON, it makes ``json.loads`` fail on the
+      whole batch, returning empty results for every file. The fix on
+      both ends: (a) read stderr on a daemon thread so exiftool never
+      blocks on a full stderr pipe, and (b) keep the streams structurally
+      separate so byte-level interleaving is impossible.
+    * ``execute()`` appends any captured stderr to the returned string
+      (after stdout, on a new line) so callers that grep for
+      ``"error"`` / ``"warning"`` still see those words. JSON callers
+      slice on ``[ ... ]`` so the trailing stderr text is harmless to
+      them either way.
     """
 
     def __init__(self) -> None:
@@ -21,13 +44,37 @@ class ExiftoolProcess:
             ["exiftool", "-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             encoding="utf-8",
             errors="replace",
         )
+        self._stderr_buf: list[str] = []
+        self._stderr_lock = threading.Lock()
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, daemon=True
+        )
+        self._stderr_thread.start()
+
+    def _drain_stderr(self) -> None:
+        """Continuously pull lines off the stderr pipe so exiftool never
+        blocks on a full pipe buffer. Lines are buffered in
+        ``_stderr_buf`` for ``execute()`` to harvest.
+        """
+        while True:
+            try:
+                line = self.proc.stderr.readline()
+            except Exception:  # pylint: disable=broad-exception-caught
+                # The proc may have closed; exit the drain thread silently.
+                break
+            if not line:
+                break
+            with self._stderr_lock:
+                self._stderr_buf.append(line)
 
     def execute(self, args: list) -> str:
-        """Send args to exiftool, return output up to {ready} sentinel."""
+        """Send args to exiftool, return stdout (with any stderr appended)
+        up to the ``{ready}`` sentinel.
+        """
         cmd = "\n".join(str(a) for a in args) + "\n-execute\n"
         self.proc.stdin.write(cmd)
         self.proc.stdin.flush()
@@ -40,7 +87,16 @@ class ExiftoolProcess:
             if stripped == "{ready}":
                 break
             lines.append(stripped)
-        return "\n".join(lines)
+        stdout_text = "\n".join(lines)
+        with self._stderr_lock:
+            err_text = "".join(self._stderr_buf)
+            self._stderr_buf.clear()
+        if err_text:
+            # Append on a new line so JSON parsers slicing on ``[ ... ]``
+            # remain unaffected, while text-grep callers still see
+            # "error" / "warning" in the result.
+            return stdout_text + "\n" + err_text.rstrip("\n")
+        return stdout_text
 
     def close(self) -> None:
         try:
@@ -62,26 +118,31 @@ _VALID_SENTINEL = "-"
 _ZERO_DATE = "0000:00:00 00:00:00"
 
 
-def _strip_exiftool_metalines(output: str) -> list[str]:
-    """Drop exiftool's per-file ``======== <path>`` headers and the trailing
-    ``    N image files read/updated`` summary, leaving only tag values.
+def _parse_exiftool_json(output: str) -> list[dict]:
+    """Extract the JSON array from a ``-j -G`` exiftool invocation.
 
-    With multiple files in ``-stay_open`` mode, exiftool emits a header line
-    before each file's tag block. Without filtering, ``i * tags_per_file``
-    indexing reads the header as data and silently misaligns — every file
-    past index 0 ends up with a date drawn from a *different* file in the
-    same batch. Single-file mode emits no header, so the bug only surfaces
-    against real multi-file batches (the failure mode #145 documented).
+    ``ExiftoolProcess.execute()`` appends any captured stderr after stdout,
+    so the raw output may contain status messages (e.g. ``    3 image files
+    read``) before or after the JSON blob. Slice by the outermost
+    ``[ ... ]`` so leading/trailing non-JSON text doesn't break parsing,
+    and fall back to an empty list on any malformation.
+
+    Why JSON over the previous ``-s3 -f`` line-positional shape
+    (photo-manager#145): each record carries its own ``SourceFile`` field,
+    so records bind to paths by **identity** instead of position.
+    Reordered records, missing records, extra records, inserted status
+    messages — none can misalign the parser anymore. The drift bug class
+    is structurally eliminated, not patched.
     """
-    out: list[str] = []
-    for line in output.splitlines():
-        if line.startswith("======== "):
-            continue
-        stripped = line.strip()
-        if stripped.endswith("image files read") or stripped.endswith("image files updated"):
-            continue
-        out.append(line)
-    return out
+    start = output.find("[")
+    end = output.rfind("]")
+    if start == -1 or end <= start:
+        return []
+    try:
+        data = json.loads(output[start:end + 1])
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
 
 
 def parse_exif_date(raw: str) -> Optional[datetime]:
@@ -119,29 +180,69 @@ def batch_read_dates(
     return result
 
 
+# JSON keys under ``-j -G`` (group-0 prefixed). Tried in order: prefer
+# DateTimeOriginal (EXIF first, XMP fallback for PNG/GIF/WebP that carry
+# date in XMP since some pipelines don't write EXIF for those formats),
+# then CreateDate, then QuickTime:CreateDate (videos). Centralising the
+# key strings here makes typos visible at module load.
+_JSON_DATE_KEYS = (
+    "EXIF:DateTimeOriginal",
+    "XMP:DateTimeOriginal",
+    "EXIF:CreateDate",
+    "XMP:CreateDate",
+    "QuickTime:CreateDate",
+)
+
+
 def _read_chunk(paths: list[Path], et: ExiftoolProcess) -> dict[Path, Optional[datetime]]:
-    # -fast: stop scanning after the first EXIF/metadata block — date tags are always
-    # there for camera files, so this is safe and avoids reading whole files over NAS.
-    # Edge case: MOV/MP4 files with the moov atom at the file end may lose their
-    # QuickTime:CreateDate; they fall back to CreateDate which is usually present anyway.
-    args = ["-DateTimeOriginal", "-CreateDate", "-QuickTime:CreateDate", "-s3", "-f", "-fast"]
+    # ``-j -G``: JSON output with group-0-prefixed keys. Each record carries
+    # its own ``SourceFile`` field, so records bind to paths by identity
+    # (Path equality) rather than position. This structurally eliminates the
+    # drift bug class that the previous ``-s3 -f`` line-positional parser
+    # had — see photo-manager#145 and google-album-metadata#5.
+    #
+    # ``-fast``: stop scanning after the first EXIF/metadata block — date
+    # tags are always there for camera files, so this is safe and avoids
+    # reading whole files over NAS. (MOV/MP4 with moov atom at file end
+    # may lose their ``QuickTime:CreateDate`` under ``-fast``; they fall
+    # back to CreateDate which is usually present anyway.)
+    #
+    # No ``-f``: under ``-j``, missing tags are absent from the record
+    # (no ``-`` placeholder), which is cleaner than the sentinel.
+    args = ["-j", "-G",
+            "-DateTimeOriginal", "-CreateDate", "-QuickTime:CreateDate",
+            "-fast"]
     args += [str(p) for p in paths]
     output = et.execute(args)
+    records = _parse_exiftool_json(output)
+
+    # Bind records to input paths by ``SourceFile``. ``pathlib`` normalises
+    # forward/back slashes on Windows so dict equality holds regardless of
+    # which separator exiftool emitted in its JSON output.
+    by_path: dict[Path, dict] = {}
+    for rec in records:
+        src = rec.get("SourceFile")
+        if isinstance(src, str):
+            by_path[Path(src)] = rec
 
     result: dict[Path, Optional[datetime]] = {}
-    # Filter out per-file ``======== <path>`` headers and the trailing
-    # ``N image files read`` summary that exiftool emits in multi-file
-    # ``-stay_open`` mode — see ``_strip_exiftool_metalines`` for why.
-    lines = _strip_exiftool_metalines(output)
-    # exiftool -s3 outputs 3 lines per file (one per tag, in order)
-    for i, path in enumerate(paths):
-        base = i * 3
-        if base + 2 >= len(lines):
+    for path in paths:
+        rec = by_path.get(Path(str(path)))
+        if rec is None:
+            # Record missing (file not scanned, ghost-binding, etc.) →
+            # None. Position-independence means a missing file at index N
+            # does NOT cause every later file to drift.
             result[path] = None
             continue
-        dt_orig = parse_exif_date(lines[base])
-        create = parse_exif_date(lines[base + 1])
-        qt_create = parse_exif_date(lines[base + 2])
-        result[path] = dt_orig or create or qt_create
+        chosen: Optional[datetime] = None
+        for key in _JSON_DATE_KEYS:
+            v = rec.get(key)
+            if not isinstance(v, str) or not v:
+                continue
+            parsed = parse_exif_date(v)
+            if parsed is not None:
+                chosen = parsed
+                break
+        result[path] = chosen
 
     return result
