@@ -68,7 +68,7 @@ calls out what would be uncaught even with a green CI.
 
 | Module | Layer 1 | Layer 2 (integration) | Layer 3 (qa-explore) | Residual risk |
 |---|---|---|---|---|
-| `scanner/exif.py` | 100% (all mocks) | spot-add only | s01, s04, s06, s08 (real exiftool, happy path) | exiftool protocol drift between versions; subtle output-format changes our mock doesn't anticipate. Add a layer-2 spot-test if exiftool ships a known-breaking change. |
+| `scanner/exif.py` | 100% (mocks emit realistic stay_open shape: `======== <path>` headers + trailing summary for multi-file batches; verified live against `qa/sandbox/`. Static fixtures in `tests/fixtures/exiftool_outputs/` snapshot real exiftool output for the edge-case batch). | spot-add only | s01, s04, s06, s08 (real exiftool, happy path) | exiftool protocol drift between versions. Static fixtures will fail loudly if the `========` separator or `N image files read` summary line wording changes — that's the early-warning. Re-capture procedure documented in `TestRealExiftoolFixtures` docstring. |
 | `scanner/hasher.py` | 73% | spot-add only | s06, s07, s11 (real fixtures, happy path) | uncovered tail (~27%) is rawpy / HEIC fallback paths only reachable with real raw files. Layer 3 covers the formats we ship fixtures for; spot-add a layer-2 test only if a real-world RAW format misbehaves. |
 | `scanner/dedup.py` | 93% | — | s01, s07, s10 | low — pure logic, well-covered |
 | `scanner/walker.py` | 95% | — | s09 | very low — symlink + flat-mode branches well-covered |

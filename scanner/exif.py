@@ -62,6 +62,28 @@ _VALID_SENTINEL = "-"
 _ZERO_DATE = "0000:00:00 00:00:00"
 
 
+def _strip_exiftool_metalines(output: str) -> list[str]:
+    """Drop exiftool's per-file ``======== <path>`` headers and the trailing
+    ``    N image files read/updated`` summary, leaving only tag values.
+
+    With multiple files in ``-stay_open`` mode, exiftool emits a header line
+    before each file's tag block. Without filtering, ``i * tags_per_file``
+    indexing reads the header as data and silently misaligns — every file
+    past index 0 ends up with a date drawn from a *different* file in the
+    same batch. Single-file mode emits no header, so the bug only surfaces
+    against real multi-file batches (the failure mode #145 documented).
+    """
+    out: list[str] = []
+    for line in output.splitlines():
+        if line.startswith("======== "):
+            continue
+        stripped = line.strip()
+        if stripped.endswith("image files read") or stripped.endswith("image files updated"):
+            continue
+        out.append(line)
+    return out
+
+
 def parse_exif_date(raw: str) -> Optional[datetime]:
     raw = raw.strip()
     if not raw or raw == _VALID_SENTINEL or raw.startswith(_ZERO_DATE[:4] + ":"):
@@ -107,7 +129,10 @@ def _read_chunk(paths: list[Path], et: ExiftoolProcess) -> dict[Path, Optional[d
     output = et.execute(args)
 
     result: dict[Path, Optional[datetime]] = {}
-    lines = output.splitlines()
+    # Filter out per-file ``======== <path>`` headers and the trailing
+    # ``N image files read`` summary that exiftool emits in multi-file
+    # ``-stay_open`` mode — see ``_strip_exiftool_metalines`` for why.
+    lines = _strip_exiftool_metalines(output)
     # exiftool -s3 outputs 3 lines per file (one per tag, in order)
     for i, path in enumerate(paths):
         base = i * 3
