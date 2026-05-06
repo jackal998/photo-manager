@@ -117,9 +117,17 @@ def _wait_for_main_window(pid: int, timeout: float = 8.0) -> bool:
 def run_one(name: str) -> tuple[int, str]:
     print(f"\n===== {name} =====", flush=True)
     # 1. Configure
+    #
+    # Decode child stdout/stderr as UTF-8 (matches PYTHONIOENCODING=utf-8
+    # the qa-batch workflow sets). subprocess.run(text=True) without an
+    # explicit encoding falls back to locale.getpreferredencoding, which
+    # is CP1252 on en-US Windows runners — that turns the scanner's
+    # box-drawing chars (─ U+2500) into mojibake (`â”€`) before they
+    # reach our own stdout.
     r = subprocess.run(
         [PY, "-m", "qa.scenarios.configure", name],
-        cwd=REPO, capture_output=True, text=True, timeout=15,
+        cwd=REPO, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=15,
     )
     print(r.stdout, end="", flush=True)
     if r.returncode != 0:
@@ -149,7 +157,8 @@ def run_one(name: str) -> tuple[int, str]:
     try:
         r = subprocess.run(
             [PY, "-m", f"qa.scenarios.{name}"],
-            cwd=REPO, capture_output=True, text=True, timeout=180,
+            cwd=REPO, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=180,
         )
         print(r.stdout, end="", flush=True)
         if r.stderr.strip():
