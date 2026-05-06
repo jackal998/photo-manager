@@ -87,6 +87,14 @@ jobs:
           # end-to-end here. Local users still get the native dialog.
           PHOTO_MANAGER_QT_FILE_DIALOG: '1'
         run: |
+          # Force UTF-8 for PowerShell's stdout decode/encode pipeline so
+          # box-drawing chars (─ U+2500) and other non-ASCII Unicode in
+          # the scanner's summary banner render correctly in the runner
+          # log instead of mojibake (`â”€` for `─`). Python writes UTF-8
+          # via PYTHONIOENCODING above, but PowerShell on hosted runners
+          # defaults to the OEM codepage for child-process I/O.
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
           python -m qa.scenarios._batch 2>&1 | Tee-Object -FilePath qa-batch.log
           # Forward the batch's exit code; PowerShell pipes default to the
           # tail-element rc which is Tee-Object's (always 0). The variable

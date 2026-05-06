@@ -3,7 +3,7 @@
 For each scenario:
   1. configure qa/settings.json (writes scenario-specific source list)
   2. launch main.py as a subprocess
-  3. wait 3s for the window
+  3. poll until the main window is visible (max 8s; typically <2s)
   4. run the driver
   5. close the window via UIA
   6. wait for the subprocess to exit (or terminate if stuck)
@@ -13,6 +13,8 @@ Usage:  .venv/Scripts/python.exe -m qa.scenarios._batch [scenarios...]
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import os
 import subprocess
 import sys
@@ -60,12 +62,72 @@ def _close_window() -> None:
     subprocess.run([PY, "-c", code], cwd=REPO, capture_output=True, timeout=10)
 
 
+_user32 = ctypes.windll.user32
+_WNDENUMPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_int, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+)
+
+
+def _wait_for_main_window(pid: int, timeout: float = 8.0) -> bool:
+    """Poll until photo-manager's main window is visible for ``pid``.
+
+    Replaces a fixed ``time.sleep`` after launching ``main.py``. The
+    window typically appears in ~0.5–1.5 s on a real desktop and 2–4 s
+    on hosted CI runners — fixed sleeps either over-wait or are too
+    short under runner contention. Polling adapts to whichever side
+    you're on and saves cumulative time across the batch (~2 s × 21
+    scenarios ≈ 40 s on a green run).
+
+    Uses ctypes ``EnumWindows`` rather than spawning pywinauto so the
+    cost per check is microseconds, not subprocess-startup overhead.
+    Returns ``True`` if the window appeared within ``timeout``,
+    ``False`` if the timeout expired (caller logs a warning; the
+    driver's own UIA ``connect`` will then surface a clearer error).
+    """
+    deadline = time.monotonic() + timeout
+    found = [False]
+
+    def cb(hwnd, _):
+        if not _user32.IsWindowVisible(hwnd):
+            return True
+        ppid = ctypes.c_ulong()
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(ppid))
+        if ppid.value != pid:
+            return True
+        title = ctypes.create_unicode_buffer(256)
+        _user32.GetWindowTextW(hwnd, title, 256)
+        if "Photo Manager" in title.value:
+            found[0] = True
+            return False
+        return True
+
+    while time.monotonic() < deadline:
+        found[0] = False
+        _user32.EnumWindows(_WNDENUMPROC(cb), 0)
+        if found[0]:
+            # Small grace for the QApplication event loop to finish
+            # constructing widgets — without it, an immediate UIA
+            # connect from the driver can race against widget setup.
+            time.sleep(0.3)
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def run_one(name: str) -> tuple[int, str]:
     print(f"\n===== {name} =====", flush=True)
     # 1. Configure
+    #
+    # Decode child stdout/stderr as UTF-8 (matches PYTHONIOENCODING=utf-8
+    # the qa-batch workflow sets). subprocess.run(text=True) without an
+    # explicit encoding falls back to locale.getpreferredencoding, which
+    # is CP1252 on en-US Windows runners — that turns the scanner's
+    # box-drawing chars (─ U+2500) into mojibake (`â”€`) before they
+    # reach our own stdout.
     r = subprocess.run(
         [PY, "-m", "qa.scenarios.configure", name],
-        cwd=REPO, capture_output=True, text=True, timeout=15,
+        cwd=REPO, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=15,
     )
     print(r.stdout, end="", flush=True)
     if r.returncode != 0:
@@ -81,7 +143,13 @@ def run_one(name: str) -> tuple[int, str]:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     print(f"launched main.py pid={proc.pid}", flush=True)
-    time.sleep(3.5)
+    if not _wait_for_main_window(proc.pid, timeout=8.0):
+        print(
+            f"WARN: main window did not appear within 8s for pid={proc.pid}; "
+            f"continuing anyway — the driver's UIA connect will surface a "
+            f"clearer error if the app really failed to launch.",
+            flush=True,
+        )
 
     # 3. Drive
     driver_rc = -1
@@ -89,7 +157,8 @@ def run_one(name: str) -> tuple[int, str]:
     try:
         r = subprocess.run(
             [PY, "-m", f"qa.scenarios.{name}"],
-            cwd=REPO, capture_output=True, text=True, timeout=180,
+            cwd=REPO, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=180,
         )
         print(r.stdout, end="", flush=True)
         if r.stderr.strip():
