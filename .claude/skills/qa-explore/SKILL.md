@@ -379,8 +379,10 @@ For each scenario:
      invisible to pywinauto. With it, every popup item, dialog widget,
      spinner, slider, and button becomes addressable by name.
 
-   Wait ~3 seconds before invoking the driver — the window takes a
-   moment to appear.
+   Wait ~2 seconds before invoking the driver — the window takes a
+   moment to appear. (The batch runner uses a ctypes EnumWindows poll
+   instead of a fixed sleep; for one-off manual launches, a brief
+   sleep is fine.)
 
 3. **Run the scenario driver as a Python module** (so its imports
    resolve relative to the repo root):
@@ -629,11 +631,14 @@ in one go, use `qa.scenarios._batch`:
 ```
 
 For each scenario it: configures `qa/settings.json` → launches
-`main.py` → waits 3.5 s → runs the driver → closes the window →
-waits for the subprocess to exit → moves to the next. Prints a final
-SUMMARY table with rc per scenario. The whole batch (21 scenarios)
-typically finishes in ~120–200 seconds. Each app launch is still a
-real launch — get the user's "yes batch" once before starting.
+`main.py` → polls (ctypes `EnumWindows`) until the main window is
+visible (max 8 s; typically <2 s) → runs the driver → closes the
+window → waits for the subprocess to exit → moves to the next.
+Prints a final SUMMARY table with rc per scenario. The whole batch
+(21 scenarios) typically finishes in ~5–7 minutes (5m19s on
+`windows-latest` after the #133 poll change). Each app launch is
+still a real launch — get the user's "yes batch" once before
+starting.
 
 **Optional optimization — skip the per-run Bash prompt.** Add this
 to `.allow` in `.claude/settings.json` so driver runs don't prompt:
