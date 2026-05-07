@@ -114,6 +114,11 @@ settings.local.json
 !qa/sandbox/walker-exclusions/Thumbs.db
 !qa/sandbox/walker-exclusions/desktop.ini
 
+# Runtime-generated disposable fixtures (s13 regenerates the source set
+# every run; s16 writes a corrupt sqlite probe). Both intentionally
+# disposable — never commit their contents.
+qa/sandbox/_disposable/
+
 # Temporary files
 tmp/
 temp/
