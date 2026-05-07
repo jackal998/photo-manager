@@ -50,6 +50,7 @@ ALL_SCENARIOS = [
     "s19_context_menu_open_folder",
     "s20_multi_remove_from_list",
     "s21_list_menu_remove",
+    "s27_rescan_confirm",
 ]
 
 

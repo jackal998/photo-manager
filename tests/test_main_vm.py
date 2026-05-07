@@ -197,3 +197,69 @@ class TestGroupCount:
     def test_reflects_loaded_groups(self):
         vm = _load(_rec("/a.jpg", 1), _rec("/b.jpg", 2), _rec("/c.jpg", 3))
         assert vm.group_count == 3
+
+
+# ── pending_decision_count (#142 — re-scan confirmation gate) ─────────────
+
+
+class TestPendingDecisionCount:
+    """Counter used by MainWindow._confirm_no_pending_decisions to decide
+    whether to prompt before letting a re-scan replace the loaded
+    manifest.
+
+    Empty user_decision = default (untouched). Any non-empty string
+    counts as "user has acted on this row".
+    """
+
+    def test_zero_before_load(self):
+        vm = MainVM()
+        assert vm.pending_decision_count == 0
+
+    def test_zero_when_all_records_undecided(self):
+        vm = _load(
+            _rec("/a.jpg", 1, user_decision=""),
+            _rec("/b.jpg", 1, user_decision=""),
+            _rec("/c.jpg", 2, user_decision=""),
+        )
+        assert vm.pending_decision_count == 0
+
+    def test_counts_delete_decisions(self):
+        vm = _load(
+            _rec("/a.jpg", 1, user_decision="delete"),
+            _rec("/b.jpg", 1, user_decision=""),
+        )
+        assert vm.pending_decision_count == 1
+
+    def test_counts_keep_decisions(self):
+        vm = _load(
+            _rec("/a.jpg", 1, user_decision="keep"),
+            _rec("/b.jpg", 1, user_decision=""),
+        )
+        assert vm.pending_decision_count == 1
+
+    def test_counts_mixed_decision_kinds(self):
+        vm = _load(
+            _rec("/a.jpg", 1, user_decision="delete"),
+            _rec("/b.jpg", 1, user_decision="keep"),
+            _rec("/c.jpg", 2, user_decision=""),
+            _rec("/d.jpg", 2, user_decision="delete"),
+        )
+        assert vm.pending_decision_count == 3
+
+    def test_counts_across_multiple_groups(self):
+        vm = _load(
+            _rec("/g1a.jpg", 1, user_decision="delete"),
+            _rec("/g2a.jpg", 2, user_decision="delete"),
+            _rec("/g3a.jpg", 3, user_decision="delete"),
+        )
+        assert vm.pending_decision_count == 3
+
+    def test_treats_any_non_empty_string_as_decided(self):
+        """Defensive: if a future decision kind is added (e.g. 'review',
+        'move'), the gate still fires. Only the empty string means
+        'untouched'."""
+        vm = _load(
+            _rec("/a.jpg", 1, user_decision="review"),
+            _rec("/b.jpg", 1, user_decision="move"),
+        )
+        assert vm.pending_decision_count == 2
