@@ -22,10 +22,12 @@ ManifestRepository.mark_executed() write path.
 """
 from __future__ import annotations
 
+import io
 import sqlite3
 import sys
 from pathlib import Path
 
+import imagehash
 import numpy as np
 from PIL import Image
 
@@ -35,25 +37,24 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO / "qa" / "sandbox" / "_disposable" / "s13_source"
 MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
 NUM_FILES = 5
+QUALITIES = [95, 88, 80, 72, 65]
+
+# Must match scanner/dedup.py:96 default. The scanner groups files whose
+# pairwise pHash Hamming distance is in [1, _SCANNER_THRESHOLD] as
+# REVIEW_DUPLICATE; outside that band a file is independently classified
+# as MOVE. The s13 scenario assumes all NUM_FILES land in a single
+# REVIEW_DUPLICATE group so mark_all_via_regex reaches every row in the
+# Execute Action dialog tree. Issue #148 documents the flake mode.
+_SCANNER_THRESHOLD = 10
+_REGEN_MAX_ATTEMPTS = 5
 
 
-def _regen_fixture() -> list[Path]:
-    """Wipe FIXTURE_DIR and write NUM_FILES fresh near-duplicate JPEGs.
-
-    Mirrors scripts/make_qa_sandbox.make_near_duplicates: one base gradient
-    image, saved at descending JPEG qualities with distinct EXIF dates.
-    The scanner groups them as REVIEW_DUPLICATE/EXACT (one near-duplicate
-    group of NUM_FILES) so they show up in the Execute Action dialog's
-    review tree. Random gradients (no fixed seed) so each run produces
-    a fresh content set the operator's recycle bin won't already hold.
-    """
-    if FIXTURE_DIR.exists():
-        for f in FIXTURE_DIR.iterdir():
-            if f.is_file():
-                f.unlink()
-    FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-
-    rng = np.random.default_rng()
+def _build_base(rng: np.random.Generator) -> Image.Image:
+    """Build the per-run gradient base image. Random per call so visual
+    content varies across runs (the operator's recycle bin doesn't fill
+    with visually-identical entries). Caller is responsible for verifying
+    the resulting JPEG-compressed set actually pHash-clusters; see
+    ``_regen_fixture``."""
     base_color = rng.integers(0, 256, size=(3,))
     fx = float(rng.uniform(0.5, 4.0))
     fy = float(rng.uniform(0.5, 4.0))
@@ -66,11 +67,75 @@ def _regen_fixture() -> list[Path]:
             + 60 * np.sin(2 * np.pi * fx * xx / w + c)
             + 60 * np.cos(2 * np.pi * fy * yy / h + c * 0.7)
         )
-    base = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
-    qualities = [95, 88, 80, 72, 65]
+
+def _max_pairwise_phash(base: Image.Image, qualities: list[int]) -> int:
+    """Return the max pairwise pHash Hamming distance across the JPEG-
+    compressed versions of ``base`` at each quality. Used as a pre-flight
+    check before writing the fixture to disk."""
+    saved: list[Image.Image] = []
+    for q in qualities:
+        buf = io.BytesIO()
+        base.save(buf, "JPEG", quality=q)
+        buf.seek(0)
+        saved.append(Image.open(buf).copy())
+    hashes = [imagehash.phash(im) for im in saved]
+    return max(
+        hashes[i] - hashes[j]
+        for i in range(len(hashes))
+        for j in range(i + 1, len(hashes))
+    )
+
+
+def _regen_fixture() -> list[Path]:
+    """Wipe FIXTURE_DIR and write NUM_FILES fresh near-duplicate JPEGs.
+
+    Mirrors scripts/make_qa_sandbox.make_near_duplicates: one base gradient
+    image, saved at descending JPEG qualities with distinct EXIF dates.
+    The scanner groups them as REVIEW_DUPLICATE (one near-duplicate group
+    of NUM_FILES) so they show up in the Execute Action dialog's review
+    tree. Random gradients (no fixed seed) so each run produces a fresh
+    content set the operator's recycle bin won't already hold.
+
+    Verify-and-retry (#148): occasional rolls of the random gradient
+    parameters produce 5 JPEGs whose pairwise pHash distances exceed the
+    scanner's default threshold, so the scanner classifies them as a
+    MOVE/REVIEW_DUPLICATE mix instead of a single REVIEW_DUPLICATE group.
+    The scenario then breaks because mark_all_via_regex only reaches the
+    REVIEW_DUPLICATE rows. Empirically ~5% of seedless rolls fail this
+    check (see tmp/probe_s13_clustering.py study). To eliminate the
+    flake, generate up to ``_REGEN_MAX_ATTEMPTS`` candidates and pre-flight
+    check each via ``_max_pairwise_phash`` before writing to disk. Five
+    retries reduce per-run flake probability to (0.05)^5 ≈ 3e-7 — i.e.
+    structurally never.
+    """
+    if FIXTURE_DIR.exists():
+        for f in FIXTURE_DIR.iterdir():
+            if f.is_file():
+                f.unlink()
+    FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+
+    last_worst: int | None = None
+    base: Image.Image | None = None
+    for attempt in range(_REGEN_MAX_ATTEMPTS):
+        candidate = _build_base(np.random.default_rng())
+        worst = _max_pairwise_phash(candidate, QUALITIES)
+        if worst <= _SCANNER_THRESHOLD:
+            base = candidate
+            break
+        last_worst = worst
+    if base is None:
+        raise RuntimeError(
+            f"Could not generate near-duplicate fixture that clusters "
+            f"within the scanner's default threshold {_SCANNER_THRESHOLD} "
+            f"after {_REGEN_MAX_ATTEMPTS} attempts; last worst pairwise "
+            f"pHash distance was {last_worst}. The gradient parameter "
+            "ranges in _build_base may need tightening."
+        )
+
     paths: list[Path] = []
-    for i, q in enumerate(qualities):
+    for i, q in enumerate(QUALITIES):
         exif = base.getexif()
         exif[36867] = f"2024:05:01 1{i}:00:00"  # DateTimeOriginal
         out = FIXTURE_DIR / f"s13_neardup_{i:02d}_q{q}.jpg"
