@@ -119,6 +119,13 @@ settings.local.json
 # disposable — never commit their contents.
 qa/sandbox/_disposable/
 
+# Optional symlink fixture for s09. Created by scripts/make_qa_sandbox.py
+# when the platform allows (Linux, macOS, Windows with Developer Mode);
+# silently skipped otherwise. Must NOT be tracked by Git — Windows clones
+# without core.symlinks=true would de-symlink it to a plain text file
+# containing the target path, silently breaking the test.
+qa/sandbox/walker-exclusions/symlink_to_real.jpg
+
 # Temporary files
 tmp/
 temp/

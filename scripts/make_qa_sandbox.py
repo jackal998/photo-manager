@@ -19,6 +19,8 @@ Subdirs and contents:
   multi-source-a/    — 2 JPEGs (used with multi-source-b for priority test)
   multi-source-b/    — 3 JPEGs: 1 byte-identical to a/, 1 near-dup, 1 unique
   walker-exclusions/ — 2 JPEGs + sidecar.json + Thumbs.db + desktop.ini
+                       (+ optional symlink_to_real.jpg when permitted —
+                       see _ensure_walker_symlink)
                        (probes walker skip rules)
   videos/            — 2 minimal video stub files: dummy.mp4, dummy.mov
                        (just an ftyp box; SHA-256 + extension routing only —
@@ -72,7 +74,19 @@ def _ensure_dir(name: str) -> Path:
 
 
 def _content_files(p: Path) -> list[Path]:
-    return [f for f in p.iterdir() if f.is_file() and f.name != ".gitkeep"]
+    """Regular (non-symlink) files in the fixture dir, excluding .gitkeep.
+
+    Symlinks are intentionally excluded from this tally so they don't
+    inflate the per-fixture EXPECTED_COUNTS check. Currently only
+    walker-exclusions/ uses a symlink, and it's optional (depends on
+    platform privileges — see ``_ensure_walker_symlink``).
+    """
+    return [
+        f for f in p.iterdir()
+        if f.is_file()
+        and not f.is_symlink()
+        and f.name != ".gitkeep"
+    ]
 
 
 def _is_complete(name: str) -> bool:
@@ -83,7 +97,15 @@ def _is_complete(name: str) -> bool:
 
 
 def _clear(p: Path) -> None:
-    for f in _content_files(p):
+    """Remove every artifact under ``p`` except ``.gitkeep``.
+
+    Iterates ``iterdir()`` directly (not ``_content_files``) so symlinks
+    are also unlinked — ``--force`` should produce a clean slate, not
+    leave stale symlinks pointing at deleted-and-regenerated targets.
+    """
+    for f in p.iterdir():
+        if f.name == ".gitkeep":
+            continue
         f.unlink()
 
 
@@ -326,7 +348,11 @@ def make_walker_exclusions(force: bool) -> None:
     name = "walker-exclusions"
     p = _ensure_dir(name)
     if not force and _is_complete(name):
-        print(f"  {name}/ -> already complete (5 files), skipping")
+        print(f"  {name}/ -> already complete (5 files), skipping base regen")
+        # Even when the 5 base files are intact, the optional symlink may
+        # be absent (gitignored, missing on a fresh clone, removed by an
+        # earlier --force). Try to add it idempotently.
+        _ensure_walker_symlink(p)
         return
     _clear(p)
 
@@ -345,6 +371,53 @@ def make_walker_exclusions(force: bool) -> None:
         "[.ShellClassInfo]\nIconFile=icon.ico\n", encoding="utf-8")
     print(f"  {name}/ -> 5 files (2 photos + .json sidecar "
           "+ Thumbs.db + desktop.ini)")
+    _ensure_walker_symlink(p)
+
+
+def _ensure_walker_symlink(p: Path) -> None:
+    """Create ``walker-exclusions/symlink_to_real.jpg`` → ``real_photo_a.jpg``
+    if not already present and the platform permits symlink creation.
+
+    This is the layer-3 companion to ``tests/test_walker.py`` lines 50/75 —
+    those layer-1 tests verify ``scan_sources()`` skips symlinks directly;
+    this fixture lets ``s09_walker_exclusions`` verify the same behaviour
+    end-to-end through the GUI scan worker.
+
+    Symlink creation requires SeCreateSymbolicLink on Windows (Developer
+    Mode or admin-elevated shell). When unavailable we silently fall
+    through; s09 detects the symlink's absence at scan time and skips
+    that branch of its assertion list. CI on ``windows-latest`` runners
+    has the privilege by default — verified via the layer-1 tests passing
+    on CI without the local skip we see on dev machines.
+
+    The symlink is gitignored — Git stores symlinks as text files
+    containing the target path on Windows clones unless ``core.symlinks``
+    is enabled, which would silently de-symlink the fixture for some
+    contributors and break the test. Generating it at fixture time
+    avoids that class of confusion entirely.
+    """
+    link = p / "symlink_to_real.jpg"
+    target = p / "real_photo_a.jpg"
+    if link.is_symlink() or link.exists():
+        return  # already present, idempotent
+    if not target.is_file():
+        # Base fixture not yet built — caller must run --force first.
+        return
+    try:
+        # Relative target so the link works regardless of where the
+        # checkout lives on disk.
+        link.symlink_to(target.name)
+    except OSError as exc:
+        # Most common cause: Windows without SeCreateSymbolicLink.
+        # Other possibilities: read-only filesystem, broken target.
+        # All are non-fatal for fixture build — s09 falls back to
+        # asserting only the name-based exclusions.
+        print(f"  walker-exclusions/symlink_to_real.jpg -> "
+              f"could not create symlink ({exc.__class__.__name__}); "
+              "layer-3 symlink check will be skipped on this machine")
+        return
+    print(f"  walker-exclusions/symlink_to_real.jpg -> "
+          "created symlink to real_photo_a.jpg")
 
 
 def _minimal_mp4_box(brand: bytes) -> bytes:
