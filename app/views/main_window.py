@@ -255,8 +255,42 @@ class MainWindow(QMainWindow):
             settings=self._settings,
             on_scan_complete=self._load_manifest_from_path,
             parent=self,
+            should_proceed=self._confirm_no_pending_decisions,
         )
         dlg.exec()
+
+    def _confirm_no_pending_decisions(self) -> bool:
+        """Prompt before a re-scan replaces a manifest with pending decisions.
+
+        Issue #142: a re-scan replaces the in-memory manifest (and may
+        overwrite the on-disk file if the output path matches) without
+        warning. If the user has acted on rows since loading, that work is
+        silently lost.
+
+        Returns ``True`` to proceed with the scan, ``False`` to cancel.
+        Returns ``True`` immediately when there's nothing at risk
+        (no manifest loaded, or no decisions made yet), so this is also
+        the right behaviour for first-time scans.
+        """
+        pending = self._vm.pending_decision_count
+        if pending == 0:
+            return True
+
+        reply = QMessageBox.question(
+            self,
+            "Discard pending decisions?",
+            f"You have {pluralize(pending, 'pending decision')} on the loaded "
+            "manifest.\n\n"
+            "Re-scanning will replace the loaded manifest. If the scan output "
+            "path matches the loaded manifest path, those decisions will be "
+            "permanently lost on disk; otherwise the previous manifest is "
+            "preserved on disk but no longer visible in this window.\n\n"
+            "Save first via File → Save Manifest Decisions… if you want to "
+            "keep them.\n\nProceed with the re-scan?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
 
     def _load_manifest_from_path(self, manifest_path: str) -> None:
         """Load a manifest directly (called after scan completes or from Open Manifest)."""

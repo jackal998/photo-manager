@@ -319,6 +319,7 @@ class ScanDialog(QDialog):
         settings,                          # JsonSettings instance
         on_scan_complete: Callable[[str], None] | None = None,
         parent: QWidget | None = None,
+        should_proceed: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Scan Sources")
@@ -326,6 +327,13 @@ class ScanDialog(QDialog):
         self.setMinimumHeight(600)
         self.settings = settings
         self._on_complete = on_scan_complete
+        # Optional gate fired right before the scan worker starts. Returns
+        # True to proceed, False to cancel. Defaults to always-proceed so
+        # callers (and tests) that don't care can omit it.
+        # See photo-manager#142 — used by MainWindow to prompt when the
+        # currently-loaded manifest has pending user decisions that would
+        # be replaced by a re-scan.
+        self._should_proceed = should_proceed or (lambda: True)
         self._worker: ScanWorker | None = None
         self.manifest_path: str | None = None
 
@@ -561,6 +569,13 @@ class ScanDialog(QDialog):
             QMessageBox.warning(
                 self, "No output", "Please specify an output path for the manifest."
             )
+            return
+
+        # Gate (#142): host can prompt if the loaded manifest has pending
+        # decisions that this scan would replace. Default callback always
+        # returns True so freshly-launched / unconnected dialogs are
+        # unchanged.
+        if not self._should_proceed():
             return
 
         self._save_to_settings()

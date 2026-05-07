@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -439,6 +440,132 @@ class TestPostScanCloseFocus:
         dlg._btn_scan.setEnabled(False)
         dlg._on_failed("simulated pipeline error")
         assert dlg._btn_scan.isEnabled()
+
+
+class TestStartScanShouldProceed:
+    """#142 — the ``should_proceed`` callback gates the scan worker launch.
+
+    MainWindow injects a callback that returns False when the loaded
+    manifest has pending decisions and the user clicks No on the
+    confirmation prompt. ScanDialog must respect that and abort before
+    ``ScanWorker.start()`` is reached.
+
+    These tests verify the gating contract independent of MainWindow's
+    actual prompt logic — they pass a deterministic lambda for ``should_proceed``.
+    """
+
+    def _make_dialog(self, qapp, tmp_path, should_proceed):
+        from app.views.dialogs.scan_dialog import ScanDialog, _SourceEntry
+        from infrastructure.settings import JsonSettings
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text('{"sources":{}}', encoding="utf-8")
+        dlg = ScanDialog(
+            JsonSettings(settings_path), should_proceed=should_proceed
+        )
+        # Satisfy input validation so we reach the gate.
+        dlg._source_list.set_entries(
+            [_SourceEntry(path=str(tmp_path), recursive=True)]
+        )
+        dlg._output_field.setText(str(tmp_path / "out.sqlite"))
+        return dlg
+
+    def test_default_should_proceed_is_always_true(self, qapp, tmp_path):
+        """Constructor default — caller didn't pass should_proceed — must
+        not block any existing flow."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text('{"sources":{}}', encoding="utf-8")
+        dlg = ScanDialog(JsonSettings(settings_path))
+        # Default callback is the always-True lambda; calling it must not raise.
+        assert dlg._should_proceed() is True
+
+    def test_should_proceed_false_aborts_before_worker_start(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """When the gate returns False (user clicked No on the prompt),
+        ScanWorker must not be instantiated at all."""
+        worker_constructed = []
+
+        def fake_worker_init(self, *a, **kw):
+            worker_constructed.append((a, kw))
+            # Block actual subprocess; let __init__ "succeed" so we'd see
+            # the failure if the gate didn't fire.
+            self.start = lambda: None
+
+        from app.views.dialogs import scan_dialog as sd
+        monkeypatch.setattr(sd.ScanWorker, "__init__", fake_worker_init)
+
+        called = []
+        dlg = self._make_dialog(
+            qapp, tmp_path, should_proceed=lambda: (called.append(True), False)[1]
+        )
+        dlg._start_scan()
+
+        assert called == [True], "should_proceed must be called"
+        assert worker_constructed == [], (
+            "ScanWorker must not be constructed when should_proceed is False"
+        )
+
+    def test_should_proceed_true_proceeds_to_worker_start(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """When the gate returns True (user clicked Yes or no manifest
+        loaded), the scan worker is constructed and started as before."""
+        worker_started = []
+
+        class FakeWorker:
+            def __init__(self, *a, **kw):
+                self._args = (a, kw)
+                # Provide the signal attributes _start_scan connects to.
+                self.progress = MagicMock()
+                self.failed = MagicMock()
+                self.finished = MagicMock()
+                self.completed_empty = MagicMock()
+
+            def start(self):
+                worker_started.append(True)
+
+        from app.views.dialogs import scan_dialog as sd
+        monkeypatch.setattr(sd, "ScanWorker", FakeWorker)
+
+        dlg = self._make_dialog(
+            qapp, tmp_path, should_proceed=lambda: True
+        )
+        dlg._start_scan()
+
+        assert worker_started == [True], (
+            "ScanWorker.start must be called when should_proceed is True"
+        )
+
+    def test_validation_failures_short_circuit_before_should_proceed(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """If the source list is empty or output path missing, the
+        validation message fires FIRST and should_proceed is never called.
+        This keeps the prompt from interrupting users who haven't even
+        configured a valid scan yet."""
+        from PySide6.QtWidgets import QMessageBox
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        # Suppress the warning dialog popup.
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+
+        called = []
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text('{"sources":{}}', encoding="utf-8")
+        dlg = ScanDialog(
+            JsonSettings(settings_path),
+            should_proceed=lambda: (called.append(True), True)[1],
+        )
+        # Don't add any source entries — should fail the "no sources"
+        # validation BEFORE reaching should_proceed.
+        dlg._start_scan()
+
+        assert called == [], "should_proceed must not fire on validation failure"
 
 
 class TestPathFieldEntry:

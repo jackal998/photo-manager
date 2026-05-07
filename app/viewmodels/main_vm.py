@@ -107,3 +107,20 @@ class MainVM:
     def group_count(self) -> int:
         """Number of groups currently loaded."""
         return len(self.groups)
+
+    @property
+    def pending_decision_count(self) -> int:
+        """Number of records with a non-default ``user_decision``.
+
+        Used by the re-scan confirmation flow (#142) to detect when a
+        user has acted on the loaded manifest and should be warned
+        before a re-scan replaces it. ``user_decision`` is empty string
+        by default (see ``core.models.PhotoRecord``); any non-empty
+        value (``delete`` / ``keep`` / etc.) means the user has acted.
+        """
+        return sum(
+            1
+            for group in self.groups
+            for record in group.items
+            if record.user_decision
+        )

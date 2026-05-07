@@ -565,6 +565,7 @@ running.
 | 19 | Right-click context menu → Open Folder (explorer.exe /select integration) | `qa.scenarios.s19_context_menu_open_folder` | ✓ ready |
 | 20 | Right-click multi-selection → Remove from List (file-multi / group + file) | `qa.scenarios.s20_multi_remove_from_list` | ✓ ready |
 | 21 | List menu → Remove from List (no-selection / single / multi) | `qa.scenarios.s21_list_menu_remove` | ✓ ready |
+| 27 | Re-scan with pending decisions → confirmation prompt (#142) | `qa.scenarios.s27_rescan_confirm` | ✓ ready |
 
 Several drivers also call cross-scenario invariant probes from
 `qa/scenarios/_invariants.py` — they assert that the status bar matches
