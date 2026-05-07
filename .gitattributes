@@ -1,0 +1,5 @@
+# Captured exiftool output — must match what live exiftool emits byte-for-byte
+# (LF on every platform, no CRLF conversion). The test_scanner_exif.py
+# `TestRealExiftoolFixtures.test_*` tests assert the fixture matches live
+# output; CRLF conversion on checkout would break those checks on Windows.
+tests/fixtures/exiftool_outputs/*.txt text eol=lf
