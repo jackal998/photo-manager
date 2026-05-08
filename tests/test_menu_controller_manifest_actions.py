@@ -152,3 +152,89 @@ def test_get_all_actions_returns_a_copy(qapp):
     snapshot = mc.get_all_actions()
     snapshot["sentinel"] = "intruder"
     assert "sentinel" not in mc.actions, "get_all_actions must return a copy, not the live dict"
+
+
+# ── #135: top-level menus must declare Alt+letter mnemonics ────────────────
+
+def test_top_level_menus_have_mnemonic_prefixes(qapp):
+    """#135 — every top-level menu title contains a Qt ``&`` mnemonic
+    prefix so Alt+letter opens it without a mouse. Without this, UIA's
+    AccessKey property is empty for these QActions and the keyboard-
+    nav scenario (#125) cannot test mnemonic-driven menu opens.
+
+    Pin both that the titles include ``&`` AND that the mnemonics are
+    pairwise unique — Qt's QMenuBar resolves ambiguous mnemonics in
+    insertion order, which would silently shadow whichever menu came
+    second on a collision. List + Log both start with L; this test
+    guards against an unconscious regression that flips List from
+    ``Alt+L`` to ``Lo&g`` (or vice versa) and accidentally collides.
+    """
+    from PySide6.QtWidgets import QMainWindow
+
+    win = QMainWindow()
+    mc = MenuController(win)
+    mc.setup_menus()
+
+    menubar = win.menuBar()
+    titles = [a.menu().title() for a in menubar.actions() if a.menu() is not None]
+    assert titles, "no top-level menus were registered"
+
+    # Each title must contain a single ``&`` followed by a letter.
+    mnemonics: list[str] = []
+    for title in titles:
+        idx = title.find("&")
+        assert idx != -1, (
+            f"menu {title!r} has no Alt mnemonic; add a '&' before the "
+            f"intended Alt letter"
+        )
+        # Reject the ``&&`` literal-ampersand escape, which has no mnemonic.
+        assert title[idx + 1:idx + 2] != "&", (
+            f"menu {title!r} starts an escaped '&&'; intended mnemonic "
+            f"missing"
+        )
+        letter = title[idx + 1:idx + 2].upper()
+        assert letter, f"menu {title!r} has '&' at the end with no letter after"
+        mnemonics.append(letter)
+
+    duplicates = {m for m in mnemonics if mnemonics.count(m) > 1}
+    assert not duplicates, (
+        f"top-level menu mnemonics collide: {sorted(duplicates)}; "
+        f"titles={titles}"
+    )
+
+
+def test_top_level_menus_specific_mnemonic_assignment(qapp):
+    """Pin the deliberate List=Alt+L / Log=Alt+G choice so a future
+    refactor that "obviously" assigns Alt+L to Log (alphabetical) or
+    swaps the two breaks loudly — that swap would change muscle memory
+    for users who already learned the layout.
+    """
+    from PySide6.QtWidgets import QMainWindow
+
+    win = QMainWindow()
+    mc = MenuController(win)
+    mc.setup_menus()
+
+    menubar = win.menuBar()
+    title_by_first_word = {
+        a.menu().title().lstrip("&").split()[0].rstrip("…").rstrip(":")
+        .replace("&", "").lower(): a.menu().title()
+        for a in menubar.actions() if a.menu() is not None
+    }
+    # Expected: File→F, Action→A, List→L, Log→G
+    expected = {
+        "file": "&File",
+        "action": "&Action",
+        "list": "&List",
+        "log": "Lo&g",
+    }
+    for name, want in expected.items():
+        # Match by mnemonic-stripped lowercase (so the test still works
+        # if a future change adds extra title decoration like
+        # ``&File (Recent)``).
+        candidates = [t for t in title_by_first_word.values()
+                      if t.replace("&", "").lower().startswith(name)]
+        assert candidates, f"no menu starting with {name!r} found in {title_by_first_word}"
+        assert want in candidates, (
+            f"expected {want!r} for {name!r} mnemonic; got {candidates!r}"
+        )
