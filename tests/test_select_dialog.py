@@ -30,6 +30,19 @@ class TestInitialField:
         assert dlg.combo.currentText() == "File Name"
 
 
+class TestModality:
+    def test_window_modality_is_application_modal(self, qapp):
+        """#139 — same root cause as ExecuteActionDialog: QDialog.exec()
+        without explicit windowModality leaves Qt at NonModal at the OS
+        level, allowing real mouse clicks on the main window's menu bar
+        to steal foreground while this dialog is up. ApplicationModal is
+        what actually establishes WS_DISABLED on the parent on Windows."""
+        from PySide6.QtCore import Qt
+        from app.views.dialogs.select_dialog import ActionDialog
+        dlg = ActionDialog(fields=["Similarity", "File Name", "Folder"])
+        assert dlg.windowModality() == Qt.ApplicationModal
+
+
 class TestSetActionSignal:
     def test_set_action_emits_signal_with_delete(self, qapp):
         from app.views.dialogs.select_dialog import ActionDialog

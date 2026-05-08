@@ -72,6 +72,19 @@ class TestDialogState:
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         assert dlg._tree.model() is not None
 
+    def test_window_modality_is_application_modal(self, qapp):
+        """#139 — QDialog.exec() alone leaves windowModality at NonModal,
+        which means Qt does NOT set OS-level WS_DISABLED on the parent
+        on Windows. Real mouse clicks on the parent window's menu bar
+        then steal foreground and open menus while this dialog is mid-
+        review. Pin ApplicationModal explicitly so the OS-level owner
+        relationship and WS_DISABLED are both established."""
+        from PySide6.QtCore import Qt
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert dlg.windowModality() == Qt.ApplicationModal
+
     def test_empty_groups_tree_still_created(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         dlg = ExecuteActionDialog([], manifest_path=None)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -35,6 +35,11 @@ class ActionDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Set Action by Field/Regex")
+        # #139 — explicit ApplicationModal so OS-level click events on
+        # the parent (e.g. main window menu bar) are blocked while this
+        # dialog is up. QDialog.exec() alone doesn't do this; see the
+        # ExecuteActionDialog comment for the full reasoning.
+        self.setWindowModality(Qt.ApplicationModal)
         self._fields = list(fields)
         self._row_values = dict(row_values or {})
 
