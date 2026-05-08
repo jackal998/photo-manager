@@ -60,6 +60,9 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # s25 (#124) — right-click on empty area / menu bar / unselected row
     # must NOT spawn a Qt context menu.
     "s25_empty_area_context_menu":  ["qa/sandbox/near-duplicates"],
+    # s26 (#125) — keyboard-only navigation through main flow (tree
+    # arrows, Alt+F mnemonic, scan dialog Tab cycle, Esc).
+    "s26_keyboard_navigation":      ["qa/sandbox/near-duplicates"],
     # s27 (#142) — re-scan with pending decisions triggers confirmation prompt.
     "s27_rescan_confirm":           ["qa/sandbox/near-duplicates"],
 }
