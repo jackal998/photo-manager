@@ -53,6 +53,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # to preserve what s23a persisted.
     "s23a_set_settings":            ["qa/sandbox/unique"],
     "s23b_verify_settings":         None,
+    # s24 (#123) — open manifest whose source files were deleted
+    # after the scan (stale-paths UX). Driver creates the disposable
+    # source dir at startup, then deletes it before the re-load step.
+    "s24_stale_manifest_paths":     ["qa/sandbox/_disposable/s24_source"],
     # s25 (#124) — right-click on empty area / menu bar / unselected row
     # must NOT spawn a Qt context menu.
     "s25_empty_area_context_menu":  ["qa/sandbox/near-duplicates"],
