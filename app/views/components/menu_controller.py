@@ -26,11 +26,17 @@ class MenuController:
         self.actions: dict[str, QAction] = {}
 
     def setup_menus(self) -> dict[str, QAction]:
-        """Create all menus and return action references."""
+        """Create all menus and return action references.
+
+        #135 — top-level menu titles use Qt's ``&`` mnemonic prefix so
+        Alt+letter opens each menu without a mouse. List and Log both
+        start with L; List wins ``Alt+L`` (more frequently used —
+        Remove from List), Log uses ``Alt+G`` (``Lo&g``).
+        """
         menubar = QMenuBar(self.window)
 
-        # File Menu
-        file_menu = menubar.addMenu("File")
+        # File Menu — Alt+F
+        file_menu = menubar.addMenu("&File")
         self.actions["scan_sources"] = file_menu.addAction("Scan Sources…")
         file_menu.addSeparator()
         self.actions["open_manifest"] = file_menu.addAction("Open Manifest…")
@@ -39,23 +45,23 @@ class MenuController:
         file_menu.addSeparator()
         self.actions["exit"] = file_menu.addAction("Exit")
 
-        # Action Menu
-        action_menu = menubar.addMenu("Action")
+        # Action Menu — Alt+A
+        action_menu = menubar.addMenu("&Action")
         self.actions["action_by_regex"] = action_menu.addAction("Set Action by Field/Regex…")
         action_menu.addSeparator()
         self.actions["execute_action"] = action_menu.addAction("Execute Action…")
         self.actions["execute_action"].setEnabled(False)
 
-        # List Menu
-        list_menu = menubar.addMenu("List")
+        # List Menu — Alt+L
+        list_menu = menubar.addMenu("&List")
         self.actions["remove_from_list"] = list_menu.addAction("Remove from List")
         # Disabled until a manifest loads — gives the user a visible-but-greyed
         # entry instead of a menu that appears empty / no-op before any data is
         # present. Re-enabled in MainWindow._load_manifest_from_path.
         self.actions["remove_from_list"].setEnabled(False)
 
-        # Log Menu
-        log_menu = menubar.addMenu("Log")
+        # Log Menu — Alt+G ("Lo&g") — L is taken by List
+        log_menu = menubar.addMenu("Lo&g")
         self.actions["open_latest_log"] = log_menu.addAction("Open Latest Log")
         self.actions["open_latest_delete_log"] = log_menu.addAction("Open Latest Delete Log")
         log_menu.addSeparator()
