@@ -509,6 +509,35 @@ def assert_no_dialog_within(
     return True
 
 
+def assert_no_qt_popup_within(
+    pid: int, seconds: float = 1.0,
+    baseline: list[int] | None = None,
+) -> bool:
+    """True iff no NEW Qt popup-class window appears in ``pid`` within
+    the polling window.
+
+    Used by s25 to verify that right-clicks on empty tree areas / menu-
+    bar / unselected rows do NOT spawn a Qt context menu. Distinct from
+    ``assert_no_dialog_within`` (matches by title) — Qt popup windows
+    have empty titles and are matched by Win32 class name (something
+    containing ``"Popup"`` — typically
+    ``Qt<ver>QWindowPopupDropShadowSaveBits``).
+
+    ``baseline`` lets the caller exclude popups that already existed
+    when the probe started (e.g. a tooltip lingering from a prior
+    hover). Only popups whose hwnd is NOT in ``baseline`` count as
+    "spawned" for this check.
+    """
+    base = set(baseline or [])
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        for hwnd, cls, _ in list_process_windows(pid):
+            if "Popup" in cls and hwnd not in base:
+                return False
+        time.sleep(0.1)
+    return True
+
+
 def dismiss_dialog_by_title(pid: int, title: str, timeout: float = 3) -> bool:
     """Find a window with ``title`` in ``pid`` and dismiss it via Esc.
 

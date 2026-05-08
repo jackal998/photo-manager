@@ -39,6 +39,9 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     "s19_context_menu_open_folder": ["qa/sandbox/near-duplicates"],
     "s20_multi_remove_from_list":   ["qa/sandbox/near-duplicates", "qa/sandbox/format-dup"],
     "s21_list_menu_remove":         ["qa/sandbox/near-duplicates"],
+    # s25 (#124) — right-click on empty area / menu bar / unselected row
+    # must NOT spawn a Qt context menu.
+    "s25_empty_area_context_menu":  ["qa/sandbox/near-duplicates"],
     # s27 (#142) — re-scan with pending decisions triggers confirmation prompt.
     "s27_rescan_confirm":           ["qa/sandbox/near-duplicates"],
 }
