@@ -28,6 +28,16 @@ class ExecuteActionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Execute Actions — Review")
         self.setMinimumSize(900, 560)
+        # #139 — QDialog.exec() sets WA_ShowModal but leaves windowModality
+        # at the QWidget default (Qt.NonModal). Without explicit modality,
+        # Qt does NOT set the OS-level owner relationship or disable the
+        # parent on Windows, so a real mouse click on the parent's menu
+        # bar steals foreground and opens the menu while this dialog is
+        # mid-review. ApplicationModal blocks input to all windows in
+        # the app until this dialog is dismissed; this is the right
+        # choice for a destructive-confirmation review modal where any
+        # menu-bar action could create inconsistent state.
+        self.setWindowModality(Qt.ApplicationModal)
         self._groups = groups
         self._manifest_path = manifest_path
         self.deleted_paths: list[str] = []
