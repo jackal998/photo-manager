@@ -23,8 +23,15 @@ def main() -> int:
     except KeyError as e:
         print(f"error: {e}")
         return 1
-    print(f"wrote {path}")
-    print(f"sources={SCENARIO_SOURCES[name]}")
+    sources = SCENARIO_SOURCES[name]
+    if sources is None:
+        # Preserve sentinel — settings.json was NOT rewritten. The scenario
+        # reads back what a previous scenario in the batch wrote via the GUI.
+        print(f"preserved settings at {path}")
+        print("sources=<preserved from previous scenario>")
+    else:
+        print(f"wrote {path}")
+        print(f"sources={sources}")
     return 0
 
 

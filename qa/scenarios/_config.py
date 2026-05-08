@@ -14,7 +14,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_PATH = REPO_ROOT / "qa" / "settings.json"
 
 # Source folder lists per scenario. Keys are module names under qa.scenarios.
-SCENARIO_SOURCES: dict[str, list[str]] = {
+#
+# Sentinel: a value of ``None`` means "preserve the existing qa/settings.json".
+# Used when a scenario needs to read back state that a previous scenario
+# wrote via the GUI (e.g. s23b reads what s23a persisted through
+# ScanDialog._save_to_settings). The configure step becomes a no-op for
+# such scenarios; the batch ordering in _batch.py is what guarantees the
+# previous scenario ran first.
+SCENARIO_SOURCES: dict[str, list[str] | None] = {
     "s01_happy_path":      ["qa/sandbox/huge", "qa/sandbox/near-duplicates", "qa/sandbox/unique"],
     "s02_empty_folder":    ["qa/sandbox/empty"],
     "s03_cancel_scan":     ["qa/sandbox/near-duplicates", "qa/sandbox/huge", "qa/sandbox/unique"],
@@ -39,6 +46,13 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
     "s19_context_menu_open_folder": ["qa/sandbox/near-duplicates"],
     "s20_multi_remove_from_list":   ["qa/sandbox/near-duplicates", "qa/sandbox/format-dup"],
     "s21_list_menu_remove":         ["qa/sandbox/near-duplicates"],
+    # s23 (#122) — scan dialog settings round-trip across app restart.
+    # Split into two scenarios so the cross-launch boundary is an
+    # explicit batch step. s23a writes via GUI; s23b launches fresh
+    # and reads back. The ``None`` sentinel on s23b tells configure
+    # to preserve what s23a persisted.
+    "s23a_set_settings":            ["qa/sandbox/unique"],
+    "s23b_verify_settings":         None,
     # s25 (#124) — right-click on empty area / menu bar / unselected row
     # must NOT spawn a Qt context menu.
     "s25_empty_area_context_menu":  ["qa/sandbox/near-duplicates"],
@@ -47,14 +61,18 @@ SCENARIO_SOURCES: dict[str, list[str]] = {
 }
 
 
-def build_settings(scenario_name: str) -> dict:
-    """Return the settings.json dict for a scenario."""
-    sources = SCENARIO_SOURCES.get(scenario_name)
-    if sources is None:
+def build_settings(scenario_name: str) -> dict | None:
+    """Return the settings.json dict for a scenario, or ``None`` to mean
+    "preserve the existing settings.json on disk" (see SCENARIO_SOURCES
+    sentinel docstring above)."""
+    if scenario_name not in SCENARIO_SOURCES:
         raise KeyError(
             f"unknown scenario {scenario_name!r}; "
             f"known: {sorted(SCENARIO_SOURCES)}"
         )
+    sources = SCENARIO_SOURCES[scenario_name]
+    if sources is None:
+        return None  # preserve existing settings.json
     return {
         "_comment": f"Auto-written by qa.scenarios.configure for {scenario_name}.",
         "thumbnail_size": 256,
@@ -70,5 +88,7 @@ def build_settings(scenario_name: str) -> dict:
 
 def write_settings(scenario_name: str) -> Path:
     cfg = build_settings(scenario_name)
+    if cfg is None:
+        return SETTINGS_PATH  # preserve — caller's previous scenario already wrote
     SETTINGS_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return SETTINGS_PATH
