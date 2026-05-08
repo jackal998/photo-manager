@@ -565,6 +565,8 @@ running.
 | 19 | Right-click context menu → Open Folder (explorer.exe /select integration) | `qa.scenarios.s19_context_menu_open_folder` | ✓ ready |
 | 20 | Right-click multi-selection → Remove from List (file-multi / group + file) | `qa.scenarios.s20_multi_remove_from_list` | ✓ ready |
 | 21 | List menu → Remove from List (no-selection / single / multi) | `qa.scenarios.s21_list_menu_remove` | ✓ ready |
+| 23a | Scan dialog: GUI mutates settings, persists via Start Scan (#122) | `qa.scenarios.s23a_set_settings` | ✓ ready |
+| 23b | Scan dialog: fresh launch reloads what s23a wrote (#122) | `qa.scenarios.s23b_verify_settings` | ✓ ready |
 | 25 | Right-click on empty area / menu bar / unselected row → no Qt popup (#124) | `qa.scenarios.s25_empty_area_context_menu` | ✓ ready |
 | 27 | Re-scan with pending decisions → confirmation prompt (#142) | `qa.scenarios.s27_rescan_confirm` | ✓ ready |
 

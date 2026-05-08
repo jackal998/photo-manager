@@ -50,6 +50,10 @@ ALL_SCENARIOS = [
     "s19_context_menu_open_folder",
     "s20_multi_remove_from_list",
     "s21_list_menu_remove",
+    # s23 is split A/B so the cross-launch boundary is an explicit batch step.
+    # Order matters: s23b reads what s23a's GUI mutations persisted to disk.
+    "s23a_set_settings",
+    "s23b_verify_settings",
     "s25_empty_area_context_menu",
     "s27_rescan_confirm",
 ]
