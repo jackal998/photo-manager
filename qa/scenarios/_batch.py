@@ -56,6 +56,7 @@ ALL_SCENARIOS = [
     "s23b_verify_settings",
     "s24_stale_manifest_paths",
     "s25_empty_area_context_menu",
+    "s26_keyboard_navigation",
     "s27_rescan_confirm",
 ]
 

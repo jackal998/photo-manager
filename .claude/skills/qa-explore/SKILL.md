@@ -569,6 +569,7 @@ running.
 | 23b | Scan dialog: fresh launch reloads what s23a wrote (#122) | `qa.scenarios.s23b_verify_settings` | ✓ ready |
 | 24 | Open manifest whose source files were deleted after scan (stale paths, #123) | `qa.scenarios.s24_stale_manifest_paths` | ✓ ready |
 | 25 | Right-click on empty area / menu bar / unselected row → no Qt popup (#124) | `qa.scenarios.s25_empty_area_context_menu` | ✓ ready |
+| 26 | Keyboard-only navigation: tree arrows, Alt+F mnemonic, scan dialog Tab cycle, Esc (#125) | `qa.scenarios.s26_keyboard_navigation` | ✓ ready |
 | 27 | Re-scan with pending decisions → confirmation prompt (#142) | `qa.scenarios.s27_rescan_confirm` | ✓ ready |
 
 Several drivers also call cross-scenario invariant probes from
