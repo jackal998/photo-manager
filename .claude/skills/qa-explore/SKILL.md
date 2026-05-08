@@ -567,6 +567,7 @@ running.
 | 21 | List menu → Remove from List (no-selection / single / multi) | `qa.scenarios.s21_list_menu_remove` | ✓ ready |
 | 23a | Scan dialog: GUI mutates settings, persists via Start Scan (#122) | `qa.scenarios.s23a_set_settings` | ✓ ready |
 | 23b | Scan dialog: fresh launch reloads what s23a wrote (#122) | `qa.scenarios.s23b_verify_settings` | ✓ ready |
+| 24 | Open manifest whose source files were deleted after scan (stale paths, #123) | `qa.scenarios.s24_stale_manifest_paths` | ✓ ready |
 | 25 | Right-click on empty area / menu bar / unselected row → no Qt popup (#124) | `qa.scenarios.s25_empty_area_context_menu` | ✓ ready |
 | 27 | Re-scan with pending decisions → confirmation prompt (#142) | `qa.scenarios.s27_rescan_confirm` | ✓ ready |
 

@@ -54,6 +54,7 @@ ALL_SCENARIOS = [
     # Order matters: s23b reads what s23a's GUI mutations persisted to disk.
     "s23a_set_settings",
     "s23b_verify_settings",
+    "s24_stale_manifest_paths",
     "s25_empty_area_context_menu",
     "s27_rescan_confirm",
 ]
