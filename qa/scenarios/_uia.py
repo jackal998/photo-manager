@@ -1363,14 +1363,33 @@ def _drive_action_dialog_form(
     regex_edit = standalone_edits[0]
     regex_edit.iface_value.SetValue(regex)
 
-    # Live-preview debounce in ActionDialog is 150 ms; sleep past it
-    # before reading the counter so we never race against the timer.
+    # Wait past the 150 ms live-preview debounce so the counter has
+    # populated before we read it (post-Apply, below).
     time.sleep(0.3)
 
-    # Find the live-preview match counter. pywinauto's auto_id is the
-    # full QObject hierarchy path ending in objectName, so we suffix-match
-    # rather than exact-match — keeps the lookup stable if a wrapper
-    # widget gets inserted later.
+    action_combo.select(action_label)
+    # 0.1 s was enough locally but flaked on the hosted CI runner under
+    # the new wider layout — the action-combo dropdown takes longer to
+    # commit when the dialog is taller. 0.4 s costs nothing and keeps the
+    # apply path deterministic.
+    time.sleep(0.4)
+
+    # Use _find_dialog_button (bottom-most match) — on en-US Windows the
+    # title-bar Close button shares the form Close's accessible name and a
+    # plain child_window lookup goes ambiguous.
+    apply_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_APPLY)
+    apply_btn.click_input()
+    time.sleep(0.3)
+
+    # Counter readback happens AFTER Apply — Apply doesn't dismiss the
+    # dialog, so the live-preview pane is still on screen with the same
+    # numbers. Reading it before Apply meant the descendants() walk
+    # interleaved with combo selection, which raced against the
+    # dropdown-commit timing on hosted CI runners and caused intermittent
+    # action_label='remove from list' applies to silently miss.
+    # pywinauto's auto_id is the full QObject hierarchy path ending in
+    # objectName, so we suffix-match rather than exact-match — keeps the
+    # lookup stable if a wrapper widget gets inserted later.
     counter_text: str | None = None
     try:
         for d in action_dlg.descendants(control_type="Text"):
@@ -1383,16 +1402,6 @@ def _drive_action_dialog_form(
                 break
     except Exception:
         counter_text = None
-
-    action_combo.select(action_label)
-    time.sleep(0.1)
-
-    # Use _find_dialog_button (bottom-most match) — on en-US Windows the
-    # title-bar Close button shares the form Close's accessible name and a
-    # plain child_window lookup goes ambiguous.
-    apply_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_APPLY)
-    apply_btn.click_input()
-    time.sleep(0.3)
 
     close_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_CLOSE)
     close_btn.click_input()
