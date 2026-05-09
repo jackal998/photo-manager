@@ -111,11 +111,15 @@ class MainWindow(QMainWindow):
         # Tree data provider for dialog handler
         self.tree_data_provider = TreeDataProviderImpl(self.tree, self.tree_controller)
 
-        # Initialize dialog handler
+        # Initialize dialog handler. records_provider lets the regex
+        # dialog build its live-preview match function from the current
+        # manifest state at open time (no caching — picks up any
+        # in-memory changes since the last open).
         self.dialog_handler = DialogHandler(
             parent_widget=self,
             tree_data_provider=self.tree_data_provider,
             action_handler=self._apply_action_by_regex,
+            records_provider=lambda: self._vm.groups,
         )
 
         # Action handlers for context menu

@@ -77,6 +77,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # as s14 so the regex partition (q[89]\d) keeps producing 3 matches
     # / 2 unchanged.
     "s29_remove_from_list_by_regex": ["qa/sandbox/near-duplicates"],
+    # s30 — Phase A regex-dialog UX upgrade: right-click parity in
+    # Execute Action dialog. Same fixture and regex partition as s14
+    # so the verification flow can mirror it.
+    "s30_execute_dialog_regex_right_click": ["qa/sandbox/near-duplicates"],
 }
 
 

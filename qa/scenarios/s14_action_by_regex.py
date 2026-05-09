@@ -89,9 +89,22 @@ def main() -> int:
     print(f"  field={FIELD!r} regex={REGEX!r} action={ACTION!r}")
     print(f"  expected_match={expected_match}")
     print(f"  expected_unchanged={expected_unchanged}")
-    _uia.mark_all_via_regex_standalone(
+    counter_text = _uia.mark_all_via_regex_standalone(
         win, field=FIELD, regex=REGEX, action_label=ACTION
     )
+
+    print("step: assert_live_preview_counter")
+    # The dialog now ships a live-preview pane; the counter must reflect
+    # the typed pattern by the time we click Apply. We only verify the
+    # text is non-empty and contains digits — exact format is locale-
+    # dependent (en: "3 of 5 match", zh_TW: "3 / 5 相符").
+    print(f"  counter_text={counter_text!r}")
+    if counter_text is None:
+        print("FAIL: live-preview counter not found — preview pane missing?")
+        return 1
+    if not any(ch.isdigit() for ch in counter_text):
+        print(f"FAIL: counter text {counter_text!r} has no digits — preview not populated")
+        return 1
 
     print("step: invariant_status_bar")
     _, win = _uia.connect_main()

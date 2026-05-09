@@ -1186,3 +1186,137 @@ class TestDirtyTracking:
         ):
             handler.save_manifest_decisions()
         assert handler.is_dirty() is False
+
+
+# ── build_match_fn (powers ActionDialog live preview) ──────────────────────
+
+class TestBuildMatchFn:
+    """The closure must agree byte-for-byte with set_decision_by_regex.
+
+    These tests pin its contract: same field map, same case-insensitive
+    flag, same skip-on-None-field semantics. If they drift, the dialog's
+    preview will lie to the user about what Apply will do.
+    """
+
+    def _rec_with_folder(self, path: str, folder: str = "/photos") -> PhotoRecord:
+        rec = _rec(path)
+        rec.folder_path = folder
+        return rec
+
+    def test_returns_matched_total_samples(self):
+        from app.views.handlers.file_operations import build_match_fn
+
+        recs = [
+            _rec("/photos/IMG_001.jpg"),
+            _rec("/photos/IMG_002.jpg"),
+            _rec("/photos/note.txt"),
+        ]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+
+        match_fn = build_match_fn(groups)
+        matched, total, samples = match_fn("File Name", r"^IMG_\d+\.jpg$")
+
+        assert matched == 2
+        assert total == 3
+        assert samples == ["IMG_001.jpg", "IMG_002.jpg"]
+
+    def test_invalid_regex_returns_zero_with_total(self):
+        """A live-preview must not crash on a partial regex; it returns
+        zero matches and lets the dialog's validation row show why."""
+        from app.views.handlers.file_operations import build_match_fn
+
+        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+
+        match_fn = build_match_fn(groups)
+        matched, total, samples = match_fn("File Name", "(unclosed")
+
+        assert matched == 0
+        assert total == 2
+        assert samples == []
+
+    def test_sample_cap_truncates_but_count_is_full(self):
+        """Sample collection stops at sample_cap so the preview list
+        stays bounded; matched count must still be the true total."""
+        from app.views.handlers.file_operations import build_match_fn
+
+        recs = [_rec(f"/dir/file_{i:03d}.jpg") for i in range(100)]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+
+        match_fn = build_match_fn(groups, sample_cap=50)
+        matched, total, samples = match_fn("File Name", r"\.jpg$")
+
+        assert matched == 100
+        assert total == 100
+        assert len(samples) == 50
+
+    def test_uses_get_record_field_for_basename(self):
+        """File Name field must extract basename, not the full path —
+        otherwise users can't write `^IMG` to anchor at the filename
+        (the path starts with `/photos/`)."""
+        from app.views.handlers.file_operations import build_match_fn
+
+        recs = [_rec("/photos/IMG_x.jpg"), _rec("/photos/note.txt")]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+
+        match_fn = build_match_fn(groups)
+        matched, _total, _samples = match_fn("File Name", r"^IMG")
+
+        assert matched == 1
+
+    def test_folder_field_returns_folder(self):
+        """And Folder must NOT use the basename — pinning the field-map
+        routing matches what set_decision_by_regex does."""
+        from app.views.handlers.file_operations import build_match_fn
+
+        recs = [
+            self._rec_with_folder("/a.jpg", folder="/photos/2023"),
+            self._rec_with_folder("/b.jpg", folder="/photos/2024"),
+        ]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+
+        match_fn = build_match_fn(groups)
+        matched, _, samples = match_fn("Folder", r"2023$")
+
+        assert matched == 1
+        # Sample is the basename of the matching record's file_path,
+        # not the folder string — so users see WHICH file matched.
+        assert samples == ["a.jpg"]
+
+    def test_unmapped_field_skips_without_match(self):
+        """Group Count / Similarity have no _FIELD_TO_ATTR entry — they
+        cannot match any regex, but records still count toward total."""
+        from app.views.handlers.file_operations import build_match_fn
+
+        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+
+        match_fn = build_match_fn(groups)
+        matched, total, samples = match_fn("Group Count", r".*")
+
+        assert matched == 0
+        assert total == 2
+        assert samples == []
+
+    def test_empty_groups(self):
+        from app.views.handlers.file_operations import build_match_fn
+
+        match_fn = build_match_fn([])
+        matched, total, samples = match_fn("File Name", r".*")
+
+        assert matched == 0
+        assert total == 0
+        assert samples == []
+
+    def test_case_insensitive(self):
+        """Must match set_decision_by_regex's re.IGNORECASE flag —
+        otherwise the preview undercounts vs. what Apply will do."""
+        from app.views.handlers.file_operations import build_match_fn
+
+        recs = [_rec("/photos/IMG_001.JPG"), _rec("/photos/img_002.jpg")]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+
+        match_fn = build_match_fn(groups)
+        matched, _total, _samples = match_fn("File Name", r"\.jpg$")
+
+        assert matched == 2

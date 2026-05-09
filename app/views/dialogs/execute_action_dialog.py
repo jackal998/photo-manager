@@ -198,6 +198,12 @@ class ExecuteActionDialog(QDialog):
             act.triggered.connect(
                 lambda _checked=False, _v=value, _p=path: self._set_decision(_p, _v)
             )
+        # Right-click parity with the main file list — the regex dialog
+        # was previously only reachable via the dedicated toolbar button.
+        # Discoverability matters more than menu purity; add it here too.
+        menu.addSeparator()
+        regex_act = menu.addAction(t("execute_dialog.set_action_by_regex_menu"))
+        regex_act.triggered.connect(self._show_select_dialog)
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _set_decision(self, path: str, decision: str) -> None:
@@ -262,11 +268,16 @@ class ExecuteActionDialog(QDialog):
 
     def _show_select_dialog(self) -> None:
         from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.handlers.file_operations import build_match_fn
 
         # Internal English keys; ActionDialog displays localized labels but
         # emits the English name back via setActionRequested.
         fields = ["Action", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
-        dlg = ActionDialog(fields=fields, parent=self)
+        # Build the live-preview match_fn from this dialog's groups —
+        # which alias the main window's vm.groups (see _remove_from_list_paths
+        # docstring), so both surfaces preview against the same data.
+        match_fn = build_match_fn(self._groups) if self._groups else None
+        dlg = ActionDialog(fields=fields, parent=self, match_fn=match_fn)
         dlg.setActionRequested.connect(self._set_decision_by_regex)
         dlg.exec()
 

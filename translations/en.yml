@@ -140,6 +140,7 @@ execute_dialog:
   no_match_title: "Set Action — No Match"
   no_match_body: "No files matched the pattern."
   invalid_regex_title: "Invalid Regex"
+  set_action_by_regex_menu: "Set Action by Field/Regex…"
   files_not_found_title: "Files Not Found"
   files_not_found_body: "The following files could not be found and were skipped:\n\n{missing}{suffix}"
   files_not_found_more: "\n…and {n} more"
@@ -158,6 +159,12 @@ action_dialog:
   set_action_label: "Set Action:"
   apply_button: "Apply"
   close_button: "Close"
+  preview_label: "Preview"
+  match_counter: "{matched} of {total} match"
+  match_counter_invalid: "—"
+  invalid_regex: "Invalid regex: {error}"
+  preview_truncated: "…and {n} more"
+  preview_empty: "No matches"
 
 # Right-click context menu on the main tree.
 context_menu:

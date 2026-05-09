@@ -138,3 +138,212 @@ class TestBackwardCompatAlias:
     def test_select_dialog_alias_works(self, qapp):
         from app.views.dialogs.select_dialog import SelectDialog, ActionDialog
         assert SelectDialog is ActionDialog
+
+
+# ── Live preview / validation / debounce (Phase A) ─────────────────────────
+
+
+class TestPreviewPane:
+    def test_no_match_fn_hides_preview_pane(self, qapp):
+        """match_fn=None falls back to the original flat layout — no
+        preview list, no counter visible. Existing UIA paths and tests
+        keep working unchanged."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        # No preview_list attribute when match_fn isn't supplied.
+        assert not hasattr(dlg, "_preview_list")
+        # Counter is constructed but hidden.
+        assert dlg._match_counter.isHidden()
+
+    def test_match_fn_called_on_typing(self, qapp):
+        """Typing into the regex must invoke match_fn after the debounce
+        timer fires (we shortcut the timer here)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from unittest.mock import MagicMock
+
+        match_fn = MagicMock(return_value=(2, 3, ["a.jpg", "b.jpg"]))
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+
+        match_fn.reset_mock()
+        dlg.regex.setText("IMG")
+        dlg._refresh_preview()
+
+        match_fn.assert_called_with("File Name", "IMG")
+
+    def test_preview_lists_samples(self, qapp):
+        """Preview list shows the sample names returned by match_fn."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (3, 100, ["one.jpg", "two.jpg", "three.jpg"])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg.regex.setText(".*")
+        dlg._refresh_preview()
+
+        items = [
+            dlg._preview_list.item(i).text()
+            for i in range(dlg._preview_list.count())
+        ]
+        assert items == ["one.jpg", "two.jpg", "three.jpg"]
+
+    def test_preview_truncation_footer(self, qapp):
+        """When matched count exceeds samples returned, the truncation
+        footer must show "…and N more"."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        # 50 samples, 200 total matches — 150 are hidden.
+        match_fn = lambda f, p: (200, 4500, [f"x{i}.jpg" for i in range(50)])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg.regex.setText(".*")
+        dlg._refresh_preview()
+
+        assert dlg._preview_list.count() == 50
+        assert not dlg._preview_truncated.isHidden()
+        assert "150" in dlg._preview_truncated.text()
+
+    def test_no_truncation_when_all_samples_fit(self, qapp):
+        """If matched <= len(samples), the truncation footer stays
+        hidden — otherwise users see "…and 0 more" which is confusing."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (5, 100, ["a", "b", "c", "d", "e"])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg.regex.setText(".*")
+        dlg._refresh_preview()
+
+        assert dlg._preview_truncated.isHidden()
+
+    def test_field_change_retriggers_match_fn(self, qapp):
+        """Changing the field combo restarts the debounce timer so the
+        preview re-runs with the new field."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from unittest.mock import MagicMock
+
+        match_fn = MagicMock(return_value=(0, 0, []))
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"], match_fn=match_fn
+        )
+        dlg.regex.setText("foo")
+        match_fn.reset_mock()
+
+        dlg.combo.setCurrentText("Folder")
+        dlg._refresh_preview()
+
+        # The first call after combo change is for the new field.
+        called_fields = [c.args[0] for c in match_fn.call_args_list]
+        assert "Folder" in called_fields
+
+    def test_no_match_shows_empty_placeholder(self, qapp):
+        """matched == 0 → list shows the localized "No matches"
+        placeholder, not an empty list (which feels broken)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from infrastructure.i18n import t
+
+        match_fn = lambda f, p: (0, 100, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg.regex.setText("zz_no_such_pattern")
+        dlg._refresh_preview()
+
+        assert dlg._preview_list.count() == 1
+        assert dlg._preview_list.item(0).text() == t("action_dialog.preview_empty")
+
+
+class TestRegexValidation:
+    def test_valid_regex_shows_check_icon(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("^IMG_\\d+$")
+        dlg._validate_regex()
+
+        assert dlg._validation_icon.text() == "✓"
+        assert dlg._validation_error.isHidden()
+
+    def test_invalid_regex_shows_x_and_error(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("(unclosed")
+        dlg._validate_regex()
+
+        assert dlg._validation_icon.text() == "✗"
+        assert not dlg._validation_error.isHidden()
+        # Localized prefix from action_dialog.invalid_regex.
+        assert "Invalid regex" in dlg._validation_error.text() \
+            or "正規式錯誤" in dlg._validation_error.text()
+
+    def test_empty_regex_clears_validation_state(self, qapp):
+        """Empty input is neutral — no icon, no error. Otherwise the
+        dialog feels broken before the user has typed anything."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("(")
+        dlg._validate_regex()
+        assert dlg._validation_icon.text() == "✗"
+
+        dlg.regex.setText("")
+        dlg._validate_regex()
+        assert dlg._validation_icon.text() == ""
+        assert dlg._validation_error.isHidden()
+
+    def test_invalid_regex_does_not_call_match_fn(self, qapp):
+        """match_fn iterates the records — must not run for unparseable
+        patterns. Counter shows em dash instead."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from unittest.mock import MagicMock
+
+        match_fn = MagicMock(return_value=(0, 0, []))
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        match_fn.reset_mock()
+
+        dlg.regex.setText("(")
+        # Validation runs synchronously; should mark counter as "—".
+        # Then we manually fire the preview timer's slot to confirm the
+        # closure short-circuits on invalid regex.
+        dlg._refresh_preview()
+
+        assert match_fn.call_count == 0
+        assert dlg._match_counter.text() == "—"
+
+
+class TestMatchCounter:
+    def test_counter_format_uses_translation(self, qapp):
+        """Counter text is built from the action_dialog.match_counter
+        i18n template — verifies localization rather than hardcoded
+        English."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from infrastructure.i18n import t
+
+        match_fn = lambda f, p: (7, 200, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg.regex.setText(".*")
+        dlg._refresh_preview()
+
+        expected = t("action_dialog.match_counter").format(matched=7, total=200)
+        assert dlg._match_counter.text() == expected
+
+
+class TestObjectNames:
+    """Pinning objectName values that QA scenarios will use to find
+    widgets without relying on geometry / type-path."""
+
+    def test_widget_object_names_are_set(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert dlg.regex.objectName() == "regexLineEdit"
+        assert dlg.combo.objectName() == "regexFieldCombo"
+        assert dlg._action_combo.objectName() == "regexActionCombo"
+        assert dlg._btn_set_action.objectName() == "regexApplyButton"
+        assert dlg._validation_icon.objectName() == "regexValidationIcon"
+        assert dlg._validation_error.objectName() == "regexValidationError"
+        assert dlg._match_counter.objectName() == "regexMatchCounter"
+
+    def test_preview_widgets_object_names_set_when_present(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        assert dlg._preview_list.objectName() == "regexPreviewList"
+        assert dlg._preview_truncated.objectName() == "regexPreviewTruncated"
