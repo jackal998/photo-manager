@@ -143,7 +143,16 @@ class ContextMenuHandler:
                     self.handlers.set_decision(_items, _v)
             )
 
+        # Right-click parity with the single-selection branch — the regex
+        # dialog is the bulk power tool, so it has to be reachable from
+        # multi-select right-click too. clicked_col=None falls back to
+        # the dialog's "File Name" default.
         menu.addSeparator()
+        action_dialog_action = menu.addAction(t("context_menu.set_action_by_regex"))
+        action_dialog_action.triggered.connect(
+            lambda: self.handlers.show_action_dialog(clicked_col=None)
+        )
+
         remove_action = menu.addAction(t("context_menu.remove_from_list"))
         remove_action.triggered.connect(
             lambda: self.handlers.remove_items_from_list(selected_items)

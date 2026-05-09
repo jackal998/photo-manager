@@ -1313,15 +1313,22 @@ def open_execute_action_dialog(win: UIAWrapper) -> tuple[UIAWrapper, int]:
 
 def _drive_action_dialog_form(
     action_dlg: UIAWrapper, field: str, regex: str, action_label: str
-) -> None:
+) -> str | None:
     """Fill the Set Action by Field/Regex dialog and submit.
 
     Shared by both entry points (menu-bar standalone and Execute-dialog
     inner). Caller must have already focused `action_dlg`.
 
-    Steps: select Field combo → SetValue regex → select Action combo →
-    Apply → Close. Regex uses UIA ValuePattern to bypass IME interception
-    of Latin keystrokes under bopomofo input.
+    Steps: select Field combo → SetValue regex → wait for live-preview
+    debounce → capture match-counter text → select Action combo → Apply
+    → Close. Regex uses UIA ValuePattern to bypass IME interception of
+    Latin keystrokes under bopomofo input.
+
+    Returns the live-preview match-counter text (e.g. "3 of 5 match")
+    captured AFTER the 150 ms debounce window — or ``None`` if the
+    dialog has no preview pane (legacy callers that opened ActionDialog
+    without ``match_fn``). Scenarios can assert on this to verify the
+    preview is reachable and reflects the typed pattern.
     """
     # Two ComboBoxes in this dialog: Field combo (top) and Set Action combo
     # (bottom). Order is deterministic — find them by position (top-most first).
@@ -1355,7 +1362,27 @@ def _drive_action_dialog_form(
         raise RuntimeError("action dialog: no standalone Edit (regex line) found")
     regex_edit = standalone_edits[0]
     regex_edit.iface_value.SetValue(regex)
-    time.sleep(0.1)
+
+    # Live-preview debounce in ActionDialog is 150 ms; sleep past it
+    # before reading the counter so we never race against the timer.
+    time.sleep(0.3)
+
+    # Find the live-preview match counter. pywinauto's auto_id is the
+    # full QObject hierarchy path ending in objectName, so we suffix-match
+    # rather than exact-match — keeps the lookup stable if a wrapper
+    # widget gets inserted later.
+    counter_text: str | None = None
+    try:
+        for d in action_dlg.descendants(control_type="Text"):
+            try:
+                aid = d.element_info.automation_id or ""
+            except Exception:
+                aid = ""
+            if aid.endswith(".regexMatchCounter"):
+                counter_text = d.window_text() or None
+                break
+    except Exception:
+        counter_text = None
 
     action_combo.select(action_label)
     time.sleep(0.1)
@@ -1370,6 +1397,8 @@ def _drive_action_dialog_form(
     close_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_CLOSE)
     close_btn.click_input()
     time.sleep(0.3)
+
+    return counter_text
 
 
 def _click_btn_and_wait_for_dialog(
@@ -1417,7 +1446,7 @@ def mark_all_via_regex(
     regex: str,
     action_label: str,
     dialog_timeout: float = 5,
-) -> None:
+) -> str | None:
     """Open the inner Set Action by Field/Regex dialog from inside the
     Execute Action dialog, set field+regex+action, click Apply, then Close.
 
@@ -1426,6 +1455,9 @@ def mark_all_via_regex(
     helper for the same rationale).
     `action_label` is the visible label in the Set Action combo
     (e.g. "delete" — see SETTABLE_DECISIONS in app/views/constants.py).
+
+    Returns the live-preview match-counter text or ``None`` (see
+    ``_drive_action_dialog_form``).
     """
     pid = execute_dlg.process_id()
     select_btn = execute_dlg.child_window(
@@ -1439,7 +1471,7 @@ def mark_all_via_regex(
     _focus(action_dlg)
     time.sleep(0.3)
 
-    _drive_action_dialog_form(action_dlg, field, regex, action_label)
+    return _drive_action_dialog_form(action_dlg, field, regex, action_label)
 
 
 def mark_all_via_regex_standalone(
@@ -1448,7 +1480,7 @@ def mark_all_via_regex_standalone(
     regex: str,
     action_label: str,
     dialog_timeout: float = 5,
-) -> None:
+) -> str | None:
     """Drive the standalone Set Action by Field/Regex flow from the menu bar.
 
     Distinct from `mark_all_via_regex` — this opens the dialog via
@@ -1458,6 +1490,9 @@ def mark_all_via_regex_standalone(
 
     Use for s14 (standalone Set Action) and any future scenario that
     exercises bulk-decision assignment without entering Execute review.
+
+    Returns the live-preview match-counter text or ``None`` (see
+    ``_drive_action_dialog_form``).
     """
     pid = main_win.process_id()
     menu_path(main_win, MENU_ACTION, ACTION_BY_REGEX)
@@ -1467,7 +1502,7 @@ def mark_all_via_regex_standalone(
     _focus(action_dlg)
     time.sleep(0.3)
 
-    _drive_action_dialog_form(action_dlg, field, regex, action_label)
+    return _drive_action_dialog_form(action_dlg, field, regex, action_label)
 
 
 def execute_and_confirm(

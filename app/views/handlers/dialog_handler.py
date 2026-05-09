@@ -61,10 +61,16 @@ class DialogHandler:
         parent_widget: QObject,
         tree_data_provider: TreeDataProvider,
         action_handler: Callable[[str, str, str], None] | None = None,
+        records_provider: Callable[[], list] | None = None,
     ) -> None:
         self.parent = parent_widget
         self.tree_provider = tree_data_provider
         self.action_handler = action_handler
+        # Optional callable returning the loaded PhotoGroups so the
+        # ActionDialog can build its live preview. We resolve it lazily
+        # at dialog-open time so the latest manifest state is reflected
+        # without re-wiring on every load.
+        self.records_provider = records_provider
 
     def show_action_dialog(self, clicked_col: int | None = None) -> None:
         """Show the Set Action by Field/Regex dialog."""
@@ -91,9 +97,20 @@ class DialogHandler:
 
         initial_field = _COL_TO_FIELD.get(clicked_col) if clicked_col is not None else None
         row_values = self._get_highlighted_row_values()
+        match_fn = None
+        if self.records_provider is not None:
+            from app.views.handlers.file_operations import build_match_fn
+
+            try:
+                groups = self.records_provider() or []
+            except Exception:
+                groups = []
+            if groups:
+                match_fn = build_match_fn(groups)
         dlg = ActionDialog(
             fields=fields, parent=self.parent,
             row_values=row_values, initial_field=initial_field,
+            match_fn=match_fn,
         )
 
         if self.action_handler is not None:

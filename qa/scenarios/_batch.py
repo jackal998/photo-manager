@@ -67,6 +67,10 @@ ALL_SCENARIOS = [
     # s29 — bulk regex remove-from-list as a deferred decision. Sister
     # to s14 (bulk regex delete) but with the deferred-remove action.
     "s29_remove_from_list_by_regex",
+    # s30 — Phase A regex-dialog UX upgrade: right-click parity in
+    # Execute Action dialog opens the same enhanced ActionDialog.
+    # Sister to s14 (menu route) and s13 (toolbar-button route).
+    "s30_execute_dialog_regex_right_click",
 ]
 
 

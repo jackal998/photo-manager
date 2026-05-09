@@ -121,6 +121,7 @@ execute_dialog:
   no_match_title: "設定動作 — 無相符項目"
   no_match_body: "沒有檔案符合此正規式。"
   invalid_regex_title: "正規式錯誤"
+  set_action_by_regex_menu: "依欄位/正規式設定動作…"
   files_not_found_title: "找不到檔案"
   files_not_found_body: "下列檔案找不到,已略過:\n\n{missing}{suffix}"
   files_not_found_more: "\n…以及其餘 {n} 個"
@@ -138,6 +139,12 @@ action_dialog:
   set_action_label: "設定動作:"
   apply_button: "套用"
   close_button: "關閉"
+  preview_label: "預覽"
+  match_counter: "{matched} / {total} 相符"
+  match_counter_invalid: "—"
+  invalid_regex: "正規式錯誤:{error}"
+  preview_truncated: "…還有 {n} 筆"
+  preview_empty: "無相符項目"
 
 context_menu:
   set_action: "設定動作"

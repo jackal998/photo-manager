@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+import re
+from typing import Any, Callable, Protocol
 
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
@@ -42,6 +43,59 @@ def _get_record_field(rec: Any, field: str) -> str | None:
     if field == "File Name":
         return Path(str(val)).name
     return str(val)
+
+
+def build_match_fn(
+    groups: list, sample_cap: int = 50
+) -> Callable[[str, str], tuple[int, int, list[str]]]:
+    """Return a closure that counts regex matches across the records.
+
+    The closure returned by this function powers the ActionDialog's live
+    preview pane. Calling it with a (field, pattern) pair returns a tuple
+    (matched, total, sample_basenames) where:
+      - matched: total number of records whose `field` value matches `pattern`
+        (case-insensitive) under the same `_FIELD_TO_ATTR` map that
+        `set_decision_by_regex` will use, so the preview is byte-for-byte
+        consistent with what Apply will affect.
+      - total: total number of records iterated. Records whose field is
+        unavailable (no `_FIELD_TO_ATTR` entry, or the attr is None) count
+        toward `total` but cannot match.
+      - sample_basenames: at most `sample_cap` basenames of matching files,
+        for display in the preview list. Iteration continues past the cap
+        so the matched count is always accurate.
+
+    On `re.error` returns (0, total, []) — the dialog handles invalid-regex
+    feedback through its own validation row, so the closure stays silent.
+    """
+
+    def _match(field: str, pattern: str) -> tuple[int, int, list[str]]:
+        from pathlib import Path
+
+        try:
+            rx = re.compile(pattern, re.IGNORECASE)
+        except re.error:
+            total = sum(len(g.items) for g in groups)
+            return (0, total, [])
+
+        matched = 0
+        total = 0
+        samples: list[str] = []
+        for grp in groups:
+            for rec in grp.items:
+                total += 1
+                value = _get_record_field(rec, field)
+                if value is None:
+                    continue
+                if rx.search(value):
+                    matched += 1
+                    if len(samples) < sample_cap:
+                        path_val = getattr(rec, "file_path", None)
+                        samples.append(
+                            Path(str(path_val)).name if path_val else value
+                        )
+        return (matched, total, samples)
+
+    return _match
 
 
 class UIUpdateCallback(Protocol):
