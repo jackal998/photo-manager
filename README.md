@@ -156,9 +156,20 @@ The tree shows all files loaded from the manifest.
 
 **Setting decisions:**
 
-- *Per file*: right-click a file → **Set Action → delete** or **keep**.
+- *Per file*: right-click a file → **Set Action → delete** / **keep** /
+  **remove from list**.
 - *By highlight*: click or multi-select rows in the tree, then
-  **Action › Set Action to Activated Files › delete** (or **keep**).
+  **Action › Set Action to Activated Files › delete** (or **keep** /
+  **remove from list**).
+- *In bulk*: **Action › Set Action by Field/Regex…** — pick a column,
+  type a regex, choose an action (`delete`, `keep`, or
+  `remove from list`). The "remove from list" action is a deferred
+  decision: matched rows are flagged and dropped on save, no files are
+  moved or deleted.
+
+If you close the app with unsaved decisions a prompt appears with
+**Save & leave** / **Leave** / **Back**, so you don't lose work
+accidentally.
 
 ### Step 3 — Save decisions
 
@@ -345,6 +356,7 @@ photo-manager/
 │   │   ├── media_utils.py         # Media type helpers for the views layer
 │   │   ├── components/
 │   │   │   ├── menu_controller.py      # Menu creation + "Set Action" submenu
+│   │   │   ├── status_messages.py      # Centralized status-bar copy formatter
 │   │   │   └── tree_controller.py      # Tree view interactions
 │   │   ├── handlers/
 │   │   │   ├── file_operations.py      # set_decision, execute_action
@@ -375,6 +387,7 @@ photo-manager/
 │   ├── manifest_repository.py   # load/save/batch_update_decisions; mark_executed()
 │   ├── delete_service.py         # Recycle-bin deletion + audit CSV logging
 │   ├── image_service.py          # Thumbnail loading; disk + memory LRU cache
+│   ├── i18n.py                   # YAML translator catalog + t() lookup helper
 │   ├── logging.py                # loguru configuration and file rotation
 │   ├── settings.py               # settings.json loader
 │   └── utils.py                  # Shared utilities
@@ -382,9 +395,14 @@ photo-manager/
 ├── scripts/
 │   └── make_qa_images.py    # Generates controlled near-dup test images for QA
 │
+├── translations/            # Locale catalogs — single source of truth for UI strings
+│   ├── en.yml
+│   ├── zh_TW.yml
+│   └── README.md
+│
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 391 tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 650+ tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
@@ -398,13 +416,20 @@ photo-manager/
     ├── test_scanner_manifest.py
     ├── test_scanner_media.py    # magic-byte detection, Takeout filename parsing
     ├── test_main_vm.py
-    ├── test_file_operations.py  # set_decision, execute_action
+    ├── test_file_operations.py  # set_decision, execute_action, regex remove-from-list
     ├── test_sort_service.py
     ├── test_execute_action_dialog.py
     ├── test_context_menu.py
     ├── test_manifest_load_worker.py
     ├── test_scan_dialog.py      # _auto_label, _SourceListWidget, ScanDialog settings
-    └── test_select_dialog.py    # initial_field, Set Action signal, settable decision options
+    ├── test_scan_worker.py
+    ├── test_select_dialog.py    # initial_field, Set Action signal, settable decision options
+    ├── test_status_messages.py  # Pins status-bar copy so qa-explore regexes stay coherent
+    ├── test_media_utils.py
+    ├── test_tree_model_builder.py
+    ├── test_menu_controller_manifest_actions.py  # Language picker exclusivity, action toggle lifecycle
+    ├── test_i18n.py             # Catalog parity (en ↔ zh_TW), fallback, format-placeholder safety
+    └── test_uia_label_coupling.py  # Lint: every _uia.py constant exists in app/*.py or translations/*.yml
 ```
 
 ---
@@ -442,13 +467,15 @@ automatically. List order determines dedup priority (index 0 = highest priority)
 ## Languages
 
 The UI ships in **English** (`en`) and **Traditional Chinese** (`zh_TW`).
-Switch via **View › Language**; the change requires an app restart.
-The chosen locale is persisted in `settings.json` under `ui.locale`.
+Switch via **View › Language**; after a Yes/No confirmation the main
+window rebuilds in place — no app restart needed. The chosen locale is
+persisted in `settings.json` under `ui.locale`.
 
 To add another language, copy `translations/en.yml` to
-`translations/<code>.yml`, translate the values, and restart — the new
-locale appears automatically in the picker. Full translator workflow
-in [`docs/i18n.md`](docs/i18n.md).
+`translations/<code>.yml`, translate the values, and restart once —
+the new locale then appears automatically in the picker for the rest
+of the session and on every later launch. Full translator workflow in
+[`docs/i18n.md`](docs/i18n.md).
 
 ---
 
