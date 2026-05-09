@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.views.workers.scan_worker import ScanWorker
+from infrastructure.i18n import t
 
 
 @dataclass
@@ -89,11 +90,11 @@ class _FolderTreePanel(QWidget):
         # Path entry — lets the user paste / type an absolute path instead of
         # scrolling the tree 10+ levels deep to a known fixture.
         path_row = QHBoxLayout()
-        path_row.addWidget(QLabel("Path:"))
+        path_row.addWidget(QLabel(t("scan_dialog.path_label")))
         self._path_field = QLineEdit()
-        self._path_field.setPlaceholderText("Paste or type an absolute folder path…")
+        self._path_field.setPlaceholderText(t("scan_dialog.path_placeholder"))
         self._path_field.returnPressed.connect(self._on_add_typed)
-        path_add_btn = QPushButton("+ Add")
+        path_add_btn = QPushButton(t("scan_dialog.add_button"))
         path_add_btn.setFixedWidth(80)
         path_add_btn.clicked.connect(self._on_add_typed)
         path_row.addWidget(self._path_field, stretch=1)
@@ -118,7 +119,7 @@ class _FolderTreePanel(QWidget):
             self._tree.expand(home_index)
             self._tree.scrollTo(home_index)
 
-        add_btn = QPushButton("+ Add Selected Folder")
+        add_btn = QPushButton(t("scan_dialog.add_selected_button"))
         add_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         add_btn.clicked.connect(self._on_add)
 
@@ -175,15 +176,21 @@ class _SourceListWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         header_row = QHBoxLayout()
-        header_row.addWidget(QLabel("Source folders (top = highest priority):"))
+        header_row.addWidget(QLabel(t("scan_dialog.source_list_header")))
         header_row.addStretch()
-        remove_all_btn = QPushButton("Remove All")
+        remove_all_btn = QPushButton(t("scan_dialog.remove_all"))
         remove_all_btn.clicked.connect(self.clear)
         header_row.addWidget(remove_all_btn)
         layout.addLayout(header_row)
 
         self._table = QTableWidget(0, 5)
-        self._table.setHorizontalHeaderLabels(["#", "Path", "Recursive", "", ""])
+        self._table.setHorizontalHeaderLabels([
+            t("scan_dialog.table_col_priority"),
+            t("scan_dialog.table_col_path"),
+            t("scan_dialog.table_col_recursive"),
+            "",
+            "",
+        ])
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -256,11 +263,11 @@ class _SourceListWidget(QWidget):
             ud_layout.setSpacing(2)
             up_btn = QPushButton("↑")
             up_btn.setFixedWidth(26)
-            up_btn.setToolTip("Move up (higher priority)")
+            up_btn.setToolTip(t("scan_dialog.tooltip_move_up"))
             up_btn.clicked.connect(lambda _, row=row_idx: self._move(row, -1))
             dn_btn = QPushButton("↓")
             dn_btn.setFixedWidth(26)
-            dn_btn.setToolTip("Move down (lower priority)")
+            dn_btn.setToolTip(t("scan_dialog.tooltip_move_down"))
             dn_btn.clicked.connect(lambda _, row=row_idx: self._move(row, +1))
             ud_layout.addWidget(up_btn)
             ud_layout.addWidget(dn_btn)
@@ -268,7 +275,7 @@ class _SourceListWidget(QWidget):
 
             rm_btn = QPushButton("×")
             rm_btn.setFixedWidth(26)
-            rm_btn.setToolTip("Remove from list")
+            rm_btn.setToolTip(t("scan_dialog.tooltip_remove"))
             rm_btn.clicked.connect(lambda _, row=row_idx: self._remove(row))
             self._table.setCellWidget(row_idx, 4, rm_btn)
 
@@ -322,7 +329,7 @@ class ScanDialog(QDialog):
         should_proceed: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Scan Sources")
+        self.setWindowTitle(t("scan_dialog.title"))
         self.setMinimumWidth(700)
         self.setMinimumHeight(600)
         self.settings = settings
@@ -357,17 +364,14 @@ class ScanDialog(QDialog):
         """Construct the full dialog layout."""
         root = QVBoxLayout(self)
 
-        notice = QLabel(
-            "Read-only scan — no files are moved or deleted. "
-            "MOVE / SKIP in the log are planned actions stored in the manifest only."
-        )
+        notice = QLabel(t("scan_dialog.notice"))
         notice.setWordWrap(True)
         notice.setStyleSheet("color: #555; font-style: italic; padding: 4px 0;")
         root.addWidget(notice)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
-        tree_group = QGroupBox("Browse source folders:")
+        tree_group = QGroupBox(t("scan_dialog.browse_group"))
         tree_layout = QVBoxLayout(tree_group)
         self._tree_panel = _FolderTreePanel(self)
         self._tree_panel.folder_requested.connect(self._on_folder_requested)
@@ -382,28 +386,23 @@ class ScanDialog(QDialog):
         root.addWidget(splitter, stretch=1)
 
         output_row = QHBoxLayout()
-        output_row.addWidget(QLabel("Save manifest to:"))
+        output_row.addWidget(QLabel(t("scan_dialog.output_label")))
         self._output_field = QLineEdit()
-        self._output_field.setPlaceholderText("Output manifest path (.sqlite)")
+        self._output_field.setPlaceholderText(t("scan_dialog.output_placeholder"))
         output_row.addWidget(self._output_field, stretch=1)
-        browse_out_btn = QPushButton("Browse…")
+        browse_out_btn = QPushButton(t("scan_dialog.browse_button"))
         browse_out_btn.setFixedWidth(80)
         browse_out_btn.clicked.connect(self._browse_output)
         output_row.addWidget(browse_out_btn)
         root.addLayout(output_row)
 
         # Grouping parameters
-        params_group = QGroupBox("Grouping Parameters")
+        params_group = QGroupBox(t("scan_dialog.params_group"))
         params_layout = QVBoxLayout(params_group)
 
         # pHash threshold
-        phash_label = QLabel("<b>pHash Similarity Threshold</b> (default: 10, range: 1–20)")
-        phash_desc = QLabel(
-            "Perceptual hash Hamming distance between two images. "
-            "A 64-bit pHash means images can differ by at most this many bits before being "
-            "flagged as near-duplicates. <b>Lower = stricter</b> (fewer groups, less noise); "
-            "<b>higher = more permissive</b> (catches more slightly-edited pairs)."
-        )
+        phash_label = QLabel(t("scan_dialog.phash_label"))
+        phash_desc = QLabel(t("scan_dialog.phash_desc"))
         phash_desc.setWordWrap(True)
         phash_desc.setStyleSheet("color: #555;")
         phash_row = QHBoxLayout()
@@ -423,14 +422,8 @@ class ScanDialog(QDialog):
         params_layout.addLayout(phash_row)
 
         # Mean-color threshold
-        color_label = QLabel("<b>Mean Color Gate</b> (default: 30, range: 0–100)")
-        color_desc = QLabel(
-            "L2 distance between the average RGB color of two images. "
-            "After the pHash check, images whose mean colors differ by more than this value "
-            "are excluded from grouping — catching pHash false positives where similar "
-            "DCT structure but different colors were matched. "
-            "<b>0 = disabled</b>; <b>higher = more permissive</b> color gate."
-        )
+        color_label = QLabel(t("scan_dialog.color_label"))
+        color_desc = QLabel(t("scan_dialog.color_desc"))
         color_desc.setWordWrap(True)
         color_desc.setStyleSheet("color: #555;")
         color_row = QHBoxLayout()
@@ -454,13 +447,13 @@ class ScanDialog(QDialog):
         self._log_widget = QPlainTextEdit()
         self._log_widget.setReadOnly(True)
         self._log_widget.setMinimumHeight(150)
-        self._log_widget.setPlaceholderText("Scan progress will appear here…")
+        self._log_widget.setPlaceholderText(t("scan_dialog.log_placeholder"))
         root.addWidget(self._log_widget)
 
-        self._btn_scan = QPushButton("Start Scan")
+        self._btn_scan = QPushButton(t("scan_dialog.start_button"))
         self._btn_scan.setDefault(True)
         self._btn_scan.clicked.connect(self._start_scan)
-        self._btn_close = QPushButton("Close")
+        self._btn_close = QPushButton(t("scan_dialog.close_button"))
         self._btn_close.clicked.connect(self.reject)
 
         btn_row = QHBoxLayout()
@@ -482,7 +475,7 @@ class ScanDialog(QDialog):
         start = self._output_field.text() or "migration_manifest.sqlite"
         chosen, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Manifest As",
+            t("scan_dialog.save_dialog_title"),
             start,
             MANIFEST_FILE_FILTER,
         )
@@ -562,12 +555,18 @@ class ScanDialog(QDialog):
     def _start_scan(self) -> None:
         """Validate inputs and launch the background scan worker."""
         if not self._source_list.entries():
-            QMessageBox.warning(self, "No sources", "Please add at least one source folder.")
+            QMessageBox.warning(
+                self,
+                t("scan_dialog.no_sources_title"),
+                t("scan_dialog.no_sources_body"),
+            )
             return
         output = self._output_field.text().strip()
         if not output:
             QMessageBox.warning(
-                self, "No output", "Please specify an output path for the manifest."
+                self,
+                t("scan_dialog.no_output_title"),
+                t("scan_dialog.no_output_body"),
             )
             return
 
@@ -582,7 +581,7 @@ class ScanDialog(QDialog):
         sources, recursive_map, source_priority = self._build_sources()
 
         self._log_widget.clear()
-        self._log("Starting scan…")
+        self._log(t("scan_dialog.log_starting"))
         self._btn_scan.setEnabled(False)
 
         self._worker = ScanWorker(
@@ -613,15 +612,15 @@ class ScanDialog(QDialog):
         # `&&` escapes the ampersand so Qt doesn't interpret it as a mnemonic
         # prefix and silently drop it on display (which produced the "Close
         # double-space Load" bug — #54).
-        self._btn_close.setText("Close && Load")
+        self._btn_close.setText(t("scan_dialog.close_load_button"))
         self._btn_close.clicked.disconnect()
         self._btn_close.clicked.connect(self._load_and_close)
 
     def _on_failed(self, error: str) -> None:
         """Handle scan failure: log the error and re-enable the scan button."""
-        self._log(f"\nERROR: {error}")
+        self._log(t("scan_dialog.log_error", error=error))
         self._btn_scan.setEnabled(True)
-        QMessageBox.critical(self, "Scan Failed", error)
+        QMessageBox.critical(self, t("scan_dialog.scan_failed_title"), error)
         # No manifest was produced; Close is the canonical exit. Pull focus
         # there so the user has an obvious next action (focus ring + Enter
         # dismisses) instead of a UI that looks identical to pre-scan (#86).

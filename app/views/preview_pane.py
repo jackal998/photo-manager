@@ -17,6 +17,7 @@ from app.views.image_tasks import ImageTaskRunner
 from app.views.media_utils import is_video, normalize_windows_path
 from app.views.widgets.group_media_controller import GroupMediaController
 from app.views.widgets.video_player import VideoPlayerWidget
+from infrastructure.i18n import t
 
 _RAW_EXTENSIONS = frozenset((".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".rw2"))
 
@@ -99,7 +100,7 @@ class PreviewPane(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.addWidget(QLabel("Preview"))
+        root.addWidget(QLabel(t("preview.header")))
 
         self.preview_area = QScrollArea()
         self.preview_area.setWidgetResizable(True)
@@ -118,7 +119,7 @@ class PreviewPane(QWidget):
         self._single_info_label.setVisible(False)
         self._preview_layout.addWidget(self._single_info_label)
 
-        self._single_label = QLabel("(preview)")
+        self._single_label = QLabel(t("preview.placeholder"))
         self._single_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._single_label.setMinimumHeight(200)
         self._preview_layout.addWidget(self._single_label)
@@ -166,11 +167,11 @@ class PreviewPane(QWidget):
                     creation = info.get("creation") or ""
                     shot = info.get("shot") or ""
                     info_rows: list[tuple[str, str]] = []
-                    if name:      info_rows.append(("Name", name))
-                    if folder:    info_rows.append(("Folder", folder))
-                    if size_txt:  info_rows.append(("Size", f"{size_txt} Bytes"))
-                    if creation:  info_rows.append(("Created", creation))
-                    if shot:      info_rows.append(("Shot", shot))
+                    if name:      info_rows.append((t("preview.info_name"), name))
+                    if folder:    info_rows.append((t("preview.info_folder"), folder))
+                    if size_txt:  info_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
+                    if creation:  info_rows.append((t("preview.info_created"), creation))
+                    if shot:      info_rows.append((t("preview.info_shot"), shot))
                     html = _format_info_html(info_rows)
                     if html:
                         self._single_info_label.setTextFormat(Qt.RichText)
@@ -188,7 +189,7 @@ class PreviewPane(QWidget):
                 self._single_info_label.clear()
                 self._single_info_label.setVisible(False)
                 self._single_label.setVisible(True)
-                self._single_label.setText("Video file not found or cannot be played")
+                self._single_label.setText(t("preview.video_unavailable"))
         else:
             # Show image preview with persistent info block
             self._single_label.setVisible(True)
@@ -200,18 +201,18 @@ class PreviewPane(QWidget):
                 shot = info.get("shot") or ""
                 res = _read_resolution(normalize_windows_path(path))
                 info_rows: list[tuple[str, str]] = []
-                if name:      info_rows.append(("Name", name))
-                if folder:    info_rows.append(("Folder", folder))
-                if size_txt:  info_rows.append(("Size", f"{size_txt} Bytes"))
-                if res:       info_rows.append(("Resolution", res))
-                if creation:  info_rows.append(("Created", creation))
-                if shot:      info_rows.append(("Shot", shot))
+                if name:      info_rows.append((t("preview.info_name"), name))
+                if folder:    info_rows.append((t("preview.info_folder"), folder))
+                if size_txt:  info_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
+                if res:       info_rows.append((t("preview.info_resolution"), res))
+                if creation:  info_rows.append((t("preview.info_created"), creation))
+                if shot:      info_rows.append((t("preview.info_shot"), shot))
                 html = _format_info_html(info_rows)
                 if html:
                     self._single_info_label.setTextFormat(Qt.RichText)
                     self._single_info_label.setText(html)
                     self._single_info_label.setVisible(True)
-            self._single_label.setText("Loading…")
+            self._single_label.setText(t("preview.loading"))
             self._current_single_token = self._runner.request_single_preview(path)
 
     def show_grid(
@@ -322,7 +323,7 @@ class PreviewPane(QWidget):
 
             if is_video(p):
                 # Video tile: thumbnail + click to play
-                img_lbl = QLabel("Loading…")
+                img_lbl = QLabel(t("preview.loading"))
                 img_lbl.setFixedSize(thumb_side, thumb_side)
                 img_lbl.setAlignment(Qt.AlignCenter)
                 img_lbl.setStyleSheet("background-color: black;")
@@ -346,12 +347,12 @@ class PreviewPane(QWidget):
                 self._grid_pending_video_labels[p] = img_lbl
 
                 tile_rows: list[tuple[str, str]] = []
-                if name:         tile_rows.append(("Name", name))
-                if folder:       tile_rows.append(("Folder", folder))
-                if size_txt:     tile_rows.append(("Size", f"{size_txt} Bytes"))
-                if creation_txt: tile_rows.append(("Created", creation_txt))
-                if shot_txt:     tile_rows.append(("Shot", shot_txt))
-                tile_rows.append(("Duration", "--:--"))
+                if name:         tile_rows.append((t("preview.info_name"), name))
+                if folder:       tile_rows.append((t("preview.info_folder"), folder))
+                if size_txt:     tile_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
+                if creation_txt: tile_rows.append((t("preview.info_created"), creation_txt))
+                if shot_txt:     tile_rows.append((t("preview.info_shot"), shot_txt))
+                tile_rows.append((t("preview.info_duration"), t("preview.info_duration_unknown")))
                 info = QLabel(_format_info_html(tile_rows))
                 info.setTextFormat(Qt.RichText)
                 info.setWordWrap(True)
@@ -363,17 +364,17 @@ class PreviewPane(QWidget):
                 self._grid_labels[token] = img_lbl
             else:
                 # Image tile
-                img_lbl = QLabel("Loading…")
+                img_lbl = QLabel(t("preview.loading"))
                 img_lbl.setFixedSize(thumb_side, thumb_side)
                 img_lbl.setAlignment(Qt.AlignCenter)
                 v.addWidget(img_lbl)
                 tile_rows: list[tuple[str, str]] = []
-                if name:         tile_rows.append(("Name", name))
-                if folder:       tile_rows.append(("Folder", folder))
-                if size_txt:     tile_rows.append(("Size", f"{size_txt} Bytes"))
-                if res:          tile_rows.append(("Resolution", res))
-                if creation_txt: tile_rows.append(("Created", creation_txt))
-                if shot_txt:     tile_rows.append(("Shot", shot_txt))
+                if name:         tile_rows.append((t("preview.info_name"), name))
+                if folder:       tile_rows.append((t("preview.info_folder"), folder))
+                if size_txt:     tile_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
+                if res:          tile_rows.append((t("preview.info_resolution"), res))
+                if creation_txt: tile_rows.append((t("preview.info_created"), creation_txt))
+                if shot_txt:     tile_rows.append((t("preview.info_shot"), shot_txt))
                 info = QLabel(_format_info_html(tile_rows))
                 info.setTextFormat(Qt.RichText)
                 info.setWordWrap(True)
@@ -491,11 +492,11 @@ class PreviewPane(QWidget):
                 if token != self._current_single_token:
                     return
                 if image is None:
-                    self._single_label.setText("(failed)")
+                    self._single_label.setText(t("preview.failed"))
                     return
                 pm = QPixmap.fromImage(image)
                 if pm.isNull():
-                    self._single_label.setText("(failed)")
+                    self._single_label.setText(t("preview.failed"))
                     return
                 self._single_pm = pm
                 self._apply_single_pixmap_fit()
@@ -507,11 +508,11 @@ class PreviewPane(QWidget):
 
                 # Update thumbnail
                 if image is None:
-                    lbl.setText("(failed)")
+                    lbl.setText(t("preview.failed"))
                     return
                 pm = QPixmap.fromImage(image)
                 if pm.isNull():
-                    lbl.setText("(failed)")
+                    lbl.setText(t("preview.failed"))
                     return
                 lbl.setPixmap(
                     pm.scaled(
@@ -552,7 +553,10 @@ class PreviewPane(QWidget):
             # Update info label to show controls
             info_label = tile.findChild(QLabel, "info_label")
             if info_label:
-                info_label.setText(f"{name}\n{folder}\n{size_txt} Bytes\n(Click to pause)")
+                size_value = t("preview.info_size_value", bytes=size_txt)
+                info_label.setText(
+                    f"{name}\n{folder}\n{size_value}\n{t('preview.click_to_pause')}"
+                )
 
             self._grid_video_players[path] = video_player
 
@@ -575,7 +579,10 @@ class PreviewPane(QWidget):
             thumbnail_label.show()
             info_label = tile.findChild(QLabel, "info_label")
             if info_label:
-                info_label.setText(f"{name}\n{folder}\n{size_txt} Bytes\n(Video not available)")
+                size_value = t("preview.info_size_value", bytes=size_txt)
+                info_label.setText(
+                    f"{name}\n{folder}\n{size_value}\n{t('preview.video_not_available')}"
+                )
 
         # If all videos in view have been instantiated, start group autoplay
         self._try_group_autoplay()
@@ -655,7 +662,7 @@ class PreviewPane(QWidget):
 
                 if is_video(p):
                     # Video tile
-                    img_lbl = QLabel("Loading…")
+                    img_lbl = QLabel(t("preview.loading"))
                     img_lbl.setFixedSize(thumb_side, thumb_side)
                     img_lbl.setAlignment(Qt.AlignCenter)
                     img_lbl.setStyleSheet("background-color: black;")
@@ -678,12 +685,16 @@ class PreviewPane(QWidget):
 
                     extra = []
                     if creation_txt:
-                        extra.append(f"Created: {creation_txt}")
+                        extra.append(f"{t('preview.info_created')}: {creation_txt}")
                     if shot_txt:
-                        extra.append(f"Shot: {shot_txt}")
+                        extra.append(f"{t('preview.info_shot')}: {shot_txt}")
                     extra_txt = ("\n" + "\n".join(extra)) if extra else ""
+                    size_value = t("preview.info_size_value", bytes=size_txt)
+                    duration_unknown = t("preview.info_duration_unknown")
+                    duration_label = t("preview.info_duration")
                     info = QLabel(
-                        f"{name}\n{folder}\n{size_txt} Bytes{extra_txt}\n(Duration: --:--)"
+                        f"{name}\n{folder}\n{size_value}{extra_txt}\n"
+                        f"({duration_label}: {duration_unknown})"
                     )
                     info.setWordWrap(True)
                     info.setObjectName("info_label")
@@ -694,18 +705,19 @@ class PreviewPane(QWidget):
                     self._grid_labels[token] = img_lbl
                 else:
                     # Image tile — resolution comes from cached _grid_items, no extra I/O
-                    img_lbl = QLabel("Loading…")
+                    img_lbl = QLabel(t("preview.loading"))
                     img_lbl.setFixedSize(thumb_side, thumb_side)
                     img_lbl.setAlignment(Qt.AlignCenter)
                     v.addWidget(img_lbl)
                     extra = []
                     if creation_txt:
-                        extra.append(f"Created: {creation_txt}")
+                        extra.append(f"{t('preview.info_created')}: {creation_txt}")
                     if shot_txt:
-                        extra.append(f"Shot: {shot_txt}")
+                        extra.append(f"{t('preview.info_shot')}: {shot_txt}")
                     extra_txt = ("\n" + "\n".join(extra)) if extra else ""
                     res_txt = f"\n{res}" if res else ""
-                    info = QLabel(f"{name}\n{folder}\n{size_txt} Bytes{res_txt}{extra_txt}")
+                    size_value = t("preview.info_size_value", bytes=size_txt)
+                    info = QLabel(f"{name}\n{folder}\n{size_value}{res_txt}{extra_txt}")
                     info.setWordWrap(True)
                     info.setObjectName("info_label")
                     v.addWidget(info)

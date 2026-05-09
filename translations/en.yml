@@ -1,0 +1,243 @@
+# photo-manager — English string catalog (canonical reference).
+#
+# This file is the single source of truth for every user-facing string
+# in the app. To add a new locale: copy this file to <locale>.yml and
+# translate every value. Keys must stay identical — they're how the
+# code looks strings up.
+#
+# Conventions:
+#   * The "&X" prefix marks an Alt-key mnemonic. Translators may move
+#     it to a different letter (or remove it for languages where Alt
+#     mnemonics aren't used).
+#   * "…" is the proper ellipsis character (U+2026), not three dots.
+#   * Format placeholders use named braces: {n}, {path}. Never {} or
+#     positional {0}.
+#   * HTML inside <b>...</b> is rendered by Qt — keep tags around the
+#     same conceptual phrase when translating.
+
+_meta:
+  display_name: English
+  locale: en
+
+menu:
+  file:
+    title: "&File"
+    scan_sources: "Scan Sources…"
+    open_manifest: "Open Manifest…"
+    save_manifest: "Save Manifest Decisions…"
+    exit: "Exit"
+  action:
+    title: "&Action"
+    by_regex: "Set Action by Field/Regex…"
+    execute: "Execute Action…"
+  list:
+    title: "&List"
+    remove: "Remove from List"
+  log:
+    title: "Lo&g"
+    open_latest: "Open Latest Log"
+    open_latest_delete: "Open Latest Delete Log"
+    open_directory: "Open Log Directory"
+    open_delete_directory: "Open Delete Log Directory"
+  view:
+    title: "&View"
+    language:
+      title: "Language"
+
+main_window:
+  title: "Photo Manager"
+  status_ready: "Ready"
+  empty_state: "No manifest loaded.\n\nFile → Scan Sources… to begin."
+  status_loaded: "Loaded manifest: {parts}"
+  load_error_title: "Load Manifest Error"
+  discard_pending_title: "Discard pending decisions?"
+  discard_pending_body: |
+    You have {pending} on the loaded manifest.
+
+    Re-scanning will replace the loaded manifest. If the scan output path matches the loaded manifest path, those decisions will be permanently lost on disk; otherwise the previous manifest is preserved on disk but no longer visible in this window.
+
+    Save first via File → Save Manifest Decisions… if you want to keep them.
+
+    Proceed with the re-scan?
+
+# Column headers shown in the main tree view.
+column:
+  similarity: "Similarity"
+  action: "Action"
+  file_name: "File Name"
+  folder: "Folder"
+  size_bytes: "Size (Bytes)"
+  group_count: "Group Count"
+  creation_date: "Creation Date"
+  shot_date: "Shot Date"
+  resolution: "Resolution"
+
+# Tree row values — the "Group 5" label and similarity tags shown in
+# the main tree view next to each group / file.
+tree:
+  group_label: "Group {n}"
+  similarity_ref: "Ref"
+  similarity_near_dup: "~dup"
+
+# Decision labels shown in context menus and the action dialog.
+# The stored value is internal ("delete" / "") — only the label is
+# user-facing.
+decision:
+  delete: "delete"
+  keep: "keep (remove action)"
+
+# ScanDialog and its inner panels.
+scan_dialog:
+  title: "Scan Sources"
+  notice: "Read-only scan — no files are moved or deleted. MOVE / SKIP in the log are planned actions stored in the manifest only."
+  browse_group: "Browse source folders:"
+  path_label: "Path:"
+  path_placeholder: "Paste or type an absolute folder path…"
+  add_button: "+ Add"
+  add_selected_button: "+ Add Selected Folder"
+  source_list_header: "Source folders (top = highest priority):"
+  remove_all: "Remove All"
+  table_col_priority: "#"
+  table_col_path: "Path"
+  table_col_recursive: "Recursive"
+  tooltip_move_up: "Move up (higher priority)"
+  tooltip_move_down: "Move down (lower priority)"
+  tooltip_remove: "Remove from list"
+  output_label: "Save manifest to:"
+  output_placeholder: "Output manifest path (.sqlite)"
+  browse_button: "Browse…"
+  save_dialog_title: "Save Manifest As"
+  params_group: "Grouping Parameters"
+  phash_label: "<b>pHash Similarity Threshold</b> (default: 10, range: 1–20)"
+  phash_desc: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. <b>Lower = stricter</b> (fewer groups, less noise); <b>higher = more permissive</b> (catches more slightly-edited pairs)."
+  color_label: "<b>Mean Color Gate</b> (default: 30, range: 0–100)"
+  color_desc: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. <b>0 = disabled</b>; <b>higher = more permissive</b> color gate."
+  log_placeholder: "Scan progress will appear here…"
+  start_button: "Start Scan"
+  close_button: "Close"
+  close_load_button: "Close && Load"
+  log_starting: "Starting scan…"
+  log_error: "\nERROR: {error}"
+  no_sources_title: "No sources"
+  no_sources_body: "Please add at least one source folder."
+  no_output_title: "No output"
+  no_output_body: "Please specify an output path for the manifest."
+  scan_failed_title: "Scan Failed"
+
+# ExecuteActionDialog — final review before destructive ops.
+execute_dialog:
+  title: "Execute Actions — Review"
+  select_button: "Select by Field/Regex…"
+  set_action_menu: "Set Action"
+  execute_button: "Execute"
+  close_button: "Close"
+  summary_decided: "<b>{count}</b> file(s) with decisions: {n_delete} delete. Right-click a file row to change its decision."
+  summary_none: "No decisions set — use 'Set Action' to mark files for deletion."
+  warning_complete_groups: "⚠ Group(s) {groups} will have ALL files deleted. Review decisions below before clicking Execute."
+  confirm_all_title: "All Files Will Be Deleted"
+  confirm_all_body: "Group(s) {groups} will have EVERY file deleted.\n\nFiles will be sent to the Recycle Bin. Continue?"
+  no_match_title: "Set Action — No Match"
+  no_match_body: "No files matched the pattern."
+  invalid_regex_title: "Invalid Regex"
+  files_not_found_title: "Files Not Found"
+  files_not_found_body: "The following files could not be found and were skipped:\n\n{missing}{suffix}"
+  files_not_found_more: "\n…and {n} more"
+
+# ActionDialog (Set Action by Field/Regex).
+action_dialog:
+  title: "Set Action by Field/Regex"
+  field_label: "Field"
+  regex_label: "Regex"
+  regex_placeholder: "e.g. .*\\iPhone\\2023\\02\\.*"
+  regex_tips: |
+    Regex tips:
+      Exact match: ^text$     Any substring: .*     Digits: \d+
+      Examples:  ^IMG_\d+\.HEIC$  (File Name),  ^delete$  (Action),
+                 ^exact$  (Similarity),  ^H:\\Photos\\2023\\  (Folder)
+  set_action_label: "Set Action:"
+  apply_button: "Apply"
+  close_button: "Close"
+
+# Right-click context menu on the main tree.
+context_menu:
+  set_action: "Set Action"
+  open_folder: "Open Folder"
+  set_action_by_regex: "Set Action by Field/Regex…"
+  remove_from_list: "Remove from List"
+
+# Strings produced by FileOperationsHandler / DialogHandler.
+file_op:
+  open_manifest_title: "Open Manifest"
+  opening_status: "Opening manifest…"
+  open_error_title: "Open Manifest Error"
+  open_failed_status: "Open manifest failed"
+  save_no_manifest_title: "Save Manifest"
+  save_no_manifest_body: "No manifest open."
+  save_dialog_title: "Save Manifest Decisions"
+  save_error_title: "Save Manifest Error"
+  save_failed_status: "Save manifest failed"
+  remove_title: "Remove from List"
+  remove_no_selection: "No items selected. Please select rows first."
+  remove_error_title: "Remove from List Error"
+  remove_failed_body: "Remove from list failed: {error}"
+  decision_set_status: "Decision set to '{decision}'"
+  set_action_no_manifest_title: "Set Action — No Manifest"
+  set_action_no_manifest_body: "No manifest loaded."
+  set_action_no_selection_title: "Set Action — No Selection"
+  set_action_no_selection_body: "No activated files."
+  set_action_no_match_title: "Set Action — No Match"
+  set_action_no_match_body: "No files matched the pattern."
+  invalid_regex_title: "Invalid Regex"
+  execute_no_manifest_title: "Execute Action"
+  execute_no_manifest_body: "No manifest loaded."
+  set_action_internal_error_title: "Set Action — Internal Error"
+  set_action_internal_error_body: "Action dialog not available."
+
+# Language switch confirmation — fires before the live window rebuild.
+language:
+  confirm_title: "Switch language?"
+  confirm_body: "Switch language to {language}?\n\nThe window will rebuild — your loaded manifest and decisions stay intact, but any open dialog will close."
+
+# Status-bar verbs and nouns. Singular and plural forms are kept as
+# separate keys so locales without grammatical plurals (e.g. zh_TW)
+# can supply identical values for both.
+status:
+  verb_removed: "Removed"
+  verb_executed: "Executed"
+  verb_saved: "Saved"
+  noun_pair_singular: "pair"
+  noun_pair_plural: "pairs"
+  noun_file_singular: "file"
+  noun_file_plural: "files"
+  noun_group_singular: "group"
+  noun_group_plural: "groups"
+  noun_isolated_file_singular: "isolated file"
+  noun_isolated_file_plural: "isolated files"
+  noun_pending_decision_singular: "pending decision"
+  noun_pending_decision_plural: "pending decisions"
+  noun_decision_singular: "decision"
+  noun_decision_plural: "decisions"
+  noun_action_singular: "action"
+  noun_action_plural: "actions"
+  noun_item_from_list_singular: "item from list"
+  noun_item_from_list_plural: "items from list"
+  manifest_loaded_pairs: "Opened manifest: {pairs} to review ({files})"
+
+# Preview pane text and inline labels.
+preview:
+  header: "Preview"
+  placeholder: "(preview)"
+  loading: "Loading…"
+  failed: "(failed)"
+  video_unavailable: "Video file not found or cannot be played"
+  info_name: "Name"
+  info_folder: "Folder"
+  info_size: "Size"
+  info_size_value: "{bytes} Bytes"
+  info_resolution: "Resolution"
+  info_created: "Created"
+  info_shot: "Shot"
+  info_duration: "Duration"
+  info_duration_unknown: "--:--"
+  click_to_pause: "(Click to pause)"
+  video_not_available: "(Video not available)"

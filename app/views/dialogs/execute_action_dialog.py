@@ -17,8 +17,9 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
-from app.views.constants import COL_NAME, PATH_ROLE, SETTABLE_DECISIONS as _SETTABLE_DECISIONS
+from app.views.constants import COL_NAME, PATH_ROLE, settable_decisions
 from app.views.tree_model_builder import build_model
+from infrastructure.i18n import t
 
 
 class ExecuteActionDialog(QDialog):
@@ -26,7 +27,7 @@ class ExecuteActionDialog(QDialog):
 
     def __init__(self, groups: list, manifest_path: str | None, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Execute Actions — Review")
+        self.setWindowTitle(t("execute_dialog.title"))
         self.setMinimumSize(900, 560)
         # #139 — QDialog.exec() sets WA_ShowModal but leaves windowModality
         # at the QWidget default (Qt.NonModal). Without explicit modality,
@@ -84,7 +85,7 @@ class ExecuteActionDialog(QDialog):
         self._update_summary()
         layout.addWidget(self._summary_label)
 
-        select_btn = QPushButton("Select by Field/Regex…")
+        select_btn = QPushButton(t("execute_dialog.select_button"))
         select_btn.clicked.connect(self._show_select_dialog)
         layout.addWidget(select_btn)
 
@@ -119,8 +120,8 @@ class ExecuteActionDialog(QDialog):
         # intent is reinforced at the "All Files Will Be Deleted" confirmation
         # that fires on Execute — not at this dismiss button.
         self._btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        self._btn_box.button(QDialogButtonBox.Ok).setText("Execute")
-        self._btn_box.button(QDialogButtonBox.Cancel).setText("Close")
+        self._btn_box.button(QDialogButtonBox.Ok).setText(t("execute_dialog.execute_button"))
+        self._btn_box.button(QDialogButtonBox.Cancel).setText(t("execute_dialog.close_button"))
         self._btn_box.button(QDialogButtonBox.Ok).setEnabled(has_decisions)
         self._btn_box.accepted.connect(self._on_execute_requested)
         self._btn_box.rejected.connect(self.reject)
@@ -140,14 +141,10 @@ class ExecuteActionDialog(QDialog):
         n_delete = sum(1 for _, rec in decided if rec.user_decision == "delete")
         if decided:
             self._summary_label.setText(
-                f"<b>{len(decided)}</b> file(s) with decisions: "
-                f"{n_delete} delete. "
-                "Right-click a file row to change its decision."
+                t("execute_dialog.summary_decided", count=len(decided), n_delete=n_delete)
             )
         else:
-            self._summary_label.setText(
-                "No decisions set — use 'Set Action' to mark files for deletion."
-            )
+            self._summary_label.setText(t("execute_dialog.summary_none"))
 
     def _refresh_ui_after_decision_change(self) -> None:
         """Rebuild tree, update summary, and sync Execute button + warning banner."""
@@ -161,8 +158,7 @@ class ExecuteActionDialog(QDialog):
         if complete:
             group_list = ", ".join(str(g) for g in complete)
             self._warning_label.setText(
-                f"\u26a0 Group(s) {group_list} will have ALL files deleted. "
-                "Review decisions below before clicking Execute."
+                t("execute_dialog.warning_complete_groups", groups=group_list)
             )
             self._warning_banner.setVisible(True)
         else:
@@ -181,8 +177,8 @@ class ExecuteActionDialog(QDialog):
         if not path:
             return
         menu = QMenu(self)
-        set_menu = menu.addMenu("Set Action")
-        for label, value in _SETTABLE_DECISIONS:
+        set_menu = menu.addMenu(t("execute_dialog.set_action_menu"))
+        for label, value in settable_decisions():
             act = set_menu.addAction(label)
             act.triggered.connect(
                 lambda _checked=False, _v=value, _p=path: self._set_decision(_p, _v)
@@ -202,6 +198,8 @@ class ExecuteActionDialog(QDialog):
     def _show_select_dialog(self) -> None:
         from app.views.dialogs.select_dialog import ActionDialog
 
+        # Internal English keys; ActionDialog displays localized labels but
+        # emits the English name back via setActionRequested.
         fields = ["Action", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
         dlg = ActionDialog(fields=fields, parent=self)
         dlg.setActionRequested.connect(self._set_decision_by_regex)
@@ -216,7 +214,7 @@ class ExecuteActionDialog(QDialog):
         try:
             rx = _re.compile(pattern, _re.IGNORECASE)
         except _re.error as exc:
-            QMessageBox.warning(self, "Invalid Regex", str(exc))
+            QMessageBox.warning(self, t("execute_dialog.invalid_regex_title"), str(exc))
             return
 
         batch: dict[str, str] = {}
@@ -228,7 +226,11 @@ class ExecuteActionDialog(QDialog):
                     batch[rec.file_path] = new_decision
 
         if not batch:
-            QMessageBox.information(self, "Set Action — No Match", "No files matched the pattern.")
+            QMessageBox.information(
+                self,
+                t("execute_dialog.no_match_title"),
+                t("execute_dialog.no_match_body"),
+            )
             return
 
         if self._manifest_path:
@@ -249,9 +251,8 @@ class ExecuteActionDialog(QDialog):
             group_list = ", ".join(str(g) for g in complete)
             reply = QMessageBox.question(
                 self,
-                "All Files Will Be Deleted",
-                f"Group(s) {group_list} will have EVERY file deleted.\n\n"
-                "Files will be sent to the Recycle Bin. Continue?",
+                t("execute_dialog.confirm_all_title"),
+                t("execute_dialog.confirm_all_body", groups=group_list),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -296,15 +297,14 @@ class ExecuteActionDialog(QDialog):
             from PySide6.QtWidgets import QMessageBox
             missing_list = "\n".join(self._missing_paths[:20])
             suffix = (
-                f"\n…and {len(self._missing_paths) - 20} more"
+                t("execute_dialog.files_not_found_more", n=len(self._missing_paths) - 20)
                 if len(self._missing_paths) > 20
                 else ""
             )
             QMessageBox.warning(
                 self,
-                "Files Not Found",
-                f"The following files could not be found and were skipped:\n\n"
-                f"{missing_list}{suffix}",
+                t("execute_dialog.files_not_found_title"),
+                t("execute_dialog.files_not_found_body", missing=missing_list, suffix=suffix),
             )
 
         self.accept()

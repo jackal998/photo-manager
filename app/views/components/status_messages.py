@@ -11,12 +11,28 @@ Convention:
     only for messages the user must actually read (failures, summaries).
   * Pluralization: ``report_count`` handles the trailing ``s`` so callers
     don't reinvent the ``f"{n} item(s)"`` pattern at every site.
+
+Localized callers should pass *both* singular and plural forms (resolved
+via ``infrastructure.i18n.t``) so locales without grammatical plurals
+(e.g. zh_TW) can supply identical values without the auto ``+s`` derivation
+mangling the result. Pure-English call sites that don't pass ``plural``
+still get the historical auto-derivation.
 """
 from __future__ import annotations
 
 from typing import Protocol
 
+from infrastructure.i18n import t
+
 DEFAULT_TIMEOUT_MS = 3000
+
+
+def t_pluralize(n: int, key_singular: str, key_plural: str) -> str:
+    """Localized pluralize: ``f"{n} {t(key_*)}"``.
+
+    Convenience wrapper for the common ``pluralize(n, t(s), t(p))`` pattern.
+    """
+    return f"{n} {t(key_singular) if n == 1 else t(key_plural)}"
 
 
 class _StatusReporter(Protocol):

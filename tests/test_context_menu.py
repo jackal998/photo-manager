@@ -19,12 +19,14 @@ from unittest.mock import MagicMock, call
 
 class TestSettableDecisions:
     def test_decisions_are_list_of_tuples(self):
-        from app.views.handlers.context_menu import _SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        _SETTABLE_DECISIONS = settable_decisions()
         assert isinstance(_SETTABLE_DECISIONS, list)
         assert all(isinstance(item, tuple) and len(item) == 2 for item in _SETTABLE_DECISIONS)
 
     def test_first_decision_is_delete(self):
-        from app.views.handlers.context_menu import _SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        _SETTABLE_DECISIONS = settable_decisions()
         labels = [label for label, _ in _SETTABLE_DECISIONS]
         assert "delete" in labels
         values = [v for _, v in _SETTABLE_DECISIONS]
@@ -32,18 +34,19 @@ class TestSettableDecisions:
 
     def test_keep_remove_action_clears_decision(self):
         """'keep (remove action)' must set user_decision to empty string, not 'keep'."""
-        from app.views.handlers.context_menu import _SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        _SETTABLE_DECISIONS = settable_decisions()
         keep_entry = next((t for t in _SETTABLE_DECISIONS if "keep" in t[0].lower()), None)
         assert keep_entry is not None, "No 'keep' entry found in _SETTABLE_DECISIONS"
         _label, value = keep_entry
         assert value == "", f"Expected '' but got {value!r} — keep should clear the decision"
 
     def test_no_scanner_actions_in_settable_values(self):
-        from app.views.handlers.context_menu import _SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        _SETTABLE_DECISIONS = settable_decisions()
         scanner_actions = {"EXACT", "REVIEW_DUPLICATE", "MOVE", "KEEP", "UNDATED", "SKIP"}
         values = {v for _, v in _SETTABLE_DECISIONS}
         assert not scanner_actions.intersection(values)
-
 
 class TestActionHandlersProtocol:
     def test_protocol_has_set_decision(self):

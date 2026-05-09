@@ -18,6 +18,7 @@ from app.views.constants import (
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
 )
+from infrastructure.i18n import t
 
 # Maps tree column index → dialog field name.
 _COL_TO_FIELD: dict[int, str] = {
@@ -70,7 +71,11 @@ class DialogHandler:
         try:
             from app.views.dialogs.select_dialog import ActionDialog
         except Exception:
-            QMessageBox.critical(self.parent, "Set Action — Internal Error", "Action dialog not available.")
+            QMessageBox.critical(
+                self.parent,
+                t("file_op.set_action_internal_error_title"),
+                t("file_op.set_action_internal_error_body"),
+            )
             return
 
         fields = [

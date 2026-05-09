@@ -488,18 +488,21 @@ class TestSetDecisionByRegex:
 
 class TestContextMenuDecisions:
     def test_settable_decisions_constant_exists(self, qapp):
-        from app.views.dialogs.execute_action_dialog import _SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        _SETTABLE_DECISIONS = settable_decisions()
         assert isinstance(_SETTABLE_DECISIONS, list)
         assert all(isinstance(t, tuple) and len(t) == 2 for t in _SETTABLE_DECISIONS)
 
     def test_keep_remove_action_value_is_empty_string(self, qapp):
-        from app.views.dialogs.execute_action_dialog import _SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        _SETTABLE_DECISIONS = settable_decisions()
         keep_entry = next((t for t in _SETTABLE_DECISIONS if "keep" in t[0].lower()), None)
         assert keep_entry is not None, "No 'keep' entry in _SETTABLE_DECISIONS"
         assert keep_entry[1] == "", f"Expected '' but got {keep_entry[1]!r}"
 
     def test_delete_decision_value_is_delete(self, qapp):
-        from app.views.dialogs.execute_action_dialog import _SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        _SETTABLE_DECISIONS = settable_decisions()
         del_entry = next((t for t in _SETTABLE_DECISIONS if t[1] == "delete"), None)
         assert del_entry is not None
 

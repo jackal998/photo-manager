@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from loguru import logger
 
 from app.views.media_utils import format_duration
+from infrastructure.i18n import t
 
 
 class VideoPlayerWidget(QWidget):
@@ -80,7 +81,7 @@ class VideoPlayerWidget(QWidget):
         # Show error message if video failed to load
         if hasattr(self, "_video_load_error") and self._video_load_error:
             self._video_widget.hide()
-            error_label = QLabel("Video file not found or cannot be played")
+            error_label = QLabel(t("preview.video_unavailable"))
             error_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(error_label)
 

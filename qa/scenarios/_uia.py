@@ -39,6 +39,13 @@ MENU_FILE = "File"
 MENU_ACTION = "Action"
 MENU_LIST = "List"
 MENU_LOG = "Log"
+MENU_VIEW = "View"
+
+# View menu items
+VIEW_LANGUAGE = "Language"
+VIEW_LANG_ENGLISH = "English"
+VIEW_LANG_ZH_TW = "繁體中文"
+LANGUAGE_CONFIRM_TITLE = "Switch language?"
 
 # File menu items
 FILE_SCAN_SOURCES = "Scan Sources…"

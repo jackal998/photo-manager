@@ -427,12 +427,38 @@ photo-manager/
       { "field": "file_size_bytes", "asc": false },
       { "field": "file_path",       "asc": true  }
     ]
+  },
+  "ui": {
+    "locale": "en"
   }
 }
 ```
 
 Source paths and recursive flags set via **File › Scan Sources…** are saved here
 automatically. List order determines dedup priority (index 0 = highest priority).
+
+---
+
+## Languages
+
+The UI ships in **English** (`en`) and **Traditional Chinese** (`zh_TW`).
+Switch via **View › Language**; the change requires an app restart.
+The chosen locale is persisted in `settings.json` under `ui.locale`.
+
+To add another language, copy `translations/en.yml` to
+`translations/<code>.yml`, translate the values, and restart — the new
+locale appears automatically in the picker. Full translator workflow
+in [`docs/i18n.md`](docs/i18n.md).
+
+---
+
+## Contributing
+
+New here? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) — it covers
+the bits that aren't obvious from the code (especially: every
+user-facing string lives in `translations/*.yml`, not in a Python
+literal). Deeper references in [`docs/i18n.md`](docs/i18n.md) and
+[`docs/testing.md`](docs/testing.md).
 
 ---
 

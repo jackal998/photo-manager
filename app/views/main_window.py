@@ -11,6 +11,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -30,6 +31,7 @@ from app.views.handlers.file_operations import FileOperationsHandler
 from app.views.image_tasks import ImageTaskRunner
 from app.views.layout.layout_manager import LayoutManager
 from app.views.preview_pane import PreviewPane
+from infrastructure.i18n import t
 
 
 class MainWindow(QMainWindow):
@@ -88,7 +90,7 @@ class MainWindow(QMainWindow):
 
         # Initialize controllers
         self.tree_controller = TreeController(self.tree)
-        self.menu_controller = MenuController(self)
+        self.menu_controller = MenuController(self, settings=self._settings)
         self.layout_manager = LayoutManager(self)
 
         # Status reporter and UI updater implementations
@@ -132,7 +134,7 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self) -> None:
         """Setup the main UI components and layout."""
-        self.setWindowTitle("Photo Manager")
+        self.setWindowTitle(t("main_window.title"))
 
         # Setup tree properties
         self.tree_controller.setup_tree_properties()
@@ -142,9 +144,7 @@ class MainWindow(QMainWindow):
         # First-run hint — visible until the first manifest loads. Once a
         # manifest is loaded (even if it produces zero groups), the user has
         # discovered the menu and the label is hidden permanently (#42).
-        self._empty_state_label = QLabel(
-            "No manifest loaded.\n\nFile → Scan Sources… to begin."
-        )
+        self._empty_state_label = QLabel(t("main_window.empty_state"))
         self._empty_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_state_label.setStyleSheet(
             "color: #888; font-size: 14px; padding: 40px;"
@@ -203,7 +203,7 @@ class MainWindow(QMainWindow):
     def _setup_window_properties(self) -> None:
         """Setup window properties and status bar."""
         # Status bar
-        self.statusBar().showMessage("Ready", 3000)
+        self.statusBar().showMessage(t("main_window.status_ready"), 3000)
 
     # PRESERVED: All public methods with exact signatures
 
@@ -276,17 +276,15 @@ class MainWindow(QMainWindow):
         if pending == 0:
             return True
 
+        pending_phrase = pluralize(
+            pending,
+            t("status.noun_pending_decision_singular"),
+            t("status.noun_pending_decision_plural"),
+        )
         reply = QMessageBox.question(
             self,
-            "Discard pending decisions?",
-            f"You have {pluralize(pending, 'pending decision')} on the loaded "
-            "manifest.\n\n"
-            "Re-scanning will replace the loaded manifest. If the scan output "
-            "path matches the loaded manifest path, those decisions will be "
-            "permanently lost on disk; otherwise the previous manifest is "
-            "preserved on disk but no longer visible in this window.\n\n"
-            "Save first via File → Save Manifest Decisions… if you want to "
-            "keep them.\n\nProceed with the re-scan?",
+            t("main_window.discard_pending_title"),
+            t("main_window.discard_pending_body", pending=pending_phrase),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -321,16 +319,26 @@ class MainWindow(QMainWindow):
                 isolated = max(0, total - grouped)
             except (sqlite3.Error, OSError):
                 pass
-            parts = [pluralize(n, "group")]
+            parts = [pluralize(
+                n,
+                t("status.noun_group_singular"),
+                t("status.noun_group_plural"),
+            )]
             if isolated:
                 # Preserve thousands separator on isolated count — typical
                 # libraries can have tens of thousands of un-grouped files.
-                parts.append(f"{isolated:,} {plural_form(isolated, 'isolated file')}")
+                isolated_form = plural_form(
+                    isolated,
+                    t("status.noun_isolated_file_singular"),
+                    t("status.noun_isolated_file_plural"),
+                )
+                parts.append(f"{isolated:,} {isolated_form}")
             self.statusBar().showMessage(
-                f"Loaded manifest: {', '.join(parts)}", 10000
+                t("main_window.status_loaded", parts=", ".join(parts)),
+                10000,
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Load Manifest Error", str(exc))
+            QMessageBox.critical(self, t("main_window.load_error_title"), str(exc))
 
     def on_open_manifest(self) -> None:
         """Handle Open Manifest action."""
@@ -463,6 +471,118 @@ class MainWindow(QMainWindow):
         """Handle remove from list toolbar action."""
         highlighted_items = self.tree_controller.get_selected_items()
         self.file_operations.remove_from_list_toolbar(highlighted_items)
+
+    # ------------------------------------------------------------------ live language switch
+
+    def _capture_relocalize_state(self) -> dict:
+        """Snapshot the bits of UI state worth carrying across a live
+        language switch — window geometry, splitter sizes, and the
+        selected file row's path. Tree expansion isn't preserved
+        because ``TreeController.refresh_model`` always expands all
+        groups by default; preview doesn't need preservation because
+        re-selecting the same row triggers it. vm-side state
+        (manifest, decisions) survives automatically because vm
+        outlives the window."""
+        state: dict = {
+            "geometry": bytes(self.saveGeometry()),
+            "splitter_state": None,
+            "selected_path": None,
+            "thumb_size": self._thumb_size,
+        }
+        try:
+            splitter = self.layout_manager.get_splitter()
+            if splitter is not None:
+                state["splitter_state"] = bytes(splitter.saveState())
+        except Exception:
+            pass
+        try:
+            items = self.tree_controller.get_selected_items()
+            for it in items:
+                if it.get("type") == "file" and it.get("path"):
+                    state["selected_path"] = it["path"]
+                    break
+        except Exception:
+            pass
+        return state
+
+    def _apply_relocalize_state(self, state: dict) -> None:
+        """Best-effort restore of the snapshot from
+        ``_capture_relocalize_state``. Each step is independently
+        guarded — a failure to restore selection shouldn't strand
+        the user with a broken window."""
+        try:
+            geom = state.get("geometry")
+            if geom:
+                self.restoreGeometry(geom)
+        except Exception:
+            pass
+        try:
+            splitter = self.layout_manager.get_splitter()
+            sp_state = state.get("splitter_state")
+            if splitter is not None and sp_state:
+                splitter.restoreState(sp_state)
+        except Exception:
+            pass
+        # Re-select the previously-selected row by file_path. The tree
+        # is already populated by refresh_tree at construction time.
+        target = state.get("selected_path")
+        if target:
+            try:
+                self._reselect_by_path(target)
+            except Exception:
+                pass
+
+    def _reselect_by_path(self, target_path: str) -> None:
+        """Walk the tree and select the row whose PATH_ROLE matches."""
+        from PySide6.QtCore import QItemSelectionModel
+
+        model = self.tree.model()
+        if model is None:
+            return
+        # Top-level rows are groups; their children are files.
+        for group_row in range(model.rowCount()):
+            group_idx = model.index(group_row, COL_GROUP)
+            for child_row in range(model.rowCount(group_idx)):
+                name_idx = model.index(child_row, COL_NAME, group_idx)
+                # PATH_ROLE is the integer 32 (Qt.UserRole); see constants.py.
+                path = model.data(name_idx, 32)
+                if path == target_path:
+                    self.tree.scrollTo(name_idx)
+                    self.tree.selectionModel().select(
+                        name_idx,
+                        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+                    )
+                    return
+
+    def relocalize(self) -> None:
+        """Rebuild the window in the locale persisted to settings.
+
+        Triggered by ``MenuController._on_language_chosen`` after it
+        writes ``ui.locale``. We snapshot a few preservable bits of UI
+        state, swap the translator singletons, build a fresh
+        MainWindow via the same factory used at startup, restore the
+        snapshot, and dispose of self. The new window picks up
+        translated strings naturally because every view module reads
+        them through ``t()`` at construction time.
+        """
+        # Local import avoids a module-level cycle (main imports
+        # MainWindow at module level; this is a runtime call).
+        from main import install_locale_translators, make_main_window
+
+        saved = self._capture_relocalize_state()
+
+        app = QApplication.instance()
+        if app is not None and self._settings is not None:
+            install_locale_translators(app, self._settings)
+
+        new_win = make_main_window(self._vm, self._img, self._settings)
+        new_win._apply_relocalize_state(saved)
+        new_win.show()
+        # Close + delete this window. The new one owns the same vm /
+        # image_service / settings; nothing of ours needs to outlive
+        # the close.
+        self.close()
+        self.deleteLater()
 
     def _apply_action_by_regex(self, field: str, pattern: str, action_value: str) -> None:
         """Apply an action to all files matching field/regex from the ActionDialog."""

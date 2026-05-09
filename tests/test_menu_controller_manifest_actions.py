@@ -238,3 +238,158 @@ def test_top_level_menus_specific_mnemonic_assignment(qapp):
         assert want in candidates, (
             f"expected {want!r} for {name!r} mnemonic; got {candidates!r}"
         )
+
+
+# ── View → Language submenu — radio-button exclusivity ────────────────────
+# Without the QActionGroup, individually-checkable QActions accumulate
+# ticks across clicks. These tests pin the radio-button behaviour so a
+# regression that drops the group is caught at PR time rather than
+# discovered when the user reports two locales checked at once.
+
+
+def test_language_actions_share_one_exclusive_action_group(qapp):
+    """Every locale entry in View → Language must belong to the same
+    QActionGroup, and that group must be exclusive."""
+    from PySide6.QtWidgets import QMainWindow
+
+    win = QMainWindow()
+    mc = MenuController(win)
+    mc.setup_menus()
+
+    group = getattr(mc, "_language_group", None)
+    assert group is not None, "MenuController should expose _language_group"
+    assert group.isExclusive(), "Language QActionGroup must be exclusive"
+
+    for code, action in mc._language_actions.items():
+        assert action.actionGroup() is group, (
+            f"Language action {code!r} is not in the exclusive group"
+        )
+
+
+def test_language_picker_exclusive_check_state(qapp):
+    """Clicking a second locale must uncheck the previously-active one.
+
+    Reproduces the multi-select bug: before QActionGroup, both English
+    and 繁體中文 stayed checked after a switch. With the group in place,
+    Qt enforces 'at most one checked' automatically.
+    """
+    from PySide6.QtWidgets import QMainWindow
+
+    win = QMainWindow()
+    mc = MenuController(win)
+    mc.setup_menus()
+
+    actions = list(mc._language_actions.values())
+    if len(actions) < 2:
+        pytest.skip("need at least 2 shipped locales to exercise exclusivity")
+
+    first, second = actions[0], actions[1]
+    first.setChecked(True)
+    second.setChecked(True)
+    assert second.isChecked()
+    assert not first.isChecked(), (
+        "Setting a second locale checked must uncheck the first when the "
+        "actions share an exclusive QActionGroup."
+    )
+
+
+def test_on_language_chosen_noops_on_same_locale(qapp):
+    """Picking the active locale must short-circuit before any prompt
+    or relocalize call. Without this guard, the user would see a
+    pointless 'Switch language?' dialog every time they accidentally
+    re-clicked the current locale.
+    """
+    from unittest.mock import patch
+
+    from PySide6.QtWidgets import QMainWindow
+
+    from infrastructure.i18n import get_translator
+
+    host = QMainWindow()
+    calls = {"hit": 0}
+    host.relocalize = lambda: calls.update(hit=calls["hit"] + 1)  # type: ignore[attr-defined]
+
+    mc = MenuController(host)
+    mc.setup_menus()
+
+    current = get_translator().locale
+    with patch("PySide6.QtWidgets.QMessageBox.question") as q:
+        mc._on_language_chosen(current)
+
+    q.assert_not_called(), (
+        "Same-locale click should short-circuit before showing the prompt"
+    )
+    assert calls["hit"] == 0
+
+
+def test_on_language_chosen_yes_invokes_relocalize(qapp):
+    """User picks a different locale and clicks Yes → relocalize fires."""
+    from unittest.mock import patch
+
+    from PySide6.QtWidgets import QMainWindow, QMessageBox
+
+    from infrastructure.i18n import get_translator
+
+    host = QMainWindow()
+    calls = {"hit": 0}
+    host.relocalize = lambda: calls.update(hit=calls["hit"] + 1)  # type: ignore[attr-defined]
+
+    mc = MenuController(host)
+    mc.setup_menus()
+
+    current = get_translator().locale
+    other = "zh_TW" if current != "zh_TW" else "en"
+
+    with patch(
+        "PySide6.QtWidgets.QMessageBox.question",
+        return_value=QMessageBox.Yes,
+    ) as q:
+        mc._on_language_chosen(other)
+
+    q.assert_called_once()
+    assert calls["hit"] == 1, (
+        f"_on_language_chosen({other!r}) did not call host.relocalize after Yes"
+    )
+
+
+def test_on_language_chosen_no_skips_relocalize(qapp):
+    """User picks a different locale and clicks No → no relocalize, no
+    settings write. The QActionGroup auto-flipped on click, so we must
+    also revert the check state to the originally-active locale.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from PySide6.QtWidgets import QMainWindow, QMessageBox
+
+    from infrastructure.i18n import get_translator
+
+    host = QMainWindow()
+    calls = {"hit": 0}
+    host.relocalize = lambda: calls.update(hit=calls["hit"] + 1)  # type: ignore[attr-defined]
+
+    settings = MagicMock()
+    mc = MenuController(host, settings=settings)
+    mc.setup_menus()
+
+    current = get_translator().locale
+    other = "zh_TW" if current != "zh_TW" else "en"
+
+    # Simulate the QActionGroup's auto-check on click by flipping
+    # the picked action's checked state.
+    if other in mc._language_actions:
+        mc._language_actions[other].setChecked(True)
+
+    with patch(
+        "PySide6.QtWidgets.QMessageBox.question",
+        return_value=QMessageBox.No,
+    ):
+        mc._on_language_chosen(other)
+
+    assert calls["hit"] == 0, "relocalize fired despite the user clicking No"
+    settings.set.assert_not_called()
+    settings.save.assert_not_called()
+    # Revert: the active locale's action should be checked again,
+    # not the one the user almost-picked.
+    if current in mc._language_actions:
+        assert mc._language_actions[current].isChecked()
+
