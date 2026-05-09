@@ -84,13 +84,20 @@ SCAN_BTN_CLOSE_LOAD = "Close & Load"   # exact UIA accessible name; mirrors scan
 SCAN_BTN_BROWSE = "Browse…"
 SCAN_BTN_REMOVE_ALL = "Remove All"
 SCAN_BTN_ADD_SELECTED = "+ Add Selected Folder"
-SCAN_AID_LOG = "QApplication.ScanDialog.QPlainTextEdit"
-SCAN_AID_OUTPUT_PATH = "QApplication.ScanDialog.QLineEdit"
+# Paths reflect the two-column ScanDialog layout: outer horizontal QSplitter
+# wraps an inner vertical QSplitter on each side. Left inner splitter holds
+# the tree group and source list; right inner splitter holds a QWidget
+# wrapper (output row + params) on top and the log QPlainTextEdit on the
+# bottom.
+SCAN_AID_LOG = "QApplication.ScanDialog.QSplitter.QSplitter.QPlainTextEdit"
+SCAN_AID_OUTPUT_PATH = (
+    "QApplication.ScanDialog.QSplitter.QSplitter.QWidget.QLineEdit"
+)
 SCAN_AID_SOURCE_TABLE = (
-    "QApplication.ScanDialog.QSplitter._SourceListWidget.QTableWidget"
+    "QApplication.ScanDialog.QSplitter.QSplitter._SourceListWidget.QTableWidget"
 )
 SCAN_AID_TREE_PATH_FIELD = (
-    "QApplication.ScanDialog.QSplitter.QGroupBox._FolderTreePanel.QLineEdit"
+    "QApplication.ScanDialog.QSplitter.QSplitter.QGroupBox._FolderTreePanel.QLineEdit"
 )
 
 # Execute Action dialog
