@@ -89,7 +89,7 @@ calls out what would be uncaught even with a green CI.
 |---|---|---|---|---|
 | `infrastructure/manifest_repository.py` | 99% | — | every scenario | very low |
 | `infrastructure/settings.py` | 100% | — | every scenario | none |
-| `infrastructure/i18n.py` | 90% | — | s22 (language switch + restart prompt + locale persistence) | low — uncovered branches are defensive `except (OSError, yaml.YAMLError)` paths in `available_locales()` and a couple of guards. The `test_zh_tw_has_every_key_present_in_english` test pins parity between the en and zh_TW catalogs at PR time, so a missing translation never ships silently. |
+| `infrastructure/i18n.py` | 93% | — | s22 (live language switch — Yes-confirm, in-place MainWindow rebuild, locale persistence in settings.json) | low — uncovered branches are defensive `except (OSError, yaml.YAMLError)` paths in `available_locales()` and a couple of guards. The `test_zh_tw_has_every_key_present_in_english` test pins parity between the en and zh_TW catalogs at PR time, so a missing translation never ships silently. |
 | `infrastructure/delete_service.py` | 93% | spot-add only | s13 (planned per #80) covers happy-path real send2trash | recycle-bin behavior on networked drives untested; error paths exercised via mocks. Spot-add a layer-2 test for specific bug cases (locked file, network drive, permission denied). |
 | `infrastructure/utils.py` | 89% | spot-add only | s08 (real EXIF on real fixtures) | DNG fallback only mocked. If a real DNG ever returns metadata in a shape we don't anticipate, that's the moment to add a layer-2 spot-test pinning the parse. |
 | `infrastructure/image_service.py` | **omit** | depends on running `QApplication` for image decode | s01, s05 | full responsibility on layer 3 |
@@ -112,7 +112,9 @@ calls out what would be uncaught even with a green CI.
 | `app/views/workers/scan_worker.py` | 91% | every scan scenario | minor — cancellation timing branch hard to test deterministically |
 | `app/views/handlers/file_operations.py` | 81% | s01 + every scenario that loads a manifest, plus s12 for Save Manifest Decisions end-to-end | uncovered 19% is QFileDialog interaction (file picker for open manifest) — Save Manifest is now driven by s12, with the WAL-checkpoint branch (#91) covered by both layer-1 unit test and the s12 layer-3 driver |
 | `app/views/handlers/context_menu.py` | 88% | s01 (menu probes) | low — `_open_folder` Windows + non-Windows + fallback paths covered; remaining 12% is Protocol stub bodies |
-| `app/views/dialogs/scan_dialog.py` | 84% | every scenario opens it | uncovered 16% is QFileDialog browse interaction + a few worker-signal branches |
+| `app/views/dialogs/scan_dialog.py` | 90% | every scenario opens it; s17 (full source-list operations) | uncovered 10% is QFileDialog browse interaction + a few worker-signal branches |
+| `app/views/components/menu_controller.py` | 89% | s01, s18, s21, s22, s28 | uncovered 11% is fallback branches in the language picker (no available locales) and a defensive guard for missing manifest-actions; the View → Language exclusivity + Yes/No confirm + dirty-flag exit prompt all unit-tested in `test_menu_controller_manifest_actions.py` |
+| `app/views/components/status_messages.py` | 95% | indirectly via every scenario that asserts on status-bar copy (s01, s12, s13, s14, s20, s21, s27, s29) | low — pure formatter; `test_status_messages.py` pins the output shape so qa-explore regexes stay coherent |
 | `app/views/dialogs/execute_action_dialog.py` | 83% | s13 (planned, will exercise real send2trash through the GUI) | uncovered 17% is `_on_tree_context_menu` + the actual destructive `_on_execute` flow — qa-explore s13 will cover the happy path; spot-add a layer-2 test only if a destructive-flow bug surfaces that's hard to reproduce via the GUI |
 | `app/views/dialogs/select_dialog.py` | 94% | s01 (action menu) | low |
 
