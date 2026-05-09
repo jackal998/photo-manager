@@ -1367,12 +1367,41 @@ def _drive_action_dialog_form(
     # populated before we read it (post-Apply, below).
     time.sleep(0.3)
 
-    action_combo.select(action_label)
-    # 0.1 s was enough locally but flaked on the hosted CI runner under
-    # the new wider layout — the action-combo dropdown takes longer to
-    # commit when the dialog is taller. 0.4 s costs nothing and keeps the
-    # apply path deterministic.
-    time.sleep(0.4)
+    # combo.select(text) works reliably locally but flaked on the
+    # hosted CI runner specifically for non-default items: s29
+    # (action='remove from list', third item) failed twice in a row
+    # while s14/s30 (action='delete', first item) always passed in
+    # the same runs. Mechanism unclear (possibly a focus or dropdown-
+    # visibility race that's invisible under local Windows), so we
+    # defend by retrying with a focus refresh between attempts and
+    # verifying the combo's displayed text actually changed.
+    for attempt in range(3):
+        try:
+            action_combo.set_focus()
+        except Exception:
+            pass
+        time.sleep(0.1)
+        try:
+            action_combo.select(action_label)
+        except Exception:
+            pass
+        time.sleep(0.4)
+        try:
+            current = (action_combo.window_text() or "").strip()
+        except Exception:
+            current = ""
+        if current == action_label:
+            break
+    else:
+        # Final fallback: ValuePattern.SetValue. This sets the visible
+        # text but does NOT fire QComboBox::currentIndexChanged on Qt's
+        # side — kept as a last-ditch so the helper at least surfaces
+        # a clearer failure if the click+verify path can't agree.
+        try:
+            action_combo.iface_value.SetValue(action_label)
+        except Exception:
+            pass
+        time.sleep(0.2)
 
     # Use _find_dialog_button (bottom-most match) — on en-US Windows the
     # title-bar Close button shares the form Close's accessible name and a
@@ -1622,6 +1651,8 @@ CTX_KEEP = "keep (remove action)"
 CTX_OPEN_FOLDER = "Open Folder"
 
 _VK_CONTROL = 0x11
+_VK_DOWN = 0x28
+_VK_UP = 0x26
 _KEYEVENTF_KEYUP = 0x0002
 
 
