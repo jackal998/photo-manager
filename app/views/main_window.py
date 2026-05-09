@@ -472,6 +472,50 @@ class MainWindow(QMainWindow):
         highlighted_items = self.tree_controller.get_selected_items()
         self.file_operations.remove_from_list_toolbar(highlighted_items)
 
+    # ------------------------------------------------------------------ close-with-dirty-check
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        """Prompt the user when there are unsaved decisions before closing.
+
+        Decisions auto-persist to the loaded manifest as soon as
+        they're set, so "Leave" never loses data. The prompt's value
+        is purely about offering an explicit save (e.g. before a
+        Save-As to another path) and giving the user a back-out.
+        """
+        if not self.file_operations.is_dirty():
+            super().closeEvent(event)
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(t("exit.confirm_title"))
+        box.setText(t("exit.confirm_body"))
+        btn_save = box.addButton(t("exit.button_save_leave"), QMessageBox.AcceptRole)
+        btn_leave = box.addButton(t("exit.button_leave"), QMessageBox.DestructiveRole)
+        btn_back = box.addButton(t("exit.button_back"), QMessageBox.RejectRole)
+        # Default to Back so an accidental Enter/Esc keeps the user in the app.
+        box.setDefaultButton(btn_back)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is btn_save:
+            if self.file_operations.save_manifest_decisions_silent():
+                event.accept()
+            else:
+                # Save failed — better to keep the user in the app
+                # than silently lose the prompt's protection.
+                QMessageBox.critical(
+                    self,
+                    t("file_op.save_error_title"),
+                    t("file_op.save_failed_status"),
+                )
+                event.ignore()
+        elif clicked is btn_leave:
+            event.accept()
+        else:
+            # Back, Esc, or window-X (rejection); stay in the app.
+            event.ignore()
+
     # ------------------------------------------------------------------ live language switch
 
     def _capture_relocalize_state(self) -> dict:

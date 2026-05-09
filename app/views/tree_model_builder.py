@@ -17,10 +17,24 @@ from app.views.constants import (
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
     PATH_ROLE,
+    REMOVE_FROM_LIST_DECISION,
     SORT_ROLE,
     headers,
 )
 from infrastructure.i18n import t
+
+
+def _action_display(decision: str) -> str:
+    """Map an internal user_decision value to its localized label.
+
+    Currently only the deferred remove-from-list value gets a
+    translated label; ``"delete"`` and ``"keep"`` are passed through
+    as-is to preserve the existing display behaviour. If those become
+    translatable later, extend the mapping here.
+    """
+    if decision == REMOVE_FROM_LIST_DECISION:
+        return t("decision.remove_from_list")
+    return decision
 
 # Numeric sort priorities — lower value = sorted first (ascending).
 #
@@ -44,7 +58,8 @@ _ACTION_SORT: dict[str, int] = {
 _DECISION_SORT: dict[str, int] = {
     "delete": 1,
     "keep": 2,
-}  # "" (undecided) → 3
+    REMOVE_FROM_LIST_DECISION: 4,
+}  # "" (undecided) → 3 (between keep and remove_from_list)
 
 def _hamming_to_pct(hamming: int | None) -> str:
     """Convert pHash Hamming distance to a similarity percentage string."""
@@ -193,10 +208,10 @@ def build_model(
             item_decision = getattr(p, "user_decision", "") or ""
 
             child_row = [
-                QStandardItem(file_match),           # COL_GROUP      (0) — similarity
-                QStandardItem(item_decision),        # COL_ACTION     (1) — user decision
-                QStandardItem(name),                 # COL_NAME       (2)
-                QStandardItem(folder),               # COL_FOLDER     (3)
+                QStandardItem(file_match),                       # COL_GROUP      (0) — similarity
+                QStandardItem(_action_display(item_decision)),   # COL_ACTION     (1) — localized label
+                QStandardItem(name),                             # COL_NAME       (2)
+                QStandardItem(folder),                           # COL_FOLDER     (3)
                 QStandardItem(str(size_num)),        # COL_SIZE_BYTES (4)
                 QStandardItem(""),                   # COL_GROUP_COUNT (5) — group level only
                 QStandardItem(creation_txt),         # COL_CREATION_DATE (6)

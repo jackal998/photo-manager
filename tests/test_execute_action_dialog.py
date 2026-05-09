@@ -580,3 +580,215 @@ class TestSetDecisionByRegexPersistFailure:
             assert rec.user_decision == "delete"
         finally:
             dlg.close()
+
+
+# ── Remove-from-list branch (regex + single-row right-click) ──────────────
+
+
+class TestRemoveFromListBranch:
+    """The execute-action dialog routes the REMOVE_FROM_LIST_SENTINEL
+    to a separate path that mutates self._groups in place (preserving
+    the alias to vm.groups), syncs the manifest, and accumulates
+    removed paths for the parent to read after exec()."""
+
+    def test_single_row_right_click_prompts_and_removes_when_confirmed(self, qapp, tmp_path):
+        """Single-row right-click + confirm: drops the row from the
+        in-memory group AND records it in removed_from_list_paths so
+        the parent can refresh the main tree on close."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        rec_a = _rec("/a.jpg", "delete")
+        rec_b = _rec("/b.jpg", "delete")
+        groups = [_group(rec_a, rec_b)]
+        # tmp_path/missing means remove_from_review will raise; the
+        # logger swallow lets the in-memory removal still happen, which
+        # is the behavior we want to assert.
+        dlg = ExecuteActionDialog(groups, manifest_path=str(tmp_path / "missing.sqlite"))
+        try:
+            with patch(
+                "PySide6.QtWidgets.QMessageBox.question",
+                return_value=QMessageBox.Yes,
+            ) as q:
+                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+            q.assert_called_once()
+            remaining = [r.file_path for g in dlg._groups for r in g.items]
+            assert remaining == ["/b.jpg"]
+            assert dlg.removed_from_list_paths == ["/a.jpg"]
+        finally:
+            dlg.close()
+
+    def test_single_row_right_click_decline_keeps_row(self, qapp, tmp_path):
+        """Decline path: prompt fires, user clicks No, row stays."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        rec_a = _rec("/a.jpg", "delete")
+        groups = [_group(rec_a)]
+        dlg = ExecuteActionDialog(groups, manifest_path=str(tmp_path / "missing.sqlite"))
+        try:
+            with patch(
+                "PySide6.QtWidgets.QMessageBox.question",
+                return_value=QMessageBox.No,
+            ):
+                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+            # Row still present, removed_from_list_paths empty.
+            assert dlg._groups[0].items == [rec_a]
+            assert dlg.removed_from_list_paths == []
+        finally:
+            dlg.close()
+
+    def test_empty_groups_dropped_from_list(self, qapp, tmp_path):
+        """When every record in a group is removed, the group itself
+        must disappear — otherwise the tree shows an empty header."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        rec_a = _rec("/a.jpg", "delete")
+        groups = [_group(rec_a)]
+        dlg = ExecuteActionDialog(groups, manifest_path=str(tmp_path / "missing.sqlite"))
+        try:
+            with patch(
+                "PySide6.QtWidgets.QMessageBox.question",
+                return_value=QMessageBox.Yes,
+            ):
+                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+            assert dlg._groups == []
+        finally:
+            dlg.close()
+
+    def test_groups_alias_to_caller_is_preserved(self, qapp, tmp_path):
+        """self._groups is constructed from the caller's list; the in-place
+        slice replacement (self._groups[:] = ...) must keep that alias so
+        vm.groups (the caller's list) reflects the removal automatically."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        rec_a = _rec("/a.jpg", "delete")
+        rec_b = _rec("/b.jpg", "delete")
+        caller_groups = [_group(rec_a, rec_b)]
+        dlg = ExecuteActionDialog(caller_groups, manifest_path=str(tmp_path / "missing.sqlite"))
+        try:
+            with patch(
+                "PySide6.QtWidgets.QMessageBox.question",
+                return_value=QMessageBox.Yes,
+            ):
+                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+            # Caller's list reflects the removal because we mutated in place.
+            assert caller_groups is dlg._groups
+            remaining = [r.file_path for g in caller_groups for r in g.items]
+            assert remaining == ["/b.jpg"]
+        finally:
+            dlg.close()
+
+    def test_regex_remove_writes_decision_no_prompt(self, qapp, tmp_path):
+        """Regex 'remove from list' is now deferred — no prompt fires,
+        matched rows just get user_decision='remove_from_list' set.
+        The actual removal happens at Execute time."""
+        from app.views.constants import REMOVE_FROM_LIST_DECISION, REMOVE_FROM_LIST_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        rec_a = _rec("/a.jpg", "delete")
+        rec_b = _rec("/b.jpg", "delete")
+        groups = [_group(rec_a, rec_b)]
+        dlg = ExecuteActionDialog(groups, manifest_path=str(tmp_path / "missing.sqlite"))
+        try:
+            with patch("PySide6.QtWidgets.QMessageBox.question") as q:
+                dlg._set_decision_by_regex(
+                    "File Name", r"^a\.jpg$", REMOVE_FROM_LIST_SENTINEL
+                )
+            q.assert_not_called()
+            # Row stays in groups; decision is updated.
+            assert rec_a.user_decision == REMOVE_FROM_LIST_DECISION
+            assert rec_b.user_decision == "delete"
+            assert dlg.removed_from_list_paths == [], (
+                "Bulk regex must not append to removed_from_list_paths "
+                "before Execute — that list is for executed removals."
+            )
+        finally:
+            dlg.close()
+
+    def test_regex_remove_no_match_shows_info(self, qapp, tmp_path):
+        """Zero matches → no-match info dialog, no prompt, no decision change."""
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        rec = _rec("/a.jpg", "delete")
+        dlg = ExecuteActionDialog([_group(rec)], manifest_path=str(tmp_path / "missing.sqlite"))
+        try:
+            with patch("PySide6.QtWidgets.QMessageBox.information") as info, \
+                 patch("PySide6.QtWidgets.QMessageBox.question") as q:
+                dlg._set_decision_by_regex(
+                    "File Name", "wont_match", REMOVE_FROM_LIST_SENTINEL
+                )
+            info.assert_called_once()
+            q.assert_not_called()
+            assert rec.user_decision == "delete"
+            assert dlg.removed_from_list_paths == []
+        finally:
+            dlg.close()
+
+    def test_on_execute_handles_remove_from_list_decision(self, qapp, tmp_path):
+        """When _on_execute encounters user_decision='remove_from_list',
+        it should NOT delete the file (no recycle-bin call) but should
+        accumulate the path in removed_from_list_paths so the parent
+        can drop it from vm.groups, AND mark it in remove_from_review
+        in the manifest."""
+        import sqlite3
+
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        # Build a real SQLite manifest so remove_from_review can write.
+        db = tmp_path / "manifest.sqlite"
+        with sqlite3.connect(db) as conn:
+            conn.executescript("""
+                CREATE TABLE migration_manifest (
+                    id INTEGER PRIMARY KEY,
+                    source_path TEXT NOT NULL,
+                    source_label TEXT NOT NULL DEFAULT 'test',
+                    dest_path TEXT,
+                    action TEXT NOT NULL DEFAULT 'MOVE',
+                    source_hash TEXT,
+                    phash TEXT,
+                    hamming_distance INTEGER,
+                    group_id TEXT,
+                    reason TEXT,
+                    executed INTEGER NOT NULL DEFAULT 0,
+                    user_decision TEXT NOT NULL DEFAULT ''
+                );
+            """)
+            conn.execute(
+                "INSERT INTO migration_manifest (source_path) VALUES (?)",
+                ("/a.jpg",),
+            )
+            conn.commit()
+
+        rec_a = _rec("/a.jpg", REMOVE_FROM_LIST_DECISION)
+        groups = [_group(rec_a)]
+        dlg = ExecuteActionDialog(groups, manifest_path=str(db))
+        try:
+            with patch.object(dlg, "_delete_file") as delete_file:
+                dlg._on_execute()
+            # No file delete attempted for remove decisions.
+            delete_file.assert_not_called()
+            # Path landed in removed_from_list_paths so the parent
+            # can drop it from vm.groups.
+            assert dlg.removed_from_list_paths == ["/a.jpg"]
+            # The manifest row was marked removed.
+            with sqlite3.connect(db) as conn:
+                row = conn.execute(
+                    "SELECT user_decision FROM migration_manifest WHERE source_path = ?",
+                    ("/a.jpg",),
+                ).fetchone()
+            assert row and row[0] == "removed"
+        finally:
+            dlg.close()

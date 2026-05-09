@@ -17,7 +17,13 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
-from app.views.constants import COL_NAME, PATH_ROLE, settable_decisions
+from app.views.constants import (
+    COL_NAME,
+    PATH_ROLE,
+    REMOVE_FROM_LIST_DECISION,
+    REMOVE_FROM_LIST_SENTINEL,
+    settable_decisions,
+)
 from app.views.tree_model_builder import build_model
 from infrastructure.i18n import t
 
@@ -43,6 +49,11 @@ class ExecuteActionDialog(QDialog):
         self._manifest_path = manifest_path
         self.deleted_paths: list[str] = []
         self.executed_paths: list[str] = []
+        # Paths removed from the review list during this dialog session
+        # (via the new "remove from list" action). The parent inspects
+        # this after exec() so it can refresh the main tree — vm.groups
+        # is already updated in place because self._groups aliases it.
+        self.removed_from_list_paths: list[str] = []
         self._missing_paths: list[str] = []
         self._src_model = None
         self._build_ui()
@@ -178,7 +189,11 @@ class ExecuteActionDialog(QDialog):
             return
         menu = QMenu(self)
         set_menu = menu.addMenu(t("execute_dialog.set_action_menu"))
-        for label, value in settable_decisions():
+        # include_remove=True surfaces "remove from list" alongside the
+        # decision options. Single-row right-click takes the silent
+        # path (no confirmation prompt) — the threshold gate lives in
+        # the regex flow, where one click can cull dozens of rows.
+        for label, value in settable_decisions(include_remove=True):
             act = set_menu.addAction(label)
             act.triggered.connect(
                 lambda _checked=False, _v=value, _p=path: self._set_decision(_p, _v)
@@ -186,11 +201,61 @@ class ExecuteActionDialog(QDialog):
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _set_decision(self, path: str, decision: str) -> None:
+        if decision == REMOVE_FROM_LIST_SENTINEL:
+            # Single-row right-click — always confirm before removing,
+            # for symmetry with the regex flow. Set+execute is a bigger
+            # commitment than delete/keep, even on one row.
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                t("file_op.remove_confirm_title"),
+                t("file_op.remove_confirm_body", count=1),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self._remove_from_list_paths([path])
+            return
         for group in self._groups:
             for rec in getattr(group, "items", []):
                 if rec.file_path == path:
                     rec.user_decision = decision
                     break
+        self._refresh_ui_after_decision_change()
+
+    def _remove_from_list_paths(self, paths: list[str]) -> None:
+        """Drop ``paths`` from self._groups (in place) and the manifest.
+
+        ``self._groups`` aliases ``vm.groups`` (passed by reference at
+        construction). In-place mutation here means the main window's
+        viewmodel is already up to date when the dialog closes — the
+        parent only needs to re-render. Empty groups are dropped from
+        the list to avoid showing a header with no rows.
+        """
+        if not paths:
+            return
+        removed = set(paths)
+        # Walk groups; strip matched records; drop groups that empty out.
+        # We iterate over a copy and rebuild via list slicing so we
+        # mutate the same list object self._groups points at — caller
+        # aliasing depends on it.
+        keep_groups = []
+        for g in self._groups:
+            kept_items = [it for it in getattr(g, "items", []) if it.file_path not in removed]
+            if kept_items:
+                # Mutate the existing group object so any other
+                # references to it (vm-side) stay consistent.
+                g.items = kept_items
+                keep_groups.append(g)
+        self._groups[:] = keep_groups  # in-place replacement preserves the alias
+        if self._manifest_path:
+            try:
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().remove_from_review(self._manifest_path, list(paths))
+            except Exception as exc:
+                logger.warning("Failed to sync removed paths to manifest: {}", exc)
+        self.removed_from_list_paths.extend(paths)
         self._refresh_ui_after_decision_change()
 
     # ------------------------------------------------------------------ set action by regex
@@ -206,7 +271,12 @@ class ExecuteActionDialog(QDialog):
         dlg.exec()
 
     def _set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
-        """Find all file rows where field matches pattern and set user_decision."""
+        """Find all file rows where field matches pattern and route by action.
+
+        ``new_decision == REMOVE_FROM_LIST_SENTINEL`` removes the
+        matched rows from the review list (mirrors the main-window
+        regex flow); otherwise sets ``user_decision``.
+        """
         import re as _re
         from PySide6.QtWidgets import QMessageBox
         from app.views.handlers.file_operations import _get_record_field
@@ -216,6 +286,13 @@ class ExecuteActionDialog(QDialog):
         except _re.error as exc:
             QMessageBox.warning(self, t("execute_dialog.invalid_regex_title"), str(exc))
             return
+
+        # Bulk regex remove now mirrors bulk regex delete/keep:
+        # matched rows get user_decision = REMOVE_FROM_LIST_DECISION
+        # and the user reviews + commits via Execute. Single-row
+        # right-click (_set_decision) stays immediate.
+        if new_decision == REMOVE_FROM_LIST_SENTINEL:
+            new_decision = REMOVE_FROM_LIST_DECISION
 
         batch: dict[str, str] = {}
         for group in self._groups:          # search full list, not just displayed
@@ -276,6 +353,11 @@ class ExecuteActionDialog(QDialog):
                 except Exception as exc:
                     logger.warning("Failed to persist decisions before execute: {}", exc)
 
+        # Collect deferred-remove paths separately from immediate ones
+        # so we don't double-mark already-removed rows in SQLite. The
+        # immediate single-row right-click path already calls
+        # remove_from_review at click time.
+        deferred_remove_paths: list[str] = []
         for group in self._groups:
             for rec in getattr(group, "items", []):
                 decision = getattr(rec, "user_decision", "") or ""
@@ -283,6 +365,8 @@ class ExecuteActionDialog(QDialog):
                     self._delete_file(rec.file_path)
                 elif decision == "keep":
                     self.executed_paths.append(rec.file_path)
+                elif decision == REMOVE_FROM_LIST_DECISION:
+                    deferred_remove_paths.append(rec.file_path)
 
         if self._manifest_path:
             all_done = self.deleted_paths + self.executed_paths
@@ -292,6 +376,21 @@ class ExecuteActionDialog(QDialog):
                     ManifestRepository().mark_executed(self._manifest_path, all_done)
                 except Exception as exc:
                     logger.warning("Failed to mark executed in manifest: {}", exc)
+
+            if deferred_remove_paths:
+                try:
+                    from infrastructure.manifest_repository import ManifestRepository
+                    ManifestRepository().remove_from_review(
+                        self._manifest_path, deferred_remove_paths
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to mark deferred remove rows: {}", exc
+                    )
+                # Surface to the caller so it can drop these from
+                # vm.groups; the immediate-path entries are already
+                # gone from there via in-place mutation.
+                self.removed_from_list_paths.extend(deferred_remove_paths)
 
         if self._missing_paths:
             from PySide6.QtWidgets import QMessageBox
