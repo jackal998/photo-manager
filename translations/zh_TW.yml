@@ -68,6 +68,7 @@ tree:
 decision:
   delete: "刪除"
   keep: "保留 (取消動作)"
+  remove_from_list: "從清單移除"
 
 scan_dialog:
   title: "掃描來源"
@@ -170,6 +171,15 @@ file_op:
   execute_no_manifest_body: "尚未載入清單。"
   set_action_internal_error_title: "設定動作 — 內部錯誤"
   set_action_internal_error_body: "動作對話框無法使用。"
+  remove_confirm_title: "從清單移除"
+  remove_confirm_body: "確定要從清單移除 {count} 個項目嗎?\n\n此操作只會更新清單檔,不會影響硬碟上的任何檔案。被移除的列在重新掃描之前不會再出現於檢閱清單中。"
+
+exit:
+  confirm_title: "尚未儲存的變更"
+  confirm_body: "您有尚未明確儲存的決策。\n\n所有決策都會自動寫入目前載入的清單檔,所以直接離開是安全的;但如果您打算把這份清單另存為其他檔案,建議先儲存。"
+  button_save_leave: "儲存並離開(&S)"
+  button_leave: "離開"
+  button_back: "返回"
 
 language:
   confirm_title: "要切換語言嗎?"

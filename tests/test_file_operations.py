@@ -959,6 +959,92 @@ class TestSetDecisionByRegex:
         assert rec_skip.user_decision == ""
 
 
+# ── set_decision_by_regex with REMOVE_FROM_LIST_SENTINEL ──────────────────
+
+
+class TestSetDecisionByRegexRemoveFromList:
+    """Regex 'remove from list' branch — deferred semantics.
+
+    The bulk regex flow no longer removes rows immediately. Like
+    bulk delete and bulk keep, it sets ``user_decision`` on every
+    matched row and the user reviews + commits via Execute Action.
+    No confirmation prompt fires (matches the delete/keep regex
+    feel); single-row right-click in the execute dialog is the only
+    path that still removes immediately, with its own confirm
+    prompt (covered in test_execute_action_dialog).
+    """
+
+    def test_match_writes_remove_decision_no_immediate_drop(self, tmp_path):
+        """Matched rows stay in vm.groups and have
+        user_decision='remove_from_list' written. No prompt fires."""
+        from app.views.constants import REMOVE_FROM_LIST_DECISION, REMOVE_FROM_LIST_SENTINEL
+        from app.viewmodels.main_vm import MainVM
+
+        db = _make_db(tmp_path, [
+            {"source_path": "/photos/keep.jpg"},
+            {"source_path": "/photos/match.jpg"},
+        ])
+        rec_keep = _rec("/photos/keep.jpg")
+        rec_match = _rec("/photos/match.jpg")
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[rec_keep, rec_match])]
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+
+        with patch("PySide6.QtWidgets.QMessageBox.question") as q:
+            handler.set_decision_by_regex(
+                "File Name", r"^match", REMOVE_FROM_LIST_SENTINEL
+            )
+
+        # No prompt — deferred path matches delete/keep regex feel.
+        q.assert_not_called()
+        # Both rows still present in memory; only the matched one's
+        # user_decision was changed.
+        all_paths = [r.file_path for g in vm.groups for r in g.items]
+        assert "/photos/match.jpg" in all_paths
+        assert "/photos/keep.jpg" in all_paths
+        assert rec_match.user_decision == REMOVE_FROM_LIST_DECISION
+        assert rec_keep.user_decision == ""
+        # SQLite reflects the same.
+        assert _read_decision(db, "/photos/match.jpg") == REMOVE_FROM_LIST_DECISION
+        assert _read_decision(db, "/photos/keep.jpg") == ""
+        ui_updater.refresh_tree.assert_called()
+
+    def test_remove_decision_marks_handler_dirty(self, tmp_path):
+        """Setting the deferred remove decision must flip the dirty
+        flag — the exit prompt depends on it (Item 2)."""
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.viewmodels.main_vm import MainVM
+
+        db = _make_db(tmp_path, [{"source_path": "/photos/m.jpg"}])
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[_rec("/photos/m.jpg")])]
+        handler, _, _ = _make_handler(vm, str(db))
+        assert handler.is_dirty() is False
+
+        handler.set_decision_by_regex("File Name", r"^m", REMOVE_FROM_LIST_SENTINEL)
+        assert handler.is_dirty() is True
+
+    def test_bulk_regex_no_match_shows_info(self, tmp_path):
+        """A pattern that matches nothing still shows the no-match info
+        dialog (unchanged from prior behaviour)."""
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+
+        rec = _rec("/photos/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/photos/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info, \
+             patch("PySide6.QtWidgets.QMessageBox.question") as q:
+            handler.set_decision_by_regex(
+                "File Name", "wont_match", REMOVE_FROM_LIST_SENTINEL
+            )
+
+        info.assert_called_once()
+        assert "No files matched" in info.call_args[0][2]
+        q.assert_not_called()
+
+
 # ── execute_action / save_manifest guards ─────────────────────────────────
 
 
@@ -988,3 +1074,115 @@ class TestEntryPointGuards:
             handler.save_manifest_decisions()
         info.assert_called_once()
         assert "No manifest open" in info.call_args[0][2]
+
+
+# ── Item 2 — dirty-tracking flag + silent save ─────────────────────────────
+
+
+class TestDirtyTracking:
+    """The is_dirty flag drives the exit prompt. False positives are
+    acceptable (prompt fires when nothing actually changed); false
+    negatives are not (close without prompting after real changes).
+    These tests pin the transitions so a future regression doesn't
+    silently un-flip the flag.
+    """
+
+    def test_initial_state_is_clean(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        h = FileOperationsHandler(
+            vm=MagicMock(), settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        assert h.is_dirty() is False
+
+    def test_set_decision_marks_dirty(self, tmp_path):
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        assert handler.is_dirty() is False
+
+        handler.set_decision([{"type": "file", "path": "/a.jpg"}], "delete")
+        assert handler.is_dirty() is True
+
+    def test_remove_items_marks_dirty(self, tmp_path):
+        from app.viewmodels.main_vm import MainVM
+
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[_rec("/a.jpg")])]
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.remove_items_from_list([{"type": "file", "path": "/a.jpg"}])
+        assert handler.is_dirty() is True
+
+    def test_remove_from_toolbar_marks_dirty(self, tmp_path):
+        from app.viewmodels.main_vm import MainVM
+
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[_rec("/a.jpg")])]
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.remove_from_list_toolbar([{"type": "file", "path": "/a.jpg"}])
+        assert handler.is_dirty() is True
+
+    def test_silent_save_clears_dirty(self, tmp_path):
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        handler.set_decision([{"type": "file", "path": "/a.jpg"}], "delete")
+        assert handler.is_dirty() is True
+
+        ok = handler.save_manifest_decisions_silent()
+        assert ok is True
+        assert handler.is_dirty() is False
+
+    def test_silent_save_returns_false_when_no_manifest(self):
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        h = FileOperationsHandler(
+            vm=MagicMock(), settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        # No manifest_path → can't save anywhere; returns False, leaves
+        # dirty alone (caller decides whether to abort the close).
+        h._mark_dirty()
+        assert h.save_manifest_decisions_silent() is False
+        assert h.is_dirty() is True
+
+    def test_manifest_load_clears_dirty(self, tmp_path):
+        from app.viewmodels.main_vm import MainVM
+
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[_rec("/a.jpg")])]
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        # Simulate prior in-session changes.
+        handler._mark_dirty()
+        assert handler.is_dirty() is True
+
+        # _on_manifest_loaded resets vm.groups and the dirty flag.
+        handler._on_manifest_loaded([], "/some/new/path.sqlite")
+        assert handler.is_dirty() is False
+
+    def test_full_save_clears_dirty(self, tmp_path):
+        """The interactive Save Manifest Decisions… path also marks
+        clean on success (via the existing save_manifest_decisions
+        method). Using mock for the QFileDialog so the test runs
+        offscreen."""
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        handler._mark_dirty()
+
+        save_path = str(tmp_path / "saved.sqlite")
+        with patch(
+            "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+            return_value=(save_path, ""),
+        ):
+            handler.save_manifest_decisions()
+        assert handler.is_dirty() is False

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 from loguru import logger
 
 from app.views.components.status_messages import pluralize, report_count, t_pluralize
+from app.views.constants import REMOVE_FROM_LIST_DECISION, REMOVE_FROM_LIST_SENTINEL
 from infrastructure.i18n import t
 
 # Single source of truth for the QFileDialog filter string used wherever
@@ -87,6 +88,23 @@ class FileOperationsHandler:
         self.status_reporter = status_reporter
         self.checked_paths_provider = checked_paths_provider
         self.highlighted_items_provider = highlighted_items_provider
+        # Dirty since last load / save / execute. Decisions auto-persist
+        # to SQLite, so leaving the app without an explicit Save isn't
+        # a data-loss risk; the dirty flag is purely a UX cue for the
+        # exit prompt. Cleared on import, save_silent, save, and
+        # successful execute.
+        self._is_dirty: bool = False
+
+    def is_dirty(self) -> bool:
+        """Return True if decisions have been set / changed since the
+        last load / save / execute."""
+        return self._is_dirty
+
+    def _mark_dirty(self) -> None:
+        self._is_dirty = True
+
+    def _mark_clean(self) -> None:
+        self._is_dirty = False
 
     def import_manifest(self) -> None:
         """Open a migration_manifest.sqlite in a background worker (non-blocking)."""
@@ -126,6 +144,8 @@ class FileOperationsHandler:
         self.ui_updater.show_group_counts(self.vm.group_count)
         self.ui_updater.show_groups_summary(groups)
         self._set_manifest_actions_enabled(True)
+        # Fresh load — no in-session edits yet.
+        self._mark_clean()
 
         n_groups = self.vm.group_count
         n_items = sum(len(g.items) for g in groups)
@@ -152,6 +172,28 @@ class FileOperationsHandler:
             self.parent.menu_controller.set_manifest_actions(enabled)
         except AttributeError:
             pass
+
+    def save_manifest_decisions_silent(self) -> bool:
+        """Persist current decisions to the loaded manifest path with no
+        file picker.
+
+        Used by the exit-prompt's "Save & leave" branch — the user
+        already chose to save, no need to show another modal asking
+        where. Returns True on success, False if there's no manifest
+        loaded or the save raised. Failure leaves dirty=True so the
+        caller can decide whether to abort the close.
+        """
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            return False
+        try:
+            from infrastructure.manifest_repository import ManifestRepository
+            ManifestRepository().save(manifest_path, self.vm.groups)
+            self._mark_clean()
+            return True
+        except Exception as ex:
+            logger.exception("Silent manifest save failed: {}", ex)
+            return False
 
     def save_manifest_decisions(self) -> None:
         """Export current decisions to a (possibly new) manifest file."""
@@ -206,6 +248,7 @@ class FileOperationsHandler:
                 t("status.noun_decision_singular"),
                 plural=t("status.noun_decision_plural"),
             )
+            self._mark_clean()
 
         except Exception as ex:
             logger.exception("Save manifest failed: {}", ex)
@@ -237,6 +280,7 @@ class FileOperationsHandler:
 
                 self.ui_updater.refresh_tree(self.vm.groups)
                 self._sync_removed_to_db(paths_for_db)
+                self._mark_dirty()
                 report_count(
                     self.status_reporter,
                     t("status.verb_removed"),
@@ -290,6 +334,7 @@ class FileOperationsHandler:
 
             self.ui_updater.refresh_tree(self.vm.groups)
             self._sync_removed_to_db(paths_for_db)
+            self._mark_dirty()
 
             total_removed = len(file_paths) + len(group_numbers)
             report_count(
@@ -338,6 +383,7 @@ class FileOperationsHandler:
         if batch:
             from infrastructure.manifest_repository import ManifestRepository
             ManifestRepository().batch_update_decisions(manifest_path, batch)
+            self._mark_dirty()
         self.ui_updater.refresh_tree(self.vm.groups)
         self.status_reporter.show_status(
             t("file_op.decision_set_status", decision=new_decision)
@@ -371,12 +417,17 @@ class FileOperationsHandler:
         self.set_decision(file_items, new_decision)
 
     def set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
-        """Find all file rows where field matches regex and set their user_decision.
+        """Find all file rows where field matches regex and route by action.
 
         Args:
             field: Field name (e.g. "File Name", "Folder", "Action").
             pattern: Regex pattern (case-insensitive).
-            new_decision: Value to write — "delete" or "" (clears any existing decision).
+            new_decision: ``"delete"`` / ``""`` set the corresponding
+                user_decision; the sentinel
+                :data:`REMOVE_FROM_LIST_SENTINEL` removes the matched
+                rows from the review list (and the manifest's review-set)
+                instead — that path prompts when the match count crosses
+                ``REMOVE_FROM_LIST_CONFIRM_THRESHOLD``.
         """
         import re as _re
 
@@ -410,6 +461,15 @@ class FileOperationsHandler:
             )
             return
 
+        if new_decision == REMOVE_FROM_LIST_SENTINEL:
+            # Bulk regex remove behaves like bulk regex delete/keep:
+            # the matched rows get a decision attached
+            # (REMOVE_FROM_LIST_DECISION), shown in the Action column,
+            # and committed only when the user clicks Execute Action.
+            # Single-row right-click stays immediate — see
+            # ExecuteActionDialog._set_decision.
+            new_decision = REMOVE_FROM_LIST_DECISION
+
         self.set_decision(matching, new_decision)
 
     def execute_action(self) -> None:
@@ -424,9 +484,25 @@ class FileOperationsHandler:
             return
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         dlg = ExecuteActionDialog(self.vm.groups, manifest_path, self.parent)
-        if dlg.exec() == QDialog.Accepted:
+        accepted = dlg.exec() == QDialog.Accepted
+        # When the user removed rows via the immediate single-row
+        # right-click (which mutates self._groups in place — an alias
+        # of vm.groups), the main tree must re-render even if the
+        # dialog was rejected. The deferred-remove path is committed
+        # only via Execute (accepted=True branch below), so it doesn't
+        # affect this path.
+        if dlg.removed_from_list_paths and not accepted:
+            self.ui_updater.refresh_tree(self.vm.groups)
+        if accepted:
             if dlg.deleted_paths:
                 self.vm.remove_deleted_and_prune(dlg.deleted_paths, prune_singles=False)
+            if dlg.removed_from_list_paths:
+                # Deferred-remove paths are still in vm.groups (we set
+                # user_decision but didn't drop them in-place). Drop
+                # them now so they vanish from the main tree.
+                # Immediate-path entries are already gone — vm.remove_from_list
+                # filters by path, so duplicates are harmless.
+                self.vm.remove_from_list(dlg.removed_from_list_paths)
             self.ui_updater.refresh_tree(self.vm.groups)
             total = len(dlg.deleted_paths) + len(dlg.executed_paths)
             report_count(
@@ -436,3 +512,7 @@ class FileOperationsHandler:
                 t("status.noun_action_singular"),
                 plural=t("status.noun_action_plural"),
             )
+            # Execute is the canonical "commit" — decisions have been
+            # applied to disk (or to the review list); no need to nag
+            # the user about saving on the way out.
+            self._mark_clean()

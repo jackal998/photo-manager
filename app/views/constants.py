@@ -53,14 +53,43 @@ def headers() -> list[str]:
     ]
 
 
-def settable_decisions() -> list[tuple[str, str]]:
+# Sentinel emitted by the regex / right-click dispatch when the user
+# picks "remove from list". The receiving handler routes the sentinel
+# differently depending on context:
+#   * single-row right-click in the execute dialog → IMMEDIATE
+#     (set + execute together, with confirmation), the row vanishes
+#     and the manifest is updated.
+#   * regex bulk path → DEFERRED, mirroring the delete/keep UX:
+#     each matched row's user_decision is set to
+#     :data:`REMOVE_FROM_LIST_DECISION` and the user reviews + commits
+#     via the execute action dialog.
+REMOVE_FROM_LIST_SENTINEL: str = "__remove_from_list__"
+
+# Stored user_decision value for the deferred remove-from-list flow.
+# Persisted to SQLite alongside the existing "" / "delete" / "keep"
+# values, displayed in the Action column via a localised label, and
+# applied at execute time (mark removed in the manifest, drop from vm).
+REMOVE_FROM_LIST_DECISION: str = "remove_from_list"
+
+
+def settable_decisions(include_remove: bool = False) -> list[tuple[str, str]]:
     """User-settable decision options for context menus and ActionDialog.
 
     Each tuple is ``(display_label, stored_value)``. The stored value is
     internal (``"delete"`` or empty string for "keep — remove action");
     only the label is translated.
+
+    When ``include_remove`` is True, appends a third entry whose stored
+    value is :data:`REMOVE_FROM_LIST_SENTINEL`. Callers that recognise
+    the sentinel route to the remove-from-list backend instead of the
+    decision-update path. Default is False so the main-window
+    right-click submenu (which has a separate top-level "Remove from
+    List" item) doesn't gain a duplicate entry.
     """
-    return [
+    decisions: list[tuple[str, str]] = [
         (t("decision.delete"), "delete"),
         (t("decision.keep"), ""),
     ]
+    if include_remove:
+        decisions.append((t("decision.remove_from_list"), REMOVE_FROM_LIST_SENTINEL))
+    return decisions

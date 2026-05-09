@@ -85,6 +85,7 @@ tree:
 decision:
   delete: "delete"
   keep: "keep (remove action)"
+  remove_from_list: "remove from list"
 
 # ScanDialog and its inner panels.
 scan_dialog:
@@ -192,6 +193,16 @@ file_op:
   execute_no_manifest_body: "No manifest loaded."
   set_action_internal_error_title: "Set Action — Internal Error"
   set_action_internal_error_body: "Action dialog not available."
+  remove_confirm_title: "Remove from List"
+  remove_confirm_body: "Remove {count} item(s) from the list?\n\nThis only updates the manifest — no files on disk are touched. Removed rows will not appear in the review tree until you re-scan."
+
+# Exit prompt fired when there are unsaved decisions.
+exit:
+  confirm_title: "Unsaved Changes"
+  confirm_body: "You have decisions that haven't been explicitly saved.\n\nDecisions auto-persist to the loaded manifest, so leaving is safe — but you might want to save first if you intend to keep this manifest as a separate file."
+  button_save_leave: "Save && leave"
+  button_leave: "Leave"
+  button_back: "Back"
 
 # Language switch confirmation — fires before the live window rebuild.
 language:

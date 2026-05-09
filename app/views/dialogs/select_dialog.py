@@ -92,7 +92,11 @@ class ActionDialog(QDialog):
         action_row = QHBoxLayout()
         action_row.addWidget(QLabel(t("action_dialog.set_action_label")))
         self._action_combo = QComboBox()
-        self._decisions = settable_decisions()
+        # include_remove=True surfaces "remove from list" alongside the
+        # decision options. The receiving handler routes the sentinel
+        # value to the remove-from-review backend instead of the
+        # user_decision update path.
+        self._decisions = settable_decisions(include_remove=True)
         for label, _value in self._decisions:
             self._action_combo.addItem(label)
         action_row.addWidget(self._action_combo)

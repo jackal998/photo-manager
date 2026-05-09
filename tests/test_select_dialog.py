@@ -113,12 +113,25 @@ class TestSettableDecisionOptions:
         assert keep_entry is not None
         assert keep_entry[1] == ""
 
-    def test_action_combo_count_matches_settable_decisions(self, qapp):
+    def test_action_combo_count_matches_settable_decisions_with_remove(self, qapp):
+        """The regex dropdown surfaces all three actions:
+        delete, keep, and the new "remove from list" sentinel.
+        That's settable_decisions(include_remove=True), not the default."""
         from app.views.constants import settable_decisions
-        SETTABLE_DECISIONS = settable_decisions()
+        SETTABLE_DECISIONS_WITH_REMOVE = settable_decisions(include_remove=True)
         from app.views.dialogs.select_dialog import ActionDialog
         dlg = ActionDialog(fields=["File Name"])
-        assert dlg._action_combo.count() == len(SETTABLE_DECISIONS)
+        assert dlg._action_combo.count() == len(SETTABLE_DECISIONS_WITH_REMOVE)
+
+    def test_action_combo_includes_remove_option(self, qapp):
+        """Specifically verify the remove sentinel is reachable from the
+        dropdown — that's the whole point of include_remove=True here."""
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.dialogs.select_dialog import ActionDialog
+        dlg = ActionDialog(fields=["File Name"])
+        # _decisions stores the (label, value) pairs the dropdown emits.
+        values = [v for _, v in dlg._decisions]
+        assert REMOVE_FROM_LIST_SENTINEL in values
 
 
 class TestBackwardCompatAlias:

@@ -48,6 +48,40 @@ class TestSettableDecisions:
         values = {v for _, v in _SETTABLE_DECISIONS}
         assert not scanner_actions.intersection(values)
 
+    def test_default_excludes_remove_from_list(self):
+        """Default settable_decisions() must NOT include the remove option.
+
+        The main-window right-click submenu uses the default. It already
+        has a top-level "Remove from List" peer; adding remove inside
+        the Set Action submenu would duplicate.
+        """
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL, settable_decisions
+        values = {v for _, v in settable_decisions()}
+        assert REMOVE_FROM_LIST_SENTINEL not in values
+
+    def test_include_remove_appends_remove_entry(self):
+        """include_remove=True surfaces 'remove from list' with the
+        sentinel value, used by the regex dropdown and the
+        execute-action right-click menu."""
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL, settable_decisions
+        with_remove = settable_decisions(include_remove=True)
+        # Same first two entries.
+        assert [v for _, v in with_remove[:2]] == ["delete", ""]
+        # Third entry is the remove sentinel with a non-empty label.
+        label, value = with_remove[2]
+        assert value == REMOVE_FROM_LIST_SENTINEL
+        assert label  # translatable; just non-empty here
+
+    def test_remove_sentinel_is_distinct_from_real_decisions(self):
+        """The sentinel must not collide with any real user_decision
+        value (today: '' / 'delete'). If a future decision value
+        accidentally matches, this test catches it before the regex
+        dispatcher silently routes wrong."""
+        from app.views.constants import REMOVE_FROM_LIST_SENTINEL, settable_decisions
+        real_values = {v for _, v in settable_decisions()}
+        assert REMOVE_FROM_LIST_SENTINEL not in real_values
+
+
 class TestActionHandlersProtocol:
     def test_protocol_has_set_decision(self):
         from app.views.handlers.context_menu import ActionHandlers
