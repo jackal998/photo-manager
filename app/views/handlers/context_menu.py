@@ -10,8 +10,9 @@ from PySide6.QtCore import QPoint, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMenu, QTreeView
 
-from app.views.constants import SETTABLE_DECISIONS as _SETTABLE_DECISIONS
+from app.views.constants import settable_decisions
 from app.views.media_utils import normalize_windows_path
+from infrastructure.i18n import t
 
 
 class ActionHandlers(Protocol):
@@ -82,8 +83,8 @@ class ContextMenuHandler:
     ) -> None:
         if item["type"] == "file":
             # Set Action submenu
-            set_action_menu = menu.addMenu("Set Action")
-            for label, value in _SETTABLE_DECISIONS:
+            set_action_menu = menu.addMenu(t("context_menu.set_action"))
+            for label, value in settable_decisions():
                 a = set_action_menu.addAction(label)
                 a.triggered.connect(
                     lambda checked=False, _v=value, _item=item:
@@ -91,7 +92,7 @@ class ContextMenuHandler:
                 )
 
             # Open Folder action
-            open_folder_action = menu.addAction("Open Folder")
+            open_folder_action = menu.addAction(t("context_menu.open_folder"))
 
             def _open_folder(checked: bool = False, path: str = item.get("path", "")) -> None:
                 try:
@@ -123,19 +124,19 @@ class ContextMenuHandler:
 
         # Common actions for single selection
         menu.addSeparator()
-        action_dialog_action = menu.addAction("Set Action by Field/Regex…")
+        action_dialog_action = menu.addAction(t("context_menu.set_action_by_regex"))
         action_dialog_action.triggered.connect(
             lambda: self.handlers.show_action_dialog(clicked_col=clicked_col)
         )
 
-        remove_action = menu.addAction("Remove from List")
+        remove_action = menu.addAction(t("context_menu.remove_from_list"))
         remove_action.triggered.connect(lambda: self.handlers.remove_items_from_list([item]))
 
     def _create_multi_selection_menu(self, menu: QMenu, selected_items: list[dict]) -> None:
         # Set Action submenu — only applies to file-type items
-        set_action_menu = menu.addMenu("Set Action")
+        set_action_menu = menu.addMenu(t("context_menu.set_action"))
         file_items = [it for it in selected_items if it.get("type") == "file"]
-        for label, value in _SETTABLE_DECISIONS:
+        for label, value in settable_decisions():
             a = set_action_menu.addAction(label)
             a.triggered.connect(
                 lambda checked=False, _v=value, _items=file_items:
@@ -143,7 +144,7 @@ class ContextMenuHandler:
             )
 
         menu.addSeparator()
-        remove_action = menu.addAction("Remove from List")
+        remove_action = menu.addAction(t("context_menu.remove_from_list"))
         remove_action.triggered.connect(
             lambda: self.handlers.remove_items_from_list(selected_items)
         )

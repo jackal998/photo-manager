@@ -4,13 +4,14 @@ import os
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTranslator
 from PySide6.QtGui import QImageReader
 from PySide6.QtWidgets import QApplication
 from loguru import logger
 
 from app.viewmodels.main_vm import MainVM
 from app.views.main_window import MainWindow
+from infrastructure.i18n import init_translator
 from infrastructure.image_service import ImageService
 from infrastructure.logging import init_logging
 from infrastructure.settings import JsonSettings
@@ -37,6 +38,57 @@ def _parse_default_sort(settings: JsonSettings) -> list[tuple[str, bool]]:
     return result
 
 
+def install_locale_translators(app: QApplication, settings: JsonSettings) -> None:
+    """Initialize the YAML catalog + Qt's bundled translator for the
+    locale stored at ``settings.ui.locale``.
+
+    Called at startup AND on live language switch. The Qt translator
+    setup is idempotent: any previously-installed QTranslator children
+    of ``app`` are removed before installing the new one, so calling
+    this twice doesn't accumulate stale translators.
+    """
+    locale = settings.get("ui.locale", "en") or "en"
+    init_translator(locale, BASE_DIR / "translations")
+
+    # Remove any QTranslator we previously installed on the app.
+    # PySide6 sets the parent of an installed translator to the app,
+    # so findChildren picks them up. Removing then deleting avoids
+    # leaks across switches.
+    for old in app.findChildren(QTranslator):
+        app.removeTranslator(old)
+        old.deleteLater()
+
+    qt_translator = QTranslator(app)
+    qt_locale_code = locale.replace("_", "-")
+    if qt_translator.load(
+        QLocale(qt_locale_code),
+        "qtbase",
+        "_",
+        QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath),
+    ):
+        app.installTranslator(qt_translator)
+
+
+def make_main_window(
+    vm: MainVM,
+    image_service: ImageService,
+    settings: JsonSettings,
+) -> MainWindow:
+    """Build a fresh MainWindow with the current locale and a populated tree.
+
+    Shared between startup and the live-language-switch path. The
+    Translator must already be initialized (call
+    ``install_locale_translators`` first); construction-time ``t()``
+    calls bake in the active locale.
+    """
+    from infrastructure.i18n import t
+
+    win = MainWindow(vm=vm, image_service=image_service, settings=settings)
+    win.refresh_tree(vm.groups)
+    win.statusBar().showMessage(t("main_window.status_ready"), 2000)
+    return win
+
+
 def main() -> int:
     init_logging()
     settings = JsonSettings(CONFIG_HOME / "settings.json")
@@ -51,6 +103,11 @@ def main() -> int:
         QApplication.setAttribute(Qt.AA_DontUseNativeDialogs)
 
     app = QApplication(sys.argv)
+
+    # Initialize translation catalogs (YAML + Qt's bundled qtbase_*.qm)
+    # for the persisted ui.locale. Same helper used by the live
+    # language switch.
+    install_locale_translators(app, settings)
 
     img = ImageService(settings)
     default_sort = _parse_default_sort(settings)
@@ -130,9 +187,7 @@ def main() -> int:
     except Exception as ex:
         logger.info("HEIC diagnostics skipped due to exception: {}", ex)
 
-    win = MainWindow(vm=vm, image_service=img, settings=settings)
-    win.refresh_tree(vm.groups)
-    win.statusBar().showMessage("Ready", 2000)
+    win = make_main_window(vm, img, settings)
     win.show()
 
     return app.exec()

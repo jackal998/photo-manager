@@ -16,10 +16,11 @@ from app.views.constants import (
     COL_RESOLUTION,
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
-    HEADERS,
     PATH_ROLE,
     SORT_ROLE,
+    headers,
 )
+from infrastructure.i18n import t
 
 # Numeric sort priorities — lower value = sorted first (ascending).
 #
@@ -48,7 +49,7 @@ _DECISION_SORT: dict[str, int] = {
 def _hamming_to_pct(hamming: int | None) -> str:
     """Convert pHash Hamming distance to a similarity percentage string."""
     if hamming is None:
-        return "~dup"
+        return t("tree.similarity_near_dup")
     return f"{round((64 - hamming) / 64 * 100)}%"
 
 
@@ -62,7 +63,7 @@ def _file_similarity(action: str, record: object) -> str:
         return "100%"
     if action == "REVIEW_DUPLICATE":
         return _hamming_to_pct(getattr(record, "hamming_distance", None))
-    return "Ref"
+    return t("tree.similarity_ref")
 
 
 def build_model(
@@ -73,14 +74,14 @@ def build_model(
     Returns (model, proxy). Proxy can be None on failure.
     """
     model = QStandardItemModel()
-    model.setHorizontalHeaderLabels(HEADERS)
+    model.setHorizontalHeaderLabels(headers())
 
     for g in groups:
         group_number = int(getattr(g, "group_number", 0) or 0)
         items_list = getattr(g, "items", []) or []
 
         # Col 0 at group row: "Group N" label
-        group_item = QStandardItem(f"Group {group_number}")
+        group_item = QStandardItem(t("tree.group_label", n=group_number))
         group_item.setEditable(False)
 
         group_count_val = len(items_list)

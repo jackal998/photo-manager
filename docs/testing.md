@@ -89,6 +89,7 @@ calls out what would be uncaught even with a green CI.
 |---|---|---|---|---|
 | `infrastructure/manifest_repository.py` | 99% | — | every scenario | very low |
 | `infrastructure/settings.py` | 100% | — | every scenario | none |
+| `infrastructure/i18n.py` | 90% | — | s22 (language switch + restart prompt + locale persistence) | low — uncovered branches are defensive `except (OSError, yaml.YAMLError)` paths in `available_locales()` and a couple of guards. The `test_zh_tw_has_every_key_present_in_english` test pins parity between the en and zh_TW catalogs at PR time, so a missing translation never ships silently. |
 | `infrastructure/delete_service.py` | 93% | spot-add only | s13 (planned per #80) covers happy-path real send2trash | recycle-bin behavior on networked drives untested; error paths exercised via mocks. Spot-add a layer-2 test for specific bug cases (locked file, network drive, permission denied). |
 | `infrastructure/utils.py` | 89% | spot-add only | s08 (real EXIF on real fixtures) | DNG fallback only mocked. If a real DNG ever returns metadata in a shape we don't anticipate, that's the moment to add a layer-2 spot-test pinning the parse. |
 | `infrastructure/image_service.py` | **omit** | depends on running `QApplication` for image decode | s01, s05 | full responsibility on layer 3 |
@@ -165,25 +166,30 @@ Three triggers, three test homes:
 
 ## Changing UI labels (and not breaking the QA batch)
 
-The qa-explore drivers couple to app/ source via three surfaces:
-**`qa/scenarios/_uia.py` constants** (button titles, dialog titles,
-menu items), **`qa/scenarios/_invariants.py`'s menu-item table**
-(hardcoded menu labels for the manifest-action invariant), and
-**inline strings inside individual scenario files** (status-bar regex,
-dialog body substrings).
+User-facing strings live in `translations/<locale>.yml` (the i18n
+catalog), not in Python literals. The qa-explore drivers couple to
+those English values via three surfaces: **`qa/scenarios/_uia.py`
+constants** (button titles, dialog titles, menu items),
+**`qa/scenarios/_invariants.py`'s menu-item table** (hardcoded menu
+labels for the manifest-action invariant), and **inline strings inside
+individual scenario files** (status-bar regex, dialog body
+substrings).
 
-When you rename a button or change a dialog title in `app/`:
+When you rename a button or change a dialog title:
 
-1. Grep `qa/` for the old string (`grep -rn "Old Label" qa/`). That's
+1. **Update `translations/en.yml`** — that's the single source of
+   truth for what the app shows.
+2. **Update every other `translations/*.yml`** with the matching
+   value (or accept that older locales temporarily fall back to
+   English until a translator catches up).
+3. Grep `qa/` for the old string (`grep -rn "Old Label" qa/`). That's
    your blast radius. Update every match.
-2. Run the affected scenario(s) targeted: `python -m
+4. Run the affected scenario(s) targeted: `python -m
    qa.scenarios._batch sNN_xyz` — fast iteration vs. the full batch.
-3. If you forget step 1, [`tests/test_uia_label_coupling.py`](../tests/test_uia_label_coupling.py)
-   catches it at PR time. The test verifies every user-facing label
-   constant in `_uia.py` and every hardcoded label in `_invariants.py`
-   still appears somewhere in `app/*.py`. It runs in CI as a regular
-   pytest, so a stale `_uia.py` constant fails the test that gates
-   the merge.
+5. If you forget steps 1–3, [`tests/test_uia_label_coupling.py`](../tests/test_uia_label_coupling.py)
+   catches it at PR time. The test scans `app/*.py` AND every
+   `translations/*.yml` for each user-facing label constant in
+   `_uia.py`, so a stale constant fails CI.
 
 **What the lint test does NOT catch:**
 

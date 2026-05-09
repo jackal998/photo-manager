@@ -13,7 +13,29 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.views.constants import SETTABLE_DECISIONS as _SETTABLE_DECISIONS
+from app.views.constants import settable_decisions
+from infrastructure.i18n import t
+
+# Maps the internal English field name (used as the lookup key in
+# regex matching and column dispatch) to its column.* translation key.
+# The dialog displays the translated label but emits the English name
+# in setActionRequested so downstream regex matchers stay locale-free.
+_FIELD_LABEL_KEYS: dict[str, str] = {
+    "Similarity":    "column.similarity",
+    "Action":        "column.action",
+    "File Name":     "column.file_name",
+    "Folder":        "column.folder",
+    "Size (Bytes)":  "column.size_bytes",
+    "Group Count":   "column.group_count",
+    "Creation Date": "column.creation_date",
+    "Shot Date":     "column.shot_date",
+}
+
+
+def _field_display(name: str) -> str:
+    """Return the localized label for an internal field name."""
+    key = _FIELD_LABEL_KEYS.get(name)
+    return t(key) if key else name
 
 
 class ActionDialog(QDialog):
@@ -34,7 +56,7 @@ class ActionDialog(QDialog):
         initial_field: str | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Set Action by Field/Regex")
+        self.setWindowTitle(t("action_dialog.title"))
         # #139 — explicit ApplicationModal so OS-level click events on
         # the parent (e.g. main window menu bar) are blocked while this
         # dialog is up. QDialog.exec() alone doesn't do this; see the
@@ -46,43 +68,42 @@ class ActionDialog(QDialog):
         root = QVBoxLayout(self)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("Field"))
+        row.addWidget(QLabel(t("action_dialog.field_label")))
         self.combo = QComboBox()
-        self.combo.addItems(self._fields)
+        # Display localized label; carry the English internal name as
+        # itemData so currentField() always returns the lookup key.
+        for fname in self._fields:
+            self.combo.addItem(_field_display(fname), userData=fname)
         row.addWidget(self.combo)
         root.addLayout(row)
 
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Regex"))
+        row2.addWidget(QLabel(t("action_dialog.regex_label")))
         self.regex = QLineEdit()
-        self.regex.setPlaceholderText("e.g. .*\\iPhone\\2023\\02\\.*")
+        self.regex.setPlaceholderText(t("action_dialog.regex_placeholder"))
         row2.addWidget(self.regex)
         root.addLayout(row2)
 
-        tips = QLabel(
-            "Regex tips:\n"
-            "  Exact match: ^text$     Any substring: .*     Digits: \\d+\n"
-            "  Examples:  ^IMG_\\d+\\.HEIC$  (File Name),  ^delete$  (Action),\n"
-            "             ^exact$  (Similarity),  ^H:\\\\Photos\\\\2023\\\\  (Folder)"
-        )
+        tips = QLabel(t("action_dialog.regex_tips"))
         tips.setWordWrap(True)
         root.addWidget(tips)
 
         # ── Set Action ─────────────────────────────────────────────────────
         action_row = QHBoxLayout()
-        action_row.addWidget(QLabel("Set Action:"))
+        action_row.addWidget(QLabel(t("action_dialog.set_action_label")))
         self._action_combo = QComboBox()
-        for label, _value in _SETTABLE_DECISIONS:
+        self._decisions = settable_decisions()
+        for label, _value in self._decisions:
             self._action_combo.addItem(label)
         action_row.addWidget(self._action_combo)
-        self._btn_set_action = QPushButton("Apply")
+        self._btn_set_action = QPushButton(t("action_dialog.apply_button"))
         action_row.addWidget(self._btn_set_action)
         action_row.addStretch(1)
         root.addLayout(action_row)
 
         # ── Close ──────────────────────────────────────────────────────────
         close_row = QHBoxLayout()
-        self.btn_close = QPushButton("Close")
+        self.btn_close = QPushButton(t("action_dialog.close_button"))
         close_row.addStretch(1)
         close_row.addWidget(self.btn_close)
         root.addLayout(close_row)
@@ -90,33 +111,38 @@ class ActionDialog(QDialog):
         self.btn_close.clicked.connect(self.accept)
         self._btn_set_action.clicked.connect(self._emit_set_action)
 
-        if initial_field and self.combo.findText(initial_field) >= 0:
+        if initial_field and self.combo.findData(initial_field) >= 0:
             self._set_default_field(initial_field)
         else:
             self._set_default_field("File Name")
-        self.combo.currentTextChanged.connect(self._on_field_changed)
+        self.combo.currentIndexChanged.connect(self._on_field_changed)
         self._apply_exact_regex_for_current_field()
 
+    def _current_field(self) -> str:
+        """Return the active English field name (lookup key, not the displayed label)."""
+        data = self.combo.currentData()
+        return str(data) if data is not None else self.combo.currentText()
+
     def _emit_set_action(self) -> None:
-        field = self.combo.currentText()
+        field = self._current_field()
         pattern = self.regex.text()
         idx = self._action_combo.currentIndex()
-        _label, value = _SETTABLE_DECISIONS[idx]
+        _label, value = self._decisions[idx]
         self.setActionRequested.emit(field, pattern, value)
 
     def _set_default_field(self, field_name: str) -> None:
         try:
-            idx = self.combo.findText(field_name)
+            idx = self.combo.findData(field_name)
             if idx >= 0:
                 self.combo.setCurrentIndex(idx)
         except Exception:
             pass
 
-    def _on_field_changed(self, _text: str) -> None:
+    def _on_field_changed(self, _index: int) -> None:
         self._apply_exact_regex_for_current_field()
 
     def _apply_exact_regex_for_current_field(self) -> None:
-        field = self.combo.currentText()
+        field = self._current_field()
         value = self._row_values.get(field, "")
         if value:
             import re as _re

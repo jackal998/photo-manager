@@ -107,13 +107,15 @@ class TestSettableDecisionOptions:
 
     def test_keep_remove_action_value_is_empty_string(self, qapp):
         """The internal value for the keep entry must be '' not 'keep'."""
-        from app.views.constants import SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        SETTABLE_DECISIONS = settable_decisions()
         keep_entry = next((t for t in SETTABLE_DECISIONS if "keep" in t[0].lower()), None)
         assert keep_entry is not None
         assert keep_entry[1] == ""
 
     def test_action_combo_count_matches_settable_decisions(self, qapp):
-        from app.views.constants import SETTABLE_DECISIONS
+        from app.views.constants import settable_decisions
+        SETTABLE_DECISIONS = settable_decisions()
         from app.views.dialogs.select_dialog import ActionDialog
         dlg = ActionDialog(fields=["File Name"])
         assert dlg._action_combo.count() == len(SETTABLE_DECISIONS)

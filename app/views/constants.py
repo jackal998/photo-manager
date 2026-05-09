@@ -6,19 +6,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
-# Column headers and indices
-HEADERS: list[str] = [
-    "Similarity",
-    "Action",
-    "File Name",
-    "Folder",
-    "Size (Bytes)",
-    "Group Count",
-    "Creation Date",
-    "Shot Date",
-    "Resolution",
-]
+from infrastructure.i18n import t
 
+# Column indices stay as integer constants — they're not user-facing.
 COL_GROUP: int = 0
 COL_ACTION: int = 1
 COL_NAME: int = 2
@@ -43,10 +33,34 @@ GRID_SPACING_PX: int = 4
 GRID_MARGIN_RATIO: float = 0.05  # left/right and top/bottom
 
 
-# User-settable decision options used by context menus and ActionDialog.
-# Each tuple is (display_label, stored_value).  "keep (remove action)" stores ""
-# (empty) — undecided is the natural no-op; the label clarifies intent to the user.
-SETTABLE_DECISIONS: list[tuple[str, str]] = [
-    ("delete",               "delete"),
-    ("keep (remove action)", ""),
-]
+def headers() -> list[str]:
+    """Column header labels resolved against the active locale.
+
+    Lazy: each call re-reads the catalog so language changes (after a
+    restart) take effect even if this module was imported before
+    ``init_translator``.
+    """
+    return [
+        t("column.similarity"),
+        t("column.action"),
+        t("column.file_name"),
+        t("column.folder"),
+        t("column.size_bytes"),
+        t("column.group_count"),
+        t("column.creation_date"),
+        t("column.shot_date"),
+        t("column.resolution"),
+    ]
+
+
+def settable_decisions() -> list[tuple[str, str]]:
+    """User-settable decision options for context menus and ActionDialog.
+
+    Each tuple is ``(display_label, stored_value)``. The stored value is
+    internal (``"delete"`` or empty string for "keep — remove action");
+    only the label is translated.
+    """
+    return [
+        (t("decision.delete"), "delete"),
+        (t("decision.keep"), ""),
+    ]

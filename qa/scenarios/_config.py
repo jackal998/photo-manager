@@ -46,6 +46,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     "s19_context_menu_open_folder": ["qa/sandbox/near-duplicates"],
     "s20_multi_remove_from_list":   ["qa/sandbox/near-duplicates", "qa/sandbox/format-dup"],
     "s21_list_menu_remove":         ["qa/sandbox/near-duplicates"],
+    # s22 — View → Language switch persists ui.locale and prompts for restart.
+    # Driver does no scanning; empty source list is fine. Driver MUST restore
+    # ui.locale=en before exiting (see scenario docstring) so subsequent
+    # scenarios in the batch don't launch in 繁體中文.
+    "s22_language_switch":          [],
     # s23 (#122) — scan dialog settings round-trip across app restart.
     # Split into two scenarios so the cross-launch boundary is an
     # explicit batch step. s23a writes via GUI; s23b launches fresh

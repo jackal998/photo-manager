@@ -1,0 +1,217 @@
+# photo-manager — 繁體中文 (Traditional Chinese, Taiwan).
+#
+# Source of truth: translations/en.yml. Keep keys identical.
+# Conventions follow Taiwan Mandarin: 檔案 (file), 資料夾 (folder),
+# 掃描 (scan), 縮圖 (thumbnail), 設定 (settings), 預覽 (preview).
+
+_meta:
+  display_name: 繁體中文
+  locale: zh_TW
+
+menu:
+  file:
+    title: "檔案(&F)"
+    scan_sources: "掃描來源…"
+    open_manifest: "開啟清單檔…"
+    save_manifest: "儲存清單決策…"
+    exit: "結束"
+  action:
+    title: "動作(&A)"
+    by_regex: "依欄位/正規式設定動作…"
+    execute: "執行動作…"
+  list:
+    title: "清單(&L)"
+    remove: "從清單移除"
+  log:
+    title: "紀錄(&G)"
+    open_latest: "開啟最新紀錄"
+    open_latest_delete: "開啟最新刪除紀錄"
+    open_directory: "開啟紀錄資料夾"
+    open_delete_directory: "開啟刪除紀錄資料夾"
+  view:
+    title: "檢視(&V)"
+    language:
+      title: "語言"
+
+main_window:
+  title: "Photo Manager"
+  status_ready: "就緒"
+  empty_state: "尚未載入清單檔。\n\n請從「檔案 → 掃描來源…」開始。"
+  status_loaded: "已載入清單:{parts}"
+  load_error_title: "載入清單錯誤"
+  discard_pending_title: "捨棄未儲存的決策?"
+  discard_pending_body: |
+    目前載入的清單上有 {pending} 尚未儲存。
+
+    重新掃描會取代目前的清單。如果掃描輸出路徑與目前清單路徑相同,這些決策將永久從硬碟上消失;否則先前的清單仍會保留在硬碟上,但不再顯示於此視窗。
+
+    若要保留這些決策,請先選擇「檔案 → 儲存清單決策…」。
+
+    確定要重新掃描嗎?
+
+column:
+  similarity: "相似度"
+  action: "動作"
+  file_name: "檔名"
+  folder: "資料夾"
+  size_bytes: "大小 (位元組)"
+  group_count: "群組數量"
+  creation_date: "建立日期"
+  shot_date: "拍攝日期"
+  resolution: "解析度"
+
+tree:
+  group_label: "群組 {n}"
+  similarity_ref: "參考"
+  similarity_near_dup: "~近似"
+
+decision:
+  delete: "刪除"
+  keep: "保留 (取消動作)"
+
+scan_dialog:
+  title: "掃描來源"
+  notice: "唯讀掃描 — 不會搬移或刪除任何檔案。紀錄中的 MOVE / SKIP 僅為預定動作,儲存於清單檔內。"
+  browse_group: "瀏覽來源資料夾:"
+  path_label: "路徑:"
+  path_placeholder: "貼上或輸入絕對資料夾路徑…"
+  add_button: "+ 新增"
+  add_selected_button: "+ 新增所選資料夾"
+  source_list_header: "來源資料夾 (上方優先順序最高):"
+  remove_all: "全部移除"
+  table_col_priority: "#"
+  table_col_path: "路徑"
+  table_col_recursive: "包含子資料夾"
+  tooltip_move_up: "上移 (提高優先順序)"
+  tooltip_move_down: "下移 (降低優先順序)"
+  tooltip_remove: "從清單移除"
+  output_label: "清單檔儲存至:"
+  output_placeholder: "輸出清單路徑 (.sqlite)"
+  browse_button: "瀏覽…"
+  save_dialog_title: "儲存清單為"
+  params_group: "分組參數"
+  phash_label: "<b>pHash 相似度閾值</b> (預設:10,範圍:1–20)"
+  phash_desc: "兩張影像之間的感知雜湊 Hamming 距離。64 位元的 pHash 表示兩張影像最多可相差此位元數,即被視為近似重複。<b>越低 = 越嚴格</b> (群組較少,雜訊較少);<b>越高 = 越寬鬆</b> (可抓到更多輕微編輯過的影像對)。"
+  color_label: "<b>平均色彩閘門</b> (預設:30,範圍:0–100)"
+  color_desc: "兩張影像之間平均 RGB 色彩的 L2 距離。在 pHash 檢查之後,平均色彩差距超過此值的影像將被排除於分組之外 — 用以排除 pHash 假陽性 (DCT 結構相似但色彩不同)。<b>0 = 停用</b>;<b>越高 = 越寬鬆</b>。"
+  log_placeholder: "掃描進度將顯示於此…"
+  start_button: "開始掃描"
+  close_button: "關閉"
+  close_load_button: "關閉並載入"
+  log_starting: "正在開始掃描…"
+  log_error: "\n錯誤:{error}"
+  no_sources_title: "未指定來源"
+  no_sources_body: "請至少新增一個來源資料夾。"
+  no_output_title: "未指定輸出"
+  no_output_body: "請指定清單檔的輸出路徑。"
+  scan_failed_title: "掃描失敗"
+
+execute_dialog:
+  title: "執行動作 — 檢閱"
+  select_button: "依欄位/正規式選擇…"
+  set_action_menu: "設定動作"
+  execute_button: "執行"
+  close_button: "關閉"
+  summary_decided: "<b>{count}</b> 個檔案已設定動作:刪除 {n_delete} 個。在檔案列上按右鍵可變更其決策。"
+  summary_none: "尚未設定任何決策 — 請使用「設定動作」標記要刪除的檔案。"
+  warning_complete_groups: "⚠ 群組 {groups} 將會刪除全部檔案。請在按下「執行」前再次確認下方的決策。"
+  confirm_all_title: "將刪除所有檔案"
+  confirm_all_body: "群組 {groups} 將會刪除其中的每一個檔案。\n\n檔案會被送進資源回收筒。確定要繼續嗎?"
+  no_match_title: "設定動作 — 無相符項目"
+  no_match_body: "沒有檔案符合此正規式。"
+  invalid_regex_title: "正規式錯誤"
+  files_not_found_title: "找不到檔案"
+  files_not_found_body: "下列檔案找不到,已略過:\n\n{missing}{suffix}"
+  files_not_found_more: "\n…以及其餘 {n} 個"
+
+action_dialog:
+  title: "依欄位/正規式設定動作"
+  field_label: "欄位"
+  regex_label: "正規式"
+  regex_placeholder: "例如:.*\\iPhone\\2023\\02\\.*"
+  regex_tips: |
+    正規式提示:
+      完全相符:^text$     任意子字串:.*     數字:\d+
+      範例:  ^IMG_\d+\.HEIC$  (檔名),  ^delete$  (動作),
+             ^exact$  (相似度),  ^H:\\Photos\\2023\\  (資料夾)
+  set_action_label: "設定動作:"
+  apply_button: "套用"
+  close_button: "關閉"
+
+context_menu:
+  set_action: "設定動作"
+  open_folder: "開啟資料夾"
+  set_action_by_regex: "依欄位/正規式設定動作…"
+  remove_from_list: "從清單移除"
+
+file_op:
+  open_manifest_title: "開啟清單檔"
+  opening_status: "正在開啟清單…"
+  open_error_title: "開啟清單錯誤"
+  open_failed_status: "開啟清單失敗"
+  save_no_manifest_title: "儲存清單"
+  save_no_manifest_body: "目前沒有開啟的清單。"
+  save_dialog_title: "儲存清單決策"
+  save_error_title: "儲存清單錯誤"
+  save_failed_status: "儲存清單失敗"
+  remove_title: "從清單移除"
+  remove_no_selection: "尚未選取任何項目。請先選擇要移除的列。"
+  remove_error_title: "移除錯誤"
+  remove_failed_body: "從清單移除失敗:{error}"
+  decision_set_status: "決策已設為「{decision}」"
+  set_action_no_manifest_title: "設定動作 — 未載入清單"
+  set_action_no_manifest_body: "尚未載入清單。"
+  set_action_no_selection_title: "設定動作 — 未選取"
+  set_action_no_selection_body: "未選取任何啟用中的檔案。"
+  set_action_no_match_title: "設定動作 — 無相符項目"
+  set_action_no_match_body: "沒有檔案符合此正規式。"
+  invalid_regex_title: "正規式錯誤"
+  execute_no_manifest_title: "執行動作"
+  execute_no_manifest_body: "尚未載入清單。"
+  set_action_internal_error_title: "設定動作 — 內部錯誤"
+  set_action_internal_error_body: "動作對話框無法使用。"
+
+language:
+  confirm_title: "要切換語言嗎?"
+  confirm_body: "切換語言為 {language}?\n\n視窗將會重新建立 — 已載入的清單與決策會保留,但任何開啟中的對話框將會關閉。"
+
+# 中文沒有單複數變化,因此單複數欄位皆使用相同字串。
+status:
+  verb_removed: "已移除"
+  verb_executed: "已執行"
+  verb_saved: "已儲存"
+  noun_pair_singular: "對"
+  noun_pair_plural: "對"
+  noun_file_singular: "個檔案"
+  noun_file_plural: "個檔案"
+  noun_group_singular: "個群組"
+  noun_group_plural: "個群組"
+  noun_isolated_file_singular: "個獨立檔案"
+  noun_isolated_file_plural: "個獨立檔案"
+  noun_pending_decision_singular: "項待儲存的決策"
+  noun_pending_decision_plural: "項待儲存的決策"
+  noun_decision_singular: "項決策"
+  noun_decision_plural: "項決策"
+  noun_action_singular: "項動作"
+  noun_action_plural: "項動作"
+  noun_item_from_list_singular: "個項目"
+  noun_item_from_list_plural: "個項目"
+  manifest_loaded_pairs: "已開啟清單:可檢閱 {pairs} ({files})"
+
+preview:
+  header: "預覽"
+  placeholder: "(預覽)"
+  loading: "載入中…"
+  failed: "(失敗)"
+  video_unavailable: "找不到視訊檔或無法播放"
+  info_name: "名稱"
+  info_folder: "資料夾"
+  info_size: "大小"
+  info_size_value: "{bytes} 位元組"
+  info_resolution: "解析度"
+  info_created: "建立"
+  info_shot: "拍攝"
+  info_duration: "時間長度"
+  info_duration_unknown: "--:--"
+  click_to_pause: "(點擊暫停)"
+  video_not_available: "(無法使用視訊)"

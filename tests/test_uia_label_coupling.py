@@ -40,18 +40,33 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 APP_DIR = REPO / "app"
+TRANSLATIONS_DIR = REPO / "translations"
 UIA_FILE = REPO / "qa" / "scenarios" / "_uia.py"
 INVARIANTS_FILE = REPO / "qa" / "scenarios" / "_invariants.py"
 
 
 def _collect_app_text() -> str:
-    """Concatenate every .py file under app/ for substring search."""
+    """Concatenate every .py file under app/ plus every translations/*.yml.
+
+    The QA framework couples to UIA labels in English (most constants)
+    and a few non-English ones (the language-picker checks for the
+    target locale's display name like ``繁體中文``). After the i18n
+    refactor these strings live in the YAML catalogs rather than as
+    Python literals — both en.yml and zh_TW.yml are valid sources for
+    a UIA constant.
+    """
     parts: list[str] = []
     for p in APP_DIR.rglob("*.py"):
         try:
             parts.append(p.read_text(encoding="utf-8"))
         except UnicodeDecodeError:
             continue
+    if TRANSLATIONS_DIR.exists():
+        for yml in TRANSLATIONS_DIR.glob("*.yml"):
+            try:
+                parts.append(yml.read_text(encoding="utf-8"))
+            except UnicodeDecodeError:
+                continue
     return "\n".join(parts)
 
 
