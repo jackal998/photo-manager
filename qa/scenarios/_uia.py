@@ -47,6 +47,14 @@ VIEW_LANG_ENGLISH = "English"
 VIEW_LANG_ZH_TW = "繁體中文"
 LANGUAGE_CONFIRM_TITLE = "Switch language?"
 
+# Exit-dirty prompt — fired by MainWindow.closeEvent when there are
+# unsaved decisions. Title and button accessible names come from
+# translations/en.yml under the `exit.*` namespace.
+EXIT_CONFIRM_TITLE = "Unsaved Changes"
+EXIT_BTN_SAVE_LEAVE = "Save & leave"   # source has "Save && leave"; UIA strips one &
+EXIT_BTN_LEAVE = "Leave"
+EXIT_BTN_BACK = "Back"
+
 # File menu items
 FILE_SCAN_SOURCES = "Scan Sources…"
 FILE_OPEN_MANIFEST = "Open Manifest…"
