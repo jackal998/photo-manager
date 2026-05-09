@@ -330,7 +330,11 @@ class ScanDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("scan_dialog.title"))
-        self.setMinimumWidth(700)
+        # Two-column layout (tree+list left, output/params/log right) needs
+        # ~1000 px to be comfortable; below that the source-list paths and
+        # the slider rows start to crowd. Height stays at 600 — the inner
+        # vertical splitters absorb shorter windows gracefully.
+        self.setMinimumWidth(1000)
         self.setMinimumHeight(600)
         self.settings = settings
         self._on_complete = on_scan_complete
@@ -369,21 +373,37 @@ class ScanDialog(QDialog):
         notice.setStyleSheet("color: #555; font-style: italic; padding: 4px 0;")
         root.addWidget(notice)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        # Two-column layout: tree + source list on the left (each gets a full
+        # column-half via an inner vertical splitter), output / params / log
+        # on the right (also vertically split so the user can drag the log
+        # taller during a long scan). Replaces the previous flat vertical
+        # stack where tree and list were squeezed into the top ~520 px.
+        outer_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # ── Left pane: tree + source list ────────────────────────────────
+        left_splitter = QSplitter(Qt.Orientation.Vertical)
 
         tree_group = QGroupBox(t("scan_dialog.browse_group"))
         tree_layout = QVBoxLayout(tree_group)
         self._tree_panel = _FolderTreePanel(self)
         self._tree_panel.folder_requested.connect(self._on_folder_requested)
         tree_layout.addWidget(self._tree_panel)
-        splitter.addWidget(tree_group)
+        left_splitter.addWidget(tree_group)
 
         self._source_list = _SourceListWidget(self)
-        splitter.addWidget(self._source_list)
-        # Give the source list more initial room so a multi-source config
-        # isn't squashed into a 2-row sliver. User can still drag.
-        splitter.setSizes([280, 240])
-        root.addWidget(splitter, stretch=1)
+        left_splitter.addWidget(self._source_list)
+        # Roughly 50/50 — both lists are equally valuable and the user can
+        # drag if their workflow favours one.
+        left_splitter.setSizes([320, 280])
+
+        outer_splitter.addWidget(left_splitter)
+
+        # ── Right pane: output + params (top), log (bottom) ──────────────
+        right_splitter = QSplitter(Qt.Orientation.Vertical)
+
+        right_top = QWidget()
+        right_top_layout = QVBoxLayout(right_top)
+        right_top_layout.setContentsMargins(0, 0, 0, 0)
 
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel(t("scan_dialog.output_label")))
@@ -394,7 +414,7 @@ class ScanDialog(QDialog):
         browse_out_btn.setFixedWidth(80)
         browse_out_btn.clicked.connect(self._browse_output)
         output_row.addWidget(browse_out_btn)
-        root.addLayout(output_row)
+        right_top_layout.addLayout(output_row)
 
         # Grouping parameters
         params_group = QGroupBox(t("scan_dialog.params_group"))
@@ -442,13 +462,27 @@ class ScanDialog(QDialog):
         params_layout.addWidget(color_desc)
         params_layout.addLayout(color_row)
 
-        root.addWidget(params_group)
+        right_top_layout.addWidget(params_group)
+        # Trailing stretch so the params group hugs the top and any extra
+        # vertical room in the right-top pane stays empty rather than
+        # inflating the slider rows.
+        right_top_layout.addStretch(1)
+
+        right_splitter.addWidget(right_top)
 
         self._log_widget = QPlainTextEdit()
         self._log_widget.setReadOnly(True)
         self._log_widget.setMinimumHeight(150)
         self._log_widget.setPlaceholderText(t("scan_dialog.log_placeholder"))
-        root.addWidget(self._log_widget)
+        right_splitter.addWidget(self._log_widget)
+        right_splitter.setSizes([340, 260])
+
+        outer_splitter.addWidget(right_splitter)
+        # Left column slightly wider — paths and the source-list table
+        # benefit more from horizontal room than the slider rows do.
+        outer_splitter.setSizes([550, 450])
+
+        root.addWidget(outer_splitter, stretch=1)
 
         self._btn_scan = QPushButton(t("scan_dialog.start_button"))
         self._btn_scan.setDefault(True)
