@@ -29,11 +29,18 @@ What's NOT verified (covered elsewhere):
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
 
 from qa.scenarios import _uia
+
+# Strip the parenthesized mnemonic hint Qt appends for CJK menu titles.
+# When a QAction's text is "動作(&A)", the rendered string has the
+# Alt-A hint as a trailing "(A)" because the mnemonic letter does not
+# appear in the visible CJK glyphs. UIA reports the rendered form.
+_MNEMONIC_HINT_RE = re.compile(r"\s*\([A-Za-z]\)\s*$")
 
 REPO = Path(__file__).resolve().parents[2]
 SETTINGS_PATH = REPO / "qa" / "settings.json"
@@ -70,15 +77,24 @@ def _menu_titles(win) -> set[str]:
 
     Qt exposes "&File" as a QAction with text "&File"; UIA reports
     the accessible name as the visible string ("File"), so we read
-    the menubar items by their `window_text` and strip any leading
+    the menubar items by their ``window_text`` and strip any leading
     ampersand the test happens to see.
+
+    A top-level Qt window exposes more than one MenuBar to UIA: the
+    Win32 title-bar system menu (one item titled "System" / "系統")
+    AND the QMenuBar. Their order in ``descendants(control_type=
+    "MenuBar")`` is not stable across the recreate path used by the
+    live language switch, so we union items from every MenuBar found
+    rather than reading just the first. The verification only checks
+    that the zh_TW titles are present, so the extra "系統" entry
+    from the system menu doesn't matter.
     """
     titles: set[str] = set()
     try:
-        bar = win.descendants(control_type="MenuBar")
-        if bar:
-            for item in bar[0].children():
+        for bar in win.descendants(control_type="MenuBar"):
+            for item in bar.children():
                 txt = (item.window_text() or "").strip().replace("&", "")
+                txt = _MNEMONIC_HINT_RE.sub("", txt).strip()
                 if txt:
                     titles.add(txt)
     except Exception:
@@ -100,6 +116,12 @@ def main() -> int:
     # assertion.
     initial_settings = _read_settings()
     print(f"  initial_locale={initial_settings.get('ui', {}).get('locale', 'en')!r}")
+
+    # Snapshot the old HWND so the post-switch reconnect can tell the
+    # new window apart from a (possibly still-extant) old one. Without
+    # this, pywinauto's top_window() can return the soon-to-be-closed
+    # original during the transition window.
+    old_hwnd = win.handle
 
     print("step: open_view_language_zh_tw")
     try:
@@ -132,25 +154,47 @@ def main() -> int:
     confirm_dlg = _uia.connect_by_handle(confirm_hwnd)
     confirm_dlg.child_window(title="Yes", control_type="Button").click_input()
 
-    # The recreate path closes the current window and shows a fresh one.
-    # Give Qt a beat to finish that transition before reconnecting; the
-    # new window publishes a new HWND so our `win` UIAWrapper above is
-    # stale.
-    time.sleep(1.0)
-
+    # Poll until (a) a MainWindow with a HWND different from the
+    # pre-switch one is reachable AND (b) its QMenuBar has been
+    # constructed with zh_TW titles. A fixed sleep used to live here,
+    # but on hosted CI runners the recreate can take >1 s and pywinauto
+    # then read the still-bare top-level window's Win32 system menu
+    # (titled "System") instead of the real QMenuBar. Polling adapts.
     print("step: reconnect_after_live_switch")
-    try:
-        app, win = _uia.connect_main()
-    except Exception as exc:
-        # Live-switch failed to produce a new window — flag and bail
-        # to the cleanup step.
-        failures.append(f"could not reconnect to MainWindow after switch: {exc!r}")
-        win = None  # type: ignore
+    deadline = time.time() + 10.0
+    win = None
+    last_titles: set[str] = set()
+    last_hwnd: int | None = None
+    while time.time() < deadline:
+        try:
+            _, candidate = _uia.connect_main(timeout=1)
+        except Exception:
+            time.sleep(0.2)
+            continue
+        cand_hwnd = candidate.handle
+        if cand_hwnd == old_hwnd:
+            # Old window still topmost; recreate not done yet.
+            time.sleep(0.2)
+            continue
+        last_hwnd = cand_hwnd
+        last_titles = _menu_titles(candidate)
+        if last_titles & ZH_TW_MENU_TITLES:
+            win = candidate
+            break
+        # New window exists but QMenuBar not yet populated — keep polling.
+        time.sleep(0.2)
+    print(f"  new_hwnd={last_hwnd!r}  old_hwnd={old_hwnd!r}  reconnect_ok={win is not None}")
 
     print("step: verify_menu_bar_in_zh_tw")
-    if win is not None:
-        titles = _menu_titles(win)
-        print(f"  menu_titles={sorted(titles)!r}")
+    titles = last_titles if win is None else _menu_titles(win)
+    print(f"  menu_titles={sorted(titles)!r}")
+    if win is None:
+        failures.append(
+            f"Could not find a fresh MainWindow with zh_TW menu titles within "
+            f"10 s of clicking Yes (last menu_titles={sorted(last_titles)!r}, "
+            f"last_hwnd={last_hwnd!r}, old_hwnd={old_hwnd!r})"
+        )
+    else:
         missing = ZH_TW_MENU_TITLES - titles
         if missing:
             failures.append(
