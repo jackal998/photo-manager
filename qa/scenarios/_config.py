@@ -70,6 +70,13 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     "s26_keyboard_navigation":      ["qa/sandbox/near-duplicates"],
     # s27 (#142) — re-scan with pending decisions triggers confirmation prompt.
     "s27_rescan_confirm":           ["qa/sandbox/near-duplicates"],
+    # s28 — exit-dirty prompt. Runs a small scan + sets a decision to
+    # dirty the manifest; the prompt assertions follow.
+    "s28_exit_dirty_prompt":        ["qa/sandbox/near-duplicates"],
+    # s29 — bulk regex "remove from list" deferred decision. Same fixture
+    # as s14 so the regex partition (q[89]\d) keeps producing 3 matches
+    # / 2 unchanged.
+    "s29_remove_from_list_by_regex": ["qa/sandbox/near-duplicates"],
 }
 
 

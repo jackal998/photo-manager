@@ -59,6 +59,14 @@ ALL_SCENARIOS = [
     "s25_empty_area_context_menu",
     "s26_keyboard_navigation",
     "s27_rescan_confirm",
+    # s28 — dirty-flag exit prompt. Run AFTER s27 so any test order
+    # change still puts s28 next to its closest neighbour (manifest
+    # state-mutation scenarios). Self-cleans by exiting the app with
+    # "Leave"; the next scenario relaunches.
+    "s28_exit_dirty_prompt",
+    # s29 — bulk regex remove-from-list as a deferred decision. Sister
+    # to s14 (bulk regex delete) but with the deferred-remove action.
+    "s29_remove_from_list_by_regex",
 ]
 
 
