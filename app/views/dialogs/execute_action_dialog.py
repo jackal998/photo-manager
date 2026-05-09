@@ -31,8 +31,20 @@ from infrastructure.i18n import t
 class ExecuteActionDialog(QDialog):
     """Shows groups with decisions for final review; executes file decisions on confirm."""
 
-    def __init__(self, groups: list, manifest_path: str | None, parent=None) -> None:
+    def __init__(
+        self,
+        groups: list,
+        manifest_path: str | None,
+        parent=None,
+        settings: object | None = None,
+    ) -> None:
         super().__init__(parent)
+        # settings is optional so existing tests / callers that don't
+        # need Phase B persistence can pass None. Threaded into the
+        # inner regex dialog via _show_select_dialog so its mode +
+        # recent-patterns survive across runs even when reached via
+        # the Execute Action route.
+        self._settings = settings
         self.setWindowTitle(t("execute_dialog.title"))
         self.setMinimumSize(900, 560)
         # #139 — QDialog.exec() sets WA_ShowModal but leaves windowModality
@@ -277,7 +289,10 @@ class ExecuteActionDialog(QDialog):
         # which alias the main window's vm.groups (see _remove_from_list_paths
         # docstring), so both surfaces preview against the same data.
         match_fn = build_match_fn(self._groups) if self._groups else None
-        dlg = ActionDialog(fields=fields, parent=self, match_fn=match_fn)
+        dlg = ActionDialog(
+            fields=fields, parent=self, match_fn=match_fn,
+            settings=self._settings,
+        )
         dlg.setActionRequested.connect(self._set_decision_by_regex)
         dlg.exec()
 

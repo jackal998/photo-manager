@@ -165,6 +165,27 @@ action_dialog:
   invalid_regex: "Invalid regex: {error}"
   preview_truncated: "…and {n} more"
   preview_empty: "No matches"
+  # Phase B — Beginner / Regex mode toggle and friends.
+  mode_label: "Mode:"
+  mode_beginner: "Beginner"
+  mode_regex: "Regex"
+  beginner_prefix: "Find rows where it"
+  beginner_op_contains: "contains"
+  beginner_op_starts_with: "starts with"
+  beginner_op_ends_with: "ends with"
+  beginner_op_exact: "exactly matches"
+  beginner_text_placeholder: "type the text to match…"
+  cheatsheet_label: "Insert:"
+  cheatsheet_any: ".* — any text"
+  cheatsheet_digit: "\\d — digit"
+  cheatsheet_word: "\\w — word char"
+  cheatsheet_start: "^ — start"
+  cheatsheet_end: "$ — end"
+  cheatsheet_dot: "\\. — literal dot"
+  cheatsheet_set: "[abc] — any of"
+  recent_button: "Recent ▾"
+  recent_empty: "(no recent patterns)"
+  recent_clear: "Clear recent patterns"
 
 # Right-click context menu on the main tree.
 context_menu:

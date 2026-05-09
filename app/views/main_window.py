@@ -114,12 +114,15 @@ class MainWindow(QMainWindow):
         # Initialize dialog handler. records_provider lets the regex
         # dialog build its live-preview match function from the current
         # manifest state at open time (no caching — picks up any
-        # in-memory changes since the last open).
+        # in-memory changes since the last open). settings is threaded
+        # through so the regex dialog can persist Phase B preferences
+        # (Beginner/Regex mode + recent-patterns history).
         self.dialog_handler = DialogHandler(
             parent_widget=self,
             tree_data_provider=self.tree_data_provider,
             action_handler=self._apply_action_by_regex,
             records_provider=lambda: self._vm.groups,
+            settings=self._settings,
         )
 
         # Action handlers for context menu

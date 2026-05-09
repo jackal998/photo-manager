@@ -164,6 +164,9 @@ class TestPreviewPane:
 
         match_fn = MagicMock(return_value=(2, 3, ["a.jpg", "b.jpg"]))
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        # Phase B introduced Beginner-mode default — switch to Regex
+        # mode so dlg.regex is the active pattern source.
+        dlg._mode_regex_btn.setChecked(True)
 
         match_fn.reset_mock()
         dlg.regex.setText("IMG")
@@ -295,6 +298,9 @@ class TestRegexValidation:
 
         match_fn = MagicMock(return_value=(0, 0, []))
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        # Phase B: Regex-mode-specific test — switch into Regex mode so
+        # dlg.regex.setText drives the pattern.
+        dlg._mode_regex_btn.setChecked(True)
         match_fn.reset_mock()
 
         dlg.regex.setText("(")
@@ -347,3 +353,279 @@ class TestObjectNames:
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         assert dlg._preview_list.objectName() == "regexPreviewList"
         assert dlg._preview_truncated.objectName() == "regexPreviewTruncated"
+
+
+# ── Phase B: Beginner / Regex mode toggle, cheatsheet, recent ──────────────
+
+
+class _FakeSettings:
+    """In-memory stand-in for JsonSettings with the same get/set/save API."""
+
+    def __init__(self, initial: dict | None = None) -> None:
+        self._data = dict(initial or {})
+        self.save_count = 0
+
+    def get(self, key, default=None):
+        parts = key.split(".")
+        node = self._data
+        for p in parts:
+            if isinstance(node, dict) and p in node:
+                node = node[p]
+            else:
+                return default
+        return node
+
+    def set(self, key, value) -> None:
+        parts = key.split(".")
+        node = self._data
+        for p in parts[:-1]:
+            if not isinstance(node.get(p), dict):
+                node[p] = {}
+            node = node[p]
+        node[parts[-1]] = value
+
+    def save(self) -> None:
+        self.save_count += 1
+
+
+class TestModeToggle:
+    def test_default_mode_is_beginner_when_match_fn_supplied(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_BEGINNER
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        assert dlg._mode == MODE_BEGINNER
+        # Beginner widgets visible, regex widgets hidden.
+        assert not dlg._beginner_widget.isHidden()
+        assert dlg._regex_widget.isHidden()
+
+    def test_no_match_fn_pins_regex_mode(self, qapp):
+        """Without a preview to back it, Beginner is meaningless — the
+        dialog falls back to the original Regex-only flat layout."""
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert dlg._mode == MODE_REGEX
+        # No mode toggle row was constructed in the flat layout.
+        assert not hasattr(dlg, "_mode_beginner_btn")
+
+    def test_persisted_mode_overrides_default(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
+
+        settings = _FakeSettings({"ui": {"action_dialog": {"mode": "regex"}}})
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        assert dlg._mode == MODE_REGEX
+        assert dlg._mode_regex_btn.isChecked()
+
+    def test_toggle_persists_to_settings(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        # Default Beginner — toggle to Regex.
+        dlg._mode_regex_btn.setChecked(True)
+        assert settings.get("ui.action_dialog.mode") == "regex"
+        assert settings.save_count >= 1
+
+
+class TestBeginnerMode:
+    """Beginner mode synthesises a regex from (op, plain text) so users
+    can match without learning regex syntax."""
+
+    def test_contains_op_builds_escaped_substring(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._beginner_op_combo.setCurrentIndex(0)  # contains
+        dlg._beginner_text.setText("IMG_001 (copy)")
+        # Special chars must be escaped — the user typed plain text.
+        assert dlg._build_pattern() == r"IMG_001\ \(copy\)"
+
+    def test_starts_with_anchors_at_caret(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._beginner_op_combo.setCurrentIndex(1)  # starts_with
+        dlg._beginner_text.setText("IMG")
+        assert dlg._build_pattern() == r"^IMG"
+
+    def test_ends_with_anchors_at_dollar(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._beginner_op_combo.setCurrentIndex(2)  # ends_with
+        dlg._beginner_text.setText(".jpg")
+        assert dlg._build_pattern() == r"\.jpg$"
+
+    def test_exact_anchors_both_ends(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._beginner_op_combo.setCurrentIndex(3)  # exact
+        dlg._beginner_text.setText("abc")
+        assert dlg._build_pattern() == r"^abc$"
+
+    def test_empty_text_returns_empty_pattern(self, qapp):
+        """Empty Beginner input must NOT produce ``^$`` etc — we return
+        empty string so the preview pane shows the no-pattern state
+        rather than 'matches everything that's empty', which is
+        confusing."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._beginner_text.setText("")
+        assert dlg._build_pattern() == ""
+
+    def test_apply_emits_synthesised_pattern(self, qapp):
+        """The signal must carry the SAME regex the live preview built,
+        so what-you-see is what-Apply-applies."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._beginner_op_combo.setCurrentIndex(0)  # contains
+        dlg._beginner_text.setText("IMG")
+        dlg._action_combo.setCurrentIndex(0)  # delete
+
+        received = []
+        dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
+        dlg._btn_set_action.click()
+
+        assert received == [("File Name", "IMG", "delete")]
+
+
+class TestCheatsheet:
+    def test_token_inserted_at_caret(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("foo bar")
+        dlg.regex.setCursorPosition(3)  # between 'foo' and ' bar'
+        dlg._insert_token(r"\d")
+        assert dlg.regex.text() == r"foo\d bar"
+        assert dlg.regex.cursorPosition() == 5
+
+    def test_chips_only_built_when_match_fn_present(self, qapp):
+        """Cheatsheet chips would clutter the legacy flat layout. They
+        only ship alongside the rest of the live-preview UI."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        # No match_fn: no chips. Verify by absence of any cheatsheet
+        # objectName in the descendant widgets.
+        dlg = ActionDialog(fields=["File Name"])
+        names = {c.objectName() for c in dlg.findChildren(object)
+                 if hasattr(c, "objectName")}
+        chip_names = {n for n in names if n.startswith("regexCheatsheet_")}
+        assert chip_names == set()
+
+        # With match_fn: chips present, one per token.
+        dlg2 = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        names2 = {c.objectName() for c in dlg2.findChildren(object)
+                  if hasattr(c, "objectName")}
+        chip_names2 = {n for n in names2 if n.startswith("regexCheatsheet_")}
+        assert len(chip_names2) >= 5  # at least the basic tokens
+
+
+class TestRecentPatterns:
+    def test_apply_records_pattern(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"^IMG_\d+$")
+        dlg._btn_set_action.click()
+
+        recent = settings.get("ui.action_dialog.recent_patterns", [])
+        assert recent == [r"^IMG_\d+$"]
+
+    def test_recent_dedup_and_cap(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": [
+                f"pattern_{i}" for i in range(10)
+            ]}}
+        })
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        # Reapply pattern_5 — must move to the front, drop the duplicate
+        # at its old position, and stay capped at 10.
+        dlg.regex.setText("pattern_5")
+        dlg._btn_set_action.click()
+
+        recent = settings.get("ui.action_dialog.recent_patterns")
+        assert recent[0] == "pattern_5"
+        assert recent.count("pattern_5") == 1
+        assert len(recent) == 10
+
+    def test_apply_skips_empty_pattern(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        # Beginner mode default — empty text → empty pattern. Don't
+        # pollute the recent list with a no-op.
+        dlg._beginner_text.setText("")
+        dlg._btn_set_action.click()
+        assert settings.get("ui.action_dialog.recent_patterns", []) == []
+
+    def test_clear_recent(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": ["a", "b", "c"]}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        dlg._clear_recent_patterns()
+        assert dlg._recent_patterns == []
+        assert settings.get("ui.action_dialog.recent_patterns") == []
+
+
+class TestMatchHighlightDelegate:
+    def test_match_span_stored_on_preview_items(self, qapp):
+        """Each row that matches should carry its (start, end) span on
+        Qt.UserRole — that's what the delegate paints from."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from PySide6.QtCore import Qt
+
+        # match_fn returns 2 samples both containing 'IMG'.
+        match_fn = lambda f, p: (2, 100, ["IMG_001.jpg", "before_IMG_after.jpg"])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("IMG")
+        dlg._refresh_preview()
+
+        spans = [
+            dlg._preview_list.item(i).data(Qt.UserRole)
+            for i in range(dlg._preview_list.count())
+        ]
+        assert spans == [(0, 3), (7, 10)]
