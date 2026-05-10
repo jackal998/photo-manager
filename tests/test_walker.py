@@ -159,8 +159,8 @@ class TestLivePhotoPairing:
         _write_mov(tmp_path / "IMG_1234.MOV")
         records = scan_sources({"test": tmp_path})
         heic = next(r for r in records if r.path.suffix.upper() == ".HEIC")
-        assert heic.pair_partner is not None
-        assert heic.pair_partner.name == "IMG_1234.MOV"
+        assert len(heic.pair_cluster) == 1
+        assert heic.pair_cluster[0].name == "IMG_1234.MOV"
 
     def test_jpg_paired_with_mov(self, tmp_path):
         from scanner.walker import scan_sources
@@ -168,13 +168,13 @@ class TestLivePhotoPairing:
         _write_mov(tmp_path / "IMG_5678.MOV")
         records = scan_sources({"test": tmp_path})
         jpg = next(r for r in records if r.path.suffix.upper() == ".JPG")
-        assert jpg.pair_partner is not None
+        assert len(jpg.pair_cluster) == 1
 
     def test_no_pairing_without_partner(self, tmp_path):
         from scanner.walker import scan_sources
         _write_jpeg(tmp_path / "IMG_9999.HEIC")
         records = scan_sources({"test": tmp_path})
-        assert records[0].pair_partner is None
+        assert records[0].pair_cluster == ()
 
     def test_edited_not_paired(self, tmp_path):
         from scanner.walker import scan_sources
@@ -182,16 +182,166 @@ class TestLivePhotoPairing:
         _write_mov(tmp_path / "IMG_1234.MOV")
         records = scan_sources({"test": tmp_path})
         heic = next(r for r in records if "編輯" in r.path.name)
-        assert heic.pair_partner is None
+        assert heic.pair_cluster == ()
 
     def test_takeout_numbered_pair(self, tmp_path):
-        """IMG_9556(1).HEIC + IMG_9556(1).MOV should pair via clean_stem."""
+        """``IMG_9556(1).HEIC + IMG_9556(1).MOV`` pair via exact-stem
+        match (clean_stem AND number match)."""
         from scanner.walker import scan_sources
         _write_jpeg(tmp_path / "IMG_9556(1).HEIC")
         _write_mov(tmp_path / "IMG_9556(1).MOV")
         records = scan_sources({"test": tmp_path})
         heic = next(r for r in records if r.path.suffix.upper() == ".HEIC")
-        assert heic.pair_partner is not None
+        assert len(heic.pair_cluster) == 1
+
+    def test_pair_emits_both_records(self, tmp_path):
+        """Both halves of a Live Photo pair must appear in the records.
+
+        Regression for the surface bug behind photo-manager#88: the old
+        walker maintained a ``paired`` set and skipped any path already
+        named as a partner, dropping the MOV/MP4 half entirely before
+        hashing. The video never reached the manifest, so dedup-side
+        pair-edge logic had only one record to work with and the pair
+        couldn't form a 2-row group on the GUI side.
+
+        Mirrors the production-data shape verified against
+        ``D:\\Takeout-0508`` — 4 simple HEIC+MP4 pairs in the
+        ``2024 June-July Japan (Nishi-Nihon)`` album, all observed
+        missing their MP4 half from the manifest pre-fix.
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_2247.HEIC")
+        _write_mov(tmp_path / "IMG_2247.MP4")
+        records = scan_sources({"test": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["IMG_2247.HEIC", "IMG_2247.MP4"], (
+            f"expected both halves of pair to appear; got {names}"
+        )
+
+    def test_pair_cluster_bidirectional(self, tmp_path):
+        """HEIC's cluster names the MOV; MOV's cluster names the HEIC.
+
+        Symmetric clusters mean ``_collect_pair_edges`` emits an edge
+        in each direction, so union-find groups them regardless of
+        iteration order or record-survival differences.
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_2247.HEIC")
+        _write_mov(tmp_path / "IMG_2247.MP4")
+        records = scan_sources({"test": tmp_path})
+        heic = next(r for r in records if r.path.suffix == ".HEIC")
+        mp4  = next(r for r in records if r.path.suffix == ".MP4")
+        assert tuple(p.name for p in heic.pair_cluster) == ("IMG_2247.MP4",)
+        assert tuple(p.name for p in mp4.pair_cluster)  == ("IMG_2247.HEIC",)
+
+    def test_unpaired_video_still_emits_record(self, tmp_path):
+        """A video with no same-stem image partner (e.g. a standalone
+        recording, like ``IMG_2296.MOV`` in the production data set)
+        must still produce its own FileRecord with empty pair_cluster.
+        """
+        from scanner.walker import scan_sources
+        _write_mov(tmp_path / "IMG_2296.MOV")
+        records = scan_sources({"test": tmp_path})
+        assert len(records) == 1
+        assert records[0].path.name == "IMG_2296.MOV"
+        assert records[0].pair_cluster == ()
+
+    def test_takeout_numbered_pair_emits_both(self, tmp_path):
+        """Strengthening of ``test_takeout_numbered_pair`` — assert BOTH
+        halves of a ``(1)``-suffixed pair appear, not just the HEIC
+        side. Pre-#88 the MOV was silently dropped here too.
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_9556(1).HEIC")
+        _write_mov(tmp_path / "IMG_9556(1).MOV")
+        records = scan_sources({"test": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["IMG_9556(1).HEIC", "IMG_9556(1).MOV"]
+
+    # ── Production-data edge cases ─────────────────────────────────────
+
+    def test_dup_marker_clash_pairs_correctly(self, tmp_path):
+        """``IMG_1856.HEIC + IMG_1856.MP4 + IMG_1856(1).HEIC + IMG_1856(1).MP4``
+        in the same directory must form TWO independent pairs, not one
+        confused 4-member cluster.
+
+        Production case (``D:\\Takeout-0508\\Takeout\\Google 相簿\\2022 年的相片``):
+        Google extracts the same Live Photo from two albums, adds
+        ``(1)`` to disambiguate. Pre-#88 the walker matched on
+        ``clean_stem`` only — ``IMG_1856.HEIC`` could pair with
+        ``IMG_1856(1).MP4`` non-deterministically. Now pairing
+        requires exact ``(clean_stem, number)`` match.
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_1856.HEIC")
+        _write_mov(tmp_path / "IMG_1856.MP4")
+        _write_jpeg(tmp_path / "IMG_1856(1).HEIC")
+        _write_mov(tmp_path / "IMG_1856(1).MP4")
+        records = scan_sources({"test": tmp_path})
+
+        by_name = {r.path.name: r for r in records}
+        # Unsuffixed pair: HEIC clusters only with the unsuffixed MP4
+        unsuf_heic_cluster = sorted(p.name for p in by_name["IMG_1856.HEIC"].pair_cluster)
+        assert unsuf_heic_cluster == ["IMG_1856.MP4"]
+        # Suffixed pair: clusters only with the (1).MP4
+        suf_heic_cluster = sorted(p.name for p in by_name["IMG_1856(1).HEIC"].pair_cluster)
+        assert suf_heic_cluster == ["IMG_1856(1).MP4"]
+        # And mirror the symmetric direction
+        assert sorted(p.name for p in by_name["IMG_1856.MP4"].pair_cluster) == ["IMG_1856.HEIC"]
+        assert sorted(p.name for p in by_name["IMG_1856(1).MP4"].pair_cluster) == ["IMG_1856(1).HEIC"]
+
+    def test_image_plus_two_videos_clusters_all_three(self, tmp_path):
+        """``IMG_4278.HEIC + IMG_4278.MOV + IMG_4278.MP4`` is a single
+        Live Photo where Google Takeout transcoded the video to both
+        formats. All three files must cluster together (downstream
+        dedup will then group them under one group_id).
+
+        Production case (``D:\\Takeout-0508\\Takeout\\Google 相簿\\2023 年的相片``).
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_4278.HEIC")
+        _write_mov(tmp_path / "IMG_4278.MOV")
+        _write_mov(tmp_path / "IMG_4278.MP4")
+        records = scan_sources({"test": tmp_path})
+
+        by_name = {r.path.name: r for r in records}
+        # HEIC clusters with both videos
+        assert sorted(p.name for p in by_name["IMG_4278.HEIC"].pair_cluster) == [
+            "IMG_4278.MOV", "IMG_4278.MP4",
+        ]
+        # MOV clusters with HEIC and MP4
+        assert sorted(p.name for p in by_name["IMG_4278.MOV"].pair_cluster) == [
+            "IMG_4278.HEIC", "IMG_4278.MP4",
+        ]
+        # MP4 clusters with HEIC and MOV
+        assert sorted(p.name for p in by_name["IMG_4278.MP4"].pair_cluster) == [
+            "IMG_4278.HEIC", "IMG_4278.MOV",
+        ]
+
+    def test_image_plus_image_plus_video_clusters(self, tmp_path):
+        """``IMG_5332.HEIC + IMG_5332.jpg + IMG_5332.MP4`` — a Live
+        Photo with an extra JPG variant of the image (e.g. extraction
+        of a still from the live photo). All three same-exact-stem
+        files cluster.
+
+        Production case (``D:\\Takeout-0508\\Takeout\\Google 相簿\\2023 年的相片``).
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_5332.HEIC")
+        _write_jpeg(tmp_path / "IMG_5332.jpg")
+        _write_mov(tmp_path / "IMG_5332.MP4")
+        records = scan_sources({"test": tmp_path})
+
+        by_name = {r.path.name: r for r in records}
+        assert sorted(p.name for p in by_name["IMG_5332.HEIC"].pair_cluster) == [
+            "IMG_5332.MP4", "IMG_5332.jpg",
+        ]
+        assert sorted(p.name for p in by_name["IMG_5332.jpg"].pair_cluster) == [
+            "IMG_5332.HEIC", "IMG_5332.MP4",
+        ]
+        assert sorted(p.name for p in by_name["IMG_5332.MP4"].pair_cluster) == [
+            "IMG_5332.HEIC", "IMG_5332.jpg",
+        ]
 
 
 class TestFlatScan:

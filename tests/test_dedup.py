@@ -26,12 +26,18 @@ def _record(
     source_label: str = "jdrive",
     file_type: str = "jpeg",
     pair_partner: Path | None = None,
+    pair_cluster: tuple[Path, ...] | None = None,
 ) -> FileRecord:
+    """Build a FileRecord. ``pair_partner`` is accepted as a back-compat
+    alias and converted to a single-member ``pair_cluster``; tests that
+    need multi-peer clusters should pass ``pair_cluster`` directly."""
+    if pair_cluster is None:
+        pair_cluster = (pair_partner,) if pair_partner is not None else ()
     return FileRecord(
         path=Path(path),
         source_label=source_label,
         file_type=file_type,
-        pair_partner=pair_partner,
+        pair_cluster=pair_cluster,
     )
 
 
@@ -44,10 +50,13 @@ def _hr(
     source_label: str = "jdrive",
     file_type: str = "jpeg",
     pair_partner: Path | None = None,
+    pair_cluster: tuple[Path, ...] | None = None,
 ) -> HashResult:
     return HashResult(
-        record=_record(path, source_label=source_label, file_type=file_type,
-                       pair_partner=pair_partner),
+        record=_record(
+            path, source_label=source_label, file_type=file_type,
+            pair_partner=pair_partner, pair_cluster=pair_cluster,
+        ),
         sha256=sha256,
         phash=phash,
         mean_color=mean_color,
@@ -226,7 +235,19 @@ class TestUndated:
 # ---------------------------------------------------------------------------
 
 class TestLivePhotoPair:
-    def test_mov_skipped_when_heic_skipped(self):
+    def test_mov_pairs_with_dup_heic_keeps_own_action(self):
+        """When the HEIC is a duplicate of another HEIC, the paired MOV
+        is NOT auto-marked as EXACT — it keeps its independent
+        classification (here, MOVE because exif_date is set and SHA is
+        unique). Both still share the same group_id via the pair edge.
+
+        Per photo-manager#88: pairing is coupled at matching/grouping
+        but per-row at set/execute action. The image's destruction is
+        no longer automatically the video's — the user makes that call.
+
+        Was: ``test_mov_skipped_when_heic_skipped`` (pre-#88, when
+        action propagation forced the MOV to EXACT alongside the HEIC).
+        """
         heic_path = Path("/iphone/IMG_1234.HEIC")
         mov_path = Path("/iphone/IMG_1234.MOV")
         orig_heic_path = Path("/jdrive/IMG_1234.HEIC")
@@ -241,8 +262,150 @@ class TestLivePhotoPair:
                    file_type="heic", exif_date=_dt())
 
         rows = _rows(classify([heic, mov, orig], source_priority={"iphone": 0, "jdrive": 1}))
+        # HEIC duplicate of orig → EXACT (unchanged)
         assert rows[heic_path.as_posix()].action == "EXACT"
-        assert rows[mov_path.as_posix()].action == "EXACT"
+        # MOV no longer auto-EXACT — keeps its own MOVE classification
+        assert rows[mov_path.as_posix()].action == "MOVE"
+        # But both share a group_id via the pair edge (#88 invariant)
+        heic_gid = rows[heic_path.as_posix()].group_id
+        mov_gid = rows[mov_path.as_posix()].group_id
+        assert heic_gid is not None
+        assert mov_gid is not None
+        assert heic_gid == mov_gid
+
+    def test_unique_pair_forms_group(self):
+        """Headline regression for photo-manager#88 — a Live Photo pair
+        where NEITHER side is a duplicate of anything else still forms a
+        group of two. Pre-#88 both rows would end up with group_id=None
+        and the manifest loader's ``len(db_rows) < 2`` filter would drop
+        both, surfacing as ``total_rows=0`` in the tree.
+        """
+        heic_path = Path("/iphone/IMG_unique.HEIC")
+        mov_path = Path("/iphone/IMG_unique.MOV")
+        heic = _hr(str(heic_path), sha256="heic-unique", source_label="iphone",
+                   file_type="heic", exif_date=_dt(),
+                   pair_partner=mov_path)
+        mov = _hr(str(mov_path), sha256="mov-unique", phash=None,
+                  source_label="iphone", file_type="mov", exif_date=_dt(),
+                  pair_partner=heic_path)
+        rows = _rows(classify([heic, mov]))
+
+        # Both rows survive into manifest
+        assert len(rows) == 2
+        # Both classified as MOVE (unique, exif_date present)
+        assert rows[heic_path.as_posix()].action == "MOVE"
+        assert rows[mov_path.as_posix()].action == "MOVE"
+        # Both share the same group_id thanks to the pair edge
+        heic_gid = rows[heic_path.as_posix()].group_id
+        mov_gid = rows[mov_path.as_posix()].group_id
+        assert heic_gid is not None, (
+            "unique pair must receive a group_id — without one, the "
+            "manifest loader filters both rows as singletons (#88)"
+        )
+        assert mov_gid is not None
+        assert heic_gid == mov_gid
+
+    def test_pair_with_separate_sha_groups_unions_correctly(self):
+        """The asymmetric case the in-place-mutation approach would have
+        missed: HEIC=EXACT(dup of orig_heic) AND MOV=EXACT(dup of
+        other_mov). Both partners already have ``duplicate_of`` set by
+        Pass 1. Without the edge-list approach + transitive union in
+        ``_assign_group_ids``, the pair would be split across two
+        SHA-groups.
+
+        Expected: all four files end up in a single component / group_id.
+        """
+        heic_path = Path("/iphone/IMG.HEIC")
+        mov_path = Path("/iphone/IMG.MOV")
+        orig_heic_path = Path("/jdrive/IMG.HEIC")
+        other_mov_path = Path("/jdrive/IMG.MOV")
+
+        heic = _hr(str(heic_path), sha256="hh", source_label="jdrive",
+                   file_type="heic", exif_date=_dt(),
+                   pair_partner=mov_path)
+        mov = _hr(str(mov_path), sha256="mm", phash=None,
+                  source_label="jdrive", file_type="mov", exif_date=_dt(),
+                  pair_partner=heic_path)
+        orig_heic = _hr(str(orig_heic_path), sha256="hh", source_label="iphone",
+                        file_type="heic", exif_date=_dt())
+        other_mov = _hr(str(other_mov_path), sha256="mm", phash=None,
+                        source_label="iphone", file_type="mov", exif_date=_dt())
+
+        rows = _rows(classify(
+            [heic, mov, orig_heic, other_mov],
+            source_priority={"iphone": 0, "jdrive": 1},
+        ))
+
+        gids = {rows[p].group_id for p in (
+            heic_path.as_posix(), mov_path.as_posix(),
+            orig_heic_path.as_posix(), other_mov_path.as_posix(),
+        )}
+        assert None not in gids, "all four must have a group_id"
+        assert len(gids) == 1, (
+            f"all four (HEIC + MOV pair, plus orig HEIC + other MOV they SHA-match) "
+            f"must share one group_id via transitive closure of "
+            f"duplicate_of + pair edges; got {gids}"
+        )
+
+    def test_multi_member_cluster_shares_one_group_id(self):
+        """``IMG_4278.HEIC + IMG_4278.MOV + IMG_4278.MP4`` — Google
+        transcoded one Live Photo to both video formats. The walker
+        emits a 3-member ``pair_cluster`` on each file; ``_collect_pair_edges``
+        unions them into a single component. All three must share one
+        group_id.
+
+        Production case from ``D:\\Takeout-0508\\Takeout\\Google 相簿\\2023 年的相片``.
+        """
+        heic_path = Path("/iphone/IMG_4278.HEIC")
+        mov_path = Path("/iphone/IMG_4278.MOV")
+        mp4_path = Path("/iphone/IMG_4278.MP4")
+        cluster = (heic_path, mov_path, mp4_path)
+
+        heic = _hr(str(heic_path), sha256="h1", source_label="iphone",
+                   file_type="heic", exif_date=_dt(),
+                   pair_cluster=tuple(p for p in cluster if p != heic_path))
+        mov = _hr(str(mov_path), sha256="m1", phash=None,
+                  source_label="iphone", file_type="mov", exif_date=_dt(),
+                  pair_cluster=tuple(p for p in cluster if p != mov_path))
+        mp4 = _hr(str(mp4_path), sha256="p1", phash=None,
+                  source_label="iphone", file_type="mp4", exif_date=_dt(),
+                  pair_cluster=tuple(p for p in cluster if p != mp4_path))
+
+        rows = _rows(classify([heic, mov, mp4]))
+        gids = {rows[p.as_posix()].group_id for p in cluster}
+        assert None not in gids, "every cluster member must have a group_id"
+        assert len(gids) == 1, (
+            f"all three same-exact-stem files must share one group_id; got {gids}"
+        )
+
+    def test_pair_actions_independent_when_heic_is_dup(self):
+        """When the HEIC is itself a duplicate of another HEIC, the
+        paired MOV must NOT inherit the EXACT classification. This
+        pins the explicit decoupling intent of #88: the MOV stays
+        MOVE / UNDATED based on its own data, even though its group_id
+        is shared with the HEIC's group via the pair edge.
+        """
+        heic_path = Path("/jdrive/IMG_5678.HEIC")
+        mov_path = Path("/jdrive/IMG_5678.MOV")
+        orig_path = Path("/iphone/IMG_5678.HEIC")
+        heic = _hr(str(heic_path), sha256="dup", source_label="jdrive",
+                   file_type="heic", exif_date=_dt(),
+                   pair_partner=mov_path)
+        mov = _hr(str(mov_path), sha256="solo", phash=None,
+                  source_label="jdrive", file_type="mov", exif_date=_dt(),
+                  pair_partner=heic_path)
+        orig = _hr(str(orig_path), sha256="dup", source_label="iphone",
+                   file_type="heic", exif_date=_dt())
+
+        rows = _rows(classify(
+            [heic, mov, orig],
+            source_priority={"iphone": 0, "jdrive": 1},
+        ))
+        assert rows[heic_path.as_posix()].action == "EXACT"
+        # CRITICAL: NOT EXACT — pre-#88 propagation would have made it EXACT.
+        assert rows[mov_path.as_posix()].action == "MOVE"
+        # But still grouped together
+        assert rows[heic_path.as_posix()].group_id == rows[mov_path.as_posix()].group_id
 
 
 # ---------------------------------------------------------------------------
@@ -378,15 +541,21 @@ class TestCaseSensitiveCollision:
         assert actions[r"D:\Photos\IMG.jpg"] == "EXACT"
 
     def test_case_only_diff_in_live_photo_pair_partner(self):
-        """A Live Photo HEIC paired with its MOV must propagate the action
-        even when a case-collision sibling file exists at the same parent."""
+        """A Live Photo HEIC paired with its MOV must keep its OWN action
+        (per photo-manager#88, no propagation), even when a case-collision
+        sibling exists at the same parent. The pair shares a group_id.
+
+        Pre-#88, this test asserted the MOV was auto-marked EXACT to
+        mirror the HEIC. Post-#88, action stays per-row independent and
+        the pair is coupled only at the group_id level.
+        """
         heic = Path(r"D:\Photos\IMG_X.HEIC")
         mov_lower = Path(r"D:\Photos\IMG_X.mov")
         mov_upper = Path(r"D:\Photos\IMG_X.MOV")  # case-collision sibling
 
-        # HEIC is an exact duplicate of an earlier file → SKIP propagates
-        # to its pair partner (mov_lower). The case-collision MOV (mov_upper)
-        # MUST NOT be confused with mov_lower in path_to_hr lookup.
+        # HEIC is an exact duplicate of an earlier file (action=EXACT).
+        # The case-collision MOV (mov_upper) MUST NOT be confused with
+        # mov_lower in pair-edge construction (#170 case-sensitivity).
         records = [
             _hr(r"D:\Photos\earlier.heic", sha256="dup",
                 source_label="takeout", exif_date=_dt()),
@@ -403,6 +572,10 @@ class TestCaseSensitiveCollision:
         # All four records must survive into ManifestRows
         assert len(result) == 4
         by_path = {r.source_path: r for r in result}
-        # The case-collision sibling is INDEPENDENT of the pair propagation
-        assert by_path[str(mov_upper)].action != "EXACT"   # not the partner
-        assert by_path[str(mov_lower)].action == "EXACT"   # IS the partner
+        # MOV partner keeps its own non-EXACT classification (no propagation).
+        assert by_path[str(mov_lower)].action != "EXACT"
+        assert by_path[str(mov_upper)].action != "EXACT"
+        # Pair edge unioned mov_lower with the heic's component → same group_id.
+        # mov_upper is unrelated → its own component (or group_id None if isolated).
+        assert by_path[str(heic)].group_id == by_path[str(mov_lower)].group_id
+        assert by_path[str(heic)].group_id != by_path[str(mov_upper)].group_id

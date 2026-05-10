@@ -140,11 +140,14 @@ def classify(
                 hr, "MOVE", reason="unique", dest=_dest_path(hr)
             )
 
-    # Pass 4: propagate EXACT/KEEP actions to Live Photo MOV partners
-    _propagate_pairs(records, rows)
+    # Pass 4 (was: action propagation, removed in #88): collect Live Photo
+    # pair edges. Pairs always share a group_id, but each row keeps its
+    # independent action / user_decision — the image's classification no
+    # longer dictates the video's.
+    pair_edges = _collect_pair_edges(records, rows)
 
-    # Pass 5: assign group_id via transitive closure over duplicate_of edges
-    _assign_group_ids(rows)
+    # Pass 5: assign group_id via union-find over duplicate_of + pair edges.
+    _assign_group_ids(rows, pair_edges)
 
     return list(rows.values())
 
@@ -287,41 +290,70 @@ def _classify_near_duplicates(
                     )
 
 
-def _propagate_pairs(records: list[HashResult], rows: dict[str, ManifestRow]) -> None:
-    """Propagate SKIP/KEEP actions to Live Photo MOV partners.
+def _collect_pair_edges(
+    records: list[HashResult], rows: dict[str, ManifestRow]
+) -> list[tuple[str, str]]:
+    """Return ``(own_path, peer_path)`` edges for every Live Photo cluster
+    member that survived classification.
 
-    Always overrides the partner's existing action — the image file is authoritative
-    for the pair. If the image is SKIP, the MOV must also be SKIP even if it was
-    independently classified as MOVE.
+    Per photo-manager#88: files with the same exact stem (clean_stem AND
+    ``(N)`` dupe-marker number) in the same directory always share a
+    ``group_id`` regardless of whether any side is itself a duplicate
+    of something else. Action / ``user_decision`` / ``dest_path`` /
+    ``reason`` are NOT propagated — each row keeps its independent
+    classification. The image's destruction is no longer automatically
+    the video's; the user makes those decisions per-row in the UI.
+
+    A "cluster" is computed by the walker's ``pair_cluster`` field and
+    typically holds one peer (the simple HEIC+MP4 case observed across
+    most production data). Larger clusters surface for:
+
+    * HEIC + MOV + MP4 (Google transcoded one Live Photo into both
+      video formats — same exact stem, no ``(N)``).
+    * HEIC + JPG + MP4 (a Live Photo with an extra image variant).
+
+    All cluster members share one group_id via the edges emitted here.
+
+    Implementation: emit edges as a list (not in-place mutation of
+    ``duplicate_of``) so ``_assign_group_ids`` can transitively close
+    every component via union-find — handles the asymmetric case where
+    each cluster member sits in its own SHA-group, plus the cluster
+    edges union them all.
+
+    The walker computes the cluster symmetrically (every member sees
+    every other member as a peer), so duplicate edges flow in both
+    directions. Union-find dedupes them implicitly.
     """
-    # Keys are str(path) for case-sensitivity on Windows — see classify() docstring.
-    path_to_hr = {str(hr.record.path): hr for hr in records}
-
+    edges: list[tuple[str, str]] = []
     for hr in records:
-        partner_path = hr.record.pair_partner
-        if partner_path is None:
+        own_key = str(hr.record.path)
+        if own_key not in rows:
             continue
-        own_row = rows.get(str(hr.record.path))
-        if own_row is None:
-            continue
-        if own_row.action in ("EXACT", "KEEP"):
-            partner_key = str(partner_path)
-            partner_hr = path_to_hr.get(partner_key)
-            if partner_hr:
-                rows[partner_key] = _make_row(
-                    partner_hr,
-                    own_row.action,
-                    duplicate_of=own_row.duplicate_of or str(hr.record.path),
-                    reason=f"Live Photo pair partner of {hr.record.path.name}",
-                )
+        for peer_path in hr.record.pair_cluster:
+            peer_key = str(peer_path)
+            if peer_key not in rows:
+                continue
+            edges.append((own_key, peer_key))
+    return edges
 
 
-def _assign_group_ids(rows: dict[str, ManifestRow]) -> None:
-    """Assign group_id via union-find over duplicate_of edges.
+def _assign_group_ids(
+    rows: dict[str, ManifestRow],
+    pair_edges: list[tuple[str, str]] | None = None,
+) -> None:
+    """Assign group_id via union-find over duplicate_of edges + pair edges.
 
     Files transitively connected (A→B, B→C) all receive the same group_id —
     the lexicographically smallest source_path in the component.
-    Isolated files (no similarity edge) receive group_id = None.
+    Isolated files (no similarity edge AND no pair edge) receive
+    group_id = None.
+
+    ``pair_edges`` are Live Photo HEIC ↔ MOV/MP4 pairs from
+    ``_collect_pair_edges`` (photo-manager#88). They participate in the
+    same union-find as ``duplicate_of`` edges, so a unique pair (neither
+    side a duplicate of anything else) still gets its own 2-row group;
+    a pair where each side belongs to a different SHA-group still
+    transitively closes into a single component.
     """
     parent: dict[str, str] = {}
 
@@ -342,12 +374,20 @@ def _assign_group_ids(rows: dict[str, ManifestRow]) -> None:
         if row.duplicate_of:
             union(row.source_path, row.duplicate_of)
 
+    # Pair edges (#88): pair partners always share a group regardless
+    # of whether either side is itself a SHA/pHash duplicate.
+    for a, b in (pair_edges or []):
+        union(a, b)
+
     # Collect every path that participates in at least one edge
     has_edge: set[str] = set()
     for row in rows.values():
         if row.duplicate_of:
             has_edge.add(row.source_path)
             has_edge.add(row.duplicate_of)
+    for a, b in (pair_edges or []):
+        has_edge.add(a)
+        has_edge.add(b)
 
     for row in rows.values():
         if row.source_path in has_edge:
