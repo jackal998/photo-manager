@@ -19,9 +19,11 @@ from loguru import logger
 
 from app.views.constants import (
     COL_NAME,
+    LOCK_SENTINEL,
     PATH_ROLE,
     REMOVE_FROM_LIST_DECISION,
     REMOVE_FROM_LIST_SENTINEL,
+    UNLOCK_SENTINEL,
     settable_decisions,
 )
 from app.views.tree_model_builder import build_model
@@ -210,6 +212,18 @@ class ExecuteActionDialog(QDialog):
             act.triggered.connect(
                 lambda _checked=False, _v=value, _p=path: self._set_decision(_p, _v)
             )
+        # Lock / Unlock — the escape hatch the user reaches for at execute
+        # time when a previously-locked row needs to actually go through.
+        # Single-row override is intentional: no skip-locked filter here.
+        # See photo-manager#164.
+        lock_act = menu.addAction(t("context_menu.lock"))
+        lock_act.triggered.connect(
+            lambda _checked=False, _p=path: self._set_lock(_p, True)
+        )
+        unlock_act = menu.addAction(t("context_menu.unlock"))
+        unlock_act.triggered.connect(
+            lambda _checked=False, _p=path: self._set_lock(_p, False)
+        )
         # Right-click parity with the main file list — the regex dialog
         # was previously only reachable via the dedicated toolbar button.
         # Discoverability matters more than menu purity; add it here too.
@@ -218,7 +232,34 @@ class ExecuteActionDialog(QDialog):
         regex_act.triggered.connect(self._show_select_dialog)
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
+    def _set_lock(self, path: str, locked: bool) -> None:
+        """Single-row Lock/Unlock from the Execute dialog right-click.
+
+        Persists immediately and refreshes the tree so the lock glyph
+        updates without waiting for an Execute pass. See photo-manager#164.
+        """
+        for group in self._groups:
+            for rec in getattr(group, "items", []):
+                if rec.file_path == path:
+                    rec.is_locked = locked
+                    break
+        if self._manifest_path:
+            try:
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().batch_update_lock_state(
+                    self._manifest_path, {path: locked}
+                )
+            except Exception as exc:
+                logger.warning("Failed to persist lock state: {}", exc)
+        self._refresh_ui_after_decision_change()
+
     def _set_decision(self, path: str, decision: str) -> None:
+        if decision == LOCK_SENTINEL:
+            self._set_lock(path, True)
+            return
+        if decision == UNLOCK_SENTINEL:
+            self._set_lock(path, False)
+            return
         if decision == REMOVE_FROM_LIST_SENTINEL:
             # Single-row right-click — always confirm before removing,
             # for symmetry with the regex flow. Set+execute is a bigger
@@ -301,7 +342,11 @@ class ExecuteActionDialog(QDialog):
 
         ``new_decision == REMOVE_FROM_LIST_SENTINEL`` removes the
         matched rows from the review list (mirrors the main-window
-        regex flow); otherwise sets ``user_decision``.
+        regex flow). ``LOCK_SENTINEL`` / ``UNLOCK_SENTINEL`` flip
+        ``is_locked`` for matched rows (idempotent — applied to all,
+        no skip-locked pre-filter on this branch). For destructive
+        decisions, already-locked rows are skipped — see
+        photo-manager#164.
         """
         import re as _re
         from PySide6.QtWidgets import QMessageBox
@@ -313,6 +358,36 @@ class ExecuteActionDialog(QDialog):
             QMessageBox.warning(self, t("execute_dialog.invalid_regex_title"), str(exc))
             return
 
+        # Lock / unlock route — applied to ALL matched, no skip filter.
+        # The whole point of having unlock available here is that locked
+        # rows need bulk-untangling at execute time.
+        if new_decision in (LOCK_SENTINEL, UNLOCK_SENTINEL):
+            target_locked = (new_decision == LOCK_SENTINEL)
+            lock_batch: dict[str, bool] = {}
+            for group in self._groups:
+                for rec in getattr(group, "items", []):
+                    value = _get_record_field(rec, field)
+                    if value is not None and rx.search(value):
+                        rec.is_locked = target_locked
+                        lock_batch[rec.file_path] = target_locked
+            if not lock_batch:
+                QMessageBox.information(
+                    self,
+                    t("execute_dialog.no_match_title"),
+                    t("execute_dialog.no_match_body"),
+                )
+                return
+            if self._manifest_path:
+                try:
+                    from infrastructure.manifest_repository import ManifestRepository
+                    ManifestRepository().batch_update_lock_state(
+                        self._manifest_path, lock_batch
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to persist lock state: {}", exc)
+            self._refresh_ui_after_decision_change()
+            return
+
         # Bulk regex remove now mirrors bulk regex delete/keep:
         # matched rows get user_decision = REMOVE_FROM_LIST_DECISION
         # and the user reviews + commits via Execute. Single-row
@@ -321,18 +396,31 @@ class ExecuteActionDialog(QDialog):
             new_decision = REMOVE_FROM_LIST_DECISION
 
         batch: dict[str, str] = {}
+        skipped_locked = 0
         for group in self._groups:          # search full list, not just displayed
             for rec in getattr(group, "items", []):
                 value = _get_record_field(rec, field)
                 if value is not None and rx.search(value):
+                    if rec.is_locked:
+                        skipped_locked += 1
+                        continue
                     rec.user_decision = new_decision
                     batch[rec.file_path] = new_decision
 
-        if not batch:
+        if not batch and not skipped_locked:
             QMessageBox.information(
                 self,
                 t("execute_dialog.no_match_title"),
                 t("execute_dialog.no_match_body"),
+            )
+            return
+        if not batch:
+            # Every match was locked — surface explicitly so the user
+            # doesn't think the regex didn't match.
+            QMessageBox.information(
+                self,
+                t("file_op.set_action_all_locked_title"),
+                t("file_op.set_action_all_locked_body", count=skipped_locked),
             )
             return
 
@@ -344,6 +432,11 @@ class ExecuteActionDialog(QDialog):
                 logger.warning("Failed to persist batch decisions: {}", exc)
 
         self._refresh_ui_after_decision_change()
+        if skipped_locked:
+            logger.info(
+                "Set {} decisions, skipped {} locked rows",
+                len(batch), skipped_locked,
+            )
 
     # ------------------------------------------------------------------ execute
 

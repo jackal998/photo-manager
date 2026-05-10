@@ -77,6 +77,11 @@ ALL_SCENARIOS = [
     # Regex mode to confirm the regex line edit holds the synthesised
     # pattern and reverse-parsing back populates Simple cleanly.
     "s31_simple_mode_regex",
+    # s32 (#164) — Locked decision state protects per-file decisions
+    # from bulk regex sweeps. Drives the regex dialog's new lock /
+    # unlock action options end-to-end on the same near-duplicates
+    # fixture as s14 / s29 / s30 / s31.
+    "s32_lock_protects_from_bulk_regex",
 ]
 
 

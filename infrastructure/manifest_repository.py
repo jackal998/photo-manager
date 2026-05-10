@@ -6,7 +6,9 @@ Load flow:
   the user via "Remove from List").  Files with a duplicate_of reference (EXACT /
   REVIEW_DUPLICATE) are grouped with their reference as a pair.  If the reference
   file itself is marked 'removed', the inline yield is also skipped.
-  All records load with is_mark=False, is_locked=False.
+  All records load with is_mark=False; is_locked is read from the
+  ``is_locked`` column (0 / 1, defaults to 0 for older manifests via the
+  additive migration).
 
   EXIF date is only read for REVIEW_DUPLICATE rows (performance).
 
@@ -14,7 +16,9 @@ Load flow:
   automatically so older manifests open without error.
 
 Save flow:
-  Writes rec.user_decision for every record back to the manifest.
+  Writes rec.user_decision for every record back to the manifest. Lock
+  state is written by ``batch_update_lock_state`` separately — locking is
+  a UI affordance, not a per-decision side-effect.
   (executed=1 is set separately by ExecuteActionDialog after operations run.)
 """
 
@@ -47,7 +51,7 @@ def _connect(path: str) -> sqlite3.Connection:
 
 _LOAD_ALL_SQL = """
 SELECT id, source_path, source_label, group_id, hamming_distance, reason,
-       action, executed, user_decision,
+       action, executed, user_decision, is_locked,
        file_size_bytes, shot_date, creation_date, mtime,
        pixel_width, pixel_height
 FROM   migration_manifest
@@ -82,10 +86,15 @@ _MIGRATIONS = [
     ("group_id",        "TEXT"),
     ("pixel_width",     "INTEGER"),
     ("pixel_height",    "INTEGER"),
+    ("is_locked",       "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 _UPDATE_DECISION_SQL = """
 UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
+"""
+
+_UPDATE_LOCK_SQL = """
+UPDATE migration_manifest SET is_locked = ? WHERE source_path = ?
 """
 
 _MARK_EXECUTED_SQL = """
@@ -246,7 +255,7 @@ class ManifestRepository:
                         source_path=source_path,
                         group_number=group_number,
                         is_mark=False,
-                        is_locked=False,
+                        is_locked=bool(row["is_locked"]),
                         action=action,
                         read_exif=read_exif,
                         user_decision=user_decision,
@@ -297,6 +306,25 @@ class ManifestRepository:
         conn = _connect(manifest_path)
         try:
             conn.executemany(_UPDATE_DECISION_SQL, [(v, k) for k, v in decisions.items()])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def batch_update_lock_state(self, manifest_path: str, lock_states: dict[str, bool]) -> None:
+        """Update is_locked for multiple rows in a single transaction.
+
+        Lock state lives on its own column so it persists independently of
+        ``user_decision`` (locking pins the current decision; the two are
+        orthogonal at the schema level — see photo-manager#164).
+        """
+        if not lock_states:
+            return
+        conn = _connect(manifest_path)
+        try:
+            conn.executemany(
+                _UPDATE_LOCK_SQL,
+                [(1 if v else 0, k) for k, v in lock_states.items()],
+            )
             conn.commit()
         finally:
             conn.close()

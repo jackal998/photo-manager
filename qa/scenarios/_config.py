@@ -85,6 +85,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # same fixture as s14/s30; partition is Simple "contains q9" →
     # matches only neardup_00_q95.jpg.
     "s31_simple_mode_regex": ["qa/sandbox/near-duplicates"],
+    # s32 (#164) — Lock state protects per-file decisions from bulk
+    # regex sweeps. Same fixture as s14 so the regex partition stays
+    # stable; q95 locked, q[89]\d destructive regex matches all three
+    # but only q88 / q80 actually receive the decision.
+    "s32_lock_protects_from_bulk_regex": ["qa/sandbox/near-duplicates"],
 }
 
 

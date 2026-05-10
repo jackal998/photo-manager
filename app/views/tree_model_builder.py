@@ -24,17 +24,28 @@ from app.views.constants import (
 from infrastructure.i18n import t
 
 
-def _action_display(decision: str) -> str:
+_LOCK_GLYPH = "\U0001F512"  # 🔒
+
+
+def _action_display(decision: str, is_locked: bool = False) -> str:
     """Map an internal user_decision value to its localized label.
 
     Currently only the deferred remove-from-list value gets a
     translated label; ``"delete"`` and ``"keep"`` are passed through
     as-is to preserve the existing display behaviour. If those become
     translatable later, extend the mapping here.
+
+    A locked row is prefixed with a 🔒 glyph so the visual indicator
+    rides on the existing Action column (no schema/layout change needed
+    in the tree). See photo-manager#164.
     """
     if decision == REMOVE_FROM_LIST_DECISION:
-        return t("decision.remove_from_list")
-    return decision
+        text = t("decision.remove_from_list")
+    else:
+        text = decision
+    if is_locked:
+        return f"{_LOCK_GLYPH} {text}".rstrip()
+    return text
 
 # Numeric sort priorities — lower value = sorted first (ascending).
 #
@@ -204,12 +215,13 @@ def build_model(
             file_action = getattr(p, "action", "") or ""
             file_match = _file_similarity(file_action, p)
 
-            # Col 1: user's decision (delete / keep / "")
+            # Col 1: user's decision (delete / keep / "") with optional lock glyph
             item_decision = getattr(p, "user_decision", "") or ""
+            item_locked = bool(getattr(p, "is_locked", False))
 
             child_row = [
                 QStandardItem(file_match),                       # COL_GROUP      (0) — similarity
-                QStandardItem(_action_display(item_decision)),   # COL_ACTION     (1) — localized label
+                QStandardItem(_action_display(item_decision, item_locked)),  # COL_ACTION (1) — localized label + lock glyph
                 QStandardItem(name),                             # COL_NAME       (2)
                 QStandardItem(folder),                           # COL_FOLDER     (3)
                 QStandardItem(str(size_num)),        # COL_SIZE_BYTES (4)

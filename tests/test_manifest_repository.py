@@ -1061,3 +1061,126 @@ class TestInGroupRowOrdering:
         assert actions[0] == "KEEP", \
             f"KEEP primary (rendered as Ref) should be at top of group; got order {actions}"
         assert actions == ["KEEP", "EXACT", "REVIEW_DUPLICATE"]
+
+
+# ---------------------------------------------------------------------------
+# is_locked persistence (photo-manager#164)
+# ---------------------------------------------------------------------------
+
+_DDL_WITH_IS_LOCKED = """
+CREATE TABLE migration_manifest (
+    id               INTEGER PRIMARY KEY,
+    source_path      TEXT NOT NULL,
+    source_label     TEXT NOT NULL,
+    dest_path        TEXT,
+    action           TEXT NOT NULL,
+    source_hash      TEXT,
+    phash            TEXT,
+    hamming_distance INTEGER,
+    group_id         TEXT,
+    reason           TEXT,
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    is_locked        INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
+class TestIsLockedPersistence:
+    """Round-trip the is_locked column: write via batch_update_lock_state,
+    read back via load(). Pre-existing DBs (no is_locked column) auto-migrate
+    via the additive ALTER TABLE list and load with is_locked=False.
+    """
+
+    def test_is_locked_default_false_for_new_rows(self, tmp_path):
+        """A row inserted without is_locked loads with is_locked=False."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ])
+        records = {str(r.file_path): r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].is_locked is False
+        assert records[str(ref)].is_locked is False
+
+    def test_old_db_without_is_locked_column_auto_migrates(self, tmp_path):
+        """Pre-#164 DBs lack the is_locked column. The additive migration
+        list adds it on load with default 0, so old manifests open
+        without error and every row reads back as is_locked=False."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ], ddl=_DDL_WITH_METADATA)  # _DDL_WITH_METADATA has no is_locked
+        # First load triggers the migration (ALTER TABLE ADD COLUMN).
+        records = list(ManifestRepository().load(str(db)))
+        assert all(r.is_locked is False for r in records)
+        # Re-open and confirm the column now exists.
+        conn = sqlite3.connect(db)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(migration_manifest)")}
+        conn.close()
+        assert "is_locked" in cols
+
+    def test_batch_update_lock_state_writes_and_loads(self, tmp_path):
+        """batch_update_lock_state flips the column; subsequent load()
+        returns is_locked=True for the touched row."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ], ddl=_DDL_WITH_IS_LOCKED)
+
+        ManifestRepository().batch_update_lock_state(
+            str(db), {str(cand): True}
+        )
+
+        records = {str(r.file_path): r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].is_locked is True
+        assert records[str(ref)].is_locked is False
+
+    def test_batch_update_lock_state_handles_unlock(self, tmp_path):
+        """Re-running batch_update_lock_state with locked=False clears it."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid, "is_locked": 1}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ], ddl=_DDL_WITH_IS_LOCKED)
+
+        # Sanity: lock loaded back as True
+        records = {str(r.file_path): r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].is_locked is True
+
+        # Unlock
+        ManifestRepository().batch_update_lock_state(
+            str(db), {str(cand): False}
+        )
+
+        records = {str(r.file_path): r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].is_locked is False
+
+    def test_batch_update_lock_state_empty_dict_is_noop(self, tmp_path):
+        """Empty input must not error or open a connection."""
+        db = tmp_path / "noop.sqlite"
+        # File doesn't even exist; empty dict should be a guard-clause early return
+        ManifestRepository().batch_update_lock_state(str(db), {})
+        assert not db.exists()

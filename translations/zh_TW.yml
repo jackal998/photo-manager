@@ -69,6 +69,8 @@ decision:
   delete: "刪除"
   keep: "保留 (取消動作)"
   remove_from_list: "從清單移除"
+  lock: "鎖定"
+  unlock: "解除鎖定"
 
 scan_dialog:
   title: "掃描來源"
@@ -172,6 +174,8 @@ context_menu:
   open_folder: "開啟資料夾"
   set_action_by_regex: "依欄位/正規式設定動作…"
   remove_from_list: "從清單移除"
+  lock: "鎖定"
+  unlock: "解除鎖定"
 
 file_op:
   open_manifest_title: "開啟清單檔"
@@ -188,6 +192,13 @@ file_op:
   remove_error_title: "移除錯誤"
   remove_failed_body: "從清單移除失敗:{error}"
   decision_set_status: "決策已設為「{decision}」"
+  decision_set_with_skipped_status: "決策已設為「{decision}」({set_count} 列);跳過 {skipped} 列已鎖定"
+  set_action_all_locked_title: "設定動作 — 全部相符列均已鎖定"
+  set_action_all_locked_body: "所有 {count} 列相符項目均已鎖定。如需套用此動作,請先解除鎖定。"
+  locked_verb: "已鎖定"
+  unlocked_verb: "已解除鎖定"
+  noun_row_singular: "列"
+  noun_row_plural: "列"
   set_action_no_manifest_title: "設定動作 — 未載入清單"
   set_action_no_manifest_body: "尚未載入清單。"
   set_action_no_selection_title: "設定動作 — 未選取"

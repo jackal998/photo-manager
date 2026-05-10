@@ -30,6 +30,10 @@ class ActionHandlers(Protocol):
         """Set the user decision (delete/keep) for file items."""
         ...
 
+    def set_locked_state(self, items: list[dict], locked: bool) -> None:
+        """Lock or unlock file items (photo-manager#164)."""
+        ...
+
 
 class TreeItemProvider(Protocol):
     """Protocol for tree item provider."""
@@ -91,6 +95,22 @@ class ContextMenuHandler:
                         self.handlers.set_decision([_item], _v)
                 )
 
+            # Lock / Unlock — both shown unconditionally; the handler is
+            # idempotent so re-locking a locked row is a no-op (and the
+            # UX cost of showing only the contextually-relevant action
+            # would mean threading lock state into the menu builder for
+            # one label flip — see photo-manager#164).
+            lock_action = menu.addAction(t("context_menu.lock"))
+            lock_action.triggered.connect(
+                lambda checked=False, _item=item:
+                    self.handlers.set_locked_state([_item], True)
+            )
+            unlock_action = menu.addAction(t("context_menu.unlock"))
+            unlock_action.triggered.connect(
+                lambda checked=False, _item=item:
+                    self.handlers.set_locked_state([_item], False)
+            )
+
             # Open Folder action
             open_folder_action = menu.addAction(t("context_menu.open_folder"))
 
@@ -141,6 +161,19 @@ class ContextMenuHandler:
             a.triggered.connect(
                 lambda checked=False, _v=value, _items=file_items:
                     self.handlers.set_decision(_items, _v)
+            )
+
+        # Bulk Lock / Unlock — see photo-manager#164.
+        if file_items:
+            lock_action = menu.addAction(t("context_menu.lock"))
+            lock_action.triggered.connect(
+                lambda checked=False, _items=file_items:
+                    self.handlers.set_locked_state(_items, True)
+            )
+            unlock_action = menu.addAction(t("context_menu.unlock"))
+            unlock_action.triggered.connect(
+                lambda checked=False, _items=file_items:
+                    self.handlers.set_locked_state(_items, False)
             )
 
         # Right-click parity with the single-selection branch — the regex

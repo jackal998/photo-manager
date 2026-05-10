@@ -71,20 +71,34 @@ REMOVE_FROM_LIST_SENTINEL: str = "__remove_from_list__"
 # applied at execute time (mark removed in the manifest, drop from vm).
 REMOVE_FROM_LIST_DECISION: str = "remove_from_list"
 
+# Sentinels for lock / unlock dispatched through the same regex / multi-
+# select code path as decisions. They DO NOT update ``user_decision`` —
+# they flip the orthogonal ``is_locked`` flag. Callers in
+# ``file_operations`` recognise these sentinels and route to
+# ``set_locked_state`` instead of ``set_decision``. Bulk regex applies
+# them to all matched rows (idempotent — no skip-locked pre-filter on
+# the lock/unlock route itself). See photo-manager#164.
+LOCK_SENTINEL: str = "__lock__"
+UNLOCK_SENTINEL: str = "__unlock__"
 
-def settable_decisions(include_remove: bool = False) -> list[tuple[str, str]]:
+
+def settable_decisions(
+    include_remove: bool = False,
+    include_lock: bool = False,
+) -> list[tuple[str, str]]:
     """User-settable decision options for context menus and ActionDialog.
 
     Each tuple is ``(display_label, stored_value)``. The stored value is
     internal (``"delete"`` or empty string for "keep — remove action");
     only the label is translated.
 
-    When ``include_remove`` is True, appends a third entry whose stored
-    value is :data:`REMOVE_FROM_LIST_SENTINEL`. Callers that recognise
-    the sentinel route to the remove-from-list backend instead of the
-    decision-update path. Default is False so the main-window
-    right-click submenu (which has a separate top-level "Remove from
-    List" item) doesn't gain a duplicate entry.
+    When ``include_remove`` is True, appends an entry whose stored value
+    is :data:`REMOVE_FROM_LIST_SENTINEL`. When ``include_lock`` is True,
+    appends two more entries with the lock/unlock sentinels. Callers
+    that recognise the sentinels route to the appropriate backend
+    instead of the decision-update path. Defaults are both False so the
+    main-window right-click submenu (which has separate top-level Lock /
+    Unlock items) doesn't gain duplicate entries.
     """
     decisions: list[tuple[str, str]] = [
         (t("decision.delete"), "delete"),
@@ -92,4 +106,7 @@ def settable_decisions(include_remove: bool = False) -> list[tuple[str, str]]:
     ]
     if include_remove:
         decisions.append((t("decision.remove_from_list"), REMOVE_FROM_LIST_SENTINEL))
+    if include_lock:
+        decisions.append((t("decision.lock"), LOCK_SENTINEL))
+        decisions.append((t("decision.unlock"), UNLOCK_SENTINEL))
     return decisions
