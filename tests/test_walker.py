@@ -193,6 +193,71 @@ class TestLivePhotoPairing:
         heic = next(r for r in records if r.path.suffix.upper() == ".HEIC")
         assert heic.pair_partner is not None
 
+    def test_pair_emits_both_records(self, tmp_path):
+        """Both halves of a Live Photo pair must appear in the records.
+
+        Regression for the surface bug behind photo-manager#88: the old
+        walker maintained a ``paired`` set and skipped any path already
+        named as a partner, dropping the MOV/MP4 half entirely before
+        hashing. The video never reached the manifest, so dedup-side
+        pair-edge logic had only one record to work with and the pair
+        couldn't form a 2-row group on the GUI side.
+
+        This test mirrors the production-data shape verified against
+        ``D:\\Takeout-0508-qa\\2024 June-July Japan (Nishi-Nihon)``
+        (4 simple HEIC+MP4 pairs, no edge cases).
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_2247.HEIC")
+        _write_mov(tmp_path / "IMG_2247.MP4")
+        records = scan_sources({"test": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["IMG_2247.HEIC", "IMG_2247.MP4"], (
+            f"expected both halves of pair to appear; got {names}"
+        )
+
+    def test_pair_partner_bidirectional(self, tmp_path):
+        """HEIC's pair_partner points at the MOV, AND vice versa.
+
+        Bidirectional pairing is what feeds ``_collect_pair_edges`` in
+        ``scanner/dedup.py`` so the union-find unions both directions
+        even when iteration order or record-survival differs.
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_2247.HEIC")
+        _write_mov(tmp_path / "IMG_2247.MP4")
+        records = scan_sources({"test": tmp_path})
+        heic = next(r for r in records if r.path.suffix == ".HEIC")
+        mp4  = next(r for r in records if r.path.suffix == ".MP4")
+        assert heic.pair_partner is not None
+        assert heic.pair_partner.name == "IMG_2247.MP4"
+        assert mp4.pair_partner is not None
+        assert mp4.pair_partner.name == "IMG_2247.HEIC"
+
+    def test_unpaired_video_still_emits_record(self, tmp_path):
+        """A video with no same-stem image partner (e.g. a standalone
+        recording, like ``IMG_2296.MOV`` in the production data set)
+        must still produce its own FileRecord with ``pair_partner=None``.
+        """
+        from scanner.walker import scan_sources
+        _write_mov(tmp_path / "IMG_2296.MOV")
+        records = scan_sources({"test": tmp_path})
+        assert len(records) == 1
+        assert records[0].path.name == "IMG_2296.MOV"
+        assert records[0].pair_partner is None
+
+    def test_takeout_numbered_pair_emits_both(self, tmp_path):
+        """Strengthening of ``test_takeout_numbered_pair`` — assert BOTH
+        halves of a ``(1)``-suffixed pair appear, not just the HEIC
+        side. Pre-#88 the MOV was silently dropped here too.
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "IMG_9556(1).HEIC")
+        _write_mov(tmp_path / "IMG_9556(1).MOV")
+        records = scan_sources({"test": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["IMG_9556(1).HEIC", "IMG_9556(1).MOV"]
+
 
 class TestFlatScan:
     def test_flat_scan_finds_top_level_file(self, tmp_path):

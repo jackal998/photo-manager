@@ -138,7 +138,21 @@ def _scan_dir(
 
 
 def _process_directory(files: list[Path], label: str) -> list[FileRecord]:
-    """Build FileRecords for one directory, pairing Live Photos by stem."""
+    """Build FileRecords for one directory, pairing Live Photos by stem.
+
+    Every media file gets its own FileRecord. Live Photo pairing is
+    expressed via the bidirectional ``pair_partner`` field — the HEIC's
+    ``pair_partner`` points at the MOV/MP4, and vice versa. Downstream
+    (hasher, dedup, manifest writer) operates on each FileRecord
+    independently, so BOTH halves must surface here.
+
+    Pre-#88 this loop maintained a ``paired`` set and skipped any path
+    already named as a partner — meaning the MOV/MP4 half of every
+    Live Photo pair was silently dropped before hashing. The video
+    never reached the manifest, so the dedup-side pair-edge logic in
+    ``scanner/dedup.py`` had only one record to work with and the pair
+    couldn't form a 2-row group. See the issue thread on PR #178.
+    """
     # Build stem → files map using clean stems (strip Takeout numbering + edited suffixes)
     stem_map: dict[str, list[Path]] = {}
     for path in files:
@@ -146,21 +160,11 @@ def _process_directory(files: list[Path], label: str) -> list[FileRecord]:
         stem_map.setdefault(mf.clean_stem, []).append(path)
 
     records: list[FileRecord] = []
-    # str(path) for case-sensitivity on Windows — see photo-manager#170.
-    paired: set[str] = set()
-
     for path in files:
-        if str(path) in paired:
-            continue
-
         file_type, misnamed = get_file_type(path)
         if file_type == "skip":
             continue
-
         partner = _find_live_photo_partner(path, stem_map)
-        if partner is not None:
-            paired.add(str(partner))
-
         records.append(FileRecord(
             path=path,
             source_label=label,
@@ -168,7 +172,6 @@ def _process_directory(files: list[Path], label: str) -> list[FileRecord]:
             pair_partner=partner,
             misnamed=misnamed,
         ))
-
     return records
 
 
