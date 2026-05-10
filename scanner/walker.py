@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from loguru import logger
+
 from scanner.media import (
     COMPANION_PHOTO_EXTS,
     EDITED_SUFFIXES,
@@ -14,6 +16,19 @@ from scanner.media import (
     get_file_type,
     parse_media_filename,
 )
+
+
+def _has_win32_unsafe_name(name: str) -> bool:
+    """True if a filename ends in '.' or whitespace.
+
+    NTFS preserves these characters but the Win32 GUI layer (Explorer, file
+    dialogs, most third-party tools) silently strips them on display. Worse,
+    pathlib's ``is_dir`` / ``exists`` / ``rglob`` recurse FAIL on such paths
+    unless they are accessed via the ``\\\\?\\`` NT-prefix raw API — so any
+    files INSIDE a trailing-dot folder are silently invisible to a normal
+    pathlib walk. See photo-manager#169.
+    """
+    return bool(name) and (name[-1] == "." or name[-1].isspace())
 
 
 @dataclass
@@ -80,11 +95,29 @@ def _scan_dir(
         recursive: When ``True`` walk all subdirectories (default); when
             ``False`` scan only the immediate files in ``root``.
     """
-    # Collect all media files grouped by directory for efficient pairing
-    by_dir: dict[Path, list[Path]] = {}
+    # Collect all media files grouped by directory for efficient pairing.
+    # Keys are str(parent), not Path. On Windows pathlib equality is
+    # case-INSENSITIVE — two genuinely-distinct sibling directories that
+    # differ only by case (rare but possible on case-sensitive NTFS dirs)
+    # would collapse and lose one. See photo-manager#170.
+    by_dir: dict[str, list[Path]] = {}
     total = 0
+    warned_unsafe: set[str] = set()
     glob_fn = root.rglob if recursive else root.glob
     for path in glob_fn("*"):
+        # photo-manager#169: warn ONCE per trailing-dot/whitespace name.
+        # rglob enumerates such paths but pathlib operations on them fail —
+        # any contents inside are silently invisible to this walk.
+        if _has_win32_unsafe_name(path.name):
+            key = str(path)
+            if key not in warned_unsafe:
+                warned_unsafe.add(key)
+                logger.warning(
+                    f"Path '{path}' has a trailing dot or whitespace in its "
+                    f"name. NTFS preserves it but Win32 GUI tools hide it, "
+                    f"and pathlib cannot recurse into trailing-dot folders. "
+                    f"Any files INSIDE may be silently missed. Rename to fix."
+                )
         if not path.is_file():
             continue
         if _traverses_symlink(path, root):
@@ -93,13 +126,13 @@ def _scan_dir(
             continue
         if path.suffix.lower() not in MEDIA_EXTENSIONS:
             continue
-        by_dir.setdefault(path.parent, []).append(path)
+        by_dir.setdefault(str(path.parent), []).append(path)
         total += 1
         if limit and total >= limit:
             break
 
     records: list[FileRecord] = []
-    for directory, files in by_dir.items():
+    for _directory, files in by_dir.items():
         records.extend(_process_directory(files, label))
     return records
 
@@ -113,10 +146,11 @@ def _process_directory(files: list[Path], label: str) -> list[FileRecord]:
         stem_map.setdefault(mf.clean_stem, []).append(path)
 
     records: list[FileRecord] = []
-    paired: set[Path] = set()
+    # str(path) for case-sensitivity on Windows — see photo-manager#170.
+    paired: set[str] = set()
 
     for path in files:
-        if path in paired:
+        if str(path) in paired:
             continue
 
         file_type, misnamed = get_file_type(path)
@@ -125,7 +159,7 @@ def _process_directory(files: list[Path], label: str) -> list[FileRecord]:
 
         partner = _find_live_photo_partner(path, stem_map)
         if partner is not None:
-            paired.add(partner)
+            paired.add(str(partner))
 
         records.append(FileRecord(
             path=path,

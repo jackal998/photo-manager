@@ -116,7 +116,11 @@ def classify(
                 seen[label] = len(seen)
         source_priority = seen
 
-    rows: dict[Path, ManifestRow] = {}
+    # Keys are str(path), not Path. On Windows pathlib equality is case-INSENSITIVE
+    # (e.g. Path("a.MOV") == Path("a.mov") is True), which silently collapses
+    # genuinely-distinct files that happen to share a name in different case on
+    # case-sensitive NTFS dirs. See photo-manager#170.
+    rows: dict[str, ManifestRow] = {}
 
     # Pass 1: exact SHA-256 duplicates
     _classify_exact(records, rows, source_priority)
@@ -126,12 +130,13 @@ def classify(
 
     # Pass 3: remaining unclassified files — all sources treated equally
     for hr in records:
-        if hr.record.path in rows:
+        key = str(hr.record.path)
+        if key in rows:
             continue
         if hr.exif_date is None:
-            rows[hr.record.path] = _make_row(hr, "UNDATED", reason="no EXIF DateTimeOriginal")
+            rows[key] = _make_row(hr, "UNDATED", reason="no EXIF DateTimeOriginal")
         else:
-            rows[hr.record.path] = _make_row(
+            rows[key] = _make_row(
                 hr, "MOVE", reason="unique", dest=_dest_path(hr)
             )
 
@@ -151,7 +156,7 @@ def _priority(label: str, source_priority: dict[str, int]) -> int:
 
 def _classify_exact(
     records: list[HashResult],
-    rows: dict[Path, ManifestRow],
+    rows: dict[str, ManifestRow],
     source_priority: dict[str, int],
 ) -> None:
     """Group by SHA-256; mark lower-priority copies as EXACT."""
@@ -165,7 +170,7 @@ def _classify_exact(
         group.sort(key=lambda h: _priority(h.record.source_label, source_priority))
         keeper = group[0]
         for duplicate in group[1:]:
-            rows[duplicate.record.path] = _make_row(
+            rows[str(duplicate.record.path)] = _make_row(
                 duplicate,
                 "EXACT",
                 duplicate_of=str(keeper.record.path),
@@ -175,14 +180,14 @@ def _classify_exact(
 
 def _classify_phash(
     records: list[HashResult],
-    rows: dict[Path, ManifestRow],
+    rows: dict[str, ManifestRow],
     threshold: int,
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
 ) -> None:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE."""
     # Only consider records not already classified and with a valid pHash
-    candidates = [hr for hr in records if hr.phash and hr.record.path not in rows]
+    candidates = [hr for hr in records if hr.phash and str(hr.record.path) not in rows]
 
     # Build pHash → records map (exact matches first)
     by_phash: dict[str, list[HashResult]] = {}
@@ -201,7 +206,7 @@ def _classify_phash(
 
 def _classify_format_group(
     group: list[HashResult],
-    rows: dict[Path, ManifestRow],
+    rows: dict[str, ManifestRow],
     source_priority: dict[str, int],
 ) -> None:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority."""
@@ -222,9 +227,10 @@ def _classify_format_group(
     ))
     keeper = lossy[0]
     for duplicate in lossy[1:]:
-        if duplicate.record.path in rows:
+        key = str(duplicate.record.path)
+        if key in rows:
             continue
-        rows[duplicate.record.path] = _make_row(
+        rows[key] = _make_row(
             duplicate,
             "EXACT",
             duplicate_of=str(keeper.record.path),
@@ -236,7 +242,7 @@ def _classify_format_group(
 
 def _classify_near_duplicates(
     candidates: list[HashResult],
-    rows: dict[Path, ManifestRow],
+    rows: dict[str, ManifestRow],
     threshold: int,
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
@@ -245,7 +251,7 @@ def _classify_near_duplicates(
     if not _IMAGEHASH_AVAILABLE:
         return
 
-    unclassified = [hr for hr in candidates if hr.record.path not in rows]
+    unclassified = [hr for hr in candidates if str(hr.record.path) not in rows]
     hashes = [(hr, imagehash.hex_to_hash(hr.phash)) for hr in unclassified if hr.phash]
 
     for i, (hr_a, hash_a) in enumerate(hashes):
@@ -253,7 +259,7 @@ def _classify_near_duplicates(
         # a comparator so that transitively-similar files (hr_b similar to hr_a
         # which is similar to an earlier file) are connected into the same group.
         for hr_b, hash_b in hashes[i + 1:]:
-            if hr_b.record.path in rows:
+            if str(hr_b.record.path) in rows:
                 continue
             distance = hash_a - hash_b
             if 0 < distance <= threshold:
@@ -269,8 +275,9 @@ def _classify_near_duplicates(
                     key=lambda h: _priority(h.record.source_label, source_priority),
                 )
                 flagged = ordered[1]
-                if flagged.record.path not in rows:
-                    rows[flagged.record.path] = _make_row(
+                flagged_key = str(flagged.record.path)
+                if flagged_key not in rows:
+                    rows[flagged_key] = _make_row(
                         flagged,
                         "REVIEW_DUPLICATE",
                         duplicate_of=str(ordered[0].record.path),
@@ -280,26 +287,28 @@ def _classify_near_duplicates(
                     )
 
 
-def _propagate_pairs(records: list[HashResult], rows: dict[Path, ManifestRow]) -> None:
+def _propagate_pairs(records: list[HashResult], rows: dict[str, ManifestRow]) -> None:
     """Propagate SKIP/KEEP actions to Live Photo MOV partners.
 
     Always overrides the partner's existing action — the image file is authoritative
     for the pair. If the image is SKIP, the MOV must also be SKIP even if it was
     independently classified as MOVE.
     """
-    path_to_hr = {hr.record.path: hr for hr in records}
+    # Keys are str(path) for case-sensitivity on Windows — see classify() docstring.
+    path_to_hr = {str(hr.record.path): hr for hr in records}
 
     for hr in records:
         partner_path = hr.record.pair_partner
         if partner_path is None:
             continue
-        own_row = rows.get(hr.record.path)
+        own_row = rows.get(str(hr.record.path))
         if own_row is None:
             continue
         if own_row.action in ("EXACT", "KEEP"):
-            partner_hr = path_to_hr.get(partner_path)
+            partner_key = str(partner_path)
+            partner_hr = path_to_hr.get(partner_key)
             if partner_hr:
-                rows[partner_path] = _make_row(
+                rows[partner_key] = _make_row(
                     partner_hr,
                     own_row.action,
                     duplicate_of=own_row.duplicate_of or str(hr.record.path),
@@ -307,7 +316,7 @@ def _propagate_pairs(records: list[HashResult], rows: dict[Path, ManifestRow]) -
                 )
 
 
-def _assign_group_ids(rows: dict[Path, ManifestRow]) -> None:
+def _assign_group_ids(rows: dict[str, ManifestRow]) -> None:
     """Assign group_id via union-find over duplicate_of edges.
 
     Files transitively connected (A→B, B→C) all receive the same group_id —
