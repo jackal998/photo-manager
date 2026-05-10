@@ -26,12 +26,18 @@ def _record(
     source_label: str = "jdrive",
     file_type: str = "jpeg",
     pair_partner: Path | None = None,
+    pair_cluster: tuple[Path, ...] | None = None,
 ) -> FileRecord:
+    """Build a FileRecord. ``pair_partner`` is accepted as a back-compat
+    alias and converted to a single-member ``pair_cluster``; tests that
+    need multi-peer clusters should pass ``pair_cluster`` directly."""
+    if pair_cluster is None:
+        pair_cluster = (pair_partner,) if pair_partner is not None else ()
     return FileRecord(
         path=Path(path),
         source_label=source_label,
         file_type=file_type,
-        pair_partner=pair_partner,
+        pair_cluster=pair_cluster,
     )
 
 
@@ -44,10 +50,13 @@ def _hr(
     source_label: str = "jdrive",
     file_type: str = "jpeg",
     pair_partner: Path | None = None,
+    pair_cluster: tuple[Path, ...] | None = None,
 ) -> HashResult:
     return HashResult(
-        record=_record(path, source_label=source_label, file_type=file_type,
-                       pair_partner=pair_partner),
+        record=_record(
+            path, source_label=source_label, file_type=file_type,
+            pair_partner=pair_partner, pair_cluster=pair_cluster,
+        ),
         sha256=sha256,
         phash=phash,
         mean_color=mean_color,
@@ -336,6 +345,37 @@ class TestLivePhotoPair:
             f"all four (HEIC + MOV pair, plus orig HEIC + other MOV they SHA-match) "
             f"must share one group_id via transitive closure of "
             f"duplicate_of + pair edges; got {gids}"
+        )
+
+    def test_multi_member_cluster_shares_one_group_id(self):
+        """``IMG_4278.HEIC + IMG_4278.MOV + IMG_4278.MP4`` — Google
+        transcoded one Live Photo to both video formats. The walker
+        emits a 3-member ``pair_cluster`` on each file; ``_collect_pair_edges``
+        unions them into a single component. All three must share one
+        group_id.
+
+        Production case from ``D:\\Takeout-0508\\Takeout\\Google 相簿\\2023 年的相片``.
+        """
+        heic_path = Path("/iphone/IMG_4278.HEIC")
+        mov_path = Path("/iphone/IMG_4278.MOV")
+        mp4_path = Path("/iphone/IMG_4278.MP4")
+        cluster = (heic_path, mov_path, mp4_path)
+
+        heic = _hr(str(heic_path), sha256="h1", source_label="iphone",
+                   file_type="heic", exif_date=_dt(),
+                   pair_cluster=tuple(p for p in cluster if p != heic_path))
+        mov = _hr(str(mov_path), sha256="m1", phash=None,
+                  source_label="iphone", file_type="mov", exif_date=_dt(),
+                  pair_cluster=tuple(p for p in cluster if p != mov_path))
+        mp4 = _hr(str(mp4_path), sha256="p1", phash=None,
+                  source_label="iphone", file_type="mp4", exif_date=_dt(),
+                  pair_cluster=tuple(p for p in cluster if p != mp4_path))
+
+        rows = _rows(classify([heic, mov, mp4]))
+        gids = {rows[p.as_posix()].group_id for p in cluster}
+        assert None not in gids, "every cluster member must have a group_id"
+        assert len(gids) == 1, (
+            f"all three same-exact-stem files must share one group_id; got {gids}"
         )
 
     def test_pair_actions_independent_when_heic_is_dup(self):

@@ -293,37 +293,47 @@ def _classify_near_duplicates(
 def _collect_pair_edges(
     records: list[HashResult], rows: dict[str, ManifestRow]
 ) -> list[tuple[str, str]]:
-    """Return ``(own_path, partner_path)`` edges for every Live Photo pair
-    where both records survived classification.
+    """Return ``(own_path, peer_path)`` edges for every Live Photo cluster
+    member that survived classification.
 
-    Per photo-manager#88: Live Photo HEIC + MOV/MP4 pairs always share a
-    ``group_id`` regardless of whether either side is itself a duplicate
+    Per photo-manager#88: files with the same exact stem (clean_stem AND
+    ``(N)`` dupe-marker number) in the same directory always share a
+    ``group_id`` regardless of whether any side is itself a duplicate
     of something else. Action / ``user_decision`` / ``dest_path`` /
     ``reason`` are NOT propagated — each row keeps its independent
     classification. The image's destruction is no longer automatically
     the video's; the user makes those decisions per-row in the UI.
 
+    A "cluster" is computed by the walker's ``pair_cluster`` field and
+    typically holds one peer (the simple HEIC+MP4 case observed across
+    most production data). Larger clusters surface for:
+
+    * HEIC + MOV + MP4 (Google transcoded one Live Photo into both
+      video formats — same exact stem, no ``(N)``).
+    * HEIC + JPG + MP4 (a Live Photo with an extra image variant).
+
+    All cluster members share one group_id via the edges emitted here.
+
     Implementation: emit edges as a list (not in-place mutation of
     ``duplicate_of``) so ``_assign_group_ids`` can transitively close
-    every component via union-find. The edge-list shape correctly
-    handles the asymmetric case where a HEIC sits in one SHA-group and
-    its paired MOV happens to sit in another — both pre-existing
-    ``duplicate_of`` chains plus the pair edge get unioned, yielding a
-    single group_id for the whole component.
+    every component via union-find — handles the asymmetric case where
+    each cluster member sits in its own SHA-group, plus the cluster
+    edges union them all.
 
-    Walker pairs bidirectionally, so duplicate edges are emitted (HEIC→MOV
-    and MOV→HEIC). Union-find dedupes them implicitly.
+    The walker computes the cluster symmetrically (every member sees
+    every other member as a peer), so duplicate edges flow in both
+    directions. Union-find dedupes them implicitly.
     """
     edges: list[tuple[str, str]] = []
     for hr in records:
-        partner_path = hr.record.pair_partner
-        if partner_path is None:
-            continue
         own_key = str(hr.record.path)
-        partner_key = str(partner_path)
-        if own_key not in rows or partner_key not in rows:
+        if own_key not in rows:
             continue
-        edges.append((own_key, partner_key))
+        for peer_path in hr.record.pair_cluster:
+            peer_key = str(peer_path)
+            if peer_key not in rows:
+                continue
+            edges.append((own_key, peer_key))
     return edges
 
 

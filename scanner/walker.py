@@ -9,7 +9,6 @@ from typing import Optional
 from loguru import logger
 
 from scanner.media import (
-    COMPANION_PHOTO_EXTS,
     EDITED_SUFFIXES,
     MEDIA_EXTENSIONS,
     SKIP_FILENAMES,
@@ -38,7 +37,7 @@ class FileRecord:
     path: Path
     source_label: str        # user-supplied label (e.g. folder name or custom key)
     file_type: str           # 'jpeg' | 'heic' | 'raw' | 'png' | 'mp4' | 'mov' | …
-    pair_partner: Optional[Path] = None  # MOV partner for Live Photo HEIC, or vice versa
+    pair_cluster: tuple[Path, ...] = ()  # Peers with same exact stem in same dir
     misnamed: bool = False   # True if magic bytes differ from file extension
 
 
@@ -138,72 +137,64 @@ def _scan_dir(
 
 
 def _process_directory(files: list[Path], label: str) -> list[FileRecord]:
-    """Build FileRecords for one directory, pairing Live Photos by stem.
+    """Build FileRecords for one directory, computing Live Photo clusters.
 
-    Every media file gets its own FileRecord. Live Photo pairing is
-    expressed via the bidirectional ``pair_partner`` field — the HEIC's
-    ``pair_partner`` points at the MOV/MP4, and vice versa. Downstream
-    (hasher, dedup, manifest writer) operates on each FileRecord
-    independently, so BOTH halves must surface here.
+    Every media file gets its own FileRecord. Live Photo grouping is
+    expressed as a ``pair_cluster``: the tuple of all OTHER non-edited,
+    non-skip files in this directory that share the same exact stem
+    (clean_stem AND ``(N)`` dupe-marker number). Downstream
+    (``scanner/dedup._collect_pair_edges``) emits a union-find edge per
+    peer, so the whole cluster collapses into one group_id.
 
-    Pre-#88 this loop maintained a ``paired`` set and skipped any path
-    already named as a partner — meaning the MOV/MP4 half of every
-    Live Photo pair was silently dropped before hashing. The video
-    never reached the manifest, so the dedup-side pair-edge logic in
-    ``scanner/dedup.py`` had only one record to work with and the pair
-    couldn't form a 2-row group. See the issue thread on PR #178.
+    Why exact-stem matching (not just clean_stem): production data
+    contains pairs that share a clean_stem because Google Takeout adds
+    ``(N)`` to disambiguate copies from different albums. A naive
+    clean_stem match conflates ``IMG_1856.HEIC`` with both
+    ``IMG_1856.MP4`` AND ``IMG_1856(1).MP4`` — non-deterministically
+    pairing the wrong files. Requiring ``number`` equality keeps the
+    two underlying pairs separate.
+
+    Why a cluster (not a single ``pair_partner``): production data also
+    contains multi-companion clusters like
+    ``IMG_4278.HEIC + IMG_4278.MOV + IMG_4278.MP4`` (Google transcoded
+    the same Live Photo to both video formats) and
+    ``IMG_5332.HEIC + IMG_5332.MP4 + IMG_5332.jpg`` (a Live Photo with
+    an extra JPG variant). All three should land in one group; a
+    single-partner field would orphan one of them.
+
+    Pre-#88 this loop additionally maintained a ``paired`` set and
+    silently dropped MOV/MP4 partners before hashing. Both bugs are
+    fixed here — see the discussion on PR #178.
     """
-    # Build stem → files map using clean stems (strip Takeout numbering + edited suffixes)
-    stem_map: dict[str, list[Path]] = {}
+    # Build (clean_stem, number) → list[Path] using full stem identity.
+    # Edited files are excluded from clusters: they neither pair with
+    # their non-edited sibling nor with each other (downstream dedup
+    # handles edited-vs-original via SHA / pHash).
+    cluster_map: dict[tuple[str, Optional[int]], list[Path]] = {}
     for path in files:
         mf = parse_media_filename(path)
-        stem_map.setdefault(mf.clean_stem, []).append(path)
+        if mf.is_edited:
+            continue
+        cluster_map.setdefault((mf.clean_stem, mf.number), []).append(path)
 
     records: list[FileRecord] = []
     for path in files:
         file_type, misnamed = get_file_type(path)
         if file_type == "skip":
             continue
-        partner = _find_live_photo_partner(path, stem_map)
+        mf = parse_media_filename(path)
+        if mf.is_edited:
+            cluster: tuple[Path, ...] = ()
+        else:
+            peers = cluster_map.get((mf.clean_stem, mf.number), [])
+            cluster = tuple(p for p in peers if p != path)
         records.append(FileRecord(
             path=path,
             source_label=label,
             file_type=file_type,
-            pair_partner=partner,
+            pair_cluster=cluster,
             misnamed=misnamed,
         ))
     return records
 
 
-def _find_live_photo_partner(path: Path, stem_map: dict[str, list[Path]]) -> Optional[Path]:
-    """Return the paired Live Photo partner for a HEIC/JPG or MOV file, or None.
-
-    HEIC/JPG → look for same-stem MOV
-    MOV → look for same-stem HEIC/JPG (using COMPANION_PHOTO_EXTS order)
-    Edited copies are excluded from pairing.
-    """
-    mf = parse_media_filename(path)
-    if mf.is_edited:
-        return None
-
-    ext = path.suffix.lower()
-    candidates = stem_map.get(mf.clean_stem, [])
-
-    if ext in (".heic", ".heif", ".jpg", ".jpeg"):
-        # Look for a same-stem MOV
-        for candidate in candidates:
-            if candidate.suffix.lower() in (".mov", ".mp4") and candidate != path:
-                c_mf = parse_media_filename(candidate)
-                if not c_mf.is_edited and c_mf.clean_stem == mf.clean_stem:
-                    return candidate
-
-    elif ext in (".mov", ".mp4"):
-        # Look for a same-stem image (HEIC preferred)
-        for photo_ext in COMPANION_PHOTO_EXTS:
-            for candidate in candidates:
-                if (candidate.suffix == photo_ext and candidate != path):
-                    c_mf = parse_media_filename(candidate)
-                    if not c_mf.is_edited and c_mf.clean_stem == mf.clean_stem:
-                        return candidate
-
-    return None
