@@ -537,7 +537,10 @@ class FileOperationsHandler:
             )
             return
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        dlg = ExecuteActionDialog(self.vm.groups, manifest_path, self.parent)
+        dlg = ExecuteActionDialog(
+            self.vm.groups, manifest_path, self.parent,
+            settings=self.settings,
+        )
         accepted = dlg.exec() == QDialog.Accepted
         # When the user removed rows via the immediate single-row
         # right-click (which mutates self._groups in place — an alias

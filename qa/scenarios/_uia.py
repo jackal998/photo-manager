@@ -1311,6 +1311,27 @@ def open_execute_action_dialog(win: UIAWrapper) -> tuple[UIAWrapper, int]:
     return connect_by_handle(hwnd), hwnd
 
 
+def _find_descendant_by_aid_suffix(
+    parent: UIAWrapper, control_type: str, suffix: str
+) -> UIAWrapper | None:
+    """Return the first descendant of ``parent`` whose automation_id ends
+    with ``suffix`` and matches ``control_type``, or ``None`` if absent.
+
+    pywinauto exposes Qt's QObject objectName as the trailing path
+    segment of the auto_id (e.g. ``QApplication.ActionDialog.QSplitter
+    .QWidget.regexLineEdit``). Suffix-matching keeps lookups stable
+    when wrapper widgets get inserted around the named control.
+    """
+    for d in parent.descendants(control_type=control_type):
+        try:
+            aid = d.element_info.automation_id or ""
+        except Exception:
+            aid = ""
+        if aid.endswith(suffix):
+            return d
+    return None
+
+
 def _drive_action_dialog_form(
     action_dlg: UIAWrapper, field: str, regex: str, action_label: str
 ) -> str | None:
@@ -1319,10 +1340,11 @@ def _drive_action_dialog_form(
     Shared by both entry points (menu-bar standalone and Execute-dialog
     inner). Caller must have already focused `action_dlg`.
 
-    Steps: select Field combo → SetValue regex → wait for live-preview
-    debounce → capture match-counter text → select Action combo → Apply
-    → Close. Regex uses UIA ValuePattern to bypass IME interception of
-    Latin keystrokes under bopomofo input.
+    Steps: switch dialog to Regex mode if the Phase B toggle exists →
+    select Field combo → SetValue regex → wait for live-preview
+    debounce → select Action combo → Apply → capture match-counter
+    text → Close. Regex uses UIA ValuePattern to bypass IME interception
+    of Latin keystrokes under bopomofo input.
 
     Returns the live-preview match-counter text (e.g. "3 of 5 match")
     captured AFTER the 150 ms debounce window — or ``None`` if the
@@ -1330,43 +1352,59 @@ def _drive_action_dialog_form(
     without ``match_fn``). Scenarios can assert on this to verify the
     preview is reachable and reflects the typed pattern.
     """
-    # Two ComboBoxes in this dialog: Field combo (top) and Set Action combo
-    # (bottom). Order is deterministic — find them by position (top-most first).
-    combos = sorted(
-        action_dlg.descendants(control_type="ComboBox"),
-        key=lambda c: c.rectangle().top,
+    # Phase B introduced a Beginner / Regex mode toggle that defaults
+    # to Beginner. This helper drives the regex line edit / Set Action
+    # combo / Apply button, all of which only make sense in Regex mode
+    # (Beginner hides the regex line entirely). Click the Regex radio
+    # if it exists; without the toggle (no match_fn → flat layout) the
+    # dialog is permanently Regex-only and we skip cleanly.
+    for radio in action_dlg.descendants(control_type="RadioButton"):
+        try:
+            aid = radio.element_info.automation_id or ""
+        except Exception:
+            aid = ""
+        if aid.endswith(".regexModeRegex"):
+            try:
+                already = False
+                try:
+                    already = radio.is_selected()
+                except Exception:
+                    already = False
+                if not already:
+                    radio.click_input()
+                    time.sleep(0.2)
+            except Exception:
+                pass
+            break
+
+    # Find the named widgets by auto_id suffix (Phase A pinned
+    # objectName values for exactly this purpose). Falling back to
+    # geometry would now give the wrong combo because Beginner mode
+    # also has its own op combo.
+    field_combo = _find_descendant_by_aid_suffix(
+        action_dlg, "ComboBox", ".regexFieldCombo"
     )
-    if len(combos) < 2:
-        raise RuntimeError(
-            f"action dialog: expected >= 2 ComboBoxes, found {len(combos)}"
-        )
-    field_combo, action_combo = combos[0], combos[1]
+    if field_combo is None:
+        raise RuntimeError("action dialog: regexFieldCombo not found")
     field_combo.select(field)
     time.sleep(0.1)
 
-    # Regex line edit — set via ValuePattern to bypass IME interception.
-    edits = action_dlg.descendants(control_type="Edit")
-    if not edits:
-        raise RuntimeError("action dialog: no Edit control found for regex")
-    # Filter out Edits inside ComboBoxes (those belong to the combos, not
-    # the standalone QLineEdit).
-    standalone_edits = []
-    for e in edits:
-        try:
-            parent = e.parent()
-            if parent.element_info.control_type != "ComboBox":
-                standalone_edits.append(e)
-        except Exception:
-            standalone_edits.append(e)
-    if not standalone_edits:
-        raise RuntimeError("action dialog: no standalone Edit (regex line) found")
-    regex_edit = standalone_edits[0]
+    regex_edit = _find_descendant_by_aid_suffix(
+        action_dlg, "Edit", ".regexLineEdit"
+    )
+    if regex_edit is None:
+        raise RuntimeError("action dialog: regexLineEdit not found")
     regex_edit.iface_value.SetValue(regex)
 
     # Wait past the 150 ms live-preview debounce so the counter has
     # populated before we read it (post-Apply, below).
     time.sleep(0.3)
 
+    action_combo = _find_descendant_by_aid_suffix(
+        action_dlg, "ComboBox", ".regexActionCombo"
+    )
+    if action_combo is None:
+        raise RuntimeError("action dialog: regexActionCombo not found")
     # combo.select(text) works reliably locally but flaked on the
     # hosted CI runner specifically for non-default items: s29
     # (action='remove from list', third item) failed twice in a row
@@ -1421,14 +1459,11 @@ def _drive_action_dialog_form(
     # lookup stable if a wrapper widget gets inserted later.
     counter_text: str | None = None
     try:
-        for d in action_dlg.descendants(control_type="Text"):
-            try:
-                aid = d.element_info.automation_id or ""
-            except Exception:
-                aid = ""
-            if aid.endswith(".regexMatchCounter"):
-                counter_text = d.window_text() or None
-                break
+        counter = _find_descendant_by_aid_suffix(
+            action_dlg, "Text", ".regexMatchCounter"
+        )
+        if counter is not None:
+            counter_text = counter.window_text() or None
     except Exception:
         counter_text = None
 

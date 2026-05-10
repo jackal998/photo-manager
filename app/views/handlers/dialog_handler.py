@@ -62,6 +62,7 @@ class DialogHandler:
         tree_data_provider: TreeDataProvider,
         action_handler: Callable[[str, str, str], None] | None = None,
         records_provider: Callable[[], list] | None = None,
+        settings: object | None = None,
     ) -> None:
         self.parent = parent_widget
         self.tree_provider = tree_data_provider
@@ -71,6 +72,10 @@ class DialogHandler:
         # at dialog-open time so the latest manifest state is reflected
         # without re-wiring on every load.
         self.records_provider = records_provider
+        # Optional JsonSettings handle for persistence — the regex
+        # dialog uses it for the Beginner/Regex mode preference and the
+        # recent-patterns history. Optional so test callers can pass None.
+        self.settings = settings
 
     def show_action_dialog(self, clicked_col: int | None = None) -> None:
         """Show the Set Action by Field/Regex dialog."""
@@ -110,7 +115,7 @@ class DialogHandler:
         dlg = ActionDialog(
             fields=fields, parent=self.parent,
             row_values=row_values, initial_field=initial_field,
-            match_fn=match_fn,
+            match_fn=match_fn, settings=self.settings,
         )
 
         if self.action_handler is not None:
