@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -53,19 +54,24 @@ _FIELD_LABEL_KEYS: dict[str, str] = {
 # bounded by build_match_fn's sample_cap; matched count is the full total.
 MatchFn = Callable[[str, str], tuple[int, int, list[str]]]
 
-MODE_BEGINNER = "beginner"
+MODE_SIMPLE = "simple"
 MODE_REGEX = "regex"
+# Phase B persisted "beginner" as the mode value; Phase C renamed the
+# user-facing label to "Simple" and the persisted value to "simple".
+# We accept the legacy spelling on read so a user who upgrades doesn't
+# silently flip back to the default.
+_LEGACY_MODE_VALUES = {"beginner": MODE_SIMPLE, "simple": MODE_SIMPLE, "regex": MODE_REGEX}
 
-# Beginner-mode operator → (translation_key, regex-builder closure).
+# Simple-mode operator → (translation_key, regex-builder closure).
 # The closure receives the user's plain text and returns the regex
 # pattern that drives the live preview + Apply path. `re.escape` keeps
 # the input literal — e.g. typing "IMG_001.jpg (copy)" works without
 # the user needing to know that ()/. are special.
-_BEGINNER_OPS: list[tuple[str, str, Callable[[str], str]]] = [
-    ("contains",    "action_dialog.beginner_op_contains",    lambda txt: re.escape(txt)),
-    ("starts_with", "action_dialog.beginner_op_starts_with", lambda txt: "^" + re.escape(txt)),
-    ("ends_with",   "action_dialog.beginner_op_ends_with",   lambda txt: re.escape(txt) + "$"),
-    ("exact",       "action_dialog.beginner_op_exact",       lambda txt: "^" + re.escape(txt) + "$"),
+_SIMPLE_OPS: list[tuple[str, str, Callable[[str], str]]] = [
+    ("contains",    "action_dialog.simple_op_contains",    lambda txt: re.escape(txt)),
+    ("starts_with", "action_dialog.simple_op_starts_with", lambda txt: "^" + re.escape(txt)),
+    ("ends_with",   "action_dialog.simple_op_ends_with",   lambda txt: re.escape(txt) + "$"),
+    ("exact",       "action_dialog.simple_op_exact",       lambda txt: "^" + re.escape(txt) + "$"),
 ]
 
 # Cheatsheet chip rows: each is (insertion_text, translation_key for
@@ -93,6 +99,98 @@ def _field_display(name: str) -> str:
     """Return the localized label for an internal field name."""
     key = _FIELD_LABEL_KEYS.get(name)
     return t(key) if key else name
+
+
+def _is_plain_or_escaped(text: str) -> bool:
+    """Return True if ``text`` consists only of literal characters
+    (possibly escaped via backslash) — i.e. could have come from
+    re.escape() applied to plain user input.
+
+    The check: re.escape(decoded) round-trips back to the input. That
+    catches ``\\.`` / ``\\(`` / ``\\\\`` etc. as plain-equivalent and
+    rejects anything with quantifiers, alternation, character classes,
+    lookarounds, or unescaped metacharacters.
+    """
+    # Decode escapes the same way Simple-mode would have produced them.
+    # We can't use a stdlib unescape (none exists), so do a minimal walk:
+    # backslash + char → char; everything else → itself; reject a
+    # trailing lone backslash.
+    decoded_chars: list[str] = []
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            if i + 1 >= len(text):
+                return False  # dangling backslash isn't from re.escape
+            decoded_chars.append(text[i + 1])
+            i += 2
+        else:
+            decoded_chars.append(c)
+            i += 1
+    decoded = "".join(decoded_chars)
+    return re.escape(decoded) == text
+
+
+def _try_parse_simple(pattern: str) -> tuple[str, str] | None:
+    """Reverse-parse a regex into a Simple-mode (op_key, plain_text) pair.
+
+    Returns ``None`` for any pattern Simple cannot represent — caller
+    shows the "complex pattern" notice and disables the Simple inputs
+    rather than silently dropping the user's expression.
+
+    The four parseable shapes mirror ``_SIMPLE_OPS``:
+      - ``^X$`` → ("exact", X)
+      - ``^X``  → ("starts_with", X)   (X must NOT end with un-escaped $)
+      - ``X$``  → ("ends_with", X)     (X must NOT start with un-escaped ^)
+      - ``X``   → ("contains", X)
+    where X is "plain or escaped" per ``_is_plain_or_escaped``.
+    Empty pattern is accepted as ("contains", "") — matches the
+    reset state when the user clears Simple's text input.
+    """
+    if pattern == "":
+        return ("contains", "")
+
+    has_caret = pattern.startswith("^")
+    # A trailing un-escaped $ — count preceding backslashes; even count
+    # means the $ is unescaped (and so anchors).
+    has_dollar = False
+    if pattern.endswith("$"):
+        # walk back to count consecutive backslashes before the final $
+        bs = 0
+        idx = len(pattern) - 2
+        while idx >= 0 and pattern[idx] == "\\":
+            bs += 1
+            idx -= 1
+        has_dollar = bs % 2 == 0
+
+    body = pattern
+    if has_caret:
+        body = body[1:]
+    if has_dollar:
+        body = body[:-1]
+
+    if not _is_plain_or_escaped(body):
+        return None
+
+    # Decode the body back to the plain string the user would type.
+    decoded: list[str] = []
+    i = 0
+    while i < len(body):
+        if body[i] == "\\" and i + 1 < len(body):
+            decoded.append(body[i + 1])
+            i += 2
+        else:
+            decoded.append(body[i])
+            i += 1
+    text = "".join(decoded)
+
+    if has_caret and has_dollar:
+        return ("exact", text)
+    if has_caret:
+        return ("starts_with", text)
+    if has_dollar:
+        return ("ends_with", text)
+    return ("contains", text)
 
 
 class _MatchHighlightDelegate(QStyledItemDelegate):
@@ -220,15 +318,18 @@ class ActionDialog(QDialog):
         self._settings = settings
         self._sample_cap = 50  # mirrors build_match_fn default
 
-        # Mode is only meaningful when match_fn is supplied (Beginner
+        # Mode is only meaningful when match_fn is supplied (Simple
         # mode would have nothing to live-preview against). Default is
-        # Beginner — the on-ramp for non-regex users; power users who
+        # Simple — the on-ramp for non-regex users; power users who
         # prefer Regex flip the toggle once and the choice persists.
+        # _LEGACY_MODE_VALUES translates the Phase B "beginner" string
+        # so users who upgraded from Phase B don't silently flip back
+        # to the default.
         if self._match_fn is None:
             self._mode = MODE_REGEX
         else:
-            persisted = self._settings_get(_MODE_KEY, MODE_BEGINNER)
-            self._mode = persisted if persisted in (MODE_BEGINNER, MODE_REGEX) else MODE_BEGINNER
+            persisted = self._settings_get(_MODE_KEY, MODE_SIMPLE)
+            self._mode = _LEGACY_MODE_VALUES.get(persisted, MODE_SIMPLE)
 
         self._recent_patterns: list[str] = list(
             self._settings_get(_RECENT_KEY, []) or []
@@ -246,21 +347,21 @@ class ActionDialog(QDialog):
         if self._match_fn is not None:
             mode_row = QHBoxLayout()
             mode_row.addWidget(QLabel(t("action_dialog.mode_label")))
-            self._mode_beginner_btn = QRadioButton(t("action_dialog.mode_beginner"))
-            self._mode_beginner_btn.setObjectName("regexModeBeginner")
+            self._mode_simple_btn = QRadioButton(t("action_dialog.mode_simple"))
+            self._mode_simple_btn.setObjectName("regexModeSimple")
             self._mode_regex_btn = QRadioButton(t("action_dialog.mode_regex"))
             self._mode_regex_btn.setObjectName("regexModeRegex")
-            mode_row.addWidget(self._mode_beginner_btn)
+            mode_row.addWidget(self._mode_simple_btn)
             mode_row.addWidget(self._mode_regex_btn)
             mode_row.addStretch(1)
             left_layout.addLayout(mode_row)
             mode_group = QButtonGroup(self)
-            mode_group.addButton(self._mode_beginner_btn)
+            mode_group.addButton(self._mode_simple_btn)
             mode_group.addButton(self._mode_regex_btn)
             self._mode_button_group = mode_group  # keep ref alive
-            (self._mode_beginner_btn if self._mode == MODE_BEGINNER
+            (self._mode_simple_btn if self._mode == MODE_SIMPLE
              else self._mode_regex_btn).setChecked(True)
-            self._mode_beginner_btn.toggled.connect(self._on_mode_toggled)
+            self._mode_simple_btn.toggled.connect(self._on_mode_toggled)
 
         # ── Field row ──────────────────────────────────────────────────────
         row = QHBoxLayout()
@@ -274,24 +375,35 @@ class ActionDialog(QDialog):
         row.addWidget(self.combo)
         left_layout.addLayout(row)
 
-        # ── Beginner-mode row (Find rows where it [op] [text]) ─────────────
-        # Built unconditionally so the mode toggle can show/hide it; sits
-        # idle when not in Beginner mode.
-        self._beginner_widget = QWidget()
-        self._beginner_widget.setObjectName("regexBeginnerRow")
-        beginner_layout = QHBoxLayout(self._beginner_widget)
-        beginner_layout.setContentsMargins(0, 0, 0, 0)
-        beginner_layout.addWidget(QLabel(t("action_dialog.beginner_prefix")))
-        self._beginner_op_combo = QComboBox()
-        self._beginner_op_combo.setObjectName("regexBeginnerOpCombo")
-        for op_key, label_key, _builder in _BEGINNER_OPS:
-            self._beginner_op_combo.addItem(t(label_key), userData=op_key)
-        beginner_layout.addWidget(self._beginner_op_combo)
-        self._beginner_text = QLineEdit()
-        self._beginner_text.setObjectName("regexBeginnerText")
-        self._beginner_text.setPlaceholderText(t("action_dialog.beginner_text_placeholder"))
-        beginner_layout.addWidget(self._beginner_text, stretch=1)
-        left_layout.addWidget(self._beginner_widget)
+        # ── Simple-mode container ──────────────────────────────────────────
+        # A vertical stack: inputs row (prefix label + op combo + text edit)
+        # plus a complex-pattern notice that appears when the user toggles
+        # to Simple while holding a regex Simple can't reverse-parse. The
+        # notice keeps the regex line edit's value intact — only the Simple
+        # display gives up; toggling back to Regex restores everything.
+        self._simple_widget = QWidget()
+        self._simple_widget.setObjectName("regexSimpleRow")
+        simple_outer = QVBoxLayout(self._simple_widget)
+        simple_outer.setContentsMargins(0, 0, 0, 0)
+        simple_inputs_row = QHBoxLayout()
+        simple_inputs_row.addWidget(QLabel(t("action_dialog.simple_prefix")))
+        self._simple_op_combo = QComboBox()
+        self._simple_op_combo.setObjectName("regexSimpleOpCombo")
+        for op_key, label_key, _builder in _SIMPLE_OPS:
+            self._simple_op_combo.addItem(t(label_key), userData=op_key)
+        simple_inputs_row.addWidget(self._simple_op_combo)
+        self._simple_text = QLineEdit()
+        self._simple_text.setObjectName("regexSimpleText")
+        self._simple_text.setPlaceholderText(t("action_dialog.simple_text_placeholder"))
+        simple_inputs_row.addWidget(self._simple_text, stretch=1)
+        simple_outer.addLayout(simple_inputs_row)
+        self._simple_complex_notice = QLabel(t("action_dialog.simple_complex_notice"))
+        self._simple_complex_notice.setObjectName("regexSimpleComplexNotice")
+        self._simple_complex_notice.setStyleSheet("color: #a86200;")  # amber
+        self._simple_complex_notice.setWordWrap(True)
+        self._simple_complex_notice.hide()
+        simple_outer.addWidget(self._simple_complex_notice)
+        left_layout.addWidget(self._simple_widget)
 
         # ── Regex-mode container (regex line edit + validation + counter +
         #    Recent button + cheatsheet chips + tips) ──────────────────────
@@ -330,19 +442,23 @@ class ActionDialog(QDialog):
         self._validation_error.hide()
         regex_layout.addWidget(self._validation_error)
 
-        # Cheatsheet rows — each is [button: token] [label: description].
-        # Vertical stack keeps each token discoverable with its meaning
-        # right next to it; the buttons are full QPushButtons (not flat)
-        # so they read as clickable. Replaces the previous text-tips
-        # block — the chip descriptions ARE the tips.
+        # Cheatsheet — 3-column grid of (token button, description) pairs.
+        # Vertical stack of 7 rows used too much height; 3 columns lets
+        # all 7 tokens fit in 3 rows. Each "column block" is two grid
+        # columns wide: one for the button, one for the description, so
+        # buttons stay aligned even when descriptions vary in length.
         if self._match_fn is not None:
             chips_header = QLabel(t("action_dialog.cheatsheet_label"))
             chips_header.setStyleSheet("color: #555;")
             regex_layout.addWidget(chips_header)
-            for token, label_key in _CHEATSHEET_TOKENS:
-                row_layout = QHBoxLayout()
-                row_layout.setContentsMargins(0, 0, 0, 0)
-                row_layout.setSpacing(8)
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(12)
+            grid.setVerticalSpacing(4)
+            cols = 3
+            for idx, (token, label_key) in enumerate(_CHEATSHEET_TOKENS):
+                row_idx = idx // cols
+                col_block = idx % cols
                 chip = QPushButton(token)
                 chip.setObjectName(f"regexCheatsheet_{token}")
                 chip.setToolTip(t(label_key))
@@ -350,15 +466,19 @@ class ActionDialog(QDialog):
                 chip.clicked.connect(
                     lambda _checked=False, _tok=token: self._insert_token(_tok)
                 )
-                row_layout.addWidget(chip)
+                grid.addWidget(chip, row_idx, col_block * 2)
                 # Description: the localized label minus the leading
                 # "TOKEN — " prefix that the en/zh_TW values both carry.
                 full = t(label_key)
                 desc_text = full.split(" — ", 1)[-1] if " — " in full else full
                 desc = QLabel(desc_text)
                 desc.setStyleSheet("color: #555;")
-                row_layout.addWidget(desc, stretch=1)
-                regex_layout.addLayout(row_layout)
+                grid.addWidget(desc, row_idx, col_block * 2 + 1)
+            # Make description columns stretchable so chips stay tight
+            # against their description but the row uses available width.
+            for col in range(cols):
+                grid.setColumnStretch(col * 2 + 1, 1)
+            regex_layout.addLayout(grid)
         left_layout.addWidget(self._regex_widget)
 
         # ── Match counter row (visible in BOTH modes when match_fn) ────────
@@ -431,29 +551,34 @@ class ActionDialog(QDialog):
             self._set_default_field("File Name")
         self.combo.currentIndexChanged.connect(self._on_field_changed)
 
-        # Live validation on the regex input. Beginner-mode inputs go
-        # through _build_pattern_for_preview which is always-valid, so
-        # we don't need a parallel validator there — the icon hides.
+        # Live validation on the regex input. Simple mode synthesises
+        # patterns via re.escape so they're always valid — the validator
+        # short-circuits in that branch and the icon stays empty.
         self.regex.textChanged.connect(self._validate_regex)
         if self._match_fn is not None:
-            # Both modes share the same debounce: any user input retriggers
-            # the live preview. Keystrokes from either the regex line edit
-            # or the Beginner text box, plus combo changes, all funnel
-            # through the same timer to avoid running the closure on every
-            # character.
+            # Phase C: Simple-mode inputs write through to self.regex
+            # immediately so the regex line edit is the single source of
+            # truth across modes. _writeto_regex_from_simple guards
+            # against feedback loops by blocking signals before setText.
+            # The preview timer + validator listen to self.regex only;
+            # the Simple→regex write flows naturally through that.
+            self._simple_text.textChanged.connect(self._writeto_regex_from_simple)
+            self._simple_op_combo.currentIndexChanged.connect(self._writeto_regex_from_simple)
+
+            # Both modes share the same debounce: any user input
+            # retriggers the live preview. self.regex.textChanged covers
+            # both Regex-mode keystrokes AND the Simple write-through.
             self._preview_timer = QTimer(self)
             self._preview_timer.setSingleShot(True)
             self._preview_timer.setInterval(150)
             self._preview_timer.timeout.connect(self._refresh_preview)
             self.regex.textChanged.connect(self._preview_timer.start)
-            self._beginner_text.textChanged.connect(self._preview_timer.start)
-            self._beginner_op_combo.currentIndexChanged.connect(self._preview_timer.start)
             self.combo.currentIndexChanged.connect(self._preview_timer.start)
 
         self._apply_exact_regex_for_current_field()
-        # Default beginner op is "contains" (index 0) — most useful
+        # Default Simple op is "contains" (index 0) — most useful
         # starting state and matches the most-common user intent.
-        self._beginner_op_combo.setCurrentIndex(0)
+        self._simple_op_combo.setCurrentIndex(0)
         # Apply the mode visibility AFTER all widgets exist.
         self._apply_mode_visibility()
         self._validate_regex()
@@ -481,13 +606,13 @@ class ActionDialog(QDialog):
 
     # ── Mode toggle ────────────────────────────────────────────────────────
 
-    def _on_mode_toggled(self, checked_beginner: bool) -> None:
+    def _on_mode_toggled(self, checked_simple: bool) -> None:
         # The radio group fires twice on a switch (one off, one on); we
         # only need to act on the True side so the apply runs once.
-        if not checked_beginner and self._mode_regex_btn.isChecked():
+        if not checked_simple and self._mode_regex_btn.isChecked():
             self._mode = MODE_REGEX
-        elif checked_beginner:
-            self._mode = MODE_BEGINNER
+        elif checked_simple:
+            self._mode = MODE_SIMPLE
         else:
             return
         self._settings_set(_MODE_KEY, self._mode)
@@ -497,29 +622,96 @@ class ActionDialog(QDialog):
             self._refresh_preview()
 
     def _apply_mode_visibility(self) -> None:
-        beginner_visible = self._mode == MODE_BEGINNER and self._match_fn is not None
-        regex_visible = not beginner_visible
-        self._beginner_widget.setVisible(beginner_visible)
-        self._regex_widget.setVisible(regex_visible)
+        """Show/hide the mode containers and reverse-parse on entering Simple.
 
-    # ── Pattern build (mode-aware) ─────────────────────────────────────────
+        Phase C invariant: ``self.regex.text()`` is the single source of
+        truth across both modes. Switching to Simple tries to populate
+        the Simple inputs from the current regex via ``_try_parse_simple``;
+        on failure we keep the regex intact and show the complex-pattern
+        notice with Simple inputs disabled.
+        """
+        simple_visible = self._mode == MODE_SIMPLE and self._match_fn is not None
+        self._simple_widget.setVisible(simple_visible)
+        self._regex_widget.setVisible(not simple_visible)
+
+        if not simple_visible:
+            return
+
+        parsed = _try_parse_simple(self.regex.text())
+        if parsed is None:
+            # Regex too complex to represent in Simple — keep the regex
+            # value verbatim, show the notice, disable Simple inputs so
+            # the user can't accidentally clobber the regex by typing.
+            self._simple_complex_notice.show()
+            self._simple_op_combo.setEnabled(False)
+            self._simple_text.setEnabled(False)
+            return
+
+        op_key, plain_text = parsed
+        # Populate the Simple inputs with signals blocked so the
+        # populate doesn't trigger a write-through that re-stamps
+        # the regex (which would be a no-op but adds noise on the
+        # text-changed signal chain).
+        op_idx = self._simple_op_combo.findData(op_key)
+        if op_idx >= 0:
+            self._simple_op_combo.blockSignals(True)
+            try:
+                self._simple_op_combo.setCurrentIndex(op_idx)
+            finally:
+                self._simple_op_combo.blockSignals(False)
+        self._simple_text.blockSignals(True)
+        try:
+            self._simple_text.setText(plain_text)
+        finally:
+            self._simple_text.blockSignals(False)
+        self._simple_complex_notice.hide()
+        self._simple_op_combo.setEnabled(True)
+        self._simple_text.setEnabled(True)
+
+    # ── Simple → regex write-through ───────────────────────────────────────
+
+    def _writeto_regex_from_simple(self, *_args) -> None:
+        """Synthesise a regex from the Simple inputs and stamp it onto
+        ``self.regex`` so the regex line edit is always the canonical
+        pattern. blockSignals around setText avoids a feedback loop with
+        the validator + preview timer that already listen on regex
+        changes — we re-fire the preview timer manually so it sees the
+        new value with the right field context.
+        """
+        if self._mode != MODE_SIMPLE or self._match_fn is None:
+            return
+        text = self._simple_text.text()
+        if not text:
+            pattern = ""
+        else:
+            op_key = self._simple_op_combo.currentData() or "contains"
+            pattern = ""
+            for k, _label_key, builder in _SIMPLE_OPS:
+                if k == op_key:
+                    pattern = builder(text)
+                    break
+            if not pattern:
+                pattern = re.escape(text)
+        # Avoid a feedback loop: block signals while we replace the
+        # canonical text, then refresh validation + preview manually.
+        self.regex.blockSignals(True)
+        try:
+            self.regex.setText(pattern)
+        finally:
+            self.regex.blockSignals(False)
+        self._validate_regex()
+        if hasattr(self, "_preview_timer"):
+            self._preview_timer.start()
+
+    # ── Pattern build ──────────────────────────────────────────────────────
 
     def _build_pattern(self) -> str:
-        """Return the regex pattern that drives both preview and Apply.
+        """Return the canonical pattern.
 
-        Beginner mode synthesises a regex from (operator, plain text) so
-        the user never sees a backslash. Regex mode passes through what
-        the user typed.
+        Simple mode writes through to ``self.regex`` on every change
+        (see ``_writeto_regex_from_simple``), so the regex line edit is
+        always the single source of truth — both modes read from it.
         """
-        if self._mode == MODE_BEGINNER and self._match_fn is not None:
-            text = self._beginner_text.text()
-            if not text:
-                return ""
-            op_key = self._beginner_op_combo.currentData() or "contains"
-            for k, _label_key, builder in _BEGINNER_OPS:
-                if k == op_key:
-                    return builder(text)
-            return re.escape(text)
         return self.regex.text()
 
     # ── Cheatsheet ─────────────────────────────────────────────────────────
@@ -609,7 +801,7 @@ class ActionDialog(QDialog):
         the `re.error` message. The match counter falls back to an em
         dash while the regex is invalid.
         """
-        if self._mode == MODE_BEGINNER:
+        if self._mode == MODE_SIMPLE:
             self._validation_icon.setText("")
             self._validation_icon.setStyleSheet("")
             self._validation_icon.setAccessibleName("")

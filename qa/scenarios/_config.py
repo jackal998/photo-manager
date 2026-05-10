@@ -81,9 +81,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # Execute Action dialog. Same fixture and regex partition as s14
     # so the verification flow can mirror it.
     "s30_execute_dialog_regex_right_click": ["qa/sandbox/near-duplicates"],
-    # s31 — Phase B Beginner mode: same fixture as s14/s30; the
-    # Beginner partition is text "q9" → matches only neardup_00_q95.jpg.
-    "s31_beginner_mode_regex": ["qa/sandbox/near-duplicates"],
+    # s31 — Phase B Simple mode + Phase C regex-sync round-trip:
+    # same fixture as s14/s30; partition is Simple "contains q9" →
+    # matches only neardup_00_q95.jpg.
+    "s31_simple_mode_regex": ["qa/sandbox/near-duplicates"],
 }
 
 

@@ -71,11 +71,12 @@ ALL_SCENARIOS = [
     # Execute Action dialog opens the same enhanced ActionDialog.
     # Sister to s14 (menu route) and s13 (toolbar-button route).
     "s30_execute_dialog_regex_right_click",
-    # s31 — Phase B Beginner mode: plain-text matching without regex.
-    # Verifies the mode toggle defaults to Beginner, drives the
-    # Beginner widgets (op + plain text) and confirms the synthesised
-    # pattern matches the right rows.
-    "s31_beginner_mode_regex",
+    # s31 — Phase B Simple mode (renamed from "Beginner" in Phase C)
+    # plus the Phase C regex-sync invariants. Verifies Simple is the
+    # default, drives the Simple widgets, then round-trips through
+    # Regex mode to confirm the regex line edit holds the synthesised
+    # pattern and reverse-parsing back populates Simple cleanly.
+    "s31_simple_mode_regex",
 ]
 
 
