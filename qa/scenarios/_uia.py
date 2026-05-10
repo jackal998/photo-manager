@@ -1363,6 +1363,9 @@ def _drive_action_dialog_form(
             aid = radio.element_info.automation_id or ""
         except Exception:
             aid = ""
+        # Phase C renamed the Simple radio's objectName from
+        # ``regexModeBeginner`` to ``regexModeSimple``; the Regex radio
+        # name is stable. We only key off the Regex side here.
         if aid.endswith(".regexModeRegex"):
             try:
                 already = False

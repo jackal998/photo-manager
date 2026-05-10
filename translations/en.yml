@@ -165,16 +165,21 @@ action_dialog:
   invalid_regex: "Invalid regex: {error}"
   preview_truncated: "…and {n} more"
   preview_empty: "No matches"
-  # Phase B — Beginner / Regex mode toggle and friends.
+  # Phase B/C — Simple / Regex mode toggle and friends. ("Simple"
+  # was renamed from "Beginner" in Phase C so the label doesn't
+  # carry a tone problem.) The persisted settings value also
+  # changed; the dialog reads the legacy "beginner" string as
+  # an alias for one release for back-compat.
   mode_label: "Mode:"
-  mode_beginner: "Beginner"
+  mode_simple: "Simple"
   mode_regex: "Regex"
-  beginner_prefix: "Find rows where it"
-  beginner_op_contains: "contains"
-  beginner_op_starts_with: "starts with"
-  beginner_op_ends_with: "ends with"
-  beginner_op_exact: "exactly matches"
-  beginner_text_placeholder: "type the text to match…"
+  simple_prefix: "Find rows where it"
+  simple_op_contains: "contains"
+  simple_op_starts_with: "starts with"
+  simple_op_ends_with: "ends with"
+  simple_op_exact: "exactly matches"
+  simple_text_placeholder: "type the text to match…"
+  simple_complex_notice: "This pattern is more advanced than Simple can express — switch to Regex to keep editing it."
   cheatsheet_label: "Insert:"
   cheatsheet_any: ".* — any text"
   cheatsheet_digit: "\\d — digit"

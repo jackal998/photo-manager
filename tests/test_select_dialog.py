@@ -389,14 +389,14 @@ class _FakeSettings:
 
 
 class TestModeToggle:
-    def test_default_mode_is_beginner_when_match_fn_supplied(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_BEGINNER
+    def test_default_mode_is_simple_when_match_fn_supplied(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        assert dlg._mode == MODE_BEGINNER
+        assert dlg._mode == MODE_SIMPLE
         # Beginner widgets visible, regex widgets hidden.
-        assert not dlg._beginner_widget.isHidden()
+        assert not dlg._simple_widget.isHidden()
         assert dlg._regex_widget.isHidden()
 
     def test_no_match_fn_pins_regex_mode(self, qapp):
@@ -407,7 +407,7 @@ class TestModeToggle:
         dlg = ActionDialog(fields=["File Name"])
         assert dlg._mode == MODE_REGEX
         # No mode toggle row was constructed in the flat layout.
-        assert not hasattr(dlg, "_mode_beginner_btn")
+        assert not hasattr(dlg, "_mode_simple_btn")
 
     def test_persisted_mode_overrides_default(self, qapp):
         from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
@@ -434,8 +434,8 @@ class TestModeToggle:
         assert settings.save_count >= 1
 
 
-class TestBeginnerMode:
-    """Beginner mode synthesises a regex from (op, plain text) so users
+class TestSimpleMode:
+    """Simple mode synthesises a regex from (op, plain text) so users
     can match without learning regex syntax."""
 
     def test_contains_op_builds_escaped_substring(self, qapp):
@@ -443,8 +443,8 @@ class TestBeginnerMode:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._beginner_op_combo.setCurrentIndex(0)  # contains
-        dlg._beginner_text.setText("IMG_001 (copy)")
+        dlg._simple_op_combo.setCurrentIndex(0)  # contains
+        dlg._simple_text.setText("IMG_001 (copy)")
         # Special chars must be escaped — the user typed plain text.
         assert dlg._build_pattern() == r"IMG_001\ \(copy\)"
 
@@ -453,8 +453,8 @@ class TestBeginnerMode:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._beginner_op_combo.setCurrentIndex(1)  # starts_with
-        dlg._beginner_text.setText("IMG")
+        dlg._simple_op_combo.setCurrentIndex(1)  # starts_with
+        dlg._simple_text.setText("IMG")
         assert dlg._build_pattern() == r"^IMG"
 
     def test_ends_with_anchors_at_dollar(self, qapp):
@@ -462,8 +462,8 @@ class TestBeginnerMode:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._beginner_op_combo.setCurrentIndex(2)  # ends_with
-        dlg._beginner_text.setText(".jpg")
+        dlg._simple_op_combo.setCurrentIndex(2)  # ends_with
+        dlg._simple_text.setText(".jpg")
         assert dlg._build_pattern() == r"\.jpg$"
 
     def test_exact_anchors_both_ends(self, qapp):
@@ -471,8 +471,8 @@ class TestBeginnerMode:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._beginner_op_combo.setCurrentIndex(3)  # exact
-        dlg._beginner_text.setText("abc")
+        dlg._simple_op_combo.setCurrentIndex(3)  # exact
+        dlg._simple_text.setText("abc")
         assert dlg._build_pattern() == r"^abc$"
 
     def test_empty_text_returns_empty_pattern(self, qapp):
@@ -484,7 +484,7 @@ class TestBeginnerMode:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._beginner_text.setText("")
+        dlg._simple_text.setText("")
         assert dlg._build_pattern() == ""
 
     def test_apply_emits_synthesised_pattern(self, qapp):
@@ -494,8 +494,8 @@ class TestBeginnerMode:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._beginner_op_combo.setCurrentIndex(0)  # contains
-        dlg._beginner_text.setText("IMG")
+        dlg._simple_op_combo.setCurrentIndex(0)  # contains
+        dlg._simple_text.setText("IMG")
         dlg._action_combo.setCurrentIndex(0)  # delete
 
         received = []
@@ -590,7 +590,7 @@ class TestRecentPatterns:
         )
         # Beginner mode default — empty text → empty pattern. Don't
         # pollute the recent list with a no-op.
-        dlg._beginner_text.setText("")
+        dlg._simple_text.setText("")
         dlg._btn_set_action.click()
         assert settings.get("ui.action_dialog.recent_patterns", []) == []
 
@@ -629,3 +629,168 @@ class TestMatchHighlightDelegate:
             for i in range(dlg._preview_list.count())
         ]
         assert spans == [(0, 3), (7, 10)]
+
+
+# ── Phase C: regex-as-single-source-of-truth + reverse-parse + legacy alias
+
+
+class TestTryParseSimple:
+    """The reverse-parse table: regex string → Simple (op, plain_text)
+    or None when Simple can't represent the pattern."""
+
+    def test_empty_pattern_is_contains_empty(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple("") == ("contains", "")
+
+    def test_plain_text_is_contains(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple("foo") == ("contains", "foo")
+
+    def test_caret_anchor_is_starts_with(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple("^foo") == ("starts_with", "foo")
+
+    def test_dollar_anchor_is_ends_with(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple("foo$") == ("ends_with", "foo")
+
+    def test_both_anchors_is_exact(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple("^foo$") == ("exact", "foo")
+
+    def test_escaped_special_chars_unescape_to_plain(self):
+        """`re.escape("IMG_001.jpg (copy)")` round-trips back through
+        Simple so the user sees their original input on toggle."""
+        import re
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        pattern = re.escape("IMG_001.jpg (copy)")
+        assert _try_parse_simple(pattern) == ("contains", "IMG_001.jpg (copy)")
+
+    def test_quantifier_is_too_complex(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple(r"\d+") is None
+
+    def test_unescaped_class_is_too_complex(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple(r"[abc]") is None
+
+    def test_alternation_is_too_complex(self):
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple(r"foo|bar") is None
+
+    def test_dangling_backslash_is_too_complex(self):
+        """A regex string ending in a lone backslash isn't a valid
+        re.escape() output and isn't valid regex either — Simple
+        cannot represent it."""
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple("foo\\") is None
+
+    def test_escaped_dollar_does_not_anchor(self):
+        """`foo\\$` is the literal text `foo$`, not an end-anchor —
+        the trailing `$` is escaped (odd backslash count before it)."""
+        from app.views.dialogs.select_dialog import _try_parse_simple
+        assert _try_parse_simple(r"foo\$") == ("contains", "foo$")
+
+
+class TestRegexSyncAcrossModes:
+    """Phase C invariant: self.regex is the single source of truth for
+    both modes. Switching modes is a display change, not a state reset."""
+
+    def test_simple_writes_through_to_regex_line_edit(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        # Default mode is Simple. Type into Simple's text input —
+        # self.regex.text() must update synchronously.
+        dlg._simple_op_combo.setCurrentIndex(0)  # contains
+        dlg._simple_text.setText("near")
+        assert dlg.regex.text() == "near"
+
+    def test_simple_to_regex_toggle_preserves_synthesised_pattern(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._simple_op_combo.setCurrentIndex(2)  # ends_with
+        dlg._simple_text.setText(".jpg")
+        assert dlg.regex.text() == r"\.jpg$"
+
+        # Toggle to Regex — the regex line edit's value must persist.
+        dlg._mode_regex_btn.setChecked(True)
+        assert dlg.regex.text() == r"\.jpg$"
+
+    def test_regex_to_simple_toggle_parses_plain_pattern(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("q9")
+        # Toggle back to Simple — should populate "contains" + "q9".
+        dlg._mode_simple_btn.setChecked(True)
+        assert dlg._simple_op_combo.currentData() == "contains"
+        assert dlg._simple_text.text() == "q9"
+        assert not dlg._simple_complex_notice.isHidden() is False  # notice hidden
+        # Both Simple inputs are enabled (parseable, no notice).
+        assert dlg._simple_op_combo.isEnabled()
+        assert dlg._simple_text.isEnabled()
+
+    def test_regex_to_simple_toggle_parses_anchored_patterns(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        for pattern, expected_op, expected_text in [
+            ("^IMG", "starts_with", "IMG"),
+            ("jpg$", "ends_with", "jpg"),
+            ("^abc$", "exact", "abc"),
+        ]:
+            dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+            dlg._mode_regex_btn.setChecked(True)
+            dlg.regex.setText(pattern)
+            dlg._mode_simple_btn.setChecked(True)
+            assert dlg._simple_op_combo.currentData() == expected_op, pattern
+            assert dlg._simple_text.text() == expected_text, pattern
+
+    def test_regex_to_simple_complex_pattern_shows_notice(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"\d{3}")
+        dlg._mode_simple_btn.setChecked(True)
+        # Notice shown, Simple inputs disabled, regex preserved verbatim.
+        assert not dlg._simple_complex_notice.isHidden()
+        assert not dlg._simple_op_combo.isEnabled()
+        assert not dlg._simple_text.isEnabled()
+        assert dlg.regex.text() == r"\d{3}"
+        # Toggling back to Regex must restore everything intact.
+        dlg._mode_regex_btn.setChecked(True)
+        assert dlg.regex.text() == r"\d{3}"
+
+
+class TestLegacyModeKeyAlias:
+    """Phase B persisted ``"beginner"``; Phase C reads it as Simple so
+    upgraded users don't silently flip back to the default."""
+
+    def test_legacy_beginner_value_loads_as_simple(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
+
+        settings = _FakeSettings({"ui": {"action_dialog": {"mode": "beginner"}}})
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        assert dlg._mode == MODE_SIMPLE
+        assert dlg._mode_simple_btn.isChecked()
+
+    def test_unknown_value_falls_back_to_simple(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
+
+        settings = _FakeSettings({"ui": {"action_dialog": {"mode": "garbage"}}})
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        assert dlg._mode == MODE_SIMPLE
