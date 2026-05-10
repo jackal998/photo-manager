@@ -162,10 +162,15 @@ The tree shows all files loaded from the manifest.
   **Action › Set Action to Activated Files › delete** (or **keep** /
   **remove from list**).
 - *In bulk*: **Action › Set Action by Field/Regex…** — pick a column,
-  type a regex, choose an action (`delete`, `keep`, or
-  `remove from list`). The "remove from list" action is a deferred
-  decision: matched rows are flagged and dropped on save, no files are
-  moved or deleted.
+  describe what to match, choose an action (`delete`, `keep`, or
+  `remove from list`). The dialog defaults to **Simple** mode (pick
+  contains / starts with / ends with / exactly matches and type plain
+  text) and toggles to **Regex** for power users; both modes share a
+  live preview pane so you see the matched filenames update as you
+  type. The "remove from list" action is a deferred decision: matched
+  rows are flagged and dropped on save, no files are moved or deleted.
+  Right-clicking a row in the main tree (single or multi-select) and
+  in the Execute Action dialog also opens the same dialog.
 
 If you close the app with unsaved decisions a prompt appears with
 **Save & leave** / **Leave** / **Back**, so you don't lose work
@@ -402,7 +407,7 @@ photo-manager/
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # 650+ tests — scanner, infra, viewmodel, GUI handlers
+└── tests/                   # 700+ tests — scanner, infra, viewmodel, GUI handlers
     ├── conftest.py              # Shared fixtures (qapp)
     ├── test_dedup.py
     ├── test_hasher.py
@@ -454,13 +459,19 @@ photo-manager/
     ]
   },
   "ui": {
-    "locale": "en"
+    "locale": "en",
+    "action_dialog": {
+      "mode": "simple",
+      "recent_patterns": []
+    }
   }
 }
 ```
 
 Source paths and recursive flags set via **File › Scan Sources…** are saved here
 automatically. List order determines dedup priority (index 0 = highest priority).
+The regex dialog persists its mode (`"simple"` or `"regex"`) and a capped list
+of recently-used regex patterns under `ui.action_dialog`.
 
 ---
 
