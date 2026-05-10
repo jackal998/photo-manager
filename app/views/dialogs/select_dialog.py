@@ -145,11 +145,15 @@ class _MatchHighlightDelegate(QStyledItemDelegate):
         text_rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, widget)
         painter.save()
         painter.setClipRect(text_rect)
-        painter.setPen(opt.palette.color(opt.palette.ColorGroup.Active,
-                                          opt.palette.ColorRole.Text)
-                       if opt.state & QStyle.State_Selected == 0
-                       else opt.palette.color(opt.palette.ColorGroup.Active,
-                                               opt.palette.ColorRole.HighlightedText))
+        # Parens around the bitwise check matter — Python parses
+        # `state & SELECTED == 0` as `state & (SELECTED == 0)` because
+        # `==` binds tighter than `&`. Without them every row picks
+        # HighlightedText (white on most themes), making the preview
+        # list look "empty" against its white background.
+        is_selected = bool(opt.state & QStyle.State_Selected)
+        text_role = (opt.palette.ColorRole.HighlightedText if is_selected
+                     else opt.palette.ColorRole.Text)
+        painter.setPen(opt.palette.color(opt.palette.ColorGroup.Active, text_role))
 
         pre, mid, post = text[:start], text[start:end], text[end:]
         fm = painter.fontMetrics()
@@ -326,30 +330,35 @@ class ActionDialog(QDialog):
         self._validation_error.hide()
         regex_layout.addWidget(self._validation_error)
 
-        # Cheatsheet chips — click to insert a regex token at the caret.
-        # Hidden when match_fn is None so legacy callers see today's
-        # layout exactly.
+        # Cheatsheet rows — each is [button: token] [label: description].
+        # Vertical stack keeps each token discoverable with its meaning
+        # right next to it; the buttons are full QPushButtons (not flat)
+        # so they read as clickable. Replaces the previous text-tips
+        # block — the chip descriptions ARE the tips.
         if self._match_fn is not None:
-            chips_row = QHBoxLayout()
-            chips_row.setContentsMargins(0, 0, 0, 0)
-            chips_row.addWidget(QLabel(t("action_dialog.cheatsheet_label")))
+            chips_header = QLabel(t("action_dialog.cheatsheet_label"))
+            chips_header.setStyleSheet("color: #555;")
+            regex_layout.addWidget(chips_header)
             for token, label_key in _CHEATSHEET_TOKENS:
-                chip = QPushButton(t(label_key).split(" — ")[0])
+                row_layout = QHBoxLayout()
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(8)
+                chip = QPushButton(token)
                 chip.setObjectName(f"regexCheatsheet_{token}")
                 chip.setToolTip(t(label_key))
-                chip.setFlat(True)
-                chip.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
+                chip.setFixedWidth(64)
                 chip.clicked.connect(
                     lambda _checked=False, _tok=token: self._insert_token(_tok)
                 )
-                chips_row.addWidget(chip)
-            chips_row.addStretch(1)
-            regex_layout.addLayout(chips_row)
-
-        # ── Tips ───────────────────────────────────────────────────────────
-        tips = QLabel(t("action_dialog.regex_tips"))
-        tips.setWordWrap(True)
-        regex_layout.addWidget(tips)
+                row_layout.addWidget(chip)
+                # Description: the localized label minus the leading
+                # "TOKEN — " prefix that the en/zh_TW values both carry.
+                full = t(label_key)
+                desc_text = full.split(" — ", 1)[-1] if " — " in full else full
+                desc = QLabel(desc_text)
+                desc.setStyleSheet("color: #555;")
+                row_layout.addWidget(desc, stretch=1)
+                regex_layout.addLayout(row_layout)
         left_layout.addWidget(self._regex_widget)
 
         # ── Match counter row (visible in BOTH modes when match_fn) ────────
@@ -403,8 +412,12 @@ class ActionDialog(QDialog):
             splitter.addWidget(self._build_preview_pane())
             splitter.setSizes([420, 380])
             root.addWidget(splitter)
-            self.setMinimumSize(820, 500)
-            self.resize(880, 540)
+            # Shrunk after dropping the wrapped tips paragraph and
+            # restructuring chips into compact button-with-aside-label
+            # rows. The dialog used to feel "too tall" — particularly
+            # in Beginner mode where the regex/chip section is hidden.
+            self.setMinimumSize(720, 380)
+            self.resize(780, 420)
         else:
             root.addWidget(left_widget)
             left_layout.setContentsMargins(11, 11, 11, 11)
