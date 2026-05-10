@@ -1,9 +1,15 @@
 name: qa-batch
 
-# Run the layer-3 qa-explore batch on PRs that touch UI / scanner / qa surface.
-# Goal: catch driver-vs-app label drift and state-transition regressions
-# before merge, instead of relying on a manual `python -m qa.scenarios._batch`
-# discipline (#74).
+# Run the layer-3 qa-explore batch on every PR. Goal: catch driver-vs-app
+# label drift and state-transition regressions before merge, instead of
+# relying on a manual `python -m qa.scenarios._batch` discipline (#74).
+#
+# No `paths:` filter — the principle is "every PR, every check." Tooling /
+# docs / hook PRs pay the runner cost (~15–20 min on windows-latest) for
+# the consistency of a single uniform CI posture. Same shape as
+# .github/workflows/tests.yml. If runner cost ever bites, the right fix
+# is to make the batch faster (parallelise scenarios, prune slow ones),
+# not to silently skip it on a class of PRs.
 #
 # Status: NON-REQUIRED, informational. Per #74's acceptance criteria, this
 # workflow needs ≥10 consecutive flake-free runs on real PRs before being
@@ -12,17 +18,7 @@ name: qa-batch
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/qa-batch.yml'
-      - 'app/views/**'
-      - 'qa/**'
-      - 'scanner/**'
-      - 'infrastructure/**'
-      - 'requirements.txt'
-      - 'dev-requirements.txt'
-      - 'qa/requirements.txt'
-      - 'scripts/make_qa_sandbox.py'
-      - 'scripts/make_qa_images.py'
+    branches: [master]
   workflow_dispatch: {}   # allow manual trigger from the Actions UI for debugging
 
 concurrency:
