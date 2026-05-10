@@ -328,3 +328,81 @@ class TestDestPath:
         b = _hr("/b.jpg", sha256="dup", source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([a, b]))
         assert rows["/b.jpg"].dest_path is None
+
+
+# ---------------------------------------------------------------------------
+# Case-sensitive path collision (photo-manager#170)
+# ---------------------------------------------------------------------------
+
+class TestCaseSensitiveCollision:
+    """Two genuinely-distinct files differing only by filename case must each
+    produce their own ManifestRow.
+
+    Background: on Windows ``Path("a.MOV") == Path("a.mov")`` is True and
+    ``hash()`` matches too, so a ``dict[Path, ...]`` collapses both into one
+    bucket — silently dropping the second file. ``classify()`` keys its
+    internal ``rows`` dict by ``str(path)`` for exactly this reason.
+
+    These pairs CAN coexist on disk in case-sensitive NTFS dirs (rare; opt-in
+    via ``fsutil setCaseSensitiveInfo enable``) and Google Takeout has been
+    observed emitting both for genuinely-distinct iPhone videos.
+    """
+
+    def test_case_only_filename_diff_keeps_both(self):
+        """Both case variants survive when content hashes differ."""
+        upper = _hr(r"D:\Photos\IMG_2063.MOV", sha256="aaa", phash=None,
+                    file_type="mov", exif_date=_dt())
+        lower = _hr(r"D:\Photos\IMG_2063.mov", sha256="bbb", phash=None,
+                    file_type="mov", exif_date=_dt())
+        result = classify([upper, lower])
+        assert len(result) == 2, (
+            "Both case-variants must survive — Path-keyed dict would collapse "
+            "them on Windows because pathlib equality is case-insensitive."
+        )
+        source_paths = {r.source_path for r in result}
+        assert r"D:\Photos\IMG_2063.MOV" in source_paths
+        assert r"D:\Photos\IMG_2063.mov" in source_paths
+
+    def test_case_only_diff_with_same_hash_dedups_normally(self):
+        """When the hashes ARE identical, normal EXACT-duplicate dedup runs
+        (lower-priority loses) — case difference does not break that."""
+        upper = _hr(r"D:\Photos\IMG.JPG", sha256="same",
+                    source_label="takeout", exif_date=_dt())
+        lower = _hr(r"D:\Photos\IMG.jpg", sha256="same",
+                    source_label="jdrive", exif_date=_dt())
+        result = classify([upper, lower],
+                          source_priority={"takeout": 0, "jdrive": 1})
+        assert len(result) == 2  # both rows still exist — one MOVE, one EXACT
+        actions = {r.source_path: r.action for r in result}
+        assert actions[r"D:\Photos\IMG.JPG"] == "MOVE"
+        assert actions[r"D:\Photos\IMG.jpg"] == "EXACT"
+
+    def test_case_only_diff_in_live_photo_pair_partner(self):
+        """A Live Photo HEIC paired with its MOV must propagate the action
+        even when a case-collision sibling file exists at the same parent."""
+        heic = Path(r"D:\Photos\IMG_X.HEIC")
+        mov_lower = Path(r"D:\Photos\IMG_X.mov")
+        mov_upper = Path(r"D:\Photos\IMG_X.MOV")  # case-collision sibling
+
+        # HEIC is an exact duplicate of an earlier file → SKIP propagates
+        # to its pair partner (mov_lower). The case-collision MOV (mov_upper)
+        # MUST NOT be confused with mov_lower in path_to_hr lookup.
+        records = [
+            _hr(r"D:\Photos\earlier.heic", sha256="dup",
+                source_label="takeout", exif_date=_dt()),
+            _hr(str(heic), sha256="dup", source_label="jdrive",
+                file_type="heic", pair_partner=mov_lower, exif_date=_dt()),
+            _hr(str(mov_lower), sha256="movhash", phash=None,
+                source_label="jdrive", file_type="mov", exif_date=_dt()),
+            _hr(str(mov_upper), sha256="distinct", phash=None,
+                source_label="jdrive", file_type="mov", exif_date=_dt()),
+        ]
+        result = classify(records,
+                          source_priority={"takeout": 0, "jdrive": 1})
+
+        # All four records must survive into ManifestRows
+        assert len(result) == 4
+        by_path = {r.source_path: r for r in result}
+        # The case-collision sibling is INDEPENDENT of the pair propagation
+        assert by_path[str(mov_upper)].action != "EXACT"   # not the partner
+        assert by_path[str(mov_lower)].action == "EXACT"   # IS the partner

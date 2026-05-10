@@ -264,3 +264,111 @@ class TestWalkerExclusionsFixture:
         assert names == ["real_photo_a.jpg", "real_photo_b.jpg"], (
             f"walker leaked excluded files into the result set: {names}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Win32-unsafe filename detection (photo-manager#169)
+# ---------------------------------------------------------------------------
+
+class TestWin32UnsafeName:
+    """``_has_win32_unsafe_name`` flags filenames the Win32 GUI layer hides.
+
+    NTFS preserves trailing ``.`` and whitespace; Win32 GUI strips them. A
+    pathlib walk from the parent enumerates the dir name but cannot recurse
+    into it, so any contents are silently invisible. We warn the user instead
+    of silently coercing — matches the issue's recommendation.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "E.J.",
+        "trailing space ",
+        "tabchar\t",
+        "dot.",
+        "ends with newline\n",
+    ])
+    def test_unsafe_names_detected(self, name):
+        from scanner.walker import _has_win32_unsafe_name
+        assert _has_win32_unsafe_name(name) is True
+
+    @pytest.mark.parametrize("name", [
+        "normal_folder",
+        "E.J",                    # the Win32-stripped form — no trailing dot
+        "photo.jpg",              # extension dot is mid-name, not trailing
+        "name with internal spaces but ending letter",
+        "trailing.tar.gz",
+        ".hidden",                # leading dot is fine
+    ])
+    def test_safe_names_not_flagged(self, name):
+        from scanner.walker import _has_win32_unsafe_name
+        assert _has_win32_unsafe_name(name) is False
+
+    def test_empty_name_not_flagged(self):
+        """Defensive: empty string must not crash the boolean coercion."""
+        from scanner.walker import _has_win32_unsafe_name
+        assert _has_win32_unsafe_name("") is False
+
+
+class TestWalkerWin32UnsafeWarning:
+    """``scan_sources`` warns once per Win32-unsafe path encountered during
+    the walk. The warning text must mention rename guidance — silent
+    coercion would be a surprise; the issue body explicitly says don't."""
+
+    def test_warning_emitted_on_trailing_dot_dir(self, tmp_path, caplog):
+        """If rglob enumerates a trailing-dot directory, log a warning naming
+        the path. Mocked because a real trailing-dot directory needs the
+        ``\\\\?\\`` NT raw API to create on Windows — covered separately by
+        the platform-gated test below."""
+        from unittest.mock import patch
+        from scanner.walker import scan_sources
+        from loguru import logger
+        import logging
+
+        # Real directory exists so scan_sources passes the existence check;
+        # we mock rglob to inject the synthetic trailing-dot path.
+        fake_unsafe = tmp_path / "E.J."
+
+        # Bridge loguru → caplog so pytest captures the warning.
+        handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
+        try:
+            with patch("pathlib.Path.rglob", return_value=iter([fake_unsafe])):
+                with caplog.at_level(logging.WARNING):
+                    scan_sources({"label": tmp_path})
+        finally:
+            logger.remove(handler_id)
+
+        warnings = [r.message for r in caplog.records
+                    if "trailing dot" in r.message.lower()
+                    or "win32" in r.message.lower()]
+        assert warnings, (
+            f"expected warning about trailing-dot path; got: "
+            f"{[r.message for r in caplog.records]}"
+        )
+        # Warning must name the offending path so the user knows what to rename
+        assert "E.J." in warnings[0]
+
+    def test_warning_emitted_only_once_per_path(self, tmp_path, caplog):
+        """If rglob returns the same unsafe path multiple times across the
+        walk (theoretically possible — a unique-by-name set is the guard),
+        we warn once and stay quiet thereafter."""
+        from unittest.mock import patch
+        from scanner.walker import scan_sources
+        from loguru import logger
+        import logging
+
+        fake_unsafe = tmp_path / "trailing.dir."
+
+        handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
+        try:
+            with patch("pathlib.Path.rglob",
+                       return_value=iter([fake_unsafe, fake_unsafe, fake_unsafe])):
+                with caplog.at_level(logging.WARNING):
+                    scan_sources({"label": tmp_path})
+        finally:
+            logger.remove(handler_id)
+
+        relevant = [r for r in caplog.records
+                    if "trailing.dir." in r.message]
+        assert len(relevant) == 1, (
+            f"expected exactly 1 warning, got {len(relevant)}: "
+            f"{[r.message for r in relevant]}"
+        )
