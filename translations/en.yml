@@ -86,6 +86,8 @@ decision:
   delete: "delete"
   keep: "keep (remove action)"
   remove_from_list: "remove from list"
+  lock: "lock"
+  unlock: "unlock"
 
 # ScanDialog and its inner panels.
 scan_dialog:
@@ -198,6 +200,8 @@ context_menu:
   open_folder: "Open Folder"
   set_action_by_regex: "Set Action by Field/Regex…"
   remove_from_list: "Remove from List"
+  lock: "Lock"
+  unlock: "Unlock"
 
 # Strings produced by FileOperationsHandler / DialogHandler.
 file_op:
@@ -215,6 +219,13 @@ file_op:
   remove_error_title: "Remove from List Error"
   remove_failed_body: "Remove from list failed: {error}"
   decision_set_status: "Decision set to '{decision}'"
+  decision_set_with_skipped_status: "Decision set to '{decision}' on {set_count}; skipped {skipped} locked"
+  set_action_all_locked_title: "Set Action — All Matches Locked"
+  set_action_all_locked_body: "All {count} matched row(s) are locked. Unlock first if you want to apply this action."
+  locked_verb: "Locked"
+  unlocked_verb: "Unlocked"
+  noun_row_singular: "row"
+  noun_row_plural: "rows"
   set_action_no_manifest_title: "Set Action — No Manifest"
   set_action_no_manifest_body: "No manifest loaded."
   set_action_no_selection_title: "Set Action — No Selection"

@@ -130,6 +130,102 @@ class TestSetDecision:
         assert not dlg._warning_banner.isVisibleTo(dlg)
 
 
+# ── lock / unlock at execute stage (photo-manager#164) ─────────────────────
+
+class TestExecuteDialogLock:
+    """The execute stage is the user's last chance to override a lock.
+    Single-row right-click Lock/Unlock and bulk regex lock/unlock both
+    flip ``is_locked`` in memory and persist to SQLite. Bulk regex on
+    destructive actions skips locked rows; on lock/unlock applies to all.
+    """
+
+    def test_set_lock_via_single_row(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        rec = _rec("/a.jpg", "")
+        groups = [_group(rec, _rec("/b.jpg", ""))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_lock("/a.jpg", True)
+        assert rec.is_locked is True
+
+    def test_set_decision_routes_lock_sentinel(self, qapp):
+        """``_set_decision`` recognises LOCK_SENTINEL and routes to
+        ``_set_lock`` so the right-click Set Action submenu's lock
+        entry just works without separate dispatch logic."""
+        from app.views.constants import LOCK_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        rec = _rec("/a.jpg", "")
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_decision("/a.jpg", LOCK_SENTINEL)
+        assert rec.is_locked is True
+
+    def test_set_decision_routes_unlock_sentinel(self, qapp):
+        from app.views.constants import UNLOCK_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        rec = _rec("/a.jpg", "")
+        rec.is_locked = True
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_decision("/a.jpg", UNLOCK_SENTINEL)
+        assert rec.is_locked is False
+
+    def test_regex_skips_locked_for_destructive(self, qapp):
+        """Bulk regex with a destructive new_decision skips locked rows."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        unlocked = _rec("/free.jpg", "")
+        locked = _rec("/pinned.jpg", "")
+        locked.is_locked = True
+        groups = [_group(unlocked, locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
+        assert unlocked.user_decision == "delete"
+        assert locked.user_decision == ""  # protected
+
+    def test_regex_lock_action_locks_all_matched(self, qapp):
+        """LOCK_SENTINEL applies to all matched rows including
+        already-locked (idempotent — see photo-manager#164)."""
+        from app.views.constants import LOCK_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        a = _rec("/a.jpg", "")
+        b = _rec("/b.jpg", "")
+        groups = [_group(a, b)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_decision_by_regex("File Name", r"\.jpg$", LOCK_SENTINEL)
+        assert a.is_locked is True
+        assert b.is_locked is True
+
+    def test_regex_unlock_action_unlocks_all_matched(self, qapp):
+        """UNLOCK_SENTINEL is the bulk escape hatch at execute time."""
+        from app.views.constants import UNLOCK_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        a = _rec("/a.jpg", "")
+        a.is_locked = True
+        b = _rec("/b.jpg", "")
+        b.is_locked = True
+        groups = [_group(a, b)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._set_decision_by_regex("File Name", r"\.jpg$", UNLOCK_SENTINEL)
+        assert a.is_locked is False
+        assert b.is_locked is False
+
+    def test_regex_destructive_all_locked_shows_message(self, qapp):
+        """All-matches-locked surfaces a dedicated dialog so the user
+        doesn't conclude the regex didn't match."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        a = _rec("/a.jpg", "")
+        b = _rec("/b.jpg", "")
+        a.is_locked = True
+        b.is_locked = True
+        groups = [_group(a, b)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        with patch("PySide6.QtWidgets.QMessageBox") as MB:
+            dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
+            MB.information.assert_called()
+        # No decisions applied
+        assert a.user_decision == ""
+        assert b.user_decision == ""
+
+
 # ── _on_execute ────────────────────────────────────────────────────────────
 
 class TestOnExecute:

@@ -113,15 +113,28 @@ class TestSettableDecisionOptions:
         assert keep_entry is not None
         assert keep_entry[1] == ""
 
-    def test_action_combo_count_matches_settable_decisions_with_remove(self, qapp):
-        """The regex dropdown surfaces all three actions:
-        delete, keep, and the new "remove from list" sentinel.
-        That's settable_decisions(include_remove=True), not the default."""
+    def test_action_combo_count_matches_settable_decisions_with_remove_and_lock(self, qapp):
+        """The regex dropdown surfaces five actions: delete, keep,
+        remove from list, lock, unlock. That's
+        ``settable_decisions(include_remove=True, include_lock=True)``,
+        wired in select_dialog.py — see photo-manager#164.
+        """
         from app.views.constants import settable_decisions
-        SETTABLE_DECISIONS_WITH_REMOVE = settable_decisions(include_remove=True)
+        EXPECTED = settable_decisions(include_remove=True, include_lock=True)
         from app.views.dialogs.select_dialog import ActionDialog
         dlg = ActionDialog(fields=["File Name"])
-        assert dlg._action_combo.count() == len(SETTABLE_DECISIONS_WITH_REMOVE)
+        assert dlg._action_combo.count() == len(EXPECTED)
+        assert dlg._action_combo.count() == 5  # delete, keep, remove, lock, unlock
+
+    def test_action_combo_includes_lock_and_unlock_options(self, qapp):
+        """Lock and unlock sentinels must be reachable from the regex
+        dropdown — see photo-manager#164."""
+        from app.views.constants import LOCK_SENTINEL, UNLOCK_SENTINEL
+        from app.views.dialogs.select_dialog import ActionDialog
+        dlg = ActionDialog(fields=["File Name"])
+        values = [v for _, v in dlg._decisions]
+        assert LOCK_SENTINEL in values
+        assert UNLOCK_SENTINEL in values
 
     def test_action_combo_includes_remove_option(self, qapp):
         """Specifically verify the remove sentinel is reachable from the

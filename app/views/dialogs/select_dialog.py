@@ -503,7 +503,10 @@ class ActionDialog(QDialog):
         # decision options. The receiving handler routes the sentinel
         # value to the remove-from-review backend instead of the
         # user_decision update path.
-        self._decisions = settable_decisions(include_remove=True)
+        # include_lock=True adds "lock" / "unlock" so users can bulk-pin
+        # decisions before a broader regex sweep, and bulk-unlock at
+        # execute time as the escape hatch. See photo-manager#164.
+        self._decisions = settable_decisions(include_remove=True, include_lock=True)
         for label, _value in self._decisions:
             self._action_combo.addItem(label)
         action_row.addWidget(self._action_combo)

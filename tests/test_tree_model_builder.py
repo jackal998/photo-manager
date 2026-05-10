@@ -15,6 +15,7 @@ import pytest
 from app.views.tree_model_builder import (
     _ACTION_SORT,
     _DECISION_SORT,
+    _action_display,
     _file_similarity,
     _hamming_to_pct,
     build_model,
@@ -32,6 +33,7 @@ def _rec(**overrides):
         file_size_bytes=12345,
         action="MOVE",
         user_decision="",
+        is_locked=False,
         hamming_distance=None,
         shot_date=None,
         creation_date=None,
@@ -197,3 +199,61 @@ class TestBuildModel:
         model, proxy = build_model([])
         assert model is not None
         assert proxy is None
+
+
+# ── _action_display: lock glyph (photo-manager#164) ────────────────────────
+
+
+class TestActionDisplayLockGlyph:
+    """``_action_display`` prefixes a 🔒 glyph when ``is_locked`` is True.
+    The glyph rides on the existing Action column rather than adding a
+    separate dedicated column — see photo-manager#164."""
+
+    def test_unlocked_decision_unchanged(self):
+        assert _action_display("delete", is_locked=False) == "delete"
+
+    def test_locked_prefixed_with_glyph(self):
+        out = _action_display("delete", is_locked=True)
+        assert "\U0001F512" in out  # 🔒
+        assert "delete" in out
+
+    def test_locked_with_empty_decision(self):
+        """Lock-but-undecided is a real state — bulk-locking can happen
+        before any decision is set. The glyph must still render."""
+        out = _action_display("", is_locked=True)
+        assert "\U0001F512" in out
+
+    def test_default_is_unlocked(self):
+        """The is_locked parameter defaults to False — keeps existing
+        callers (if any) working unchanged."""
+        assert _action_display("keep") == "keep"
+
+    def test_lock_glyph_in_built_model(self, qapp):
+        """End-to-end: a locked record's row in the built QStandardItemModel
+        has the lock glyph in COL_ACTION (column index 1)."""
+        from app.views.constants import COL_ACTION
+
+        locked_rec = _rec(file_path="/p/locked.jpg",
+                          user_decision="delete", is_locked=True)
+        unlocked_rec = _rec(file_path="/p/free.jpg",
+                            user_decision="delete", is_locked=False)
+        g = _group([locked_rec, unlocked_rec])
+        model, _ = build_model([g])
+
+        group_row = model.item(0, 0)  # group row at top
+        assert group_row.rowCount() == 2
+        # Find the locked row by matching file_path in the name column.
+        from app.views.constants import COL_NAME, PATH_ROLE
+        locked_action_text = None
+        unlocked_action_text = None
+        for r in range(group_row.rowCount()):
+            name_item = group_row.child(r, COL_NAME)
+            action_item = group_row.child(r, COL_ACTION)
+            if name_item.data(PATH_ROLE) == "/p/locked.jpg":
+                locked_action_text = action_item.text()
+            elif name_item.data(PATH_ROLE) == "/p/free.jpg":
+                unlocked_action_text = action_item.text()
+        assert locked_action_text is not None
+        assert unlocked_action_text is not None
+        assert "\U0001F512" in locked_action_text
+        assert "\U0001F512" not in unlocked_action_text

@@ -10,7 +10,12 @@ from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
 from loguru import logger
 
 from app.views.components.status_messages import pluralize, report_count, t_pluralize
-from app.views.constants import REMOVE_FROM_LIST_DECISION, REMOVE_FROM_LIST_SENTINEL
+from app.views.constants import (
+    LOCK_SENTINEL,
+    REMOVE_FROM_LIST_DECISION,
+    REMOVE_FROM_LIST_SENTINEL,
+    UNLOCK_SENTINEL,
+)
 from infrastructure.i18n import t
 
 # Single source of truth for the QFileDialog filter string used wherever
@@ -419,7 +424,14 @@ class FileOperationsHandler:
             logger.warning("Failed to sync removed paths to manifest: {}", exc)
 
     def set_decision(self, items: list[dict], new_decision: str) -> None:
-        """Set user_decision for the given file items in memory and in SQLite."""
+        """Set user_decision for the given file items in memory and in SQLite.
+
+        Note: this is the SHARED dispatcher. Single-row right-click calls
+        this directly and intentionally bypasses lock-protection — the
+        skip-locked pre-filter lives in the bulk paths
+        (``set_decision_by_regex`` / ``set_decision_to_highlighted``)
+        that call into here. See photo-manager#164.
+        """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             return
@@ -443,8 +455,50 @@ class FileOperationsHandler:
             t("file_op.decision_set_status", decision=new_decision)
         )
 
+    def set_locked_state(self, items: list[dict], locked: bool) -> None:
+        """Flip ``is_locked`` for the given file items, in memory and SQLite.
+
+        Lock state is orthogonal to ``user_decision`` and lives on its own
+        column. This is the dispatcher for both single-row right-click
+        Lock/Unlock and bulk regex/multi-select lock/unlock — see
+        photo-manager#164.
+        """
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            return
+        batch: dict[str, bool] = {}
+        for item in items:
+            if item.get("type") != "file":
+                continue
+            file_path = item["path"]
+            for group in self.vm.groups:
+                for rec in group.items:
+                    if rec.file_path == file_path:
+                        rec.is_locked = locked
+                        break
+            batch[file_path] = locked
+        if batch:
+            from infrastructure.manifest_repository import ManifestRepository
+            ManifestRepository().batch_update_lock_state(manifest_path, batch)
+            self._mark_dirty()
+        self.ui_updater.refresh_tree(self.vm.groups)
+        report_count(
+            self.status_reporter,
+            t("file_op.locked_verb") if locked else t("file_op.unlocked_verb"),
+            len(batch),
+            t("file_op.noun_row_singular"),
+            t("file_op.noun_row_plural"),
+        )
+
     def set_decision_to_highlighted(self, new_decision: str) -> None:
-        """Set user_decision for tree-highlighted (activated) file rows."""
+        """Set user_decision for tree-highlighted (activated) file rows.
+
+        Lock-aware: when ``new_decision`` is a destructive value
+        (``"delete"`` / ``""`` / ``REMOVE_FROM_LIST_SENTINEL``), already-
+        locked rows are pre-filtered out and the count is surfaced in
+        the status toast. Lock/unlock sentinels apply to all selected
+        rows (idempotent — see photo-manager#164).
+        """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             QMessageBox.information(
@@ -468,7 +522,50 @@ class FileOperationsHandler:
                 t("file_op.set_action_no_selection_body"),
             )
             return
-        self.set_decision(file_items, new_decision)
+        # Lock / unlock route — idempotent, no skip
+        if new_decision == LOCK_SENTINEL:
+            self.set_locked_state(file_items, locked=True)
+            return
+        if new_decision == UNLOCK_SENTINEL:
+            self.set_locked_state(file_items, locked=False)
+            return
+        # Destructive route — pre-filter locked
+        kept, skipped = self._partition_by_lock(file_items)
+        if not kept:
+            self.status_reporter.show_status(
+                t("file_op.all_skipped_locked_status", count=skipped)
+            )
+            return
+        self.set_decision(kept, new_decision)
+        if skipped:
+            self.status_reporter.show_status(
+                t("file_op.decision_set_with_skipped_status",
+                  decision=new_decision, set_count=len(kept), skipped=skipped)
+            )
+
+    def _partition_by_lock(
+        self, items: list[dict]
+    ) -> tuple[list[dict], int]:
+        """Return ``(unlocked_items, skipped_locked_count)``.
+
+        Used by bulk paths (regex / multi-select) to honour the lock
+        before destructive decisions are applied. Single-row right-click
+        does NOT go through this — direct ``set_decision`` calls are
+        intentional per-row overrides.
+        """
+        locked_paths: set[str] = set()
+        for group in self.vm.groups:
+            for rec in group.items:
+                if rec.is_locked:
+                    locked_paths.add(rec.file_path)
+        kept: list[dict] = []
+        skipped = 0
+        for item in items:
+            if item.get("type") == "file" and item["path"] in locked_paths:
+                skipped += 1
+                continue
+            kept.append(item)
+        return kept, skipped
 
     def set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
         """Find all file rows where field matches regex and route by action.
@@ -481,7 +578,13 @@ class FileOperationsHandler:
                 :data:`REMOVE_FROM_LIST_SENTINEL` removes the matched
                 rows from the review list (and the manifest's review-set)
                 instead — that path prompts when the match count crosses
-                ``REMOVE_FROM_LIST_CONFIRM_THRESHOLD``.
+                ``REMOVE_FROM_LIST_CONFIRM_THRESHOLD``. The sentinels
+                :data:`LOCK_SENTINEL` / :data:`UNLOCK_SENTINEL` flip
+                ``is_locked`` for matched rows (idempotent — applied to
+                all matched, no skip-locked pre-filter on this branch).
+                For destructive decisions, already-locked rows are
+                skipped and the skipped count is surfaced in the status
+                toast — see photo-manager#164.
         """
         import re as _re
 
@@ -515,6 +618,30 @@ class FileOperationsHandler:
             )
             return
 
+        # Lock / unlock route — idempotent, applied to ALL matched rows.
+        # No skip-locked pre-filter: re-locking a locked row is a no-op,
+        # and bulk unlock is the escape hatch the user chose.
+        if new_decision == LOCK_SENTINEL:
+            self.set_locked_state(matching, locked=True)
+            return
+        if new_decision == UNLOCK_SENTINEL:
+            self.set_locked_state(matching, locked=False)
+            return
+
+        # Destructive routes (delete / keep / remove-from-list) — skip
+        # already-locked rows. Surface the skipped count so silent loss
+        # of "applied N" vs "matched M" doesn't repeat the very disconnect
+        # the lock feature exists to prevent.
+        kept, skipped = self._partition_by_lock(matching)
+
+        if not kept:
+            QMessageBox.information(
+                self.parent,
+                t("file_op.set_action_all_locked_title"),
+                t("file_op.set_action_all_locked_body", count=skipped),
+            )
+            return
+
         if new_decision == REMOVE_FROM_LIST_SENTINEL:
             # Bulk regex remove behaves like bulk regex delete/keep:
             # the matched rows get a decision attached
@@ -524,7 +651,12 @@ class FileOperationsHandler:
             # ExecuteActionDialog._set_decision.
             new_decision = REMOVE_FROM_LIST_DECISION
 
-        self.set_decision(matching, new_decision)
+        self.set_decision(kept, new_decision)
+        if skipped:
+            self.status_reporter.show_status(
+                t("file_op.decision_set_with_skipped_status",
+                  decision=new_decision, set_count=len(kept), skipped=skipped)
+            )
 
     def execute_action(self) -> None:
         """Open the Execute Action review dialog and run planned operations."""

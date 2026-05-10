@@ -31,7 +31,8 @@ CREATE TABLE migration_manifest (
     group_id         TEXT,
     reason           TEXT,
     executed         INTEGER NOT NULL DEFAULT 0,
-    user_decision    TEXT    NOT NULL DEFAULT ''
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    is_locked        INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -49,11 +50,13 @@ def _make_db(tmp_path: Path, rows: list[dict]) -> Path:
     return db
 
 
-def _rec(path: str, group: int = 1, decision: str = "") -> PhotoRecord:
+def _rec(
+    path: str, group: int = 1, decision: str = "", locked: bool = False
+) -> PhotoRecord:
     return PhotoRecord(
         group_number=group,
         is_mark=False,
-        is_locked=False,
+        is_locked=locked,
         folder_path="",
         file_path=path,
         capture_date=None,
@@ -93,6 +96,15 @@ def _read_decision(db: Path, path: str) -> str:
             (path,),
         ).fetchone()
     return row[0] if row else ""
+
+
+def _read_locked(db: Path, path: str) -> bool:
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT is_locked FROM migration_manifest WHERE source_path = ?",
+            (path,),
+        ).fetchone()
+    return bool(row[0]) if row else False
 
 
 # ── set_decision ───────────────────────────────────────────────────────────
@@ -1320,3 +1332,163 @@ class TestBuildMatchFn:
         matched, _total, _samples = match_fn("File Name", r"\.jpg$")
 
         assert matched == 2
+
+
+# ---------------------------------------------------------------------------
+# Lock state — set_locked_state, regex lock action, skip-locked (photo-manager#164)
+# ---------------------------------------------------------------------------
+
+class TestSetLockedState:
+    """``set_locked_state`` flips the orthogonal ``is_locked`` flag in
+    memory and SQLite. Single-row right-click goes through here directly,
+    so it must NOT skip locked rows — only bulk paths skip."""
+
+    def test_locks_in_memory(self, tmp_path):
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
+        assert rec.is_locked is True
+
+    def test_locks_in_sqlite(self, tmp_path):
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
+        assert _read_locked(db, "/a.jpg") is True
+
+    def test_unlocks(self, tmp_path):
+        rec = _rec("/a.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        # Pre-set DB lock to mirror the in-memory state
+        handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
+        assert _read_locked(db, "/a.jpg") is True
+        handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], False)
+        assert rec.is_locked is False
+        assert _read_locked(db, "/a.jpg") is False
+
+    def test_idempotent_relock(self, tmp_path):
+        """Locking an already-locked row is a no-op (no error, same state)."""
+        rec = _rec("/a.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+        handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
+        handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
+        assert rec.is_locked is True
+
+
+class TestSingleRowOverridesLock:
+    """``set_decision`` is the SHARED dispatcher and intentionally does
+    NOT skip locked rows — single-row right-click must always be able to
+    override. The skip-locked filter lives in the bulk paths
+    (regex / multi-select), not here."""
+
+    def test_set_decision_on_locked_row_overrides(self, tmp_path):
+        rec = _rec("/locked.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/locked.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision([{"type": "file", "path": "/locked.jpg"}], "delete")
+
+        assert rec.user_decision == "delete"
+        assert _read_decision(db, "/locked.jpg") == "delete"
+
+
+class TestSetDecisionByRegexSkipsLocked:
+    """Bulk regex MUST skip locked rows for destructive actions
+    (delete / keep / remove from list). Lock/unlock sentinels apply to
+    ALL matched rows (idempotent — that's the whole point of bulk
+    locking)."""
+
+    def test_destructive_regex_skips_locked(self, tmp_path):
+        unlocked = _rec("/free.jpg")
+        locked = _rec("/pinned.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(
+            group_number=1, items=[unlocked, locked])])
+        db = _make_db(tmp_path, [
+            {"source_path": "/free.jpg"},
+            {"source_path": "/pinned.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
+
+        # Only the unlocked row was decided.
+        assert unlocked.user_decision == "delete"
+        assert locked.user_decision == ""
+        assert _read_decision(db, "/free.jpg") == "delete"
+        assert _read_decision(db, "/pinned.jpg") == ""
+
+    def test_destructive_regex_all_locked_shows_message(self, tmp_path):
+        """When every match is locked, surface explicitly so the user
+        doesn't conclude the regex didn't match."""
+        locked_a = _rec("/pinned_a.jpg", locked=True)
+        locked_b = _rec("/pinned_b.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(
+            group_number=1, items=[locked_a, locked_b])])
+        db = _make_db(tmp_path, [
+            {"source_path": "/pinned_a.jpg"},
+            {"source_path": "/pinned_b.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch("app.views.handlers.file_operations.QMessageBox") as MB:
+            handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
+            MB.information.assert_called()  # the all-locked dialog
+        # No DB write happened
+        assert _read_decision(db, "/pinned_a.jpg") == ""
+        assert _read_decision(db, "/pinned_b.jpg") == ""
+
+    def test_lock_regex_action_locks_all_matched_idempotently(self, tmp_path):
+        """LOCK_SENTINEL applies to all matched rows including already-
+        locked ones (no skip-filter on this branch)."""
+        from app.views.constants import LOCK_SENTINEL
+
+        already = _rec("/already_locked.jpg", locked=True)
+        fresh = _rec("/fresh.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(
+            group_number=1, items=[already, fresh])])
+        db = _make_db(tmp_path, [
+            {"source_path": "/already_locked.jpg"},
+            {"source_path": "/fresh.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_regex("File Name", r"\.jpg$", LOCK_SENTINEL)
+
+        assert already.is_locked is True
+        assert fresh.is_locked is True
+        assert _read_locked(db, "/already_locked.jpg") is True
+        assert _read_locked(db, "/fresh.jpg") is True
+
+    def test_unlock_regex_action_unlocks_all_matched(self, tmp_path):
+        """UNLOCK_SENTINEL is the bulk escape hatch for the user who
+        locked too aggressively earlier."""
+        from app.views.constants import UNLOCK_SENTINEL
+
+        a = _rec("/a.jpg", locked=True)
+        b = _rec("/b.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[a, b])])
+        db = _make_db(tmp_path, [
+            {"source_path": "/a.jpg"},
+            {"source_path": "/b.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+        # Persist the initial locked state so the unlock has something to flip
+        handler.set_locked_state(
+            [{"type": "file", "path": "/a.jpg"}, {"type": "file", "path": "/b.jpg"}],
+            True,
+        )
+
+        handler.set_decision_by_regex("File Name", r"\.jpg$", UNLOCK_SENTINEL)
+
+        assert a.is_locked is False
+        assert b.is_locked is False
+        assert _read_locked(db, "/a.jpg") is False
+        assert _read_locked(db, "/b.jpg") is False
