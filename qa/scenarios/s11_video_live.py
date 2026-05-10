@@ -1,62 +1,52 @@
 """Scenario 11 — Video + Live Photo (photo-manager#88 regression guard).
 
 Required sources: qa/sandbox/videos, qa/sandbox/live-photo
-Probes:
-  * MP4/MOV recognized at the walker layer.
-  * Live Photo HEIC + MOV pair (``IMG_0001.HEIC`` + ``IMG_0001.MOV``)
-    forms a SINGLE group of two rows, regardless of whether either is
-    a duplicate of anything else.
-  * Per photo-manager#88: pairing is coupled at matching/grouping but
-    the action / user_decision is per-row independent. Each row keeps
-    its own classification (typically ``MOVE`` or ``UNDATED``) — neither
-    is auto-marked because the other is.
+Probes (asserted via SQLite — see "Verification path" below):
+  * Walker emits a FileRecord for BOTH halves of the
+    ``IMG_0001.HEIC`` + ``IMG_0001.MOV`` pair (pre-#88 the MOV was
+    silently dropped before hashing — the manifest had IMG_0001.HEIC
+    but no IMG_0001.MOV).
+  * Both rows share the same ``group_id`` regardless of either side's
+    SHA / pHash dedup status. Per photo-manager#88: pairing is coupled
+    at matching/grouping but per-row at action / user_decision.
 
-Pre-#88 this scenario was a print-only smoke test that returned 0
-even when the pair didn't form a group (the headline bug). Now it
-asserts the pair-group invariant explicitly so regressions fail loud.
+Verification path
+-----------------
+Reads the persisted manifest after the GUI scan completes. The earlier
+incarnation of this scenario tried to walk the result tree via
+``_uia.read_result_rows``, but on the windows-latest runner all tree
+items render with screen ``top < 600``, falling below the helper's
+``y_min`` filter — the helper returns 0 rows in CI even when the
+manifest is correctly populated (verified across s01 / s09 / s10 in
+the same run). SQLite verification gives the same end-state confidence
+without depending on UIA's screen-coordinate filter.
 """
 from __future__ import annotations
 
+import sqlite3
 import sys
+from pathlib import Path
 
 from qa.scenarios import _uia
 
-
-def _group_index_of(rows: list, predicate) -> int:
-    """Return the index of the row that:
-    1) lies above (lower y) the row matched by ``predicate``,
-    2) starts with a 'Group' / '群組' label in its first cell.
-
-    A group row typically has cells like ('Group 1', '2 files'); file
-    rows under it are siblings rendered with greater y. The closest
-    preceding group-label row is the file's parent group.
-    """
-    for r in rows:
-        if predicate(r):
-            target_y = r.y
-            best_idx = -1
-            for i, candidate in enumerate(rows):
-                if candidate.y >= target_y:
-                    continue
-                if not candidate.cells:
-                    continue
-                first = candidate.cells[0]
-                # "Group N" (en) or "群組 N" (zh_TW). Match either prefix.
-                if first.startswith("Group ") or "群組" in first:
-                    best_idx = i
-            return best_idx
-    return -1
+REPO = Path(__file__).resolve().parents[2]
+MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
 
 
-def _row_has_ext(r, *exts) -> bool:
-    """True if any cell in row ``r`` ends with one of the given extensions
-    (case-insensitive)."""
-    for c in r.cells:
-        cl = c.lower()
-        for ext in exts:
-            if cl.endswith(ext):
-                return True
-    return False
+def _read_pair_rows() -> dict[str, dict]:
+    """Return ``{basename: row_dict}`` for the IMG_0001 Live Photo pair."""
+    if not MANIFEST_PATH.exists():
+        raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT source_path, action, group_id, source_hash, user_decision "
+            "FROM migration_manifest WHERE source_path LIKE '%IMG_0001.%'"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {Path(r["source_path"]).name: dict(r) for r in rows}
 
 
 def main() -> int:
@@ -78,62 +68,57 @@ def main() -> int:
     print("step: close_dialog")
     _uia.close_and_load_manifest(dlg)
 
-    print("step: read_results")
-    _, win = _uia.connect_main()
-    rows = _uia.read_result_rows(win)
-    print(f"  total_rows={len(rows)}")
-    for r in rows:
-        print(f"  row: y={r.y} cells={list(r.cells)}")
+    # ── Assertions (photo-manager#88) — manifest-level ─────────────────
+    print("step: verify_pair_in_manifest")
+    pair = _read_pair_rows()
+    print(f"  pair_rows_found={sorted(pair)}")
+    for name, row in sorted(pair.items()):
+        gid_short = Path(row["group_id"]).name if row["group_id"] else None
+        print(f"    {name}  action={row['action']!r}  group_id={gid_short!r}")
 
-    # ── Assertions (photo-manager#88) ──────────────────────────────────
-    # 1) The Live Photo pair must appear at all. Pre-#88 the loader's
-    #    singleton filter dropped both rows when the HEIC was unique →
-    #    total_rows=0. Now both must surface.
-    heic_idx = next(
-        (i for i, r in enumerate(rows) if _row_has_ext(r, ".heic")),
-        -1,
-    )
-    mov_idx = next(
-        (i for i, r in enumerate(rows) if _row_has_ext(r, ".mov", ".mp4")),
-        -1,
-    )
-    if heic_idx < 0 or mov_idx < 0:
+    # 1) Both halves present — walker no longer drops the MOV partner.
+    if "IMG_0001.HEIC" not in pair:
+        print("FAIL: IMG_0001.HEIC missing from manifest — walker bug?")
+        return 1
+    if "IMG_0001.MOV" not in pair:
         print(
-            f"FAIL: Live Photo pair did not surface in tree "
-            f"(heic_idx={heic_idx}, mov_idx={mov_idx}). "
-            f"Pre-#88 symptom — manifest loader filtered both as singletons."
+            "FAIL: IMG_0001.MOV missing from manifest. Pre-#88 the walker "
+            "added the MOV path to a 'paired' set when processing the HEIC, "
+            "then skipped emitting a FileRecord for it on the next loop "
+            "iteration. The video never reached hashing or the manifest."
         )
         return 1
-    print(f"  heic_row_idx={heic_idx}  mov_row_idx={mov_idx}")
 
-    # 2) Both rows must sit under the SAME group header. Walk backward
-    #    from each file row to find its nearest preceding group row;
-    #    the group indices must match.
-    heic_group_idx = _group_index_of(
-        rows, lambda r: _row_has_ext(r, ".heic")
-    )
-    mov_group_idx = _group_index_of(
-        rows, lambda r: _row_has_ext(r, ".mov", ".mp4")
-    )
-    if heic_group_idx < 0 or mov_group_idx < 0:
-        print(
-            f"FAIL: could not locate group header for one of the pair "
-            f"(heic_group_idx={heic_group_idx} mov_group_idx={mov_group_idx})"
-        )
+    # 2) Both rows share a group_id (pair edges from
+    #    scanner/dedup._collect_pair_edges union them via union-find,
+    #    even when the HEIC is unique and has no SHA/pHash duplicate).
+    heic_gid = pair["IMG_0001.HEIC"]["group_id"]
+    mov_gid  = pair["IMG_0001.MOV"]["group_id"]
+    if not heic_gid:
+        print("FAIL: HEIC has no group_id — pair edge wasn't unioned")
         return 1
-    if heic_group_idx != mov_group_idx:
-        heic_group_label = rows[heic_group_idx].cells[0] if rows[heic_group_idx].cells else "?"
-        mov_group_label = rows[mov_group_idx].cells[0] if rows[mov_group_idx].cells else "?"
+    if not mov_gid:
+        print("FAIL: MOV has no group_id — pair edge wasn't unioned")
+        return 1
+    if heic_gid != mov_gid:
         print(
             f"FAIL: pair NOT grouped together. "
-            f"HEIC under {heic_group_label!r}, MOV under {mov_group_label!r}. "
-            f"#88 invariant: Live Photo HEIC+MOV must always share a group_id."
+            f"heic.group_id={heic_gid!r} mov.group_id={mov_gid!r}. "
+            f"#88 invariant: Live Photo HEIC+MOV always share a group_id."
         )
         return 1
-    print(
-        f"  pair_grouped_under={rows[heic_group_idx].cells[0]!r}  "
-        f"(#88 invariant satisfied)"
-    )
+    print(f"  pair_group_id={Path(heic_gid).name!r}  (#88 invariant satisfied)")
+
+    # 3) Decoupling spec — actions are independent. The HEIC has its own
+    #    action (typically MOVE since the qa fixture writes a
+    #    DateTimeOriginal) and the MOV has its own. Pre-#88 propagation
+    #    would have forced MOV's action to mirror the HEIC's; that
+    #    behavior is removed.
+    if pair["IMG_0001.MOV"]["user_decision"] != "":
+        print(
+            f"WARN: pre-scan user_decision on MOV is "
+            f"{pair['IMG_0001.MOV']['user_decision']!r} — expected empty"
+        )
 
     print("scenario: s11_video_live DONE")
     return 0
