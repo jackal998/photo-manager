@@ -146,6 +146,7 @@ The tree shows all files loaded from the manifest.
 |--------|---------|
 | **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
 | **Action** | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **Lock** | 🔒 if the row is locked against bulk operations (#182), empty otherwise. Sortable; searchable via the regex dialog as `Locked` / `""`. |
 | **File Name** | File name |
 | **Folder** | Containing directory |
 | **Size (Bytes)** | File size |

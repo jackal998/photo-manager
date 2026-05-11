@@ -29,6 +29,7 @@ _FIELD_TO_ATTR: dict[str, str] = {
     "File Name":     "file_path",      # basename extracted in _get_record_field
     "Folder":        "folder_path",
     "Action":        "user_decision",
+    "Lock":          "is_locked",      # bool → "Locked"/"" in _get_record_field (#182)
     "Size (Bytes)":  "file_size_bytes",
     "Creation Date": "creation_date",
     "Shot Date":     "shot_date",
@@ -36,13 +37,25 @@ _FIELD_TO_ATTR: dict[str, str] = {
 
 
 def _get_record_field(rec: Any, field: str) -> str | None:
-    """Return the string value of a record's field, or None if unavailable."""
+    """Return the string value of a record's field, or None if unavailable.
+
+    The ``Lock`` field maps a boolean ``is_locked`` to the string
+    ``"Locked"`` (truthy) or ``""`` (falsy) so users can regex-match
+    locked rows with ``^Locked$`` and unlocked rows with ``^$``. The
+    rendered string matches what the COL_LOCK column shows in the tree
+    (🔒 glyph for locked, empty for unlocked) — same conceptual values,
+    different presentation.
+    """
     from pathlib import Path
 
     attr = _FIELD_TO_ATTR.get(field)
     if attr is None:
         return None
     val = getattr(rec, attr, None)
+    if field == "Lock":
+        # bool conversion explicitly — getattr can return False which
+        # is not None and shouldn't short-circuit to "None" via str().
+        return "Locked" if bool(val) else ""
     if val is None:
         return None
     if field == "File Name":

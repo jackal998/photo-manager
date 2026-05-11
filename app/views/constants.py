@@ -9,16 +9,21 @@ from PySide6.QtCore import Qt
 from infrastructure.i18n import t
 
 # Column indices stay as integer constants — they're not user-facing.
+# COL_LOCK was added between COL_ACTION and COL_NAME in #182 so the
+# lock state is its own sortable / searchable column instead of a 🔒
+# prefix glyph on the Action column. Indices below 2 are unchanged;
+# indices above 2 shifted by +1.
 COL_GROUP: int = 0
 COL_ACTION: int = 1
-COL_NAME: int = 2
-COL_FOLDER: int = 3
-COL_SIZE_BYTES: int = 4
-COL_GROUP_COUNT: int = 5
-COL_CREATION_DATE: int = 6
-COL_SHOT_DATE: int = 7
-COL_RESOLUTION: int = 8
-NUM_COLUMNS: int = 9
+COL_LOCK: int = 2
+COL_NAME: int = 3
+COL_FOLDER: int = 4
+COL_SIZE_BYTES: int = 5
+COL_GROUP_COUNT: int = 6
+COL_CREATION_DATE: int = 7
+COL_SHOT_DATE: int = 8
+COL_RESOLUTION: int = 9
+NUM_COLUMNS: int = 10
 
 
 # Data roles
@@ -43,6 +48,7 @@ def headers() -> list[str]:
     return [
         t("column.similarity"),
         t("column.action"),
+        t("column.lock"),
         t("column.file_name"),
         t("column.folder"),
         t("column.size_bytes"),

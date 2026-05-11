@@ -52,6 +52,7 @@ main_window:
 column:
   similarity: "相似度"
   action: "動作"
+  lock: "鎖定"
   file_name: "檔名"
   folder: "資料夾"
   size_bytes: "大小 (位元組)"

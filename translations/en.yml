@@ -64,6 +64,7 @@ main_window:
 column:
   similarity: "Similarity"
   action: "Action"
+  lock: "Lock"
   file_name: "File Name"
   folder: "Folder"
   size_bytes: "Size (Bytes)"

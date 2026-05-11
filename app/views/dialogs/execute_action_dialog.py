@@ -435,7 +435,7 @@ class ExecuteActionDialog(QDialog):
 
         # Internal English keys; ActionDialog displays localized labels but
         # emits the English name back via setActionRequested.
-        fields = ["Action", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
+        fields = ["Action", "Lock", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
         # Build the live-preview match_fn from this dialog's groups —
         # which alias the main window's vm.groups (see _remove_from_list_paths
         # docstring), so both surfaces preview against the same data.
