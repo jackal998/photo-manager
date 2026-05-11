@@ -61,6 +61,23 @@ def main() -> int:
     print("step: open_scan_dialog")
     dlg, _ = _uia.open_scan_dialog(win)
 
+    # ── 0. Advanced-settings collapsed by default (#163) ──────────────────
+    # The pHash and mean-color sliders live inside a checkable QGroupBox
+    # that defaults to collapsed. Qt hides children when a checkable
+    # QGroupBox is unchecked, so a UIA descendant query for visible
+    # Slider controls returns zero.
+    print("step: assert_advanced_collapsed_by_default")
+    sliders = [s for s in dlg.descendants(control_type="Slider")
+               if s.is_visible()]
+    print(f"  visible_sliders={len(sliders)}")
+    if sliders:
+        print(
+            f"FAIL: expected 0 visible sliders (advanced settings collapsed); "
+            f"got {len(sliders)}. The Grouping-Parameters QGroupBox should be "
+            f"checkable + unchecked by default — see photo-manager#163."
+        )
+        return 1
+
     # ── 1. Empty-state baseline ───────────────────────────────────────────
     print("step: assert_empty_baseline")
     paths = _uia.read_source_paths(dlg)

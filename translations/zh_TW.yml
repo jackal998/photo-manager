@@ -92,7 +92,7 @@ scan_dialog:
   output_placeholder: "輸出清單路徑 (.sqlite)"
   browse_button: "瀏覽…"
   save_dialog_title: "儲存清單為"
-  params_group: "分組參數"
+  advanced_settings_label: "進階設定"
   phash_label: "<b>pHash 相似度閾值</b> (預設:10,範圍:1–20)"
   phash_desc: "兩張影像之間的感知雜湊 Hamming 距離。64 位元的 pHash 表示兩張影像最多可相差此位元數,即被視為近似重複。<b>越低 = 越嚴格</b> (群組較少,雜訊較少);<b>越高 = 越寬鬆</b> (可抓到更多輕微編輯過的影像對)。"
   color_label: "<b>平均色彩閘門</b> (預設:30,範圍:0–100)"
