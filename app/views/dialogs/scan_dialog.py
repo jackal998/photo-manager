@@ -419,16 +419,30 @@ class ScanDialog(QDialog):
         # Advanced settings — pHash threshold + mean-color gate.
         #
         # Collapsed by default (the 95% case never touches these knobs).
-        # Qt's ``QGroupBox.setCheckable`` renders the title as a checkbox;
-        # children inside the group are hidden when unchecked. State is
-        # persisted to ``ui.scan_dialog.advanced_expanded`` via
+        # Qt's ``QGroupBox.setCheckable`` renders the title as a checkbox,
+        # but by default Qt only DISABLES the children when unchecked —
+        # they stay visible (just greyed) and keep occupying space. To
+        # truly collapse and reclaim the vertical space, wrap all the
+        # content in a child ``QWidget`` and toggle its visibility
+        # alongside the check state.
+        #
+        # State is persisted to ``ui.scan_dialog.advanced_expanded`` via
         # ``_on_advanced_toggled`` so power users who keep it open don't
         # re-toggle every session. See photo-manager#163.
         self._params_group = QGroupBox(t("scan_dialog.advanced_settings_label"))
         self._params_group.setCheckable(True)
         self._params_group.setChecked(False)  # default — will be overwritten by _load_from_settings
         self._params_group.toggled.connect(self._on_advanced_toggled)
-        params_layout = QVBoxLayout(self._params_group)
+        outer_params_layout = QVBoxLayout(self._params_group)
+        # Removing the default groupbox padding around the collapsible
+        # container — when collapsed, the title-row alone should be
+        # visually compact, not framed by extra whitespace.
+        outer_params_layout.setContentsMargins(8, 4, 8, 4)
+        self._params_content = QWidget()
+        self._params_content.setVisible(False)  # matches setChecked(False) above
+        outer_params_layout.addWidget(self._params_content)
+        params_layout = QVBoxLayout(self._params_content)
+        params_layout.setContentsMargins(0, 0, 0, 0)
 
         # pHash threshold
         phash_label = QLabel(t("scan_dialog.phash_label"))
@@ -573,12 +587,17 @@ class ScanDialog(QDialog):
             pass  # Non-fatal — settings-save failure should not interrupt the UI
 
     def _on_advanced_toggled(self, expanded: bool) -> None:
-        """Persist the advanced-settings expanded state immediately (#163).
+        """Show/hide the content + persist expanded state (#163).
+
+        Hiding the child container is what actually reclaims the
+        vertical space — Qt's checkable QGroupBox alone only disables
+        children, leaving them visible and space-occupying.
 
         Saves the boolean ``ui.scan_dialog.advanced_expanded`` on every
         toggle so the user's last state survives the next dialog open
         without depending on the source-list save path firing.
         """
+        self._params_content.setVisible(expanded)
         self.settings.set("ui.scan_dialog.advanced_expanded", expanded)
         try:
             self.settings.save()

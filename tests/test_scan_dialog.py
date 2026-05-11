@@ -399,6 +399,52 @@ class TestAdvancedSettingsCollapse:
         assert dlg._phash_slider.value() == 10
         assert dlg._color_slider.value() == 30
 
+    def test_content_actually_hidden_when_collapsed(self, qapp, tmp_path):
+        """Qt's checkable QGroupBox by default DISABLES children when
+        unchecked — they stay visible (just greyed) and keep occupying
+        vertical space. Wrap the content in a child QWidget whose
+        visibility tracks the checked state so collapse genuinely
+        reclaims space."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        # The wrapper QWidget exists and is hidden in the default state
+        assert hasattr(dlg, "_params_content")
+        assert dlg._params_content.isVisibleTo(dlg) is False
+
+    def test_content_visible_when_expanded(self, qapp, tmp_path):
+        """Expanding the groupbox shows the wrapper QWidget (and thereby
+        the sliders inside it)."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"advanced_expanded": True}},
+        })
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._params_content.isVisibleTo(dlg) is True
+
+    def test_toggle_flips_content_visibility(self, qapp, tmp_path):
+        """The toggle handler must flip ``_params_content.setVisible``
+        AND save the state — both happen on every click."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+
+        assert dlg._params_content.isVisibleTo(dlg) is False
+        dlg._params_group.setChecked(True)
+        assert dlg._params_content.isVisibleTo(dlg) is True
+        dlg._params_group.setChecked(False)
+        assert dlg._params_content.isVisibleTo(dlg) is False
+
 
 # ---------------------------------------------------------------------------
 # _build_sources (label auto-generation + source_priority ordering)
