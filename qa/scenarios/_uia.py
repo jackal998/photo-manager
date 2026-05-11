@@ -111,6 +111,25 @@ ACTION_DIALOG_TITLE = "Set Action by Field/Regex"
 ACTION_DIALOG_BTN_APPLY = "Apply"
 ACTION_DIALOG_BTN_CLOSE = "Close"
 
+# LockedRowsConfirmDialog (photo-manager#182) — surfaced whenever an
+# action would touch a locked row. The three button labels match the
+# en.yml `locked_confirm.btn_*` keys; verdict constants below mirror
+# the dialog class's own constants and are passed into the
+# ``expect_lock_confirm`` parameter of the helpers that drive the
+# regex flow / Execute Action flow.
+LOCK_CONFIRM_TITLE = "Locked Rows Affected"
+LOCK_CONFIRM_BTN_UNLOCK_APPLY = "Unlock & Apply to All"
+LOCK_CONFIRM_BTN_UNLOCKED_ONLY = "Apply to Unlocked Only"
+LOCK_CONFIRM_BTN_CANCEL = "Cancel"
+
+# Convenience verdict aliases — point at the button label strings above.
+# Scenarios can write ``_uia.LOCK_CONFIRM_APPLY_UNLOCKED_ONLY`` rather
+# than the literal button text, which keeps a single source of truth
+# for the label drift check in ``test_uia_label_coupling.py``.
+LOCK_CONFIRM_APPLY_ALL_UNLOCKED = LOCK_CONFIRM_BTN_UNLOCK_APPLY
+LOCK_CONFIRM_APPLY_UNLOCKED_ONLY = LOCK_CONFIRM_BTN_UNLOCKED_ONLY
+LOCK_CONFIRM_CANCEL = LOCK_CONFIRM_BTN_CANCEL
+
 
 # ---------------------------------------------------------------------------
 # Win32 plumbing — needed because Qt menu popups are top-level windows but
@@ -1332,8 +1351,37 @@ def _find_descendant_by_aid_suffix(
     return None
 
 
+def drive_lock_confirm(
+    pid: int, verdict: str, timeout: float = 5.0
+) -> bool:
+    """Wait for the LockedRowsConfirmDialog (#182) and click ``verdict``.
+
+    ``verdict`` is a button label — pass one of
+    ``LOCK_CONFIRM_APPLY_ALL_UNLOCKED`` / ``LOCK_CONFIRM_APPLY_UNLOCKED_ONLY``
+    / ``LOCK_CONFIRM_CANCEL`` (aliases for the button text constants).
+
+    Returns True if the dialog was found and dismissed, False if no
+    dialog appeared within ``timeout``. Use this AFTER an Apply (regex
+    flow) or Execute (Execute Action dialog) when locked rows are
+    expected to be in the affected set.
+    """
+    try:
+        hwnd = wait_for_dialog(pid, LOCK_CONFIRM_TITLE, timeout=timeout)
+    except TimeoutError:
+        return False
+    dlg = connect_by_handle(hwnd)
+    btn = _find_dialog_button(dlg, verdict)
+    btn.click_input()
+    time.sleep(0.3)
+    return True
+
+
 def _drive_action_dialog_form(
-    action_dlg: UIAWrapper, field: str, regex: str, action_label: str
+    action_dlg: UIAWrapper,
+    field: str,
+    regex: str,
+    action_label: str,
+    expect_lock_confirm: str | None = None,
 ) -> str | None:
     """Fill the Set Action by Field/Regex dialog and submit.
 
@@ -1451,6 +1499,13 @@ def _drive_action_dialog_form(
     apply_btn.click_input()
     time.sleep(0.3)
 
+    # Lock-confirm interstitial — photo-manager#182. The Apply handler
+    # opens LockedRowsConfirmDialog modally when any matched row is
+    # locked; we drive it here so the rest of the helper (counter read
+    # + Close) sees the action dialog in its post-apply state.
+    if expect_lock_confirm is not None:
+        drive_lock_confirm(action_dlg.process_id(), expect_lock_confirm)
+
     # Counter readback happens AFTER Apply — Apply doesn't dismiss the
     # dialog, so the live-preview pane is still on screen with the same
     # numbers. Reading it before Apply meant the descendants() walk
@@ -1522,6 +1577,7 @@ def mark_all_via_regex(
     regex: str,
     action_label: str,
     dialog_timeout: float = 5,
+    expect_lock_confirm: str | None = None,
 ) -> str | None:
     """Open the inner Set Action by Field/Regex dialog from inside the
     Execute Action dialog, set field+regex+action, click Apply, then Close.
@@ -1531,6 +1587,8 @@ def mark_all_via_regex(
     helper for the same rationale).
     `action_label` is the visible label in the Set Action combo
     (e.g. "delete" — see SETTABLE_DECISIONS in app/views/constants.py).
+
+    ``expect_lock_confirm`` (#182): see :func:`mark_all_via_regex_standalone`.
 
     Returns the live-preview match-counter text or ``None`` (see
     ``_drive_action_dialog_form``).
@@ -1547,7 +1605,10 @@ def mark_all_via_regex(
     _focus(action_dlg)
     time.sleep(0.3)
 
-    return _drive_action_dialog_form(action_dlg, field, regex, action_label)
+    return _drive_action_dialog_form(
+        action_dlg, field, regex, action_label,
+        expect_lock_confirm=expect_lock_confirm,
+    )
 
 
 def mark_all_via_regex_standalone(
@@ -1556,6 +1617,7 @@ def mark_all_via_regex_standalone(
     regex: str,
     action_label: str,
     dialog_timeout: float = 5,
+    expect_lock_confirm: str | None = None,
 ) -> str | None:
     """Drive the standalone Set Action by Field/Regex flow from the menu bar.
 
@@ -1566,6 +1628,12 @@ def mark_all_via_regex_standalone(
 
     Use for s14 (standalone Set Action) and any future scenario that
     exercises bulk-decision assignment without entering Execute review.
+
+    ``expect_lock_confirm`` (#182): pass one of the
+    ``LOCK_CONFIRM_*`` verdict identifiers when the regex is expected
+    to match at least one locked row. The helper drives the modal
+    LockedRowsConfirmDialog between Apply and Close. Default ``None``
+    keeps the legacy contract (no locked rows in the affected set).
 
     Returns the live-preview match-counter text or ``None`` (see
     ``_drive_action_dialog_form``).
@@ -1578,13 +1646,17 @@ def mark_all_via_regex_standalone(
     _focus(action_dlg)
     time.sleep(0.3)
 
-    return _drive_action_dialog_form(action_dlg, field, regex, action_label)
+    return _drive_action_dialog_form(
+        action_dlg, field, regex, action_label,
+        expect_lock_confirm=expect_lock_confirm,
+    )
 
 
 def execute_and_confirm(
     execute_dlg: UIAWrapper,
     dialog_timeout: float = 10,
     on_confirm_open=None,
+    expect_lock_confirm: str | None = None,
 ) -> None:
     """Click Execute on the Execute Action dialog, then Yes on the
     'All Files Will Be Deleted' confirmation QMessageBox.
@@ -1593,15 +1665,38 @@ def execute_and_confirm(
     dialog wrapper before Yes is clicked. Used by the destructive-confirm
     invariant probe to inspect the dialog's shape (Yes/No buttons, body).
 
+    *expect_lock_confirm* (#182): pass one of the ``LOCK_CONFIRM_*``
+    verdict identifiers when locked rows have ``decision='delete'`` at
+    Execute time. Under the new lock semantic the pre-execute scan
+    surfaces the unified LockedRowsConfirmDialog BEFORE the
+    all-delete confirm — drive it here so the remainder of the
+    flow (all-delete confirm + dialog close) matches the existing
+    happy-path shape. Default ``None`` preserves the pre-#182
+    contract (no locked rows in the delete set).
+
     Returns when the Execute Action dialog has accepted (closed) — that's
     the signal that send2trash + mark_executed have completed.
     """
     pid = execute_dlg.process_id()
     execute_btn = execute_dlg.child_window(title=EXECUTE_BTN, control_type="Button")
-    confirm_hwnd = _click_btn_and_wait_for_dialog(
-        execute_btn, execute_dlg, pid, EXECUTE_CONFIRM_TITLE,
-        per_attempt_timeout=dialog_timeout,
-    )
+    if expect_lock_confirm is not None:
+        # Lock-confirm path: click Execute manually, drive the
+        # interstitial dialog, then look for the all-delete confirm.
+        execute_btn.click_input()
+        time.sleep(0.3)
+        if not drive_lock_confirm(pid, expect_lock_confirm, timeout=dialog_timeout):
+            raise TimeoutError(
+                "expect_lock_confirm was set but the LockedRowsConfirmDialog "
+                "did not appear after clicking Execute"
+            )
+        confirm_hwnd = wait_for_dialog(
+            pid, EXECUTE_CONFIRM_TITLE, timeout=dialog_timeout
+        )
+    else:
+        confirm_hwnd = _click_btn_and_wait_for_dialog(
+            execute_btn, execute_dlg, pid, EXECUTE_CONFIRM_TITLE,
+            per_attempt_timeout=dialog_timeout,
+        )
     confirm_dlg = connect_by_handle(confirm_hwnd)
     if on_confirm_open is not None:
         try:
@@ -1687,6 +1782,13 @@ CTX_SET_ACTION = "Set Action"
 CTX_DELETE = "delete"
 CTX_KEEP = "keep (remove action)"
 CTX_OPEN_FOLDER = "Open Folder"
+# Lock / Unlock items sit at the top level of the file-row context
+# menu (not under the Set Action submenu) — see
+# ContextMenuHandler._create_single_selection_menu and the
+# multi-select variant. Translation keys: context_menu.lock /
+# context_menu.unlock in translations/en.yml.
+CTX_LOCK = "Lock"
+CTX_UNLOCK = "Unlock"
 
 _VK_CONTROL = 0x11
 _VK_DOWN = 0x28

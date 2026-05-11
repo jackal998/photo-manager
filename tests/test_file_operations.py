@@ -1382,31 +1382,37 @@ class TestSetLockedState:
         assert rec.is_locked is True
 
 
-class TestSingleRowOverridesLock:
-    """``set_decision`` is the SHARED dispatcher and intentionally does
-    NOT skip locked rows — single-row right-click must always be able to
-    override. The skip-locked filter lives in the bulk paths
-    (regex / multi-select), not here."""
+class TestSetDecisionIsSilentDispatcher:
+    """``set_decision`` is the low-level silent dispatcher. It does NOT
+    check locks — that's the job of :meth:`set_decision_with_lock_check`
+    and its callers (single-row right-click, bulk regex, bulk
+    multi-select). Pinning the silent contract here so the wrapper
+    can be refactored without breaking the underlying primitive.
+    See photo-manager#182.
+    """
 
-    def test_set_decision_on_locked_row_overrides(self, tmp_path):
+    def test_set_decision_writes_decision_regardless_of_lock(self, tmp_path):
         rec = _rec("/locked.jpg", locked=True)
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
         db = _make_db(tmp_path, [{"source_path": "/locked.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
 
+        # Direct call — bypasses the lock-confirm wrapper. The wrapper
+        # is what the real call sites use; this test pins the primitive.
         handler.set_decision([{"type": "file", "path": "/locked.jpg"}], "delete")
 
         assert rec.user_decision == "delete"
         assert _read_decision(db, "/locked.jpg") == "delete"
 
 
-class TestSetDecisionByRegexSkipsLocked:
-    """Bulk regex MUST skip locked rows for destructive actions
-    (delete / keep / remove from list). Lock/unlock sentinels apply to
-    ALL matched rows (idempotent — that's the whole point of bulk
-    locking)."""
+class TestSetDecisionByRegexLockConfirm:
+    """Bulk regex with a destructive decision routes through the
+    LockedRowsConfirmDialog when any matched row is locked (#182).
+    Each verdict (Unlock & Apply All / Apply to Unlocked Only / Cancel)
+    drives a different outcome. Lock/unlock sentinels short-circuit
+    the dialog and stay idempotent."""
 
-    def test_destructive_regex_skips_locked(self, tmp_path):
+    def _setup_mixed(self, tmp_path):
         unlocked = _rec("/free.jpg")
         locked = _rec("/pinned.jpg", locked=True)
         vm = SimpleNamespace(groups=[PhotoGroup(
@@ -1416,34 +1422,121 @@ class TestSetDecisionByRegexSkipsLocked:
             {"source_path": "/pinned.jpg"},
         ])
         handler, _, _ = _make_handler(vm, str(db))
+        return handler, vm, db, unlocked, locked
 
-        handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
+    def test_apply_unlocked_only_writes_only_to_unlocked(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        handler, _, db, unlocked, locked = self._setup_mixed(tmp_path)
 
-        # Only the unlocked row was decided.
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY,
+        ):
+            handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
+
         assert unlocked.user_decision == "delete"
         assert locked.user_decision == ""
+        assert locked.is_locked is True  # lock not flipped
         assert _read_decision(db, "/free.jpg") == "delete"
         assert _read_decision(db, "/pinned.jpg") == ""
 
-    def test_destructive_regex_all_locked_shows_message(self, tmp_path):
-        """When every match is locked, surface explicitly so the user
-        doesn't conclude the regex didn't match."""
-        locked_a = _rec("/pinned_a.jpg", locked=True)
-        locked_b = _rec("/pinned_b.jpg", locked=True)
-        vm = SimpleNamespace(groups=[PhotoGroup(
-            group_number=1, items=[locked_a, locked_b])])
+    def test_apply_all_unlocked_unlocks_then_applies(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        handler, _, db, unlocked, locked = self._setup_mixed(tmp_path)
+
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+        ):
+            handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
+
+        assert unlocked.user_decision == "delete"
+        assert locked.user_decision == "delete"
+        assert locked.is_locked is False  # unlocked as part of the action
+        assert _read_decision(db, "/free.jpg") == "delete"
+        assert _read_decision(db, "/pinned.jpg") == "delete"
+
+    def test_cancel_changes_nothing(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        handler, _, db, unlocked, locked = self._setup_mixed(tmp_path)
+
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ):
+            handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
+
+        assert unlocked.user_decision == ""
+        assert locked.user_decision == ""
+        assert locked.is_locked is True
+        assert _read_decision(db, "/free.jpg") == ""
+        assert _read_decision(db, "/pinned.jpg") == ""
+
+    def test_all_locked_dialog_still_offers_unlock_apply(self, tmp_path):
+        """Degenerate case: every matched row is locked. The dialog
+        is still shown so the user can choose Unlock & Apply All or
+        Cancel; the 'Apply to Unlocked Only' button is disabled at
+        construction (covered in test_locked_rows_confirm_dialog).
+        Here we just verify the call site reaches the dialog and
+        respects an Unlock & Apply verdict."""
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+
+        a = _rec("/pinned_a.jpg", locked=True)
+        b = _rec("/pinned_b.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[a, b])])
         db = _make_db(tmp_path, [
             {"source_path": "/pinned_a.jpg"},
             {"source_path": "/pinned_b.jpg"},
         ])
         handler, _, _ = _make_handler(vm, str(db))
 
-        with patch("app.views.handlers.file_operations.QMessageBox") as MB:
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+        ) as ask:
             handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
-            MB.information.assert_called()  # the all-locked dialog
-        # No DB write happened
-        assert _read_decision(db, "/pinned_a.jpg") == ""
-        assert _read_decision(db, "/pinned_b.jpg") == ""
+            ask.assert_called_once()
+
+        assert a.user_decision == "delete"
+        assert b.user_decision == "delete"
+        assert a.is_locked is False
+        assert b.is_locked is False
+
+    def test_no_locked_rows_no_dialog(self, tmp_path):
+        """Fast path: when nothing is locked, the dialog never opens
+        and the bulk apply runs directly (today's behavior preserved
+        for the common case)."""
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+
+        a = _rec("/a.jpg")
+        b = _rec("/b.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[a, b])])
+        db = _make_db(tmp_path, [
+            {"source_path": "/a.jpg"},
+            {"source_path": "/b.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch.object(LockedRowsConfirmDialog, "ask") as ask:
+            handler.set_decision_by_regex("File Name", r"\.jpg$", "delete")
+            ask.assert_not_called()
+
+        assert a.user_decision == "delete"
+        assert b.user_decision == "delete"
 
     def test_lock_regex_action_locks_all_matched_idempotently(self, tmp_path):
         """LOCK_SENTINEL applies to all matched rows including already-

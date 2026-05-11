@@ -31,23 +31,45 @@ class DeleteService:
         self._handle_releaser = releaser
 
     def plan_delete(self, groups: Iterable[PhotoGroup], selected_paths: list[str]) -> DeletePlan:
-        """Compute a delete plan from selected paths, skipping locked items."""
-        # Build a quick lookup of path -> (group, record, locked)
+        """Compute a delete plan from selected paths.
+
+        The caller is responsible for ensuring ``selected_paths`` does
+        not include any locked rows the user did not explicitly opt
+        into deleting — under photo-manager#182 every UI path that
+        could pick locked rows routes the choice through
+        ``LockedRowsConfirmDialog`` first. A defensive assertion
+        below catches callers that forget; it logs the violating
+        paths and excludes them from the plan rather than silently
+        deleting locked files. (Previously this method silently
+        filtered locked paths at line 50; the silent filter was the
+        very asymmetry #182 retires.)
+        """
         selected_set = set(selected_paths)
         per_group_selected: dict[int, int] = {}
         per_group_total: dict[int, int] = {}
-        lock_map: dict[str, bool] = {}
+        leaked_locked: list[str] = []
         for g in groups:
             per_group_total[g.group_number] = len(g.items)
             sel_count = 0
             for r in g.items:
-                lock_map[r.file_path] = bool(r.is_locked)
                 if r.file_path in selected_set:
                     sel_count += 1
+                    if r.is_locked:
+                        leaked_locked.append(r.file_path)
             per_group_selected[g.group_number] = sel_count
 
-        # Skip locked in final delete list
-        delete_paths: list[str] = [p for p in selected_paths if not lock_map.get(p, False)]
+        if leaked_locked:
+            logger.warning(
+                "plan_delete: {} locked path(s) reached the planner "
+                "without going through the lock-confirm dialog — "
+                "excluding from plan. First few: {}",
+                len(leaked_locked),
+                leaked_locked[:3],
+            )
+        leaked_set = set(leaked_locked)
+        delete_paths: list[str] = [
+            p for p in selected_paths if p not in leaked_set
+        ]
 
         summaries: list[DeletePlanGroupSummary] = []
         for g in groups:

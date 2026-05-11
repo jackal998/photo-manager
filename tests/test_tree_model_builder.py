@@ -204,34 +204,50 @@ class TestBuildModel:
 # ── _action_display: lock glyph (photo-manager#164) ────────────────────────
 
 
-class TestActionDisplayLockGlyph:
-    """``_action_display`` prefixes a 🔒 glyph when ``is_locked`` is True.
-    The glyph rides on the existing Action column rather than adding a
-    separate dedicated column — see photo-manager#164."""
+class TestActionDisplayUnaffectedByLock:
+    """``_action_display`` returns just the localized decision label —
+    the lock indicator moved to its own COL_LOCK column in #182. The
+    ``is_locked`` parameter is still accepted for backward compatibility
+    but no longer affects the returned text.
+    """
 
     def test_unlocked_decision_unchanged(self):
         assert _action_display("delete", is_locked=False) == "delete"
 
-    def test_locked_prefixed_with_glyph(self):
+    def test_locked_no_longer_prefixes_glyph(self):
+        """Pre-#182 this returned ``"🔒 delete"``; post-#182 the glyph
+        moved to COL_LOCK and Action shows the bare decision."""
         out = _action_display("delete", is_locked=True)
-        assert "\U0001F512" in out  # 🔒
-        assert "delete" in out
+        assert "\U0001F512" not in out
+        assert out == "delete"
 
-    def test_locked_with_empty_decision(self):
-        """Lock-but-undecided is a real state — bulk-locking can happen
-        before any decision is set. The glyph must still render."""
-        out = _action_display("", is_locked=True)
-        assert "\U0001F512" in out
+    def test_locked_empty_decision_returns_empty(self):
+        """Lock-but-undecided no longer renders a glyph in Action;
+        COL_LOCK carries the visual signal instead."""
+        assert _action_display("", is_locked=True) == ""
 
     def test_default_is_unlocked(self):
-        """The is_locked parameter defaults to False — keeps existing
-        callers (if any) working unchanged."""
         assert _action_display("keep") == "keep"
 
-    def test_lock_glyph_in_built_model(self, qapp):
-        """End-to-end: a locked record's row in the built QStandardItemModel
-        has the lock glyph in COL_ACTION (column index 1)."""
-        from app.views.constants import COL_ACTION
+
+class TestLockDisplay:
+    """``_lock_display`` is the COL_LOCK cell renderer added in #182."""
+
+    def test_locked_returns_glyph(self):
+        from app.views.tree_model_builder import _lock_display
+        assert _lock_display(True) == "\U0001F512"
+
+    def test_unlocked_returns_empty(self):
+        from app.views.tree_model_builder import _lock_display
+        assert _lock_display(False) == ""
+
+
+class TestLockColumnInBuiltModel:
+    """End-to-end: a locked record's row has 🔒 in COL_LOCK and the
+    Action column stays as just the decision label."""
+
+    def test_lock_column_renders_glyph_and_action_is_clean(self, qapp):
+        from app.views.constants import COL_ACTION, COL_LOCK, COL_NAME, PATH_ROLE
 
         locked_rec = _rec(file_path="/p/locked.jpg",
                           user_decision="delete", is_locked=True)
@@ -240,20 +256,45 @@ class TestActionDisplayLockGlyph:
         g = _group([locked_rec, unlocked_rec])
         model, _ = build_model([g])
 
-        group_row = model.item(0, 0)  # group row at top
+        group_row = model.item(0, 0)
         assert group_row.rowCount() == 2
-        # Find the locked row by matching file_path in the name column.
-        from app.views.constants import COL_NAME, PATH_ROLE
-        locked_action_text = None
-        unlocked_action_text = None
+        locked_action = None
+        locked_lock = None
+        unlocked_action = None
+        unlocked_lock = None
         for r in range(group_row.rowCount()):
             name_item = group_row.child(r, COL_NAME)
             action_item = group_row.child(r, COL_ACTION)
+            lock_item = group_row.child(r, COL_LOCK)
             if name_item.data(PATH_ROLE) == "/p/locked.jpg":
-                locked_action_text = action_item.text()
+                locked_action = action_item.text()
+                locked_lock = lock_item.text()
             elif name_item.data(PATH_ROLE) == "/p/free.jpg":
-                unlocked_action_text = action_item.text()
-        assert locked_action_text is not None
-        assert unlocked_action_text is not None
-        assert "\U0001F512" in locked_action_text
-        assert "\U0001F512" not in unlocked_action_text
+                unlocked_action = action_item.text()
+                unlocked_lock = lock_item.text()
+        assert locked_action == "delete"  # bare decision, no glyph
+        assert "\U0001F512" in locked_lock  # glyph lives in COL_LOCK
+        assert unlocked_action == "delete"
+        assert unlocked_lock == ""  # empty for unlocked
+
+    def test_lock_column_sort_role(self, qapp):
+        """COL_LOCK exposes a 0/1 SORT_ROLE so users can sort by lock
+        state. Ascending → unlocked first; descending → locked first."""
+        from app.views.constants import COL_LOCK, COL_NAME, PATH_ROLE, SORT_ROLE
+
+        locked_rec = _rec(file_path="/p/locked.jpg",
+                          user_decision="", is_locked=True)
+        unlocked_rec = _rec(file_path="/p/free.jpg",
+                            user_decision="", is_locked=False)
+        g = _group([locked_rec, unlocked_rec])
+        model, _ = build_model([g])
+
+        group_row = model.item(0, 0)
+        for r in range(group_row.rowCount()):
+            name_item = group_row.child(r, COL_NAME)
+            lock_item = group_row.child(r, COL_LOCK)
+            sort_val = lock_item.data(SORT_ROLE)
+            if name_item.data(PATH_ROLE) == "/p/locked.jpg":
+                assert sort_val == 1
+            elif name_item.data(PATH_ROLE) == "/p/free.jpg":
+                assert sort_val == 0

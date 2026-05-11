@@ -27,11 +27,24 @@ class ActionHandlers(Protocol):
         ...
 
     def set_decision(self, items: list[dict], decision: str) -> None:
-        """Set the user decision (delete/keep) for file items."""
+        """Set the user decision (delete/keep) for file items.
+
+        Silent-applier — called by paths that have already resolved
+        lock state (post-confirm). Most context-menu callers should
+        use :meth:`set_decision_with_lock_check` so the
+        LockedRowsConfirmDialog fires for locked rows (#182).
+        """
+        ...
+
+    def set_decision_with_lock_check(
+        self, items: list[dict], new_decision: str
+    ) -> None:
+        """Set decisions, surfacing the LockedRowsConfirmDialog
+        when any target row is locked (#182)."""
         ...
 
     def set_locked_state(self, items: list[dict], locked: bool) -> None:
-        """Lock or unlock file items (photo-manager#164)."""
+        """Lock or unlock file items (#164)."""
         ...
 
 
@@ -86,13 +99,16 @@ class ContextMenuHandler:
         self, menu: QMenu, item: dict, clicked_col: int | None = None
     ) -> None:
         if item["type"] == "file":
-            # Set Action submenu
+            # Set Action submenu. Routes through set_decision_with_lock_check
+            # so picking a destructive decision on a locked row surfaces
+            # the unified confirm dialog (#182). Previously called
+            # set_decision directly to silently bypass the lock.
             set_action_menu = menu.addMenu(t("context_menu.set_action"))
             for label, value in settable_decisions():
                 a = set_action_menu.addAction(label)
                 a.triggered.connect(
                     lambda checked=False, _v=value, _item=item:
-                        self.handlers.set_decision([_item], _v)
+                        self.handlers.set_decision_with_lock_check([_item], _v)
                 )
 
             # Lock / Unlock — both shown unconditionally; the handler is
@@ -153,14 +169,16 @@ class ContextMenuHandler:
         remove_action.triggered.connect(lambda: self.handlers.remove_items_from_list([item]))
 
     def _create_multi_selection_menu(self, menu: QMenu, selected_items: list[dict]) -> None:
-        # Set Action submenu — only applies to file-type items
+        # Set Action submenu — only applies to file-type items. Routes
+        # through set_decision_with_lock_check so any locked rows in
+        # the multi-selection surface the unified confirm dialog (#182).
         set_action_menu = menu.addMenu(t("context_menu.set_action"))
         file_items = [it for it in selected_items if it.get("type") == "file"]
         for label, value in settable_decisions():
             a = set_action_menu.addAction(label)
             a.triggered.connect(
                 lambda checked=False, _v=value, _items=file_items:
-                    self.handlers.set_decision(_items, _v)
+                    self.handlers.set_decision_with_lock_check(_items, _v)
             )
 
         # Bulk Lock / Unlock — see photo-manager#164.

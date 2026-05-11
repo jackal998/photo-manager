@@ -87,6 +87,18 @@ class TestActionHandlersProtocol:
         from app.views.handlers.context_menu import ActionHandlers
         assert "set_decision" in dir(ActionHandlers)
 
+    def test_protocol_has_set_decision_with_lock_check(self):
+        """#182 — the lock-confirm wrapper is part of the public contract.
+        Pins the Protocol so future drift in either direction (forgetting
+        to add to Protocol, or forgetting to implement) is caught."""
+        from app.views.handlers.context_menu import ActionHandlers
+        assert "set_decision_with_lock_check" in dir(ActionHandlers)
+
+    def test_protocol_has_set_locked_state(self):
+        """#164 — Lock / Unlock context-menu items call set_locked_state."""
+        from app.views.handlers.context_menu import ActionHandlers
+        assert "set_locked_state" in dir(ActionHandlers)
+
     def test_protocol_does_not_have_delete_files(self):
         """delete_files is removed — direct delete is no longer in the context menu."""
         from app.views.handlers.context_menu import ActionHandlers
@@ -100,6 +112,61 @@ class TestActionHandlersProtocol:
             assert "set_action" not in annotations
         else:
             assert hasattr(ActionHandlers, "set_decision")
+
+
+# ── ActionHandlersImpl bridge — runtime methods exist + delegate ─────────
+
+
+class TestActionHandlersImplBridge:
+    """The live bridge from MainWindow → FileOperationsHandler. Static
+    Protocol compliance won't catch a missing method here (Python
+    Protocols are advisory, not enforced); these tests assert the
+    bridge has every method the context menu actually calls and
+    delegates correctly.
+
+    Background: #175 added set_locked_state calls in context_menu.py
+    but forgot the proxy on ActionHandlersImpl; the bug survived
+    because no scenario exercised that path. #182 broadened the gap
+    by adding set_decision_with_lock_check with the same omission. The
+    fix added both proxies; these tests guard against a recurrence.
+    """
+
+    def _make_impl(self):
+        from unittest.mock import MagicMock
+        from app.views.handlers.action_handlers import ActionHandlersImpl
+        file_ops = MagicMock()
+        dialog = MagicMock()
+        return ActionHandlersImpl(file_operations=file_ops, dialog_handler=dialog), file_ops
+
+    def test_impl_has_set_decision(self):
+        impl, _ = self._make_impl()
+        assert callable(getattr(impl, "set_decision", None))
+
+    def test_impl_has_set_decision_with_lock_check(self):
+        impl, _ = self._make_impl()
+        assert callable(getattr(impl, "set_decision_with_lock_check", None))
+
+    def test_impl_has_set_locked_state(self):
+        impl, _ = self._make_impl()
+        assert callable(getattr(impl, "set_locked_state", None))
+
+    def test_set_decision_delegates_to_file_ops(self):
+        impl, file_ops = self._make_impl()
+        items = [{"type": "file", "path": "/a.jpg"}]
+        impl.set_decision(items, "delete")
+        file_ops.set_decision.assert_called_once_with(items, "delete")
+
+    def test_set_decision_with_lock_check_delegates_to_file_ops(self):
+        impl, file_ops = self._make_impl()
+        items = [{"type": "file", "path": "/a.jpg"}]
+        impl.set_decision_with_lock_check(items, "delete")
+        file_ops.set_decision_with_lock_check.assert_called_once_with(items, "delete")
+
+    def test_set_locked_state_delegates_to_file_ops(self):
+        impl, file_ops = self._make_impl()
+        items = [{"type": "file", "path": "/a.jpg"}]
+        impl.set_locked_state(items, True)
+        file_ops.set_locked_state.assert_called_once_with(items, True)
 
 
 # ── handler routing ────────────────────────────────────────────────────────
@@ -140,7 +207,7 @@ class TestContextMenuSetDecisionRouting:
         assert delete_action is not None, "'delete' action not in Set Action submenu"
         delete_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once_with([item], "delete")
+        mock_handlers.set_decision_with_lock_check.assert_called_once_with([item], "delete")
 
     def test_set_decision_called_with_keep_remove_action_passes_empty_string(self, qapp):
         """'keep (remove action)' in the Set Action submenu must call set_decision with ''."""
@@ -166,7 +233,7 @@ class TestContextMenuSetDecisionRouting:
         assert keep_action is not None, "No 'keep' action found in Set Action submenu"
         keep_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once_with([item], "")
+        mock_handlers.set_decision_with_lock_check.assert_called_once_with([item], "")
 
 
 class TestMultiSelectSetAction:
@@ -210,8 +277,8 @@ class TestMultiSelectSetAction:
         assert delete_action is not None
         delete_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once()
-        call_args = mock_handlers.set_decision.call_args
+        mock_handlers.set_decision_with_lock_check.assert_called_once()
+        call_args = mock_handlers.set_decision_with_lock_check.call_args
         _items_arg, decision_arg = call_args[0]
         assert decision_arg == "delete"
         assert all(it["type"] == "file" for it in _items_arg)
@@ -234,8 +301,8 @@ class TestMultiSelectSetAction:
         assert keep_action is not None
         keep_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once()
-        _items_arg, decision_arg = mock_handlers.set_decision.call_args[0]
+        mock_handlers.set_decision_with_lock_check.assert_called_once()
+        _items_arg, decision_arg = mock_handlers.set_decision_with_lock_check.call_args[0]
         assert decision_arg == "", f"Expected '' but got {decision_arg!r}"
 
 

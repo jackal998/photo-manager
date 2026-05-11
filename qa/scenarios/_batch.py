@@ -77,16 +77,32 @@ ALL_SCENARIOS = [
     # Regex mode to confirm the regex line edit holds the synthesised
     # pattern and reverse-parsing back populates Simple cleanly.
     "s31_simple_mode_regex",
-    # s32 (#164) — Locked decision state protects per-file decisions
-    # from bulk regex sweeps. Drives the regex dialog's new lock /
-    # unlock action options end-to-end on the same near-duplicates
-    # fixture as s14 / s29 / s30 / s31.
-    "s32_lock_protects_from_bulk_regex",
+    # s32 (#182) — Bulk regex on locked rows now surfaces the unified
+    # LockedRowsConfirmDialog. Scenario drives "Apply to Unlocked Only"
+    # end-to-end (today's old silent-skip behavior made explicit); the
+    # other two verdicts (Unlock & Apply All, Cancel) are unit-tested.
+    "s32_lock_confirm_bulk_regex",
     # s33 (#166) — Execute Action dialog's all-delete banner renders
     # the flagged group number as a clickable anchor (the click → jump
     # itself is covered by unit tests since QLabel HTML anchors aren't
     # first-class UIA elements).
     "s33_execute_dialog_jump_to_all_delete",
+    # s34 (#182) — Execute-time lock confirm drives the
+    # LockedRowsConfirmDialog when locked rows have decision='delete'
+    # at the moment the user clicks Execute. Sister to s32 (bulk regex
+    # trigger); same fixture as s14.
+    "s34_lock_confirm_at_execute",
+    # s35 (#182 follow-up, closes the gap that hid #175's missing
+    # ActionHandlersImpl.set_locked_state proxy) — main-window
+    # right-click Lock / Unlock for single + multi-select.
+    "s35_lock_via_context_menu",
+    # s36 (#182) — DESTRUCTIVE Execute through the lock-confirm
+    # dialog. Sister to s13 (destructive happy path) and s34 (lock-
+    # confirm Cancel, non-destructive). Proves the full chain when
+    # the user picks Unlock & Apply All at Execute time: locked row
+    # unlocks, send2trash fires for every row, manifest writes
+    # executed=1. Disposable fixture; sends 5 files to recycle bin.
+    "s36_lock_confirm_destructive_execute",
 ]
 
 

@@ -146,6 +146,7 @@ The tree shows all files loaded from the manifest.
 |--------|---------|
 | **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
 | **Action** | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **Lock** | 🔒 if the row is locked against bulk operations (#182), empty otherwise. Sortable; searchable via the regex dialog as `Locked` / `""`. |
 | **File Name** | File name |
 | **Folder** | Containing directory |
 | **Size (Bytes)** | File size |
@@ -375,6 +376,7 @@ photo-manager/
 │   │   ├── dialogs/
 │   │   │   ├── scan_dialog.py              # Scan Sources dialog
 │   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
+│   │   │   ├── locked_rows_confirm_dialog.py  # Unified "Unlock to proceed?" confirm
 │   │   │   └── select_dialog.py            # Set Action by Field/Regex dialog
 │   │   └── workers/
 │   │       ├── scan_worker.py              # Background QThread for scan pipeline
@@ -424,6 +426,7 @@ photo-manager/
     ├── test_file_operations.py  # set_decision, execute_action, regex remove-from-list
     ├── test_sort_service.py
     ├── test_execute_action_dialog.py
+    ├── test_locked_rows_confirm_dialog.py  # LockedRowsConfirmDialog body / verdicts / button states (#182)
     ├── test_context_menu.py
     ├── test_manifest_load_worker.py
     ├── test_scan_dialog.py      # _auto_label, _SourceListWidget, ScanDialog settings

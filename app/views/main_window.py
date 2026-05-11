@@ -25,6 +25,7 @@ from app.views.components.status_messages import plural_form, pluralize
 # Import extracted components
 from app.views.components.tree_controller import TreeController
 from app.views.constants import COL_CREATION_DATE, COL_FOLDER, COL_GROUP, COL_NAME, COL_SHOT_DATE, COL_SIZE_BYTES
+from app.views.handlers.action_handlers import ActionHandlersImpl
 from app.views.handlers.context_menu import ContextMenuHandler
 from app.views.handlers.dialog_handler import DialogHandler
 from app.views.handlers.file_operations import FileOperationsHandler
@@ -748,25 +749,7 @@ class TreeDataProviderImpl:
         return self.controller.proxy
 
 
-class ActionHandlersImpl:
-    """Implementation of ActionHandlers protocol for context menu."""
-
-    def __init__(
-        self,
-        file_operations: FileOperationsHandler,
-        dialog_handler: DialogHandler,
-    ):
-        self.file_ops = file_operations
-        self.dialog = dialog_handler
-
-    def remove_items_from_list(self, items: list[dict]) -> None:
-        """Remove items from list."""
-        self.file_ops.remove_items_from_list(items)
-
-    def show_action_dialog(self, clicked_col: int | None = None) -> None:
-        """Show set action by field/regex dialog."""
-        self.dialog.show_action_dialog(clicked_col=clicked_col)
-
-    def set_decision(self, items: list[dict], decision: str) -> None:
-        """Set user decision (delete/keep) for file items."""
-        self.file_ops.set_decision(items, decision)
+# ActionHandlersImpl moved to app/views/handlers/action_handlers.py so
+# the context-menu bridge is unit-testable without cascade-importing
+# this 400+ line QMainWindow file. The import lives at the top of this
+# module; the class itself is no longer defined here.

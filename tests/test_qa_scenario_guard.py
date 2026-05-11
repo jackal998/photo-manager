@@ -88,7 +88,7 @@ class TestAllow:
             changed=[
                 "app/views/handlers/file_operations.py",
                 "app/views/dialogs/execute_action_dialog.py",
-                "qa/scenarios/s32_lock_protects_from_bulk_regex.py",
+                "qa/scenarios/s32_lock_confirm_bulk_regex.py",
             ],
         )
         assert rc == 0

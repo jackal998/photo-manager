@@ -12,6 +12,7 @@ from app.views.constants import (
     COL_FOLDER,
     COL_GROUP,
     COL_GROUP_COUNT,
+    COL_LOCK,
     COL_NAME,
     COL_RESOLUTION,
     COL_SHOT_DATE,
@@ -32,20 +33,26 @@ def _action_display(decision: str, is_locked: bool = False) -> str:
 
     Currently only the deferred remove-from-list value gets a
     translated label; ``"delete"`` and ``"keep"`` are passed through
-    as-is to preserve the existing display behaviour. If those become
-    translatable later, extend the mapping here.
+    as-is.
 
-    A locked row is prefixed with a 🔒 glyph so the visual indicator
-    rides on the existing Action column (no schema/layout change needed
-    in the tree). See photo-manager#164.
+    ``is_locked`` is accepted for backward compatibility but no longer
+    affects the returned text — the lock indicator moved to its own
+    :data:`COL_LOCK` column in #182. See :func:`_lock_display`.
     """
     if decision == REMOVE_FROM_LIST_DECISION:
-        text = t("decision.remove_from_list")
-    else:
-        text = decision
-    if is_locked:
-        return f"{_LOCK_GLYPH} {text}".rstrip()
-    return text
+        return t("decision.remove_from_list")
+    return decision
+
+
+def _lock_display(is_locked: bool) -> str:
+    """Cell text for the Lock column — 🔒 glyph if locked, empty otherwise.
+
+    Empty for unlocked rows so the column reads as visually quiet at
+    the typical state (very few rows locked at any time). Sortable via
+    SORT_ROLE on the same column (0 / 1). Searchable as the string
+    ``"Locked"`` (see :func:`_get_record_field` in file_operations).
+    """
+    return _LOCK_GLYPH if is_locked else ""
 
 # Numeric sort priorities — lower value = sorted first (ascending).
 #
@@ -114,13 +121,14 @@ def build_model(
         group_row = [
             group_item,                              # COL_GROUP      (0)
             QStandardItem(""),                       # COL_ACTION     (1) — decision at file level
-            QStandardItem(""),                       # COL_NAME       (2)
-            QStandardItem(""),                       # COL_FOLDER     (3)
-            QStandardItem(""),                       # COL_SIZE_BYTES (4)
-            QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (5)
-            QStandardItem(""),                       # COL_CREATION_DATE (6)
-            QStandardItem(""),                       # COL_SHOT_DATE  (7)
-            QStandardItem(""),                       # COL_RESOLUTION (8) — group level empty
+            QStandardItem(""),                       # COL_LOCK       (2) — lock at file level
+            QStandardItem(""),                       # COL_NAME       (3)
+            QStandardItem(""),                       # COL_FOLDER     (4)
+            QStandardItem(""),                       # COL_SIZE_BYTES (5)
+            QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (6)
+            QStandardItem(""),                       # COL_CREATION_DATE (7)
+            QStandardItem(""),                       # COL_SHOT_DATE  (8)
+            QStandardItem(""),                       # COL_RESOLUTION (9) — group level empty
         ]
         for it in group_row:
             it.setEditable(False)
@@ -137,6 +145,20 @@ def build_model(
                 min((_DECISION_SORT.get(getattr(it, "user_decision", ""), 3)
                      for it in items_list),
                     default=3),
+                SORT_ROLE,
+            )
+        except Exception:
+            pass
+        try:
+            # Group-level Lock sort: max wins (any locked row makes the
+            # group "locked-tier") so groups containing a locked row
+            # sort together when the user clicks the Lock column header.
+            group_row[COL_LOCK].setData(
+                max(
+                    (1 if getattr(it, "is_locked", False) else 0
+                     for it in items_list),
+                    default=0,
+                ),
                 SORT_ROLE,
             )
         except Exception:
@@ -215,20 +237,24 @@ def build_model(
             file_action = getattr(p, "action", "") or ""
             file_match = _file_similarity(file_action, p)
 
-            # Col 1: user's decision (delete / keep / "") with optional lock glyph
+            # Col 1: user's decision (delete / keep / "" / remove_from_list).
+            # Lock state moved to its own COL_LOCK column in #182 so the
+            # Action column stays sortable / searchable as just the
+            # decision label — no 🔒 prefix.
             item_decision = getattr(p, "user_decision", "") or ""
             item_locked = bool(getattr(p, "is_locked", False))
 
             child_row = [
                 QStandardItem(file_match),                       # COL_GROUP      (0) — similarity
-                QStandardItem(_action_display(item_decision, item_locked)),  # COL_ACTION (1) — localized label + lock glyph
-                QStandardItem(name),                             # COL_NAME       (2)
-                QStandardItem(folder),                           # COL_FOLDER     (3)
-                QStandardItem(str(size_num)),        # COL_SIZE_BYTES (4)
-                QStandardItem(""),                   # COL_GROUP_COUNT (5) — group level only
-                QStandardItem(creation_txt),         # COL_CREATION_DATE (6)
-                QStandardItem(shot_txt),             # COL_SHOT_DATE  (7)
-                QStandardItem(resolution_txt),       # COL_RESOLUTION (8)
+                QStandardItem(_action_display(item_decision)),   # COL_ACTION     (1) — localized decision label
+                QStandardItem(_lock_display(item_locked)),       # COL_LOCK       (2) — 🔒 glyph or empty
+                QStandardItem(name),                             # COL_NAME       (3)
+                QStandardItem(folder),                           # COL_FOLDER     (4)
+                QStandardItem(str(size_num)),        # COL_SIZE_BYTES (5)
+                QStandardItem(""),                   # COL_GROUP_COUNT (6) — group level only
+                QStandardItem(creation_txt),         # COL_CREATION_DATE (7)
+                QStandardItem(shot_txt),             # COL_SHOT_DATE  (8)
+                QStandardItem(resolution_txt),       # COL_RESOLUTION (9)
             ]
 
             try:
@@ -237,6 +263,12 @@ def build_model(
                 pass
             try:
                 child_row[COL_ACTION].setData(_DECISION_SORT.get(item_decision, 3), SORT_ROLE)
+            except Exception:
+                pass
+            try:
+                # Boolean sort key: 0=unlocked, 1=locked. Ascending puts
+                # unlocked first; descending puts locked first.
+                child_row[COL_LOCK].setData(1 if item_locked else 0, SORT_ROLE)
             except Exception:
                 pass
             try:

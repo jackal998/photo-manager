@@ -92,6 +92,7 @@ class DialogHandler:
         fields = [
             "Similarity",
             "Action",
+            "Lock",
             "File Name",
             "Folder",
             "Size (Bytes)",

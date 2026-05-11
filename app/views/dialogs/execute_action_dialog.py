@@ -32,6 +32,15 @@ from app.views.constants import (
 from app.views.tree_model_builder import build_model
 from infrastructure.i18n import t
 
+# Internal verdict codes used by _ask_lock_confirm to normalize the
+# LockedRowsConfirmDialog result for the dialog's callers. Kept
+# separate from the dialog class's own constants so this file doesn't
+# import the dialog module at the top — callers inside trigger paths
+# bring it in lazily.
+_DIALOG_VERDICT_PROCEED = 1       # Unlock & Apply — caller unlocks + applies
+_DIALOG_VERDICT_SKIP_LOCKED = 2   # Apply to Unlocked Only — caller filters out locked
+_DIALOG_VERDICT_CANCEL = 3        # Cancel — caller aborts
+
 
 class ExecuteActionDialog(QDialog):
     """Shows groups with decisions for final review; executes file decisions on confirm."""
@@ -306,6 +315,22 @@ class ExecuteActionDialog(QDialog):
             # for symmetry with the regex flow. Set+execute is a bigger
             # commitment than delete/keep, even on one row.
             from PySide6.QtWidgets import QMessageBox
+            # The remove-from-list confirm fires regardless of lock —
+            # the lock confirm wraps a DECISION change, but
+            # remove-from-list is a deferred remove with its own
+            # confirm. If the target is locked, surface the lock
+            # confirm FIRST and short-circuit on cancel; the existing
+            # remove-from-list confirm then runs as before.
+            if self._row_is_locked(path):
+                verdict = self._ask_lock_confirm(
+                    paths=[path],
+                    decision_for_label=REMOVE_FROM_LIST_DECISION,
+                )
+                if verdict != _DIALOG_VERDICT_PROCEED:
+                    return
+                # User chose Unlock & Apply — unlock the row before
+                # the remove-from-list confirm fires.
+                self._set_lock(path, False)
             reply = QMessageBox.question(
                 self,
                 t("file_op.remove_confirm_title"),
@@ -317,12 +342,56 @@ class ExecuteActionDialog(QDialog):
                 return
             self._remove_from_list_paths([path])
             return
+        # Destructive decision (delete / "" keep) — route through the
+        # unified lock confirm if the target row is locked.
+        if self._row_is_locked(path):
+            verdict = self._ask_lock_confirm(
+                paths=[path], decision_for_label=decision
+            )
+            if verdict != _DIALOG_VERDICT_PROCEED:
+                return
+            self._set_lock(path, False)
         for group in self._groups:
             for rec in getattr(group, "items", []):
                 if rec.file_path == path:
                     rec.user_decision = decision
                     break
         self._refresh_ui_after_decision_change()
+
+    def _row_is_locked(self, path: str) -> bool:
+        for group in self._groups:
+            for rec in getattr(group, "items", []):
+                if rec.file_path == path:
+                    return bool(rec.is_locked)
+        return False
+
+    def _ask_lock_confirm(
+        self, *, paths: list[str], decision_for_label: str
+    ) -> int:
+        """Show the locked-rows confirm dialog for ``paths`` (all locked).
+
+        Returns one of the ``_DIALOG_VERDICT_*`` constants. For
+        single-row entry points (degenerate single-locked case) the
+        "Apply to Unlocked Only" button is disabled by construction —
+        the helper still surfaces the dialog so the user has a
+        deliberate stop sign rather than a silent override.
+        """
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        from app.views.handlers.file_operations import _decision_display_label
+
+        verdict = LockedRowsConfirmDialog.ask(
+            self,
+            action_label=_decision_display_label(decision_for_label),
+            affected_count=len(paths),
+            locked_paths=paths,
+        )
+        if verdict == LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED:
+            return _DIALOG_VERDICT_PROCEED
+        if verdict == LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY:
+            return _DIALOG_VERDICT_SKIP_LOCKED
+        return _DIALOG_VERDICT_CANCEL
 
     def _remove_from_list_paths(self, paths: list[str]) -> None:
         """Drop ``paths`` from self._groups (in place) and the manifest.
@@ -366,7 +435,7 @@ class ExecuteActionDialog(QDialog):
 
         # Internal English keys; ActionDialog displays localized labels but
         # emits the English name back via setActionRequested.
-        fields = ["Action", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
+        fields = ["Action", "Lock", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
         # Build the live-preview match_fn from this dialog's groups —
         # which alias the main window's vm.groups (see _remove_from_list_paths
         # docstring), so both surfaces preview against the same data.
@@ -429,43 +498,63 @@ class ExecuteActionDialog(QDialog):
             self._refresh_ui_after_decision_change()
             return
 
-        # Bulk regex remove now mirrors bulk regex delete/keep:
-        # matched rows get user_decision = REMOVE_FROM_LIST_DECISION
-        # and the user reviews + commits via Execute. Single-row
-        # right-click (_set_decision) stays immediate.
+        # Bulk regex remove behaves like bulk regex delete/keep —
+        # matched rows get REMOVE_FROM_LIST_DECISION and the user
+        # reviews + commits via Execute.
         if new_decision == REMOVE_FROM_LIST_SENTINEL:
             new_decision = REMOVE_FROM_LIST_DECISION
 
-        batch: dict[str, str] = {}
-        skipped_locked = 0
-        for group in self._groups:          # search full list, not just displayed
+        # Collect every matching row's path + lock state up-front so we
+        # can surface the unified confirm dialog before mutating any
+        # decision. Order preserved so the dialog's truncated list
+        # ("first 5 …and N more") reads as the user's tree order.
+        matched_paths: list[str] = []
+        locked_paths: list[str] = []
+        for group in self._groups:
             for rec in getattr(group, "items", []):
                 value = _get_record_field(rec, field)
                 if value is not None and rx.search(value):
+                    matched_paths.append(rec.file_path)
                     if rec.is_locked:
-                        skipped_locked += 1
-                        continue
-                    rec.user_decision = new_decision
-                    batch[rec.file_path] = new_decision
+                        locked_paths.append(rec.file_path)
 
-        if not batch and not skipped_locked:
+        if not matched_paths:
             QMessageBox.information(
                 self,
                 t("execute_dialog.no_match_title"),
                 t("execute_dialog.no_match_body"),
             )
             return
-        if not batch:
-            # Every match was locked — surface explicitly so the user
-            # doesn't think the regex didn't match.
-            QMessageBox.information(
-                self,
-                t("file_op.set_action_all_locked_title"),
-                t("file_op.set_action_all_locked_body", count=skipped_locked),
-            )
-            return
 
-        if self._manifest_path:
+        apply_paths = matched_paths
+        if locked_paths:
+            verdict = self._ask_lock_confirm(
+                paths=locked_paths, decision_for_label=new_decision
+            )
+            if verdict == _DIALOG_VERDICT_CANCEL:
+                return
+            if verdict == _DIALOG_VERDICT_PROCEED:
+                # Unlock the locked subset first; the apply loop below
+                # then writes the decision to every matched row.
+                self._batch_set_lock(locked_paths, locked=False)
+            else:
+                # _DIALOG_VERDICT_SKIP_LOCKED — apply only to unlocked.
+                locked_set = set(locked_paths)
+                apply_paths = [p for p in matched_paths if p not in locked_set]
+                if not apply_paths:
+                    # Degenerate case shouldn't occur (button is
+                    # disabled when no unlocked rows) but guard
+                    # defensively.
+                    return
+
+        batch: dict[str, str] = {}
+        for group in self._groups:
+            for rec in getattr(group, "items", []):
+                if rec.file_path in apply_paths:
+                    rec.user_decision = new_decision
+                    batch[rec.file_path] = new_decision
+
+        if self._manifest_path and batch:
             try:
                 from infrastructure.manifest_repository import ManifestRepository
                 ManifestRepository().batch_update_decisions(self._manifest_path, batch)
@@ -473,16 +562,73 @@ class ExecuteActionDialog(QDialog):
                 logger.warning("Failed to persist batch decisions: {}", exc)
 
         self._refresh_ui_after_decision_change()
-        if skipped_locked:
+        if locked_paths and len(apply_paths) < len(matched_paths):
             logger.info(
                 "Set {} decisions, skipped {} locked rows",
-                len(batch), skipped_locked,
+                len(batch), len(matched_paths) - len(apply_paths),
             )
+
+    def _batch_set_lock(self, paths: list[str], locked: bool) -> None:
+        """Flip ``is_locked`` for ``paths`` in-memory and persist.
+
+        Internal helper for the lock-confirm flow — distinct from
+        :meth:`_set_lock` which targets a single path and refreshes
+        the UI; this helper deliberately skips the UI refresh because
+        the caller will do its own refresh after the subsequent
+        decision-set pass.
+        """
+        if not paths:
+            return
+        path_set = set(paths)
+        for group in self._groups:
+            for rec in getattr(group, "items", []):
+                if rec.file_path in path_set:
+                    rec.is_locked = locked
+        if self._manifest_path:
+            try:
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().batch_update_lock_state(
+                    self._manifest_path, {p: locked for p in paths}
+                )
+            except Exception as exc:
+                logger.warning("Failed to persist batch lock state: {}", exc)
 
     # ------------------------------------------------------------------ execute
 
     def _on_execute_requested(self) -> None:
         from PySide6.QtWidgets import QMessageBox
+
+        # Pre-execute scan for locked rows with decision='delete'.
+        # These can exist if the user set the decision FIRST and then
+        # locked the row — under the new model (#182) the user must
+        # explicitly choose to unlock-and-delete or skip-locked before
+        # any destructive action runs. This replaces the silent
+        # filter at delete_service:50 (which never fired in the GUI
+        # path anyway — _on_execute deletes directly, see below).
+        locked_delete_paths = [
+            rec.file_path
+            for group in self._groups
+            for rec in getattr(group, "items", [])
+            if getattr(rec, "user_decision", "") == "delete"
+            and getattr(rec, "is_locked", False)
+        ]
+        if locked_delete_paths:
+            verdict = self._ask_lock_confirm(
+                paths=locked_delete_paths, decision_for_label="delete"
+            )
+            if verdict == _DIALOG_VERDICT_CANCEL:
+                return
+            if verdict == _DIALOG_VERDICT_PROCEED:
+                # Unlock and proceed with the full delete set.
+                self._batch_set_lock(locked_delete_paths, locked=False)
+            else:
+                # Skip Locked — clear the decision on locked rows so
+                # _on_execute (which iterates decision='delete') skips
+                # them, but leave is_locked=True so the user's
+                # explicit lock survives.
+                self._clear_decision_on(locked_delete_paths)
+            self._refresh_ui_after_decision_change()
+
         complete = self._complete_delete_groups()
         if complete:
             group_list = ", ".join(str(g) for g in complete)
@@ -496,6 +642,29 @@ class ExecuteActionDialog(QDialog):
             if reply != QMessageBox.Yes:
                 return
         self._on_execute()
+
+    def _clear_decision_on(self, paths: list[str]) -> None:
+        """Reset ``user_decision`` to '' for ``paths``. Used by the
+        pre-execute confirm's "Apply to Unlocked Only" branch — the
+        user said "leave these locked rows alone," so we clear their
+        delete decision so _on_execute's iteration skips them. Lock
+        state stays untouched.
+        """
+        if not paths:
+            return
+        path_set = set(paths)
+        batch: dict[str, str] = {}
+        for group in self._groups:
+            for rec in getattr(group, "items", []):
+                if rec.file_path in path_set:
+                    rec.user_decision = ""
+                    batch[rec.file_path] = ""
+        if self._manifest_path and batch:
+            try:
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().batch_update_decisions(self._manifest_path, batch)
+            except Exception as exc:
+                logger.warning("Failed to persist cleared decisions: {}", exc)
 
     def _on_execute(self) -> None:
         # Batch-persist all current decisions before executing
