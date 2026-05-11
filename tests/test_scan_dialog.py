@@ -302,6 +302,105 @@ class TestScanDialogSettings:
 
 
 # ---------------------------------------------------------------------------
+# Advanced settings collapse (photo-manager#163)
+# ---------------------------------------------------------------------------
+
+class TestAdvancedSettingsCollapse:
+    """The Grouping-Parameters group (pHash threshold + mean-color gate)
+    is rendered as a checkable ``QGroupBox`` collapsed by default. State
+    persists across dialog open via ``ui.scan_dialog.advanced_expanded``.
+    """
+
+    def _make_settings_file(self, tmp_path: Path, data: dict) -> Path:
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_groupbox_is_checkable(self, qapp, tmp_path):
+        """``setCheckable(True)`` is what makes Qt render the title with
+        a built-in toggle checkbox and hide children when unchecked."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._params_group.isCheckable() is True
+
+    def test_default_collapsed_with_no_setting(self, qapp, tmp_path):
+        """First-run UX: open scan dialog with no prior settings → advanced
+        is collapsed. The 95% case never needs to see these sliders."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._params_group.isChecked() is False
+
+    def test_expanded_state_loaded_from_settings(self, qapp, tmp_path):
+        """A user who left advanced expanded sees it expanded on next open."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"advanced_expanded": True}},
+        })
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._params_group.isChecked() is True
+
+    def test_collapsed_state_loaded_from_settings(self, qapp, tmp_path):
+        """A user who collapsed it explicitly stays collapsed across opens."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"advanced_expanded": False}},
+        })
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._params_group.isChecked() is False
+
+    def test_toggle_persists_immediately(self, qapp, tmp_path):
+        """Clicking the disclosure toggles the state AND writes to
+        settings.json on every change — no waiting for ``_save_to_settings``
+        which only fires on scan start."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+
+        # Toggle to expanded — Qt emits the `toggled` signal automatically.
+        dlg._params_group.setChecked(True)
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert saved["ui"]["scan_dialog"]["advanced_expanded"] is True
+
+        # Toggle back to collapsed.
+        dlg._params_group.setChecked(False)
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert saved["ui"]["scan_dialog"]["advanced_expanded"] is False
+
+    def test_sliders_still_default_values_when_loaded(self, qapp, tmp_path):
+        """Collapsing the group must NOT change the threshold values
+        themselves — they stay at their canonical defaults regardless
+        of the disclosure state. (Persisting the threshold values
+        themselves is a separate concern; out of #163 scope.)"""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._phash_slider.value() == 10
+        assert dlg._color_slider.value() == 30
+
+
+# ---------------------------------------------------------------------------
 # _build_sources (label auto-generation + source_priority ordering)
 # ---------------------------------------------------------------------------
 

@@ -416,9 +416,19 @@ class ScanDialog(QDialog):
         output_row.addWidget(browse_out_btn)
         right_top_layout.addLayout(output_row)
 
-        # Grouping parameters
-        params_group = QGroupBox(t("scan_dialog.params_group"))
-        params_layout = QVBoxLayout(params_group)
+        # Advanced settings — pHash threshold + mean-color gate.
+        #
+        # Collapsed by default (the 95% case never touches these knobs).
+        # Qt's ``QGroupBox.setCheckable`` renders the title as a checkbox;
+        # children inside the group are hidden when unchecked. State is
+        # persisted to ``ui.scan_dialog.advanced_expanded`` via
+        # ``_on_advanced_toggled`` so power users who keep it open don't
+        # re-toggle every session. See photo-manager#163.
+        self._params_group = QGroupBox(t("scan_dialog.advanced_settings_label"))
+        self._params_group.setCheckable(True)
+        self._params_group.setChecked(False)  # default — will be overwritten by _load_from_settings
+        self._params_group.toggled.connect(self._on_advanced_toggled)
+        params_layout = QVBoxLayout(self._params_group)
 
         # pHash threshold
         phash_label = QLabel(t("scan_dialog.phash_label"))
@@ -462,7 +472,7 @@ class ScanDialog(QDialog):
         params_layout.addWidget(color_desc)
         params_layout.addLayout(color_row)
 
-        right_top_layout.addWidget(params_group)
+        right_top_layout.addWidget(self._params_group)
         # Trailing stretch so the params group hugs the top and any extra
         # vertical room in the right-top pane stays empty rather than
         # inflating the slider rows.
@@ -542,6 +552,12 @@ class ScanDialog(QDialog):
         saved_out = self.settings.get("sources.output", "migration_manifest.sqlite")
         self._output_field.setText(saved_out or "migration_manifest.sqlite")
 
+        # Advanced settings collapsed/expanded state (#163). Default = collapsed.
+        # Read explicitly as bool — settings.get returns the raw stored value,
+        # which may be a YAML-derived bool already.
+        expanded = bool(self.settings.get("ui.scan_dialog.advanced_expanded", False))
+        self._params_group.setChecked(expanded)
+
     def _save_to_settings(self) -> None:
         """Persist the current source list and output path to settings."""
         entries = self._source_list.entries()
@@ -555,6 +571,19 @@ class ScanDialog(QDialog):
             self.settings.save()
         except OSError:
             pass  # Non-fatal — settings-save failure should not interrupt the UI
+
+    def _on_advanced_toggled(self, expanded: bool) -> None:
+        """Persist the advanced-settings expanded state immediately (#163).
+
+        Saves the boolean ``ui.scan_dialog.advanced_expanded`` on every
+        toggle so the user's last state survives the next dialog open
+        without depending on the source-list save path firing.
+        """
+        self.settings.set("ui.scan_dialog.advanced_expanded", expanded)
+        try:
+            self.settings.save()
+        except OSError:
+            pass  # Non-fatal — see _save_to_settings rationale
 
     # ------------------------------------------------------------------ scan
 

@@ -110,7 +110,7 @@ scan_dialog:
   output_placeholder: "Output manifest path (.sqlite)"
   browse_button: "Browse…"
   save_dialog_title: "Save Manifest As"
-  params_group: "Grouping Parameters"
+  advanced_settings_label: "Advanced settings"
   phash_label: "<b>pHash Similarity Threshold</b> (default: 10, range: 1–20)"
   phash_desc: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. <b>Lower = stricter</b> (fewer groups, less noise); <b>higher = more permissive</b> (catches more slightly-edited pairs)."
   color_label: "<b>Mean Color Gate</b> (default: 30, range: 0–100)"
