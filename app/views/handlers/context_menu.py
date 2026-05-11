@@ -27,11 +27,24 @@ class ActionHandlers(Protocol):
         ...
 
     def set_decision(self, items: list[dict], decision: str) -> None:
-        """Set the user decision (delete/keep) for file items."""
+        """Set the user decision (delete/keep) for file items.
+
+        Silent-applier — called by paths that have already resolved
+        lock state (post-confirm). Most context-menu callers should
+        use :meth:`set_decision_with_lock_check` so the
+        LockedRowsConfirmDialog fires for locked rows (#182).
+        """
+        ...
+
+    def set_decision_with_lock_check(
+        self, items: list[dict], new_decision: str
+    ) -> None:
+        """Set decisions, surfacing the LockedRowsConfirmDialog
+        when any target row is locked (#182)."""
         ...
 
     def set_locked_state(self, items: list[dict], locked: bool) -> None:
-        """Lock or unlock file items (photo-manager#164)."""
+        """Lock or unlock file items (#164)."""
         ...
 
 
