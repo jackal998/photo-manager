@@ -84,6 +84,11 @@ enforced by `scripts/check_coverage_per_file.py`, run as a CI step
 right after `pytest`). CI runs this on every push and pull request to
 `master` via `.github/workflows/tests.yml`.
 
+A separate monthly job (`.github/workflows/pip-audit.yml`) runs
+`pip-audit` against `requirements.txt` + `dev-requirements.txt` on the
+1st of each month plus on-demand via `workflow_dispatch`; failure = a
+known CVE was found against a pinned dependency.
+
 Two more test layers exist locally:
 
 ```powershell

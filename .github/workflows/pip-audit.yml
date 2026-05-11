@@ -1,0 +1,29 @@
+name: pip-audit
+
+on:
+  schedule:
+    # Monthly on the 1st at 06:00 UTC
+    - cron: '0 6 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run pip-audit (requirements.txt + dev-requirements.txt)
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: |
+            requirements.txt
+            dev-requirements.txt
