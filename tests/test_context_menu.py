@@ -140,7 +140,7 @@ class TestContextMenuSetDecisionRouting:
         assert delete_action is not None, "'delete' action not in Set Action submenu"
         delete_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once_with([item], "delete")
+        mock_handlers.set_decision_with_lock_check.assert_called_once_with([item], "delete")
 
     def test_set_decision_called_with_keep_remove_action_passes_empty_string(self, qapp):
         """'keep (remove action)' in the Set Action submenu must call set_decision with ''."""
@@ -166,7 +166,7 @@ class TestContextMenuSetDecisionRouting:
         assert keep_action is not None, "No 'keep' action found in Set Action submenu"
         keep_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once_with([item], "")
+        mock_handlers.set_decision_with_lock_check.assert_called_once_with([item], "")
 
 
 class TestMultiSelectSetAction:
@@ -210,8 +210,8 @@ class TestMultiSelectSetAction:
         assert delete_action is not None
         delete_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once()
-        call_args = mock_handlers.set_decision.call_args
+        mock_handlers.set_decision_with_lock_check.assert_called_once()
+        call_args = mock_handlers.set_decision_with_lock_check.call_args
         _items_arg, decision_arg = call_args[0]
         assert decision_arg == "delete"
         assert all(it["type"] == "file" for it in _items_arg)
@@ -234,8 +234,8 @@ class TestMultiSelectSetAction:
         assert keep_action is not None
         keep_action.trigger()
 
-        mock_handlers.set_decision.assert_called_once()
-        _items_arg, decision_arg = mock_handlers.set_decision.call_args[0]
+        mock_handlers.set_decision_with_lock_check.assert_called_once()
+        _items_arg, decision_arg = mock_handlers.set_decision_with_lock_check.call_args[0]
         assert decision_arg == "", f"Expected '' but got {decision_arg!r}"
 
 

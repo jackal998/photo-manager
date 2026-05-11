@@ -147,6 +147,17 @@ execute_dialog:
   files_not_found_body: "The following files could not be found and were skipped:\n\n{missing}{suffix}"
   files_not_found_more: "\n…and {n} more"
 
+# LockedRowsConfirmDialog — unified confirm when an action would touch
+# locked rows. See photo-manager#182 (supersedes #175's hybrid).
+locked_confirm:
+  title: "Locked Rows Affected"
+  body: "Action '{action}' would affect {total} row(s); {locked} locked:\n\n{list}\n\nUnlock and apply to all {total}, apply to unlocked only ({unlocked}), or cancel?"
+  body_all_locked: "Action '{action}' would affect {locked} row(s), all locked:\n\n{list}\n\nUnlock and apply to all, or cancel?"
+  list_truncated_suffix: "  …and {n} more"
+  btn_unlock_apply: "Unlock && Apply to All"
+  btn_unlocked_only: "Apply to Unlocked Only"
+  btn_cancel: "Cancel"
+
 # ActionDialog (Set Action by Field/Regex).
 action_dialog:
   title: "Set Action by Field/Regex"
@@ -220,8 +231,6 @@ file_op:
   remove_failed_body: "Remove from list failed: {error}"
   decision_set_status: "Decision set to '{decision}'"
   decision_set_with_skipped_status: "Decision set to '{decision}' on {set_count}; skipped {skipped} locked"
-  set_action_all_locked_title: "Set Action — All Matches Locked"
-  set_action_all_locked_body: "All {count} matched row(s) are locked. Unlock first if you want to apply this action."
   locked_verb: "Locked"
   unlocked_verb: "Unlocked"
   noun_row_singular: "row"

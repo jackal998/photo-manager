@@ -167,17 +167,70 @@ class TestExecuteDialogLock:
         dlg._set_decision("/a.jpg", UNLOCK_SENTINEL)
         assert rec.is_locked is False
 
-    def test_regex_skips_locked_for_destructive(self, qapp):
-        """Bulk regex with a destructive new_decision skips locked rows."""
+    def test_regex_destructive_apply_unlocked_only_skips_locked(self, qapp):
+        """Bulk regex with a destructive new_decision routes through
+        the lock-confirm dialog (#182). When the user picks
+        'Apply to Unlocked Only', locked rows are skipped."""
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
         unlocked = _rec("/free.jpg", "")
         locked = _rec("/pinned.jpg", "")
         locked.is_locked = True
         groups = [_group(unlocked, locked)]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
-        dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY,
+        ):
+            dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
         assert unlocked.user_decision == "delete"
-        assert locked.user_decision == ""  # protected
+        assert locked.user_decision == ""  # protected — user chose to skip
+        assert locked.is_locked is True
+
+    def test_regex_destructive_apply_all_unlocks_then_writes(self, qapp):
+        """'Unlock & Apply to All' unlocks the locked subset, then
+        applies the decision to every matched row."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        unlocked = _rec("/free.jpg", "")
+        locked = _rec("/pinned.jpg", "")
+        locked.is_locked = True
+        groups = [_group(unlocked, locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+        ):
+            dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
+        assert unlocked.user_decision == "delete"
+        assert locked.user_decision == "delete"
+        assert locked.is_locked is False  # unlocked as part of action
+
+    def test_regex_destructive_cancel_changes_nothing(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        unlocked = _rec("/free.jpg", "")
+        locked = _rec("/pinned.jpg", "")
+        locked.is_locked = True
+        groups = [_group(unlocked, locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ):
+            dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
+        assert unlocked.user_decision == ""
+        assert locked.user_decision == ""
+        assert locked.is_locked is True
 
     def test_regex_lock_action_locks_all_matched(self, qapp):
         """LOCK_SENTINEL applies to all matched rows including
@@ -206,22 +259,83 @@ class TestExecuteDialogLock:
         assert a.is_locked is False
         assert b.is_locked is False
 
-    def test_regex_destructive_all_locked_shows_message(self, qapp):
-        """All-matches-locked surfaces a dedicated dialog so the user
-        doesn't conclude the regex didn't match."""
+    def test_single_row_destructive_on_locked_routes_through_dialog(self, qapp):
+        """Single-row right-click on a locked row no longer silently
+        overrides the lock (#182 retires the override path). The
+        unified confirm fires with affected_count=1, locked_paths=[that
+        row]; verdict drives the outcome."""
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        rec = _rec("/pinned.jpg", "")
+        rec.is_locked = True
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        # Cancel → row unchanged.
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ):
+            dlg._set_decision("/pinned.jpg", "delete")
+        assert rec.user_decision == ""
+        assert rec.is_locked is True
+
+        # Unlock & Apply → row unlocked + decision set.
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+        ):
+            dlg._set_decision("/pinned.jpg", "delete")
+        assert rec.user_decision == "delete"
+        assert rec.is_locked is False
+
+    def test_single_row_destructive_on_unlocked_no_dialog(self, qapp):
+        """Fast path: single-row right-click on an unlocked row never
+        opens the lock-confirm dialog."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        rec = _rec("/free.jpg", "")
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        with patch.object(LockedRowsConfirmDialog, "ask") as ask:
+            dlg._set_decision("/free.jpg", "delete")
+            ask.assert_not_called()
+        assert rec.user_decision == "delete"
+
+    def test_regex_destructive_all_locked_uses_dialog(self, qapp):
+        """All-matches-locked still surfaces the lock-confirm dialog
+        (with 'Apply to Unlocked Only' disabled at construction) so
+        the user can choose Unlock & Apply or Cancel. The retired
+        ``file_op.set_action_all_locked_*`` QMessageBox.information
+        toast is gone (#182)."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
         a = _rec("/a.jpg", "")
         b = _rec("/b.jpg", "")
         a.is_locked = True
         b.is_locked = True
         groups = [_group(a, b)]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
-        with patch("PySide6.QtWidgets.QMessageBox") as MB:
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ) as ask:
             dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
-            MB.information.assert_called()
-        # No decisions applied
+            ask.assert_called_once()
+        # User cancelled → no decisions applied, locks untouched.
         assert a.user_decision == ""
         assert b.user_decision == ""
+        assert a.is_locked is True
+        assert b.is_locked is True
 
 
 # ── _on_execute ────────────────────────────────────────────────────────────
@@ -707,6 +821,123 @@ class TestOnExecuteRequestedConfirmation:
                 patch.object(dlg, "_on_execute") as on_exec,
             ):
                 dlg._on_execute_requested()
+            on_exec.assert_not_called()
+        finally:
+            dlg.close()
+
+
+# ── pre-execute lock-confirm scan (#182) ──────────────────────────────────
+
+
+class TestExecuteRequestedLockConfirm:
+    """When the user clicks Execute and at least one row has
+    user_decision='delete' AND is_locked=True (locked AFTER decision was
+    set), the unified lock-confirm dialog fires BEFORE the
+    'All Files Will Be Deleted' QMessageBox. Verdict drives:
+      - APPLY_ALL_UNLOCKED  → unlock + proceed to execute the full set
+      - APPLY_UNLOCKED_ONLY → clear decision on locked rows, proceed
+      - CANCEL              → bail before any destructive action
+    """
+
+    def _locked_delete_setup(self):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        unlocked = _rec("/free.jpg", "delete")
+        locked = _rec("/pinned.jpg", "delete")
+        locked.is_locked = True
+        groups = [_group(unlocked, locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        return dlg, unlocked, locked
+
+    def test_no_locked_delete_skips_lock_confirm(self, qapp):
+        """Fast path: no locked-with-delete rows → no lock-confirm
+        dialog, proceed directly to the existing all-delete confirm."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        try:
+            with (
+                patch.object(LockedRowsConfirmDialog, "ask") as ask,
+                patch.object(dlg, "_on_execute") as on_exec,
+            ):
+                dlg._on_execute_requested()
+                ask.assert_not_called()
+                on_exec.assert_called_once()
+        finally:
+            dlg.close()
+
+    def test_apply_all_unlocked_unlocks_then_executes(self, qapp):
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        dlg, unlocked, locked = self._locked_delete_setup()
+        try:
+            with (
+                patch.object(
+                    LockedRowsConfirmDialog,
+                    "ask",
+                    return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+                ),
+                patch("PySide6.QtWidgets.QMessageBox.question", return_value=_QMB.Yes),
+                patch.object(dlg, "_on_execute") as on_exec,
+            ):
+                dlg._on_execute_requested()
+            assert locked.is_locked is False
+            assert locked.user_decision == "delete"  # still slated for delete
+            assert unlocked.user_decision == "delete"
+            on_exec.assert_called_once()
+        finally:
+            dlg.close()
+
+    def test_apply_unlocked_only_clears_decision_on_locked(self, qapp):
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        dlg, unlocked, locked = self._locked_delete_setup()
+        try:
+            with (
+                patch.object(
+                    LockedRowsConfirmDialog,
+                    "ask",
+                    return_value=LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY,
+                ),
+                # No complete-delete groups any more (locked row's decision was
+                # cleared), so the all-delete QMessageBox shouldn't fire — but
+                # patch it defensively in case the group has only one row
+                # and the predicate still resolves true.
+                patch("PySide6.QtWidgets.QMessageBox.question", return_value=_QMB.Yes),
+                patch.object(dlg, "_on_execute") as on_exec,
+            ):
+                dlg._on_execute_requested()
+            assert locked.is_locked is True            # lock preserved
+            assert locked.user_decision == ""          # decision cleared
+            assert unlocked.user_decision == "delete"
+            on_exec.assert_called_once()
+        finally:
+            dlg.close()
+
+    def test_cancel_aborts_before_any_destructive_action(self, qapp):
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        dlg, unlocked, locked = self._locked_delete_setup()
+        try:
+            with (
+                patch.object(
+                    LockedRowsConfirmDialog,
+                    "ask",
+                    return_value=LockedRowsConfirmDialog.CANCEL,
+                ),
+                patch.object(dlg, "_on_execute") as on_exec,
+            ):
+                dlg._on_execute_requested()
+            assert locked.is_locked is True
+            assert locked.user_decision == "delete"
+            assert unlocked.user_decision == "delete"
             on_exec.assert_not_called()
         finally:
             dlg.close()

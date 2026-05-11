@@ -85,16 +85,21 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # same fixture as s14/s30; partition is Simple "contains q9" →
     # matches only neardup_00_q95.jpg.
     "s31_simple_mode_regex": ["qa/sandbox/near-duplicates"],
-    # s32 (#164) — Lock state protects per-file decisions from bulk
-    # regex sweeps. Same fixture as s14 so the regex partition stays
-    # stable; q95 locked, q[89]\d destructive regex matches all three
-    # but only q88 / q80 actually receive the decision.
-    "s32_lock_protects_from_bulk_regex": ["qa/sandbox/near-duplicates"],
+    # s32 (#182, supersedes #175) — bulk regex on locked rows surfaces
+    # the LockedRowsConfirmDialog. Scenario drives "Apply to Unlocked
+    # Only" (today's silent skip-locked, now an explicit choice); the
+    # other two verdicts are pinned at layer 1. Same fixture as s14.
+    "s32_lock_confirm_bulk_regex": ["qa/sandbox/near-duplicates"],
     # s33 (#166) — Execute Action dialog all-delete banner renders the
     # group number(s) so they can be clicked to jump to that group.
     # Same fixture as s32; bulk delete .+ covers every row so the
     # banner must fire for the one group_number the scanner produces.
     "s33_execute_dialog_jump_to_all_delete": ["qa/sandbox/near-duplicates"],
+    # s34 (#182) — Execute-time lock confirm: when the user has set
+    # decision='delete' on a row and THEN locked it, clicking Execute
+    # must surface the same LockedRowsConfirmDialog before any
+    # destructive action runs.
+    "s34_lock_confirm_at_execute": ["qa/sandbox/near-duplicates"],
 }
 
 

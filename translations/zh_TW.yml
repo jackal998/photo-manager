@@ -128,6 +128,16 @@ execute_dialog:
   files_not_found_body: "下列檔案找不到,已略過:\n\n{missing}{suffix}"
   files_not_found_more: "\n…以及其餘 {n} 個"
 
+# LockedRowsConfirmDialog — photo-manager#182(取代 #175 的混合語意)。
+locked_confirm:
+  title: "受影響的鎖定列"
+  body: "動作「{action}」會影響 {total} 列;其中 {locked} 列已鎖定:\n\n{list}\n\n要解除鎖定並套用至全部 {total} 列、只套用至未鎖定的 {unlocked} 列,還是取消?"
+  body_all_locked: "動作「{action}」會影響 {locked} 列,全部已鎖定:\n\n{list}\n\n要解除鎖定並全部套用,還是取消?"
+  list_truncated_suffix: "  …以及其餘 {n} 個"
+  btn_unlock_apply: "解除鎖定並全部套用"
+  btn_unlocked_only: "僅套用至未鎖定"
+  btn_cancel: "取消"
+
 action_dialog:
   title: "依欄位/正規式設定動作"
   field_label: "欄位"
@@ -193,8 +203,6 @@ file_op:
   remove_failed_body: "從清單移除失敗:{error}"
   decision_set_status: "決策已設為「{decision}」"
   decision_set_with_skipped_status: "決策已設為「{decision}」({set_count} 列);跳過 {skipped} 列已鎖定"
-  set_action_all_locked_title: "設定動作 — 全部相符列均已鎖定"
-  set_action_all_locked_body: "所有 {count} 列相符項目均已鎖定。如需套用此動作,請先解除鎖定。"
   locked_verb: "已鎖定"
   unlocked_verb: "已解除鎖定"
   noun_row_singular: "列"
