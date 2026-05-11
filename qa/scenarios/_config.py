@@ -90,6 +90,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # stable; q95 locked, q[89]\d destructive regex matches all three
     # but only q88 / q80 actually receive the decision.
     "s32_lock_protects_from_bulk_regex": ["qa/sandbox/near-duplicates"],
+    # s33 (#166) — Execute Action dialog all-delete banner renders the
+    # group number(s) so they can be clicked to jump to that group.
+    # Same fixture as s32; bulk delete .+ covers every row so the
+    # banner must fire for the one group_number the scanner produces.
+    "s33_execute_dialog_jump_to_all_delete": ["qa/sandbox/near-duplicates"],
 }
 
 

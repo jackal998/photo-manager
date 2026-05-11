@@ -12,10 +12,8 @@ Covers:
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from core.models import PhotoGroup, PhotoRecord
 
@@ -415,6 +413,62 @@ class TestGroupDeletionCheck:
         # /b.jpg has no decision → not all records are "delete" → NOT complete
         complete = dlg._complete_delete_groups()
         assert 1 not in complete
+
+
+# ── banner jump-to (#166) ──────────────────────────────────────────────────
+
+class TestBannerJumpTo:
+    """Each group number in the warning banner is rendered as an HTML
+    anchor; clicking one scrolls + selects that group in the dialog
+    tree. These tests pin the rendering and the lookup path.
+    """
+
+    def _two_complete_groups(self):
+        return [
+            _group(_rec("/g1a.jpg", "delete"), _rec("/g1b.jpg", "delete"), number=1),
+            _group(_rec("/g2a.jpg", "delete"), _rec("/g2b.jpg", "delete"), number=3),
+        ]
+
+    def test_banner_renders_group_numbers_as_anchors(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._two_complete_groups(), manifest_path=None)
+        text = dlg._warning_label.text()
+        # Both group numbers should appear inside anchor tags
+        assert '<a href="1">1</a>' in text
+        assert '<a href="3">3</a>' in text
+
+    def test_jump_to_selects_target_group_row(self, qapp):
+        from app.views.constants import COL_GROUP, SORT_ROLE
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._two_complete_groups(), manifest_path=None)
+        # Click the "3" anchor — tree's current index should land on the
+        # group row whose SORT_ROLE group_number is 3.
+        dlg._on_jump_to_group("3")
+        idx = dlg._tree.currentIndex()
+        assert idx.isValid()
+        # currentIndex may be on any column of the selected row; resolve to
+        # COL_GROUP via sibling so the SORT_ROLE lookup is unambiguous.
+        group_idx = idx.sibling(idx.row(), COL_GROUP)
+        assert group_idx.data(SORT_ROLE) == 3
+
+    def test_jump_to_ignores_invalid_href(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._two_complete_groups(), manifest_path=None)
+        # Non-integer hrefs must not raise and must leave selection
+        # untouched. (linkActivated is a typed signal, but defensive
+        # against future template drift.)
+        dlg._on_jump_to_group("not-an-int")
+        # No assertion on selection state — the contract is "don't raise".
+
+    def test_jump_to_unknown_group_is_noop(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._two_complete_groups(), manifest_path=None)
+        # Group 99 isn't in the tree → no change in selection / no raise.
+        before = dlg._tree.currentIndex()
+        dlg._on_jump_to_group("99")
+        after = dlg._tree.currentIndex()
+        assert after.row() == before.row()
+        assert after.column() == before.column()
 
 
 # ── _delete_file: missing file handling ────────────────────────────────────
