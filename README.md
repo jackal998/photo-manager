@@ -498,5 +498,19 @@ user-facing string lives in `translations/*.yml`, not in a Python
 literal). Deeper references in [`docs/i18n.md`](docs/i18n.md) and
 [`docs/testing.md`](docs/testing.md).
 
+### Claude Code hooks (`.claude/settings.json`)
+
+Three `PreToolUse` hooks fire on `Bash` calls to keep PRs honest:
+
+| Hook | Fires on | Behaviour | Bypass |
+|---|---|---|---|
+| `scripts/hooks/qa_scenario_guard.py` | `gh pr create` | **Blocks** (exit 2) if user-facing files under `app/views/{handlers,dialogs,components,workers}/` changed without a `qa/scenarios/sNN_*.py` driver. | `[qa-not-needed: <reason>]` in title/body |
+| `scripts/hooks/docs_guard.py` | `gh pr create` | **Blocks** if doc-relevant code (new modules under `app/`, `infrastructure/`, `scanner/`, `core/services/`; new tests; qa-scenario changes) lands without a corresponding `README.md` / `docs/*.md` / `CLAUDE.md` / `pyproject.toml` edit. | `[docs-not-needed: <reason>]` in title/body |
+| `scripts/hooks/zombie_check.py` | `git commit` | **Warns** (non-blocking) when a QA-relevant commit is about to land and stale Photo Manager / pytest python processes are still running. Lists PIDs + a `taskkill` command. Windows-only. | n/a (warn only) |
+
+Setup: `.claude/settings.json` is gitignored. Copy
+`.claude/settings.json.example` to `.claude/settings.json` on a fresh
+checkout to install all three.
+
 ---
 

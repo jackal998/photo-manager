@@ -8,6 +8,14 @@
           {
             "type": "command",
             "command": ".venv/Scripts/python.exe scripts/hooks/qa_scenario_guard.py"
+          },
+          {
+            "type": "command",
+            "command": ".venv/Scripts/python.exe scripts/hooks/docs_guard.py"
+          },
+          {
+            "type": "command",
+            "command": ".venv/Scripts/python.exe scripts/hooks/zombie_check.py"
           }
         ]
       }
