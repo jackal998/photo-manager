@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -18,11 +19,13 @@ from PySide6.QtWidgets import (
 from loguru import logger
 
 from app.views.constants import (
+    COL_GROUP,
     COL_NAME,
     LOCK_SENTINEL,
     PATH_ROLE,
     REMOVE_FROM_LIST_DECISION,
     REMOVE_FROM_LIST_SENTINEL,
+    SORT_ROLE,
     UNLOCK_SENTINEL,
     settable_decisions,
 )
@@ -132,6 +135,12 @@ class ExecuteActionDialog(QDialog):
         self._warning_label = QLabel()
         self._warning_label.setWordWrap(True)
         self._warning_label.setStyleSheet("color: #856404; font-weight: bold;")
+        # Group numbers in the banner are rendered as HTML anchors so the
+        # user can click one to jump straight to that group in the tree
+        # (#166). RichText must be enabled before setText; linkActivated
+        # is wired once and dispatches to _on_jump_to_group on click.
+        self._warning_label.setTextFormat(Qt.RichText)
+        self._warning_label.linkActivated.connect(self._on_jump_to_group)
         banner_layout.addWidget(self._warning_label)
         self._warning_banner.setVisible(False)
         layout.addWidget(self._warning_banner)
@@ -181,13 +190,45 @@ class ExecuteActionDialog(QDialog):
     def _refresh_warning_banner(self) -> None:
         complete = self._complete_delete_groups()
         if complete:
-            group_list = ", ".join(str(g) for g in complete)
+            # Each group number is wrapped in an anchor; the linkActivated
+            # connection in _build_ui dispatches the href to _on_jump_to_group.
+            group_list = ", ".join(f'<a href="{g}">{g}</a>' for g in complete)
             self._warning_label.setText(
                 t("execute_dialog.warning_complete_groups", groups=group_list)
             )
             self._warning_banner.setVisible(True)
         else:
             self._warning_banner.setVisible(False)
+
+    def _on_jump_to_group(self, href: str) -> None:
+        """Scroll the dialog tree to the group identified by ``href``.
+
+        ``href`` is the group_number rendered into the banner anchor by
+        :meth:`_refresh_warning_banner`. The lookup matches against the
+        SORT_ROLE value set on each group row by
+        :func:`app.views.tree_model_builder.build_model`. Mirrors the
+        scrollTo + selectionModel.select pattern used by
+        ``MainWindow._reselect_by_path``.
+        """
+        try:
+            target = int(href)
+        except (TypeError, ValueError):
+            return
+        model = self._tree.model()
+        if model is None:
+            return
+        for row in range(model.rowCount()):
+            idx = model.index(row, COL_GROUP)
+            if not idx.isValid():
+                continue
+            if idx.data(SORT_ROLE) == target:
+                self._tree.scrollTo(idx, QAbstractItemView.PositionAtTop)
+                self._tree.setCurrentIndex(idx)
+                self._tree.selectionModel().select(
+                    idx,
+                    QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+                )
+                return
 
     # ------------------------------------------------------------------ context menu
 

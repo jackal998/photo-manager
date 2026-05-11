@@ -82,6 +82,11 @@ ALL_SCENARIOS = [
     # unlock action options end-to-end on the same near-duplicates
     # fixture as s14 / s29 / s30 / s31.
     "s32_lock_protects_from_bulk_regex",
+    # s33 (#166) — Execute Action dialog's all-delete banner renders
+    # the flagged group number as a clickable anchor (the click → jump
+    # itself is covered by unit tests since QLabel HTML anchors aren't
+    # first-class UIA elements).
+    "s33_execute_dialog_jump_to_all_delete",
 ]
 
 
