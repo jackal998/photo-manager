@@ -100,6 +100,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # must surface the same LockedRowsConfirmDialog before any
     # destructive action runs.
     "s34_lock_confirm_at_execute": ["qa/sandbox/near-duplicates"],
+    # s35 (#182 follow-up) — main-window right-click Lock / Unlock
+    # for single + multi-select. End-to-end coverage of the
+    # ActionHandlersImpl.set_locked_state proxy that was missing
+    # silently from #175 to #182.
+    "s35_lock_via_context_menu": ["qa/sandbox/near-duplicates"],
 }
 
 

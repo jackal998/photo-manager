@@ -1758,6 +1758,13 @@ CTX_SET_ACTION = "Set Action"
 CTX_DELETE = "delete"
 CTX_KEEP = "keep (remove action)"
 CTX_OPEN_FOLDER = "Open Folder"
+# Lock / Unlock items sit at the top level of the file-row context
+# menu (not under the Set Action submenu) — see
+# ContextMenuHandler._create_single_selection_menu and the
+# multi-select variant. Translation keys: context_menu.lock /
+# context_menu.unlock in translations/en.yml.
+CTX_LOCK = "Lock"
+CTX_UNLOCK = "Unlock"
 
 _VK_CONTROL = 0x11
 _VK_DOWN = 0x28

@@ -92,6 +92,10 @@ ALL_SCENARIOS = [
     # at the moment the user clicks Execute. Sister to s32 (bulk regex
     # trigger); same fixture as s14.
     "s34_lock_confirm_at_execute",
+    # s35 (#182 follow-up, closes the gap that hid #175's missing
+    # ActionHandlersImpl.set_locked_state proxy) — main-window
+    # right-click Lock / Unlock for single + multi-select.
+    "s35_lock_via_context_menu",
 ]
 
 
