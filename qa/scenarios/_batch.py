@@ -96,6 +96,13 @@ ALL_SCENARIOS = [
     # ActionHandlersImpl.set_locked_state proxy) — main-window
     # right-click Lock / Unlock for single + multi-select.
     "s35_lock_via_context_menu",
+    # s36 (#182) — DESTRUCTIVE Execute through the lock-confirm
+    # dialog. Sister to s13 (destructive happy path) and s34 (lock-
+    # confirm Cancel, non-destructive). Proves the full chain when
+    # the user picks Unlock & Apply All at Execute time: locked row
+    # unlocks, send2trash fires for every row, manifest writes
+    # executed=1. Disposable fixture; sends 5 files to recycle bin.
+    "s36_lock_confirm_destructive_execute",
 ]
 
 

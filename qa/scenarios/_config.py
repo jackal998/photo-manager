@@ -105,6 +105,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # ActionHandlersImpl.set_locked_state proxy that was missing
     # silently from #175 to #182.
     "s35_lock_via_context_menu": ["qa/sandbox/near-duplicates"],
+    # s36 (#182) — DESTRUCTIVE end-to-end through the Execute-time
+    # lock confirm dialog. Disposable fixture (regenerated each run);
+    # sends 5 files to the Windows recycle bin per run.
+    "s36_lock_confirm_destructive_execute": ["qa/sandbox/_disposable/s36_source"],
 }
 
 

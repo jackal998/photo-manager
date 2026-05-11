@@ -103,6 +103,108 @@ class TestBodyText:
         assert "…and" not in text and "以及其餘" not in text
 
 
+class TestBodyTextZhTW:
+    """Locale-switch tests for the dialog body. The i18n parity test in
+    test_i18n.py guarantees every English key exists in zh_TW, but it
+    doesn't verify that the zh_TW strings actually render through
+    LockedRowsConfirmDialog's body composition with format-placeholder
+    substitution intact. These tests close that gap so a malformed YAML
+    placeholder (`{action」` instead of `{action}`) or a missing
+    `body_all_locked` variant trips CI rather than a user.
+    """
+
+    def _swap_locale(self, code: str):
+        """Replace the process-global translator with one in ``code``.
+
+        Returns a callable that restores the original locale — use in a
+        try/finally so subsequent tests see English again.
+        """
+        from pathlib import Path
+        from infrastructure import i18n
+        translations_dir = Path(__file__).resolve().parent.parent / "translations"
+        prior = getattr(i18n, "_translator", None)
+        i18n.init_translator(code, translations_dir)
+
+        def _restore() -> None:
+            i18n._translator = prior
+
+        return _restore
+
+    def test_mixed_body_renders_in_zh_TW(self, qapp):
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        restore = self._swap_locale("zh_TW")
+        try:
+            dlg = LockedRowsConfirmDialog(
+                None,
+                action_label="刪除",
+                affected_count=3,
+                locked_paths=["/p/IMG_1.jpg"],
+            )
+            text = dlg._body_text()
+            # Format-placeholder substitution worked: counts appear as
+            # digits in the rendered string.
+            assert "3" in text
+            assert "1" in text  # locked count
+            assert "2" in text  # unlocked count
+            assert "IMG_1.jpg" in text
+            # At least one zh_TW marker rules out a fallback-to-English
+            # regression (which would render no Chinese at all).
+            assert any(marker in text for marker in ("鎖定", "取消", "套用"))
+        finally:
+            restore()
+
+    def test_all_locked_body_renders_in_zh_TW(self, qapp):
+        """All-locked degenerate variant uses a different YAML key
+        (``body_all_locked``); pin it separately so a missing zh_TW
+        entry fails this test rather than silently falling back to
+        English on the user."""
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        restore = self._swap_locale("zh_TW")
+        try:
+            dlg = LockedRowsConfirmDialog(
+                None,
+                action_label="刪除",
+                affected_count=2,
+                locked_paths=["/p/IMG_1.jpg", "/p/IMG_2.jpg"],
+            )
+            text = dlg._body_text()
+            assert "IMG_1.jpg" in text
+            assert "IMG_2.jpg" in text
+            assert any(marker in text for marker in ("鎖定", "取消", "套用"))
+        finally:
+            restore()
+
+    def test_button_labels_render_in_zh_TW(self, qapp):
+        """Button labels come from a separate translation key path
+        (``locked_confirm.btn_*``). Pin the zh_TW rendering so a
+        missing key fails CI rather than the user."""
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        restore = self._swap_locale("zh_TW")
+        try:
+            dlg = LockedRowsConfirmDialog(
+                None,
+                action_label="刪除",
+                affected_count=3,
+                locked_paths=["/p/IMG_1.jpg"],
+            )
+            for btn in (dlg._btn_unlock_apply, dlg._btn_unlocked_only, dlg._btn_cancel):
+                label = btn.text()
+                assert label, "button has no text"
+                # Any CJK Unified Ideograph rules out an English fallback.
+                assert any("一" <= c <= "鿿" for c in label), (
+                    f"button label {label!r} has no CJK char — likely "
+                    f"fell back to English"
+                )
+        finally:
+            restore()
+
+
 class TestButtonStates:
     def test_unlocked_only_button_enabled_when_some_unlocked(self, make_dialog):
         dlg = make_dialog(affected=3, locked=["/p/a.jpg"])  # 2 unlocked

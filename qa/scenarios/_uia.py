@@ -1656,6 +1656,7 @@ def execute_and_confirm(
     execute_dlg: UIAWrapper,
     dialog_timeout: float = 10,
     on_confirm_open=None,
+    expect_lock_confirm: str | None = None,
 ) -> None:
     """Click Execute on the Execute Action dialog, then Yes on the
     'All Files Will Be Deleted' confirmation QMessageBox.
@@ -1664,15 +1665,38 @@ def execute_and_confirm(
     dialog wrapper before Yes is clicked. Used by the destructive-confirm
     invariant probe to inspect the dialog's shape (Yes/No buttons, body).
 
+    *expect_lock_confirm* (#182): pass one of the ``LOCK_CONFIRM_*``
+    verdict identifiers when locked rows have ``decision='delete'`` at
+    Execute time. Under the new lock semantic the pre-execute scan
+    surfaces the unified LockedRowsConfirmDialog BEFORE the
+    all-delete confirm — drive it here so the remainder of the
+    flow (all-delete confirm + dialog close) matches the existing
+    happy-path shape. Default ``None`` preserves the pre-#182
+    contract (no locked rows in the delete set).
+
     Returns when the Execute Action dialog has accepted (closed) — that's
     the signal that send2trash + mark_executed have completed.
     """
     pid = execute_dlg.process_id()
     execute_btn = execute_dlg.child_window(title=EXECUTE_BTN, control_type="Button")
-    confirm_hwnd = _click_btn_and_wait_for_dialog(
-        execute_btn, execute_dlg, pid, EXECUTE_CONFIRM_TITLE,
-        per_attempt_timeout=dialog_timeout,
-    )
+    if expect_lock_confirm is not None:
+        # Lock-confirm path: click Execute manually, drive the
+        # interstitial dialog, then look for the all-delete confirm.
+        execute_btn.click_input()
+        time.sleep(0.3)
+        if not drive_lock_confirm(pid, expect_lock_confirm, timeout=dialog_timeout):
+            raise TimeoutError(
+                "expect_lock_confirm was set but the LockedRowsConfirmDialog "
+                "did not appear after clicking Execute"
+            )
+        confirm_hwnd = wait_for_dialog(
+            pid, EXECUTE_CONFIRM_TITLE, timeout=dialog_timeout
+        )
+    else:
+        confirm_hwnd = _click_btn_and_wait_for_dialog(
+            execute_btn, execute_dlg, pid, EXECUTE_CONFIRM_TITLE,
+            per_attempt_timeout=dialog_timeout,
+        )
     confirm_dlg = connect_by_handle(confirm_hwnd)
     if on_confirm_open is not None:
         try:

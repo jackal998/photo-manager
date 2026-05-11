@@ -892,6 +892,68 @@ class TestExecuteRequestedLockConfirm:
         finally:
             dlg.close()
 
+    def test_apply_all_unlocked_runs_send2trash_on_both_paths(self, qapp, tmp_path):
+        """End-to-end integration: lock-confirm → Unlock & Apply All →
+        all-delete confirm → _on_execute → send2trash actually fires
+        for BOTH the previously-locked file and the unlocked one.
+
+        Layer-1 destructive guard (mocks send2trash). The layer-3
+        sibling is s36_lock_confirm_destructive_execute, which fires
+        real send2trash on a disposable fixture. This test exists so
+        a regression in the pre-execute scan → unlock → execute chain
+        fails CI even before qa-batch runs.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        from PySide6.QtWidgets import QMessageBox as _QMB
+
+        # Real on-disk files so _delete_file's os.path.exists check
+        # passes — without that, paths land in _missing_paths and
+        # send2trash never gets called.
+        f_free = tmp_path / "free.jpg"
+        f_locked = tmp_path / "locked.jpg"
+        f_free.write_bytes(b"x")
+        f_locked.write_bytes(b"x")
+        unlocked = _rec(str(f_free), "delete")
+        locked = _rec(str(f_locked), "delete")
+        locked.is_locked = True
+        groups = [_group(unlocked, locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        try:
+            with (
+                patch.object(
+                    LockedRowsConfirmDialog,
+                    "ask",
+                    return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+                ),
+                patch("PySide6.QtWidgets.QMessageBox.question", return_value=_QMB.Yes),
+                # Patch the imported reference inside _delete_file —
+                # the function does `import send2trash` and calls
+                # `send2trash.send2trash(path)`, so patching the
+                # attribute on the module catches the real call site.
+                patch("send2trash.send2trash") as fake_send2trash,
+            ):
+                dlg._on_execute_requested()
+
+            # Both files reached send2trash — proves the lock-confirm
+            # didn't accidentally short-circuit the unlocked path,
+            # and the unlock+execute happened for the locked one.
+            called_paths = {
+                call.args[0] for call in fake_send2trash.call_args_list
+            }
+            assert str(f_free) in called_paths
+            assert str(f_locked) in called_paths
+            # Both rows ended up in deleted_paths (post-execute audit).
+            assert str(f_free) in dlg.deleted_paths
+            assert str(f_locked) in dlg.deleted_paths
+            # Locked row was unlocked as part of the verdict.
+            assert locked.is_locked is False
+        finally:
+            dlg.close()
+
     def test_apply_unlocked_only_clears_decision_on_locked(self, qapp):
         from app.views.dialogs.locked_rows_confirm_dialog import (
             LockedRowsConfirmDialog,
