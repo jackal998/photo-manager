@@ -25,6 +25,7 @@ from app.views.components.status_messages import plural_form, pluralize
 # Import extracted components
 from app.views.components.tree_controller import TreeController
 from app.views.constants import COL_CREATION_DATE, COL_FOLDER, COL_GROUP, COL_NAME, COL_SHOT_DATE, COL_SIZE_BYTES
+from app.views.handlers.action_handlers import ActionHandlersImpl
 from app.views.handlers.context_menu import ContextMenuHandler
 from app.views.handlers.dialog_handler import DialogHandler
 from app.views.handlers.file_operations import FileOperationsHandler
@@ -748,47 +749,7 @@ class TreeDataProviderImpl:
         return self.controller.proxy
 
 
-class ActionHandlersImpl:
-    """Implementation of ActionHandlers protocol for context menu."""
-
-    def __init__(
-        self,
-        file_operations: FileOperationsHandler,
-        dialog_handler: DialogHandler,
-    ):
-        self.file_ops = file_operations
-        self.dialog = dialog_handler
-
-    def remove_items_from_list(self, items: list[dict]) -> None:
-        """Remove items from list."""
-        self.file_ops.remove_items_from_list(items)
-
-    def show_action_dialog(self, clicked_col: int | None = None) -> None:
-        """Show set action by field/regex dialog."""
-        self.dialog.show_action_dialog(clicked_col=clicked_col)
-
-    def set_decision(self, items: list[dict], decision: str) -> None:
-        """Set user decision (delete/keep) for file items.
-
-        Note: this is the silent-applier proxy used by callers that have
-        already validated lock state (e.g. the regex / multi-select
-        paths after the lock-confirm dialog returned). The context menu
-        uses :meth:`set_decision_with_lock_check` so a destructive
-        decision on a locked row surfaces the confirm dialog (#182).
-        """
-        self.file_ops.set_decision(items, decision)
-
-    def set_decision_with_lock_check(
-        self, items: list[dict], new_decision: str
-    ) -> None:
-        """Set decisions, routing through the LockedRowsConfirmDialog
-        when any target row is locked (#182). Called from the
-        main-window context menu (single + multi-select)."""
-        self.file_ops.set_decision_with_lock_check(items, new_decision)
-
-    def set_locked_state(self, items: list[dict], locked: bool) -> None:
-        """Toggle ``is_locked`` for file items (#164). Called from the
-        main-window context menu's Lock / Unlock items — without this
-        proxy on ActionHandlersImpl the menu items silently no-op
-        (the bug that escaped #175's coverage)."""
-        self.file_ops.set_locked_state(items, locked)
+# ActionHandlersImpl moved to app/views/handlers/action_handlers.py so
+# the context-menu bridge is unit-testable without cascade-importing
+# this 400+ line QMainWindow file. The import lives at the top of this
+# module; the class itself is no longer defined here.

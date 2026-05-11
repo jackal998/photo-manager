@@ -133,7 +133,7 @@ class TestActionHandlersImplBridge:
 
     def _make_impl(self):
         from unittest.mock import MagicMock
-        from app.views.main_window import ActionHandlersImpl
+        from app.views.handlers.action_handlers import ActionHandlersImpl
         file_ops = MagicMock()
         dialog = MagicMock()
         return ActionHandlersImpl(file_operations=file_ops, dialog_handler=dialog), file_ops
