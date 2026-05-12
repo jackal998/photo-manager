@@ -22,6 +22,7 @@ from loguru import logger
 
 from app.views.components.menu_controller import MenuController
 from app.views.components.status_messages import plural_form, pluralize
+from app.views.components.status_reporter_impl import StatusReporterImpl
 
 # Import extracted components
 from app.views.components.tree_controller import TreeController
@@ -791,21 +792,6 @@ class MainWindow(QMainWindow):
 
 
 # Helper implementation classes
-
-
-class StatusReporterImpl:
-    """Implementation of StatusReporter protocol."""
-
-    def __init__(self, main_window: QMainWindow):
-        self.window = main_window
-
-    def show_status(self, message: str, timeout: int = 3000) -> None:
-        """Show status message in status bar."""
-        self.window.statusBar().showMessage(message, timeout)
-
-    def set_baseline(self, message: str) -> None:
-        """Update the persistent baseline text shown when no temp message is active."""
-        self.window.set_status_baseline(message)
 
 
 class UIUpdaterImpl:

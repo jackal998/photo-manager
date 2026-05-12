@@ -25,7 +25,7 @@ class TestStatusReporterImplBaseline:
     """
 
     def test_set_baseline_delegates_to_window(self):
-        from app.views.main_window import StatusReporterImpl
+        from app.views.components.status_reporter_impl import StatusReporterImpl
 
         win = MagicMock()
         reporter = StatusReporterImpl(win)
@@ -40,7 +40,7 @@ class TestStatusReporterImplBaseline:
         """Transient action feedback must still go through
         ``QStatusBar.showMessage`` with its timeout — set_baseline is for
         the persistent layer only, not action toasts."""
-        from app.views.main_window import StatusReporterImpl
+        from app.views.components.status_reporter_impl import StatusReporterImpl
 
         win = MagicMock()
         reporter = StatusReporterImpl(win)
