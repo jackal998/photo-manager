@@ -222,13 +222,47 @@ Acceptance:
        c) skip this branch
   9. Capture PR URL, report to user.
 
-## Cleanup
+## Cleanup — after the PR merges
 
-When PR is merged (later, possibly in a different session), the
-worktree can be removed via the desktop sidebar (right-click session
-→ Delete) or `git worktree remove .claude/worktrees/<your-session-name>`.
-The orchestrator session is not responsible for your cleanup; this
-cold session (or any future session) handles it.
+The cold session that did the work (this one, or any future session
+opened against the same worktree) is responsible for cleanup. The
+orchestrator never does it. Workflow:
+
+1. Confirm the merge landed — proves the work is preserved before
+   you delete anything:
+   ```
+   git fetch --prune origin
+   git log origin/master --grep="#<N>" --oneline | head -3
+   ```
+   If nothing matches, STOP — the PR may have been closed without
+   merge, or you're looking at the wrong issue. Don't delete.
+
+2. Check the remote branch — GitHub usually auto-deletes on merge:
+   ```
+   git ls-remote --heads origin <your-branch>
+   ```
+   Empty output means GitHub already cleaned it up. If a SHA prints,
+   the remote branch survived — **gated:** surface intent, on
+   approval `git push origin --delete <your-branch>`.
+
+3. Delete the local branch. You can't delete the branch that's
+   currently checked out in your worktree, so detach HEAD first:
+   ```
+   git checkout --detach HEAD
+   git branch -D <your-branch>
+   ```
+   Use `-D` (force) because upstream is `gone` after merge (or after
+   step 2), which makes `-d`'s upstream-merge check unresolvable.
+   Work IS preserved on origin/master per step 1, so `-D` is safe —
+   **gated:** surface intent briefly before running per CLAUDE.md.
+
+4. Remove the worktree itself. This step has to run from the MAIN
+   repo, not from inside the worktree — you can't remove your own
+   cwd. Tell the user; they run from the main checkout:
+   ```
+   git worktree remove .claude/worktrees/<your-session-name>
+   ```
+   Or right-click the session in the desktop sidebar → Delete.
 ```
 
 ### Step 4 — Hand briefs to user
