@@ -150,7 +150,11 @@ class StatusReporter(Protocol):
     """Protocol for status reporting callback."""
 
     def show_status(self, message: str, timeout: int = 3000) -> None:
-        """Show status message."""
+        """Show transient status message (auto-clears after timeout)."""
+        ...
+
+    def set_baseline(self, message: str) -> None:
+        """Update the persistent baseline shown between transient messages."""
         ...
 
 
@@ -238,7 +242,7 @@ class FileOperationsHandler:
         logger.info("Opened manifest: {} | groups={} items={}", path, n_groups, n_items)
         pairs = t_pluralize(n_groups, "status.noun_pair_singular", "status.noun_pair_plural")
         files = t_pluralize(n_items, "status.noun_file_singular", "status.noun_file_plural")
-        self.status_reporter.show_status(
+        self.status_reporter.set_baseline(
             t("status.manifest_loaded_pairs", pairs=pairs, files=files)
         )
 

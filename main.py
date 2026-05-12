@@ -81,11 +81,8 @@ def make_main_window(
     ``install_locale_translators`` first); construction-time ``t()``
     calls bake in the active locale.
     """
-    from infrastructure.i18n import t
-
     win = MainWindow(vm=vm, image_service=image_service, settings=settings)
     win.refresh_tree(vm.groups)
-    win.statusBar().showMessage(t("main_window.status_ready"), 2000)
     return win
 
 

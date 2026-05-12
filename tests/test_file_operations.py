@@ -716,9 +716,11 @@ class TestManifestLoadCallbacks:
         ui.refresh_tree.assert_called_once_with(groups)
         ui.show_group_counts.assert_called_once_with(2)
         ui.show_groups_summary.assert_called_once_with(groups)
-        # Status text mentions group count and total file count (3).
-        status.show_status.assert_called_once()
-        status_msg = status.show_status.call_args[0][0]
+        # Successful load updates the persistent baseline (#138, #140), not
+        # a transient temp message that would disappear after a few seconds
+        # or when the user opens a menu.
+        status.set_baseline.assert_called_once()
+        status_msg = status.set_baseline.call_args[0][0]
         assert "2" in status_msg and "3" in status_msg
 
     def test_on_manifest_failed_logs_and_disables_actions(self):

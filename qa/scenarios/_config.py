@@ -109,6 +109,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # lock confirm dialog. Disposable fixture (regenerated each run);
     # sends 5 files to the Windows recycle bin per run.
     "s36_lock_confirm_destructive_execute": ["qa/sandbox/_disposable/s36_source"],
+    # s37 (#138, #140) — exercises status-bar baseline. Needs a source
+    # that produces at least one group so the post-load summary is
+    # non-trivial; near-duplicates is the standard small fixture.
+    "s37_status_bar_baseline": ["qa/sandbox/near-duplicates"],
     # s38 (#144) — empty source list; driver populates via the path-field
     # validation flow (bad path → inline error, then good path → row).
     "s38_scan_dialog_invalid_path": [],
