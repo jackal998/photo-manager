@@ -48,6 +48,8 @@ main_window:
   title: "Photo Manager"
   status_ready: "Ready"
   empty_state: "No manifest loaded.\n\nFile → Scan Sources… to begin."
+  empty_state_scan_button: "Scan Sources…"
+  empty_state_open_button: "Open Manifest…"
   status_loaded: "Loaded manifest: {parts}"
   load_error_title: "Load Manifest Error"
   discard_pending_title: "Discard pending decisions?"

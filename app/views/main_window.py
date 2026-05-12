@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
+from app.views.components.empty_state import build_empty_state_widget
 from app.views.components.menu_controller import MenuController
 from app.views.components.status_messages import plural_form, pluralize
 from app.views.components.status_reporter_impl import StatusReporterImpl
@@ -227,13 +228,24 @@ class MainWindow(QMainWindow):
         center_widget, center_layout = self.layout_manager.create_tree_section()
         # First-run hint — visible until the first manifest loads. Once a
         # manifest is loaded (even if it produces zero groups), the user has
-        # discovered the menu and the label is hidden permanently (#42).
-        self._empty_state_label = QLabel(t("main_window.empty_state"))
-        self._empty_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_state_label.setStyleSheet(
-            "color: #888; font-size: 14px; padding: 40px;"
+        # discovered the menu and the wrapper is hidden permanently (#42).
+        # Wraps the hint label + primary-action buttons (#137) so the
+        # visibility toggle hides everything in one call. Builder lives in
+        # ``app.views.components.empty_state`` so the wiring stays
+        # unit-testable without cascading the full view stack.
+        (
+            self._empty_state_widget,
+            self._empty_state_label,
+            self._empty_state_scan_button,
+            self._empty_state_open_button,
+        ) = build_empty_state_widget(
+            label_text=t("main_window.empty_state"),
+            scan_button_text=t("main_window.empty_state_scan_button"),
+            scan_handler=self.on_scan_sources,
+            open_button_text=t("main_window.empty_state_open_button"),
+            open_handler=self.on_open_manifest,
         )
-        center_layout.addWidget(self._empty_state_label)
+        center_layout.addWidget(self._empty_state_widget)
         center_layout.addWidget(self.tree)
         self.tree.setVisible(False)
 
@@ -318,8 +330,8 @@ class MainWindow(QMainWindow):
         # First manifest load — hide the first-run hint and reveal the tree.
         # Stays hidden afterwards even if a later load produces zero groups,
         # because the user has clearly already discovered the entry point.
-        if self._empty_state_label.isVisible():
-            self._empty_state_label.setVisible(False)
+        if self._empty_state_widget.isVisible():
+            self._empty_state_widget.setVisible(False)
             self.tree.setVisible(True)
 
         self.tree_controller.refresh_model(groups)

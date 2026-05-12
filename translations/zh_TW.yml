@@ -37,6 +37,8 @@ main_window:
   title: "Photo Manager"
   status_ready: "就緒"
   empty_state: "尚未載入清單檔。\n\n請從「檔案 → 掃描來源…」開始。"
+  empty_state_scan_button: "掃描來源…"
+  empty_state_open_button: "開啟清單檔…"
   status_loaded: "已載入清單:{parts}"
   load_error_title: "載入清單錯誤"
   discard_pending_title: "捨棄未儲存的決策?"
