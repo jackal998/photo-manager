@@ -729,16 +729,42 @@ class TestPathFieldEntry:
         panel._on_add_typed()
         assert emitted == []
 
-    def test_nonexistent_path_is_silently_ignored(self, qapp, tmp_path):
+    def test_nonexistent_path_surfaces_inline_error(self, qapp, tmp_path):
+        """#144 — previously a silent no-op (the bug). Now must surface
+        a visible error label below the path row so the user can tell
+        ``+ Add`` did something."""
         from app.views.dialogs.scan_dialog import _FolderTreePanel
 
         panel = _FolderTreePanel()
         emitted: list[str] = []
         panel.folder_requested.connect(emitted.append)
 
+        bad = str(tmp_path / "definitely_does_not_exist")
+        panel._path_field.setText(bad)
+        panel._on_add_typed()
+
+        # No emit (so the source list is unchanged) AND error label is
+        # visible carrying the offending path so the user sees what was
+        # rejected — both halves matter; either alone fails to fix #144.
+        assert emitted == []
+        assert panel._path_error.isVisibleTo(panel) is True
+        assert bad in panel._path_error.text()
+
+    def test_typing_clears_existing_error(self, qapp, tmp_path):
+        """Error label is stale the moment the user edits the field —
+        the message refers to the previous value, not the new one."""
+        from app.views.dialogs.scan_dialog import _FolderTreePanel
+
+        panel = _FolderTreePanel()
         panel._path_field.setText(str(tmp_path / "definitely_does_not_exist"))
         panel._on_add_typed()
-        assert emitted == []
+        assert panel._path_error.isVisibleTo(panel) is True
+
+        # Any keystroke / setText drop reflects "the user is editing"
+        # — kill the now-stale error.
+        panel._path_field.setText("")
+        assert panel._path_error.isVisibleTo(panel) is False
+        assert panel._path_error.text() == ""
 
     def test_valid_path_emits_folder_requested_and_clears_field(self, qapp, tmp_path):
         from app.views.dialogs.scan_dialog import _FolderTreePanel
@@ -755,6 +781,35 @@ class TestPathFieldEntry:
 
         assert emitted == [str(real_dir)]
         assert panel._path_field.text() == ""
+
+    def test_successful_add_clears_prior_error(self, qapp, tmp_path):
+        """After a failed add, fixing the path and clicking ``+ Add``
+        again must remove the error — otherwise the dialog claims a
+        problem the user already resolved."""
+        from app.views.dialogs.scan_dialog import _FolderTreePanel
+
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+
+        panel = _FolderTreePanel()
+        emitted: list[str] = []
+        panel.folder_requested.connect(emitted.append)
+
+        # 1) Bad path surfaces the error.
+        panel._path_field.setText(str(tmp_path / "nope"))
+        panel._on_add_typed()
+        assert panel._path_error.isVisibleTo(panel) is True
+
+        # 2) Replacing with a real folder and adding clears the error.
+        # ``setText`` fires textChanged → _clear_path_error, but we also
+        # want to confirm the success path itself is idempotent if the
+        # error somehow survived (paranoia is cheap; tests are about
+        # documenting the contract).
+        panel._path_field.setText(str(real_dir))
+        panel._on_add_typed()
+
+        assert emitted == [str(real_dir)]
+        assert panel._path_error.isVisibleTo(panel) is False
 
     def test_quoted_path_is_stripped(self, qapp, tmp_path):
         """Windows users often paste paths from Explorer with surrounding quotes."""
