@@ -56,14 +56,30 @@ class LayoutManager:
         root = QHBoxLayout(central)
 
         # Create splitter. #136: at the Qt-enforced minimum window width
-        # (~418 px) the preview pane was being squeezed down to ~89 px and
-        # nothing rendered. Pinning each child to MIN_SECTION_WIDTH plus
-        # disabling collapse guarantees the preview always has enough
-        # room to draw, and the floor propagates through to the window's
-        # own minimumSize via QSplitter's size-hint accumulation.
+        # (~418 px) the preview pane was being squeezed down to ~89 px
+        # and nothing rendered. Two guarantees fix that:
+        #   * ``setChildrenCollapsible(False)`` — neither pane may be
+        #     dragged to size 0 by the user.
+        #   * preview_widget gets MIN_SECTION_WIDTH — so when the window
+        #     is small, the preview never falls below a renderable
+        #     width. The floor propagates to the window's own
+        #     minimumSize via QSplitter's size-hint accumulation.
+        #
+        # Why ONLY preview gets the min-width:
+        #   The tree pane on a small screen has multiple columns
+        #   (Group/Similarity/Action/Lock/File Name/Folder/…). Pinning
+        #   tree min-width too forces the splitter to over-allocate to
+        #   preview at the expense of tree on small screens — the File
+        #   Name column ends up geometrically OUTSIDE the tree pane,
+        #   inside the preview pane, and right-clicks on a row land on
+        #   the preview and never trigger the tree's context menu.
+        #   qa-batch context-menu scenarios (s15/s19/s20/s21/s25/s30/s35)
+        #   regressed on this when both panes had min=200. Letting tree
+        #   take its stretch share (no explicit min) restores master's
+        #   pre-#136 layout behavior while still fixing the #136
+        #   preview-is-unrenderable failure.
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        tree_widget.setMinimumWidth(self.MIN_SECTION_WIDTH)
         preview_widget.setMinimumWidth(self.MIN_SECTION_WIDTH)
         self.splitter.addWidget(tree_widget)
         self.splitter.addWidget(preview_widget)

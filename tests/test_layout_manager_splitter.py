@@ -38,42 +38,61 @@ def test_splitter_disables_children_collapsible(qapp, layout_manager):
     assert splitter.childrenCollapsible() is False
 
 
-def test_splitter_children_have_min_section_width(qapp, layout_manager):
-    """Both panes carry an explicit ``minimumWidth`` >= MIN_SECTION_WIDTH.
+def test_preview_pane_has_min_section_width(qapp, layout_manager):
+    """The preview pane carries an explicit ``minimumWidth`` >=
+    MIN_SECTION_WIDTH so it can never shrink to the unrenderable
+    89-px state that triggered #136.
 
-    Without these, the only floor on the preview pane was the QSplitter's
-    handle width (~3 px) plus the tree pane's natural minimum size hint
-    (~80 px on Windows) — well below anything renderable.
+    The tree pane intentionally does NOT get a min-width — see the
+    docstring in ``setup_main_layout``. Pinning both panes was
+    tried in the first iteration of this fix and regressed the
+    qa-batch context-menu scenarios on smaller screens: when the
+    window is narrow, dual mins force the splitter to over-allocate
+    to preview, pushing the tree's File Name column off-pane.
     """
     tree_widget = QWidget()
     preview_widget = QWidget()
     layout_manager.setup_main_layout(tree_widget, preview_widget)
 
-    assert tree_widget.minimumWidth() >= LayoutManager.MIN_SECTION_WIDTH
     assert preview_widget.minimumWidth() >= LayoutManager.MIN_SECTION_WIDTH
 
 
-def test_splitter_minimum_width_propagates_to_handle_floor(
+def test_tree_pane_has_no_explicit_min_width(qapp, layout_manager):
+    """Tree pane is intentionally left free to take its stretch share.
+
+    Regression guard against the original #136 fix which set
+    setMinimumWidth(200) on BOTH panes and broke context-menu
+    right-clicks on small screens (qa-batch CI run 25738426293).
+    """
+    tree_widget = QWidget()
+    preview_widget = QWidget()
+    layout_manager.setup_main_layout(tree_widget, preview_widget)
+
+    # A QWidget with no setMinimumWidth call has minimumWidth() == 0
+    # (Qt's default). The natural minimum-size-hint can still be > 0
+    # for the real tree widget once it's populated, but that's
+    # content-driven and orthogonal to what this test pins.
+    assert tree_widget.minimumWidth() == 0
+
+
+def test_splitter_preview_minimum_propagates_to_handle_floor(
     qapp, layout_manager
 ):
     """The composite ``minimumSizeHint`` of the splitter must be at
-    least twice ``MIN_SECTION_WIDTH`` (one per child), so the central
-    widget — and thus the window — inherits an enforceable floor.
-
-    This is the user-observable guarantee from #136: Win32
-    ``MoveWindow`` requests narrower than ~400 px get clamped by Qt
-    rather than producing the 89-px-preview broken state.
+    least ``MIN_SECTION_WIDTH`` (the preview's floor), so the central
+    widget — and thus the window — inherits an enforceable floor
+    that prevents the preview from being squeezed below renderable.
     """
     tree_widget = QWidget()
     preview_widget = QWidget()
     layout_manager.setup_main_layout(tree_widget, preview_widget)
 
     splitter = layout_manager.get_splitter()
-    # ``minimumSizeHint().width()`` includes the handle plus both
-    # children's minimum widths. We can't assert an exact value
-    # (handle width is platform-dependent), but two children at 200 px
-    # each guarantees >= 400 — the floor that fixes #136.
-    assert splitter.minimumSizeHint().width() >= 2 * LayoutManager.MIN_SECTION_WIDTH
+    # Preview alone contributes MIN_SECTION_WIDTH to the composite
+    # minimum-size-hint. We can't assert an exact value (handle width
+    # and tree's natural min are platform-dependent), but the preview
+    # floor alone is enough to guarantee a renderable preview.
+    assert splitter.minimumSizeHint().width() >= LayoutManager.MIN_SECTION_WIDTH
 
 
 # ── ancillary LayoutManager methods ──────────────────────────────────────
@@ -137,34 +156,43 @@ def test_connect_splitter_signals_noops_without_splitter(qapp):
     mgr.connect_splitter_signals(lambda: None)  # must not raise
 
 
-def test_adjust_splitter_for_tree_clamps_to_min_section_width(
+def test_adjust_splitter_for_tree_clamps_preview_to_min_section_width(
     qapp, layout_manager
 ):
     """``adjust_splitter_for_tree`` distributes width tree | preview
-    based on the calculated tree-content width, but neither side may
-    be smaller than ``MIN_SECTION_WIDTH``. Tests the min-clamp
-    branches in particular, since those interact with #136's fix."""
+    based on the calculated tree-content width; the right (preview)
+    side is enforced to ``MIN_SECTION_WIDTH`` via both the internal
+    clamp AND the preview widget's explicit setMinimumWidth.
+
+    The left (tree) side is NOT pinned at the widget level (see
+    ``setup_main_layout`` docstring — pinning both panes regressed
+    qa-batch context-menu scenarios on small screens). The internal
+    clamp branch in ``adjust_splitter_for_tree`` still computes a
+    floor on the size passed to setSizes(), but Qt may scale that
+    down if the sum exceeds the splitter width.
+    """
     tree_widget = QWidget()
     preview_widget = QWidget()
     layout_manager.setup_main_layout(tree_widget, preview_widget)
 
     splitter = layout_manager.get_splitter()
-    # Give the window a real width so the right-side calculation has
-    # something to work with. We use the underlying mock-but-real
-    # QMainWindow from the fixture.
     layout_manager.window.resize(900, 600)
 
     # Tree-content calculator that asks for the whole window — forces
-    # the right-side clamp to MIN_SECTION_WIDTH branch.
+    # the right-side clamp branch. Preview pane must clear the floor.
     layout_manager.adjust_splitter_for_tree(lambda: 9999)
     sizes = splitter.sizes()
     assert sizes[1] >= LayoutManager.MIN_SECTION_WIDTH
 
-    # Tree-content calculator that asks for near-zero — forces the
-    # left-side clamp to MIN_SECTION_WIDTH branch.
+    # Tree-content calculator that asks for near-zero — the left-side
+    # clamp branch runs (covered by line execution); Qt may scale the
+    # final size below MIN_SECTION_WIDTH because tree has no widget-
+    # level min. We assert only that both sides are non-zero (i.e. the
+    # clamp prevented total collapse).
     layout_manager.adjust_splitter_for_tree(lambda: 0)
     sizes = splitter.sizes()
-    assert sizes[0] >= LayoutManager.MIN_SECTION_WIDTH
+    assert sizes[0] > 0
+    assert sizes[1] > 0
 
 
 def test_adjust_splitter_for_tree_swallows_calculator_errors(
