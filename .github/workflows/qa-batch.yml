@@ -26,13 +26,6 @@ on:
     branches: [master]
   workflow_dispatch: {}   # allow manual trigger from the Actions UI for debugging
 
-concurrency:
-  # Shard number is part of the key: GitHub Actions cancels by group, and
-  # we want all 3 shards of the same PR to coexist. Without "-shard…",
-  # the second shard to start would cancel the first.
-  group: qa-batch-${{ github.head_ref || github.ref }}-shard${{ matrix.shard }}
-  cancel-in-progress: true
-
 # Public-repo hardening: workflow is read-only, no write back to the repo,
 # no token-scoped operations. Locking permissions explicitly here keeps it
 # audit-ready and resilient to future GitHub default changes.
@@ -43,6 +36,15 @@ jobs:
   qa:
     runs-on: windows-latest
     timeout-minutes: 20
+    # Concurrency must live at the job level (not workflow level): the
+    # ``matrix`` context is only in scope inside a job, so a workflow-level
+    # group key referencing ``matrix.shard`` is a workflow-file error and
+    # the run fails at parse time. Including the shard number in the key
+    # is what lets all 3 shards of the same PR coexist — without it,
+    # GitHub Actions would cancel earlier shards when the next one starts.
+    concurrency:
+      group: qa-batch-${{ github.head_ref || github.ref }}-shard${{ matrix.shard }}
+      cancel-in-progress: true
     strategy:
       # Don't cancel sibling shards when one fails — we want a full picture
       # of which scenarios failed across the whole batch from a single run.
