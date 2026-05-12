@@ -537,10 +537,14 @@ class TestGroupSingleSelection:
 
 
 class TestOpenFolderAction:
-    """Cover the _open_folder helper bound to the 'Open Folder' menu action.
+    """Cover the Open Folder menu action end-to-end.
 
-    All file-system / shell side effects (subprocess.Popen, QDesktopServices)
-    are mocked so the tests don't open Explorer windows.
+    Verifies that triggering the menu action invokes the
+    ``open_folder_containing`` helper (from ``file_opener.py``, factored
+    out in #143) with the right path and that the helper's OS-cascade
+    behaves correctly. All file-system / shell side effects
+    (subprocess.Popen, QDesktopServices) are mocked so the tests don't
+    open Explorer windows.
     """
 
     def _build_menu_and_open_folder_action(self, qapp, file_path: str):
@@ -564,7 +568,7 @@ class TestOpenFolderAction:
         action = self._build_menu_and_open_folder_action(qapp, "")
         with (
             _patch("subprocess.Popen") as popen,
-            _patch("app.views.handlers.context_menu.QDesktopServices.openUrl") as open_url,
+            _patch("app.views.handlers.file_opener.QDesktopServices.openUrl") as open_url,
         ):
             action.trigger()
         popen.assert_not_called()
@@ -614,7 +618,7 @@ class TestOpenFolderAction:
         monkeypatch.setattr("os.name", "posix")
         with (
             _patch("subprocess.Popen") as popen,
-            _patch("app.views.handlers.context_menu.QDesktopServices.openUrl") as open_url,
+            _patch("app.views.handlers.file_opener.QDesktopServices.openUrl") as open_url,
         ):
             action.trigger()
         popen.assert_not_called()
@@ -632,7 +636,7 @@ class TestOpenFolderAction:
         monkeypatch.setattr("os.name", "nt")
         with (
             _patch("subprocess.Popen", side_effect=OSError("explorer broke")),
-            _patch("app.views.handlers.context_menu.QDesktopServices.openUrl") as open_url,
+            _patch("app.views.handlers.file_opener.QDesktopServices.openUrl") as open_url,
         ):
             action.trigger()
         open_url.assert_called_once()

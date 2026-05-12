@@ -1875,6 +1875,69 @@ def left_click_tree_row(win: UIAWrapper, basename: str) -> None:
     time.sleep(0.2)
 
 
+def double_click_tree_row(win: UIAWrapper, basename: str) -> None:
+    """Double-click the result-tree row whose cell text equals ``basename``.
+
+    Used by s40 (#143) to drive the doubleClicked dispatcher. ``basename``
+    matches either a file name (file row) or a group label like "Group 1"
+    (group header row).
+
+    Sequence: focus → single left-click to seed Qt's input-tracking
+    state on the target row → settle → Win32 ``PostMessage`` with
+    ``WM_LBUTTONDBLCLK`` + ``WM_LBUTTONUP`` to the tree's HWND with
+    client-relative coords. Bypasses ``pywinauto.mouse.double_click``
+    which sends ``SendInput`` DOWN/UP/DOWN/UP — Qt's QAbstractItemView
+    does not reliably collapse those into a ``doubleClicked`` signal
+    when injected by a non-foreground process (verified empirically in
+    s40 bring-up; the synthetic events arrive but Qt processes them as
+    two singles).
+    """
+    import pywinauto.mouse
+
+    cx, cy = _row_anchor(win, basename)
+    _focus(win)
+
+    # Seed click — registers row selection / focus the same way a real
+    # user's first click would. The doubleClicked signal handler reads
+    # the cell's index from the current view state, so this also
+    # ensures Qt's mouseTracking state is current on the second press.
+    pywinauto.mouse.click(button="left", coords=(cx, cy))
+    time.sleep(0.15)
+
+    # PostMessage path. Tree's viewport HWND is what receives
+    # WM_LBUTTONDBLCLK — find it via the highest-level main window
+    # (locating the QTreeView's own native HWND is brittle when Qt
+    # widgets don't always have one) and convert screen coords to
+    # client coords via ScreenToClient on the receiver.
+    hwnd = win.handle
+    pt = ctypes.wintypes.POINT(cx, cy)
+    _user32.ScreenToClient(hwnd, ctypes.byref(pt))
+    lparam = (pt.y & 0xFFFF) << 16 | (pt.x & 0xFFFF)
+    WM_LBUTTONDBLCLK = 0x0203
+    WM_LBUTTONUP = 0x0202
+    MK_LBUTTON = 0x0001
+    _user32.PostMessageW(hwnd, WM_LBUTTONDBLCLK, MK_LBUTTON, lparam)
+    _user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+    time.sleep(0.3)
+
+
+def find_tree_item(win: UIAWrapper, text: str) -> UIAWrapper:
+    """Return the TreeItem in the result tree whose text equals ``text``.
+
+    Used by s40 to read ``is_expanded()`` on group header rows. Raises
+    if the item isn't found — caller is expected to assert presence
+    after a model load.
+    """
+    tree = _result_tree(win)
+    for it in tree.descendants(control_type="TreeItem"):
+        try:
+            if (it.window_text() or "").strip() == text:
+                return it
+        except Exception:
+            continue
+    raise RuntimeError(f"TreeItem with text {text!r} not found in result tree")
+
+
 def ctrl_click_tree_row(win: UIAWrapper, basename: str) -> None:
     """Ctrl+click the file row to extend selection (ExtendedSelection mode).
 

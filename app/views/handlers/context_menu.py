@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
 from typing import Any, Protocol
 
-from PySide6.QtCore import QPoint, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QMenu, QTreeView
 
 from app.views.constants import settable_decisions
-from app.views.media_utils import normalize_windows_path
+from app.views.handlers.file_opener import open_folder_containing
 from infrastructure.i18n import t
 
 
@@ -127,36 +124,14 @@ class ContextMenuHandler:
                     self.handlers.set_locked_state([_item], False)
             )
 
-            # Open Folder action
+            # Open Folder action — delegates to shared OS-opener helper
+            # (#143 factored out the inline cascade so right-click and the
+            # new double-click dispatcher share one implementation).
             open_folder_action = menu.addAction(t("context_menu.open_folder"))
-
-            def _open_folder(checked: bool = False, path: str = item.get("path", "")) -> None:
-                try:
-                    if not path:
-                        return
-                    norm_path = normalize_windows_path(path)
-                    folder = os.path.dirname(norm_path) or norm_path
-                    if not folder:
-                        return
-                    if os.name == "nt":
-                        try:
-                            if os.path.exists(norm_path):
-                                subprocess.Popen(["explorer", "/select,", norm_path])
-                            elif os.path.isdir(folder):
-                                subprocess.Popen(["explorer", folder])
-                            else:
-                                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-                        except Exception:
-                            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-                    else:
-                        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-                except Exception:
-                    try:
-                        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
-                    except Exception:
-                        pass
-
-            open_folder_action.triggered.connect(_open_folder)
+            open_folder_action.triggered.connect(
+                lambda checked=False, _path=item.get("path", ""):
+                    open_folder_containing(_path)
+            )
 
         # Common actions for single selection
         menu.addSeparator()
