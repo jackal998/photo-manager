@@ -55,8 +55,16 @@ class LayoutManager:
         central = QWidget(self.window)
         root = QHBoxLayout(central)
 
-        # Create splitter
+        # Create splitter. #136: at the Qt-enforced minimum window width
+        # (~418 px) the preview pane was being squeezed down to ~89 px and
+        # nothing rendered. Pinning each child to MIN_SECTION_WIDTH plus
+        # disabling collapse guarantees the preview always has enough
+        # room to draw, and the floor propagates through to the window's
+        # own minimumSize via QSplitter's size-hint accumulation.
         self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        tree_widget.setMinimumWidth(self.MIN_SECTION_WIDTH)
+        preview_widget.setMinimumWidth(self.MIN_SECTION_WIDTH)
         self.splitter.addWidget(tree_widget)
         self.splitter.addWidget(preview_widget)
         self.splitter.setStretchFactor(0, self.TREE_STRETCH_FACTOR)

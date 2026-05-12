@@ -103,6 +103,13 @@ ALL_SCENARIOS = [
     # unlocks, send2trash fires for every row, manifest writes
     # executed=1. Disposable fixture; sends 5 files to recycle bin.
     "s36_lock_confirm_destructive_execute",
+    # s39 (#136 + #141) — window geometry + splitter state persist
+    # across launches, AND the splitter min-width constraints lift
+    # the window's own minimum width above the #136 broken threshold.
+    # Owns its own re-launch mid-scenario (the geometry round-trip
+    # is what's under test); writes ``qa/window_state.ini`` and
+    # cleans it up at startup.
+    "s39_window_geometry_persist",
 ]
 
 

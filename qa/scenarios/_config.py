@@ -109,6 +109,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # lock confirm dialog. Disposable fixture (regenerated each run);
     # sends 5 files to the Windows recycle bin per run.
     "s36_lock_confirm_destructive_execute": ["qa/sandbox/_disposable/s36_source"],
+    # s39 (#136 + #141) — window geometry + splitter state round-trip
+    # across launches and #136 min-width floor. No scan performed; an
+    # empty source list is fine.
+    "s39_window_geometry_persist": [],
 }
 
 
