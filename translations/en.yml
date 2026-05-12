@@ -97,6 +97,7 @@ scan_dialog:
   browse_group: "Browse source folders:"
   path_label: "Path:"
   path_placeholder: "Paste or type an absolute folder path…"
+  path_not_found: "Folder not found: {path}"
   add_button: "+ Add"
   add_selected_button: "+ Add Selected Folder"
   source_list_header: "Source folders (top = highest priority):"

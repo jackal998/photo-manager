@@ -80,6 +80,7 @@ class _FolderTreePanel(QWidget):
         self._model: QFileSystemModel
         self._tree: QTreeView
         self._path_field: QLineEdit
+        self._path_error: QLabel
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -94,12 +95,24 @@ class _FolderTreePanel(QWidget):
         self._path_field = QLineEdit()
         self._path_field.setPlaceholderText(t("scan_dialog.path_placeholder"))
         self._path_field.returnPressed.connect(self._on_add_typed)
+        # Clear the error indicator as soon as the user types again — the
+        # message was about whatever they had before, not what they have now.
+        self._path_field.textChanged.connect(self._clear_path_error)
         path_add_btn = QPushButton(t("scan_dialog.add_button"))
         path_add_btn.setFixedWidth(80)
         path_add_btn.clicked.connect(self._on_add_typed)
         path_row.addWidget(self._path_field, stretch=1)
         path_row.addWidget(path_add_btn)
         layout.addLayout(path_row)
+
+        # Inline error label — surfaces non-existent / non-directory paths
+        # so "+ Add" stops being a silent no-op (#144). Hidden until needed
+        # so the row stays compact in the common case.
+        self._path_error = QLabel("")
+        self._path_error.setStyleSheet("color: #b00020;")
+        self._path_error.setWordWrap(True)
+        self._path_error.setVisible(False)
+        layout.addWidget(self._path_error)
 
         self._model = QFileSystemModel(self)
         self._model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
@@ -136,16 +149,32 @@ class _FolderTreePanel(QWidget):
     def _on_add_typed(self) -> None:
         """Emit ``folder_requested`` for the path typed/pasted into the field.
 
-        Silently no-ops on empty input or non-existent directories so the
-        dialog doesn't bark at the user mid-typing.
+        Empty input stays a silent no-op (the user clicked ``+ Add`` with
+        nothing typed — barking at them would be noise). A typed path that
+        doesn't resolve to an existing directory surfaces via the inline
+        error label below the row (#144) so the click stops being a silent
+        no-op.
         """
         raw = self._path_field.text().strip().strip('"')
         if not raw:
             return
         if not Path(raw).is_dir():
+            self._path_error.setText(t("scan_dialog.path_not_found", path=raw))
+            self._path_error.setVisible(True)
             return
         self.folder_requested.emit(raw)
         self._path_field.clear()
+        self._clear_path_error()
+
+    def _clear_path_error(self) -> None:
+        """Hide the inline error label and drop its text.
+
+        Called both on successful add and on every keystroke — the message
+        was about the previous value of the field; once the user edits it,
+        the message no longer corresponds to what's there.
+        """
+        self._path_error.setText("")
+        self._path_error.setVisible(False)
 
     def _on_double_click(self, index: QModelIndex) -> None:
         """Emit ``folder_requested`` on double-click."""
