@@ -103,6 +103,11 @@ ALL_SCENARIOS = [
     # unlocks, send2trash fires for every row, manifest writes
     # executed=1. Disposable fixture; sends 5 files to recycle bin.
     "s36_lock_confirm_destructive_execute",
+    # s37 (#138, #140) — persistent status-bar baseline. Probes that the
+    # startup "Ready" message survives past the original 3s timeout and
+    # that a post-load summary survives opening + dismissing the File
+    # menu (the QAction-hover path that previously wiped temp messages).
+    "s37_status_bar_baseline",
     # s38 (#144) — scan dialog inline error when "+ Add" is clicked with
     # a typed path that doesn't exist. Sister to s17 (in-dialog widget
     # ops); only s38 exercises the failure path.

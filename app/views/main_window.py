@@ -22,6 +22,7 @@ from loguru import logger
 
 from app.views.components.menu_controller import MenuController
 from app.views.components.status_messages import plural_form, pluralize
+from app.views.components.status_reporter_impl import StatusReporterImpl
 
 # Import extracted components
 from app.views.components.tree_controller import TreeController
@@ -285,8 +286,26 @@ class MainWindow(QMainWindow):
 
     def _setup_window_properties(self) -> None:
         """Setup window properties and status bar."""
-        # Status bar
-        self.statusBar().showMessage(t("main_window.status_ready"), 3000)
+        # Persistent baseline label. Qt's QStatusBar.showMessage shows a
+        # *temporary* message; once it expires (or a menu hover with an
+        # empty statusTip overwrites it) the bar goes empty unless a
+        # widget added via addWidget is there to fall back to (#138, #140).
+        self._status_baseline = QLabel(t("main_window.status_ready"))
+        self.statusBar().addWidget(self._status_baseline, 1)
+
+    def set_status_baseline(self, text: str) -> None:
+        """Update the persistent status-bar baseline text and surface it.
+
+        Transient action messages set via showMessage(text, timeout)
+        temporarily hide the baseline; it reappears once the temp message
+        clears. When a caller updates the baseline (e.g. after a manifest
+        load), they want the new text visible NOW — so we also clear any
+        active temp message. Otherwise the worker's in-progress
+        "Loaded N groups." or similar would keep covering the baseline
+        indefinitely (its timeout was 0, persistent).
+        """
+        self._status_baseline.setText(text)
+        self.statusBar().clearMessage()
 
     # PRESERVED: All public methods with exact signatures
 
@@ -416,9 +435,8 @@ class MainWindow(QMainWindow):
                     t("status.noun_isolated_file_plural"),
                 )
                 parts.append(f"{isolated:,} {isolated_form}")
-            self.statusBar().showMessage(
-                t("main_window.status_loaded", parts=", ".join(parts)),
-                10000,
+            self.set_status_baseline(
+                t("main_window.status_loaded", parts=", ".join(parts))
             )
         except Exception as exc:
             QMessageBox.critical(self, t("main_window.load_error_title"), str(exc))
@@ -774,17 +792,6 @@ class MainWindow(QMainWindow):
 
 
 # Helper implementation classes
-
-
-class StatusReporterImpl:
-    """Implementation of StatusReporter protocol."""
-
-    def __init__(self, main_window: QMainWindow):
-        self.window = main_window
-
-    def show_status(self, message: str, timeout: int = 3000) -> None:
-        """Show status message in status bar."""
-        self.window.statusBar().showMessage(message, timeout)
 
 
 class UIUpdaterImpl:

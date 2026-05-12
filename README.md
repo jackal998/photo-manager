@@ -438,6 +438,7 @@ photo-manager/
     ├── test_scan_worker.py
     ├── test_select_dialog.py    # initial_field, Set Action signal, settable decision options
     ├── test_status_messages.py  # Pins status-bar copy so qa-explore regexes stay coherent
+    ├── test_status_bar_baseline.py  # Persistent baseline widget (#138, #140) — survives temp messages + menu hover
     ├── test_media_utils.py
     ├── test_tree_model_builder.py
     ├── test_menu_controller_manifest_actions.py  # Language picker exclusivity, action toggle lifecycle
