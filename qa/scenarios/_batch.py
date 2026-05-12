@@ -11,8 +11,8 @@ For each scenario:
 Usage:
   .venv/Scripts/python.exe -m qa.scenarios._batch [scenarios...]
   .venv/Scripts/python.exe -m qa.scenarios._batch s02_empty_folder s04_corrupted
-  .venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 3
-  .venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 3 --dry-run
+  .venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 5
+  .venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 5 --dry-run
 """
 from __future__ import annotations
 

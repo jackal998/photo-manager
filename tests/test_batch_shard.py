@@ -21,8 +21,9 @@ from qa.scenarios._batch import ALL_SCENARIOS, select_shard
 
 
 # 1 is degenerate (one shard = everything) but it's a useful sanity check.
-# 2, 3, 4 are the candidates the CI matrix could realistically run.
-_SHARD_COUNTS = [1, 2, 3, 4]
+# 5 is the production CI matrix size; 2/3/4 bracket it so the invariants
+# are pinned across the range of values someone might bump to.
+_SHARD_COUNTS = [1, 2, 3, 4, 5]
 
 
 @pytest.mark.parametrize("total_shards", _SHARD_COUNTS)
@@ -75,25 +76,31 @@ def test_s23a_runs_before_s23b_within_shard(total_shards: int) -> None:
 
 
 def test_shard_count_balance_is_reasonable() -> None:
-    """All three production shards should be within 1 scenario of each other.
+    """Production shards should differ in size by at most 2 scenarios.
 
-    Sorted-stride over N items into M shards is balanced by construction
-    (each shard has floor(N/M) or ceil(N/M)). Pairing s23 into one unit
-    can perturb this by at most 1. If a future addition tilts it by more,
+    Sorted-stride over U units into M shards is balanced by construction
+    (each shard has floor(U/M) or ceil(U/M) units → delta of at most 1).
+    Pairing s23 into one unit means whichever shard owns it gets one
+    extra scenario when units are flattened back, so the delta can rise
+    by 1 more — bounded at 2. Concretely at M=5 with 40 scenarios / 39
+    units, sizes are 9/8/8/8/7 (the 9 is the pair-holding shard).
+    If a future addition tilts it past 2 (e.g. a third s23-style pair),
     the imbalance is worth catching here rather than as a slow CI shard.
     """
+    total_shards = 5  # keep in sync with .github/workflows/qa-batch.yml matrix
     sizes = [
-        len(select_shard(ALL_SCENARIOS, k, 3)) for k in range(1, 4)
+        len(select_shard(ALL_SCENARIOS, k, total_shards))
+        for k in range(1, total_shards + 1)
     ]
-    assert max(sizes) - min(sizes) <= 1, (
+    assert max(sizes) - min(sizes) <= 2, (
         f"shard sizes unbalanced: {sizes}"
     )
 
 
 def test_invalid_shard_number_raises() -> None:
     with pytest.raises(ValueError):
-        select_shard(ALL_SCENARIOS, 0, 3)
+        select_shard(ALL_SCENARIOS, 0, 5)
     with pytest.raises(ValueError):
-        select_shard(ALL_SCENARIOS, 4, 3)
+        select_shard(ALL_SCENARIOS, 6, 5)
     with pytest.raises(ValueError):
         select_shard(ALL_SCENARIOS, 1, 0)
