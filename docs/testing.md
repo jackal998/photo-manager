@@ -265,6 +265,49 @@ buttonBox). See `_find_filename_edit` and
 
 ---
 
+## Layer 3 sharding in CI ([#188](https://github.com/jackal998/photo-manager/issues/188))
+
+The qa-batch workflow runs as 5 parallel jobs via `strategy.matrix.shard:
+[1, 2, 3, 4, 5]`. Each job invokes
+`python -m qa.scenarios._batch --shard N --total-shards 5`. Selection is
+sorted-stride in `qa.scenarios._batch.select_shard` over `ALL_SCENARIOS`.
+
+Invariants pinned by `tests/test_batch_shard.py`:
+
+- **Pairwise disjoint, union complete** — every scenario runs exactly once
+  across the five shards.
+- **s23a and s23b stay on the same shard** — s23b reads settings s23a
+  wrote. The selector pairs them into a single unit before striding.
+- **Balanced** — shard sizes differ by ≤2 (the s23 pair perturbs the
+  standard floor/ceil split by +1 in whichever shard owns it; today at
+  M=5 the sizes are 9/8/8/8/7).
+
+Why 5? Per-shard fixed overhead (~1.5 min for checkout + pip + exiftool +
+sandbox build) is paid per shard in parallel. With 40 scenarios at ~25s
+each, the per-shard wall-clock equation is
+`fixed + scenarios/shards × 25s` — past ~5 shards the fixed-overhead
+floor dominates and additional shards mostly burn runner minutes for
+diminishing wall-clock wins. Well under GitHub's
+[20-concurrent-job free-tier cap](https://docs.github.com/en/actions/reference/actions-limits)
+and the [256-jobs-per-matrix hard limit](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs).
+
+The `concurrency` key includes the shard number so the five shards of
+the same PR don't auto-cancel each other; each shard's artifact name
+(`qa-batch-log-shard{N}`) is similarly suffixed because
+`actions/upload-artifact@v4` rejects duplicates within a run.
+
+Running a shard locally for debugging:
+
+```
+.venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 5 --dry-run
+.venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 5
+```
+
+An explicit positional list (`python -m qa.scenarios._batch sNN_xyz …`)
+still works and overrides sharding — handy for targeted iteration.
+
+---
+
 ## Open work
 
 - **Layer 2 is on-demand**, not on the roadmap. Add a spot-test under

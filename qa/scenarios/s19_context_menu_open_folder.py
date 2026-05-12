@@ -72,33 +72,49 @@ def main() -> int:
     _uia.right_click_tree_row(win, ROW_TARGET)
     _uia.select_popup_menu_path(pid, [_uia.CTX_OPEN_FOLDER])
 
-    # ── Wait for Explorer to spawn, find the new window ───────────────────
+    # ── Wait for Explorer to spawn AND its title to populate ──────────────
+    # Two races to clear, both serialized against a single deadline:
+    #   1. Explorer process starts + spawns its window. Typically <1 s on
+    #      local, 1–2 s on hosted runners.
+    #   2. Explorer populates the new window's title. The window first
+    #      appears with a generic placeholder (English: 'File Explorer';
+    #      localised variants on non-en-US runners) and only switches to
+    #      the folder-basename title once Explorer has enumerated the
+    #      folder contents. On a contended hosted runner this delay can
+    #      land *after* a single post-spawn snapshot, which silently
+    #      flakes the title-match assert (#196 — observed on shard 4 of
+    #      PR #195's qa-batch run; new_hwnds had the spawned window with
+    #      title='File Explorer' instead of 'near-duplicates …').
+    #
+    # Folding the title check into the same poll loop means a fast
+    # title-update finishes quickly (typical: <1.5 s) while a slow runner
+    # can still pass under the 10 s budget. The window title is the
+    # Explorer-displayed folder name and may be substring-matched (some
+    # locales prefix with parent path).
     print("step: wait_for_explorer_window")
     new_hwnds: list[tuple[int, str]] = []
-    deadline = time.time() + 5
+    matching: list[tuple[int, str]] = []
+    deadline = time.time() + 10
     while time.time() < deadline:
         current = _uia.list_explorer_windows()
         new_hwnds = [(h, t) for h, t in current if h not in baseline_hwnds]
-        if new_hwnds:
+        matching = [
+            (h, t) for h, t in new_hwnds
+            if EXPECTED_FOLDER_NAME.lower() in (t or "").lower()
+        ]
+        if matching:
             break
         time.sleep(0.2)
     print(f"  new_explorer_windows={[(h, t) for h, t in new_hwnds]!r}")
 
     if not new_hwnds:
         print(
-            "FAIL: no new Explorer window appeared within 5s after Open Folder "
-            "(regression of #102 — Open Folder action wiring or subprocess "
-            "invocation broken)"
+            "FAIL: no new Explorer window appeared within 10s after Open "
+            "Folder (regression of #102 — Open Folder action wiring or "
+            "subprocess invocation broken)"
         )
         return 1
 
-    # The window title is the Explorer-displayed folder name, which on
-    # Windows defaults to the folder's basename. Match case-insensitively
-    # and as a substring (some locales prefix with parent path).
-    matching = [
-        (h, t) for h, t in new_hwnds
-        if EXPECTED_FOLDER_NAME.lower() in (t or "").lower()
-    ]
     print(f"  matching_by_folder_name={[(h, t) for h, t in matching]!r}")
 
     if not matching:
