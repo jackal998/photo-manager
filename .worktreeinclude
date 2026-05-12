@@ -1,0 +1,11 @@
+# Files matched by these patterns ARE copied into new Claude Code
+# desktop auto-worktrees (under .claude/worktrees/<session-name>/),
+# despite being gitignored. Patterns use .gitignore syntax.
+#
+# Why this matters: .claude/settings.json carries the project's hook
+# wiring (qa_scenario_guard, docs_guard, zombie_check) and a
+# machine-specific home path. Without this file, every "+ New session"
+# would land in a worktree with no hooks active.
+
+.claude/settings.json
+.claude/settings.local.json
