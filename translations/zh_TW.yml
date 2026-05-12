@@ -79,6 +79,7 @@ scan_dialog:
   browse_group: "瀏覽來源資料夾:"
   path_label: "路徑:"
   path_placeholder: "貼上或輸入絕對資料夾路徑…"
+  path_not_found: "找不到資料夾:{path}"
   add_button: "+ 新增"
   add_selected_button: "+ 新增所選資料夾"
   source_list_header: "來源資料夾 (上方優先順序最高):"

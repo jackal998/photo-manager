@@ -103,6 +103,10 @@ ALL_SCENARIOS = [
     # unlocks, send2trash fires for every row, manifest writes
     # executed=1. Disposable fixture; sends 5 files to recycle bin.
     "s36_lock_confirm_destructive_execute",
+    # s38 (#144) — scan dialog inline error when "+ Add" is clicked with
+    # a typed path that doesn't exist. Sister to s17 (in-dialog widget
+    # ops); only s38 exercises the failure path.
+    "s38_scan_dialog_invalid_path",
     # s39 (#136 + #141) — window geometry + splitter state persist
     # across launches, AND the splitter min-width constraints lift
     # the window's own minimum width above the #136 broken threshold.
