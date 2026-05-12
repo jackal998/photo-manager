@@ -8,11 +8,15 @@ For each scenario:
   5. close the window via UIA
   6. wait for the subprocess to exit (or terminate if stuck)
 
-Usage:  .venv/Scripts/python.exe -m qa.scenarios._batch [scenarios...]
-        .venv/Scripts/python.exe -m qa.scenarios._batch s02_empty_folder s04_corrupted
+Usage:
+  .venv/Scripts/python.exe -m qa.scenarios._batch [scenarios...]
+  .venv/Scripts/python.exe -m qa.scenarios._batch s02_empty_folder s04_corrupted
+  .venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 3
+  .venv/Scripts/python.exe -m qa.scenarios._batch --shard 1 --total-shards 3 --dry-run
 """
 from __future__ import annotations
 
+import argparse
 import ctypes
 import ctypes.wintypes
 import os
@@ -120,6 +124,45 @@ ALL_SCENARIOS = [
     # cleans it up at startup.
     "s39_window_geometry_persist",
 ]
+
+
+def select_shard(
+    scenarios: list[str], shard: int, total_shards: int
+) -> list[str]:
+    """Return the subset of ``scenarios`` belonging to ``shard`` of ``total_shards``.
+
+    Sorted-stride selection over *units*: scenarios are sorted alphabetically,
+    grouped into units, then units at positions (shard-1, shard-1+N, ...) are
+    picked. Most units are singletons; ``s23a_set_settings`` and
+    ``s23b_verify_settings`` form a single two-element unit so they always run
+    in the same shard (s23b reads what s23a wrote — splitting them would break
+    the scenario).
+
+    Shards are pairwise disjoint and their union equals ``set(scenarios)``.
+    Within a shard, original sorted order is preserved.
+
+    ``shard`` is 1-indexed (matches CI matrix conventions).
+    """
+    if total_shards < 1:
+        raise ValueError(f"total_shards must be >= 1, got {total_shards}")
+    if not 1 <= shard <= total_shards:
+        raise ValueError(
+            f"shard must be in 1..{total_shards}, got {shard}"
+        )
+    sorted_scenarios = sorted(scenarios)
+    units: list[tuple[str, ...]] = []
+    i = 0
+    while i < len(sorted_scenarios):
+        name = sorted_scenarios[i]
+        nxt = sorted_scenarios[i + 1] if i + 1 < len(sorted_scenarios) else None
+        if name == "s23a_set_settings" and nxt == "s23b_verify_settings":
+            units.append((name, nxt))
+            i += 2
+        else:
+            units.append((name,))
+            i += 1
+    selected_units = units[shard - 1 :: total_shards]
+    return [name for unit in selected_units for name in unit]
 
 
 def _close_window() -> None:
@@ -271,8 +314,75 @@ def run_one(name: str) -> tuple[int, str]:
     return driver_rc, driver_err
 
 
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="python -m qa.scenarios._batch",
+        description=(
+            "Run qa.scenarios drivers sequentially. With no args, runs every "
+            "scenario in ALL_SCENARIOS. An explicit positional list always "
+            "wins over --shard / --total-shards."
+        ),
+    )
+    parser.add_argument(
+        "scenarios",
+        nargs="*",
+        help=(
+            "Explicit scenarios to run (e.g. s02_empty_folder s04_corrupted). "
+            "When supplied, --shard / --total-shards are ignored."
+        ),
+    )
+    parser.add_argument(
+        "--shard",
+        type=int,
+        default=None,
+        metavar="N",
+        help="1-indexed shard number to run (use with --total-shards).",
+    )
+    parser.add_argument(
+        "--total-shards",
+        type=int,
+        default=None,
+        metavar="M",
+        help=(
+            "Total number of shards. Selection is sorted-stride; the "
+            "s23a/s23b pair is kept on the same shard."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the selected scenarios and exit without launching any.",
+    )
+    args = parser.parse_args(argv)
+    if (args.shard is None) != (args.total_shards is None):
+        parser.error("--shard and --total-shards must be used together")
+    return args
+
+
 def main() -> int:
-    targets = sys.argv[1:] or ALL_SCENARIOS
+    args = _parse_args(sys.argv[1:])
+    if args.scenarios:
+        targets = args.scenarios
+    elif args.shard is not None:
+        targets = select_shard(ALL_SCENARIOS, args.shard, args.total_shards)
+    else:
+        targets = list(ALL_SCENARIOS)
+
+    if args.dry_run:
+        label = (
+            f"shard {args.shard}/{args.total_shards}"
+            if args.shard is not None and not args.scenarios
+            else "explicit"
+            if args.scenarios
+            else "all"
+        )
+        print(
+            f"dry-run ({label}): {len(targets)} scenario(s)", flush=True
+        )
+        for name in targets:
+            print(f"  {name}", flush=True)
+        return 0
+
     print(f"batch: running {len(targets)} scenarios: {targets}", flush=True)
     results: list[tuple[str, int, str]] = []
     for name in targets:

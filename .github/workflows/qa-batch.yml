@@ -15,6 +15,11 @@ name: qa-batch
 # workflow needs ≥10 consecutive flake-free runs on real PRs before being
 # promoted to a required status check via branch protection. Until then,
 # treat a red qa-batch as a signal to investigate, not a merge blocker.
+#
+# Sharding (#188). The batch is split across 3 parallel jobs via
+# strategy.matrix to bring wall-clock from ~15–20 min down toward ~6–7 min.
+# Selection is sorted-stride in qa/scenarios/_batch.py::select_shard, which
+# also keeps s23a/s23b in the same shard (s23b reads what s23a wrote).
 
 on:
   pull_request:
@@ -22,7 +27,10 @@ on:
   workflow_dispatch: {}   # allow manual trigger from the Actions UI for debugging
 
 concurrency:
-  group: qa-batch-${{ github.ref }}
+  # Shard number is part of the key: GitHub Actions cancels by group, and
+  # we want all 3 shards of the same PR to coexist. Without "-shard…",
+  # the second shard to start would cancel the first.
+  group: qa-batch-${{ github.head_ref || github.ref }}-shard${{ matrix.shard }}
   cancel-in-progress: true
 
 # Public-repo hardening: workflow is read-only, no write back to the repo,
@@ -35,6 +43,12 @@ jobs:
   qa:
     runs-on: windows-latest
     timeout-minutes: 20
+    strategy:
+      # Don't cancel sibling shards when one fails — we want a full picture
+      # of which scenarios failed across the whole batch from a single run.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -91,7 +105,7 @@ jobs:
           # defaults to the OEM codepage for child-process I/O.
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $OutputEncoding = [System.Text.Encoding]::UTF8
-          python -m qa.scenarios._batch 2>&1 | Tee-Object -FilePath qa-batch.log
+          python -m qa.scenarios._batch --shard ${{ matrix.shard }} --total-shards 3 2>&1 | Tee-Object -FilePath qa-batch.log
           # Forward the batch's exit code; PowerShell pipes default to the
           # tail-element rc which is Tee-Object's (always 0). The variable
           # `$LASTEXITCODE` from the python invocation is what matters.
@@ -104,8 +118,9 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $heading = '## QA batch summary (shard ${{ matrix.shard }}/3)'
           if (Test-Path qa-batch.log) {
-            Add-Content $env:GITHUB_STEP_SUMMARY '## QA batch summary'
+            Add-Content $env:GITHUB_STEP_SUMMARY $heading
             Add-Content $env:GITHUB_STEP_SUMMARY ''
             Add-Content $env:GITHUB_STEP_SUMMARY '```'
             Select-String -Path qa-batch.log -Pattern '^=====|^total:|^\s+\[(OK|FAIL)\]' |
@@ -113,18 +128,20 @@ jobs:
               Add-Content $env:GITHUB_STEP_SUMMARY
             Add-Content $env:GITHUB_STEP_SUMMARY '```'
           } else {
-            Add-Content $env:GITHUB_STEP_SUMMARY '## QA batch summary'
+            Add-Content $env:GITHUB_STEP_SUMMARY $heading
             Add-Content $env:GITHUB_STEP_SUMMARY ''
             Add-Content $env:GITHUB_STEP_SUMMARY '_qa-batch.log was not produced — see the "Run qa batch" step for setup-time errors._'
           }
 
       # Upload the full log so debugging a failed scenario doesn't require
-      # re-running CI. 7-day retention is plenty for triage cycles.
+      # re-running CI. 7-day retention is plenty for triage cycles. The name
+      # is suffixed with the shard number because upload-artifact@v4 rejects
+      # duplicate names within a single workflow run.
       - name: Upload full batch log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa-batch-log
+          name: qa-batch-log-shard${{ matrix.shard }}
           path: qa-batch.log
           if-no-files-found: ignore
           retention-days: 7

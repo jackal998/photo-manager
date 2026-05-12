@@ -56,6 +56,14 @@ omit = [
   "tests/*",
   "scripts/*",
   ".claude/*",
+  # qa/ is the layer-3 driver harness itself (subprocess spawning,
+  # UIA interaction, scenario configuration). It can't be exercised
+  # inside the layer-1 test process by design. The one pure-logic
+  # piece — qa/scenarios/_batch.select_shard — is unit-tested in
+  # tests/test_batch_shard.py; the rest is layer-3 plumbing that
+  # runs every time qa.scenarios._batch is invoked locally or in
+  # the qa-batch CI workflow (#188 sharded across 3 jobs).
+  "qa/*",
   # `omit` is reserved for files that genuinely cannot be exercised
   # inside the layer-1 test process. Each entry below carries (a) why
   # it isn't reachable from unit tests, and (b) where it IS covered
