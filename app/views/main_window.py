@@ -293,6 +293,13 @@ class MainWindow(QMainWindow):
         # Tree header click handler
         self.tree_controller.setup_header_behavior(self._on_header_clicked)
 
+        # Tree row double-click handler (#143). File rows open in the OS
+        # default viewer; group rows toggle expand (handled inside the
+        # controller). Hands off to the shared opener helper so right-click
+        # Open Folder and double-click share the same OS-cascade impl.
+        from app.views.handlers.file_opener import open_file_in_default_viewer
+        self.tree_controller.setup_double_click(open_file_in_default_viewer)
+
         # Image loading signal
         self.imageLoaded.connect(self._on_image_loaded)
 

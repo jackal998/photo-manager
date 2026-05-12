@@ -120,6 +120,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # across launches and #136 min-width floor. No scan performed; an
     # empty source list is fine.
     "s39_window_geometry_persist": [],
+    # s40 (#143) — double-click dispatcher (group-row toggle expand).
+    # Same small fixture as s19 (Open Folder counterpart) so the scan
+    # is fast and the group label is deterministic ("Group 1").
+    "s40_results_tree_double_click": ["qa/sandbox/near-duplicates"],
     # s41 (#137) — empty-state primary-action buttons. Drives the
     # first-run state, so the source list is empty by design (any
     # populated source list would let a prior scan leak in via cached

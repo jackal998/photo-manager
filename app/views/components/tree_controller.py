@@ -43,6 +43,58 @@ class TreeController:
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
         self.tree.setSelectionMode(QTreeView.ExtendedSelection)
+        # Take over double-click handling — our dispatcher routes file rows
+        # to the OS viewer (#143) and group rows to toggle expand. Leaving
+        # Qt's default on would race our own setExpanded() call, producing
+        # a no-op (expand → our toggle re-collapses → user sees nothing).
+        self.tree.setExpandsOnDoubleClick(False)
+
+    def setup_double_click(self, file_open_handler: callable) -> None:
+        """Wire the ``doubleClicked`` signal to a row-type dispatcher (#143).
+
+        Args:
+            file_open_handler: Callback for file rows, invoked with the
+                absolute file path. Group-row double-clicks toggle the
+                tree's own expand state internally — they don't reach the
+                handler.
+
+        Routing:
+            - **File row** (``index.parent().isValid()``) → call
+              ``file_open_handler(path)`` if we can resolve a path.
+            - **Group header row** → toggle ``tree.isExpanded(index)``.
+              We have to do this ourselves because ``setup_tree_properties``
+              disables Qt's default ``setExpandsOnDoubleClick`` so the file
+              branch can act without a race.
+
+        The dispatcher swallows exceptions — a stray Qt index from a
+        racing model rebuild shouldn't crash the UI for a non-essential
+        action.
+        """
+        try:
+            self.tree.doubleClicked.connect(
+                lambda idx: self._on_double_click(idx, file_open_handler)
+            )
+        except Exception:
+            pass
+
+    def _on_double_click(self, index, file_open_handler: callable) -> None:
+        """Dispatch a doubleClicked signal by row type. See setup_double_click."""
+        try:
+            if not index.isValid():
+                return
+            if index.parent().isValid():
+                # File row — hand the path to the caller-supplied opener
+                # (kept out of this class so the controller stays UI-only).
+                path = self.get_file_path_from_index(index)
+                if path:
+                    file_open_handler(path)
+            else:
+                # Group header row — toggle expand state. Map the proxy
+                # index onto itself; ``isExpanded`` / ``setExpanded`` both
+                # take the view index, NOT the source index.
+                self.tree.setExpanded(index, not self.tree.isExpanded(index))
+        except Exception as e:
+            logger.error("Error dispatching double-click: {}", e)
 
     def setup_header_behavior(self, header_click_handler: callable) -> None:
         """Setup header interactions and connect click handler.

@@ -123,6 +123,12 @@ ALL_SCENARIOS = [
     # is what's under test); writes ``qa/window_state.ini`` and
     # cleans it up at startup.
     "s39_window_geometry_persist",
+    # s40 (#143) — double-click dispatcher in TreeController. Verifies
+    # group-header rows toggle expand/collapse on double-click (file-row
+    # branch → OS viewer is unit-tested at layer 1; not driven here
+    # because an OS-spawned image viewer has no deterministic
+    # observable / cleanup path).
+    "s40_results_tree_double_click",
     # s41 (#137) — empty-state primary-action buttons. Drives the
     # pre-manifest state: clicks Scan Sources… (asserts the scan
     # dialog opens), then clicks Open Manifest… (asserts the native

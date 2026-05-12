@@ -1875,6 +1875,38 @@ def left_click_tree_row(win: UIAWrapper, basename: str) -> None:
     time.sleep(0.2)
 
 
+def double_click_tree_row(win: UIAWrapper, basename: str) -> None:
+    """Double-click the result-tree row whose cell text equals ``basename``.
+
+    Used by s40 (#143) to drive the doubleClicked dispatcher. ``basename``
+    matches either a file name (file row) or a group label like "Group 1"
+    (group header row).
+    """
+    import pywinauto.mouse
+
+    cx, cy = _row_anchor(win, basename)
+    _focus(win)
+    pywinauto.mouse.double_click(button="left", coords=(cx, cy))
+    time.sleep(0.3)
+
+
+def find_tree_item(win: UIAWrapper, text: str) -> UIAWrapper:
+    """Return the TreeItem in the result tree whose text equals ``text``.
+
+    Used by s40 to read ``is_expanded()`` on group header rows. Raises
+    if the item isn't found — caller is expected to assert presence
+    after a model load.
+    """
+    tree = _result_tree(win)
+    for it in tree.descendants(control_type="TreeItem"):
+        try:
+            if (it.window_text() or "").strip() == text:
+                return it
+        except Exception:
+            continue
+    raise RuntimeError(f"TreeItem with text {text!r} not found in result tree")
+
+
 def ctrl_click_tree_row(win: UIAWrapper, basename: str) -> None:
     """Ctrl+click the file row to extend selection (ExtendedSelection mode).
 
