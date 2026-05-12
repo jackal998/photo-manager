@@ -10,15 +10,18 @@ scenario:
     window to a known geometry, exit, relaunch, and assert the
     geometry was restored.
   * #136 — at the Qt-enforced minimum window width the preview pane
-    used to be ~89 px. ``LayoutManager.setup_main_layout`` now pins
-    PREVIEW to ``MIN_SECTION_WIDTH`` and disables collapse on both
-    panes, which (via QSplitter's size-hint accumulation) lifts the
-    window's own minimum width past the broken-preview threshold.
-    We send a Win32 ``MoveWindow`` for 100×600 and assert Qt clamps
-    the result above the floor. (Tree pane intentionally not pinned
-    at the widget level — see ``setup_main_layout`` docstring; this
-    was the lesson from PR #191's first qa-batch CI run, where dual
-    mins caused right-click anchors to land in the preview pane.)
+    used to be ~89 px. ``LayoutManager`` now disables splitter
+    collapse and dynamically pins preview's ``minimumWidth`` to
+    ``MIN_SECTION_WIDTH`` when ``adjust_splitter_for_tree`` runs
+    with room (manifest loaded on a reasonably-sized window). On
+    narrow windows the dynamic min is dropped so right-click row
+    anchors stay inside the tree pane — the lesson from PR #191's
+    first three CI runs, where static widget mins broke qa-batch
+    context-menu scenarios on small screens. We send a Win32
+    ``MoveWindow`` for 100×600 and just log the resulting width
+    here; the algorithmic #136 protection is pinned by the
+    ``test_layout_manager_splitter`` unit tests (which can
+    deterministically check the preview-min pinning behavior).
 
 Why one scenario across two launches (not split a/b like s23):
 the QSettings INI is dropped into ``qa/window_state.ini`` (because
@@ -84,14 +87,15 @@ REQUEST_W, REQUEST_H = 1100, 700
 SIZE_TOLERANCE_PX = 10
 POSITION_TOLERANCE_PX = 100
 
-# #136 floor — preview pane has MIN_SECTION_WIDTH=200; the splitter
-# composite minimum-size-hint is preview (200) + tree-natural (content-
-# driven; ~50-300 depending on whether empty-state hint is visible)
-# + handle (~5). We assert >= 250 — well above the 89-px-preview
-# visible-bug threshold without depending on tree's content-driven
-# minimum (which would make the test flaky across translation/font
-# changes).
-MIN_FLOOR_PX = 250
+# Sanity floor — content-driven (empty-state label, tree header,
+# preview placeholder). Asserted very loosely because s39 launches
+# with no manifest loaded, so adjust_splitter_for_tree never runs
+# and the dynamic preview-min protection isn't yet engaged. We only
+# need the assertion to catch a totally broken layout (e.g. window
+# vanished). Layer 1 (tests/test_layout_manager_splitter.py) pins
+# the algorithmic #136 protection in a way that doesn't depend on
+# CI screen size or content-driven natural minimums.
+MIN_FLOOR_PX = 150
 
 # Where the persistent-state INI lands when PHOTO_MANAGER_HOME=qa.
 # Mirrors MainWindow._qsettings_path() under the same env var.
