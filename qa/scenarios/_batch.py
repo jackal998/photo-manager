@@ -123,6 +123,12 @@ ALL_SCENARIOS = [
     # is what's under test); writes ``qa/window_state.ini`` and
     # cleans it up at startup.
     "s39_window_geometry_persist",
+    # s41 (#137) — empty-state primary-action buttons. Drives the
+    # pre-manifest state: clicks Scan Sources… (asserts the scan
+    # dialog opens), then clicks Open Manifest… (asserts the native
+    # file picker opens, then cancels via Esc). Verifies the buttons
+    # converge on the same handlers as the File-menu route.
+    "s41_empty_state_action_buttons",
 ]
 
 

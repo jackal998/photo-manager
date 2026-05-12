@@ -120,6 +120,12 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # across launches and #136 min-width floor. No scan performed; an
     # empty source list is fine.
     "s39_window_geometry_persist": [],
+    # s41 (#137) — empty-state primary-action buttons. Drives the
+    # first-run state, so the source list is empty by design (any
+    # populated source list would let a prior scan leak in via cached
+    # state). Scenario clicks each button and asserts the right
+    # dialog opens, then cancels the open-manifest picker.
+    "s41_empty_state_action_buttons": [],
 }
 
 
