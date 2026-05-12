@@ -481,6 +481,15 @@ automatically. List order determines dedup priority (index 0 = highest priority)
 The regex dialog persists its mode (`"simple"` or `"regex"`) and a capped list
 of recently-used regex patterns under `ui.action_dialog`.
 
+The main window's position, size, and splitter ratio are persisted across
+launches (#141) in a separate `window_state.ini` (Qt `QSettings` INI format)
+alongside `settings.json`, under the keys `geometry/main_window` and
+`geometry/main_splitter`. Stored under `PHOTO_MANAGER_HOME` when set, so QA
+scenarios and dev runs stay isolated from any installed-app state. The
+splitter also enforces a 200 px floor on each pane and disables collapse
+(#136), preventing the preview pane from being squeezed to invisibility at
+the minimum window width.
+
 ---
 
 ## Languages

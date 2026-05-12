@@ -112,6 +112,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # s38 (#144) — empty source list; driver populates via the path-field
     # validation flow (bad path → inline error, then good path → row).
     "s38_scan_dialog_invalid_path": [],
+    # s39 (#136 + #141) — window geometry + splitter state round-trip
+    # across launches and #136 min-width floor. No scan performed; an
+    # empty source list is fine.
+    "s39_window_geometry_persist": [],
 }
 
 

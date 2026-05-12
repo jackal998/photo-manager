@@ -107,6 +107,13 @@ ALL_SCENARIOS = [
     # a typed path that doesn't exist. Sister to s17 (in-dialog widget
     # ops); only s38 exercises the failure path.
     "s38_scan_dialog_invalid_path",
+    # s39 (#136 + #141) — window geometry + splitter state persist
+    # across launches, AND the splitter min-width constraints lift
+    # the window's own minimum width above the #136 broken threshold.
+    # Owns its own re-launch mid-scenario (the geometry round-trip
+    # is what's under test); writes ``qa/window_state.ini`` and
+    # cleans it up at startup.
+    "s39_window_geometry_persist",
 ]
 
 

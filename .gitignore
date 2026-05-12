@@ -98,6 +98,12 @@ logs/
 settings.json
 settings.local.json
 
+# Window geometry / splitter state — written by MainWindow.closeEvent on
+# every clean exit. Anchored under PHOTO_MANAGER_HOME (or repo root) so
+# the QA scenario can isolate from the user's real install; never
+# checked in for the same reason settings.json isn't.
+window_state.ini
+
 # Databases
 *.sqlite
 *.sqlite3

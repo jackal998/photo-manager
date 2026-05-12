@@ -6,10 +6,11 @@ and handlers while preserving all existing public interfaces for backward compat
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -65,6 +66,80 @@ class MainWindow(QMainWindow):
 
         # Setup window properties
         self._setup_window_properties()
+
+        # Restore persisted geometry + splitter state (#141). Runs last so
+        # that it overrides ``setup_initial_window_size``'s half-screen
+        # default when a previous launch saved geometry. Tolerates
+        # missing/corrupt blobs by leaving the defaults in place.
+        self._restore_geometry()
+
+    # ------------------------------------------------------------------ window-state persistence
+
+    # Stable QSettings keys — changing these silently invalidates the
+    # round-trip across upgrades. ``QSETTINGS_KEY_GEOMETRY`` holds
+    # ``QMainWindow.saveGeometry()`` bytes (window x/y/w/h + maximize
+    # state). ``QSETTINGS_KEY_SPLITTER_STATE`` holds the central
+    # ``QSplitter.saveState()`` bytes (handle position).
+    QSETTINGS_KEY_GEOMETRY = "geometry/main_window"
+    QSETTINGS_KEY_SPLITTER_STATE = "geometry/main_splitter"
+
+    @staticmethod
+    def _qsettings_path() -> Path:
+        """Return the INI path used for window-state QSettings.
+
+        Anchored under ``PHOTO_MANAGER_HOME`` (when set) so QA scenarios
+        and dev runs stay isolated from any installed-app state in the
+        user's Windows registry. Falls back to the repo root.
+        """
+        base_dir = Path(__file__).resolve().parents[2]
+        home_env = os.environ.get("PHOTO_MANAGER_HOME")
+        config_home = (base_dir / home_env).resolve() if home_env else base_dir
+        return config_home / "window_state.ini"
+
+    @classmethod
+    def _window_state_qsettings(cls) -> QSettings:
+        return QSettings(str(cls._qsettings_path()), QSettings.IniFormat)
+
+    def _restore_geometry(self) -> None:
+        """Restore window geometry + splitter state from QSettings, if any.
+
+        Each step is independently guarded — a corrupt splitter blob
+        shouldn't leave the user with an unrestored window position.
+        """
+        store = self._window_state_qsettings()
+        geom = store.value(self.QSETTINGS_KEY_GEOMETRY)
+        if geom:
+            try:
+                self.restoreGeometry(geom)
+            except Exception:
+                pass
+        sp_state = store.value(self.QSETTINGS_KEY_SPLITTER_STATE)
+        if sp_state:
+            try:
+                splitter = self.layout_manager.get_splitter()
+                if splitter is not None:
+                    splitter.restoreState(sp_state)
+            except Exception:
+                pass
+
+    def _save_geometry(self) -> None:
+        """Persist window geometry + splitter state to QSettings."""
+        try:
+            store = self._window_state_qsettings()
+            store.setValue(self.QSETTINGS_KEY_GEOMETRY, self.saveGeometry())
+            splitter = self.layout_manager.get_splitter()
+            if splitter is not None:
+                store.setValue(
+                    self.QSETTINGS_KEY_SPLITTER_STATE, splitter.saveState()
+                )
+            # Flush before the process tears down — QSettings is lazy by
+            # default and a Qt-driven exit doesn't always destruct the
+            # store cleanly enough to hit the auto-flush.
+            store.sync()
+        except Exception:
+            # Never let geometry persistence fail the close. The next
+            # launch just falls back to the half-screen default.
+            pass
 
     def _initialize_services(
         self,
@@ -490,6 +565,12 @@ class MainWindow(QMainWindow):
         is purely about offering an explicit save (e.g. before a
         Save-As to another path) and giving the user a back-out.
         """
+        # #141: persist current geometry + splitter state before any
+        # branch. Saving up-front is fine — a Back click leaves the
+        # window open with the same geometry that was just saved, so
+        # there's nothing to undo; if the user resizes after Back, the
+        # next close-attempt re-saves.
+        self._save_geometry()
         if not self.file_operations.is_dirty():
             super().closeEvent(event)
             return
