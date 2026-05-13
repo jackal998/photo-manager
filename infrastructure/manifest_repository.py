@@ -336,6 +336,108 @@ class ManifestRepository:
         finally:
             conn.close()
 
+    def rescore(
+        self,
+        manifest_path: str,
+        weights: "dict[str, float] | None" = None,
+    ) -> int:
+        """Recompute composite scores from cached raw signals (#187).
+
+        Reads every grouped row's scoring-relevant columns
+        (``pixel_width/height``, ``file_size_bytes``, ``shot_date``,
+        ``mtime``, ``exif_tag_count``, ``gps_present``, ``xmp_derived``,
+        plus ``source_path`` and ``group_id``), runs the scorer in
+        memory, and writes the new ``score`` values back with a single
+        batched UPDATE.
+
+        **No file I/O.** No exiftool subprocess, no Pillow open. Use
+        when the user changes ``scoring.weights`` in settings.json —
+        avoids a full re-scan, which on a NAS library can take 10+ min.
+
+        Returns the count of rows whose score was written. Isolated rows
+        (``group_id IS NULL``) are skipped — they have no peers to score
+        against. Live Photo MOV passengers receive score=NULL by the
+        scorer's own rule and that NULL is written back.
+        """
+        from collections import defaultdict
+        from scanner.dedup import ManifestRow
+        from scanner.scoring import DEFAULT_WEIGHTS, score_group, validate_weights
+
+        if weights is None:
+            weights = DEFAULT_WEIGHTS
+        validate_weights(weights)
+
+        # Load only the columns the scorer reads — keeps the in-memory
+        # rebuild cheap. ``ManifestRow`` requires source_label, action,
+        # source_hash, phash, hamming_distance, duplicate_of, reason —
+        # those don't affect scoring but the dataclass demands them, so
+        # we fill placeholders.
+        conn = _connect(manifest_path)
+        try:
+            rows_data = conn.execute(
+                """
+                SELECT source_path, action, group_id,
+                       pixel_width, pixel_height, file_size_bytes,
+                       shot_date, mtime,
+                       exif_tag_count, gps_present, xmp_derived
+                FROM   migration_manifest
+                WHERE  group_id IS NOT NULL
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+
+        rows = [
+            ManifestRow(
+                source_path=r[0],
+                source_label="",           # placeholder — not used by scorer
+                dest_path=None,
+                action=r[1],
+                source_hash="",            # placeholder
+                phash=None,
+                hamming_distance=None,
+                duplicate_of=None,
+                reason="",
+                pixel_width=r[3],
+                pixel_height=r[4],
+                file_size_bytes=r[5],
+                shot_date=r[6],
+                mtime=r[7],
+                group_id=r[2],
+                exif_tag_count=r[8],
+                gps_present=bool(r[9]),
+                xmp_derived=bool(r[10]),
+            )
+            for r in rows_data
+        ]
+
+        # Group by group_id, score each group, collect (score, path) tuples
+        # for the batch UPDATE.
+        groups: dict[str, list[ManifestRow]] = defaultdict(list)
+        for row in rows:
+            groups[row.group_id].append(row)
+
+        updates: list[tuple] = []
+        for group_rows in groups.values():
+            scores = score_group(group_rows, weights)
+            for row in group_rows:
+                updates.append((scores[row.source_path], row.source_path))
+
+        if not updates:
+            return 0
+
+        conn = _connect(manifest_path)
+        try:
+            conn.executemany(
+                "UPDATE migration_manifest SET score = ? WHERE source_path = ?",
+                updates,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("Rescored {} rows in {}", len(updates), manifest_path)
+        return len(updates)
+
     def mark_executed(self, manifest_path: str, file_paths: list[str]) -> None:
         """Mark a list of rows as executed=1."""
         conn = _connect(manifest_path)

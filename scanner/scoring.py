@@ -51,6 +51,7 @@ from typing import Iterable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from scanner.dedup import ManifestRow
+    from scanner.media_extract import MediaExtract
 
 
 # ── Tier 1 — Categorical penalties (absolute deductions, not weight-scaled) ──
@@ -405,3 +406,62 @@ def score_group(
         r.source_path: compute_score(r, group_rows, weights)
         for r in group_rows
     }
+
+
+def apply_scoring_to_rows(
+    rows: "list[ManifestRow]",
+    extracts: "dict[Path, MediaExtract]",
+    weights: dict[str, float] = DEFAULT_WEIGHTS,
+) -> None:
+    """Wire MediaExtract scoring signals into ManifestRows + assign scores.
+
+    Two-phase mutation of ``rows`` in place:
+
+    Phase A — Backfill raw signals from the exiftool extract dict:
+        ``exif_tag_count``, ``gps_present``, ``xmp_derived`` move from
+        the MediaExtract (PR 2 output) onto ManifestRow (PR 1 column).
+        The MediaExtract sentinel ``None`` (not checked) is preserved as
+        the column default — only definite True/False / int values
+        overwrite. Rows whose path is missing from ``extracts`` (exiftool
+        skipped or failed for that file) keep their default ManifestRow
+        values; the scorer treats those as 'no signal' (0.0).
+
+    Phase B — Compute and assign composite scores per group:
+        Rows are grouped by ``group_id`` (None / isolated rows stay
+        unscored). Within each group, ``score_group`` produces the dict;
+        ``ManifestRow.score`` is set per row. Live Photo MOV passengers
+        receive ``None`` (passed through from score_group); the action
+        layer (PR 6) will skip them when applying decisions.
+
+    Pure-with-mutation: same inputs always produce the same row state.
+    No I/O. Tested via ``test_apply_scoring_to_rows`` with synthetic
+    ManifestRow + MediaExtract fixtures.
+    """
+    from collections import defaultdict
+
+    # Phase A: backfill raw scoring signals from exiftool extracts.
+    for row in rows:
+        extract = extracts.get(Path(row.source_path))
+        if extract is None:
+            continue
+        if extract.exif_tag_count is not None:
+            row.exif_tag_count = extract.exif_tag_count
+        # MediaExtract uses Optional[bool] (None=not checked). ManifestRow's
+        # column is NOT NULL DEFAULT 0 — collapse None to the existing
+        # default rather than overwriting.
+        if extract.gps_present is not None:
+            row.gps_present = bool(extract.gps_present)
+        if extract.xmp_derived is not None:
+            row.xmp_derived = bool(extract.xmp_derived)
+
+    # Phase B: compute scores within each duplicate group. Isolated rows
+    # (group_id is None) intentionally stay unscored — they have no peers
+    # to compete with.
+    groups: dict[str, list] = defaultdict(list)
+    for row in rows:
+        if row.group_id:
+            groups[row.group_id].append(row)
+    for group_rows in groups.values():
+        scores = score_group(group_rows, weights)
+        for row in group_rows:
+            row.score = scores[row.source_path]
