@@ -62,6 +62,7 @@ column:
   creation_date: "建立日期"
   shot_date: "拍攝日期"
   resolution: "解析度"
+  score: "分數"
 
 tree:
   group_label: "群組 {n}"

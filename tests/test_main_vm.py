@@ -263,3 +263,82 @@ class TestPendingDecisionCount:
             _rec("/b.jpg", 1, user_decision="move"),
         )
         assert vm.pending_decision_count == 2
+
+
+# ── Within-group score-DESC default sort (#187 — PR 5) ─────────────────────
+
+
+def _scored_rec(path: str, *, score: float | None, group: int = 1) -> PhotoRecord:
+    return PhotoRecord(
+        group_number=group,
+        is_mark=False,
+        is_locked=False,
+        folder_path="/folder",
+        file_path=path,
+        capture_date=datetime(2024, 1, 1),
+        modified_date=datetime(2024, 1, 1),
+        file_size_bytes=1024,
+        score=score,
+    )
+
+
+class TestWithinGroupScoreSort:
+    """The MainVM's _group_records prepends ("score", False) as the design
+    default for #187 so the highest-scoring copy lands at the top of each
+    group. User-configured sorts act as secondary tiebreakers; an explicit
+    user sort on the score field (either direction) suppresses the prepend.
+    """
+
+    def test_default_sort_orders_by_score_desc(self):
+        """No user-configured sort — score-DESC is the implicit default."""
+        repo = _mock_repo(
+            _scored_rec("/low.jpg", score=0.3),
+            _scored_rec("/high.jpg", score=0.9),
+            _scored_rec("/mid.jpg", score=0.6),
+        )
+        vm = MainVM()
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        paths = [r.file_path for r in vm.groups[0].items]
+        assert paths == ["/high.jpg", "/mid.jpg", "/low.jpg"]
+
+    def test_none_score_sorts_to_bottom_under_desc(self):
+        """A row with score=None (Live Photo MOV passenger, isolated, or
+        old manifest) must sort below real scores under descending order.
+        Previously this would TypeError because SortService substituted
+        ``""`` for None on a numeric field — the regression-test contract."""
+        repo = _mock_repo(
+            _scored_rec("/unscored.jpg", score=None),
+            _scored_rec("/scored.jpg", score=0.5),
+        )
+        vm = MainVM()
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        paths = [r.file_path for r in vm.groups[0].items]
+        assert paths == ["/scored.jpg", "/unscored.jpg"]
+
+    def test_user_configured_score_sort_overrides_default(self):
+        """A user who explicitly configures ``score`` (any direction) takes
+        full control — the implicit DESC prepend is skipped so the user's
+        chosen direction wins."""
+        repo = _mock_repo(
+            _scored_rec("/low.jpg", score=0.3),
+            _scored_rec("/high.jpg", score=0.9),
+        )
+        vm = MainVM(default_sort=[("score", True)])   # explicit ascending
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        paths = [r.file_path for r in vm.groups[0].items]
+        assert paths == ["/low.jpg", "/high.jpg"]
+
+    def test_user_configured_non_score_sort_becomes_tiebreaker(self):
+        """A user's sort on a non-score field acts as the secondary key:
+        score-DESC first, user's field second."""
+        repo = _mock_repo(
+            _scored_rec("/path_b.jpg", score=0.8),
+            _scored_rec("/path_a.jpg", score=0.8),  # tied score
+            _scored_rec("/path_c.jpg", score=0.5),
+        )
+        vm = MainVM(default_sort=[("file_path", True)])
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        paths = [r.file_path for r in vm.groups[0].items]
+        # Score-DESC primary: the two 0.8s before the 0.5. Then path-ASC
+        # as tiebreaker on the 0.8 rows: a before b.
+        assert paths == ["/path_a.jpg", "/path_b.jpg", "/path_c.jpg"]

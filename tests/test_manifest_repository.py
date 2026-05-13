@@ -1278,3 +1278,72 @@ class TestScoringSchemaMigration:
         # First load adds the columns; second load must not raise.
         list(ManifestRepository().load(str(db)))
         list(ManifestRepository().load(str(db)))  # should not raise
+
+    def test_score_loads_from_db_into_photo_record(self, tmp_path):
+        """The score column is read from the manifest and threaded onto
+        PhotoRecord.score so the UI can display / sort it. PR 5 contract."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        # Use the production write path so the score column is in the DDL.
+        from scanner.dedup import ManifestRow
+        from scanner.manifest import write_manifest
+
+        rows = [
+            ManifestRow(
+                source_path=str(cand), source_label="src",
+                dest_path=None, action="REVIEW_DUPLICATE",
+                source_hash="aaa", phash=None, hamming_distance=5,
+                duplicate_of=None, reason="",
+                group_id=gid, score=0.87,
+            ),
+            ManifestRow(
+                source_path=str(ref), source_label="src",
+                dest_path=None, action="MOVE",
+                source_hash="bbb", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                group_id=gid, score=0.42,
+            ),
+        ]
+        db = tmp_path / "m.sqlite"
+        write_manifest(rows, db)
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].score == pytest.approx(0.87)
+        assert records[str(ref)].score == pytest.approx(0.42)
+
+    def test_score_loads_as_none_when_null(self, tmp_path):
+        """Live Photo MOV passengers and isolated rows get score=NULL in
+        the DB. The load path must preserve None on PhotoRecord, not
+        coerce to 0.0 (which would silently re-introduce 'unscored ties
+        with worst score' bug)."""
+        cand = tmp_path / "a.heic"
+        ref = tmp_path / "a.mov"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        from scanner.dedup import ManifestRow
+        from scanner.manifest import write_manifest
+
+        rows = [
+            ManifestRow(
+                source_path=str(cand), source_label="src",
+                dest_path=None, action="MOVE",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                group_id=gid, score=0.75,
+            ),
+            ManifestRow(
+                source_path=str(ref), source_label="src",
+                dest_path=None, action="MOVE",
+                source_hash="bbb", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                group_id=gid, score=None,  # Live Photo MOV passenger
+            ),
+        ]
+        db = tmp_path / "m.sqlite"
+        write_manifest(rows, db)
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(ref)].score is None
+        assert records[str(cand)].score == pytest.approx(0.75)

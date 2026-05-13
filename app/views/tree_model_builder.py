@@ -15,6 +15,7 @@ from app.views.constants import (
     COL_LOCK,
     COL_NAME,
     COL_RESOLUTION,
+    COL_SCORE,
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
     PATH_ROLE,
@@ -99,6 +100,27 @@ def _file_similarity(action: str, record: object) -> str:
     return t("tree.similarity_ref")
 
 
+# Sentinel SORT_ROLE value for unscored rows (Live Photo MOV passengers,
+# isolated rows, old manifests pre-#187). Set lower than any real score
+# (which is in [0.0, 1.0]) so unscored rows sort to the bottom under
+# descending order. -1.0 is the chosen sentinel — any negative would
+# work; -1 makes the convention explicit when reading sort code.
+_UNSCORED_SORT_VALUE: float = -1.0
+
+
+def _score_display(score: float | None) -> str:
+    """Format a score for the COL_SCORE cell.
+
+    Two-decimal float for real scores (e.g. ``"0.87"``); em-dash for
+    unscored rows. Em-dash distinguishes a deliberate None (passenger,
+    isolated, unscored manifest) from a missing render — the user reads
+    ``"—"`` as 'no score' rather than 'broken display'.
+    """
+    if score is None:
+        return "—"
+    return f"{score:.2f}"
+
+
 def build_model(
     groups: Iterable[object],
 ) -> tuple[QStandardItemModel, QSortFilterProxyModel | None]:
@@ -129,6 +151,7 @@ def build_model(
             QStandardItem(""),                       # COL_CREATION_DATE (7)
             QStandardItem(""),                       # COL_SHOT_DATE  (8)
             QStandardItem(""),                       # COL_RESOLUTION (9) — group level empty
+            QStandardItem(""),                       # COL_SCORE      (10) — group level empty; sort role = max
         ]
         for it in group_row:
             it.setEditable(False)
@@ -217,6 +240,21 @@ def build_model(
             group_row[COL_RESOLUTION].setData(max(megapixels, default=0), SORT_ROLE)
         except Exception:
             pass
+        try:
+            # Group-level Score sort: max score across files in the group.
+            # Unscored rows (score is None) contribute the sentinel so a
+            # group containing only unscored rows sorts to the bottom under
+            # descending order, like its individual rows do.
+            file_scores = [
+                getattr(it, "score", None) for it in items_list
+            ]
+            real_scores = [s for s in file_scores if s is not None]
+            group_row[COL_SCORE].setData(
+                max(real_scores) if real_scores else _UNSCORED_SORT_VALUE,
+                SORT_ROLE,
+            )
+        except Exception:
+            pass
 
         model.appendRow(group_row)
 
@@ -232,6 +270,8 @@ def build_model(
             px_h = getattr(p, "pixel_height", None)
             resolution_txt = f"{px_w}×{px_h}" if px_w and px_h else ""
             resolution_mp = (px_w or 0) * (px_h or 0)
+            score_val = getattr(p, "score", None)
+            score_txt = _score_display(score_val)
 
             # Col 0 at file row: similarity % for duplicates, "Ref" for the source file
             file_action = getattr(p, "action", "") or ""
@@ -255,6 +295,7 @@ def build_model(
                 QStandardItem(creation_txt),         # COL_CREATION_DATE (7)
                 QStandardItem(shot_txt),             # COL_SHOT_DATE  (8)
                 QStandardItem(resolution_txt),       # COL_RESOLUTION (9)
+                QStandardItem(score_txt),            # COL_SCORE      (10)
             ]
 
             try:
@@ -297,6 +338,16 @@ def build_model(
                 pass
             try:
                 child_row[COL_RESOLUTION].setData(resolution_mp, SORT_ROLE)
+            except Exception:
+                pass
+            try:
+                # Score sort: float when present, sentinel _UNSCORED_SORT_VALUE
+                # (-1.0) when None so unscored rows sort below real-score rows
+                # under descending order.
+                child_row[COL_SCORE].setData(
+                    float(score_val) if score_val is not None else _UNSCORED_SORT_VALUE,
+                    SORT_ROLE,
+                )
             except Exception:
                 pass
             try:
