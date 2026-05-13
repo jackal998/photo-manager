@@ -31,8 +31,11 @@ name: qa-batch
 # (https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs).
 
 on:
+  # Run on every PR regardless of target branch — stacked PRs (whose
+  # base is another feature branch, not master) need per-stage CI too.
+  # Without this, intermediate PRs in a multi-PR feature chain bypass
+  # qa-batch entirely. See tests.yml for the matching change.
   pull_request:
-    branches: [master]
   workflow_dispatch: {}   # allow manual trigger from the Actions UI for debugging
 
 # Public-repo hardening: workflow is read-only, no write back to the repo,

@@ -3,8 +3,11 @@ name: tests
 on:
   push:
     branches: [master]
+  # Run on every PR regardless of target branch so stacked PRs (whose
+  # base is another feature branch, not master) still get CI per stage.
+  # Without this, intermediate PRs in a multi-PR feature chain bypass
+  # CI entirely and only the final PR targeting master is validated.
   pull_request:
-    branches: [master]
 
 concurrency:
   group: tests-${{ github.ref }}
