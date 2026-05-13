@@ -87,6 +87,13 @@ _MIGRATIONS = [
     ("pixel_width",     "INTEGER"),
     ("pixel_height",    "INTEGER"),
     ("is_locked",       "INTEGER NOT NULL DEFAULT 0"),
+    # Scoring system (#187) — raw signals + composite score. Populated by
+    # the extended exiftool pass (PR 2) and scorer (PR 3/4). NULL on old
+    # manifests; scorer treats NULL as 0.0 so old manifests degrade gracefully.
+    ("exif_tag_count",  "INTEGER"),
+    ("gps_present",     "INTEGER NOT NULL DEFAULT 0"),
+    ("xmp_derived",     "INTEGER NOT NULL DEFAULT 0"),
+    ("score",           "REAL"),
 ]
 
 _UPDATE_DECISION_SQL = """

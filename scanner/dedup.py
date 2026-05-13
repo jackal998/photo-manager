@@ -78,6 +78,13 @@ class ManifestRow:
     group_id: Optional[str] = None       # canonical root path of connected component; written to DB
     pixel_width: Optional[int] = None    # image width in pixels; written to DB
     pixel_height: Optional[int] = None   # image height in pixels; written to DB
+    # Scoring system (#187) — raw signals + composite score. Populated by
+    # the extended exiftool pass (PR 2) and scorer (PR 3/4). All default to
+    # None/False so existing constructors continue to work unchanged.
+    exif_tag_count: Optional[int] = None # count of census EXIF/XMP/QuickTime tags present
+    gps_present: bool = False            # True if GPSLatitude tag present
+    xmp_derived: bool = False            # True if xmpMM:DerivedFrom tag present (file is a derivative)
+    score: Optional[float] = None        # composite quality score in [0.0, 1.0]; NULL for isolated or unscored rows
 
 
 # ---------------------------------------------------------------------------

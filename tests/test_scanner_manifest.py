@@ -296,3 +296,108 @@ class TestManifestSchemaColumns:
         )
         result = _make_row(hr, "MOVE")
         assert result.shot_date is None
+
+
+# ── Scoring system schema (#187 — PR 1) ────────────────────────────────────
+
+class TestScoringSchemaColumns:
+    """Scoring system adds 4 columns: exif_tag_count, gps_present, xmp_derived, score.
+
+    Raw signals (exif_tag_count, gps_present, xmp_derived) are populated by the
+    extended exiftool pass in PR 2. The composite score is written by the scorer
+    in PR 3/4. PR 1 establishes the schema and ManifestRow plumbing only — all
+    four columns default to NULL or 0 until later PRs populate them.
+    """
+
+    def _cols(self, out: Path) -> set[str]:
+        with sqlite3.connect(out) as conn:
+            return {row[1] for row in conn.execute("PRAGMA table_info(migration_manifest)").fetchall()}
+
+    def test_manifest_has_exif_tag_count_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "exif_tag_count" in self._cols(out)
+
+    def test_manifest_has_gps_present_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "gps_present" in self._cols(out)
+
+    def test_manifest_has_xmp_derived_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "xmp_derived" in self._cols(out)
+
+    def test_manifest_has_score_column(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([], out)
+        assert "score" in self._cols(out)
+
+    def test_write_manifest_stores_exif_tag_count(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="MOVE", source_hash="abc",
+            phash=None, hamming_distance=None, duplicate_of=None, reason="",
+            exif_tag_count=12,
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            val = conn.execute("SELECT exif_tag_count FROM migration_manifest").fetchone()[0]
+        assert val == 12
+
+    def test_write_manifest_stores_gps_present_true(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="MOVE", source_hash="abc",
+            phash=None, hamming_distance=None, duplicate_of=None, reason="",
+            gps_present=True,
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            val = conn.execute("SELECT gps_present FROM migration_manifest").fetchone()[0]
+        assert val == 1
+
+    def test_write_manifest_stores_xmp_derived_true(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="MOVE", source_hash="abc",
+            phash=None, hamming_distance=None, duplicate_of=None, reason="",
+            xmp_derived=True,
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            val = conn.execute("SELECT xmp_derived FROM migration_manifest").fetchone()[0]
+        assert val == 1
+
+    def test_write_manifest_stores_score(self, tmp_path):
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="REVIEW_DUPLICATE", source_hash="abc",
+            phash=None, hamming_distance=None, duplicate_of=None, reason="",
+            score=0.875,
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            val = conn.execute("SELECT score FROM migration_manifest").fetchone()[0]
+        assert val == pytest.approx(0.875)
+
+    def test_write_manifest_defaults_gps_and_xmp_to_zero(self, tmp_path):
+        """Existing callers that don't set the new fields get safe defaults
+        (gps_present=0, xmp_derived=0, exif_tag_count=NULL, score=NULL)."""
+        out = tmp_path / "manifest.sqlite"
+        row = ManifestRow(
+            source_path="/a.jpg", source_label="iphone",
+            dest_path=None, action="MOVE", source_hash="abc",
+            phash=None, hamming_distance=None, duplicate_of=None, reason="",
+        )
+        write_manifest([row], out)
+        with sqlite3.connect(out) as conn:
+            r = conn.execute(
+                "SELECT exif_tag_count, gps_present, xmp_derived, score "
+                "FROM migration_manifest"
+            ).fetchone()
+        assert r == (None, 0, 0, None)
