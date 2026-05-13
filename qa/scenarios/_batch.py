@@ -135,6 +135,13 @@ ALL_SCENARIOS = [
     # file picker opens, then cancels via Esc). Verifies the buttons
     # converge on the same handlers as the File-menu route.
     "s41_empty_state_action_buttons",
+    # s42 (#187) — end-to-end keep-worthiness scoring: scan populates
+    # the score column, within-group sort orders by score-DESC, and
+    # the new "Apply best-copy decisions to this group" right-click
+    # action picks the top scorer for KEEP + marks the rest DELETE.
+    # Reuses near-duplicates fixture (5 q-quality variants); file-size
+    # is the only signal that differs across the 5 files, so q95 wins.
+    "s42_scoring",
 ]
 
 

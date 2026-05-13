@@ -64,6 +64,14 @@ EXPECTED_COUNTS = {
     "walker-exclusions": 5,
     "videos": 2,
     "live-photo": 2,
+    # #187: scoring-mixed exercises the per-dimension scoring wiring
+    # end-to-end. 3 files at the root + 1 nested under Downloads/.
+    # _content_files() ignores subdirectories, so EXPECTED_COUNTS counts
+    # only the 3 root files; the recursive walker still sees all 4
+    # during a real scan. Each file is a near-duplicate of one base
+    # image but differs in a specific signal: GPS presence, filename
+    # penalty, or path penalty. See make_scoring_mixed() docstring.
+    "scoring-mixed": 3,
 }
 
 
@@ -447,6 +455,87 @@ def make_videos(force: bool) -> None:
     print(f"  {name}/          -> 2 files (minimal ftyp-only mp4 + mov)")
 
 
+def make_scoring_mixed(force: bool) -> None:
+    """Generate the #187 scoring fixture — files that exercise distinct
+    scoring dimensions end-to-end through the scan pipeline.
+
+    Four near-duplicate JPEGs from one base image (so the scanner groups
+    them via pHash) but differing in scoring signals so the scorer can
+    discriminate:
+
+      scoring_clean.jpg            — baseline (clean name, GPS, full path)
+      Copy of scoring_clean.jpg    — filename penalty (regex hits "copy")
+      scoring_no_gps.jpg           — GPS absent (gps_present=False)
+      Downloads/scoring_clean.jpg  — path penalty (segment "Downloads")
+
+    All four share content + DateTimeOriginal, so any cross-file score
+    delta is attributable to the named dimension only — the test in
+    s42_scoring.py asserts on those deltas directly. The Downloads/
+    file is in a subdirectory so it appears to the recursive walker as
+    a distinct path even though basename matches scoring_clean.jpg
+    (different stems anyway across the four files for pair_cluster
+    purposes — see scanner/walker.py).
+
+    Idempotent: skips when _content_files() shows 3 root files
+    (subdirectories like Downloads/ are not counted as content files).
+    """
+    name = "scoring-mixed"
+    p = _ensure_dir(name)
+    if not force and _is_complete(name):
+        print(f"  {name}/    -> already complete (3 root files), skipping")
+        return
+    # Custom clear that recurses into Downloads/ — the default _clear()
+    # calls f.unlink() on every iterdir() entry, which raises on
+    # directories. The scoring-mixed fixture is the only sandbox dir
+    # with a real subdirectory, so handle the recursion here rather
+    # than complicating _clear() for the general case.
+    for f in p.iterdir():
+        if f.name == ".gitkeep":
+            continue
+        if f.is_dir():
+            for child in f.iterdir():
+                child.unlink()
+            f.rmdir()
+        else:
+            f.unlink()
+
+    # Base image: distinctive seed + 640×480 so it shares the
+    # near-duplicates fixture's resolution (avoids accidental
+    # cross-fixture pHash collisions; pHash is content-based so the
+    # different seed is what keeps these in their own group).
+    base = Image.fromarray(_gradient_rgb(seed=187, w=640, h=480))
+
+    # Helper — write JPEG with the dimensions, DateTimeOriginal, and
+    # optional GPS embedded. GPS uses the EXIF GPS sub-IFD (0x8825)
+    # in the format PIL accepts: tuple of floats for DMS components.
+    # exiftool reads this as ``EXIF:GPSLatitude`` which is what
+    # batch_read_extracts checks for the gps_present signal.
+    #
+    # NB: ``base.getexif()`` is cached on the Image, so calling
+    # ``with_gps=False`` after ``with_gps=True`` would inherit the
+    # earlier GPS state. We rebuild the image from the source pixels
+    # each call to guarantee a fresh Exif object.
+    def _write_jpeg(path: Path, *, with_gps: bool) -> None:
+        img = Image.fromarray(_gradient_rgb(seed=187, w=640, h=480))
+        exif = img.getexif()
+        exif[36867] = "2024:08:01 12:00:00"  # DateTimeOriginal
+        if with_gps:
+            gps = exif.get_ifd(0x8825)
+            gps[1] = "N"                       # GPSLatitudeRef
+            gps[2] = (37.0, 46.0, 0.0)         # GPSLatitude (DMS)
+            gps[3] = "W"                       # GPSLongitudeRef
+            gps[4] = (122.0, 25.0, 0.0)        # GPSLongitude (DMS)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(path), "JPEG", quality=90, exif=exif.tobytes())
+
+    _write_jpeg(p / "scoring_clean.jpg", with_gps=True)
+    _write_jpeg(p / "Copy of scoring_clean.jpg", with_gps=True)
+    _write_jpeg(p / "scoring_no_gps.jpg", with_gps=False)
+    _write_jpeg(p / "Downloads" / "scoring_clean.jpg", with_gps=True)
+
+    print(f"  {name}/    -> 4 files across 2 dirs (GPS / filename / path test)")
+
+
 def make_live_photo(force: bool) -> None:
     name = "live-photo"
     p = _ensure_dir(name)
@@ -481,6 +570,7 @@ def main() -> int:
     make_walker_exclusions(args.force)
     make_videos(args.force)
     make_live_photo(args.force)
+    make_scoring_mixed(args.force)
     print("Done.")
     return 0
 

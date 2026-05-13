@@ -130,6 +130,28 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # state). Scenario clicks each button and asserts the right
     # dialog opens, then cancels the open-manifest picker.
     "s41_empty_state_action_buttons": [],
+    # s42 (#187) — end-to-end keep-worthiness scoring with two
+    # fixtures:
+    #
+    # * near-duplicates: 5 q-quality variants of one image —
+    #   file_size is the only differentiating signal. Pins the
+    #   pipeline plumbing (score column populates, within-group
+    #   order is score-DESC, "Apply best-copy" picks the largest
+    #   and marks the rest delete).
+    #
+    # * scoring-mixed: 4 near-duplicates that vary per-dimension —
+    #   one with GPS+clean-name+clean-path (winner), one with
+    #   filename penalty ("Copy of …"), one with GPS stripped, one
+    #   in a Downloads/ subdir (path penalty). Pins the EXTRACTION
+    #   wiring — that the real exiftool produces the keys we parse
+    #   for gps_present, that filename/path regex flows reach the
+    #   stored signals, and that the composite picks the clean file
+    #   even though the classifier's lexicographic source-priority
+    #   would have picked "Copy of …" as the action=MOVE primary.
+    "s42_scoring": [
+        "qa/sandbox/near-duplicates",
+        "qa/sandbox/scoring-mixed",
+    ],
 }
 
 
