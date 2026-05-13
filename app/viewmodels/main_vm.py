@@ -41,8 +41,17 @@ class MainVM:
         for item in items:
             grouped[item.group_number].append(item)
         self.groups = [PhotoGroup(group_number=k, items=v) for k, v in sorted(grouped.items())]
-        if self._default_sort:
-            self._sorter.sort(self.groups, self._default_sort)
+        # Compose the within-group sort: score-DESC is the design default
+        # for #187 ("highest-quality copy at the top of each group"). User-
+        # configured ``sorting.defaults`` from settings.json act as
+        # secondary tiebreakers. If the user has explicitly set ``score``
+        # as one of their default sorts (any direction), respect that
+        # choice and skip the implicit prepend.
+        sort_keys: list[tuple[str, bool]] = list(self._default_sort)
+        if not any(field == "score" for field, _ in sort_keys):
+            sort_keys = [("score", False)] + sort_keys
+        if sort_keys:
+            self._sorter.sort(self.groups, sort_keys)
 
     def remove_deleted_and_prune(
         self, deleted_paths: list[str], prune_singles: bool = True

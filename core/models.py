@@ -33,6 +33,11 @@ class PhotoRecord:
     # User's planned file operation (delete | keep | "" = undecided)
     user_decision: str = ""
     hamming_distance: int | None = None
+    # Keep-worthiness score in [0.0, 1.0] (#187). None for isolated rows
+    # (no peers to score against) and Live Photo MOV passengers (inherit
+    # their HEIC's decision). Computed at scan time by scanner.scoring;
+    # re-computable without re-scan via ManifestRepository.rescore().
+    score: float | None = None
 
 
 @dataclass

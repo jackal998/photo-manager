@@ -6,7 +6,12 @@ from core.models import PhotoGroup, PhotoRecord
 from core.services.sort_service import SortService
 
 
-def _rec(path: str, size: int = 0, folder: str = "") -> PhotoRecord:
+def _rec(
+    path: str,
+    size: int = 0,
+    folder: str = "",
+    score: float | None = 0.0,
+) -> PhotoRecord:
     return PhotoRecord(
         group_number=1,
         is_mark=False,
@@ -16,6 +21,7 @@ def _rec(path: str, size: int = 0, folder: str = "") -> PhotoRecord:
         capture_date=None,
         modified_date=None,
         file_size_bytes=size,
+        score=score,
     )
 
 
@@ -68,3 +74,34 @@ class TestSortService:
         SortService().sort([g1, g2], [("file_size_bytes", True)])
         assert [r.file_size_bytes for r in g1.items] == [1, 2]
         assert [r.file_size_bytes for r in g2.items] == [3, 4]
+
+    def test_none_on_numeric_field_substitutes_zero(self):
+        """Previously this case raised TypeError: a numeric field with
+        mixed None / float values would build sort tuples of
+        ``(-0.8,)`` vs ``((1, ""),)`` and Python 3 refuses to order
+        float against tuple. The regression-test contract from #187 PR 5:
+        None substitutes the type-appropriate zero so the sort works
+        end-to-end."""
+        # ``score`` is float|None on PhotoRecord — exercise it directly.
+        g = _group(
+            _rec("/a.jpg", score=0.8),
+            _rec("/b.jpg", score=None),
+            _rec("/c.jpg", score=0.5),
+        )
+        SortService().sort([g], [("score", False)])  # descending
+        paths = [r.file_path for r in g.items]
+        # 0.8 first, 0.5 next, None (substituted to 0) last under desc.
+        assert paths == ["/a.jpg", "/c.jpg", "/b.jpg"]
+
+    def test_all_none_on_numeric_field_does_not_crash(self):
+        """If every item has None for the sort field (e.g. an old manifest
+        loaded before scoring was wired in), sort must still be
+        deterministic — not raise."""
+        g = _group(
+            _rec("/a.jpg", score=None),
+            _rec("/b.jpg", score=None),
+        )
+        SortService().sort([g], [("score", False)])
+        # No assertion on order — just verify no exception was raised
+        # and the items are still present.
+        assert len(g.items) == 2

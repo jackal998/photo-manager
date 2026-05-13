@@ -74,6 +74,7 @@ column:
   creation_date: "Creation Date"
   shot_date: "Shot Date"
   resolution: "Resolution"
+  score: "Score"
 
 # Tree row values — the "Group 5" label and similarity tags shown in
 # the main tree view next to each group / file.

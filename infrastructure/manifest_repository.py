@@ -53,7 +53,8 @@ _LOAD_ALL_SQL = """
 SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        action, executed, user_decision, is_locked,
        file_size_bytes, shot_date, creation_date, mtime,
-       pixel_width, pixel_height
+       pixel_width, pixel_height,
+       score
 FROM   migration_manifest
 WHERE  executed = 0
 ORDER  BY
@@ -128,6 +129,7 @@ def _photo_record(
     hamming_distance: "int | None" = None,
     db_pixel_width: "int | None" = None,
     db_pixel_height: "int | None" = None,
+    db_score: "float | None" = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
@@ -191,6 +193,7 @@ def _photo_record(
         hamming_distance=hamming_distance,
         pixel_width=db_pixel_width,
         pixel_height=db_pixel_height,
+        score=db_score,
     )
 
 
@@ -273,6 +276,7 @@ class ManifestRepository:
                         hamming_distance=row["hamming_distance"],
                         db_pixel_width=row["pixel_width"],
                         db_pixel_height=row["pixel_height"],
+                        db_score=row["score"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)

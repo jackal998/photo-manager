@@ -298,3 +298,95 @@ class TestLockColumnInBuiltModel:
                 assert sort_val == 1
             elif name_item.data(PATH_ROLE) == "/p/free.jpg":
                 assert sort_val == 0
+
+
+# ── COL_SCORE — #187 PR 5 ──────────────────────────────────────────────────
+
+
+class TestScoreColumn:
+    """COL_SCORE displays a 2-decimal float for scored rows and an em-dash
+    for unscored rows (Live Photo MOV passengers, isolated rows, old
+    manifests). The SORT_ROLE carries the numeric value so within-group
+    and inter-group sort by score work correctly under the proxy.
+    """
+
+    def test_score_cell_text_for_scored_row(self):
+        from app.views.constants import COL_SCORE, SORT_ROLE
+        from app.views.tree_model_builder import build_model
+
+        a = _rec(file_path="/p/a.jpg", score=0.87)
+        b = _rec(file_path="/p/b.jpg", score=0.42)
+        g = _group([a, b])
+        model, _ = build_model([g])
+        group_row = model.item(0, 0)
+        # Two file rows under the group
+        assert group_row.rowCount() == 2
+        for r in range(group_row.rowCount()):
+            score_item = group_row.child(r, COL_SCORE)
+            # Real scores render with two decimals
+            assert score_item.text() in {"0.87", "0.42"}
+
+    def test_score_cell_text_for_none_score(self):
+        """Unscored rows (None) render as em-dash, not empty / not '0.00'."""
+        from app.views.constants import COL_SCORE
+        from app.views.tree_model_builder import build_model
+
+        a = _rec(file_path="/p/a.jpg", score=None)
+        g = _group([a])
+        model, _ = build_model([g])
+        group_row = model.item(0, 0)
+        score_item = group_row.child(0, COL_SCORE)
+        assert score_item.text() == "—"
+
+    def test_score_sort_role_is_float_for_scored_rows(self):
+        from app.views.constants import COL_SCORE, SORT_ROLE
+        from app.views.tree_model_builder import build_model
+
+        a = _rec(file_path="/p/a.jpg", score=0.87)
+        g = _group([a])
+        model, _ = build_model([g])
+        group_row = model.item(0, 0)
+        score_item = group_row.child(0, COL_SCORE)
+        assert score_item.data(SORT_ROLE) == pytest.approx(0.87)
+
+    def test_score_sort_role_for_unscored_is_below_zero(self):
+        """Unscored rows must sort below any real-score row under
+        descending order. A negative sentinel guarantees that."""
+        from app.views.constants import COL_SCORE, SORT_ROLE
+        from app.views.tree_model_builder import build_model
+
+        a = _rec(file_path="/p/a.jpg", score=None)
+        g = _group([a])
+        model, _ = build_model([g])
+        group_row = model.item(0, 0)
+        score_item = group_row.child(0, COL_SCORE)
+        sort_val = score_item.data(SORT_ROLE)
+        assert isinstance(sort_val, float)
+        assert sort_val < 0.0  # sentinel below the [0.0, 1.0] real-score range
+
+    def test_group_header_score_is_max_in_group(self):
+        """Group-level COL_SCORE.SORT_ROLE = max score across files so
+        the column header sort orders groups by their best member."""
+        from app.views.constants import COL_SCORE, SORT_ROLE
+        from app.views.tree_model_builder import build_model
+
+        low = _rec(file_path="/p/low.jpg", score=0.30)
+        high = _rec(file_path="/p/high.jpg", score=0.90)
+        g = _group([low, high])
+        model, _ = build_model([g])
+        group_row_score_item = model.item(0, COL_SCORE)
+        assert group_row_score_item.data(SORT_ROLE) == pytest.approx(0.90)
+
+    def test_group_header_score_is_negative_when_all_unscored(self):
+        """A group whose every file is unscored (Live Photo group with
+        only MOV passengers, or old manifests) gets the negative sentinel
+        at group level too — sorts below scored groups under desc."""
+        from app.views.constants import COL_SCORE, SORT_ROLE
+        from app.views.tree_model_builder import build_model
+
+        only_none = _rec(file_path="/p/x.mov", score=None)
+        g = _group([only_none])
+        model, _ = build_model([g])
+        group_row_score_item = model.item(0, COL_SCORE)
+        sort_val = group_row_score_item.data(SORT_ROLE)
+        assert sort_val < 0.0

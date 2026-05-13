@@ -23,7 +23,11 @@ COL_GROUP_COUNT: int = 6
 COL_CREATION_DATE: int = 7
 COL_SHOT_DATE: int = 8
 COL_RESOLUTION: int = 9
-NUM_COLUMNS: int = 10
+# COL_SCORE was appended at index 10 for #187 (keep-worthiness scoring).
+# All prior column indices are unchanged so existing sort-state config
+# in settings.json and any user muscle memory keep working.
+COL_SCORE: int = 10
+NUM_COLUMNS: int = 11
 
 
 # Data roles
@@ -56,6 +60,7 @@ def headers() -> list[str]:
         t("column.creation_date"),
         t("column.shot_date"),
         t("column.resolution"),
+        t("column.score"),
     ]
 
 
