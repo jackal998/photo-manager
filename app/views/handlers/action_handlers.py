@@ -81,3 +81,14 @@ class ActionHandlersImpl:
         the bug that escaped #175's coverage.
         """
         self.file_ops.set_locked_state(items, locked)
+
+    def apply_best_copy_to_group(self, group_number: int) -> None:
+        """Apply best-copy decisions to a duplicate group (#187).
+
+        Highest-scoring non-locked, non-passenger row gets KEEP; the
+        rest get DELETE. Locked rows are skipped (their existing
+        decision stays) and Live Photo MOV passengers (``score is
+        None``) are skipped — they inherit their HEIC's decision via
+        the pair-cluster logic, not this action.
+        """
+        self.file_ops.apply_best_copy_to_group(group_number)

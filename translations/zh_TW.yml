@@ -191,6 +191,7 @@ context_menu:
   remove_from_list: "從清單移除"
   lock: "鎖定"
   unlock: "解除鎖定"
+  apply_best_copy_to_group: "依分數套用此群組的最佳保留決定"
 
 file_op:
   open_manifest_title: "開啟清單檔"
@@ -208,6 +209,8 @@ file_op:
   remove_failed_body: "從清單移除失敗:{error}"
   decision_set_status: "決策已設為「{decision}」"
   decision_set_with_skipped_status: "決策已設為「{decision}」({set_count} 列);跳過 {skipped} 列已鎖定"
+  best_copy_applied_status: "群組 {group}:保留 1 列、刪除 {deleted} 列(跳過 {skipped_locked} 列已鎖定、{skipped_passenger} 列未評分)"
+  best_copy_no_candidates_status: "群組 {group}:沒有可評分的檔案(全部鎖定或未評分 — 請重新掃描)"
   locked_verb: "已鎖定"
   unlocked_verb: "已解除鎖定"
   noun_row_singular: "列"

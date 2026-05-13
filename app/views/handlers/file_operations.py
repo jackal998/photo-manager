@@ -521,6 +521,96 @@ class FileOperationsHandler:
             t("file_op.noun_row_plural"),
         )
 
+    def apply_best_copy_to_group(self, group_number: int) -> None:
+        """Apply KEEP to the top-scoring file in the group, DELETE to the
+        rest (#187).
+
+        Algorithm:
+
+        * Find the group by ``group_number`` in :attr:`vm.groups`.
+        * **Candidates** = rows that are NOT locked AND have a non-None
+          ``score``. Locked rows keep their existing decision. Live
+          Photo MOV passengers (``score is None``) are also excluded —
+          they inherit their HEIC's decision via pair-cluster logic.
+        * Pick the candidate with the maximum score → set its
+          ``user_decision`` to ``""`` (keep).
+        * Every other candidate → set to ``"delete"``.
+        * Persist the batched changes to SQLite, refresh the tree, and
+          emit a status-bar message summarising the outcome.
+
+        No lock-confirmation dialog: locked rows are *protected*, not
+        *modified*, so :class:`LockedRowsConfirmDialog` (which exists
+        for "you are about to overwrite a locked row's decision") is
+        not the right UX gate here. The protection is the silent skip.
+        """
+        manifest_path = getattr(self, "_manifest_path", None)
+        if not manifest_path:
+            return
+
+        group = next(
+            (g for g in self.vm.groups if g.group_number == group_number),
+            None,
+        )
+        if group is None:
+            return
+
+        # Candidates: not locked AND has a real score (excludes MOV
+        # passengers whose score=None per the Live Photo rule).
+        candidates = [
+            r for r in group.items
+            if not getattr(r, "is_locked", False)
+            and getattr(r, "score", None) is not None
+        ]
+        if not candidates:
+            # Either every row is locked, or none have a score yet
+            # (e.g. an old manifest loaded before #187 wired the scan
+            # pipeline). Surface a quiet status message and stop —
+            # the user can lock/unlock rows or re-scan to recover.
+            self.status_reporter.show_status(
+                t("file_op.best_copy_no_candidates_status", group=group_number)
+            )
+            return
+
+        # Highest score wins. Ties resolve deterministically by
+        # source_path so re-running the action produces the same
+        # winner. The PhotoRecord type stores score as float | None;
+        # candidates was filtered for non-None already.
+        winner = max(candidates, key=lambda r: (r.score, r.file_path))
+        losers = [r for r in candidates if r.file_path != winner.file_path]
+
+        # Update in memory + batch one DB write per decision value.
+        keep_batch: dict[str, str] = {winner.file_path: ""}
+        delete_batch: dict[str, str] = {r.file_path: "delete" for r in losers}
+        winner.user_decision = ""
+        for r in losers:
+            r.user_decision = "delete"
+
+        from infrastructure.manifest_repository import ManifestRepository
+        repo = ManifestRepository()
+        if keep_batch:
+            repo.batch_update_decisions(manifest_path, keep_batch)
+        if delete_batch:
+            repo.batch_update_decisions(manifest_path, delete_batch)
+        self._mark_dirty()
+        self.ui_updater.refresh_tree(self.vm.groups)
+
+        skipped_locked = sum(1 for r in group.items if getattr(r, "is_locked", False))
+        skipped_passenger = sum(
+            1 for r in group.items
+            if not getattr(r, "is_locked", False)
+            and getattr(r, "score", None) is None
+        )
+        self.status_reporter.show_status(
+            t(
+                "file_op.best_copy_applied_status",
+                group=group_number,
+                kept=1,
+                deleted=len(losers),
+                skipped_locked=skipped_locked,
+                skipped_passenger=skipped_passenger,
+            )
+        )
+
     def set_decision_to_highlighted(self, new_decision: str) -> None:
         """Set user_decision for tree-highlighted (activated) file rows.
 
