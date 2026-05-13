@@ -132,6 +132,14 @@ qa/sandbox/_disposable/
 # containing the target path, silently breaking the test.
 qa/sandbox/walker-exclusions/symlink_to_real.jpg
 
+# qa/sandbox/scoring-mixed/Downloads/ is a fixture for the #187
+# scoring system's path-penalty dimension — the subdir is named
+# Downloads/ precisely because that's a real "bad path" segment.
+# Without this negation, the generic `downloads/` pattern in the
+# Python defaults (line 14 above) would silently swallow this
+# fixture file and CI would fail with "row not found" for s42.
+!qa/sandbox/scoring-mixed/Downloads/
+
 # Temporary files
 tmp/
 temp/

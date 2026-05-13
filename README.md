@@ -305,6 +305,62 @@ The default of 10 is calibrated for a personal photo library where the main risk
 
 ---
 
+## Keep-worthiness scoring (#187)
+
+Within each duplicate group, every file gets a **composite score** in
+`[0.0, 1.0]` measuring how "keep-worthy" it is. The score column sits
+at the right of the result tree and within-group rows sort by score
+descending — the best copy lands at the top of every group.
+
+Right-click a group header and pick **"Apply best-copy decisions to
+this group"** to mark the top scorer `keep` and the rest `delete` in
+one batch. Locked rows are silently protected. Live Photo MOV
+passengers (the `.mov` that pairs with a `.heic` of the same stem)
+inherit their HEIC's decision and are not ranked.
+
+### Algorithm — two tiers
+
+The scorer is a pure function of file attributes (no user-intent
+signals). Inspired by Apple Photos' "highest detail + most metadata"
+framing and py-image-dedup's open-source multi-factor approach, then
+evolved into a two-tier architecture:
+
+**Tier 1 — Categorical penalties** (absolute deductions):
+- Format: `RAW=0.00`  `TIFF=0.05`  `HEIC=0.10`  `PNG=0.12`
+  `WebP=0.18`  `JPEG/MOV/MP4=0.20`  `GIF=0.35`
+- `xmpMM:DerivedFrom` present → `−0.30` (file is a Photoshop/
+  Lightroom-exported derivative)
+
+**Tier 2 — Weighted composite** (eight continuous signals, configurable):
+
+| Dimension | Default weight | Signal |
+|-----------|---------------:|--------|
+| Resolution | 0.25 | Within-group normalised pixel count |
+| EXIF completeness | 0.20 | Census tag count vs format baseline (image=16, video=9) |
+| Date provenance | 0.15 | DateTimeOriginal vs `shot_date == mtime` (suspicious) |
+| Filename | 0.12 | Penalise `copy`, `(N)`, `edited`, `thumb`, `screenshot` |
+| GPS | 0.08 | Binary — `GPSLatitude` present |
+| Path | 0.08 | Penalise `Downloads/`, `WhatsApp/`, `temp/` segments |
+| Live Photo | 0.07 | HEIC with MOV peer > orphan HEIC |
+| File size | 0.05 | Low — correlated with resolution same-format |
+
+```
+Final = max(0.0, min(1.0, Tier2 − format_penalty − derived_penalty))
+```
+
+Live Photo MOV passengers get `score = NULL` and are skipped by
+ranking — they inherit the HEIC's decision via pair-cluster logic.
+
+### Re-scoring without re-scanning
+
+Changing weights doesn't require a full re-scan.
+`ManifestRepository.rescore(weights)` recomputes scores from cached
+raw signals (`pixel_width`, `file_size_bytes`, `exif_tag_count`,
+`gps_present`, `xmp_derived`, `shot_date`, `mtime`) in one batched
+SQL update — ~1–3 seconds for 100k rows, zero file I/O.
+
+---
+
 ## Scanner features
 
 - **SHA-256** exact duplicate detection across all source folders
@@ -318,6 +374,9 @@ The default of 10 is calibrated for a personal photo library where the main risk
 - **Batch EXIF** — exiftool `-stay_open` chunked at 500 files/call for speed
 - **Cached metadata** — `file_size_bytes`, `shot_date`, `creation_date`, `mtime` written
   to the manifest at scan time; load reads from SQLite with zero filesystem round-trips
+- **Keep-worthiness scoring** — composite score in `[0.0, 1.0]` per file (#187);
+  highest-scoring copy lands at the top of each group, "Apply best-copy"
+  right-click action marks it `keep` and the rest `delete` in one batch
 
 ---
 
@@ -353,8 +412,10 @@ photo-manager/
 │   ├── media.py             # Extensions, magic-byte detection, filename parsing
 │   ├── walker.py            # Directory walk + Live Photo pairing
 │   ├── hasher.py            # SHA-256 + pHash + mean-color; single file read
-│   ├── exif.py              # Batch EXIF date reads via exiftool -stay_open
+│   ├── exif.py              # Batch EXIF date reads + scoring-signal census via exiftool -stay_open
+│   ├── media_extract.py     # MediaExtract canonical extraction schema (#187)
 │   ├── dedup.py             # Classification: exact → format → near-dup → UNDATED; mean-color gate
+│   ├── scoring.py           # Keep-worthiness scorer — two-tier composite (#187)
 │   └── manifest.py          # SQLite writer + summary printer
 │
 ├── app/                     # PySide6 GUI

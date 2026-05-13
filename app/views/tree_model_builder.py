@@ -143,15 +143,15 @@ def build_model(
         group_row = [
             group_item,                              # COL_GROUP      (0)
             QStandardItem(""),                       # COL_ACTION     (1) — decision at file level
-            QStandardItem(""),                       # COL_LOCK       (2) — lock at file level
-            QStandardItem(""),                       # COL_NAME       (3)
-            QStandardItem(""),                       # COL_FOLDER     (4)
-            QStandardItem(""),                       # COL_SIZE_BYTES (5)
-            QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (6)
-            QStandardItem(""),                       # COL_CREATION_DATE (7)
-            QStandardItem(""),                       # COL_SHOT_DATE  (8)
-            QStandardItem(""),                       # COL_RESOLUTION (9) — group level empty
-            QStandardItem(""),                       # COL_SCORE      (10) — group level empty; sort role = max
+            QStandardItem(""),                       # COL_SCORE      (2) — group level empty; sort role = max
+            QStandardItem(""),                       # COL_LOCK       (3) — lock at file level
+            QStandardItem(""),                       # COL_NAME       (4)
+            QStandardItem(""),                       # COL_FOLDER     (5)
+            QStandardItem(""),                       # COL_SIZE_BYTES (6)
+            QStandardItem(str(group_count_val)),     # COL_GROUP_COUNT (7)
+            QStandardItem(""),                       # COL_CREATION_DATE (8)
+            QStandardItem(""),                       # COL_SHOT_DATE  (9)
+            QStandardItem(""),                       # COL_RESOLUTION (10) — group level empty
         ]
         for it in group_row:
             it.setEditable(False)
@@ -287,15 +287,15 @@ def build_model(
             child_row = [
                 QStandardItem(file_match),                       # COL_GROUP      (0) — similarity
                 QStandardItem(_action_display(item_decision)),   # COL_ACTION     (1) — localized decision label
-                QStandardItem(_lock_display(item_locked)),       # COL_LOCK       (2) — 🔒 glyph or empty
-                QStandardItem(name),                             # COL_NAME       (3)
-                QStandardItem(folder),                           # COL_FOLDER     (4)
-                QStandardItem(str(size_num)),        # COL_SIZE_BYTES (5)
-                QStandardItem(""),                   # COL_GROUP_COUNT (6) — group level only
-                QStandardItem(creation_txt),         # COL_CREATION_DATE (7)
-                QStandardItem(shot_txt),             # COL_SHOT_DATE  (8)
-                QStandardItem(resolution_txt),       # COL_RESOLUTION (9)
-                QStandardItem(score_txt),            # COL_SCORE      (10)
+                QStandardItem(score_txt),                        # COL_SCORE      (2)
+                QStandardItem(_lock_display(item_locked)),       # COL_LOCK       (3) — 🔒 glyph or empty
+                QStandardItem(name),                             # COL_NAME       (4)
+                QStandardItem(folder),                           # COL_FOLDER     (5)
+                QStandardItem(str(size_num)),        # COL_SIZE_BYTES (6)
+                QStandardItem(""),                   # COL_GROUP_COUNT (7) — group level only
+                QStandardItem(creation_txt),         # COL_CREATION_DATE (8)
+                QStandardItem(shot_txt),             # COL_SHOT_DATE  (9)
+                QStandardItem(resolution_txt),       # COL_RESOLUTION (10)
             ]
 
             try:

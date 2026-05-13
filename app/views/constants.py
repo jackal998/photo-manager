@@ -11,22 +11,23 @@ from infrastructure.i18n import t
 # Column indices stay as integer constants — they're not user-facing.
 # COL_LOCK was added between COL_ACTION and COL_NAME in #182 so the
 # lock state is its own sortable / searchable column instead of a 🔒
-# prefix glyph on the Action column. Indices below 2 are unchanged;
-# indices above 2 shifted by +1.
+# prefix glyph on the Action column.
+# COL_SCORE was inserted at index 2 for #187 (keep-worthiness scoring)
+# so the score is immediately to the right of the Action column —
+# users decide actions based on score, so the two read together at a
+# glance instead of having to scroll horizontally. Inserting shifted
+# COL_LOCK and everything below by +1.
 COL_GROUP: int = 0
 COL_ACTION: int = 1
-COL_LOCK: int = 2
-COL_NAME: int = 3
-COL_FOLDER: int = 4
-COL_SIZE_BYTES: int = 5
-COL_GROUP_COUNT: int = 6
-COL_CREATION_DATE: int = 7
-COL_SHOT_DATE: int = 8
-COL_RESOLUTION: int = 9
-# COL_SCORE was appended at index 10 for #187 (keep-worthiness scoring).
-# All prior column indices are unchanged so existing sort-state config
-# in settings.json and any user muscle memory keep working.
-COL_SCORE: int = 10
+COL_SCORE: int = 2
+COL_LOCK: int = 3
+COL_NAME: int = 4
+COL_FOLDER: int = 5
+COL_SIZE_BYTES: int = 6
+COL_GROUP_COUNT: int = 7
+COL_CREATION_DATE: int = 8
+COL_SHOT_DATE: int = 9
+COL_RESOLUTION: int = 10
 NUM_COLUMNS: int = 11
 
 
@@ -52,6 +53,7 @@ def headers() -> list[str]:
     return [
         t("column.similarity"),
         t("column.action"),
+        t("column.score"),
         t("column.lock"),
         t("column.file_name"),
         t("column.folder"),
@@ -60,7 +62,6 @@ def headers() -> list[str]:
         t("column.creation_date"),
         t("column.shot_date"),
         t("column.resolution"),
-        t("column.score"),
     ]
 
 
