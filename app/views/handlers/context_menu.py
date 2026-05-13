@@ -44,6 +44,18 @@ class ActionHandlers(Protocol):
         """Lock or unlock file items (#164)."""
         ...
 
+    def apply_best_copy_to_group(self, group_number: int) -> None:
+        """Apply KEEP to the highest-scoring file in the group and
+        DELETE to the rest (#187).
+
+        Locked rows are skipped: their existing decision stays and they
+        are not considered as the best-copy candidate. Live Photo MOV
+        passengers (``score is None``) are skipped — they inherit their
+        HEIC's decision through the existing pair-cluster logic, not
+        through this action.
+        """
+        ...
+
 
 class TreeItemProvider(Protocol):
     """Protocol for tree item provider."""
@@ -131,6 +143,20 @@ class ContextMenuHandler:
             open_folder_action.triggered.connect(
                 lambda checked=False, _path=item.get("path", ""):
                     open_folder_containing(_path)
+            )
+        elif item["type"] == "group":
+            # Group-header right-click: offer the #187 "Apply best-copy
+            # decisions to this group" action. Picks the highest-scoring
+            # non-locked, non-passenger file as the keeper and marks the
+            # rest for delete. Locked rows are silently protected — the
+            # whole point of the lock flag.
+            apply_best_action = menu.addAction(
+                t("context_menu.apply_best_copy_to_group")
+            )
+            apply_best_action.triggered.connect(
+                lambda checked=False, _g=item.get("group_number"):
+                    self.handlers.apply_best_copy_to_group(int(_g))
+                    if _g is not None else None
             )
 
         # Common actions for single selection

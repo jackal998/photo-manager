@@ -1587,3 +1587,197 @@ class TestSetDecisionByRegexLockConfirm:
         assert b.is_locked is False
         assert _read_locked(db, "/a.jpg") is False
         assert _read_locked(db, "/b.jpg") is False
+
+
+# ── apply_best_copy_to_group (#187 PR 6) ──────────────────────────────────
+
+
+def _scored_rec(
+    path: str,
+    *,
+    score: float | None,
+    group: int = 1,
+    locked: bool = False,
+    decision: str = "",
+) -> PhotoRecord:
+    """PhotoRecord factory carrying a score for the best-copy tests."""
+    rec = _rec(path, group=group, decision=decision, locked=locked)
+    rec.score = score
+    return rec
+
+
+class TestApplyBestCopyToGroup:
+    """End-to-end exercise of FileOperationsHandler.apply_best_copy_to_group.
+
+    The action mutates ``vm.groups`` in place AND writes the resolved
+    KEEP/DELETE decisions to SQLite via batch_update_decisions. Locked
+    rows are silently protected; Live Photo MOV passengers (score=None)
+    are skipped. All paths use a real on-disk SQLite manifest so the
+    batched UPDATE actually hits the DB — this catches a regression
+    where the in-memory mutation works but the DB write is missing.
+    """
+
+    def test_highest_score_wins_keep_others_get_delete(self, tmp_path):
+        big = _scored_rec("/x/big.jpg", score=0.9)
+        mid = _scored_rec("/x/mid.jpg", score=0.6)
+        low = _scored_rec("/x/low.jpg", score=0.3)
+        vm = MagicMock()
+        vm.groups = [PhotoGroup(group_number=1, items=[big, mid, low])]
+        db = _make_db(tmp_path, [
+            {"source_path": "/x/big.jpg"},
+            {"source_path": "/x/mid.jpg"},
+            {"source_path": "/x/low.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.apply_best_copy_to_group(1)
+
+        # In-memory: winner keep, others delete
+        assert big.user_decision == ""
+        assert mid.user_decision == "delete"
+        assert low.user_decision == "delete"
+        # SQLite round-trip
+        assert _read_decision(db, "/x/big.jpg") == ""
+        assert _read_decision(db, "/x/mid.jpg") == "delete"
+        assert _read_decision(db, "/x/low.jpg") == "delete"
+
+    def test_locked_rows_are_silently_protected(self, tmp_path):
+        """A locked row in the group keeps its prior decision regardless
+        of score — that's the whole point of the lock flag. The
+        highest-scoring NON-locked row becomes the winner."""
+        locked_top = _scored_rec(
+            "/x/locked.jpg", score=0.95, locked=True, decision="delete"
+        )
+        unlocked_top = _scored_rec("/x/unlocked_a.jpg", score=0.80)
+        unlocked_bot = _scored_rec("/x/unlocked_b.jpg", score=0.40)
+        vm = MagicMock()
+        vm.groups = [PhotoGroup(
+            group_number=1,
+            items=[locked_top, unlocked_top, unlocked_bot],
+        )]
+        db = _make_db(tmp_path, [
+            {"source_path": "/x/locked.jpg"},
+            {"source_path": "/x/unlocked_a.jpg"},
+            {"source_path": "/x/unlocked_b.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.apply_best_copy_to_group(1)
+
+        # Locked row's in-memory decision is unchanged (action never
+        # mutates it even though it has the highest score).
+        assert locked_top.user_decision == "delete"
+        # DB row was never written by this action — it retains the
+        # initial value from _make_db ("" since _make_db doesn't seed
+        # decisions). The contract is "no write occurred for the locked
+        # path," and the initial-state value proves that.
+        assert _read_decision(db, "/x/locked.jpg") == ""
+        # Winner among the unlocked candidates:
+        assert unlocked_top.user_decision == ""
+        assert unlocked_bot.user_decision == "delete"
+        # And the unlocked rows DID get the DB write.
+        assert _read_decision(db, "/x/unlocked_a.jpg") == ""
+        assert _read_decision(db, "/x/unlocked_b.jpg") == "delete"
+
+    def test_mov_passenger_score_none_is_skipped(self, tmp_path):
+        """Live Photo MOV passenger (score=None) is excluded from
+        candidacy. The HEIC sibling drives the decision; the MOV
+        inherits via pair-cluster logic, not this action."""
+        heic = _scored_rec("/x/IMG_001.heic", score=0.85)
+        mov_passenger = _scored_rec("/x/IMG_001.mov", score=None)
+        vm = MagicMock()
+        vm.groups = [PhotoGroup(group_number=1, items=[heic, mov_passenger])]
+        db = _make_db(tmp_path, [
+            {"source_path": "/x/IMG_001.heic"},
+            {"source_path": "/x/IMG_001.mov"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.apply_best_copy_to_group(1)
+
+        # HEIC: only scored candidate → wins KEEP.
+        assert heic.user_decision == ""
+        # MOV passenger: untouched. user_decision stays at its initial "".
+        assert mov_passenger.user_decision == ""
+
+    def test_no_candidates_emits_status_no_db_change(self, tmp_path):
+        """Group where every row is locked OR has score=None: the action
+        is a no-op (no DB write, no decision mutation) and surfaces a
+        quiet status message. Old manifests pre-#187 hit this path —
+        a re-scan recovers."""
+        locked = _scored_rec("/x/a.jpg", score=0.5, locked=True)
+        unscored = _scored_rec("/x/b.jpg", score=None)
+        vm = MagicMock()
+        vm.groups = [PhotoGroup(group_number=1, items=[locked, unscored])]
+        db = _make_db(tmp_path, [
+            {"source_path": "/x/a.jpg"},
+            {"source_path": "/x/b.jpg"},
+        ])
+        handler, _, status_reporter = _make_handler(vm, str(db))
+
+        handler.apply_best_copy_to_group(1)
+
+        # No decisions changed
+        assert locked.user_decision == ""
+        assert unscored.user_decision == ""
+        assert _read_decision(db, "/x/a.jpg") == ""
+        assert _read_decision(db, "/x/b.jpg") == ""
+        # Status reporter got a message — verifying the user knows the
+        # action ran but had nothing to do.
+        status_reporter.show_status.assert_called_once()
+
+    def test_unknown_group_number_silent_noop(self, tmp_path):
+        """Defensive: a stale group_number from a re-grouped tree must
+        not crash. PR 6's UX click-target is the group row, but the
+        view-model could have re-grouped between menu open and click
+        (e.g. concurrent remove-from-list)."""
+        rec = _scored_rec("/x/a.jpg", score=0.5)
+        vm = MagicMock()
+        vm.groups = [PhotoGroup(group_number=1, items=[rec])]
+        db = _make_db(tmp_path, [{"source_path": "/x/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        # Group 999 doesn't exist — must not raise.
+        handler.apply_best_copy_to_group(999)
+        assert rec.user_decision == ""
+
+    def test_no_manifest_path_returns_early(self, tmp_path):
+        """Without a manifest path the action cannot write — early return
+        prevents an exception cascade and keeps in-memory state clean."""
+        rec = _scored_rec("/x/a.jpg", score=0.5)
+        vm = MagicMock()
+        vm.groups = [PhotoGroup(group_number=1, items=[rec])]
+        handler, _, _ = _make_handler(vm, manifest_path=None)
+        handler.apply_best_copy_to_group(1)
+        assert rec.user_decision == ""  # unchanged
+
+    def test_tie_break_is_deterministic_by_path(self, tmp_path):
+        """When two rows tie on score, the path-lexicographic tie-break
+        produces a stable result. Re-running the action must pick the
+        same winner — otherwise users would see flapping decisions on
+        consecutive clicks."""
+        a = _scored_rec("/x/aa.jpg", score=0.8)
+        b = _scored_rec("/x/bb.jpg", score=0.8)
+        vm = MagicMock()
+        vm.groups = [PhotoGroup(group_number=1, items=[b, a])]  # order shouldn't matter
+        db = _make_db(tmp_path, [
+            {"source_path": "/x/aa.jpg"},
+            {"source_path": "/x/bb.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.apply_best_copy_to_group(1)
+
+        # /x/bb.jpg > /x/aa.jpg lexicographically; max-with-key picks bb.
+        # The contract isn't WHICH one wins — only that it's deterministic.
+        # Re-running with a fresh handler produces the same result.
+        winner1 = "/x/bb.jpg" if b.user_decision == "" else "/x/aa.jpg"
+
+        # Reset and re-run on fresh records to verify determinism.
+        a2 = _scored_rec("/x/aa.jpg", score=0.8)
+        b2 = _scored_rec("/x/bb.jpg", score=0.8)
+        vm.groups = [PhotoGroup(group_number=1, items=[a2, b2])]  # different order
+        handler2, _, _ = _make_handler(vm, str(db))
+        handler2.apply_best_copy_to_group(1)
+        winner2 = "/x/bb.jpg" if b2.user_decision == "" else "/x/aa.jpg"
+        assert winner1 == winner2
