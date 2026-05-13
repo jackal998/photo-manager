@@ -1184,3 +1184,97 @@ class TestIsLockedPersistence:
         # File doesn't even exist; empty dict should be a guard-clause early return
         ManifestRepository().batch_update_lock_state(str(db), {})
         assert not db.exists()
+
+
+# ---------------------------------------------------------------------------
+# Scoring system schema migration (photo-manager#187 — PR 1)
+# ---------------------------------------------------------------------------
+
+
+class TestScoringSchemaMigration:
+    """Old DBs lacking exif_tag_count / gps_present / xmp_derived / score must
+    auto-migrate on load. New manifests get the columns from the base DDL;
+    older manifests get them via the additive ALTER TABLE list.
+
+    These four columns are added together in PR 1 (#187) so the scoring
+    system has somewhere to write its raw signals and composite score.
+    Old manifests load with gps_present=0, xmp_derived=0, exif_tag_count=NULL,
+    score=NULL — all of which the scorer interprets as 'no signal' (0.0).
+    """
+
+    def test_old_db_without_scoring_columns_auto_migrates(self, tmp_path):
+        """An old DB without any of the four scoring columns gains them on
+        first load. The load itself must not raise; subsequent inspection
+        confirms all four columns are present with the expected types."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        # _DDL_WITH_IS_LOCKED predates the scoring columns — same shape as a
+        # manifest written before #187.
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ], ddl=_DDL_WITH_IS_LOCKED)
+
+        # First load triggers the migration (ALTER TABLE ADD COLUMN x4).
+        list(ManifestRepository().load(str(db)))
+
+        # All four columns now exist.
+        conn = sqlite3.connect(db)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(migration_manifest)")}
+        finally:
+            conn.close()
+        for expected in ("exif_tag_count", "gps_present", "xmp_derived", "score"):
+            assert expected in cols, f"Migration did not add column: {expected}"
+
+    def test_old_db_scoring_columns_have_safe_defaults(self, tmp_path):
+        """After migration, pre-existing rows get the documented defaults:
+        gps_present=0, xmp_derived=0, exif_tag_count=NULL, score=NULL.
+        These are the 'no signal' values for an unscored manifest."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ], ddl=_DDL_WITH_IS_LOCKED)
+
+        list(ManifestRepository().load(str(db)))  # trigger migration
+
+        conn = sqlite3.connect(db)
+        try:
+            r = conn.execute(
+                "SELECT exif_tag_count, gps_present, xmp_derived, score "
+                "FROM migration_manifest"
+            ).fetchone()
+        finally:
+            conn.close()
+        # exif_tag_count and score nullable; gps_present and xmp_derived
+        # NOT NULL DEFAULT 0 per migration spec.
+        assert r == (None, 0, 0, None)
+
+    def test_migration_is_idempotent(self, tmp_path):
+        """Loading an already-migrated DB must not error — ALTER TABLE ADD
+        COLUMN raises on duplicate columns, which the repository swallows.
+        Re-running load() twice exercises that swallow path."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
+                  "group_id": gid}),
+            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+                  "hamming_distance": None}),
+        ], ddl=_DDL_WITH_IS_LOCKED)
+
+        # First load adds the columns; second load must not raise.
+        list(ManifestRepository().load(str(db)))
+        list(ManifestRepository().load(str(db)))  # should not raise

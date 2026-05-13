@@ -26,7 +26,11 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
     creation_date    TEXT,
     mtime            TEXT,
     pixel_width      INTEGER,
-    pixel_height     INTEGER
+    pixel_height     INTEGER,
+    exif_tag_count   INTEGER,
+    gps_present      INTEGER NOT NULL DEFAULT 0,
+    xmp_derived      INTEGER NOT NULL DEFAULT 0,
+    score            REAL
 );
 CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
 CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
@@ -39,8 +43,9 @@ INSERT INTO migration_manifest
     (source_path, source_label, dest_path, action, source_hash,
      phash, hamming_distance, group_id, reason,
      file_size_bytes, shot_date, creation_date, mtime,
-     pixel_width, pixel_height)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?)
+     pixel_width, pixel_height,
+     exif_tag_count, gps_present, xmp_derived, score)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)
 """
 
 
@@ -73,6 +78,10 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
                     r.mtime,
                     r.pixel_width,
                     r.pixel_height,
+                    r.exif_tag_count,
+                    int(r.gps_present),
+                    int(r.xmp_derived),
+                    r.score,
                 )
                 for r in rows
             ],
