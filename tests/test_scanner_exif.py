@@ -984,3 +984,311 @@ class TestRealExiftoolFixtures:
         get removed."""
         assert (_FIXTURE_DIR / "exif_edge_batch.txt").exists()
         assert (_FIXTURE_DIR / "mixed_batch.txt").exists()
+
+
+# ── batch_read_extracts (#187 — PR 2) ──────────────────────────────────────
+
+
+class TestBatchReadExtracts:
+    """Extended exiftool batch for the scoring system.
+
+    Critical sentinel contract: after this function runs, ``gps_present`` and
+    ``xmp_derived`` are *never* None — they are always explicit booleans
+    (False = checked and absent, True = present). A None on either field
+    post-pipeline is the silent-dropout regression we are protecting against.
+    """
+
+    def test_empty_paths_returns_empty(self):
+        from scanner.exif import batch_read_extracts
+        et = MagicMock()
+        result = batch_read_extracts([], et)
+        assert result == {}
+        et.execute.assert_not_called()
+
+    def test_gps_present_true_when_latitude_in_record(self):
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([
+            (paths[0], {
+                "EXIF:GPSLatitude": "37 deg 46' 0.00\" N",
+                "EXIF:GPSLongitude": "122 deg 25' 0.00\" W",
+            }),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].gps_present is True
+
+    def test_gps_present_false_when_no_gps_tags(self):
+        """Silent-dropout regression: an image without GPS must yield
+        gps_present=False (not None), proving the exiftool pass ran."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:DateTimeOriginal": "2024:06:15 10:30:00"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].gps_present is False  # NOT None
+
+    def test_gps_present_true_for_video_quicktime_coords(self):
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/clip.mov")]
+        et = _make_mock_et([
+            (paths[0], {"QuickTime:GPSCoordinates": "37.7,-122.4"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].gps_present is True
+
+    def test_xmp_derived_true_when_derivedfrom_present(self):
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/edited.jpg")]
+        et = _make_mock_et([
+            (paths[0], {"XMP:DerivedFrom": "uuid:original-abc-123"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].xmp_derived is True
+
+    def test_xmp_derived_false_when_absent(self):
+        """Silent-dropout regression for xmp_derived."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([(paths[0], None)])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].xmp_derived is False  # NOT None
+
+    def test_xmp_rating_parsed_as_int(self):
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([
+            (paths[0], {"XMP:Rating": 5}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].xmp_rating == 5
+
+    def test_xmp_rating_string_coerced(self):
+        """exiftool sometimes emits Rating as string; defensive coerce."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([
+            (paths[0], {"XMP:Rating": "4"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].xmp_rating == 4
+
+    def test_xmp_rating_none_when_absent(self):
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([(paths[0], None)])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].xmp_rating is None
+
+    def test_exif_tag_count_counts_census_tags(self):
+        """Count includes only tags in the documented census set
+        (image + video tags). Non-census tags like ``EXIF:CreateDate``
+        do not contribute even when present in the record."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([
+            (paths[0], {
+                "EXIF:DateTimeOriginal": "2024:06:15 10:30:00",
+                "EXIF:Make": "Canon",
+                "EXIF:Model": "EOS 5D",
+                "EXIF:ISO": "400",
+                # EXIF:CreateDate is in the date fallback chain but NOT in
+                # the census — counting it would double-credit dates.
+                "EXIF:CreateDate": "2024:06:15 10:30:00",
+            }),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].exif_tag_count == 4
+
+    def test_exif_tag_count_zero_when_no_census_tags(self):
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([(paths[0], None)])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].exif_tag_count == 0
+
+    def test_exif_date_tag_records_source_tag(self):
+        """When DateTimeOriginal produces the date, exif_date_tag carries
+        the exact tag name so the date_provenance scorer (PR 3) can
+        weight DateTimeOriginal-derived dates higher than CreateDate
+        fallbacks."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:DateTimeOriginal": "2024:06:15 10:30:00"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].exif_date == datetime(2024, 6, 15, 10, 30, 0)
+        assert result[paths[0]].exif_date_tag == "EXIF:DateTimeOriginal"
+
+    def test_exif_date_tag_fallback_path(self):
+        """When DateTimeOriginal is absent, the tag name reflects which
+        tag actually produced the date (CreateDate, QuickTime:CreateDate,
+        etc.)."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:CreateDate": "2024:01:01 08:00:00"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].exif_date == datetime(2024, 1, 1, 8, 0, 0)
+        assert result[paths[0]].exif_date_tag == "EXIF:CreateDate"
+
+    def test_extracted_by_marks_exiftool(self):
+        """Every MediaExtract returned must have ``"exiftool"`` in
+        extracted_by — that's how merge_extracts knows this partial came
+        from exiftool and applies the exiftool-wins-on-exif_date rule."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([(paths[0], None)])
+        result = batch_read_extracts(paths, et)
+        assert "exiftool" in result[paths[0]].extracted_by
+
+    def test_missing_record_returns_partial_with_error(self):
+        """If exiftool returns no record for a path (e.g. file vanished
+        mid-batch), we still emit a MediaExtract with extracted_by={
+        'exiftool'} and an error message — never silently drop the path."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([])  # empty output — no records for any path
+        result = batch_read_extracts(paths, et)
+        assert paths[0] in result
+        assert "exiftool" in result[paths[0]].extracted_by
+        assert len(result[paths[0]].extraction_errors) == 1
+        # All signals stay None for missing records (the scorer treats them
+        # as "no signal").
+        assert result[paths[0]].gps_present is None
+
+    def test_chunking_calls_execute_multiple_times(self):
+        """Same chunking semantics as batch_read_dates — chunk_size paths
+        per execute call."""
+        import json as _json
+        from scanner.exif import batch_read_extracts
+
+        paths = [Path(f"/fake/{i}.jpg") for i in range(5)]
+
+        def fake_execute(args):
+            chunk_paths = [a for a in args if not a.startswith("-")]
+            records = [{"SourceFile": p} for p in chunk_paths]
+            return _json.dumps(records)
+
+        et = MagicMock()
+        et.execute.side_effect = fake_execute
+
+        batch_read_extracts(paths, et, chunk_size=2)
+        assert et.execute.call_count == 3  # ceil(5/2)
+
+    def test_args_omit_fast_flag(self):
+        """Critical: the extended batch must NOT use ``-fast``. GPS and
+        XMP tags live in segments past the first IFD that ``-fast`` skips,
+        so including it would silently zero out gps_present / xmp_derived
+        for every file. Regression-protect that decision."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([(paths[0], None)])
+        batch_read_extracts(paths, et)
+        called_args = et.execute.call_args[0][0]
+        assert "-fast" not in called_args
+
+    def test_args_include_gps_and_xmp_selectors(self):
+        """Sanity check that the new tag selectors actually reach exiftool.
+        If someone removes ``-GPSLatitude`` later, gps_present would always
+        be False — caught here at the args layer instead of in production."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.jpg")]
+        et = _make_mock_et([(paths[0], None)])
+        batch_read_extracts(paths, et)
+        called_args = et.execute.call_args[0][0]
+        # GPS
+        assert "-GPSLatitude" in called_args
+        assert "-QuickTime:GPSCoordinates" in called_args
+        # XMP provenance + rating
+        assert "-XMP-xmpMM:DerivedFrom" in called_args
+        assert "-XMP:Rating" in called_args
+
+
+# ── HashResult.to_media_extract adapter (#187 — PR 2) ──────────────────────
+
+
+class TestHashResultToMediaExtract:
+    """HashResult is the existing single-read hasher output. The adapter
+    converts it into a partial MediaExtract that merge_extracts can combine
+    with the exiftool partial.
+
+    extracted_by must reflect which tools actually contributed data so the
+    merge step's rawpy-wins-on-dims rule fires correctly.
+    """
+
+    def test_jpeg_extract_marks_hasher_and_pil(self):
+        from scanner.dedup import HashResult
+        from scanner.walker import FileRecord
+        rec = FileRecord(
+            path=Path("/x/a.jpg"), source_label="src",
+            file_type="jpeg",
+        )
+        hr = HashResult(
+            record=rec, sha256="abc", phash="defg",
+            exif_date=datetime(2024, 1, 1, 12, 0, 0),
+            mean_color="100,120,140",
+            pixel_width=4032, pixel_height=3024,
+        )
+        me = hr.to_media_extract()
+        assert me.path == Path("/x/a.jpg")
+        assert me.file_type == "jpeg"
+        assert me.sha256 == "abc"
+        assert me.phash == "defg"
+        assert me.mean_color == "100,120,140"
+        assert me.pixel_width == 4032
+        assert me.extracted_by == {"hasher", "pil"}
+
+    def test_raw_extract_marks_rawpy(self):
+        """For RAW files with dims, rawpy must be in extracted_by so
+        merge_extracts picks rawpy's sensor dims over PIL's thumbnail."""
+        from scanner.dedup import HashResult
+        from scanner.walker import FileRecord
+        rec = FileRecord(
+            path=Path("/x/photo.nef"), source_label="src",
+            file_type="raw",
+        )
+        hr = HashResult(
+            record=rec, sha256="abc", phash="thumbphash",
+            exif_date=None,  # RAW dates come from exiftool, not PIL
+            pixel_width=6000, pixel_height=4000,
+        )
+        me = hr.to_media_extract()
+        assert "rawpy" in me.extracted_by
+        assert "pil" in me.extracted_by   # phash means PIL also ran
+        assert "hasher" in me.extracted_by
+
+    def test_video_extract_marks_only_hasher(self):
+        """Video files: only sha256 is computed (streamed); no PIL, no rawpy."""
+        from scanner.dedup import HashResult
+        from scanner.walker import FileRecord
+        rec = FileRecord(
+            path=Path("/x/clip.mov"), source_label="src",
+            file_type="mov",
+        )
+        hr = HashResult(
+            record=rec, sha256="abc", phash=None,
+            exif_date=None,
+        )
+        me = hr.to_media_extract()
+        assert me.extracted_by == {"hasher"}
+
+    def test_no_exif_date_tag_from_pil(self):
+        """PIL doesn't surface which EXIF IFD/tag produced the date, so
+        exif_date_tag is None on a PIL-only partial. The exiftool partial
+        fills it in during merge."""
+        from scanner.dedup import HashResult
+        from scanner.walker import FileRecord
+        rec = FileRecord(
+            path=Path("/x/a.jpg"), source_label="src",
+            file_type="jpeg",
+        )
+        hr = HashResult(
+            record=rec, sha256="abc", phash="defg",
+            exif_date=datetime(2024, 1, 1, 12, 0, 0),
+        )
+        me = hr.to_media_extract()
+        assert me.exif_date == datetime(2024, 1, 1, 12, 0, 0)
+        assert me.exif_date_tag is None
