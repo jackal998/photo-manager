@@ -68,9 +68,10 @@ class ScanWorker(QThread):
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from scanner.walker import scan_sources
         from scanner.hasher import compute_hashes
-        from scanner.exif import ExiftoolProcess, batch_read_dates, parse_exif_date
+        from scanner.exif import ExiftoolProcess, batch_read_extracts, parse_exif_date
         from scanner.dedup import HashResult, classify
         from scanner.manifest import write_manifest, print_summary
+        from scanner.scoring import apply_scoring_to_rows
         import io
         from contextlib import redirect_stdout
 
@@ -105,7 +106,6 @@ class ScanWorker(QThread):
         # One file read per image: SHA-256, pHash, and EXIF date for JPEG/PNG
         # are extracted from the same in-memory buffer.
         chunk_size = 500
-        _EXIFTOOL_TYPES = frozenset(("heic", "raw", "mov", "mp4"))
         cancel_flag = threading.Event()
         skipped: list[tuple[Path, str, str]] = []  # (path, exc type, exc msg)
 
@@ -181,29 +181,42 @@ class ScanWorker(QThread):
             if len(skipped) > 10:
                 self._emit(f"    … and {len(skipped) - 10:,} more")
 
-        # --- 3. exiftool for HEIC / RAW / MOV / MP4 only ---
-        # JPEG and PNG dates already populated from the PIL pass above.
-        et_records = [r for r in hash_results if r.exif_date is None
-                      and r.record.file_type in _EXIFTOOL_TYPES]
+        # --- 3. exiftool for ALL non-skip files ---
+        # Previously this ran only for HEIC/RAW/MOV/MP4 (formats whose dates
+        # PIL cannot extract). For the #187 scoring system every file needs
+        # a full census tag count + GPS / xmpMM:DerivedFrom presence, so
+        # the exiftool pass now covers everything (except file_type="skip").
+        # PIL dates from the hash pass are preserved — exiftool dates only
+        # fill in when PIL didn't find one.
+        et_records = [r for r in hash_results if r.record.file_type != "skip"]
+        extracts: dict = {}
         if et_records:
             et_paths = [r.record.path for r in et_records]
             n_chunks = (len(et_paths) + chunk_size - 1) // chunk_size
-            self._emit(f"EXIF via exiftool for {len(et_paths):,} non-JPEG files ({n_chunks} chunk(s))…")
+            self._emit(
+                f"EXIF + scoring signals via exiftool for {len(et_paths):,} files"
+                f" ({n_chunks} chunk(s))…"
+            )
             try:
                 with ExiftoolProcess() as et:
-                    dates: dict = {}
                     for i in range(0, len(et_paths), chunk_size):
                         chunk = et_paths[i: i + chunk_size]
-                        dates.update(batch_read_dates(chunk, et, chunk_size=chunk_size))
+                        extracts.update(batch_read_extracts(chunk, et, chunk_size=chunk_size))
                         done_et = min(i + chunk_size, len(et_paths))
                         self._emit(f"  EXIF {done_et:,}/{len(et_paths):,}")
-                found = sum(1 for v in dates.values() if v)
-                self._emit(f"  EXIF done — {found:,} dates found")
+                found_dates = sum(1 for e in extracts.values() if e.exif_date is not None)
+                with_gps = sum(1 for e in extracts.values() if e.gps_present)
+                self._emit(f"  EXIF done — {found_dates:,} dates, {with_gps:,} with GPS")
+                # Backfill exif_date for records where PIL didn't find one.
                 for r in et_records:
-                    r.exif_date = dates.get(r.record.path)
+                    if r.exif_date is None:
+                        extract = extracts.get(r.record.path)
+                        if extract is not None:
+                            r.exif_date = extract.exif_date
             except FileNotFoundError:
                 self._emit(
-                    "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video unavailable.\n"
+                    "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
+                    " and scoring signals (GPS, EXIF census, XMP provenance) unavailable.\n"
                     "Install from https://exiftool.org/ and add to PATH."
                 )
 
@@ -215,6 +228,13 @@ class ScanWorker(QThread):
             mean_color_threshold=self.mean_color_threshold,
             source_priority=self.source_priority,
         )
+
+        # --- 4.5: score within each duplicate group (#187) ---
+        # Mutates rows in place: copies exif_tag_count / gps_present /
+        # xmp_derived from extracts into ManifestRow, then assigns
+        # compute_score(...) per group. Isolated rows (group_id is None)
+        # stay unscored — no peers to compete with.
+        apply_scoring_to_rows(rows, extracts)
 
         # Capture print_summary output and re-emit as progress
         buf = io.StringIO()

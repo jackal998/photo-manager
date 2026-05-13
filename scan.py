@@ -131,9 +131,10 @@ def main() -> int:
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from scanner.walker import scan_sources
     from scanner.hasher import compute_hashes
-    from scanner.exif import ExiftoolProcess, batch_read_dates, parse_exif_date
+    from scanner.exif import ExiftoolProcess, batch_read_extracts, parse_exif_date
     from scanner.dedup import HashResult, classify
     from scanner.manifest import write_manifest, print_summary
+    from scanner.scoring import apply_scoring_to_rows
 
     print("Read-only scan — no files will be moved or deleted.", flush=True)
     print("MOVE / SKIP / REVIEW in the results are planned actions only.\n", flush=True)
@@ -159,7 +160,6 @@ def main() -> int:
     # are all extracted from the same in-memory buffer.
     # HEIC / RAW / MOV / MP4 return no date here — a targeted exiftool batch follows.
     chunk_size = 500
-    _EXIFTOOL_TYPES = frozenset(("heic", "raw", "mov", "mp4"))
 
     print(f"Hashing {len(records):,} files (workers={args.workers})…", flush=True)
     hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
@@ -202,36 +202,60 @@ def main() -> int:
         if len(skipped) > 10:
             print(f"    … and {len(skipped) - 10:,} more", file=sys.stderr, flush=True)
 
-    # --- exiftool for HEIC / RAW / MOV / MP4 only ---
-    # JPEG and PNG dates are already populated from the PIL pass above.
-    et_records = [r for r in hash_results if r.exif_date is None
-                  and r.record.file_type in _EXIFTOOL_TYPES]
+    # --- exiftool for ALL non-skip files ---
+    # Previously this ran only for HEIC/RAW/MOV/MP4 (formats whose dates
+    # PIL cannot extract). For the #187 scoring system every file needs a
+    # full census tag count + GPS / xmpMM:DerivedFrom presence, so the
+    # exiftool pass now covers everything (except file_type="skip").
+    # PIL dates from the hash pass above are preserved — exiftool dates
+    # only fill in when PIL didn't find one.
+    et_records = [r for r in hash_results if r.record.file_type != "skip"]
+    extracts: dict = {}
     if et_records:
         et_paths = [r.record.path for r in et_records]
         n_chunks = (len(et_paths) + chunk_size - 1) // chunk_size
-        print(f"EXIF via exiftool for {len(et_paths):,} non-JPEG files ({n_chunks} chunk(s))…",
-              flush=True)
+        print(
+            f"EXIF + scoring signals via exiftool for {len(et_paths):,} files "
+            f"({n_chunks} chunk(s))…",
+            flush=True,
+        )
         try:
             with ExiftoolProcess() as et:
-                dates: dict = {}
                 for i in range(0, len(et_paths), chunk_size):
                     chunk = et_paths[i: i + chunk_size]
-                    dates.update(batch_read_dates(chunk, et, chunk_size=chunk_size))
+                    extracts.update(batch_read_extracts(chunk, et, chunk_size=chunk_size))
                     done_et = min(i + chunk_size, len(et_paths))
                     print(f"  EXIF {done_et:,}/{len(et_paths):,}", end="\r", flush=True)
-            found = sum(1 for v in dates.values() if v)
-            print(f"  EXIF done — {found:,} dates found", flush=True)
+            found_dates = sum(1 for e in extracts.values() if e.exif_date is not None)
+            with_gps = sum(1 for e in extracts.values() if e.gps_present)
+            print(
+                f"  EXIF done — {found_dates:,} dates, {with_gps:,} with GPS",
+                flush=True,
+            )
+            # Backfill exif_date for records where PIL didn't find one.
+            # PIL's value (when present) wins because it's already on the
+            # record; we only fill the None slots.
             for r in et_records:
-                r.exif_date = dates.get(r.record.path)
+                if r.exif_date is None:
+                    extract = extracts.get(r.record.path)
+                    if extract is not None:
+                        r.exif_date = extract.exif_date
         except FileNotFoundError:
             print(
-                "\nWARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video unavailable.\n"
+                "\nWARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
+                " and scoring signals (GPS, EXIF census, XMP provenance) unavailable.\n"
                 "Install from https://exiftool.org/ and ensure it is in your PATH.",
                 file=sys.stderr,
             )
 
     print("Classifying…", flush=True)
     rows = classify(hash_results, threshold=args.threshold, source_priority=source_priority)
+
+    # --- Phase 4.5: score within each duplicate group (#187) ---
+    # Mutates rows in place: copies exif_tag_count / gps_present / xmp_derived
+    # from extracts into ManifestRow, then assigns compute_score(...) per group.
+    # Isolated rows (group_id is None) stay unscored — no peers to compete with.
+    apply_scoring_to_rows(rows, extracts)
 
     print_summary(rows, skipped=len(skipped))
 

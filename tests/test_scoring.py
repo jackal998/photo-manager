@@ -595,3 +595,354 @@ class TestScoreGroup:
         first = score_group([a, b])
         second = score_group([a, b])
         assert first == second
+
+
+# ── apply_scoring_to_rows — PR 4 pipeline merge + score helper ─────────────
+
+
+class TestApplyScoringToRows:
+    """The bridge from PR 2's MediaExtract dict (exiftool batch output) to
+    PR 1's ManifestRow scoring columns + PR 3's composite score. Mutates
+    rows in place; no I/O. Tests construct synthetic ManifestRows and
+    MediaExtracts so the function's purity is provable.
+    """
+
+    def _extract(
+        self,
+        path_str: str,
+        *,
+        gps_present=None,
+        xmp_derived=None,
+        exif_tag_count=None,
+    ):
+        from pathlib import Path
+        from scanner.media_extract import MediaExtract
+        return MediaExtract(
+            path=Path(path_str),
+            gps_present=gps_present,
+            xmp_derived=xmp_derived,
+            exif_tag_count=exif_tag_count,
+            extracted_by={"exiftool"},
+        )
+
+    def test_backfills_raw_signals_from_extracts(self):
+        from pathlib import Path
+        from scanner.scoring import apply_scoring_to_rows
+        row = _row("/x/a.jpg", pixel_width=4000, pixel_height=3000)
+        extracts = {
+            Path("/x/a.jpg"): self._extract(
+                "/x/a.jpg",
+                gps_present=True,
+                xmp_derived=False,
+                exif_tag_count=12,
+            )
+        }
+        apply_scoring_to_rows([row], extracts)
+        assert row.gps_present is True
+        assert row.xmp_derived is False
+        assert row.exif_tag_count == 12
+
+    def test_none_extracts_preserve_defaults(self):
+        """A MediaExtract with gps_present=None (extractor didn't check)
+        must NOT overwrite ManifestRow.gps_present's default (False).
+        The whole point of MediaExtract's sentinel convention."""
+        from pathlib import Path
+        from scanner.scoring import apply_scoring_to_rows
+        row = _row("/x/a.jpg", pixel_width=4000, pixel_height=3000)
+        extracts = {
+            Path("/x/a.jpg"): self._extract(
+                "/x/a.jpg",
+                gps_present=None,
+                xmp_derived=None,
+                exif_tag_count=None,
+            )
+        }
+        apply_scoring_to_rows([row], extracts)
+        # Defaults from ManifestRow: gps_present=False, xmp_derived=False,
+        # exif_tag_count=None.
+        assert row.gps_present is False
+        assert row.xmp_derived is False
+        assert row.exif_tag_count is None
+
+    def test_missing_extract_skips_row(self):
+        """A row whose path is absent from the extracts dict (exiftool
+        skipped or failed for that file) keeps its ManifestRow defaults.
+        The scorer reads those as 'no signal'."""
+        from scanner.scoring import apply_scoring_to_rows
+        row = _row("/x/a.jpg", pixel_width=4000, pixel_height=3000)
+        apply_scoring_to_rows([row], {})  # empty extracts
+        assert row.exif_tag_count is None
+        assert row.gps_present is False
+        assert row.xmp_derived is False
+
+    def test_assigns_score_within_groups(self):
+        from pathlib import Path
+        from scanner.scoring import apply_scoring_to_rows
+        big = _row(
+            "/x/big.jpg", group_id="g1",
+            pixel_width=6000, pixel_height=4000,
+            file_size_bytes=5_000_000,
+        )
+        small = _row(
+            "/x/small.jpg", group_id="g1",
+            pixel_width=1024, pixel_height=768,
+            file_size_bytes=500_000,
+        )
+        apply_scoring_to_rows([big, small], extracts={})
+        assert big.score is not None
+        assert small.score is not None
+        # Bigger pixels + larger size in same group → bigger score.
+        assert big.score > small.score
+
+    def test_isolated_rows_left_unscored(self):
+        """A row with group_id=None has no peers — score stays None
+        because there's nothing to compete with."""
+        from scanner.scoring import apply_scoring_to_rows
+        row = _row("/x/lone.jpg", group_id=None,
+                    pixel_width=4000, pixel_height=3000)
+        apply_scoring_to_rows([row], extracts={})
+        assert row.score is None
+
+    def test_live_photo_mov_gets_none_score(self):
+        from scanner.scoring import apply_scoring_to_rows
+        heic = _row("/x/IMG_001.heic", group_id="g1")
+        mov = _row("/x/IMG_001.mov", group_id="g1")
+        apply_scoring_to_rows([heic, mov], extracts={})
+        assert mov.score is None
+        assert isinstance(heic.score, float)
+
+    def test_does_not_overwrite_existing_default_with_extract_default(self):
+        """gps_present default is False on ManifestRow. If extract says
+        explicitly False (checked + absent), the row gets False. If extract
+        says None (not checked), the row stays at its default False. Both
+        end up at False here — the distinction matters once we have a
+        row that started with True (e.g. set by an earlier pass)."""
+        from pathlib import Path
+        from scanner.scoring import apply_scoring_to_rows
+        row = _row("/x/a.jpg", group_id="g1")
+        row.gps_present = True   # simulate prior-set state
+        extracts = {
+            Path("/x/a.jpg"): self._extract("/x/a.jpg", gps_present=None)
+        }
+        apply_scoring_to_rows([row], extracts)
+        # None extract value should NOT clobber the existing True.
+        assert row.gps_present is True
+
+
+# ── ManifestRepository.rescore — re-compute scores without re-scanning ─────
+
+
+class TestManifestRepositoryRescore:
+    """Rescore reads cached raw signals from the DB, recomputes composite
+    scores in memory, and writes the new values back via a single batched
+    UPDATE. No file I/O, no exiftool. The test path exercises the
+    round-trip: write rows → rescore → read scores back.
+    """
+
+    def _make_manifest_with_scoring(self, tmp_path, rows: list[ManifestRow]):
+        """Use the real write_manifest() so the DB shape matches production."""
+        from scanner.manifest import write_manifest
+        out = tmp_path / "manifest.sqlite"
+        write_manifest(rows, out)
+        return out
+
+    def test_rescore_assigns_scores_from_cached_signals(self, tmp_path):
+        """Two rows in the same group, only signals in the DB — rescore
+        should produce a score for both, with the better signal winning."""
+        from infrastructure.manifest_repository import ManifestRepository
+        import sqlite3
+
+        rows = [
+            ManifestRow(
+                source_path="/x/big.jpg", source_label="src",
+                dest_path=None, action="REVIEW_DUPLICATE",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                pixel_width=6000, pixel_height=4000,
+                file_size_bytes=5_000_000,
+                group_id="g1",
+                exif_tag_count=12, gps_present=True, xmp_derived=False,
+            ),
+            ManifestRow(
+                source_path="/x/small.jpg", source_label="src",
+                dest_path=None, action="REVIEW_DUPLICATE",
+                source_hash="bbb", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                pixel_width=1024, pixel_height=768,
+                file_size_bytes=500_000,
+                group_id="g1",
+                exif_tag_count=2, gps_present=False, xmp_derived=False,
+            ),
+        ]
+        db = self._make_manifest_with_scoring(tmp_path, rows)
+
+        n = ManifestRepository().rescore(str(db))
+        assert n == 2
+
+        conn = sqlite3.connect(db)
+        try:
+            scores = dict(conn.execute(
+                "SELECT source_path, score FROM migration_manifest"
+            ).fetchall())
+        finally:
+            conn.close()
+        assert scores["/x/big.jpg"] is not None
+        assert scores["/x/small.jpg"] is not None
+        assert scores["/x/big.jpg"] > scores["/x/small.jpg"]
+
+    def test_rescore_skips_isolated_rows(self, tmp_path):
+        """Rows with group_id=NULL are not scored — they have no peers."""
+        from infrastructure.manifest_repository import ManifestRepository
+        import sqlite3
+
+        rows = [
+            ManifestRow(
+                source_path="/x/alone.jpg", source_label="src",
+                dest_path=None, action="MOVE",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                pixel_width=4000, pixel_height=3000,
+                group_id=None,
+            ),
+        ]
+        db = self._make_manifest_with_scoring(tmp_path, rows)
+        n = ManifestRepository().rescore(str(db))
+        assert n == 0
+
+        conn = sqlite3.connect(db)
+        try:
+            score = conn.execute(
+                "SELECT score FROM migration_manifest WHERE source_path = ?",
+                ("/x/alone.jpg",),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert score is None
+
+    def test_rescore_writes_null_for_live_photo_mov(self, tmp_path):
+        """The Live Photo MOV passenger rule (compute_score returns None)
+        must survive the round-trip into the DB as a NULL."""
+        from infrastructure.manifest_repository import ManifestRepository
+        import sqlite3
+
+        rows = [
+            ManifestRow(
+                source_path="/x/IMG_001.heic", source_label="src",
+                dest_path=None, action="MOVE",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                pixel_width=4000, pixel_height=3000,
+                group_id="g1",
+            ),
+            ManifestRow(
+                source_path="/x/IMG_001.mov", source_label="src",
+                dest_path=None, action="MOVE",
+                source_hash="bbb", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                group_id="g1",
+            ),
+        ]
+        db = self._make_manifest_with_scoring(tmp_path, rows)
+        ManifestRepository().rescore(str(db))
+
+        conn = sqlite3.connect(db)
+        try:
+            mov_score = conn.execute(
+                "SELECT score FROM migration_manifest WHERE source_path = ?",
+                ("/x/IMG_001.mov",),
+            ).fetchone()[0]
+            heic_score = conn.execute(
+                "SELECT score FROM migration_manifest WHERE source_path = ?",
+                ("/x/IMG_001.heic",),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert mov_score is None   # passenger rule
+        assert heic_score is not None
+
+    def test_rescore_validates_weights(self, tmp_path):
+        """Bad weights → clear error, not silent wrong scoring. Covers
+        both branches of validate_weights: missing keys + bad sum."""
+        from infrastructure.manifest_repository import ManifestRepository
+
+        rows = [
+            ManifestRow(
+                source_path="/x/a.jpg", source_label="src",
+                dest_path=None, action="MOVE",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                group_id="g1",
+            ),
+        ]
+        db = self._make_manifest_with_scoring(tmp_path, rows)
+
+        # Missing keys path:
+        with pytest.raises(ValueError, match="missing keys"):
+            ManifestRepository().rescore(str(db), weights={"resolution": 0.5})
+
+        # Bad sum path (all keys present, but they sum to 4.0):
+        bad_sum = {k: 0.5 for k in DEFAULT_WEIGHTS}
+        with pytest.raises(ValueError, match="must sum to 1.0"):
+            ManifestRepository().rescore(str(db), weights=bad_sum)
+
+    def test_rescore_uses_provided_weights(self, tmp_path):
+        """Calling rescore with custom weights must affect the result —
+        otherwise the API would be silently broken."""
+        from infrastructure.manifest_repository import ManifestRepository
+        import sqlite3
+
+        rows = [
+            ManifestRow(
+                source_path="/x/big.jpg", source_label="src",
+                dest_path=None, action="REVIEW_DUPLICATE",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                pixel_width=6000, pixel_height=4000,
+                group_id="g1",
+                gps_present=False,
+            ),
+            ManifestRow(
+                source_path="/x/small.jpg", source_label="src",
+                dest_path=None, action="REVIEW_DUPLICATE",
+                source_hash="bbb", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="",
+                pixel_width=1024, pixel_height=768,
+                group_id="g1",
+                gps_present=True,
+            ),
+        ]
+        db = self._make_manifest_with_scoring(tmp_path, rows)
+
+        # Default weights → resolution wins, big > small.
+        ManifestRepository().rescore(str(db))
+        conn = sqlite3.connect(db)
+        try:
+            default = dict(conn.execute(
+                "SELECT source_path, score FROM migration_manifest"
+            ).fetchall())
+        finally:
+            conn.close()
+        assert default["/x/big.jpg"] > default["/x/small.jpg"]
+
+        # GPS-heavy weights — small has GPS, big does not. Big still has
+        # 0.25 resolution advantage but small now claims 0.85 GPS. With
+        # tied other dims, small should overtake.
+        gps_heavy = {
+            "resolution":    0.05,
+            "file_size":     0.02,
+            "exif_complete": 0.05,
+            "date_prov":     0.02,
+            "gps":           0.80,
+            "filename":      0.03,
+            "path":          0.02,
+            "live_photo":    0.01,
+        }
+        ManifestRepository().rescore(str(db), weights=gps_heavy)
+        conn = sqlite3.connect(db)
+        try:
+            tuned = dict(conn.execute(
+                "SELECT source_path, score FROM migration_manifest"
+            ).fetchall())
+        finally:
+            conn.close()
+        assert tuned["/x/small.jpg"] > tuned["/x/big.jpg"]
