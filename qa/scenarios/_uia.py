@@ -808,10 +808,13 @@ def _table_cells_by_row(dlg: UIAWrapper) -> list[list[tuple[int, int, int, int]]
 def read_source_paths(dlg: UIAWrapper) -> list[str]:
     """Return source-table paths in row order (top-to-bottom).
 
-    Reads only column 1 (path text), which is a real QTableWidgetItem
-    and so is exposed in the UIA tree. The Recursive / ↑↓ / × cells
-    are setCellWidget'd and have no accessible state — callers cannot
-    read those, only act on them.
+    Reads only column 0 (path text), which is a real QTableWidgetItem
+    and so is exposed in the UIA tree. The Recursive / × cells are
+    setCellWidget'd and have no accessible state — callers cannot read
+    those, only act on them.
+
+    The table is displayed sorted by path (case-insensitive) regardless
+    of insertion order — see _SourceListWidget._rebuild_table.
     """
     try:
         table = dlg.child_window(
@@ -833,50 +836,41 @@ def read_source_paths(dlg: UIAWrapper) -> list[str]:
 
 
 def click_source_row_button(dlg: UIAWrapper, row: int, kind: str) -> None:
-    """Click ↑ / ↓ / × on the given 0-indexed row by pixel coordinates.
+    """Click × on the given 0-indexed row by pixel coordinates.
 
-    ``kind`` is one of ``"up"``, ``"down"``, ``"remove"``.
+    ``kind`` must be ``"remove"`` — the ↑/↓ reorder buttons were
+    removed in #213 (the folder list is now sorted by path and scan
+    order doesn't affect dedup outcome).
 
     setCellWidget'd buttons are not exposed in Qt's UIA tree, so we
-    target them by clicking inside the column DataItem rectangle:
-
-      - col 3 contains the ↑↓ pair side-by-side; click left third for
-        ↑, right third for ↓ (centered button widths are 26px each).
-      - col 4 contains the × button; click center.
+    target the × button by clicking the center of the column-2
+    DataItem rectangle.
 
     After the click the table is rebuilt from scratch (see
-    _SourceListWidget._move / ._remove); callers should re-read row
-    state via read_source_paths.
+    _SourceListWidget._remove); callers should re-read row state via
+    read_source_paths.
     """
     import pywinauto.mouse
 
-    if kind not in {"up", "down", "remove"}:
-        raise ValueError(f"kind must be up|down|remove, got {kind!r}")
+    if kind != "remove":
+        raise ValueError(
+            f"kind must be 'remove' (↑/↓ buttons were removed in #213); "
+            f"got {kind!r}"
+        )
 
     rows = _table_cells_by_row(dlg)
     if row < 0 or row >= len(rows):
         raise IndexError(f"row {row} out of range (have {len(rows)} rows)")
     cells = rows[row]
-    if len(cells) < 5:
+    if len(cells) < 3:
         raise RuntimeError(
-            f"row {row} has only {len(cells)} cells; expected 5 "
-            f"(#, Path, Recursive, ↑↓, ×)"
+            f"row {row} has only {len(cells)} cells; expected 3 "
+            f"(Path, Recursive, ×)"
         )
 
-    if kind == "remove":
-        left, top, right, bottom = cells[4]
-    else:
-        left, top, right, bottom = cells[3]
-
+    left, top, right, bottom = cells[2]
     cy = top + (bottom - top) // 2
-    if kind == "up":
-        # ↑ sits in the left half of column 3
-        cx = left + (right - left) // 4
-    elif kind == "down":
-        # ↓ sits in the right half of column 3
-        cx = left + 3 * (right - left) // 4
-    else:  # remove
-        cx = left + (right - left) // 2
+    cx = left + (right - left) // 2
 
     _focus(dlg)
     pywinauto.mouse.click(button="left", coords=(cx, cy))
@@ -887,7 +881,7 @@ def toggle_source_row_recursive(dlg: UIAWrapper, row: int) -> None:
     """Toggle the Recursive checkbox in the given 0-indexed row.
 
     setCellWidget'd checkboxes do not surface in the UIA tree, so we
-    click the center of the column-2 cell rectangle. Qt routes the
+    click the center of the column-1 cell rectangle. Qt routes the
     click to the cell widget (centered checkbox) which fires
     stateChanged → _on_recursive_changed.
 
@@ -902,11 +896,11 @@ def toggle_source_row_recursive(dlg: UIAWrapper, row: int) -> None:
     if row < 0 or row >= len(rows):
         raise IndexError(f"row {row} out of range (have {len(rows)} rows)")
     cells = rows[row]
-    if len(cells) < 3:
+    if len(cells) < 2:
         raise RuntimeError(
-            f"row {row} has only {len(cells)} cells; expected at least 3"
+            f"row {row} has only {len(cells)} cells; expected at least 2"
         )
-    left, top, right, bottom = cells[2]
+    left, top, right, bottom = cells[1]
     cx = left + (right - left) // 2
     cy = top + (bottom - top) // 2
     _focus(dlg)

@@ -102,36 +102,6 @@ class TestSourceListWidget:
         widget._remove(5)
         assert len(widget.entries()) == 1
 
-    def test_move_up(self, qapp):
-        widget = _SourceListWidget()
-        widget.add_entry("/path/a")
-        widget.add_entry("/path/b")
-        widget._move(1, -1)   # move b up
-        assert widget.entries()[0].path == "/path/b"
-        assert widget.entries()[1].path == "/path/a"
-
-    def test_move_down(self, qapp):
-        widget = _SourceListWidget()
-        widget.add_entry("/path/a")
-        widget.add_entry("/path/b")
-        widget._move(0, +1)   # move a down
-        assert widget.entries()[0].path == "/path/b"
-        assert widget.entries()[1].path == "/path/a"
-
-    def test_move_up_at_top_is_noop(self, qapp):
-        widget = _SourceListWidget()
-        widget.add_entry("/path/a")
-        widget.add_entry("/path/b")
-        widget._move(0, -1)   # already at top
-        assert widget.entries()[0].path == "/path/a"
-
-    def test_move_down_at_bottom_is_noop(self, qapp):
-        widget = _SourceListWidget()
-        widget.add_entry("/path/a")
-        widget.add_entry("/path/b")
-        widget._move(1, +1)   # already at bottom
-        assert widget.entries()[1].path == "/path/b"
-
     def test_set_entries_replaces_list(self, qapp):
         widget = _SourceListWidget()
         widget.add_entry("/old/path")
@@ -168,15 +138,6 @@ class TestSourceListWidget:
         widget.clear()
         assert len(received) == 1
 
-    def test_changed_signal_on_move(self, qapp):
-        widget = _SourceListWidget()
-        widget.add_entry("/path/a")
-        widget.add_entry("/path/b")
-        received: list[None] = []
-        widget.changed.connect(lambda: received.append(None))
-        widget._move(0, +1)
-        assert len(received) == 1
-
     def test_on_recursive_changed_true(self, qapp):
         widget = _SourceListWidget()
         widget.add_entry("/path/a", recursive=False)
@@ -194,6 +155,86 @@ class TestSourceListWidget:
         widget.add_entry("/path/a")
         widget._on_recursive_changed(99, 2)  # no-op
         assert widget.entries()[0].recursive is True
+
+
+class TestSourceListDisplaySort:
+    """#213 — the table displays entries sorted alphabetically by path
+    (case-insensitive), regardless of insertion order. The underlying
+    ``self._entries`` list stays insertion-ordered so add_entry's
+    duplicate-path check keeps working.
+    """
+
+    def _table_paths(self, widget: _SourceListWidget) -> list[str]:
+        """Read the path column from the QTableWidget in display order."""
+        table = widget._table
+        return [
+            (table.item(row, 0).text() if table.item(row, 0) else "")
+            for row in range(table.rowCount())
+        ]
+
+    def test_display_sorted_by_path_ascending(self, qapp):
+        widget = _SourceListWidget()
+        widget.add_entry("/zeta")
+        widget.add_entry("/alpha")
+        widget.add_entry("/mu")
+        assert self._table_paths(widget) == ["/alpha", "/mu", "/zeta"]
+
+    def test_display_sort_is_case_insensitive(self, qapp):
+        widget = _SourceListWidget()
+        widget.add_entry("/Zebra")
+        widget.add_entry("/apple")
+        widget.add_entry("/Banana")
+        # Case-insensitive: apple < Banana < Zebra
+        assert self._table_paths(widget) == ["/apple", "/Banana", "/Zebra"]
+
+    def test_entries_list_keeps_insertion_order(self, qapp):
+        """``entries()`` returns the underlying insertion-ordered list —
+        the sort only applies to the visible table. This is what lets
+        ``add_entry`` keep doing a cheap duplicate check on the list."""
+        widget = _SourceListWidget()
+        widget.add_entry("/zeta")
+        widget.add_entry("/alpha")
+        assert [e.path for e in widget.entries()] == ["/zeta", "/alpha"]
+
+    def test_remove_button_targets_correct_entry_after_sort(self, qapp):
+        """The remove-button lambda must capture the entry's index in
+        ``self._entries`` (not the display row), otherwise sorting would
+        cause a click on row 0 to delete the wrong entry."""
+        widget = _SourceListWidget()
+        widget.add_entry("/zeta")      # entries[0], displays at row 2
+        widget.add_entry("/alpha")     # entries[1], displays at row 0
+        widget.add_entry("/mu")        # entries[2], displays at row 1
+
+        # Simulate clicking × on the top display row (/alpha).
+        # display_row 0 corresponds to entries[1]; the callback must
+        # remove entries[1], leaving /zeta and /mu.
+        widget._remove(1)
+        remaining = sorted(e.path for e in widget.entries())
+        assert remaining == ["/mu", "/zeta"]
+
+    def test_recursive_toggle_targets_correct_entry_after_sort(self, qapp):
+        """Same lambda-capture invariant as the remove button — toggling
+        row 0 in the display (which is the alphabetically-first entry)
+        must update that entry, not the one at entries[0]."""
+        widget = _SourceListWidget()
+        widget.add_entry("/zeta", recursive=True)    # entries[0]
+        widget.add_entry("/alpha", recursive=True)   # entries[1] — top of display
+
+        # Find /alpha's index in entries (it's 1) and toggle off.
+        alpha_idx = next(
+            i for i, e in enumerate(widget.entries()) if e.path == "/alpha"
+        )
+        widget._on_recursive_changed(alpha_idx, 0)
+
+        by_path = {e.path: e.recursive for e in widget.entries()}
+        assert by_path["/alpha"] is False
+        assert by_path["/zeta"] is True
+
+    def test_table_has_three_columns(self, qapp):
+        """#213 — the priority column and the ↑↓ reorder column are gone;
+        only path, recursive checkbox, and × remove remain."""
+        widget = _SourceListWidget()
+        assert widget._table.columnCount() == 3
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +488,7 @@ class TestAdvancedSettingsCollapse:
 
 
 # ---------------------------------------------------------------------------
-# _build_sources (label auto-generation + source_priority ordering)
+# _build_sources (label auto-generation)
 # ---------------------------------------------------------------------------
 
 class TestBuildSources:
@@ -464,38 +505,26 @@ class TestBuildSources:
             _SourceEntry(path="/nas/Takeout", recursive=True),
             _SourceEntry(path="/nas/Photos", recursive=False),
         ])
-        sources, recursive_map, source_priority = dlg._build_sources()
+        sources, recursive_map = dlg._build_sources()
 
         assert "Takeout" in sources
         assert "Photos" in sources
         assert recursive_map["Takeout"] is True
         assert recursive_map["Photos"] is False
 
-    def test_source_priority_matches_list_order(self, qapp, tmp_path):
-        from app.views.dialogs.scan_dialog import ScanDialog, _SourceEntry
+    def test_returns_two_tuple(self, qapp, tmp_path):
+        """#213 — the third element (source_priority) is gone; the
+        scanner auto-infers from scan order when source_priority is
+        omitted from the ScanWorker call."""
+        from app.views.dialogs.scan_dialog import ScanDialog
         from infrastructure.settings import JsonSettings
 
         settings_path = tmp_path / "settings.json"
         settings_path.write_text('{"sources":{}}', encoding="utf-8")
-        settings = JsonSettings(settings_path)
-        dlg = ScanDialog(settings)
-
-        dlg._source_list.set_entries([
-            _SourceEntry(path="/nas/First"),
-            _SourceEntry(path="/nas/Second"),
-            _SourceEntry(path="/nas/Third"),
-        ])
-        _, _, source_priority = dlg._build_sources()
-
-        # Keys may differ (from folder names), but priority order must be 0, 1, 2
-        priorities = sorted(source_priority.values())
-        assert priorities == [0, 1, 2]
-        # The folder named "First" must have the lowest priority number
-        first_label = "First"
-        second_label = "Second"
-        third_label = "Third"
-        assert source_priority[first_label] < source_priority[second_label]
-        assert source_priority[second_label] < source_priority[third_label]
+        dlg = ScanDialog(JsonSettings(settings_path))
+        result = dlg._build_sources()
+        assert isinstance(result, tuple)
+        assert len(result) == 2
 
     def test_duplicate_folder_names_get_unique_labels(self, qapp, tmp_path):
         from app.views.dialogs.scan_dialog import ScanDialog, _SourceEntry
@@ -510,7 +539,7 @@ class TestBuildSources:
             _SourceEntry(path="/drive1/Photos"),
             _SourceEntry(path="/drive2/Photos"),   # same folder name
         ])
-        sources, _, _ = dlg._build_sources()
+        sources, _ = dlg._build_sources()
 
         assert len(sources) == 2
         assert "Photos" in sources
