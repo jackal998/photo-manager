@@ -9,3 +9,11 @@
 
 .claude/settings.json
 .claude/settings.local.json
+
+# Skills are gitignored (PII-risk: too easy to reflex-paste machine-
+# specific paths into a SKILL.md). But cold sessions opened via
+# "+ New session → create worktree" still need them — `qa-explore`,
+# `impact-map`, `update-docs`, `parallel-brief-generator` are all
+# invoked from cold sessions. Mirror the settings.json hybrid:
+# untracked, but copied into fresh worktrees.
+.claude/skills/**
