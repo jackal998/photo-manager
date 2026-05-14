@@ -183,12 +183,16 @@ class _FolderTreePanel(QWidget):
 
 
 class _SourceListWidget(QWidget):
-    """Table managing the ordered list of selected source folders.
+    """Table listing the selected source folders, displayed sorted by path.
 
-    Columns: priority #, path, Recursive checkbox, ↑↓ reorder buttons, × remove.
+    Columns: path, Recursive checkbox, × remove.
+
+    Display order is always re-derived from ``self._entries`` by sorting on
+    path (case-insensitive). The underlying ``self._entries`` list stays
+    insertion-ordered so ``add_entry``'s duplicate-path check keeps working.
 
     Signals:
-        changed: Emitted whenever the list content or order changes.
+        changed: Emitted whenever the list content changes.
     """
 
     changed = Signal()
@@ -212,20 +216,16 @@ class _SourceListWidget(QWidget):
         header_row.addWidget(remove_all_btn)
         layout.addLayout(header_row)
 
-        self._table = QTableWidget(0, 5)
+        self._table = QTableWidget(0, 3)
         self._table.setHorizontalHeaderLabels([
-            t("scan_dialog.table_col_priority"),
             t("scan_dialog.table_col_path"),
             t("scan_dialog.table_col_recursive"),
             "",
-            "",
         ])
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -269,44 +269,34 @@ class _SourceListWidget(QWidget):
     # ------------------------------------------------------------------ private
 
     def _rebuild_table(self) -> None:
-        """Repopulate the table widget from ``self._entries``."""
-        self._table.setRowCount(0)
-        for row_idx, entry in enumerate(self._entries):
-            self._table.insertRow(row_idx)
+        """Repopulate the table widget from ``self._entries``, sorted by path.
 
-            num_item = QTableWidgetItem(str(row_idx + 1))
-            num_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row_idx, 0, num_item)
-            self._table.setItem(row_idx, 1, QTableWidgetItem(entry.path))
+        Display order is derived fresh from ``self._entries`` at every
+        rebuild by sorting case-insensitively on path. Per-row callbacks
+        capture the entry's index in the canonical ``self._entries`` list
+        so add/remove/toggle keep operating on the same entry regardless
+        of where it lands in the sorted display.
+        """
+        self._table.setRowCount(0)
+        sorted_entries = sorted(self._entries, key=lambda e: e.path.casefold())
+        for display_row, entry in enumerate(sorted_entries):
+            entry_idx = self._entries.index(entry)
+            self._table.insertRow(display_row)
+
+            self._table.setItem(display_row, 0, QTableWidgetItem(entry.path))
 
             check = QCheckBox()
             check.setChecked(entry.recursive)
             check.stateChanged.connect(
-                lambda state, row=row_idx: self._on_recursive_changed(row, state)
+                lambda state, idx=entry_idx: self._on_recursive_changed(idx, state)
             )
-            self._table.setCellWidget(row_idx, 2, self._centered(check))
-
-            ud_widget = QWidget()
-            ud_layout = QHBoxLayout(ud_widget)
-            ud_layout.setContentsMargins(2, 0, 2, 0)
-            ud_layout.setSpacing(2)
-            up_btn = QPushButton("↑")
-            up_btn.setFixedWidth(26)
-            up_btn.setToolTip(t("scan_dialog.tooltip_move_up"))
-            up_btn.clicked.connect(lambda _, row=row_idx: self._move(row, -1))
-            dn_btn = QPushButton("↓")
-            dn_btn.setFixedWidth(26)
-            dn_btn.setToolTip(t("scan_dialog.tooltip_move_down"))
-            dn_btn.clicked.connect(lambda _, row=row_idx: self._move(row, +1))
-            ud_layout.addWidget(up_btn)
-            ud_layout.addWidget(dn_btn)
-            self._table.setCellWidget(row_idx, 3, ud_widget)
+            self._table.setCellWidget(display_row, 1, self._centered(check))
 
             rm_btn = QPushButton("×")
             rm_btn.setFixedWidth(26)
             rm_btn.setToolTip(t("scan_dialog.tooltip_remove"))
-            rm_btn.clicked.connect(lambda _, row=row_idx: self._remove(row))
-            self._table.setCellWidget(row_idx, 4, rm_btn)
+            rm_btn.clicked.connect(lambda _, idx=entry_idx: self._remove(idx))
+            self._table.setCellWidget(display_row, 2, rm_btn)
 
     @staticmethod
     def _centered(widget: QWidget) -> QWidget:
@@ -322,17 +312,6 @@ class _SourceListWidget(QWidget):
         """Update the recursive flag for the entry at ``row``."""
         if 0 <= row < len(self._entries):
             self._entries[row].recursive = bool(state)
-            self.changed.emit()
-
-    def _move(self, row: int, delta: int) -> None:
-        """Swap the entry at ``row`` with the entry at ``row + delta``."""
-        new_row = row + delta
-        if 0 <= new_row < len(self._entries):
-            self._entries[row], self._entries[new_row] = (
-                self._entries[new_row],
-                self._entries[row],
-            )
-            self._rebuild_table()
             self.changed.emit()
 
     def _remove(self, row: int) -> None:
@@ -645,31 +624,34 @@ class ScanDialog(QDialog):
 
     def _build_sources(
         self,
-    ) -> tuple[dict[str, str], dict[str, bool], dict[str, int]]:
-        """Build sources, recursive_map, and source_priority from the source list.
+    ) -> tuple[dict[str, str], dict[str, bool]]:
+        """Build sources and recursive_map from the source list.
 
         Labels are auto-generated from folder basenames (internal only; not shown
         to the user — the full path is already visible in the table).
 
+        Scan-order priority is not produced here: the scanner auto-infers it
+        from iteration order when ``source_priority`` is omitted from the
+        ``ScanWorker`` call, and the final dedup sort (group name → score →
+        file name) does not depend on source order.
+
         Returns:
-            A 3-tuple of (sources, recursive_map, source_priority) dicts keyed
-            by the auto-generated label.
+            A 2-tuple of (sources, recursive_map) dicts keyed by the
+            auto-generated label.
         """
         entries = self._source_list.entries()
         used_labels: set[str] = set()
         sources: dict[str, str] = {}
         recursive_map: dict[str, bool] = {}
-        source_priority: dict[str, int] = {}
 
-        for priority, entry in enumerate(entries):
+        for entry in entries:
             folder_name = Path(entry.path).name or "source"
             label = _auto_label(folder_name, used_labels)
             used_labels.add(label)
             sources[label] = entry.path
             recursive_map[label] = entry.recursive
-            source_priority[label] = priority
 
-        return sources, recursive_map, source_priority
+        return sources, recursive_map
 
     def _start_scan(self) -> None:
         """Validate inputs and launch the background scan worker."""
@@ -697,7 +679,7 @@ class ScanDialog(QDialog):
             return
 
         self._save_to_settings()
-        sources, recursive_map, source_priority = self._build_sources()
+        sources, recursive_map = self._build_sources()
 
         self._log_widget.clear()
         self._log(t("scan_dialog.log_starting"))
@@ -707,7 +689,6 @@ class ScanDialog(QDialog):
             sources=sources,
             output_path=output,
             recursive_map=recursive_map,
-            source_priority=source_priority,
             threshold=self._phash_slider.value(),
             mean_color_threshold=self._color_slider.value(),
         )
