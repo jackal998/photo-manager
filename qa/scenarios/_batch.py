@@ -149,6 +149,12 @@ ALL_SCENARIOS = [
     # larger files are marked delete and the 2 smaller ones stay
     # unchanged. Non-destructive: cancels Execute before deletion.
     "s43_numeric_condition",
+    # s44 — selection-scoped Execute (#211). Highlights 2 of 5
+    # delete-decision rows in the Execute dialog tree, clicks Execute,
+    # asserts only the highlighted files leave disk and the rest keep
+    # their decisions intact (executed=0). Destructive like s13 —
+    # 2 files per run go to the recycle bin.
+    "s44_execute_highlighted_rows",
 ]
 
 
