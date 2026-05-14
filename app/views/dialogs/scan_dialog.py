@@ -559,7 +559,15 @@ class ScanDialog(QDialog):
         """Open a save-file dialog to choose the manifest output path."""
         from app.views.handlers.file_operations import MANIFEST_FILE_FILTER
 
-        start = self._output_field.text() or "migration_manifest.sqlite"
+        # Bare relative filenames (e.g. "migration_manifest.sqlite") confuse
+        # Qt on Windows: getSaveFileName opens against the process CWD —
+        # unpredictable — and can render a folder-picker-flavoured dialog
+        # instead of the polished save-file UI (#216). Pass an absolute
+        # path when we have one; pass "" otherwise so Qt falls back to
+        # its remembered last-visited directory (matches the Open Manifest
+        # flow in file_operations._on_open_manifest).
+        text = self._output_field.text().strip()
+        start = str(Path(text).resolve()) if text else ""
         chosen, _ = QFileDialog.getSaveFileName(
             self,
             t("scan_dialog.save_dialog_title"),
