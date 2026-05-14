@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from typing import Callable
+
+from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtWidgets import QHeaderView, QTreeView
 from loguru import logger
 
@@ -113,6 +115,113 @@ class TreeController:
         except Exception:
             pass
 
+    def connect_layout_change_signal(self, callback: Callable[[], None]) -> None:
+        """Fire ``callback`` when the user moves or resizes a column.
+
+        ``sectionMoved(int, int, int)`` and ``sectionResized(int, int, int)``
+        are emitted by ``QHeaderView`` on every user-driven drag/resize.
+        The callback is invoked with no arguments — it's the persistence
+        trigger, not a layout consumer; the receiver pulls the current
+        state via ``save_column_state``.
+
+        Programmatic ``resizeColumnToContents`` calls inside
+        ``refresh_model`` also fire ``sectionResized``. That's fine for
+        the save-on-change use case — the auto-sized widths become the
+        new "user-current" state until the user resizes manually, which
+        is the same outcome as not having persistence at all on first
+        launch.
+        """
+        try:
+            header = self.tree.header()
+            header.sectionMoved.connect(lambda *_: callback())
+            header.sectionResized.connect(lambda *_: callback())
+        except Exception as exc:
+            logger.error("Failed to connect header layout-change signals: {}", exc)
+
+    def save_column_state(self, store, key: str) -> None:
+        """Persist the current header layout (visual order + widths) to QSettings.
+
+        Wraps ``QHeaderView.saveState()`` — an opaque bytes blob whose
+        format is Qt-version-specific but stable across launches of the
+        same Qt build. Also writes a sibling ``{key}/section_count``
+        sentinel so :meth:`restore_column_state` can detect a column-
+        schema change and fall back to defaults rather than apply a
+        mis-sized blob.
+
+        Callers typically invoke this from a ``sectionMoved`` /
+        ``sectionResized`` handler wired up via
+        :meth:`connect_layout_change_signal`.
+
+        Args:
+            store: A ``QSettings`` instance (caller owns the path / format).
+            key: The QSettings key under which to store the state bytes.
+        """
+        try:
+            header = self.tree.header()
+            state = header.saveState()
+            store.setValue(key, state)
+            store.setValue(f"{key}/section_count", header.count())
+        except Exception as exc:
+            logger.error("Failed to save column state: {}", exc)
+
+    def restore_column_state(self, store, key: str) -> bool:
+        """Restore the saved header layout, or skip when incompatible.
+
+        Calling order matters: ``refresh_model`` runs a
+        ``ResizeToContents → Interactive`` cycle that silently overwrites
+        any previously-restored widths, so the restore must happen
+        AFTER ``refresh_model`` returns.
+
+        Section-count guard: ``QHeaderView.restoreState()`` accepts a
+        blob from a different column count and silently produces a
+        broken layout (hidden columns, mis-aligned widths). We compare
+        the section count saved alongside the blob against the live
+        header's section count and skip the restore on mismatch — a
+        future column addition then falls back cleanly to the auto-
+        sized defaults rather than presenting a malformed table.
+        Encoding the count as a sidecar key (rather than parsing it out
+        of Qt's opaque saveState blob) keeps us Qt-version-independent.
+
+        Args:
+            store: A ``QSettings`` instance.
+            key: The QSettings key holding the state bytes.
+
+        Returns:
+            ``True`` if the saved state was restored, ``False`` if the
+            key was absent, the blob was unreadable, or the section
+            count didn't match the current header.
+        """
+        try:
+            raw = store.value(key)
+            if raw is None:
+                return False
+            if isinstance(raw, (bytes, bytearray)):
+                state = QByteArray(bytes(raw))
+            elif isinstance(raw, QByteArray):
+                state = raw
+            else:
+                return False
+            if state.isEmpty():
+                return False
+            header = self.tree.header()
+            saved_count_raw = store.value(f"{key}/section_count")
+            if saved_count_raw is not None:
+                try:
+                    saved_count = int(saved_count_raw)
+                except (TypeError, ValueError):
+                    saved_count = -1
+                if saved_count != header.count():
+                    logger.info(
+                        "Saved column state has {} sections, header has {} — "
+                        "skipping restore, falling back to defaults.",
+                        saved_count, header.count(),
+                    )
+                    return False
+            return bool(header.restoreState(state))
+        except Exception as exc:
+            logger.error("Failed to restore column state: {}", exc)
+            return False
+
     def refresh_model(self, groups: list) -> None:
         """Build and set the tree model, preserving sort order.
 
@@ -138,14 +247,22 @@ class TreeController:
         except Exception:
             pass
 
-        # Auto size columns to contents, then leave interactive for user drag
+        # Auto size columns to contents, then leave interactive for user drag.
+        # Block header signals during the resize cycle so the
+        # ``sectionResized`` listener (used to persist the user's column
+        # widths) doesn't fire on every programmatic ResizeToContents step
+        # and clobber the saved layout with the auto-sized widths.
         try:
             header = self.tree.header()
-            for i in range(NUM_COLUMNS):
-                header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
-            self.tree.doItemsLayout()
-            for i in range(NUM_COLUMNS):
-                header.setSectionResizeMode(i, QHeaderView.Interactive)
+            blocked = header.blockSignals(True)
+            try:
+                for i in range(NUM_COLUMNS):
+                    header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+                self.tree.doItemsLayout()
+                for i in range(NUM_COLUMNS):
+                    header.setSectionResizeMode(i, QHeaderView.Interactive)
+            finally:
+                header.blockSignals(blocked)
         except Exception:
             for i in range(NUM_COLUMNS):
                 self.tree.resizeColumnToContents(i)

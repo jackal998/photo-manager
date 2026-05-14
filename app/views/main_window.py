@@ -84,6 +84,12 @@ class MainWindow(QMainWindow):
     # ``QSplitter.saveState()`` bytes (handle position).
     QSETTINGS_KEY_GEOMETRY = "geometry/main_window"
     QSETTINGS_KEY_SPLITTER_STATE = "geometry/main_splitter"
+    # Holds ``QHeaderView.saveState()`` bytes for the results tree
+    # (visual section order + per-column widths). The restore happens
+    # AFTER ``refresh_model``'s ResizeToContents→Interactive cycle —
+    # see ``refresh_tree`` — so the auto-sized defaults don't clobber
+    # restored widths.
+    QSETTINGS_KEY_COLUMN_STATE = "geometry/column_header"
 
     @staticmethod
     def _qsettings_path() -> Path:
@@ -125,7 +131,7 @@ class MainWindow(QMainWindow):
                 pass
 
     def _save_geometry(self) -> None:
-        """Persist window geometry + splitter state to QSettings."""
+        """Persist window geometry + splitter state + column layout to QSettings."""
         try:
             store = self._window_state_qsettings()
             store.setValue(self.QSETTINGS_KEY_GEOMETRY, self.saveGeometry())
@@ -134,6 +140,9 @@ class MainWindow(QMainWindow):
                 store.setValue(
                     self.QSETTINGS_KEY_SPLITTER_STATE, splitter.saveState()
                 )
+            self.tree_controller.save_column_state(
+                store, self.QSETTINGS_KEY_COLUMN_STATE
+            )
             # Flush before the process tears down — QSettings is lazy by
             # default and a Qt-driven exit doesn't always destruct the
             # store cleanly enough to hit the auto-flush.
@@ -141,6 +150,25 @@ class MainWindow(QMainWindow):
         except Exception:
             # Never let geometry persistence fail the close. The next
             # launch just falls back to the half-screen default.
+            pass
+
+    def _save_column_state_only(self) -> None:
+        """Save just the column layout to QSettings.
+
+        Wired to the tree-header ``sectionMoved`` / ``sectionResized``
+        signals so a single drag or resize is persisted immediately —
+        users who never close cleanly (force quit, OS crash) still get
+        their layout back on next launch. We don't write geometry or
+        splitter state here because those have their own signal paths
+        and writing them on every column drag is needless I/O.
+        """
+        try:
+            store = self._window_state_qsettings()
+            self.tree_controller.save_column_state(
+                store, self.QSETTINGS_KEY_COLUMN_STATE
+            )
+            store.sync()
+        except Exception:
             pass
 
     def _initialize_services(
@@ -293,6 +321,14 @@ class MainWindow(QMainWindow):
         # Tree header click handler
         self.tree_controller.setup_header_behavior(self._on_header_clicked)
 
+        # Persist column order + width on every drag/resize (#214). Saving
+        # on each signal — rather than only at closeEvent — survives force
+        # quits and OS crashes; the call is debounced enough by Qt that a
+        # drag-in-progress doesn't flood QSettings I/O.
+        self.tree_controller.connect_layout_change_signal(
+            self._save_column_state_only
+        )
+
         # Tree row double-click handler (#143). File rows open in the OS
         # default viewer; group rows toggle expand (handled inside the
         # controller). Hands off to the shared opener helper so right-click
@@ -342,6 +378,20 @@ class MainWindow(QMainWindow):
             self.tree.setVisible(True)
 
         self.tree_controller.refresh_model(groups)
+
+        # Restore the saved column layout AFTER refresh_model's
+        # ResizeToContents→Interactive cycle (#214). Calling earlier is
+        # silently wiped by the auto-size step. Runs every refresh
+        # because each refresh_model rebuild reapplies the auto-sized
+        # defaults — without restoring after each one, the user's saved
+        # widths would be lost on any re-scan / re-open mid-session.
+        try:
+            store = self._window_state_qsettings()
+            self.tree_controller.restore_column_state(
+                store, self.QSETTINGS_KEY_COLUMN_STATE
+            )
+        except Exception:
+            pass
 
         # Reconnect selection handler after model reset
         self.tree_controller.reconnect_selection_handler(self.on_tree_selection_changed)

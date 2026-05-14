@@ -306,3 +306,145 @@ class TestGetGroupNumberFromIndexFallback:
 
         idx = model.index(0, 0)
         assert controller.get_group_number_from_index(idx) is None
+
+
+# ── column-layout persistence (#214) ───────────────────────────────────────
+
+
+def _ini_store(tmp_path):
+    """Build a real-file ``QSettings`` so the round-trip exercises the
+    same serialisation Qt uses in production (no in-memory mock that
+    could let a Qt-vs-Python type mismatch slip through)."""
+    from PySide6.QtCore import QSettings
+    return QSettings(str(tmp_path / "state.ini"), QSettings.IniFormat)
+
+
+class TestColumnStateRoundTrip:
+    """``save_column_state`` → ``restore_column_state`` must return the
+    user's visual section order. This is the headline bug from #214 —
+    if it doesn't round-trip, every restart resets the layout."""
+
+    KEY = "geometry/column_header"
+
+    def test_round_trip_preserves_visual_order(self, qapp, tmp_path):
+        from app.views.constants import NUM_COLUMNS
+
+        controller, _vm = _build(qapp)
+        header = controller.tree.header()
+        # Move logical column 0 to visual position 3 — a non-trivial
+        # rearrangement that survives ONLY if both saveState() and
+        # restoreState() are wired correctly.
+        header.moveSection(0, 3)
+        before_order = [header.visualIndex(i) for i in range(NUM_COLUMNS)]
+        store = _ini_store(tmp_path)
+        controller.save_column_state(store, self.KEY)
+        store.sync()
+
+        # Fresh controller + tree to simulate a relaunch — but reuse the
+        # same store file. The new header starts in default visual order.
+        controller2, _vm2 = _build(qapp)
+        ok = controller2.restore_column_state(store, self.KEY)
+        assert ok is True
+        header2 = controller2.tree.header()
+        after_order = [header2.visualIndex(i) for i in range(NUM_COLUMNS)]
+        assert after_order == before_order
+
+    def test_round_trip_preserves_column_width(self, qapp, tmp_path):
+        """The other half of #214 — column widths must also survive."""
+        controller, _vm = _build(qapp)
+        controller.tree.header().resizeSection(2, 333)
+        store = _ini_store(tmp_path)
+        controller.save_column_state(store, self.KEY)
+        store.sync()
+
+        controller2, _vm2 = _build(qapp)
+        assert controller2.restore_column_state(store, self.KEY) is True
+        assert controller2.tree.header().sectionSize(2) == 333
+
+    def test_missing_key_returns_false(self, qapp, tmp_path):
+        """First launch: nothing saved yet. Must fall back to defaults
+        without raising — restoring a missing key is the normal path."""
+        controller, _vm = _build(qapp)
+        store = _ini_store(tmp_path)
+        assert controller.restore_column_state(store, self.KEY) is False
+
+    def test_section_count_mismatch_skips_restore(self, qapp, tmp_path):
+        """Future-proof against new column additions (issue #214 Notes).
+        A saved state from when the schema had fewer/more sections
+        must be ignored rather than silently producing a broken layout.
+        """
+        controller, _vm = _build(qapp)
+        header = controller.tree.header()
+        header.moveSection(0, 3)
+        store = _ini_store(tmp_path)
+        controller.save_column_state(store, self.KEY)
+        # Forge a schema drift: rewrite the section_count sidecar key
+        # as if it had been saved with a different schema. The blob
+        # itself is untouched — the count guard is what protects us.
+        store.setValue(f"{self.KEY}/section_count", 99)
+        store.sync()
+
+        controller2, _vm2 = _build(qapp)
+        # Default visual order must be unchanged after the skipped restore.
+        from app.views.constants import NUM_COLUMNS
+        default_order = [
+            controller2.tree.header().visualIndex(i) for i in range(NUM_COLUMNS)
+        ]
+        assert controller2.restore_column_state(store, self.KEY) is False
+        after = [
+            controller2.tree.header().visualIndex(i) for i in range(NUM_COLUMNS)
+        ]
+        assert after == default_order
+
+    def test_save_writes_section_count_sentinel(self, qapp, tmp_path):
+        """The section_count sidecar is the protection against schema
+        drift. If it's not saved, the mismatch guard can't fire."""
+        from app.views.constants import NUM_COLUMNS
+
+        controller, _vm = _build(qapp)
+        store = _ini_store(tmp_path)
+        controller.save_column_state(store, self.KEY)
+        store.sync()
+        assert int(store.value(f"{self.KEY}/section_count")) == NUM_COLUMNS
+
+
+class TestLayoutChangeSignalConnection:
+    """The persistence trigger MUST fire on both ``sectionMoved`` and
+    ``sectionResized`` — losing either signal means the user's drag /
+    resize disappears on next launch."""
+
+    def test_section_moved_fires_callback(self, qapp):
+        controller, _vm = _build(qapp)
+        calls: list[int] = []
+        controller.connect_layout_change_signal(lambda: calls.append(1))
+        controller.tree.header().moveSection(0, 2)
+        assert calls, "moveSection did not trigger save callback"
+
+    def test_section_resized_fires_callback(self, qapp):
+        controller, _vm = _build(qapp)
+        calls: list[int] = []
+        controller.connect_layout_change_signal(lambda: calls.append(1))
+        controller.tree.header().resizeSection(1, 250)
+        assert calls, "resizeSection did not trigger save callback"
+
+    def test_refresh_model_does_not_fire_callback(self, qapp):
+        """``refresh_model``'s internal ResizeToContents cycle MUST NOT
+        fire the save callback — otherwise every manifest reload would
+        overwrite the user's saved widths with auto-sized defaults
+        (the #214 fix's biggest regression risk).
+        """
+        from types import SimpleNamespace
+
+        controller, _vm = _build(qapp)
+        calls: list[int] = []
+        controller.connect_layout_change_signal(lambda: calls.append(1))
+        # Refresh with a different groups list — triggers the full
+        # ResizeToContents → Interactive cycle inside refresh_model.
+        new_groups = [
+            SimpleNamespace(group_number=99, items=[_rec("/photos/z.jpg")]),
+        ]
+        controller.refresh_model(new_groups)
+        assert calls == [], (
+            f"refresh_model fired save callback {len(calls)} times; "
+            f"signal-blocking around the resize cycle is broken."
+        )

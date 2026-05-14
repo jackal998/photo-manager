@@ -162,6 +162,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # 2 of the 5 are sent to the Windows recycle bin per run. Same
     # destructive-fixture pattern as s13 and s36.
     "s44_execute_highlighted_rows": ["qa/sandbox/_disposable/s44_source"],
+    # s47 (#214) — column layout persists across launches. Needs a
+    # fixture that produces at least one group so the result tree
+    # renders and the header columns are interactable. Same fixture as
+    # s40 / s14 / s32; deterministic file count and group label.
+    "s47_column_layout_persist": ["qa/sandbox/near-duplicates"],
 }
 
 
