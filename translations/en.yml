@@ -209,6 +209,25 @@ action_dialog:
   recent_button: "Recent ▾"
   recent_empty: "(no recent patterns)"
   recent_clear: "Clear recent patterns"
+  # #209 — numeric-condition panel. Shown when the selected field is
+  # numeric-capable (Size, Group Count, Similarity, Score, Creation
+  # Date, Shot Date) and the dialog was opened with the raw groups
+  # (i.e. from the Execute Action dialog). Replaces the regex/simple
+  # panels in that case.
+  numeric_mode_threshold: "Threshold"
+  numeric_mode_topn: "Top N per group"
+  numeric_threshold_label: "Where the value is"
+  numeric_topn_label: "Pick"
+  numeric_topn_suffix: "per group"
+  numeric_order_top: "Top"
+  numeric_order_bottom: "Bottom"
+  numeric_value_placeholder: "type a number (or YYYY-MM-DD for dates)…"
+  cmp_op_gt: ">"
+  cmp_op_ge: ">="
+  cmp_op_lt: "<"
+  cmp_op_le: "<="
+  cmp_op_eq: "=="
+  cmp_op_ne: "!="
 
 # Right-click context menu on the main tree.
 context_menu:
