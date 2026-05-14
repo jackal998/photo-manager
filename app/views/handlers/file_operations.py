@@ -352,6 +352,54 @@ class FileOperationsHandler:
                 logger.info(
                     "Removing {} highlighted items from list via toolbar", len(highlighted_items)
                 )
+
+                # Lock guard (#208): surface LockedRowsConfirmDialog if any
+                # item being removed is locked.
+                all_paths, locked_paths = self._collect_locked_paths_for_removal(
+                    highlighted_items
+                )
+                if locked_paths:
+                    from app.views.dialogs.locked_rows_confirm_dialog import (
+                        LockedRowsConfirmDialog,
+                    )
+                    verdict = LockedRowsConfirmDialog.ask(
+                        self.parent,
+                        action_label=_decision_display_label(REMOVE_FROM_LIST_DECISION),
+                        affected_count=len(all_paths),
+                        locked_paths=locked_paths,
+                    )
+                    if verdict == LockedRowsConfirmDialog.CANCEL:
+                        return
+                    if verdict == LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY:
+                        locked_set = set(locked_paths)
+                        unlocked = [p for p in all_paths if p not in locked_set]
+                        if unlocked:
+                            self.vm.remove_from_list(unlocked)
+                            self._sync_removed_to_db(unlocked)
+                            self._mark_dirty()
+                            self.ui_updater.refresh_tree(self.vm.groups)
+                            report_count(
+                                self.status_reporter,
+                                t("status.verb_removed"),
+                                len(unlocked),
+                                t("status.noun_item_from_list_singular"),
+                                plural=t("status.noun_item_from_list_plural"),
+                            )
+                        return
+                    # APPLY_ALL_UNLOCKED: unlock the locked subset in memory
+                    # and in SQLite, then fall through to remove everything.
+                    manifest_path = getattr(self, "_manifest_path", None)
+                    locked_set = set(locked_paths)
+                    for group in self.vm.groups:
+                        for rec in group.items:
+                            if rec.file_path in locked_set:
+                                rec.is_locked = False
+                    if manifest_path:
+                        from infrastructure.manifest_repository import ManifestRepository
+                        ManifestRepository().batch_update_lock_state(
+                            manifest_path, {p: False for p in locked_paths}
+                        )
+
                 file_items = [item for item in highlighted_items if item.get("type") == "file"]
                 group_items = [item for item in highlighted_items if item.get("type") == "group"]
 
@@ -397,6 +445,51 @@ class FileOperationsHandler:
     def remove_items_from_list(self, items: list[dict]) -> None:
         """Remove multiple items (files and/or groups) from the list."""
         try:
+            # Lock guard (#208): surface LockedRowsConfirmDialog if any
+            # item being removed is locked.
+            all_paths, locked_paths = self._collect_locked_paths_for_removal(items)
+            if locked_paths:
+                from app.views.dialogs.locked_rows_confirm_dialog import (
+                    LockedRowsConfirmDialog,
+                )
+                verdict = LockedRowsConfirmDialog.ask(
+                    self.parent,
+                    action_label=_decision_display_label(REMOVE_FROM_LIST_DECISION),
+                    affected_count=len(all_paths),
+                    locked_paths=locked_paths,
+                )
+                if verdict == LockedRowsConfirmDialog.CANCEL:
+                    return
+                if verdict == LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY:
+                    locked_set = set(locked_paths)
+                    unlocked = [p for p in all_paths if p not in locked_set]
+                    if unlocked:
+                        self.vm.remove_from_list(unlocked)
+                        self._sync_removed_to_db(unlocked)
+                        self._mark_dirty()
+                        self.ui_updater.refresh_tree(self.vm.groups)
+                        report_count(
+                            self.status_reporter,
+                            t("status.verb_removed"),
+                            len(unlocked),
+                            t("status.noun_item_from_list_singular"),
+                            plural=t("status.noun_item_from_list_plural"),
+                        )
+                    return
+                # APPLY_ALL_UNLOCKED: unlock the locked subset in memory
+                # and in SQLite, then fall through to remove everything.
+                manifest_path = getattr(self, "_manifest_path", None)
+                locked_set = set(locked_paths)
+                for group in self.vm.groups:
+                    for rec in group.items:
+                        if rec.file_path in locked_set:
+                            rec.is_locked = False
+                if manifest_path:
+                    from infrastructure.manifest_repository import ManifestRepository
+                    ManifestRepository().batch_update_lock_state(
+                        manifest_path, {p: False for p in locked_paths}
+                    )
+
             file_paths: list[str] = []
             group_numbers: list[int] = []
 
@@ -643,6 +736,34 @@ class FileOperationsHandler:
             )
             return
         self.set_decision_with_lock_check(file_items, new_decision)
+
+    def _collect_locked_paths_for_removal(
+        self, items: list[dict]
+    ) -> tuple[list[str], list[str]]:
+        """Expand items (files + groups) to file paths and return (all, locked).
+
+        Used by the remove-from-list lock guard to find locked paths across
+        both individual file items and group items (which expand to all their
+        constituent files).
+        """
+        all_paths: list[str] = []
+        for item in items:
+            if item.get("type") == "file":
+                all_paths.append(item["path"])
+            elif item.get("type") == "group":
+                gn = item.get("group_number")
+                for g in self.vm.groups:
+                    if g.group_number == gn:
+                        all_paths.extend(r.file_path for r in g.items)
+                        break
+        locked_set: set[str] = {
+            rec.file_path
+            for group in self.vm.groups
+            for rec in group.items
+            if rec.is_locked
+        }
+        locked = [p for p in all_paths if p in locked_set]
+        return all_paths, locked
 
     def _locked_paths_in(self, file_items: list[dict]) -> list[str]:
         """Return the paths in ``file_items`` whose record is locked.
