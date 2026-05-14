@@ -63,7 +63,13 @@ def main() -> int:
         print(f"FAIL: expected 2 sources after add, got {len(after_add)}")
         return 1
 
-    # ── Mutation 2: toggle Recursive on row 0 (default True → False) ────
+    # ── Mutation 2: toggle Recursive on display row 0 (default True → False) ─
+    # Since #213 the source list displays sorted by path, so display row 0
+    # is the alphabetically-first basename. Here the dialog holds two
+    # entries (`unique` pre-seeded + `near-duplicates` added) — display
+    # row 0 = `near-duplicates`. The settings.list assertion below looks
+    # up by basename rather than index so it stays correct regardless of
+    # how the alphabetic sort interacts with insertion order.
     print("step: toggle_recursive_row_0")
     _uia.toggle_source_row_recursive(dlg, 0)
 
@@ -110,19 +116,35 @@ def main() -> int:
         failures.append(
             f"settings.json output={saved_output!r}, expected {TARGET_OUTPUT!r}"
         )
-    # Recursive flag round-trip: row 0 should be False (we toggled), row 1
-    # should still be True (default for newly-added sources).
-    if saved_list:
-        if saved_list[0].get("recursive") is not False:
-            failures.append(
-                f"settings.json row 0 recursive={saved_list[0].get('recursive')!r}, "
-                f"expected False (we toggled it)"
-            )
-        if len(saved_list) > 1 and saved_list[1].get("recursive") is not True:
-            failures.append(
-                f"settings.json row 1 recursive={saved_list[1].get('recursive')!r}, "
-                f"expected True (default for new sources)"
-            )
+    # Recursive-flag round-trip: assert by path, not by settings.list
+    # index. Since #213 the dialog's display is sorted by path
+    # (case-insensitive), so display row 0 = alphabetically-first source
+    # — here that's `near-duplicates`, not the pre-seeded `unique`. The
+    # underlying settings.list stays insertion-ordered, so an index-based
+    # assertion would flip when display sort and insertion order
+    # disagree. We care about the *operation* (toggle worked, default
+    # held), not which slot the entry occupies.
+    by_basename = {Path(item["path"]).name: item for item in saved_list}
+    toggled = by_basename.get("near-duplicates")  # display row 0 after sort
+    untoggled = by_basename.get("unique")          # not touched in this run
+    if not toggled:
+        failures.append(
+            "near-duplicates entry missing from settings.json"
+        )
+    elif toggled.get("recursive") is not False:
+        failures.append(
+            f"near-duplicates recursive={toggled.get('recursive')!r}, "
+            f"expected False (we toggled display row 0)"
+        )
+    if not untoggled:
+        failures.append(
+            "unique entry missing from settings.json"
+        )
+    elif untoggled.get("recursive") is not True:
+        failures.append(
+            f"unique recursive={untoggled.get('recursive')!r}, "
+            f"expected True (default for new sources, we did not toggle it)"
+        )
 
     if failures:
         for f in failures:
