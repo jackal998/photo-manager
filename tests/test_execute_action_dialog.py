@@ -1004,6 +1004,34 @@ class TestExecuteRequestedLockConfirm:
         finally:
             dlg.close()
 
+    def test_lock_confirm_receives_total_delete_count_not_just_locked_count(self, qapp):
+        """#207 — when 1 of 3 delete-decision rows is locked, the lock-confirm dialog
+        must receive affected_count=3 (total deletes), not affected_count=1 (locked
+        only). Without this, unlocked_count=0 and the dialog fires the all-locked
+        branch, disabling "Apply to Unlocked Only"."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+
+        r1 = _rec("/a.jpg", "delete")
+        r2 = _rec("/b.jpg", "delete")
+        r3 = _rec("/c.jpg", "delete")
+        r3.is_locked = True
+        groups = [_group(r1, r2, r3)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        try:
+            with patch.object(
+                LockedRowsConfirmDialog,
+                "ask",
+                return_value=LockedRowsConfirmDialog.CANCEL,
+            ) as ask:
+                dlg._on_execute_requested()
+            ask.assert_called_once()
+            _, kwargs = ask.call_args
+            assert kwargs["affected_count"] == 3
+            assert kwargs["locked_paths"] == ["/c.jpg"]
+        finally:
+            dlg.close()
+
 
 # ── _set_decision_by_regex persist-failure swallow ────────────────────────
 
