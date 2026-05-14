@@ -131,13 +131,14 @@ def _file_row_y(tree_rect, row_index: int) -> int:
     """Return screen Y for the middle of the Nth (0-based) file row
     inside the Execute Action dialog's tree.
 
-    Layout matches s30's empirical tuning (#211 introduces no new
-    layout): header ~30 px, group row ~25 px, file rows ~22 px each.
-    The mid-row offset of 11 keeps the click off the row boundaries
-    even with light DPI scaling.
+    Anchored to s30's empirically-tuned value of ``top + 105`` for the
+    second file row (the 30/25/22-px layout sketch in s30's comment
+    underestimates the real header + group-row height on real DPI).
+    Working back: second file row ≈ top + 105, first file row ≈ 83,
+    Nth file row ≈ 83 + 22*N. The 22 px row pitch is robust across
+    DPI scaling within this DPI range.
     """
-    base = tree_rect.top + 30 + 25  # past header + group row
-    return base + 22 * row_index + 11
+    return tree_rect.top + 83 + 22 * row_index
 
 
 def _read_manifest_rows() -> list[tuple[str, str, int]]:
