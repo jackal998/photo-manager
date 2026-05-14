@@ -287,6 +287,23 @@ Invariants pinned by `tests/test_batch_shard.py`:
   standard floor/ceil split by +1 in whichever shard owns it; today at
   M=5 the sizes are 9/8/8/8/7).
 
+Registry-completeness invariants pinned by
+`tests/test_all_scenarios_registered.py` (close the gap surfaced
+post-#211: `test_batch_shard.py` assumes `ALL_SCENARIOS` is correct;
+nothing previously checked the input itself):
+
+- Every `qa/scenarios/sNN_*.py` on disk is in
+  `ALL_SCENARIOS`. Catches the headline failure mode where a new
+  driver lands but the registration is forgotten — without this guard,
+  CI silently skips the new scenario and the only thing that ever
+  runs is the layer-1 unit tests.
+- Every `ALL_SCENARIOS` entry has a real file (catches rename/delete
+  drift).
+- Every entry is also keyed in `_config.py::SCENARIO_SOURCES`
+  (otherwise `configure.py` would fail at launch time, not in
+  pytest output).
+- No stale `SCENARIO_SOURCES` keys outlive a removed scenario.
+
 Why 5? Per-shard fixed overhead (~1.5 min for checkout + pip + exiftool +
 sandbox build) is paid per shard in parallel. With 40 scenarios at ~25s
 each, the per-shard wall-clock equation is
