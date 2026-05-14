@@ -142,6 +142,13 @@ ALL_SCENARIOS = [
     # Reuses near-duplicates fixture (5 q-quality variants); file-size
     # is the only signal that differs across the 5 files, so q95 wins.
     "s42_scoring",
+    # s43 (#209) — Set Action dialog's new numeric-condition panel.
+    # Opens Execute Action → Set Action by Field/Regex → switches the
+    # field combo to Size (Bytes) → verifies the numeric panel
+    # surfaces → sets a threshold > (q72's size) → verifies the 3
+    # larger files are marked delete and the 2 smaller ones stay
+    # unchanged. Non-destructive: cancels Execute before deletion.
+    "s43_numeric_condition",
 ]
 
 

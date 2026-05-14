@@ -152,6 +152,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
         "qa/sandbox/near-duplicates",
         "qa/sandbox/scoring-mixed",
     ],
+    # s43 (#209) — Set Action dialog's new numeric-condition panel.
+    # Reuses near-duplicates (5 q-quality variants); the JPEG sizes
+    # are well-separated, so a Size (Bytes) threshold cleanly splits
+    # the group into matched vs. unchanged subsets.
+    "s43_numeric_condition": ["qa/sandbox/near-duplicates"],
 }
 
 

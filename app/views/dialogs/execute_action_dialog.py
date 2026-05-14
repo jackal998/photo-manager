@@ -443,9 +443,63 @@ class ExecuteActionDialog(QDialog):
         dlg = ActionDialog(
             fields=fields, parent=self, match_fn=match_fn,
             settings=self._settings,
+            # #209 — pass the raw groups so the dialog can rank
+            # records for Top-N within group and run threshold
+            # comparisons against numeric/date fields.
+            groups=self._groups,
         )
         dlg.setActionRequested.connect(self._set_decision_by_regex)
         dlg.exec()
+
+    def _matched_paths_for_pattern(
+        self, field: str, pattern: str
+    ) -> list[str]:
+        """Resolve ``pattern`` against ``self._groups`` and return matched
+        file_paths, preserving the user's tree order (group-then-record).
+
+        Handles three pattern shapes:
+          * ``__cmp__:OP:VALUE`` — threshold comparison (#209)
+          * ``__top_n__:N:asc|desc`` — top/bottom N within group (#209)
+          * anything else — case-insensitive regex against the field
+            value from ``_get_record_field``.
+
+        Raises :class:`re.error` on an invalid regex; raises
+        :class:`ValueError` on a malformed numeric pattern. Caller
+        catches and surfaces a localized message.
+        """
+        import re as _re
+        from app.views.dialogs.select_dialog import (
+            PATTERN_CMP_PREFIX,
+            PATTERN_TOP_N_PREFIX,
+            decode_cmp_pattern,
+            decode_top_n_pattern,
+            select_paths_by_threshold,
+            select_paths_top_n,
+        )
+        from app.views.handlers.file_operations import _get_record_field
+
+        if pattern.startswith(PATTERN_CMP_PREFIX):
+            decoded = decode_cmp_pattern(pattern)
+            if decoded is None:
+                raise ValueError(pattern)
+            op, value_text = decoded
+            return select_paths_by_threshold(
+                self._groups, field, op, value_text
+            )
+        if pattern.startswith(PATTERN_TOP_N_PREFIX):
+            decoded = decode_top_n_pattern(pattern)
+            if decoded is None:
+                raise ValueError(pattern)
+            n, order = decoded
+            return select_paths_top_n(self._groups, field, n, order)
+        rx = _re.compile(pattern, _re.IGNORECASE)
+        out: list[str] = []
+        for group in self._groups:
+            for rec in getattr(group, "items", []):
+                value = _get_record_field(rec, field)
+                if value is not None and rx.search(value):
+                    out.append(rec.file_path)
+        return out
 
     def _set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
         """Find all file rows where field matches pattern and route by action.
@@ -457,15 +511,31 @@ class ExecuteActionDialog(QDialog):
         no skip-locked pre-filter on this branch). For destructive
         decisions, already-locked rows are skipped — see
         photo-manager#164.
+
+        Accepts the same regex strings as before, plus the numeric
+        pseudo-patterns ``__cmp__:`` and ``__top_n__:`` emitted by the
+        Set Action dialog when the user picks a numeric-capable field
+        (#209). All three pattern shapes funnel through the same
+        matched-paths set, so the lock-confirm / persist / refresh
+        steps stay shared.
         """
         import re as _re
         from PySide6.QtWidgets import QMessageBox
-        from app.views.handlers.file_operations import _get_record_field
 
         try:
-            rx = _re.compile(pattern, _re.IGNORECASE)
+            matched_for_op = self._matched_paths_for_pattern(field, pattern)
         except _re.error as exc:
             QMessageBox.warning(self, t("execute_dialog.invalid_regex_title"), str(exc))
+            return
+        except ValueError:
+            # Malformed numeric pattern — treat as "no match" rather
+            # than a hard error. The dialog UI prevents most invalid
+            # patterns; a stray one shouldn't crash the apply flow.
+            QMessageBox.information(
+                self,
+                t("execute_dialog.no_match_title"),
+                t("execute_dialog.no_match_body"),
+            )
             return
 
         # Lock / unlock route — applied to ALL matched, no skip filter.
@@ -473,11 +543,11 @@ class ExecuteActionDialog(QDialog):
         # rows need bulk-untangling at execute time.
         if new_decision in (LOCK_SENTINEL, UNLOCK_SENTINEL):
             target_locked = (new_decision == LOCK_SENTINEL)
+            matched_set = set(matched_for_op)
             lock_batch: dict[str, bool] = {}
             for group in self._groups:
                 for rec in getattr(group, "items", []):
-                    value = _get_record_field(rec, field)
-                    if value is not None and rx.search(value):
+                    if rec.file_path in matched_set:
                         rec.is_locked = target_locked
                         lock_batch[rec.file_path] = target_locked
             if not lock_batch:
@@ -504,19 +574,16 @@ class ExecuteActionDialog(QDialog):
         if new_decision == REMOVE_FROM_LIST_SENTINEL:
             new_decision = REMOVE_FROM_LIST_DECISION
 
-        # Collect every matching row's path + lock state up-front so we
-        # can surface the unified confirm dialog before mutating any
-        # decision. Order preserved so the dialog's truncated list
-        # ("first 5 …and N more") reads as the user's tree order.
-        matched_paths: list[str] = []
+        # Compute locked subset from the unified matched set. Order
+        # preserved from matched_for_op so the lock-confirm dialog's
+        # truncated list reads as the user's tree order.
+        matched_paths: list[str] = list(matched_for_op)
+        matched_set = set(matched_paths)
         locked_paths: list[str] = []
         for group in self._groups:
             for rec in getattr(group, "items", []):
-                value = _get_record_field(rec, field)
-                if value is not None and rx.search(value):
-                    matched_paths.append(rec.file_path)
-                    if rec.is_locked:
-                        locked_paths.append(rec.file_path)
+                if rec.file_path in matched_set and rec.is_locked:
+                    locked_paths.append(rec.file_path)
 
         if not matched_paths:
             QMessageBox.information(

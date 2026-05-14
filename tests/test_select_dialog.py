@@ -807,3 +807,407 @@ class TestLegacyModeKeyAlias:
             settings=settings,
         )
         assert dlg._mode == MODE_SIMPLE
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# #209 — Numeric-condition panel
+# ──────────────────────────────────────────────────────────────────────────
+#
+# These tests cover the new threshold / Top-N controls added to the
+# Set Action dialog. Every test exercises a real user-visible behavior:
+# panel-switching by field choice (regression if a non-numeric field
+# accidentally shows numeric UI), encoded pattern shape (regression if
+# the downstream caller can't parse what Apply emits), and the
+# selection helpers themselves (regression if Top-N's tiebreak or
+# threshold's ISO-date parse drifts).
+
+def _make_record(
+    *, file_path: str, file_size_bytes: int = 0,
+    score: float | None = None, hamming_distance: int | None = None,
+    creation_date=None, is_locked: bool = False,
+):
+    """Minimal duck-typed record matching what the helpers read."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Rec:
+        file_path: str
+        file_size_bytes: int
+        score: float | None
+        hamming_distance: int | None
+        creation_date: object
+        shot_date: object
+        is_locked: bool
+
+    return _Rec(
+        file_path=file_path,
+        file_size_bytes=file_size_bytes,
+        score=score,
+        hamming_distance=hamming_distance,
+        creation_date=creation_date,
+        shot_date=None,
+        is_locked=is_locked,
+    )
+
+
+def _make_group(items):
+    from dataclasses import dataclass, field as _f
+
+    @dataclass
+    class _G:
+        items: list = _f(default_factory=list)
+
+    return _G(items=list(items))
+
+
+class TestNumericPanelVisibility:
+    """Field combo choice gates the numeric vs. regex/simple panels."""
+
+    def test_numeric_field_shows_numeric_panel_with_groups(self, qapp):
+        # A numeric-capable field with groups supplied → numeric panel
+        # pre-empts the regex/simple panel. Regression: the brief's
+        # core acceptance criterion.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=10)])
+        dlg = ActionDialog(
+            fields=["File Name", "Size (Bytes)"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        assert not dlg._numeric_widget.isHidden()
+        assert dlg._regex_widget.isHidden()
+        assert dlg._simple_widget.isHidden()
+
+    def test_non_numeric_field_keeps_regex_simple_panel(self, qapp):
+        # Switching back to a text field hides the numeric panel and
+        # restores whichever of regex/simple was previously active.
+        # Regression: numeric-field switch must not leak into other
+        # fields.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=10)])
+        dlg = ActionDialog(
+            fields=["File Name", "Size (Bytes)"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        dlg.combo.setCurrentText("File Name")
+        assert dlg._numeric_widget.isHidden()
+        # File Name is non-numeric → at least one of simple/regex is
+        # visible (depends on the persisted mode default).
+        assert not (
+            dlg._simple_widget.isHidden() and dlg._regex_widget.isHidden()
+        )
+
+    def test_numeric_panel_hidden_when_groups_not_passed(self, qapp):
+        # Main-window dialog_handler builds ActionDialog without
+        # groups; the numeric panel must stay hidden even for
+        # numeric fields. Regression: don't surface a Top-N control
+        # that has no groups to rank.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name", "Size (Bytes)"],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        assert dlg._numeric_widget.isHidden()
+
+
+class TestThresholdEmit:
+    """Apply with threshold mode emits an encoded __cmp__: pattern."""
+
+    def test_threshold_emits_cmp_pattern(self, qapp):
+        # The dialog's contract with the Execute Action dialog is
+        # that threshold conditions ride through setActionRequested
+        # as ``__cmp__:OP:VALUE``. If the encoding drifts, the
+        # downstream handler will silently match 0 rows.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=100)])
+        dlg = ActionDialog(
+            fields=["File Name", "Size (Bytes)"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        # Pick >=, type 80
+        ge_idx = dlg._num_cmp_combo.findData(">=")
+        assert ge_idx >= 0
+        dlg._num_cmp_combo.setCurrentIndex(ge_idx)
+        dlg._num_value_edit.setText("80")
+        dlg._action_combo.setCurrentIndex(0)  # first = delete
+
+        received: list[tuple] = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._btn_set_action.click()
+        assert received == [("Size (Bytes)", "__cmp__:>=:80", "delete")]
+
+    def test_threshold_isodate_round_trips_through_pattern(self, qapp):
+        # Date fields accept ISO YYYY-MM-DD. The emitted pattern
+        # carries the user's literal text — the receiver re-parses
+        # via _parse_threshold which knows the field is a date.
+        # Regression: if encode/decode used a colon-greedy split,
+        # ``2026-01-01 12:00:00`` would be truncated.
+        from app.views.dialogs.select_dialog import (
+            ActionDialog, decode_cmp_pattern,
+        )
+
+        g = _make_group([_make_record(file_path="a/x.jpg")])
+        dlg = ActionDialog(
+            fields=["File Name", "Creation Date"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Creation Date")
+        dlg._num_value_edit.setText("2026-01-01 12:00:00")
+        dlg._action_combo.setCurrentIndex(0)
+
+        received: list[tuple] = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._btn_set_action.click()
+        assert len(received) == 1
+        _field, pattern, _value = received[0]
+        decoded = decode_cmp_pattern(pattern)
+        assert decoded == (">", "2026-01-01 12:00:00")
+
+
+class TestTopNEmit:
+    """Apply with Top-N mode emits an encoded __top_n__: pattern."""
+
+    def test_top_n_emits_pattern(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", score=0.9)])
+        dlg = ActionDialog(
+            fields=["File Name", "Score"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Score")
+        dlg._num_mode_topn_btn.setChecked(True)
+        dlg._num_n_spin.setValue(3)
+        # Order combo defaults to Top (desc)
+        dlg._action_combo.setCurrentIndex(0)
+
+        received: list[tuple] = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._btn_set_action.click()
+        assert received == [("Score", "__top_n__:3:desc", "delete")]
+
+    def test_top_n_bottom_emits_asc(self, qapp):
+        # "Bottom 1 per group" — the deleter's most common pattern
+        # ("nuke the lowest-scoring sibling in each cluster").
+        # Regression: if asc/desc flip, this would silently delete
+        # the keepers.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", score=0.5)])
+        dlg = ActionDialog(
+            fields=["File Name", "Score"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Score")
+        dlg._num_mode_topn_btn.setChecked(True)
+        bot_idx = dlg._num_order_combo.findData("asc")
+        dlg._num_order_combo.setCurrentIndex(bot_idx)
+        dlg._num_n_spin.setValue(1)
+        dlg._action_combo.setCurrentIndex(0)
+
+        received: list[tuple] = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._btn_set_action.click()
+        assert received == [("Score", "__top_n__:1:asc", "delete")]
+
+
+class TestThresholdSelectionLogic:
+    """select_paths_by_threshold returns the rows the user actually expects."""
+
+    def test_size_gt_selects_only_above(self, qapp):
+        # 3 rows at 50/100/200 bytes; "> 100" must select exactly
+        # one row (200), not two. Regression: an `>=` slip would
+        # delete one extra file.
+        from app.views.dialogs.select_dialog import select_paths_by_threshold
+
+        g = _make_group([
+            _make_record(file_path="a/1.jpg", file_size_bytes=50),
+            _make_record(file_path="a/2.jpg", file_size_bytes=100),
+            _make_record(file_path="a/3.jpg", file_size_bytes=200),
+        ])
+        result = select_paths_by_threshold([g], "Size (Bytes)", ">", "100")
+        assert result == ["a/3.jpg"]
+
+    def test_size_ge_includes_equal(self, qapp):
+        from app.views.dialogs.select_dialog import select_paths_by_threshold
+
+        g = _make_group([
+            _make_record(file_path="a/1.jpg", file_size_bytes=50),
+            _make_record(file_path="a/2.jpg", file_size_bytes=100),
+            _make_record(file_path="a/3.jpg", file_size_bytes=200),
+        ])
+        result = select_paths_by_threshold([g], "Size (Bytes)", ">=", "100")
+        assert result == ["a/2.jpg", "a/3.jpg"]
+
+    def test_score_threshold_with_none_skipped(self, qapp):
+        # Records with score=None (isolated rows, MOV passengers)
+        # must NOT match a `> 0` threshold — the brief's score
+        # contract treats None as "unrankable", not "zero".
+        # Regression: a `float(None or 0)` would falsely include
+        # passengers.
+        from app.views.dialogs.select_dialog import select_paths_by_threshold
+
+        g = _make_group([
+            _make_record(file_path="a/1.jpg", score=None),
+            _make_record(file_path="a/2.jpg", score=0.4),
+            _make_record(file_path="a/3.jpg", score=0.8),
+        ])
+        result = select_paths_by_threshold([g], "Score", ">", "0.5")
+        assert result == ["a/3.jpg"]
+
+    def test_creation_date_isodate_threshold(self, qapp):
+        from datetime import datetime
+
+        from app.views.dialogs.select_dialog import select_paths_by_threshold
+
+        g = _make_group([
+            _make_record(
+                file_path="a/old.jpg",
+                creation_date=datetime(2020, 1, 1),
+            ),
+            _make_record(
+                file_path="a/new.jpg",
+                creation_date=datetime(2026, 6, 1),
+            ),
+        ])
+        result = select_paths_by_threshold(
+            [g], "Creation Date", ">", "2024-01-01"
+        )
+        assert result == ["a/new.jpg"]
+
+    def test_unparseable_threshold_returns_empty(self, qapp):
+        # User typed "abc" in the value field — must select nothing,
+        # not crash. Regression: a stray ValueError up the stack
+        # would kill the dialog. The acceptance test (`no_match_body`
+        # dialog) lives in test_execute_action_dialog; here we just
+        # verify the helper is silent.
+        from app.views.dialogs.select_dialog import select_paths_by_threshold
+
+        g = _make_group([
+            _make_record(file_path="a/1.jpg", file_size_bytes=100),
+        ])
+        result = select_paths_by_threshold([g], "Size (Bytes)", ">", "abc")
+        assert result == []
+
+
+class TestTopNSelectionLogic:
+    """select_paths_top_n ranks within group, not globally."""
+
+    def test_top_1_per_group_picks_one_from_each(self, qapp):
+        # Two groups of two rows each; Top 1 by score per group
+        # picks the higher-scoring row from EACH group — not the
+        # globally-top-1. Regression: if ranking went global, only
+        # one of the two groups would have a survivor selected.
+        from app.views.dialogs.select_dialog import select_paths_top_n
+
+        g1 = _make_group([
+            _make_record(file_path="g1/a.jpg", score=0.3),
+            _make_record(file_path="g1/b.jpg", score=0.9),
+        ])
+        g2 = _make_group([
+            _make_record(file_path="g2/a.jpg", score=0.4),
+            _make_record(file_path="g2/b.jpg", score=0.6),
+        ])
+        result = select_paths_top_n([g1, g2], "Score", 1, "desc")
+        assert sorted(result) == ["g1/b.jpg", "g2/b.jpg"]
+
+    def test_bottom_1_picks_lowest_per_group(self, qapp):
+        from app.views.dialogs.select_dialog import select_paths_top_n
+
+        g1 = _make_group([
+            _make_record(file_path="g1/a.jpg", score=0.3),
+            _make_record(file_path="g1/b.jpg", score=0.9),
+        ])
+        g2 = _make_group([
+            _make_record(file_path="g2/a.jpg", score=0.4),
+            _make_record(file_path="g2/b.jpg", score=0.6),
+        ])
+        result = select_paths_top_n([g1, g2], "Score", 1, "asc")
+        assert sorted(result) == ["g1/a.jpg", "g2/a.jpg"]
+
+    def test_top_n_skips_none_scored_records(self, qapp):
+        # MOV passengers and isolated rows have score=None and must
+        # NOT be ranked — otherwise a passenger would dominate Top-1
+        # via numeric coercion. Two scored + one None → Top 1
+        # selects the higher of the scored, never the None.
+        from app.views.dialogs.select_dialog import select_paths_top_n
+
+        g = _make_group([
+            _make_record(file_path="g1/p.mov", score=None),
+            _make_record(file_path="g1/a.jpg", score=0.3),
+            _make_record(file_path="g1/b.jpg", score=0.7),
+        ])
+        result = select_paths_top_n([g], "Score", 1, "desc")
+        assert result == ["g1/b.jpg"]
+
+    def test_top_n_larger_than_group_returns_all(self, qapp):
+        # Top 5 of a 2-row group returns both — partial selection
+        # is the right call ("pick up to N keepers per group") and
+        # the user's intent regardless of group sizes.
+        from app.views.dialogs.select_dialog import select_paths_top_n
+
+        g = _make_group([
+            _make_record(file_path="g1/a.jpg", score=0.3),
+            _make_record(file_path="g1/b.jpg", score=0.9),
+        ])
+        result = select_paths_top_n([g], "Score", 5, "desc")
+        assert sorted(result) == ["g1/a.jpg", "g1/b.jpg"]
+
+    def test_top_n_tie_is_stable_by_path(self, qapp):
+        # Two equal scores → tiebreak on file_path. Stable selection
+        # matters because re-running the same Top-N must select the
+        # same rows; otherwise the user's preview-then-Apply cycle
+        # could deselect a row they expected.
+        from app.views.dialogs.select_dialog import select_paths_top_n
+
+        g = _make_group([
+            _make_record(file_path="g1/b.jpg", score=0.5),
+            _make_record(file_path="g1/a.jpg", score=0.5),
+            _make_record(file_path="g1/c.jpg", score=0.5),
+        ])
+        # Top 1 of three equal-score rows: tiebreak picks the
+        # alphabetically-first path (a.jpg), stably across runs.
+        result = select_paths_top_n([g], "Score", 1, "desc")
+        assert result == ["g1/a.jpg"]
+
+
+class TestPatternEncoding:
+    """encode/decode round-trips for the special pattern strings."""
+
+    def test_cmp_pattern_round_trip(self, qapp):
+        from app.views.dialogs.select_dialog import (
+            decode_cmp_pattern, encode_cmp_pattern,
+        )
+        assert decode_cmp_pattern(encode_cmp_pattern(">=", "80")) == (">=", "80")
+
+    def test_top_n_pattern_round_trip(self, qapp):
+        from app.views.dialogs.select_dialog import (
+            decode_top_n_pattern, encode_top_n_pattern,
+        )
+        assert decode_top_n_pattern(encode_top_n_pattern(3, "desc")) == (3, "desc")
+
+    def test_decode_cmp_returns_none_for_non_cmp(self, qapp):
+        from app.views.dialogs.select_dialog import decode_cmp_pattern
+        assert decode_cmp_pattern("IMG.*") is None
+
+    def test_decode_top_n_rejects_bad_order(self, qapp):
+        # The receiver guards against a corrupted pattern (e.g.
+        # `__top_n__:3:garbage`) so a future drift doesn't silently
+        # rank with bogus order. None signals "treat as no-match".
+        from app.views.dialogs.select_dialog import decode_top_n_pattern
+        assert decode_top_n_pattern("__top_n__:3:garbage") is None

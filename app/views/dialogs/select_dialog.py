@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Callable
+from datetime import datetime
+from typing import Any, Callable
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStyle,
     QStyledItemDelegate,
@@ -93,6 +95,241 @@ _CHEATSHEET_TOKENS: list[tuple[str, str]] = [
 _RECENT_KEY = "ui.action_dialog.recent_patterns"
 _MODE_KEY = "ui.action_dialog.mode"
 _RECENT_CAP = 10
+
+# Fields whose underlying record attribute is numeric (or a datetime
+# that maps cleanly to a sortable timestamp). For these fields the
+# dialog swaps the regex/simple panel for a numeric-condition panel
+# (threshold comparison or Top-N within group). When the selected
+# field is NOT in this set, the existing regex/simple controls show
+# unchanged. #209.
+_NUMERIC_FIELDS: frozenset[str] = frozenset({
+    "Size (Bytes)",
+    "Group Count",
+    "Similarity",
+    "Score",
+    "Creation Date",
+    "Shot Date",
+})
+
+# Threshold-comparison operators. Order is the dropdown order shown
+# to the user; the first item (">") is the default because it matches
+# the most common intent ("delete rows below score X" → keep > X).
+_CMP_OPS: list[tuple[str, str]] = [
+    (">",  "action_dialog.cmp_op_gt"),
+    (">=", "action_dialog.cmp_op_ge"),
+    ("<",  "action_dialog.cmp_op_lt"),
+    ("<=", "action_dialog.cmp_op_le"),
+    ("==", "action_dialog.cmp_op_eq"),
+    ("!=", "action_dialog.cmp_op_ne"),
+]
+
+# Internal mode flags for the numeric panel.
+NUMERIC_MODE_THRESHOLD = "threshold"
+NUMERIC_MODE_TOPN = "top_n"
+
+# Pattern-string prefixes encoding numeric conditions through the
+# existing setActionRequested(field, pattern, decision) signal. The
+# receiver inspects the prefix and routes accordingly — keeps the
+# dialog→handler contract a single string and avoids a new signal.
+PATTERN_CMP_PREFIX = "__cmp__:"
+PATTERN_TOP_N_PREFIX = "__top_n__:"
+
+
+def _numeric_value_for(field: str, rec: Any, group: Any) -> float | None:
+    """Return the comparable numeric value of ``field`` for ``rec``.
+
+    For date fields the datetime is converted to a POSIX timestamp so
+    threshold comparisons stay in floats. Returns ``None`` when the
+    attribute is missing or unset — caller skips such records (same
+    semantics as ``_get_record_field`` returning ``None``).
+    """
+    if field == "Size (Bytes)":
+        val = getattr(rec, "file_size_bytes", None)
+        return float(val) if val is not None else None
+    if field == "Group Count":
+        items = getattr(group, "items", None)
+        return float(len(items)) if items is not None else None
+    if field == "Similarity":
+        val = getattr(rec, "hamming_distance", None)
+        return float(val) if val is not None else None
+    if field == "Score":
+        val = getattr(rec, "score", None)
+        return float(val) if val is not None else None
+    if field == "Creation Date":
+        d = getattr(rec, "creation_date", None)
+        try:
+            return d.timestamp() if d is not None else None
+        except Exception:
+            return None
+    if field == "Shot Date":
+        d = getattr(rec, "shot_date", None)
+        try:
+            return d.timestamp() if d is not None else None
+        except Exception:
+            return None
+    return None
+
+
+def _parse_threshold(field: str, text: str) -> float | None:
+    """Parse the user's threshold text into a numeric value to compare against.
+
+    Pure numeric fields accept a float. Date fields accept ISO ``YYYY-MM-DD``
+    (or ``YYYY-MM-DD HH:MM:SS``) and we convert to a timestamp so the
+    threshold matches ``_numeric_value_for``'s float-of-timestamp form.
+    Returns ``None`` for unparseable input — the caller treats this as
+    a zero-match condition (same as an invalid regex in the existing flow).
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    if field in ("Creation Date", "Shot Date"):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt).timestamp()
+            except ValueError:
+                continue
+        # Fall through to bare-float — lets power users paste a
+        # timestamp if they want, but the common case is ISO.
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _cmp_apply(value: float, op: str, threshold: float) -> bool:
+    """Evaluate ``value <op> threshold``. Unknown op → False (defensive)."""
+    if op == ">":  return value > threshold
+    if op == ">=": return value >= threshold
+    if op == "<":  return value < threshold
+    if op == "<=": return value <= threshold
+    if op == "==": return value == threshold
+    if op == "!=": return value != threshold
+    return False
+
+
+def select_paths_by_threshold(
+    groups: list, field: str, op: str, threshold_text: str
+) -> list[str]:
+    """Return file_paths from ``groups`` whose ``field`` value passes ``op threshold``.
+
+    Records whose numeric value is missing (None) are skipped — same
+    rule as the regex flow, which skips fields ``_get_record_field``
+    returns None for. Order is group-then-record so the caller's
+    truncated lock-confirm list reads as user tree order.
+    """
+    threshold = _parse_threshold(field, threshold_text)
+    if threshold is None:
+        return []
+    matched: list[str] = []
+    for group in groups:
+        for rec in getattr(group, "items", []):
+            val = _numeric_value_for(field, rec, group)
+            if val is None:
+                continue
+            if _cmp_apply(val, op, threshold):
+                matched.append(rec.file_path)
+    return matched
+
+
+def select_paths_top_n(
+    groups: list, field: str, n: int, order: str
+) -> list[str]:
+    """Return file_paths ranked top (or bottom) ``n`` within each group.
+
+    ``order='desc'`` selects the N records with the LARGEST values —
+    "top by score" picks the keepers. ``order='asc'`` selects the N
+    records with the SMALLEST values — "bottom by score" picks the
+    deletables. Ties break by file_path so the selection is stable
+    across re-runs (don't want a coin-flip on which of two equal-score
+    siblings gets selected). Records with no numeric value (None) are
+    excluded from ranking entirely.
+
+    When a group has fewer than N rankable records, all of its rankable
+    records are selected — Top 3 of a 2-row group selects both rows.
+    """
+    if n <= 0 or order not in ("asc", "desc"):
+        return []
+    matched: list[str] = []
+    reverse = (order == "desc")
+    for group in groups:
+        ranked: list[tuple[float, str]] = []
+        for rec in getattr(group, "items", []):
+            val = _numeric_value_for(field, rec, group)
+            if val is None:
+                continue
+            ranked.append((val, rec.file_path))
+        # Stable sort by (value, file_path). For desc, sort by
+        # (-value, file_path) so the tiebreaker stays ascending —
+        # picking the alphabetically-earlier path among equals is
+        # arbitrary but deterministic.
+        ranked.sort(key=lambda t: (t[0], t[1]), reverse=False)
+        if reverse:
+            ranked.reverse()
+            # After reverse the tiebreaker reads desc(path); flip
+            # tiebreaker back to asc(path) within each value bucket.
+            # Cheapest correct way: group by value and re-sort each
+            # group's paths ascending. With small N (typical use:
+            # n=1..5) the dataset per group is small.
+            from itertools import groupby
+            fixed: list[tuple[float, str]] = []
+            for _val, grp in groupby(ranked, key=lambda t: t[0]):
+                fixed.extend(sorted(grp, key=lambda t: t[1]))
+            ranked = fixed
+        for _val, path in ranked[:n]:
+            matched.append(path)
+    return matched
+
+
+def encode_cmp_pattern(op: str, value_text: str) -> str:
+    """Encode a threshold condition as a single pattern string for transit
+    through ``setActionRequested(field, pattern, decision)``.
+
+    Format: ``__cmp__:<op>:<value_text>``. Value text is the user's raw
+    input so the receiver can re-parse it with the field's own rules
+    (numeric vs. ISO date). Value is the last segment, so user input
+    containing ``:`` (e.g. ``2026-01-01 12:00:00``) still round-trips.
+    """
+    return f"{PATTERN_CMP_PREFIX}{op}:{value_text}"
+
+
+def encode_top_n_pattern(n: int, order: str) -> str:
+    """Encode a Top-N condition as a pattern string. Format:
+    ``__top_n__:<n>:<order>`` where order ∈ {asc, desc}.
+    """
+    return f"{PATTERN_TOP_N_PREFIX}{n}:{order}"
+
+
+def decode_cmp_pattern(pattern: str) -> tuple[str, str] | None:
+    """Reverse of :func:`encode_cmp_pattern`. Returns (op, value_text)
+    or ``None`` if the pattern isn't a cmp-encoded string."""
+    if not pattern.startswith(PATTERN_CMP_PREFIX):
+        return None
+    rest = pattern[len(PATTERN_CMP_PREFIX):]
+    # op is first segment, value is everything after — value may
+    # contain ``:`` (ISO timestamp with seconds).
+    if ":" not in rest:
+        return None
+    op, value_text = rest.split(":", 1)
+    return op, value_text
+
+
+def decode_top_n_pattern(pattern: str) -> tuple[int, str] | None:
+    """Reverse of :func:`encode_top_n_pattern`. Returns (n, order) or
+    ``None`` if pattern isn't a top-n-encoded string."""
+    if not pattern.startswith(PATTERN_TOP_N_PREFIX):
+        return None
+    rest = pattern[len(PATTERN_TOP_N_PREFIX):]
+    parts = rest.split(":", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        n = int(parts[0])
+    except ValueError:
+        return None
+    order = parts[1]
+    if order not in ("asc", "desc"):
+        return None
+    return n, order
 
 
 def _field_display(name: str) -> str:
@@ -304,6 +541,7 @@ class ActionDialog(QDialog):
         initial_field: str | None = None,
         match_fn: MatchFn | None = None,
         settings: object | None = None,
+        groups: list | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("action_dialog.title"))
@@ -317,6 +555,14 @@ class ActionDialog(QDialog):
         self._match_fn = match_fn
         self._settings = settings
         self._sample_cap = 50  # mirrors build_match_fn default
+        # ``groups`` is the raw list of PhotoGroups whose rows the
+        # dialog would affect — passed in by ExecuteActionDialog so
+        # the new numeric-condition panel can rank records for Top-N
+        # within group (#209). When None, the numeric panel never
+        # appears: callers that don't supply groups (main-window
+        # standalone) keep the existing regex/simple-only behavior.
+        self._groups = groups if groups is not None else []
+        self._numeric_mode = NUMERIC_MODE_THRESHOLD
 
         # Mode is only meaningful when match_fn is supplied (Simple
         # mode would have nothing to live-preview against). Default is
@@ -481,6 +727,85 @@ class ActionDialog(QDialog):
             regex_layout.addLayout(grid)
         left_layout.addWidget(self._regex_widget)
 
+        # ── Numeric-condition container (only built when groups passed) ────
+        # The numeric panel covers two condition types: threshold
+        # comparison (>=, <=, == …) against a value the user types,
+        # and Top/Bottom N within group. Only shown when the active
+        # field is in _NUMERIC_FIELDS AND groups were supplied (#209).
+        # Stays hidden by default — _apply_field_panel_visibility flips
+        # it on at the moment the user picks a numeric field.
+        self._numeric_widget = QWidget()
+        self._numeric_widget.setObjectName("numericConditionRow")
+        numeric_outer = QVBoxLayout(self._numeric_widget)
+        numeric_outer.setContentsMargins(0, 0, 0, 0)
+
+        # Mode toggle: Threshold | Top N per group
+        num_mode_row = QHBoxLayout()
+        self._num_mode_threshold_btn = QRadioButton(
+            t("action_dialog.numeric_mode_threshold")
+        )
+        self._num_mode_threshold_btn.setObjectName("numericModeThreshold")
+        self._num_mode_topn_btn = QRadioButton(
+            t("action_dialog.numeric_mode_topn")
+        )
+        self._num_mode_topn_btn.setObjectName("numericModeTopN")
+        self._num_mode_threshold_btn.setChecked(True)
+        num_mode_row.addWidget(self._num_mode_threshold_btn)
+        num_mode_row.addWidget(self._num_mode_topn_btn)
+        num_mode_row.addStretch(1)
+        numeric_outer.addLayout(num_mode_row)
+        num_mode_group = QButtonGroup(self)
+        num_mode_group.addButton(self._num_mode_threshold_btn)
+        num_mode_group.addButton(self._num_mode_topn_btn)
+        self._num_mode_button_group = num_mode_group  # retain ref
+
+        # Threshold sub-panel: op combo + value line edit.
+        self._num_threshold_widget = QWidget()
+        threshold_row = QHBoxLayout(self._num_threshold_widget)
+        threshold_row.setContentsMargins(0, 0, 0, 0)
+        threshold_row.addWidget(QLabel(t("action_dialog.numeric_threshold_label")))
+        self._num_cmp_combo = QComboBox()
+        self._num_cmp_combo.setObjectName("numericCmpCombo")
+        for op_key, label_key in _CMP_OPS:
+            self._num_cmp_combo.addItem(t(label_key), userData=op_key)
+        threshold_row.addWidget(self._num_cmp_combo)
+        self._num_value_edit = QLineEdit()
+        self._num_value_edit.setObjectName("numericValueEdit")
+        self._num_value_edit.setPlaceholderText(
+            t("action_dialog.numeric_value_placeholder")
+        )
+        threshold_row.addWidget(self._num_value_edit, stretch=1)
+        numeric_outer.addWidget(self._num_threshold_widget)
+
+        # Top-N sub-panel: order combo (Top/Bottom) + N spinbox.
+        self._num_topn_widget = QWidget()
+        topn_row = QHBoxLayout(self._num_topn_widget)
+        topn_row.setContentsMargins(0, 0, 0, 0)
+        topn_row.addWidget(QLabel(t("action_dialog.numeric_topn_label")))
+        self._num_order_combo = QComboBox()
+        self._num_order_combo.setObjectName("numericOrderCombo")
+        # "desc" first because top-by-score (highest-first) is the most
+        # common ranking intent — keepers at the top.
+        self._num_order_combo.addItem(t("action_dialog.numeric_order_top"), userData="desc")
+        self._num_order_combo.addItem(t("action_dialog.numeric_order_bottom"), userData="asc")
+        topn_row.addWidget(self._num_order_combo)
+        self._num_n_spin = QSpinBox()
+        self._num_n_spin.setObjectName("numericNSpinBox")
+        self._num_n_spin.setRange(1, 999)
+        self._num_n_spin.setValue(1)
+        topn_row.addWidget(self._num_n_spin)
+        topn_row.addWidget(QLabel(t("action_dialog.numeric_topn_suffix")))
+        topn_row.addStretch(1)
+        numeric_outer.addWidget(self._num_topn_widget)
+        self._num_topn_widget.hide()  # threshold is the default sub-mode
+
+        # Connect the numeric-mode radios so toggling shows/hides the
+        # right sub-panel and re-runs the live preview.
+        self._num_mode_threshold_btn.toggled.connect(self._on_numeric_mode_toggled)
+
+        self._numeric_widget.hide()  # initial state: hidden until field changes
+        left_layout.addWidget(self._numeric_widget)
+
         # ── Match counter row (visible in BOTH modes when match_fn) ────────
         # Lives outside the mode containers so toggling mode never hides
         # the live count — it's the primary feedback for both Beginner
@@ -577,6 +902,14 @@ class ActionDialog(QDialog):
             self._preview_timer.timeout.connect(self._refresh_preview)
             self.regex.textChanged.connect(self._preview_timer.start)
             self.combo.currentIndexChanged.connect(self._preview_timer.start)
+            # #209 — numeric panel inputs feed the same debounced
+            # preview so the match counter updates as the user types
+            # a threshold or scrolls the Top-N spinbox.
+            self._num_value_edit.textChanged.connect(self._preview_timer.start)
+            self._num_cmp_combo.currentIndexChanged.connect(self._preview_timer.start)
+            self._num_order_combo.currentIndexChanged.connect(self._preview_timer.start)
+            self._num_n_spin.valueChanged.connect(self._preview_timer.start)
+            self._num_mode_threshold_btn.toggled.connect(self._preview_timer.start)
 
         self._apply_exact_regex_for_current_field()
         # Default Simple op is "contains" (index 0) — most useful
@@ -632,7 +965,18 @@ class ActionDialog(QDialog):
         the Simple inputs from the current regex via ``_try_parse_simple``;
         on failure we keep the regex intact and show the complex-pattern
         notice with Simple inputs disabled.
+
+        #209: when the active field is numeric AND groups were provided,
+        the numeric panel pre-empts both Simple and Regex panels.
+        ``_field_panel_is_numeric`` is the gate.
         """
+        if self._field_panel_is_numeric():
+            self._simple_widget.setVisible(False)
+            self._regex_widget.setVisible(False)
+            self._numeric_widget.setVisible(True)
+            self._apply_numeric_sub_visibility()
+            return
+        self._numeric_widget.setVisible(False)
         simple_visible = self._mode == MODE_SIMPLE and self._match_fn is not None
         self._simple_widget.setVisible(simple_visible)
         self._regex_widget.setVisible(not simple_visible)
@@ -670,6 +1014,41 @@ class ActionDialog(QDialog):
         self._simple_complex_notice.hide()
         self._simple_op_combo.setEnabled(True)
         self._simple_text.setEnabled(True)
+
+    # ── Numeric panel ──────────────────────────────────────────────────────
+
+    def _field_panel_is_numeric(self) -> bool:
+        """True iff the numeric-condition panel should pre-empt the
+        regex/simple panels. Gated on (a) selected field is numeric-capable
+        and (b) groups were supplied — without groups, Top-N can't rank
+        and threshold comparisons have no rows to apply to from this
+        dialog's own context. The main-window callsite intentionally
+        leaves groups=None to preserve existing behavior (#209)."""
+        if not self._groups:
+            return False
+        return self._current_field() in _NUMERIC_FIELDS
+
+    def _apply_numeric_sub_visibility(self) -> None:
+        """Show one sub-panel (threshold or top-n) inside the numeric widget."""
+        is_threshold = self._numeric_mode == NUMERIC_MODE_THRESHOLD
+        self._num_threshold_widget.setVisible(is_threshold)
+        self._num_topn_widget.setVisible(not is_threshold)
+
+    def _on_numeric_mode_toggled(self, checked_threshold: bool) -> None:
+        # Mirror _on_mode_toggled: act on the True side only so the
+        # apply runs once per user click.
+        if checked_threshold:
+            self._numeric_mode = NUMERIC_MODE_THRESHOLD
+        elif self._num_mode_topn_btn.isChecked():
+            self._numeric_mode = NUMERIC_MODE_TOPN
+        else:
+            return
+        self._apply_numeric_sub_visibility()
+        # Numeric panel doesn't have a regex line edit to validate;
+        # the match-counter is best-effort refreshed off the regex
+        # input. We don't currently live-preview numeric matches —
+        # the user clicks Apply and sees the result in the parent
+        # dialog's tree refresh.
 
     # ── Simple → regex write-through ───────────────────────────────────────
 
@@ -804,7 +1183,7 @@ class ActionDialog(QDialog):
         the `re.error` message. The match counter falls back to an em
         dash while the regex is invalid.
         """
-        if self._mode == MODE_SIMPLE:
+        if self._mode == MODE_SIMPLE or self._field_panel_is_numeric():
             self._validation_icon.setText("")
             self._validation_icon.setStyleSheet("")
             self._validation_icon.setAccessibleName("")
@@ -852,8 +1231,15 @@ class ActionDialog(QDialog):
         mode synthesises via _build_pattern). Match-span highlighting is
         applied per-row by storing (start, end) on each list item; the
         delegate paints from there.
+
+        Numeric panel uses its own counting path (groups + helpers)
+        because the match_fn closure is regex-only.
         """
         if self._match_fn is None:
+            return
+
+        if self._field_panel_is_numeric():
+            self._refresh_numeric_preview()
             return
 
         pattern = self._build_pattern()
@@ -898,6 +1284,47 @@ class ActionDialog(QDialog):
         else:
             self._preview_truncated.hide()
 
+    def _refresh_numeric_preview(self) -> None:
+        """Populate the preview pane + counter from the numeric panel."""
+        from pathlib import Path
+
+        field = self._current_field()
+        total = sum(len(getattr(g, "items", [])) for g in self._groups)
+
+        if self._numeric_mode == NUMERIC_MODE_TOPN:
+            n = int(self._num_n_spin.value())
+            order = str(self._num_order_combo.currentData() or "desc")
+            paths = select_paths_top_n(self._groups, field, n, order)
+        else:
+            op = str(self._num_cmp_combo.currentData() or ">")
+            value_text = self._num_value_edit.text()
+            paths = select_paths_by_threshold(
+                self._groups, field, op, value_text
+            )
+
+        matched = len(paths)
+        self._match_counter.setText(
+            t("action_dialog.match_counter").format(matched=matched, total=total)
+        )
+
+        self._preview_list.clear()
+        if matched == 0:
+            self._preview_list.addItem(t("action_dialog.preview_empty"))
+        else:
+            for path in paths[: self._sample_cap]:
+                item = QListWidgetItem(Path(path).name)
+                self._preview_list.addItem(item)
+
+        if matched > self._sample_cap:
+            self._preview_truncated.setText(
+                t("action_dialog.preview_truncated").format(
+                    n=matched - self._sample_cap
+                )
+            )
+            self._preview_truncated.show()
+        else:
+            self._preview_truncated.hide()
+
     # ── Existing API ───────────────────────────────────────────────────────
 
     def _current_field(self) -> str:
@@ -907,14 +1334,29 @@ class ActionDialog(QDialog):
 
     def _emit_set_action(self) -> None:
         field = self._current_field()
-        pattern = self._build_pattern()
-        # Record only the raw pattern (not the Beginner tuple) — keeps
-        # the recent list usable from either mode and survives mode
-        # toggles. Empty patterns aren't worth keeping.
-        self._record_recent_pattern(pattern)
+        if self._field_panel_is_numeric():
+            pattern = self._build_numeric_pattern()
+        else:
+            pattern = self._build_pattern()
+            # Recent-patterns only records raw regex strings — numeric
+            # pseudo-patterns (`__cmp__:`, `__top_n__:`) would be
+            # confusing in the Recent dropdown which lives in the
+            # regex panel. Record only when we're emitting a real
+            # regex.
+            self._record_recent_pattern(pattern)
         idx = self._action_combo.currentIndex()
         _label, value = self._decisions[idx]
         self.setActionRequested.emit(field, pattern, value)
+
+    def _build_numeric_pattern(self) -> str:
+        """Encode the active numeric sub-panel as a pattern string."""
+        if self._numeric_mode == NUMERIC_MODE_TOPN:
+            n = int(self._num_n_spin.value())
+            order = self._num_order_combo.currentData() or "desc"
+            return encode_top_n_pattern(n, str(order))
+        op = self._num_cmp_combo.currentData() or ">"
+        value_text = self._num_value_edit.text()
+        return encode_cmp_pattern(str(op), value_text)
 
     def _set_default_field(self, field_name: str) -> None:
         try:
@@ -925,7 +1367,16 @@ class ActionDialog(QDialog):
             pass
 
     def _on_field_changed(self, _index: int) -> None:
+        # Switching to a numeric-capable field swaps the panel stack.
+        # _apply_mode_visibility is the single source of truth for
+        # which panel is visible — call it BEFORE re-stamping the
+        # regex line edit so the regex panel (now potentially hidden)
+        # doesn't drive a spurious live-preview refresh.
+        self._apply_mode_visibility()
         self._apply_exact_regex_for_current_field()
+        # Validation icon would otherwise read the (now-irrelevant)
+        # regex value in numeric-panel mode; suppress it explicitly.
+        self._validate_regex()
 
     def _apply_exact_regex_for_current_field(self) -> None:
         field = self._current_field()
