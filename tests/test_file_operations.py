@@ -285,6 +285,135 @@ class TestRemoveFromList:
         assert recs[0].user_decision == ""
 
 
+# ── remove-from-list lock guard (#208) ───────────────────────────────────────
+
+
+class TestRemoveFromListLockGuard:
+    """Lock guard on remove_items_from_list and remove_from_list_toolbar (#208).
+
+    Locked files must surface LockedRowsConfirmDialog before removal,
+    mirroring the guard already present in the execute-dialog remove path.
+    """
+
+    def _setup(self, tmp_path):
+        from app.viewmodels.main_vm import MainVM
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        rec_a = _rec("/a.jpg", locked=False)
+        rec_b = _rec("/b.jpg", locked=True)
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[rec_a, rec_b])]
+        handler, _, _ = _make_handler(vm, str(db))
+        return handler, rec_a, rec_b, db
+
+    # -- remove_items_from_list -----------------------------------------------
+
+    def test_cancel_does_not_remove_locked_file(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, db = self._setup(tmp_path)
+        with patch.object(LockedRowsConfirmDialog, "ask", return_value=LockedRowsConfirmDialog.CANCEL):
+            handler.remove_items_from_list([{"type": "file", "path": "/b.jpg"}])
+        assert rec_b in handler.vm.groups[0].items
+        assert _read_decision(db, "/b.jpg") == ""
+
+    def test_apply_unlocked_only_skips_locked_file(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, db = self._setup(tmp_path)
+        items = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "file", "path": "/b.jpg"},
+        ]
+        with patch.object(
+            LockedRowsConfirmDialog, "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY,
+        ):
+            handler.remove_items_from_list(items)
+        remaining = [r.file_path for r in handler.vm.groups[0].items]
+        assert "/a.jpg" not in remaining
+        assert "/b.jpg" in remaining
+        assert _read_decision(db, "/a.jpg") == "removed"
+        assert _read_decision(db, "/b.jpg") == ""
+
+    def test_apply_all_unlocked_unlocks_then_removes_all(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, db = self._setup(tmp_path)
+        items = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "file", "path": "/b.jpg"},
+        ]
+        with patch.object(
+            LockedRowsConfirmDialog, "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+        ):
+            handler.remove_items_from_list(items)
+        assert handler.vm.groups == []
+        assert rec_b.is_locked is False
+        assert _read_decision(db, "/a.jpg") == "removed"
+        assert _read_decision(db, "/b.jpg") == "removed"
+
+    def test_no_locked_items_skips_dialog(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, _ = self._setup(tmp_path)
+        rec_b.is_locked = False  # no locked items
+        with patch.object(LockedRowsConfirmDialog, "ask") as ask:
+            handler.remove_items_from_list([{"type": "file", "path": "/a.jpg"}])
+        ask.assert_not_called()
+
+    # -- remove_from_list_toolbar ---------------------------------------------
+
+    def test_toolbar_cancel_does_not_remove_locked_file(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, db = self._setup(tmp_path)
+        with patch.object(LockedRowsConfirmDialog, "ask", return_value=LockedRowsConfirmDialog.CANCEL):
+            handler.remove_from_list_toolbar([{"type": "file", "path": "/b.jpg"}])
+        assert rec_b in handler.vm.groups[0].items
+
+    def test_toolbar_apply_unlocked_only_skips_locked(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, db = self._setup(tmp_path)
+        items = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "file", "path": "/b.jpg"},
+        ]
+        with patch.object(
+            LockedRowsConfirmDialog, "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY,
+        ):
+            handler.remove_from_list_toolbar(items)
+        remaining = [r.file_path for r in handler.vm.groups[0].items]
+        assert "/a.jpg" not in remaining
+        assert "/b.jpg" in remaining
+
+    def test_toolbar_apply_all_unlocked_removes_all(self, tmp_path):
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, db = self._setup(tmp_path)
+        items = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "file", "path": "/b.jpg"},
+        ]
+        with patch.object(
+            LockedRowsConfirmDialog, "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+        ):
+            handler.remove_from_list_toolbar(items)
+        assert handler.vm.groups == []
+        assert rec_b.is_locked is False
+
+    def test_group_with_locked_item_expands_correctly(self, tmp_path):
+        """Removing a group that contains a locked file surfaces the dialog
+        with the group's file paths (not just the group item itself)."""
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+        handler, rec_a, rec_b, db = self._setup(tmp_path)
+        with patch.object(
+            LockedRowsConfirmDialog, "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ) as ask:
+            handler.remove_items_from_list([{"type": "group", "group_number": 1}])
+        ask.assert_called_once()
+        _, kwargs = ask.call_args
+        assert kwargs["affected_count"] == 2
+        assert "/b.jpg" in kwargs["locked_paths"]
+
+
 # ── set_decision_to_highlighted ───────────────────────────────────────────────
 
 class TestSetDecisionToHighlighted:
