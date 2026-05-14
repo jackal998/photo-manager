@@ -167,6 +167,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # renders and the header columns are interactable. Same fixture as
     # s40 / s14 / s32; deterministic file count and group label.
     "s47_column_layout_persist": ["qa/sandbox/near-duplicates"],
+    # s48 (#215) — dialog geometry persists across close-and-reopen.
+    # Near-duplicates fixture so the in-session scan produces a
+    # manifest, which enables Execute Action and the ActionDialog
+    # preview-pane path.
+    "s48_dialog_geometry_persist": ["qa/sandbox/near-duplicates"],
 }
 
 

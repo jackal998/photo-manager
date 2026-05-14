@@ -6,7 +6,6 @@ and handlers while preserving all existing public interfaces for backward compat
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +34,14 @@ from app.views.handlers.file_operations import FileOperationsHandler
 from app.views.image_tasks import ImageTaskRunner
 from app.views.layout.layout_manager import LayoutManager
 from app.views.preview_pane import PreviewPane
+from app.views.window_state import (
+    QSETTINGS_KEY_COLUMN_HEADER_STATE,
+    QSETTINGS_KEY_MAIN_SPLITTER_STATE,
+    QSETTINGS_KEY_MAIN_WINDOW_GEOM,
+    qsettings_path,
+    save_widget_geometry,
+    window_state_qsettings,
+)
 from infrastructure.i18n import t
 
 
@@ -77,36 +84,24 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ window-state persistence
 
-    # Stable QSettings keys — changing these silently invalidates the
-    # round-trip across upgrades. ``QSETTINGS_KEY_GEOMETRY`` holds
-    # ``QMainWindow.saveGeometry()`` bytes (window x/y/w/h + maximize
-    # state). ``QSETTINGS_KEY_SPLITTER_STATE`` holds the central
-    # ``QSplitter.saveState()`` bytes (handle position).
-    QSETTINGS_KEY_GEOMETRY = "geometry/main_window"
-    QSETTINGS_KEY_SPLITTER_STATE = "geometry/main_splitter"
-    # Holds ``QHeaderView.saveState()`` bytes for the results tree
-    # (visual section order + per-column widths). The restore happens
-    # AFTER ``refresh_model``'s ResizeToContents→Interactive cycle —
-    # see ``refresh_tree`` — so the auto-sized defaults don't clobber
-    # restored widths.
-    QSETTINGS_KEY_COLUMN_STATE = "geometry/column_header"
+    # QSettings keys — kept as class-level aliases for back-compat with
+    # any existing callers; the canonical definitions live in
+    # :mod:`app.views.window_state` (single source of truth shared with
+    # the dialogs and the column-header state from #214).
+    QSETTINGS_KEY_GEOMETRY = QSETTINGS_KEY_MAIN_WINDOW_GEOM
+    QSETTINGS_KEY_SPLITTER_STATE = QSETTINGS_KEY_MAIN_SPLITTER_STATE
+    QSETTINGS_KEY_COLUMN_STATE = QSETTINGS_KEY_COLUMN_HEADER_STATE
 
+    # Backwards-compat shims for callers/tests that historically
+    # reached for these classmethods. The real implementations live
+    # in :mod:`app.views.window_state`.
     @staticmethod
     def _qsettings_path() -> Path:
-        """Return the INI path used for window-state QSettings.
-
-        Anchored under ``PHOTO_MANAGER_HOME`` (when set) so QA scenarios
-        and dev runs stay isolated from any installed-app state in the
-        user's Windows registry. Falls back to the repo root.
-        """
-        base_dir = Path(__file__).resolve().parents[2]
-        home_env = os.environ.get("PHOTO_MANAGER_HOME")
-        config_home = (base_dir / home_env).resolve() if home_env else base_dir
-        return config_home / "window_state.ini"
+        return qsettings_path()
 
     @classmethod
     def _window_state_qsettings(cls) -> QSettings:
-        return QSettings(str(cls._qsettings_path()), QSettings.IniFormat)
+        return window_state_qsettings()
 
     def _restore_geometry(self) -> None:
         """Restore window geometry + splitter state from QSettings, if any.
