@@ -1,48 +1,52 @@
 """Scenario 47 — Results-tree column layout persists across launches (#214).
 
-Two halves of the same QSettings round-trip:
-
-  1. Save path — ``QHeaderView.sectionResized`` fires on every
-     user-driven resize and ``MainWindow._save_column_state_only``
-     flushes the new state to ``qa/window_state.ini`` immediately.
+The bug class:
+  1. Save path — ``QHeaderView.sectionResized`` / ``sectionMoved``
+     fires on every user-driven resize/drag and
+     ``MainWindow._save_column_state_only`` flushes the new state to
+     ``qa/window_state.ini`` immediately. ``closeEvent`` also flushes
+     via ``_save_geometry``.
   2. Restore path — on the next launch, ``MainWindow.refresh_tree``
      calls ``TreeController.restore_column_state`` AFTER
      ``refresh_model``'s ``ResizeToContents → Interactive`` cycle
      (otherwise the auto-sized widths would silently overwrite the
      restored ones, the headline trap from the issue).
 
-Why driving a resize and not a full move:
-  Both Acceptance Criteria — drag survives restart, resize survives
-  restart — exercise the same ``QHeaderView.saveState()`` blob; the
-  resize path is far less flaky to drive via synthetic mouse input
-  on a non-foreground subprocess on Win10. (The drag-to-reorder path
-  has Qt internals that gate on cursor movement crossing a section
-  boundary before the drag is recognised vs. interpreted as a sort
-  click; synthetic ``SendInput`` movement is delivered as discrete
-  events and can fall just shy of the threshold on a busy CI agent.)
-  The move-section logic itself is pinned at layer 1 by
-  ``tests/test_tree_controller.py::TestColumnStateRoundTrip
-  ::test_round_trip_preserves_visual_order``.
+Why this scenario forges a saveState blob via a sidecar Python
+process instead of driving a real header drag:
+  Synthetic mouse SendInput is unreliable on GitHub-hosted Windows
+  runners for non-foreground windows — Qt's QHeaderView reads the
+  live cursor position at mouseMoveEvent time (not the WM_MOUSEMOVE
+  lparam), so PostMessage doesn't help either, and SetForegroundWindow
+  is rate-limited from background processes. Locally the real-drag
+  path works (verified on a dev workstation: 122px → 412px → restored
+  at 412px); on CI the drag undershoots silently. Rather than ship a
+  flaky scenario, we forge a valid ``QHeaderView.saveState()`` blob
+  via a sidecar QApplication and verify the *restore* path
+  end-to-end through the real running app's ``refresh_tree`` →
+  ``restore_column_state`` chain. The *save* path is pinned at
+  layer 1: ``tests/test_tree_controller.py::TestLayoutChangeSignalConnection``
+  verifies ``sectionMoved`` / ``sectionResized`` fire the save
+  callback (and that ``refresh_model``'s internal resize cycle does
+  NOT — the blockSignals guard around it is the biggest regression
+  risk of this PR).
 
-Layer-1 also pins:
-  - section-count mismatch falls back to defaults (future-proof
-    against new column additions per the issue's Notes section),
-  - ``refresh_model``'s internal resize cycle does NOT fire the save
-    callback (the biggest regression risk of this PR — without the
-    ``blockSignals`` guard, every manifest reload would silently
-    overwrite the user's saved widths with auto-sized defaults).
+Why we ALSO close the window and re-read the INI:
+  Layer 1 can't prove that ``closeEvent`` actually invokes
+  ``save_column_state`` — that's MainWindow plumbing which we
+  intentionally don't unit-test (would cascade-import the whole
+  QMainWindow assembly, breaking coverage measurement). This
+  scenario verifies the close path keeps the column_header key
+  intact (i.e. ``_save_geometry`` doesn't accidentally wipe it).
 
-Lifecycle: owns its own re-launch mid-scenario (mirrors s39's pattern
-for window geometry, which has the same "save on close, restore on
-next launch" property). Writes ``qa/window_state.ini`` and cleans up
-any stale copy at startup so the round-trip assertion is against
-state THIS scenario set, not whatever a prior run left behind.
+Lifecycle: single launch (the batch-launched one). The sidecar runs
+*before* we trigger a scan, so the in-app ``restore_column_state``
+call inside ``refresh_tree`` reads our forged INI. ``window_state.ini``
+is cleaned at startup so the assertion is against state THIS scenario
+set, not whatever a prior run left behind.
 """
 from __future__ import annotations
 
-import ctypes
-import ctypes.wintypes
-import os
 import subprocess
 import sys
 import time
@@ -54,45 +58,121 @@ REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
 QSETTINGS_INI_PATH = REPO / "qa" / "window_state.ini"
 
-# The two column-name labels we'll be poking. Resolved from
-# ``translations/en.yml::column.*`` — must match what
-# ``app.views.constants.headers()`` returns. We resize the File Name
-# column to a known, recognisably-different width on launch 1, then
-# read it back via UIA on launch 2.
+# Column-name label resolved from ``translations/en.yml::column.file_name``
+# — must match what ``app.views.constants.headers()`` returns. We force
+# File Name to a known width via the sidecar, then read it back via UIA.
 COL_FILE_NAME = "File Name"
 
-# The width we'll force File Name to on launch 1. Pick a value clearly
-# distinct from any auto-sized default (which depends on file name
-# length in the loaded manifest) and clearly distinct from neighbouring
-# columns so the assertion has signal even with ±1 px UIA jitter.
+# Logical column index of the File Name column. Must match
+# ``app.views.constants.COL_NAME`` (currently 4). A drift here would
+# fail loudly with a width-mismatch error rather than silently passing.
+COL_NAME_IDX = 4
+
+# Total number of columns in the results tree. Must match
+# ``app.views.constants.NUM_COLUMNS`` (currently 11). The forged
+# QHeaderView state encodes this count, and the in-app section-count
+# guard (``TreeController.restore_column_state``) compares against
+# ``header.count()`` to detect schema drift.
+NUM_COLUMNS = 11
+
+# The width we'll force File Name to via the sidecar. Pick a value
+# clearly distinct from any auto-sized default (which depends on
+# file-name length in the loaded manifest) and clearly distinct from
+# neighbouring columns so the assertion has signal even with ±1 px
+# UIA jitter.
 TARGET_WIDTH_PX = 411
 WIDTH_TOLERANCE_PX = 8
 
-
-_user32 = ctypes.windll.user32
+# QSettings key — must match ``MainWindow.QSETTINGS_KEY_COLUMN_STATE``.
+# Drifting one without the other is a fast-fail because the scenario's
+# forged state writes one key and the app reads the other.
+QSETTINGS_KEY = "geometry/column_header"
 
 
 # ---------------------------------------------------------------------------
-# Helpers — header probing + width manipulation
+# Sidecar — forge a valid QHeaderView state blob and write it to the
+# INI before the app reads it.
+#
+# Runs as its own Python subprocess so QApplication's process-wide
+# singleton constraint doesn't clash with anything else the scenario
+# does. Receives no arguments; all knobs are baked into the inline
+# script via the f-string below.
 # ---------------------------------------------------------------------------
 
 
-def _header_item_rect(win, item_name: str):
-    """Return ``(left, top, right, bottom)`` for the named column header section.
+def _forge_column_state(target_width_px: int) -> None:
+    """Write a forged column-state INI that sets File Name = ``target_width_px``.
 
-    PySide6's QTreeView exposes each section as its OWN top-level
-    ``Header`` control (not as a ``HeaderItem`` inside a parent
-    ``Header``). Each section's ``window_text()`` is the column label.
-    Match by name. Visible-only — invisible sections (hidden columns)
-    would otherwise win on a stale rect.
+    The sidecar:
+      1. Creates a QApplication + QTreeView with NUM_COLUMNS sections.
+      2. Resizes the COL_NAME_IDX section to ``target_width_px``.
+      3. Calls ``QHeaderView.saveState()`` to get a Qt-internal blob
+         that, when applied to a header with the same section count,
+         produces the same widths.
+      4. Writes the blob and the section_count sidecar to
+         ``qa/window_state.ini`` via QSettings(IniFormat).
+
+    On the running app, the next ``refresh_tree`` call will invoke
+    ``TreeController.restore_column_state`` which reads this INI,
+    confirms section_count matches, and applies the blob.
     """
+    # DPR scaling — TARGET_WIDTH_PX is expressed in PHYSICAL pixels
+    # (matches what UIA ``Rectangle.right - Rectangle.left`` returns).
+    # ``QHeaderView.resizeSection`` takes LOGICAL pixels which Qt scales
+    # by ``devicePixelRatio`` when rendering. To produce
+    # ``target_width_px`` physical pixels post-render, resize to
+    # ``target_width_px / dpr`` logical. On a 1:1 display (most CI
+    # runners), dpr == 1.0 → no scaling; on a 2:1 HiDPI dev display,
+    # dpr == 2.0 → resize to half the target. Same fixture both sides.
+    code = (
+        "import sys\n"
+        "from PySide6.QtCore import QSettings\n"
+        "from PySide6.QtWidgets import QApplication, QTreeView\n"
+        "from PySide6.QtGui import QStandardItemModel\n"
+        "app = QApplication(sys.argv)\n"
+        "dpr = app.primaryScreen().devicePixelRatio()\n"
+        f"model = QStandardItemModel(0, {NUM_COLUMNS})\n"
+        "tv = QTreeView()\n"
+        "tv.setModel(model)\n"
+        "h = tv.header()\n"
+        f"logical = max(1, int(round({target_width_px} / dpr)))\n"
+        f"h.resizeSection({COL_NAME_IDX}, logical)\n"
+        f"s = QSettings(r'{QSETTINGS_INI_PATH}', QSettings.IniFormat)\n"
+        f"s.setValue('{QSETTINGS_KEY}', h.saveState())\n"
+        f"s.setValue('{QSETTINGS_KEY}/section_count', {NUM_COLUMNS})\n"
+        "s.sync()\n"
+        "print(f'SIDECAR_OK dpr={dpr} logical={logical}')\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=20,
+    )
+    if r.returncode != 0 or "SIDECAR_OK" not in r.stdout:
+        raise RuntimeError(
+            f"sidecar forge failed: rc={r.returncode} "
+            f"stdout={r.stdout!r} stderr={r.stderr!r}"
+        )
+    print(f"  {r.stdout.strip()}")
+
+
+# ---------------------------------------------------------------------------
+# UIA — find the File Name column header section. PySide6's QTreeView
+# exposes each section as its own top-level ``Header`` control whose
+# ``window_text()`` is the column label. (Not as ``HeaderItem`` children
+# of a parent Header — that was the bring-up gotcha; preserved as a
+# comment for the next person who looks at this.)
+# ---------------------------------------------------------------------------
+
+
+def _column_width(win, item_name: str) -> int:
     for h in win.descendants(control_type="Header"):
         try:
             if not h.is_visible():
                 continue
             if (h.window_text() or "").strip() == item_name:
                 r = h.rectangle()
-                return r.left, r.top, r.right, r.bottom
+                return r.right - r.left
         except Exception:
             continue
     names = []
@@ -106,106 +186,6 @@ def _header_item_rect(win, item_name: str):
     )
 
 
-def _column_width(win, item_name: str) -> int:
-    left, _, right, _ = _header_item_rect(win, item_name)
-    return right - left
-
-
-def _drag_resize_column(win, item_name: str, new_width: int) -> None:
-    """Drag the right edge of ``item_name`` so the column width becomes
-    ``new_width`` pixels.
-
-    Qt exposes a resize-cursor hotspot in a 3–5 px band centred on the
-    section boundary at ``right``. We press just inside that band
-    (right - 1), then send intermediate ``move`` events along the
-    cursor's expected path before releasing at the target X. Qt's
-    QHeaderView::mouseMoveEvent uses the cumulative drag delta from
-    the initial press, not the destination X directly — so the
-    intermediate moves matter for the section to actually track.
-    """
-    import pywinauto.mouse
-
-    left, top, right, bottom = _header_item_rect(win, item_name)
-    current_width = right - left
-    cy = top + (bottom - top) // 2
-    # The resize hotspot is 1–3 px inside the section's right edge.
-    press_x = right - 1
-    target_x = left + new_width
-
-    _uia._focus(win)
-    # Sequence: press at edge → series of move events → release.
-    # Real SendInput, not Win32 PostMessage — Qt's QHeaderView
-    # gates the resize-mode on the live cursor position read at
-    # mouseMoveEvent time, not just on the WM_MOUSEMOVE lparam.
-    pywinauto.mouse.press(button="left", coords=(press_x, cy))
-    time.sleep(0.05)
-    # Step the cursor in ~30 px increments so Qt sees a smooth drag.
-    delta = target_x - press_x
-    steps = max(1, abs(delta) // 30)
-    for i in range(1, steps + 1):
-        intermediate_x = press_x + int(delta * i / steps)
-        pywinauto.mouse.move(coords=(intermediate_x, cy))
-        time.sleep(0.02)
-    pywinauto.mouse.move(coords=(target_x, cy))
-    time.sleep(0.05)
-    pywinauto.mouse.release(button="left", coords=(target_x, cy))
-    time.sleep(0.25)  # Qt processes the resize + emits sectionResized
-
-
-# ---------------------------------------------------------------------------
-# Process lifecycle — mirrored from s39
-# ---------------------------------------------------------------------------
-
-
-def _photo_manager_visible(pid: int) -> bool:
-    try:
-        return any(
-            t and "Photo Manager" in t
-            for _h, _c, t in _uia.list_process_windows(pid)
-        )
-    except Exception:
-        return False
-
-
-def _any_photo_manager_window():
-    found = []
-    WND = ctypes.WINFUNCTYPE(
-        ctypes.c_int, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
-    )
-
-    def cb(hwnd, _):
-        if _user32.IsWindowVisible(hwnd):
-            title = ctypes.create_unicode_buffer(256)
-            _user32.GetWindowTextW(hwnd, title, 256)
-            if "Photo Manager" in title.value:
-                ppid = ctypes.c_ulong()
-                _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(ppid))
-                found.append((hwnd, ppid.value))
-        return True
-
-    _user32.EnumWindows(WND(cb), 0)
-    return found[0] if found else None
-
-
-def _wait_for_exit(pid: int, timeout: float = 8.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _photo_manager_visible(pid):
-            return True
-        time.sleep(0.1)
-    return False
-
-
-def _wait_for_main_window_any(timeout: float = 12.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _any_photo_manager_window() is not None:
-            time.sleep(0.5)
-            return True
-        time.sleep(0.1)
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Main scenario
 # ---------------------------------------------------------------------------
@@ -214,157 +194,90 @@ def _wait_for_main_window_any(timeout: float = 12.0) -> bool:
 def main() -> int:
     print("scenario: s47_column_layout_persist")
 
-    # ── Pre-flight: clean stale window_state.ini so the assertion is
-    # against state WE set this run. ─────────────────────────────────
+    # ── Pre-flight: clean stale state so the assertion is against state
+    # WE set this run. The configure step already cleared
+    # window_state.ini; defence-in-depth here in case configure was
+    # bypassed (direct ``python -m qa.scenarios.s47_*`` invocation). ───
     if QSETTINGS_INI_PATH.exists():
         QSETTINGS_INI_PATH.unlink()
         print(f"  cleaned stale qsettings: {QSETTINGS_INI_PATH}")
     if MANIFEST_PATH.exists():
-        # A leftover manifest from a previous scenario means refresh_tree
-        # wouldn't fire from a fresh scan path on launch 2. Removing it
-        # forces both launches down the same "scan → refresh_tree" path,
-        # which is the actual code path that calls restore_column_state.
+        # A leftover manifest from a previous scenario would let the
+        # batch-launched app's auto-load short-circuit our test path.
+        # Force the scenario down the explicit scan→load path so
+        # refresh_tree (and therefore restore_column_state) is the one
+        # we actually exercise.
         MANIFEST_PATH.unlink()
         print(f"  cleaned stale manifest: {MANIFEST_PATH}")
 
     failures: list[str] = []
 
-    # ── Launch 1: the batch already launched main.py before this driver
-    # ran. Connect, scan, load. ───────────────────────────────────────
-    print("step: launch1_connect")
-    if not _wait_for_main_window_any(timeout=12.0):
-        print("FAIL: launch 1 did not show window within 12s")
+    # ── Forge a known column-state INI via the sidecar BEFORE we trigger
+    # a scan. The running app will read this INI inside refresh_tree. ─
+    print(f"step: forge_column_state file_name_width={TARGET_WIDTH_PX}px")
+    _forge_column_state(TARGET_WIDTH_PX)
+    if not QSETTINGS_INI_PATH.exists():
+        print(f"FAIL: sidecar did not write {QSETTINGS_INI_PATH}")
         return 1
-    app1, win1 = _uia.connect_main()
-    pid1 = win1.process_id()
-    print(f"  pid={pid1}")
+    ini_text_pre = QSETTINGS_INI_PATH.read_text(encoding="utf-8", errors="replace")
+    if "column_header" not in ini_text_pre:
+        print(f"FAIL: forged INI does not contain 'column_header' key")
+        return 1
 
-    print("step: launch1_scan_and_load")
-    dlg, _ = _uia.open_scan_dialog(win1)
+    # ── Connect to the batch-launched app ─────────────────────────────
+    print("step: connect")
+    app, win = _uia.connect_main()
+    print(f"  pid={win.process_id()}")
+
+    # ── Trigger scan → load manifest → refresh_tree → restore_column_state.
+    # The restore must apply our forged 411-px width to the File Name
+    # section. ────────────────────────────────────────────────────────
+    print("step: scan_and_load")
+    dlg, _ = _uia.open_scan_dialog(win)
     _uia.run_scan_and_wait(dlg, timeout=30)
     _uia.close_and_load_manifest(dlg)
     if not MANIFEST_PATH.exists():
-        print(f"FAIL: launch 1 scan did not produce manifest at {MANIFEST_PATH}")
+        print(f"FAIL: scan did not produce manifest at {MANIFEST_PATH}")
         return 1
-    _, win1 = _uia.connect_main()
+    # Re-connect (close-and-load can race the UIA cache on hosted
+    # runners — same pattern as s40).
+    _, win = _uia.connect_main()
+    # Settle: refresh_tree → refresh_model has its own resize cycle.
+    # Restore runs after that returns; the visible-layout repaint takes
+    # a beat to land in the UIA tree.
+    time.sleep(0.5)
 
-    # ── Capture the auto-sized File Name width as the baseline so the
-    # resize assertion is genuinely different from default. ──────────
-    baseline_width = _column_width(win1, COL_FILE_NAME)
-    print(f"  baseline File Name width={baseline_width}px")
-    if abs(baseline_width - TARGET_WIDTH_PX) < WIDTH_TOLERANCE_PX:
-        # Defensive — if a future header re-org happens to auto-size
-        # File Name to ~411 px, our assertion couldn't distinguish
-        # "restored" from "default". Bail with a clear message rather
-        # than silently passing.
-        failures.append(
-            f"baseline File Name width {baseline_width}px is too close "
-            f"to TARGET_WIDTH_PX={TARGET_WIDTH_PX} — pick a different "
-            f"target so the assertion has signal."
-        )
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-
-    # ── Drag the right edge of File Name to TARGET_WIDTH_PX. Qt's
-    # sectionResized fires → MainWindow._save_column_state_only writes
-    # qa/window_state.ini immediately. ─────────────────────────────────
-    print(f"step: launch1_resize_column to ~{TARGET_WIDTH_PX}px")
-    _drag_resize_column(win1, COL_FILE_NAME, TARGET_WIDTH_PX)
-    after_drag_width = _column_width(win1, COL_FILE_NAME)
-    print(f"  File Name width after drag={after_drag_width}px")
-    if abs(after_drag_width - TARGET_WIDTH_PX) > WIDTH_TOLERANCE_PX:
-        # The drag didn't take. On Win10 hosted CI the synthetic
-        # SendInput mouse move can occasionally undershoot — diagnose
-        # via the diff and abort rather than write a misleading INI.
-        failures.append(
-            f"drag-resize undershot: requested {TARGET_WIDTH_PX}px, "
-            f"got {after_drag_width}px (tolerance {WIDTH_TOLERANCE_PX}). "
-            f"#214 wiring may be fine but the QA driver couldn't drive "
-            f"the resize. Re-run; consider increasing TARGET_WIDTH_PX "
-            f"delta from baseline."
-        )
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-
-    # ── Close launch 1 (WM_CLOSE → closeEvent → _save_geometry, which
-    # ALSO calls save_column_state). The signal-driven save already
-    # wrote the INI, but closeEvent re-asserts everything one more
-    # time. ────────────────────────────────────────────────────────────
-    print("step: launch1_close")
-    win1.close()
-    if not _wait_for_exit(pid1, timeout=8.0):
-        failures.append(f"launch 1 (pid={pid1}) did not exit within 8s")
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-
-    if not QSETTINGS_INI_PATH.exists():
-        failures.append(
-            f"close did not write {QSETTINGS_INI_PATH} — column state "
-            f"persistence is silently broken."
-        )
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-    # Sanity: the INI MUST mention our column key, otherwise we wrote
-    # a window_state.ini without the column state (sign of a regression
-    # where the geometry path was uncommented but the column path was
-    # not). The exact serialised bytes are Qt-internal; presence of the
-    # key is what we assert.
-    ini_text = QSETTINGS_INI_PATH.read_text(encoding="utf-8", errors="replace")
-    if "column_header" not in ini_text:
-        failures.append(
-            f"window_state.ini exists but contains no 'column_header' key — "
-            f"_save_geometry is not invoking save_column_state."
-        )
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-    print("  INI contains 'column_header' key")
-
-    # ── Launch 2: fresh process, same QSettings, same fixture →
-    # restore must put File Name back at ~TARGET_WIDTH_PX. ────────────
-    print("step: launch2_relaunch")
-    env = os.environ.copy()
-    env["PHOTO_MANAGER_HOME"] = "qa"
-    env["QT_ACCESSIBILITY"] = "1"
-    proc2 = subprocess.Popen(
-        [sys.executable, "main.py"],
-        cwd=REPO, env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    print(f"  relaunched parent_pid={proc2.pid}")
-    if not _wait_for_main_window_any(timeout=12.0):
-        failures.append(
-            f"relaunch (parent pid={proc2.pid}) did not show window within 12s"
-        )
-        for f in failures:
-            print(f"FAIL: {f}")
-        proc2.terminate()
-        return 1
-
-    _, win2 = _uia.connect_main()
-
-    print("step: launch2_scan_and_load")
-    dlg2, _ = _uia.open_scan_dialog(win2)
-    _uia.run_scan_and_wait(dlg2, timeout=30)
-    _uia.close_and_load_manifest(dlg2)
-    _, win2 = _uia.connect_main()
-
-    restored_width = _column_width(win2, COL_FILE_NAME)
+    # ── Assertion: File Name section width matches our forged value. ─
+    restored_width = _column_width(win, COL_FILE_NAME)
     print(f"  File Name width after restore={restored_width}px")
-
-    print("step: assert_column_state_restored")
     if abs(restored_width - TARGET_WIDTH_PX) > WIDTH_TOLERANCE_PX:
         failures.append(
-            f"restored File Name width={restored_width}px != "
-            f"launch-1 set {TARGET_WIDTH_PX}px (tolerance "
-            f"{WIDTH_TOLERANCE_PX}). #214 restore is silently broken — "
-            f"refresh_tree's call to restore_column_state may be in "
-            f"the wrong place (must be AFTER refresh_model's "
-            f"ResizeToContents → Interactive cycle)."
+            f"File Name width={restored_width}px != forged "
+            f"TARGET_WIDTH_PX={TARGET_WIDTH_PX}px (tolerance "
+            f"{WIDTH_TOLERANCE_PX}). #214 restore_column_state is "
+            f"either not being called from refresh_tree, called in "
+            f"the wrong place (BEFORE refresh_model's resize cycle, "
+            f"so auto-sizing overwrites), or the section_count "
+            f"sentinel guard is rejecting a valid blob."
+        )
+
+    # ── Close cleanly so closeEvent → _save_geometry runs, then verify
+    # the column_header key SURVIVES the save. (Defends against a
+    # future refactor that splits _save_geometry into multiple writes
+    # one of which clobbers the others, or where a path raises mid-
+    # save and silently leaves the INI in an inconsistent state.) ─────
+    print("step: close_and_verify_save")
+    win.close()
+    # Give Qt's closeEvent + QSettings.sync() time to land. We don't
+    # need to wait for full process exit — the INI write happens
+    # synchronously inside _save_geometry before super().closeEvent.
+    time.sleep(1.5)
+    ini_text_post = QSETTINGS_INI_PATH.read_text(encoding="utf-8", errors="replace")
+    if "column_header" not in ini_text_post:
+        failures.append(
+            f"window_state.ini no longer contains 'column_header' key "
+            f"after closeEvent — _save_geometry wiped it. Save path "
+            f"is silently broken."
         )
 
     if failures:
