@@ -27,13 +27,16 @@ can't reach):
   3. Tree model renders the Score column (PR 5 — COL_SCORE).
   4. Within-group sort orders rows by score DESC (PR 5 — MainVM
      _group_records prepends ("score", False)).
-  5. Group-header right-click exposes "Apply best-copy decisions to
-     this group" (PR 6 — context_menu + ActionHandlers + bridge).
-  6. Action picks the highest-scoring row as KEEP and marks the rest
-     DELETE (PR 6 — FileOperationsHandler.apply_best_copy_to_group).
-  7. Per-dimension signals propagate from real-exiftool output into the
+  5. Per-dimension signals propagate from real-exiftool output into the
      DB (PR 2's batch_read_extracts + PR 4's apply_scoring_to_rows).
-  8. Filename + path regex penalties fire end-to-end.
+  6. Filename + path regex penalties fire end-to-end.
+
+The score-driven decision step (formerly a "Apply best-copy" group
+context-menu action, PR 6 of #187) was removed in #210; the
+equivalent flow is now reachable through the Set Action by
+Field/Regex dialog's "top 1 by score within group" condition
+(#209) and is covered by that dialog's own scenarios. This scenario
+verifies the score *pipeline* — computation, storage, display.
 
 PRE: PHOTO_MANAGER_HOME=qa QT_ACCESSIBILITY=1 .venv/Scripts/python.exe main.py
 """
@@ -71,15 +74,6 @@ MIXED_COPY_OF = "Copy of scoring_clean.jpg"
 MIXED_NO_GPS = "scoring_no_gps.jpg"
 MIXED_DOWNLOADS = "Downloads/scoring_clean.jpg"
 MIXED_ROWS = {MIXED_CLEAN, MIXED_COPY_OF, MIXED_NO_GPS, MIXED_DOWNLOADS}
-
-# Group labels for the right-click target. Group numbering is
-# deterministic: groups are assigned by lexicographic group_id which
-# is the smallest source_path in each connected component, then sorted
-# in load(). near-duplicates < scoring-mixed alphabetically, so
-# near-duplicates is Group 1 and scoring-mixed is Group 2.
-GROUP1_LABEL = "Group 1"  # near-duplicates
-GROUP2_LABEL = "Group 2"  # scoring-mixed
-
 
 def _read_manifest_neardup() -> dict[str, dict]:
     """Return {basename: {decision, score}} for the near-duplicates group."""
@@ -284,95 +278,33 @@ def main() -> int:
         for f in failures:
             print(f"FAIL: {f}")
         return 1
-    print(
-        f"  near-duplicates ✓ ({NEARDUP_BEST} > {NEARDUP_WORST}); "
-        f"scoring-mixed ✓ (GPS / filename / path penalties all fired)"
-    )
-
-    # ── 3. Apply best-copy to Group 1 (near-duplicates) ───────────────────
-    print("step: apply_best_copy_group1")
-    _uia.left_click_tree_row(win, GROUP1_LABEL)
-    _uia.right_click_tree_row(win, GROUP1_LABEL)
-    _uia.select_popup_menu_path(pid, [_uia.CTX_APPLY_BEST_COPY])
-
-    # ── 4. Apply best-copy to Group 2 (scoring-mixed) ─────────────────────
-    print("step: apply_best_copy_group2")
-    _uia.left_click_tree_row(win, GROUP2_LABEL)
-    _uia.right_click_tree_row(win, GROUP2_LABEL)
-    _uia.select_popup_menu_path(pid, [_uia.CTX_APPLY_BEST_COPY])
-
-    # ── 5. Post-action verification ───────────────────────────────────────
-    print("step: snapshot_post_apply")
-    post_neardup = _read_manifest_neardup()
-    post_mixed = _read_manifest_mixed()
-    print(f"  near-duplicates={dict(sorted(post_neardup.items()))}")
-    print(f"  scoring-mixed={dict(sorted(post_mixed.items()))}")
-
-    # Near-duplicates: highest-score file should be KEEP, others DELETE.
-    expected_neardup_winner = max(pre_neardup, key=lambda n: pre_neardup[n]["score"])
-    print(f"  expected_neardup_winner={expected_neardup_winner!r}")
-    for name, row in post_neardup.items():
-        expected = "" if name == expected_neardup_winner else "delete"
-        err = _assert(f"neardup {name} (post)", expected, row["decision"])
-        if err:
-            failures.append(err)
-
-    # Scoring-mixed: scoring_clean.jpg (root, clean name + path + GPS)
-    # should win regardless of where the pre-existing classifier put
-    # action=MOVE. This is the load-bearing test that scoring corrects
-    # the lexicographic primary picker.
+    # Pin the expected winner for the scoring-mixed group: the clean
+    # variant has GPS + clean filename + clean path and must outscore
+    # all three penalised variants. The actual decision-setting step
+    # belongs to the Set Action by Field/Regex dialog (#209) — this
+    # scenario only verifies the underlying score signal.
     expected_mixed_winner = max(pre_mixed, key=lambda n: pre_mixed[n]["score"])
-    print(f"  expected_mixed_winner={expected_mixed_winner!r}")
     if expected_mixed_winner != MIXED_CLEAN:
         failures.append(
             f"unexpected scoring-mixed winner: {expected_mixed_winner!r} (expected {MIXED_CLEAN!r})"
         )
-    for name, row in post_mixed.items():
-        expected = "" if name == expected_mixed_winner else "delete"
-        err = _assert(f"mixed {name} (post)", expected, row["decision"])
-        if err:
-            failures.append(err)
-
-    # Scores preserved by both apply-best-copy actions (the action
-    # writes user_decision only — never touches score).
-    for name in NEARDUP_ROWS:
-        err = _assert(
-            f"neardup {name} score preserved",
-            pre_neardup[name]["score"],
-            post_neardup[name]["score"],
-        )
-        if err:
-            failures.append(err)
-    for name in MIXED_ROWS:
-        err = _assert(
-            f"mixed {name} score preserved",
-            pre_mixed[name]["score"],
-            post_mixed[name]["score"],
-        )
-        if err:
-            failures.append(err)
-
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
         return 1
     print(
-        f"  near-duplicates winner={expected_neardup_winner!r}; "
-        f"scoring-mixed winner={MIXED_CLEAN!r} ✓"
+        f"  near-duplicates ✓ ({NEARDUP_BEST} > {NEARDUP_WORST}); "
+        f"scoring-mixed ✓ (GPS / filename / path penalties all fired, "
+        f"winner={MIXED_CLEAN!r})"
     )
 
-    # ── 6. Manifest-action invariant ──────────────────────────────────────
-    # The status-bar regex assertion from earlier versions was dropped:
-    # two consecutive apply-best-copy calls fire two status messages,
-    # the second clobbers the first, and Qt's showMessage has a
-    # finite timeout that races the polling. The DB assertions above
-    # are the load-bearing verification that the action ran.
+    # ── 3. Manifest-action invariant ──────────────────────────────────────
     print("step: invariant_manifest_actions")
     inv_actions = _invariants.assert_manifest_actions_consistent(
         win, expected_enabled=True
     )
     if not inv_actions:
-        print("FAIL: manifest-gated menu items not all enabled post-action")
+        print("FAIL: manifest-gated menu items not all enabled post-scan")
         return 1
 
     print("scenario: s42_scoring DONE")

@@ -168,22 +168,6 @@ class TestActionHandlersImplBridge:
         impl.set_locked_state(items, True)
         file_ops.set_locked_state.assert_called_once_with(items, True)
 
-    # ── apply_best_copy_to_group (#187 PR 6) ───────────────────────────────
-
-    def test_impl_has_apply_best_copy_to_group(self):
-        """The bridge MUST proxy apply_best_copy_to_group — context_menu.py
-        calls it directly on the handler, so a missing method here would
-        silently no-op every group-header right-click. Same class of bug
-        as #175 (set_locked_state) and #182 (set_decision_with_lock_check)."""
-        impl, _ = self._make_impl()
-        assert callable(getattr(impl, "apply_best_copy_to_group", None))
-
-    def test_apply_best_copy_to_group_delegates_to_file_ops(self):
-        """Bridge passes the group_number through unmodified."""
-        impl, file_ops = self._make_impl()
-        impl.apply_best_copy_to_group(42)
-        file_ops.apply_best_copy_to_group.assert_called_once_with(42)
-
 
 # ── handler routing ────────────────────────────────────────────────────────
 
@@ -250,69 +234,6 @@ class TestContextMenuSetDecisionRouting:
         keep_action.trigger()
 
         mock_handlers.set_decision_with_lock_check.assert_called_once_with([item], "")
-
-
-# ── apply_best_copy_to_group menu routing (#187 PR 6) ─────────────────────
-
-
-class TestApplyBestCopyMenu:
-    """Group-header right-click exposes "Apply best-copy decisions to this
-    group" which routes to handlers.apply_best_copy_to_group(group_number).
-    """
-
-    def _make_handler(self, qapp):
-        from PySide6.QtWidgets import QTreeView
-        from app.views.handlers.context_menu import ContextMenuHandler
-        handlers = MagicMock()
-        return ContextMenuHandler(QTreeView(), MagicMock(), handlers, MagicMock()), handlers
-
-    def test_group_menu_contains_apply_best_copy_action(self, qapp):
-        """A group-row right-click must expose the apply-best-copy menu
-        item. Skipping it would mean the feature ships invisibly."""
-        from PySide6.QtWidgets import QMenu
-        handler, _ = self._make_handler(qapp)
-        group_item = {"type": "group", "group_number": 7}
-
-        menu = QMenu()
-        handler._create_single_selection_menu(menu, group_item)
-        labels = [a.text() for a in menu.actions()]
-        # The translation may differ across locales but the en default
-        # is the contract for this test environment.
-        assert any("best-copy" in label.lower() for label in labels), (
-            f"apply-best-copy menu item not in group-row menu; got {labels!r}"
-        )
-
-    def test_group_menu_action_triggers_handler_with_group_number(self, qapp):
-        """Clicking the menu item must invoke
-        handlers.apply_best_copy_to_group(group_number) with the right
-        integer. Off-by-one or missing group_number → silent no-op bug."""
-        from PySide6.QtWidgets import QMenu
-        handler, mock_handlers = self._make_handler(qapp)
-        group_item = {"type": "group", "group_number": 7}
-
-        menu = QMenu()
-        handler._create_single_selection_menu(menu, group_item)
-        action = next(
-            (a for a in menu.actions() if "best-copy" in a.text().lower()), None
-        )
-        assert action is not None
-        action.trigger()
-        mock_handlers.apply_best_copy_to_group.assert_called_once_with(7)
-
-    def test_file_menu_does_not_offer_apply_best_copy(self, qapp):
-        """The action is group-scoped — offering it on a file row would
-        imply 'apply to the group containing this file' which is a
-        different UX. Keep the menu locations distinct."""
-        from PySide6.QtWidgets import QMenu
-        handler, _ = self._make_handler(qapp)
-        file_item = {"type": "file", "path": "/a.jpg"}
-
-        menu = QMenu()
-        handler._create_single_selection_menu(menu, file_item)
-        labels = [a.text() for a in menu.actions()]
-        assert not any("best-copy" in label.lower() for label in labels), (
-            f"apply-best-copy must not appear on file-row menu; got {labels!r}"
-        )
 
 
 class TestMultiSelectSetAction:
