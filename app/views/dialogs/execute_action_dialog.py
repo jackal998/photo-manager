@@ -30,6 +30,11 @@ from app.views.constants import (
     settable_decisions,
 )
 from app.views.tree_model_builder import build_model
+from app.views.window_state import (
+    QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM,
+    restore_widget_geometry,
+    save_widget_geometry,
+)
 from infrastructure.i18n import t
 
 # Internal verdict codes used by _ask_lock_confirm to normalize the
@@ -83,6 +88,11 @@ class ExecuteActionDialog(QDialog):
         self._missing_paths: list[str] = []
         self._src_model = None
         self._build_ui()
+        # #215 — restore last saved geometry. ``setMinimumSize`` above
+        # acts as the floor; the off-screen guard inside
+        # ``restore_widget_geometry`` falls back to that default when a
+        # previously-saved rect would land on a disconnected monitor.
+        restore_widget_geometry(self, QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM)
 
     # ------------------------------------------------------------------ helpers
 
@@ -943,3 +953,12 @@ class ExecuteActionDialog(QDialog):
             logger.info("Deleted file: {}", path)
         except Exception as exc:
             logger.warning("Failed to delete {}: {}", path, exc)
+
+    def done(self, result: int) -> None:
+        """Persist geometry on every close path (#215).
+
+        ``done()`` funnels ``accept()``, ``reject()`` and the X-button
+        path so this one hook catches every dismissal.
+        """
+        save_widget_geometry(self, QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM)
+        super().done(result)

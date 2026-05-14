@@ -32,6 +32,11 @@ from PySide6.QtWidgets import (
 )
 
 from app.views.constants import settable_decisions
+from app.views.window_state import (
+    QSETTINGS_KEY_ACTION_DIALOG_GEOM,
+    restore_widget_geometry,
+    save_widget_geometry,
+)
 from infrastructure.i18n import t
 
 # Maps the internal English field name (used as the lookup key in
@@ -864,8 +869,14 @@ class ActionDialog(QDialog):
             # restructuring chips into compact button-with-aside-label
             # rows. The dialog used to feel "too tall" — particularly
             # in Beginner mode where the regex/chip section is hidden.
+            # #215 — previously hardcoded ``self.resize(780, 420)``;
+            # now the minimum is the only hardcoded default and the
+            # user's last manual resize is restored on top of it.
+            # ``restore_widget_geometry``'s off-screen guard falls
+            # back to ``setMinimumSize`` defaults when the saved
+            # rect would land on a disconnected monitor.
             self.setMinimumSize(720, 380)
-            self.resize(780, 420)
+            restore_widget_geometry(self, QSETTINGS_KEY_ACTION_DIALOG_GEOM)
         else:
             root.addWidget(left_widget)
             left_layout.setContentsMargins(11, 11, 11, 11)
@@ -1385,6 +1396,18 @@ class ActionDialog(QDialog):
             self.regex.setText(f"^{re.escape(value)}$")
         else:
             self.regex.clear()
+
+    def done(self, result: int) -> None:
+        """Persist geometry on every close path (#215).
+
+        Only saves when the preview pane is wired up (match_fn given),
+        because that's the only branch that runs the resizable
+        QSplitter layout — the flat layout has no user-resizable
+        geometry to preserve.
+        """
+        if self._match_fn is not None:
+            save_widget_geometry(self, QSETTINGS_KEY_ACTION_DIALOG_GEOM)
+        super().done(result)
 
 
 # Backward-compatibility alias

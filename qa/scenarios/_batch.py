@@ -163,6 +163,13 @@ ALL_SCENARIOS = [
     # resize (drag the right-edge handle) but flaky for a move (Qt's
     # section-drag threshold is sensitive to event pacing on busy CI).
     "s47_column_layout_persist",
+    # s48 (#215) — geometry persists across close-and-reopen WITHIN
+    # one app session for ScanDialog / ExecuteActionDialog /
+    # ActionDialog. Companion to s39 which covers the main-window
+    # round-trip across an app restart. Non-destructive: scans
+    # near-duplicates to load a manifest, then resizes / closes /
+    # reopens each dialog and asserts the size came back through.
+    "s48_dialog_geometry_persist",
 ]
 
 

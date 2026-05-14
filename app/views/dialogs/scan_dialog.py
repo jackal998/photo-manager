@@ -32,6 +32,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.views.window_state import (
+    QSETTINGS_KEY_SCAN_DIALOG_GEOM,
+    restore_widget_geometry,
+    save_widget_geometry,
+)
 from app.views.workers.scan_worker import ScanWorker
 from infrastructure.i18n import t
 
@@ -369,6 +374,12 @@ class ScanDialog(QDialog):
 
         self._build_ui()
         self._load_from_settings()
+        # #215 — restore last saved geometry (if any). Runs after the
+        # widget tree is built so Qt has a layout to apply the rect
+        # against; falls back to the setMinimumWidth/Height defaults
+        # above when no saved geometry exists or it would land off-
+        # screen (multi-monitor disconnect).
+        restore_widget_geometry(self, QSETTINGS_KEY_SCAN_DIALOG_GEOM)
 
     # ------------------------------------------------------------------ UI
 
@@ -755,3 +766,13 @@ class ScanDialog(QDialog):
             self._worker.requestInterruption()
             self._worker.wait(3000)
         super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        """Persist geometry on every close path (#215).
+
+        ``done()`` is the funnel for ``accept()`` / ``reject()`` and
+        the default ``closeEvent`` route (X button → QDialog reject),
+        so one hook here catches every dismissal in one place.
+        """
+        save_widget_geometry(self, QSETTINGS_KEY_SCAN_DIALOG_GEOM)
+        super().done(result)
