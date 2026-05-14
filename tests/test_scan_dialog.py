@@ -713,6 +713,159 @@ class TestStartScanShouldProceed:
         assert called == [], "should_proceed must not fire on validation failure"
 
 
+class TestBrowseOutputStartPath:
+    """#216 — ``_browse_output`` must never hand Qt a bare relative
+    filename. Qt's ``QFileDialog.getSaveFileName`` interprets a relative
+    string against the process CWD (unpredictable in a launched app),
+    and on Windows the resulting dialog can render as the OS folder
+    picker rather than the standard save-file UI. Fix: pass an absolute
+    path when the field has a value, ``""`` (empty) otherwise so Qt uses
+    its remembered last-visited directory.
+    """
+
+    def _make_dialog(self, qapp, tmp_path):
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text('{"sources":{}}', encoding="utf-8")
+        return ScanDialog(JsonSettings(settings_path))
+
+    def test_empty_field_passes_empty_string_not_relative_filename(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """When the output field is empty, ``start`` must be ``""`` — NOT
+        the legacy ``"migration_manifest.sqlite"`` bare-relative default
+        that triggered the wrong-dialog regression on Windows."""
+        from app.views.dialogs import scan_dialog as sd
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        dlg._output_field.setText("")
+
+        captured: dict = {}
+
+        def fake_get_save(parent, title, start, filt):
+            captured["start"] = start
+            return ("", "")
+
+        monkeypatch.setattr(sd.QFileDialog, "getSaveFileName", fake_get_save)
+        dlg._browse_output()
+
+        assert captured["start"] == "", (
+            f"empty field must pass '' to Qt (last-visited dir), "
+            f"got {captured['start']!r}"
+        )
+
+    def test_whitespace_only_field_treated_as_empty(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """A field with only spaces is conceptually empty — must NOT
+        be resolve()'d into a meaningless absolute path."""
+        from app.views.dialogs import scan_dialog as sd
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        dlg._output_field.setText("   ")
+
+        captured: dict = {}
+
+        def fake_get_save(parent, title, start, filt):
+            captured["start"] = start
+            return ("", "")
+
+        monkeypatch.setattr(sd.QFileDialog, "getSaveFileName", fake_get_save)
+        dlg._browse_output()
+
+        assert captured["start"] == ""
+
+    def test_populated_field_passes_absolute_path(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """When the field has a value, it must be passed as an absolute
+        path so Qt opens to the right parent directory regardless of
+        the process CWD."""
+        from app.views.dialogs import scan_dialog as sd
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        target = tmp_path / "subdir" / "my_manifest.sqlite"
+        dlg._output_field.setText(str(target))
+
+        captured: dict = {}
+
+        def fake_get_save(parent, title, start, filt):
+            captured["start"] = start
+            return ("", "")
+
+        monkeypatch.setattr(sd.QFileDialog, "getSaveFileName", fake_get_save)
+        dlg._browse_output()
+
+        assert Path(captured["start"]).is_absolute(), (
+            f"populated field must yield an absolute path, "
+            f"got {captured['start']!r}"
+        )
+        # Compare resolved forms — Path.resolve() may collapse symlinks
+        # or apply OS path canonicalisation (e.g. case on Windows).
+        assert Path(captured["start"]) == Path(str(target)).resolve()
+
+    def test_relative_field_value_is_resolved_to_absolute(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """If a stored relative path leaks through from settings, the
+        browse dialog must still receive an absolute path — otherwise
+        we're back at the #216 regression."""
+        from app.views.dialogs import scan_dialog as sd
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        dlg._output_field.setText("migration_manifest.sqlite")
+
+        captured: dict = {}
+
+        def fake_get_save(parent, title, start, filt):
+            captured["start"] = start
+            return ("", "")
+
+        monkeypatch.setattr(sd.QFileDialog, "getSaveFileName", fake_get_save)
+        dlg._browse_output()
+
+        assert Path(captured["start"]).is_absolute(), (
+            f"bare relative filename {dlg._output_field.text()!r} must be "
+            f"resolved to absolute before reaching Qt; got {captured['start']!r}"
+        )
+
+    def test_chosen_path_with_extension_used_verbatim(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """When the user picks a file ending in .sqlite, the path goes
+        into the field as-is (no double-extension)."""
+        from app.views.dialogs import scan_dialog as sd
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        target = tmp_path / "picked.sqlite"
+
+        monkeypatch.setattr(
+            sd.QFileDialog, "getSaveFileName",
+            lambda *a, **kw: (str(target), ""),
+        )
+        dlg._browse_output()
+        assert dlg._output_field.text() == str(target)
+
+    def test_chosen_path_without_extension_gets_sqlite_appended(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Preserve the existing post-pick auto-extension behaviour —
+        the fix is scoped to the ``start`` arg, not the return path."""
+        from app.views.dialogs import scan_dialog as sd
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        target = tmp_path / "picked"  # no extension
+
+        monkeypatch.setattr(
+            sd.QFileDialog, "getSaveFileName",
+            lambda *a, **kw: (str(target), ""),
+        )
+        dlg._browse_output()
+        assert dlg._output_field.text() == str(target) + ".sqlite"
+
+
 class TestPathFieldEntry:
     """#40 — typing/pasting an absolute path should add it to the source list."""
 
