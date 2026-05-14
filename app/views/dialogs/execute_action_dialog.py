@@ -366,7 +366,7 @@ class ExecuteActionDialog(QDialog):
         return False
 
     def _ask_lock_confirm(
-        self, *, paths: list[str], decision_for_label: str
+        self, *, paths: list[str], decision_for_label: str, affected_count: int | None = None
     ) -> int:
         """Show the locked-rows confirm dialog for ``paths`` (all locked).
 
@@ -384,7 +384,7 @@ class ExecuteActionDialog(QDialog):
         verdict = LockedRowsConfirmDialog.ask(
             self,
             action_label=_decision_display_label(decision_for_label),
-            affected_count=len(paths),
+            affected_count=affected_count if affected_count is not None else len(paths),
             locked_paths=paths,
         )
         if verdict == LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED:
@@ -529,7 +529,9 @@ class ExecuteActionDialog(QDialog):
         apply_paths = matched_paths
         if locked_paths:
             verdict = self._ask_lock_confirm(
-                paths=locked_paths, decision_for_label=new_decision
+                paths=locked_paths,
+                decision_for_label=new_decision,
+                affected_count=len(matched_paths),
             )
             if verdict == _DIALOG_VERDICT_CANCEL:
                 return
@@ -605,6 +607,12 @@ class ExecuteActionDialog(QDialog):
         # any destructive action runs. This replaces the silent
         # filter at delete_service:50 (which never fired in the GUI
         # path anyway — _on_execute deletes directly, see below).
+        total_delete_count = sum(
+            1
+            for group in self._groups
+            for rec in getattr(group, "items", [])
+            if getattr(rec, "user_decision", "") == "delete"
+        )
         locked_delete_paths = [
             rec.file_path
             for group in self._groups
@@ -614,7 +622,9 @@ class ExecuteActionDialog(QDialog):
         ]
         if locked_delete_paths:
             verdict = self._ask_lock_confirm(
-                paths=locked_delete_paths, decision_for_label="delete"
+                paths=locked_delete_paths,
+                decision_for_label="delete",
+                affected_count=total_delete_count,
             )
             if verdict == _DIALOG_VERDICT_CANCEL:
                 return
