@@ -1263,3 +1263,250 @@ class TestRemoveFromListBranch:
             assert row and row[0] == "removed"
         finally:
             dlg.close()
+
+
+# ── #211 — selection-scoped execute ────────────────────────────────────────
+
+class TestExecuteHighlightedRows:
+    """#211 — when ≥1 file row is highlighted in the tree, Execute should
+    act on only those rows. The Execute button label tracks the selection
+    state so the user sees the scope before clicking.
+    """
+
+    @staticmethod
+    def _find_file_index(dlg, path: str):
+        """Walk the tree's model and return the COL_NAME proxy index whose
+        PATH_ROLE matches ``path``. Returns an invalid QModelIndex if not
+        found.
+        """
+        from PySide6.QtCore import QModelIndex
+        from app.views.constants import COL_NAME, PATH_ROLE
+        model = dlg._tree.model()
+        if model is None:
+            return QModelIndex()
+        for grow in range(model.rowCount()):
+            gidx = model.index(grow, 0)
+            for frow in range(model.rowCount(gidx)):
+                fidx = model.index(frow, COL_NAME, gidx)
+                if fidx.data(PATH_ROLE) == path:
+                    return fidx
+        return QModelIndex()
+
+    @staticmethod
+    def _select_paths(dlg, paths: list[str]) -> None:
+        """Highlight the file rows for ``paths`` using the tree's
+        selection model. Mirrors what a real user does by clicking rows
+        with the keyboard/mouse — Execute_dialog reads the same
+        selectionModel().
+        """
+        from PySide6.QtCore import QItemSelectionModel
+        sel = dlg._tree.selectionModel()
+        sel.clear()
+        for p in paths:
+            idx = TestExecuteHighlightedRows._find_file_index(dlg, p)
+            assert idx.isValid(), f"file row for {p!r} not in tree"
+            sel.select(idx, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+
+    # — button label —
+
+    def test_button_label_default_when_no_selection(self, qapp):
+        from PySide6.QtWidgets import QDialogButtonBox
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from infrastructure.i18n import t
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        btn = dlg._btn_box.button(QDialogButtonBox.Ok)
+        assert btn.text() == t("execute_dialog.execute_button")
+
+    def test_button_label_switches_when_row_highlighted(self, qapp):
+        from PySide6.QtWidgets import QDialogButtonBox
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from infrastructure.i18n import t
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_paths(dlg, ["/a.jpg"])
+        btn = dlg._btn_box.button(QDialogButtonBox.Ok)
+        assert btn.text() == t("execute_dialog.execute_button_highlighted")
+
+    def test_button_label_reverts_when_selection_cleared(self, qapp):
+        from PySide6.QtWidgets import QDialogButtonBox
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from infrastructure.i18n import t
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_paths(dlg, ["/a.jpg"])
+        dlg._tree.selectionModel().clear()
+        btn = dlg._btn_box.button(QDialogButtonBox.Ok)
+        assert btn.text() == t("execute_dialog.execute_button")
+
+    def test_group_header_selection_does_not_change_label(self, qapp):
+        """Selecting a group header row (no PATH_ROLE) must NOT flip the
+        button text — group rows aren't file rows, so the scope is still
+        effectively empty.
+        """
+        from PySide6.QtCore import QItemSelectionModel
+        from PySide6.QtWidgets import QDialogButtonBox
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from infrastructure.i18n import t
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        model = dlg._tree.model()
+        group_idx = model.index(0, 0)
+        dlg._tree.selectionModel().select(
+            group_idx, QItemSelectionModel.Select | QItemSelectionModel.Rows
+        )
+        btn = dlg._btn_box.button(QDialogButtonBox.Ok)
+        assert btn.text() == t("execute_dialog.execute_button")
+
+    # — scoped iteration —
+
+    def test_only_highlighted_path_executes_when_selection_present(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/del.jpg", "delete"),
+            _rec("/keep.jpg", "keep"),
+            _rec("/other_del.jpg", "delete"),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_paths(dlg, ["/del.jpg"])
+
+        deleted: list[str] = []
+        with patch.object(dlg, "_delete_file", side_effect=deleted.append):
+            dlg._on_execute_requested()
+
+        # Only the highlighted delete row went through; the other delete
+        # and the keep row were untouched.
+        assert deleted == ["/del.jpg"]
+        assert "/keep.jpg" not in dlg.executed_paths
+        assert "/other_del.jpg" not in deleted
+
+    def test_no_selection_executes_all_decided_rows(self, qapp):
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/del.jpg", "delete"),
+            _rec("/keep.jpg", "keep"),
+            _rec("/other_del.jpg", "delete"),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        # No selection — pre-#211 behaviour: act on every decided row.
+
+        deleted: list[str] = []
+        with patch.object(dlg, "_delete_file", side_effect=deleted.append):
+            # No complete-delete group in this fixture (one keep row in
+            # the group), so no confirm dialog fires, but stub it
+            # defensively anyway.
+            with patch(
+                "PySide6.QtWidgets.QMessageBox.question",
+                return_value=_QMB.Yes,
+            ):
+                dlg._on_execute_requested()
+
+        assert set(deleted) == {"/del.jpg", "/other_del.jpg"}
+        assert "/keep.jpg" in dlg.executed_paths
+
+    def test_unselected_decided_rows_remain_in_groups_after_execute(self, qapp):
+        """Acceptance criterion: 'Unselected decided rows remain in the
+        list untouched.' After Execute with scoping, self._groups must
+        still contain the un-highlighted decided rows with their
+        decisions intact.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        rec_a = _rec("/a.jpg", "delete")
+        rec_b = _rec("/b.jpg", "delete")
+        groups = [_group(rec_a, rec_b)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_paths(dlg, ["/a.jpg"])
+
+        with patch.object(dlg, "_delete_file"):
+            dlg._on_execute_requested()
+
+        # rec_b still in self._groups with decision intact.
+        assert any(
+            r is rec_b and r.user_decision == "delete"
+            for g in dlg._groups for r in g.items
+        )
+
+    # — lock guard scopes too —
+
+    def test_lock_guard_only_fires_for_highlighted_locked_rows(self, qapp):
+        """A locked delete row OUTSIDE the highlighted scope must NOT
+        trigger the lock-confirm dialog. The guard only sees the
+        highlighted subset.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        rec_unlocked = _rec("/a.jpg", "delete")
+        rec_locked = _rec("/locked.jpg", "delete")
+        rec_locked.is_locked = True
+        groups = [_group(rec_unlocked, rec_locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        # Highlight only the unlocked row.
+        self._select_paths(dlg, ["/a.jpg"])
+
+        with patch.object(dlg, "_ask_lock_confirm") as mock_confirm:
+            with patch.object(dlg, "_delete_file"):
+                dlg._on_execute_requested()
+
+        mock_confirm.assert_not_called()
+
+    def test_lock_guard_fires_when_highlighted_subset_contains_locked(self, qapp):
+        """Conversely, a locked delete row INSIDE the highlighted scope
+        must still trigger the lock-confirm dialog — scoping narrows the
+        subset but never skips the guard.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.execute_action_dialog import _DIALOG_VERDICT_CANCEL
+        rec_unlocked = _rec("/a.jpg", "delete")
+        rec_locked = _rec("/locked.jpg", "delete")
+        rec_locked.is_locked = True
+        groups = [_group(rec_unlocked, rec_locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        # Highlight the locked row this time.
+        self._select_paths(dlg, ["/locked.jpg"])
+
+        with patch.object(
+            dlg, "_ask_lock_confirm", return_value=_DIALOG_VERDICT_CANCEL
+        ) as mock_confirm:
+            with patch.object(dlg, "_delete_file") as mock_del:
+                dlg._on_execute_requested()
+
+        mock_confirm.assert_called_once()
+        kwargs = mock_confirm.call_args.kwargs
+        # Lock confirm sees only the highlighted locked row.
+        assert kwargs["paths"] == ["/locked.jpg"]
+        # User cancelled at the lock confirm → no delete.
+        mock_del.assert_not_called()
+
+    # — complete-group confirm scoping —
+
+    def test_complete_group_confirm_skipped_when_scope_partial(self, qapp):
+        """When a complete-delete group is only partially highlighted,
+        this Execute click won't actually empty the group, so the
+        ``confirm_all`` dialog must not fire.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_paths(dlg, ["/a.jpg"])  # only half the group
+
+        with patch("PySide6.QtWidgets.QMessageBox.question") as q:
+            with patch.object(dlg, "_delete_file"):
+                dlg._on_execute_requested()
+
+        q.assert_not_called()
+
+    def test_complete_group_confirm_fires_when_scope_covers_full_group(self, qapp):
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_paths(dlg, ["/a.jpg", "/b.jpg"])  # whole group
+
+        with patch(
+            "PySide6.QtWidgets.QMessageBox.question",
+            return_value=_QMB.Yes,
+        ) as q:
+            with patch.object(dlg, "_delete_file"):
+                dlg._on_execute_requested()
+
+        q.assert_called_once()

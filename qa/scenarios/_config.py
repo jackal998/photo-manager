@@ -157,6 +157,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # are well-separated, so a Size (Bytes) threshold cleanly splits
     # the group into matched vs. unchanged subsets.
     "s43_numeric_condition": ["qa/sandbox/near-duplicates"],
+    # s44 (#211) — selection-scoped Execute. Disposable fixture
+    # (regenerated each run by the driver, 5 near-duplicate JPEGs);
+    # 2 of the 5 are sent to the Windows recycle bin per run. Same
+    # destructive-fixture pattern as s13 and s36.
+    "s44_execute_highlighted_rows": ["qa/sandbox/_disposable/s44_source"],
 }
 
 
