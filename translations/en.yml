@@ -238,7 +238,6 @@ context_menu:
   remove_from_list: "Remove from List"
   lock: "Lock"
   unlock: "Unlock"
-  apply_best_copy_to_group: "Apply best-copy decisions to this group"
 
 # Strings produced by FileOperationsHandler / DialogHandler.
 file_op:
@@ -257,8 +256,6 @@ file_op:
   remove_failed_body: "Remove from list failed: {error}"
   decision_set_status: "Decision set to '{decision}'"
   decision_set_with_skipped_status: "Decision set to '{decision}' on {set_count}; skipped {skipped} locked"
-  best_copy_applied_status: "Group {group}: kept 1, deleted {deleted} (skipped {skipped_locked} locked, {skipped_passenger} unscored)"
-  best_copy_no_candidates_status: "Group {group}: no scorable rows (all locked or unscored — re-scan to recover)"
   locked_verb: "Locked"
   unlocked_verb: "Unlocked"
   noun_row_singular: "row"

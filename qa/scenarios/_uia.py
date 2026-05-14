@@ -1789,11 +1789,6 @@ CTX_OPEN_FOLDER = "Open Folder"
 # context_menu.unlock in translations/en.yml.
 CTX_LOCK = "Lock"
 CTX_UNLOCK = "Unlock"
-# #187 PR 6 — appears only on group-header right-click. Picks the
-# highest-scoring non-locked, non-passenger row in the group, marks
-# it keep, marks the rest delete. Translation key:
-# context_menu.apply_best_copy_to_group in translations/en.yml.
-CTX_APPLY_BEST_COPY = "Apply best-copy decisions to this group"
 
 _VK_CONTROL = 0x11
 _VK_DOWN = 0x28
