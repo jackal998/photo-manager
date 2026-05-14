@@ -71,9 +71,13 @@ SIZE_TOLERANCE_PX = 25
 
 # Minimum size delta from the dialog's default — the resize must be
 # big enough that a "did the round-trip work" comparison is unambiguous
-# even with the tolerance above. 200px wider/taller comfortably exceeds
-# 25px tolerance × both axes.
-RESIZE_DELTA_PX = 200
+# even with the tolerance above. 60px wider/taller comfortably exceeds
+# 25px tolerance × both axes AND fits inside the GitHub-hosted runner's
+# small work area (~1044×788 effective). Previous attempt at 200px
+# clamped the resize at the screen edge, after which the restore
+# clamped DIFFERENTLY (the dialog reopened higher on screen with less
+# room below), producing a false negative in CI shard 5.
+RESIZE_DELTA_PX = 60
 
 
 _user32 = ctypes.windll.user32
