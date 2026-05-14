@@ -155,6 +155,14 @@ ALL_SCENARIOS = [
     # their decisions intact (executed=0). Destructive like s13 —
     # 2 files per run go to the recycle bin.
     "s44_execute_highlighted_rows",
+    # s47 (#214) — column layout (visual order + widths) persists
+    # across launches. Owns its own re-launch mid-scenario (mirrors
+    # s39's lifecycle for window geometry, which has the same
+    # save-on-close / restore-on-next-launch property). The drag-to-
+    # reorder path is layer-1 — synthetic SendInput is reliable for a
+    # resize (drag the right-edge handle) but flaky for a move (Qt's
+    # section-drag threshold is sensitive to event pacing on busy CI).
+    "s47_column_layout_persist",
 ]
 
 
