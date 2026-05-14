@@ -189,7 +189,12 @@ Acceptance:
 
 ## Project conventions (non-negotiable)
 
-  - Python: `.venv/Scripts/python.exe` always (system Python lacks PySide6).
+  - Python — the venv lives at the **main repo root**, not inside the
+    worktree. From inside a worktree (cwd is
+    `.../<repo>/.claude/worktrees/<name>/`) the correct path is
+    `../../../.venv/Scripts/python.exe`. From a normal checkout it's
+    `.venv/Scripts/python.exe`. Don't burn turns trying both — pick
+    based on `pwd`. (System Python lacks PySide6.)
   - Branch off `<base-ref>` at SHA `<base-sha>`.
   - No `--no-verify` under any circumstances.
   - No mock-driven test padding — every assertion must catch a real
@@ -201,13 +206,18 @@ Acceptance:
 
 ## Workflow through PR
 
+In every command below, **PY** is the venv python — from a worktree
+that's `../../../.venv/Scripts/python.exe`, from a normal checkout
+it's `.venv/Scripts/python.exe`. Resolve once at the start of your
+session, then reuse.
+
   1. `git checkout -b <your-branch>` (your worktree starts on master).
   2. Implement the change.
-  3. `.venv/Scripts/python.exe -m pytest` — must pass.
-  4. `.venv/Scripts/python.exe scripts/check_coverage_per_file.py` —
-     70% per-file floor on every file touched.
+  3. `PY -m pytest` — must pass.
+  4. `PY scripts/check_coverage_per_file.py` — 70% per-file floor on
+     every file touched.
   5. If you added a new layer-3 scenario, run it:
-     `.venv/Scripts/python.exe -m qa.scenarios._batch <sNN>_<name>`
+     `PY -m qa.scenarios._batch <sNN>_<name>`
   6. Commit with conventional-commit message + `Closes #<N>` trailer
      + `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
   7. **Gated:** surface push intent to user, on approval
@@ -294,6 +304,14 @@ from here; they own their work end-to-end.
 
 ## Anti-patterns — do not do these
 
+- **Hardcoding `.venv/Scripts/python.exe` in brief commands.** Cold
+  sessions opened with "create worktree" run from
+  `.claude/worktrees/<name>/` where that path doesn't exist — the
+  venv lives at the main repo root, so it's `../../../.venv/...`
+  from there. Use a `PY` placeholder in the brief's workflow section
+  and tell the cold session to resolve it once based on `pwd`. (This
+  was a recurring time-sink across multiple sessions before the
+  template was fixed.)
 - **Generating briefs without the file-scope collision check.** Two
   cold sessions blindly editing the same file means a rebase fight
   at PR-merge time you didn't see coming.
