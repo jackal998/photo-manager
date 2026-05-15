@@ -962,3 +962,121 @@ class ExecuteActionDialog(QDialog):
         """
         save_widget_geometry(self, QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM)
         super().done(result)
+
+
+class ExecuteRunner(ExecuteActionDialog):
+    """Headless wrapper around ``ExecuteActionDialog``'s destructive flow.
+
+    #165 prototype — when option B is engaged (Execute Mode), the main
+    window owns the tree, preview, banner, and Execute button. The
+    destructive pipeline itself (pre-execute lock-confirm scan,
+    complete-group "all files will be deleted" prompt, send2trash
+    loop, missing-files report) still lives on ``ExecuteActionDialog``
+    where ~1500 lines of tests cover it. ``ExecuteRunner`` subclasses
+    the dialog, skips ``_build_ui`` so no widgets are constructed, and
+    exposes ``run(scope)`` as a deliberate entry point that bypasses
+    the tree-selection-driven scope computation.
+
+    A follow-up after option B is approved would extract the pipeline
+    methods onto ``ExecuteRunner`` directly and shrink the parent class
+    to a deprecated shell — the inheritance is the prototype shortcut
+    that keeps the existing test surface validating the runner for
+    free without forking 1500 lines of coverage.
+    """
+
+    def _build_ui(self) -> None:  # type: ignore[override]
+        # No widgets — the main window owns the Execute-mode UI.
+        # _on_execute / _on_execute_requested still work because every
+        # piece of state they touch (self._groups, self._manifest_path,
+        # self.deleted_paths, …) is initialised by the base ``__init__``
+        # before this hook is invoked.
+        pass
+
+    def _refresh_ui_after_decision_change(self) -> None:  # type: ignore[override]
+        # The dialog calls this from the lock-confirm pathway to
+        # re-render its own tree. The main window's tree is the source
+        # of truth in Execute mode; refresh happens there after run()
+        # returns. No-op here so we don't hit AttributeError on
+        # self._btn_box / self._tree.
+        pass
+
+    def done(self, result: int) -> None:  # type: ignore[override]
+        # Skip geometry persistence (we never showed a window) — but
+        # keep the QDialog state machine consistent.
+        from PySide6.QtWidgets import QDialog
+        QDialog.done(self, result)
+
+    def run(self, scope: set[str] | None = None) -> bool:
+        """Fire the destructive pipeline with an optional path scope.
+
+        Args:
+            scope: Set of file_paths to limit the destructive run to.
+                ``None`` (the default) means "every decided row in
+                ``self._groups``" — the same default as the dialog
+                flow's empty-selection branch.
+
+        Returns:
+            ``True`` if the destructive loop ran. ``False`` if the
+            user cancelled at the lock-confirm or all-files-will-be-
+            deleted prompt.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        self._execute_scope = scope
+
+        def _in_scope(path: str) -> bool:
+            return scope is None or path in scope
+
+        # Pre-execute scan for locked rows with decision='delete' —
+        # mirrors the dialog's _on_execute_requested but skips the
+        # _selected_file_paths() call (no tree on this instance).
+        total_delete_count = sum(
+            1
+            for group in self._groups
+            for rec in getattr(group, "items", [])
+            if getattr(rec, "user_decision", "") == "delete"
+            and _in_scope(rec.file_path)
+        )
+        locked_delete_paths = [
+            rec.file_path
+            for group in self._groups
+            for rec in getattr(group, "items", [])
+            if getattr(rec, "user_decision", "") == "delete"
+            and getattr(rec, "is_locked", False)
+            and _in_scope(rec.file_path)
+        ]
+        if locked_delete_paths:
+            verdict = self._ask_lock_confirm(
+                paths=locked_delete_paths,
+                decision_for_label="delete",
+                affected_count=total_delete_count,
+            )
+            if verdict == _DIALOG_VERDICT_CANCEL:
+                return False
+            if verdict == _DIALOG_VERDICT_PROCEED:
+                self._batch_set_lock(locked_delete_paths, locked=False)
+            else:
+                # Skip-Locked branch — clear the decision so _on_execute's
+                # iteration skips locked rows but leaves lock state intact.
+                self._clear_decision_on(locked_delete_paths)
+
+        # Complete-group confirm — re-uses the in-scope variant so the
+        # wording reflects what THIS click will empty on disk, not just
+        # what was decided.
+        complete = self._complete_delete_groups_in_scope(scope)
+        if complete:
+            group_list = ", ".join(str(g) for g in complete)
+            reply = QMessageBox.question(
+                self.parent(),
+                t("execute_dialog.confirm_all_title"),
+                t("execute_dialog.confirm_all_body", groups=group_list),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return False
+
+        # Destructive loop — reads self._execute_scope back via
+        # getattr(self, '_execute_scope', None), which we stashed above.
+        self._on_execute()
+        return True

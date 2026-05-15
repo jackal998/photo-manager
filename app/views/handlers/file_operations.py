@@ -6,7 +6,7 @@ import re
 from typing import Any, Callable, Protocol
 
 from PySide6.QtCore import QObject
-from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 from loguru import logger
 
 from app.views.components.status_messages import pluralize, report_count, t_pluralize
@@ -848,7 +848,22 @@ class FileOperationsHandler:
         self.set_decision_with_lock_check(matching, new_decision)
 
     def execute_action(self) -> None:
-        """Open the Execute Action review dialog and run planned operations."""
+        """Switch the main window into Execute Mode.
+
+        #165 prototype rewire — the Action → Execute Action… menu
+        item used to open the modal Execute Action dialog. Under
+        option B it now toggles ``vm.mode = "execute"`` and lets the
+        main window's banner + Execute action bar take over. The
+        actual destructive run fires when the user clicks the
+        Execute button in the action bar, which routes through
+        ``MainWindow._on_execute_clicked`` and the headless
+        ``ExecuteRunner``.
+
+        Keeping the menu item wired here (rather than reaching for
+        the new ``View → Execute Mode`` toggle) preserves the
+        existing muscle memory and the same enabled-when-manifest-
+        loaded gating.
+        """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             QMessageBox.information(
@@ -857,40 +872,14 @@ class FileOperationsHandler:
                 t("file_op.execute_no_manifest_body"),
             )
             return
-        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        dlg = ExecuteActionDialog(
-            self.vm.groups, manifest_path, self.parent,
-            settings=self.settings,
-        )
-        accepted = dlg.exec() == QDialog.Accepted
-        # When the user removed rows via the immediate single-row
-        # right-click (which mutates self._groups in place — an alias
-        # of vm.groups), the main tree must re-render even if the
-        # dialog was rejected. The deferred-remove path is committed
-        # only via Execute (accepted=True branch below), so it doesn't
-        # affect this path.
-        if dlg.removed_from_list_paths and not accepted:
-            self.ui_updater.refresh_tree(self.vm.groups)
-        if accepted:
-            if dlg.deleted_paths:
-                self.vm.remove_deleted_and_prune(dlg.deleted_paths, prune_singles=False)
-            if dlg.removed_from_list_paths:
-                # Deferred-remove paths are still in vm.groups (we set
-                # user_decision but didn't drop them in-place). Drop
-                # them now so they vanish from the main tree.
-                # Immediate-path entries are already gone — vm.remove_from_list
-                # filters by path, so duplicates are harmless.
-                self.vm.remove_from_list(dlg.removed_from_list_paths)
-            self.ui_updater.refresh_tree(self.vm.groups)
-            total = len(dlg.deleted_paths) + len(dlg.executed_paths)
-            report_count(
-                self.status_reporter,
-                t("status.verb_executed"),
-                total,
-                t("status.noun_action_singular"),
-                plural=t("status.noun_action_plural"),
-            )
-            # Execute is the canonical "commit" — decisions have been
-            # applied to disk (or to the review list); no need to nag
-            # the user about saving on the way out.
-            self._mark_clean()
+        # Use the main window's mode applicator (sets vm.mode, updates
+        # the menu checkmark, refreshes the banner / action bar / tree).
+        # Duck-typed call so this handler stays free of a hard import
+        # on MainWindow.
+        apply_mode = getattr(self.parent, "_apply_mode", None)
+        if callable(apply_mode):
+            apply_mode("execute")
+        else:
+            # Defensive: in tests / future refactors where the parent
+            # isn't a MainWindow, just flip the VM state.
+            self.vm.mode = "execute"
