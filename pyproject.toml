@@ -75,6 +75,20 @@ omit = [
   "run_all_linters.py",               # dev tooling shell, not user-facing
   "infrastructure/image_service.py",  # requires running QApplication for decode; covered by qa-explore preview pane (s05)
   "infrastructure/logging.py",        # module-level loguru sink setup; no executable surface beyond import
+  # QMainWindow assembly cascades into the whole view stack (PreviewPane,
+  # ImageTaskRunner, TreeController, every handler/dialog) so a layer-1
+  # import would need a running QApplication and end up loading the same
+  # view stack qa-explore already exercises as a real subprocess. The
+  # per-module row in docs/testing.md has flagged this file as "not
+  # measured" since #137 / #141 / #143; #165 expands the surface (Execute
+  # Mode UI + mode applicator) but follows the same extraction pattern —
+  # pure-logic helpers (`_complete_delete_group_numbers`,
+  # `_apply_mode` dispatch) covered at layer 1 in
+  # `tests/test_execute_mode_helpers.py`; visible signals (title suffix,
+  # action-bar visibility, menu indicator) covered at layer 3 by s46.
+  # Mocking QApplication to "cover" the construction path would be
+  # metric gaming per CLAUDE.md.
+  "app/views/main_window.py",
 ]
 
 [tool.coverage.report]
