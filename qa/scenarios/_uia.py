@@ -450,38 +450,37 @@ def read_tree_row_order(win: UIAWrapper) -> list[str]:
     Unlike ``read_result_rows``, this helper does NOT y-filter — the
     windows-latest CI runner renders the main window smaller, every
     TreeItem's ``top < 600``, and ``read_result_rows`` silently returns
-    ``[]`` on CI. This helper walks raw ``TreeItem`` descendants,
-    clusters by a 30-px Y-bucket, and returns the cell that matches
-    :data:`_BASENAME_RE` for each row.
+    ``[]`` on CI.
 
-    Group-header rows (whose text starts with ``"Group "``) have no
-    basename cell and are skipped — the returned list contains only
-    file rows, in the order Qt is currently displaying them. This is
-    the right oracle for sort-state assertions: it's what the user
-    sees, not what's in the database.
+    Approach: walk raw ``TreeItem`` descendants, keep only cells whose
+    text matches :data:`_BASENAME_RE` (the File Name column for file
+    rows — uniquely identifying), and return them sorted by ``top``.
+    No Y-bucketing — earlier versions used a 30-px bucket which on the
+    CI render (rows ~15-16 px tall, smaller font / DPI than a dev
+    workstation) merged adjacent rows pairwise and dropped every
+    other file. Sorting basename-cells directly avoids the bucket
+    boundary entirely; each file row has exactly one File Name cell,
+    so there's nothing to cluster.
+
+    Group-header rows (which don't contain a basename) are naturally
+    excluded by the regex filter — the returned list is file rows
+    only, in the order Qt is currently displaying them. This is the
+    right oracle for sort-state assertions: it's what the user sees,
+    not what's in the database.
     """
     items = win.descendants(control_type="TreeItem")
-    by_row: dict[int, list[tuple[int, str]]] = {}
+    name_cells: list[tuple[int, str]] = []
     for it in items:
         try:
             txt = (it.window_text() or "").strip()
-            if not txt:
+            if not txt or not _BASENAME_RE.match(txt):
                 continue
             r = it.rectangle()
-            key = r.top // 30 * 30   # 30-px row-height bucket
-            by_row.setdefault(key, []).append((r.left, txt))
+            name_cells.append((r.top, txt))
         except Exception:
             continue
-    out: list[str] = []
-    for y in sorted(by_row):
-        # Sort cells left-to-right; pick the first that looks like a
-        # media filename. There's exactly one such cell per file row
-        # (the File Name column).
-        for _, t in sorted(by_row[y]):
-            if _BASENAME_RE.match(t):
-                out.append(t)
-                break
-    return out
+    name_cells.sort(key=lambda pair: pair[0])
+    return [t for _, t in name_cells]
 
 
 def click_column_header(win: UIAWrapper, header_text: str) -> None:
