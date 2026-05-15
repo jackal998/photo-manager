@@ -554,6 +554,52 @@ class TestGetRecordFieldActionMapping:
 
 # ── save_manifest_decisions ───────────────────────────────────────────────────
 
+class _MockSaveDialog:
+    """Context manager that patches ``QFileDialog`` plus the geometry
+    helpers in the handler module.
+
+    The geometry helpers are stubbed because they otherwise read and
+    write the real ``window_state.ini`` under the repo root — a
+    stale/corrupt blob from a prior session would crash the test, and
+    we don't want unit tests touching shared user state. The handler
+    flow's correctness w.r.t. those calls is covered by the dedicated
+    round-trip test in ``tests/test_window_state.py``.
+
+    ``accept_path=None`` simulates Cancel (Rejected); a string path
+    simulates the user accepting that path.
+    """
+
+    def __init__(self, accept_path):
+        self._accept_path = accept_path
+        self._patches = [
+            patch("app.views.handlers.file_operations.QFileDialog"),
+            patch("app.views.handlers.file_operations.restore_widget_geometry"),
+            patch("app.views.handlers.file_operations.save_widget_geometry"),
+        ]
+
+    def __enter__(self):
+        MockDialog = self._patches[0].__enter__()
+        self._patches[1].__enter__()
+        self._patches[2].__enter__()
+        instance = MockDialog.return_value
+        if self._accept_path is None:
+            instance.exec.return_value = MockDialog.Rejected
+            instance.selectedFiles.return_value = []
+        else:
+            instance.exec.return_value = MockDialog.Accepted
+            instance.selectedFiles.return_value = [self._accept_path]
+        return MockDialog
+
+    def __exit__(self, *exc):
+        for p in reversed(self._patches):
+            p.__exit__(*exc)
+        return False
+
+
+def _mock_save_dialog(accept_path):
+    return _MockSaveDialog(accept_path)
+
+
 class TestSaveManifestDecisions:
     @patch("PySide6.QtWidgets.QMessageBox.information")
     def test_saves_to_same_path_in_place(self, _mock, tmp_path):
@@ -563,7 +609,7 @@ class TestSaveManifestDecisions:
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
 
-        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=(str(db), "")):
+        with _mock_save_dialog(accept_path=str(db)):
             handler.save_manifest_decisions()
 
         assert _read_decision(db, "/a.jpg") == "keep"
@@ -578,7 +624,7 @@ class TestSaveManifestDecisions:
         new_path = str(tmp_path / "exported.sqlite")
         handler, _, _ = _make_handler(vm, str(db))
 
-        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=(new_path, "")):
+        with _mock_save_dialog(accept_path=new_path):
             handler.save_manifest_decisions()
 
         assert _read_decision(Path(new_path), "/a.jpg") == "delete"
@@ -613,10 +659,7 @@ class TestSaveManifestDecisions:
             new_path = str(tmp_path / "exported.sqlite")
             handler, _, _ = _make_handler(vm, str(db))
 
-            with patch(
-                "PySide6.QtWidgets.QFileDialog.getSaveFileName",
-                return_value=(new_path, ""),
-            ):
+            with _mock_save_dialog(accept_path=new_path):
                 handler.save_manifest_decisions()
 
             assert _read_decision(Path(new_path), "/a.jpg") == "delete"
@@ -631,7 +674,7 @@ class TestSaveManifestDecisions:
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
 
-        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=("", "")):
+        with _mock_save_dialog(accept_path=None):
             handler.save_manifest_decisions()
 
         assert _read_decision(db, "/a.jpg") == ""
@@ -652,7 +695,7 @@ class TestSaveManifestDecisions:
 
         Drift in this literal at file_operations.py would silently break QA
         scenario s12 (which finds the dialog by exact title) and confuse users
-        who see a renamed title. Asserts the call args of getSaveFileName so
+        who see a renamed title. Asserts the QFileDialog constructor args so
         the title literal can't drift unnoticed (#129 — replacement coverage
         for s12 which cannot run on hosted Windows runners).
         """
@@ -661,17 +704,35 @@ class TestSaveManifestDecisions:
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
 
-        with patch(
-            "PySide6.QtWidgets.QFileDialog.getSaveFileName",
-            return_value=("", ""),  # cancel; we only care about call args
-        ) as mock_dlg:
+        with _mock_save_dialog(accept_path=None) as MockDialog:
             handler.save_manifest_decisions()
 
-        mock_dlg.assert_called_once()
-        title = mock_dlg.call_args.args[1]
+        MockDialog.assert_called_once()
+        title = MockDialog.call_args.args[1]
         assert title == "Save Manifest Decisions", (
             f"dialog title drift: expected 'Save Manifest Decisions', got {title!r}"
         )
+
+    @patch("PySide6.QtWidgets.QMessageBox.information")
+    def test_dialog_uses_non_native_with_min_size(self, _mock, tmp_path):
+        """#230 regression guard: the save dialog must opt out of the
+        native Windows IFileSaveDialog and apply a minimum size large
+        enough that the folder picker / breadcrumb is visible on first
+        open. Native dialogs ignore setMinimumSize, so dropping either
+        call reproduces the user-visible bug (picker clipped above the
+        screen top).
+        """
+        recs = [_rec("/a.jpg")]
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with _mock_save_dialog(accept_path=None) as MockDialog:
+            handler.save_manifest_decisions()
+
+        instance = MockDialog.return_value
+        instance.setOption.assert_any_call(MockDialog.DontUseNativeDialog, True)
+        instance.setMinimumSize.assert_any_call(800, 500)
 
 
 # ── load → decide → save round-trip ────────────────────────────────────────
@@ -750,10 +811,7 @@ class TestSaveManifestLoadRoundTrip:
         new_path = str(tmp_path / "exported.sqlite")
         vm = SimpleNamespace(groups=groups)
         handler, _, _ = _make_handler(vm, str(src_db))
-        with patch(
-            "PySide6.QtWidgets.QFileDialog.getSaveFileName",
-            return_value=(new_path, ""),
-        ):
+        with _mock_save_dialog(accept_path=new_path):
             handler.save_manifest_decisions()
 
         # Verify the loaded -> decided -> saved chain preserved decisions.
@@ -1323,10 +1381,7 @@ class TestDirtyTracking:
         handler._mark_dirty()
 
         save_path = str(tmp_path / "saved.sqlite")
-        with patch(
-            "PySide6.QtWidgets.QFileDialog.getSaveFileName",
-            return_value=(save_path, ""),
-        ):
+        with _mock_save_dialog(accept_path=save_path):
             handler.save_manifest_decisions()
         assert handler.is_dirty() is False
 

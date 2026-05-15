@@ -34,6 +34,7 @@ QSETTINGS_KEY_COLUMN_HEADER_STATE = "geometry/column_header"
 QSETTINGS_KEY_SCAN_DIALOG_GEOM = "geometry/scan_dialog"
 QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM = "geometry/execute_action_dialog"
 QSETTINGS_KEY_ACTION_DIALOG_GEOM = "geometry/action_dialog"
+QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM = "geometry/save_manifest_dialog"
 
 
 def qsettings_path() -> Path:
