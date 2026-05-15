@@ -333,6 +333,42 @@ class TestExecuteActionDialogDoneSavesGeometry:
         assert blob is not None and len(blob) > 0
 
 
+class TestSaveManifestDialogGeomKey:
+    """#230 — the new ``QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM`` is the
+    wiring between the FileOperationsHandler save flow and the existing
+    save/restore helpers. The handler-level tests verify the call sites,
+    but a misspelled or duplicated key here would silently lose geometry
+    or collide with another dialog's blob. This round-trip pins the key
+    string against accidental drift and confirms the helpers accept it.
+    """
+
+    def test_round_trip_with_save_manifest_key(
+        self, qapp, isolated_qsettings
+    ):
+        from PySide6.QtWidgets import QFileDialog
+        from app.views.window_state import (
+            QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM,
+        )
+
+        dlg_a = QFileDialog()
+        dlg_a.resize(900, 600)
+        dlg_a.move(120, 80)
+        save_widget_geometry(dlg_a, QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM)
+
+        store = window_state_qsettings()
+        blob = store.value(QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM)
+        assert blob is not None and len(blob) > 0
+
+        dlg_b = QFileDialog()
+        dlg_b.resize(400, 300)
+        applied = restore_widget_geometry(
+            dlg_b, QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM
+        )
+        assert applied is True
+        assert dlg_b.size().width() == 900
+        assert dlg_b.size().height() == 600
+
+
 class TestScanDialogDoneSavesGeometry:
     def test_done_saves(self, qapp, isolated_qsettings, tmp_path):
         """ScanDialog needs a JsonSettings instance; tmp_path keeps it

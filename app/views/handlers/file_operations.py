@@ -16,6 +16,11 @@ from app.views.constants import (
     REMOVE_FROM_LIST_SENTINEL,
     UNLOCK_SENTINEL,
 )
+from app.views.window_state import (
+    QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM,
+    restore_widget_geometry,
+    save_widget_geometry,
+)
 from infrastructure.i18n import t
 
 # Single source of truth for the QFileDialog filter string used wherever
@@ -300,14 +305,29 @@ class FileOperationsHandler:
             )
             return
 
-        save_path, _ = QFileDialog.getSaveFileName(
-            self.parent,
-            t("file_op.save_dialog_title"),
-            manifest_path,
-            MANIFEST_FILE_FILTER,
-        )
-        if not save_path:
+        # #230 — Use a non-native QFileDialog instance with an explicit
+        # minimum size. The native Windows IFileSaveDialog opened with
+        # the folder picker / breadcrumb clipped above the screen top,
+        # and native dialogs ignore Qt-side setMinimumSize. Process-wide
+        # opt-out lives at main.py:99 for CI; this is the production fix.
+        dlg = QFileDialog(self.parent, t("file_op.save_dialog_title"))
+        dlg.setAcceptMode(QFileDialog.AcceptSave)
+        dlg.setFileMode(QFileDialog.AnyFile)
+        dlg.setNameFilter(MANIFEST_FILE_FILTER)
+        dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        dlg.setMinimumSize(800, 500)
+        dlg.setDirectory(os.path.dirname(manifest_path))
+        dlg.selectFile(os.path.basename(manifest_path))
+
+        restore_widget_geometry(dlg, QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM)
+        try:
+            accepted = dlg.exec() == QFileDialog.Accepted
+        finally:
+            save_widget_geometry(dlg, QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM)
+
+        if not accepted:
             return
+        save_path = dlg.selectedFiles()[0]
 
         try:
             if os.path.normcase(os.path.normpath(save_path)) != os.path.normcase(
