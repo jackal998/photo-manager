@@ -350,9 +350,13 @@ class TestSaveManifestDialogGeomKey:
             QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM,
         )
 
+        # Dimensions match the precedent in ``test_round_trip_restores_size``
+        # — small enough to fit on the hosted-CI Windows runners (some
+        # have an 800px-wide virtual screen, so anything >= 900 gets
+        # clamped on restore and the round-trip looks "off by 100px").
         dlg_a = QFileDialog()
-        dlg_a.resize(900, 600)
-        dlg_a.move(120, 80)
+        dlg_a.resize(500, 350)
+        dlg_a.move(100, 100)
         save_widget_geometry(dlg_a, QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM)
 
         store = window_state_qsettings()
@@ -360,13 +364,13 @@ class TestSaveManifestDialogGeomKey:
         assert blob is not None and len(blob) > 0
 
         dlg_b = QFileDialog()
-        dlg_b.resize(400, 300)
+        dlg_b.resize(200, 200)
         applied = restore_widget_geometry(
             dlg_b, QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM
         )
         assert applied is True
-        assert dlg_b.size().width() == 900
-        assert dlg_b.size().height() == 600
+        assert dlg_b.size().width() == 500
+        assert dlg_b.size().height() == 350
 
 
 class TestScanDialogDoneSavesGeometry:
