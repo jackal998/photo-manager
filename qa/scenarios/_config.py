@@ -162,6 +162,13 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # 2 of the 5 are sent to the Windows recycle bin per run. Same
     # destructive-fixture pattern as s13 and s36.
     "s44_execute_highlighted_rows": ["qa/sandbox/_disposable/s44_source"],
+    # s45 (#121) — column-header sort + in-memory sort preservation
+    # across manifest reload. Drives File Name + Size (Bytes) header
+    # clicks, asserts row order through a new y-filter-free helper,
+    # then re-opens the same manifest in-process and asserts the
+    # sort survives. Near-duplicates: 5 files with distinct sizes
+    # (q-quality variants), so the size sort is deterministic.
+    "s45_sort_persistence": ["qa/sandbox/near-duplicates"],
     # s47 (#214) — column layout persists across launches. Needs a
     # fixture that produces at least one group so the result tree
     # renders and the header columns are interactable. Same fixture as
