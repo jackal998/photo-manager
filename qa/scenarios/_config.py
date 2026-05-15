@@ -172,6 +172,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # manifest, which enables Execute Action and the ActionDialog
     # preview-pane path.
     "s48_dialog_geometry_persist": ["qa/sandbox/near-duplicates"],
+    # s49 (#212) — "Auto select after scan" end-to-end. Same fixture as
+    # s42 (5 q-quality near-duplicates); file_size_bytes is the sole
+    # differentiating signal so q95 is the deterministic per-group score
+    # winner the scenario asserts on.
+    "s49_scan_auto_select": ["qa/sandbox/near-duplicates"],
 }
 
 

@@ -36,6 +36,7 @@ class ScanWorker(QThread):
         mean_color_threshold: int = 30,
         limit: int | None = None,
         workers: int = 4,
+        auto_select_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.sources = {k: Path(v) for k, v in sources.items() if v.strip()}
@@ -46,6 +47,11 @@ class ScanWorker(QThread):
         self.mean_color_threshold = mean_color_threshold
         self.limit = limit
         self.workers = workers
+        # #212 — when True, promote the top-scored row in each duplicate
+        # group to action="KEEP" before writing the manifest. The scan
+        # dialog persists the corresponding setting; defaults False so
+        # callers that don't opt in get the pre-#212 behaviour.
+        self.auto_select_enabled = auto_select_enabled
 
     def run(self) -> None:
         try:
@@ -235,6 +241,22 @@ class ScanWorker(QThread):
         # compute_score(...) per group. Isolated rows (group_id is None)
         # stay unscored — no peers to compete with.
         apply_scoring_to_rows(rows, extracts)
+
+        # --- 4.6: optional auto-select keepers (#212) ---
+        # When enabled in the scan dialog, the top-scored row in each
+        # duplicate group is promoted to action="KEEP" so the manifest
+        # loads with keepers already chosen — the user does not have
+        # to open the Selection dialog manually. Other duplicates keep
+        # their classifier action (REVIEW_DUPLICATE / EXACT / MOVE) so
+        # the user still confirms deletions explicitly.
+        if self.auto_select_enabled:
+            from core.services.auto_select import top_score_path_per_group
+            keepers = top_score_path_per_group(rows)
+            if keepers:
+                for row in rows:
+                    if row.source_path in keepers:
+                        row.action = "KEEP"
+                self._emit(f"Auto-select: marked {len(keepers):,} keeper(s) per group.")
 
         # Capture print_summary output and re-emit as progress
         buf = io.StringIO()

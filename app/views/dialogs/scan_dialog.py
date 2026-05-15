@@ -371,6 +371,7 @@ class ScanDialog(QDialog):
         self._phash_spin: QSpinBox
         self._color_slider: QSlider
         self._color_spin: QSpinBox
+        self._auto_select_check: QCheckBox
 
         self._build_ui()
         self._load_from_settings()
@@ -505,6 +506,22 @@ class ScanDialog(QDialog):
         params_layout.addWidget(color_desc)
         params_layout.addLayout(color_row)
 
+        # Auto-select after scan (#212).
+        # Opt-in: when on, the scan worker promotes the top-scored row in
+        # each duplicate group to action="KEEP" before writing the
+        # manifest. Other duplicates stay at their classifier action so
+        # the user still confirms deletions explicitly. Persists via
+        # ``ui.scan_dialog.auto_select_enabled`` on toggle (mirrors the
+        # ``advanced_expanded`` save path) so the choice survives a
+        # close/reopen.
+        self._auto_select_check = QCheckBox(t("scan_dialog.auto_select_label"))
+        auto_select_desc = QLabel(t("scan_dialog.auto_select_desc"))
+        auto_select_desc.setWordWrap(True)
+        auto_select_desc.setStyleSheet("color: #555;")
+        self._auto_select_check.toggled.connect(self._on_auto_select_toggled)
+        params_layout.addWidget(self._auto_select_check)
+        params_layout.addWidget(auto_select_desc)
+
         right_top_layout.addWidget(self._params_group)
         # Trailing stretch so the params group hugs the top and any extra
         # vertical room in the right-top pane stays empty rather than
@@ -599,6 +616,13 @@ class ScanDialog(QDialog):
         expanded = bool(self.settings.get("ui.scan_dialog.advanced_expanded", False))
         self._params_group.setChecked(expanded)
 
+        # Auto-select keepers after scan (#212). Default = False so the
+        # pre-#212 behaviour is preserved for users who haven't opted in.
+        auto_select = bool(
+            self.settings.get("ui.scan_dialog.auto_select_enabled", False)
+        )
+        self._auto_select_check.setChecked(auto_select)
+
     def _save_to_settings(self) -> None:
         """Persist the current source list and output path to settings."""
         entries = self._source_list.entries()
@@ -612,6 +636,20 @@ class ScanDialog(QDialog):
             self.settings.save()
         except OSError:
             pass  # Non-fatal — settings-save failure should not interrupt the UI
+
+    def _on_auto_select_toggled(self, enabled: bool) -> None:
+        """Persist the auto-select checkbox on every toggle (#212).
+
+        Same persistence shape as ``_on_advanced_toggled`` — write
+        immediately on change so the user's choice survives the next
+        dialog open without depending on the scan-start save path
+        firing.
+        """
+        self.settings.set("ui.scan_dialog.auto_select_enabled", enabled)
+        try:
+            self.settings.save()
+        except OSError:
+            pass  # Non-fatal — see _save_to_settings rationale
 
     def _on_advanced_toggled(self, expanded: bool) -> None:
         """Show/hide the content + persist expanded state (#163).
@@ -702,6 +740,7 @@ class ScanDialog(QDialog):
             recursive_map=recursive_map,
             threshold=self._phash_slider.value(),
             mean_color_threshold=self._color_slider.value(),
+            auto_select_enabled=self._auto_select_check.isChecked(),
         )
         self._worker.progress.connect(self._log)
         self._worker.finished.connect(self._on_finished)

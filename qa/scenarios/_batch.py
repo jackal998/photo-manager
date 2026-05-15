@@ -170,6 +170,12 @@ ALL_SCENARIOS = [
     # near-duplicates to load a manifest, then resizes / closes /
     # reopens each dialog and asserts the size came back through.
     "s48_dialog_geometry_persist",
+    # s49 (#212) — "Auto select after scan" checkbox end-to-end.
+    # Two phases inside one app session against the near-duplicates
+    # fixture: phase 1 toggles the new Advanced-Settings checkbox ON
+    # via UIA and asserts the top-scored row carries action="KEEP" in
+    # the manifest; phase 2 toggles it OFF and asserts zero KEEP rows.
+    "s49_scan_auto_select",
 ]
 
 
