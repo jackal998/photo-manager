@@ -72,8 +72,6 @@ omit = [
   # scripts/check_coverage_per_file.py. See docs/testing.md for the
   # full layer model.
   "main.py",                          # argparse + sys.exit shell; covered by qa-explore launching the real app
-  "scan.py",                          # CLI shell over scanner.* (layer-1 tested); manual smoke before release
-  "review.py",                        # CLI shell over scanner/review logic; manual
   "run_all_linters.py",               # dev tooling shell, not user-facing
   "infrastructure/image_service.py",  # requires running QApplication for decode; covered by qa-explore preview pane (s05)
   "infrastructure/logging.py",        # module-level loguru sink setup; no executable surface beyond import

@@ -135,8 +135,6 @@ calls out what would be uncaught even with a green CI.
 | Module | Status | Where it's covered |
 |---|---|---|
 | `main.py` | **omit** | qa-explore launches it as a real subprocess for every scenario |
-| `scan.py` | **omit** | manual smoke before release; underlying `scanner.*` is layer-1 tested |
-| `review.py` | **omit** | manual; underlying `scanner.*` is layer-1 tested |
 | `run_all_linters.py` | **omit** | dev tooling, not user-facing |
 
 ---
