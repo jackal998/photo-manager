@@ -163,6 +163,12 @@ ALL_SCENARIOS = [
     # render), then triggers File → Open Manifest on the same path
     # and asserts the sort survives. Non-destructive.
     "s45_sort_persistence",
+    # s46 (#165 prototype) — Execute Mode toggle round-trip. Ctrl+E
+    # engages Execute mode (window title gains suffix, Execute action
+    # bar appears, View menu action flips checked); a second Ctrl+E
+    # returns to Review. Non-destructive — stops at the toggle. The
+    # destructive Execute click itself stays in s13 / s36 / s44.
+    "s46_execute_mode_toggle",
     # s47 (#214) — column layout (visual order + widths) persists
     # across launches. Owns its own re-launch mid-scenario (mirrors
     # s39's lifecycle for window geometry, which has the same
