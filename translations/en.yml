@@ -117,6 +117,8 @@ scan_dialog:
   phash_desc: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. <b>Lower = stricter</b> (fewer groups, less noise); <b>higher = more permissive</b> (catches more slightly-edited pairs)."
   color_label: "<b>Mean Color Gate</b> (default: 30, range: 0–100)"
   color_desc: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. <b>0 = disabled</b>; <b>higher = more permissive</b> color gate."
+  auto_select_label: "Auto select after scan"
+  auto_select_desc: "When enabled, the highest-scoring file in each duplicate group is marked <b>KEEP</b> as soon as the scan finishes. Other duplicates stay un-decided so you still confirm deletions explicitly — auto-select picks keepers, never deleters."
   log_placeholder: "Scan progress will appear here…"
   start_button: "Start Scan"
   close_button: "Close"

@@ -488,6 +488,89 @@ class TestAdvancedSettingsCollapse:
 
 
 # ---------------------------------------------------------------------------
+# Auto-select after scan (photo-manager#212)
+# ---------------------------------------------------------------------------
+
+class TestAutoSelectCheckbox:
+    """The Advanced Settings section gains an "Auto select after scan"
+    checkbox (#212). Default off; state persists via
+    ``ui.scan_dialog.auto_select_enabled``; toggling writes through to
+    the on-disk settings file immediately (mirrors the
+    ``advanced_expanded`` save path) so the user's choice survives the
+    next dialog open."""
+
+    def _make_settings_file(self, tmp_path: Path, data: dict) -> Path:
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_default_unchecked_with_no_setting(self, qapp, tmp_path):
+        """Catches: opt-in flag defaults to ON. Auto-select must be
+        opt-in — a user who hasn't enabled it should get the pre-#212
+        behaviour (no decisions pre-marked). Flipping the default would
+        silently change every existing user's scan output."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._auto_select_check.isChecked() is False
+
+    def test_checked_state_loaded_from_settings(self, qapp, tmp_path):
+        """Catches: load idiom regression. A user who enabled it
+        previously must see the checkbox checked when they reopen."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"auto_select_enabled": True}},
+        })
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+        assert dlg._auto_select_check.isChecked() is True
+
+    def test_toggle_persists_to_disk_immediately(self, qapp, tmp_path):
+        """Catches: save not wired, or save() not called. The toggle
+        signal MUST write through to disk on each change — without
+        this the user toggles the setting, closes the dialog without
+        starting a scan, reopens, and sees the toggle reverted."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+
+        dlg._auto_select_check.setChecked(True)
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert saved["ui"]["scan_dialog"]["auto_select_enabled"] is True
+
+        dlg._auto_select_check.setChecked(False)
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert saved["ui"]["scan_dialog"]["auto_select_enabled"] is False
+
+    def test_state_round_trips_across_dialog_instances(self, qapp, tmp_path):
+        """Catches: toggle saves but next dialog instance doesn't read
+        it back. End-to-end round trip — exactly what the user sees:
+        toggle on, close, reopen, expect on. Independent of the two
+        narrower load/save tests above so a regression in the wiring
+        between them still fails this case."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        # First dialog: toggle on.
+        dlg1 = ScanDialog(JsonSettings(settings_path))
+        assert dlg1._auto_select_check.isChecked() is False
+        dlg1._auto_select_check.setChecked(True)
+        # Second dialog (fresh JsonSettings on the same file): reads back.
+        dlg2 = ScanDialog(JsonSettings(settings_path))
+        assert dlg2._auto_select_check.isChecked() is True
+
+
+# ---------------------------------------------------------------------------
 # _build_sources (label auto-generation)
 # ---------------------------------------------------------------------------
 

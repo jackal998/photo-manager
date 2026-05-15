@@ -137,8 +137,13 @@ The PySide6 desktop app is the primary interface. Launch it with `run.bat`.
      subdirectories; unticked scans only the immediate folder.
    - Use **×** to remove a source; **Remove All** to clear the list.
 2. Set the **Save manifest to** path (defaults to `migration_manifest.sqlite`).
-3. Click **Start Scan**. Progress is streamed to the log pane.
-4. When the scan finishes, click **Close & Load** — the manifest loads
+3. *(Optional)* Expand **Advanced settings** and tick **Auto select after
+   scan** to have the highest-scoring file in each duplicate group marked
+   `action="KEEP"` automatically when the scan finishes (#212). Other
+   duplicates stay un-decided so deletions still require your explicit
+   confirmation. The setting persists across sessions.
+4. Click **Start Scan**. Progress is streamed to the log pane.
+5. When the scan finishes, click **Close & Load** — the manifest loads
    directly into the review tree.
 
 Source paths are persisted to `settings.json` (`sources.list`) between sessions.
