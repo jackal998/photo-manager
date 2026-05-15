@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Literal
 
 from loguru import logger
 
 from core.models import PhotoGroup, PhotoRecord
 from core.services.sort_service import SortService
+
+# Mode values for the #165 prototype. ``review`` is today's behaviour;
+# ``execute`` exposes the destructive surface (banner + Execute button)
+# while reusing the same tree + preview. Kept as a string Literal (not
+# an Enum) so external tooling, settings dumps, and qa scenarios can
+# read it without importing this module.
+Mode = Literal["review", "execute"]
 
 
 class MainVM:
@@ -24,6 +32,17 @@ class MainVM:
         self._sorter = sorter or SortService()
         self._default_sort = default_sort or []
         self.groups: list[PhotoGroup] = []
+        # #165 — review/execute mode lives on the VM rather than the
+        # window so it survives the main-window rebuild used by the
+        # live language switch. Defaults to ``review`` on every fresh
+        # VM and is reset on every ``load_from_repo`` — a destructive
+        # mode should never persist silently across manifest reloads.
+        self.mode: Mode = "review"
+        # #165 — accumulates paths the user has marked "remove from list"
+        # during this manifest session. Previously a dialog-instance
+        # field on ExecuteActionDialog; lives here now because both
+        # modes (and the post-execute refresh) read from it.
+        self.removed_from_list_paths: list[str] = []
 
     def load_from_repo(self, repo, path: str) -> None:
         """Load from a repository (e.g. ManifestRepository).
@@ -35,6 +54,12 @@ class MainVM:
         self._manifest_path = path
         items: list[PhotoRecord] = list(repo.load(path))
         self._group_records(items)
+        # Reset mode + removed-from-list bookkeeping on every load. The
+        # user explicitly picks Execute mode against the manifest in
+        # front of them; carrying it forward into a freshly-loaded
+        # manifest would be a footgun.
+        self.mode = "review"
+        self.removed_from_list_paths = []
 
     def _group_records(self, items: list[PhotoRecord]) -> None:
         grouped: dict[int, list[PhotoRecord]] = defaultdict(list)

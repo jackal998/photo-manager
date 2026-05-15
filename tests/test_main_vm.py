@@ -265,6 +265,55 @@ class TestPendingDecisionCount:
         assert vm.pending_decision_count == 2
 
 
+# ── Mode state + removed_from_list_paths (#165 — option B prototype) ──────
+
+
+class TestModeState:
+    """The mode flag drives the #165 Execute Mode prototype. Default
+    is ``"review"``; the user toggles via the View menu or Ctrl+E.
+    A manifest reload always returns the user to Review — a
+    destructive surface should never auto-engage."""
+
+    def test_defaults_to_review_on_fresh_vm(self):
+        vm = MainVM()
+        assert vm.mode == "review"
+
+    def test_load_from_repo_resets_to_review(self):
+        vm = MainVM()
+        vm.mode = "execute"
+        # Reloading a manifest with the user in Execute mode must
+        # snap them back to Review — they should re-engage Execute
+        # explicitly against the freshly-loaded manifest.
+        repo = _mock_repo(_rec("/a.jpg", 1))
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        assert vm.mode == "review"
+
+    def test_mode_setter_accepts_execute(self):
+        """No validation guard — Literal is documentation only."""
+        vm = MainVM()
+        vm.mode = "execute"
+        assert vm.mode == "execute"
+
+
+class TestRemovedFromListPaths:
+    """Moved off ExecuteActionDialog as part of #165 — the list spans
+    both modes now, so it belongs on the VM."""
+
+    def test_defaults_empty(self):
+        vm = MainVM()
+        assert vm.removed_from_list_paths == []
+
+    def test_load_from_repo_clears(self):
+        vm = MainVM()
+        vm.removed_from_list_paths = ["/stale.jpg"]
+        repo = _mock_repo(_rec("/a.jpg", 1))
+        vm.load_from_repo(repo, "/manifest.sqlite")
+        # Carrying paths forward into a freshly-loaded manifest is a
+        # bug class — the strings would refer to a different on-disk
+        # state. Always reset alongside the mode.
+        assert vm.removed_from_list_paths == []
+
+
 # ── Within-group score-DESC default sort (#187 — PR 5) ─────────────────────
 
 
