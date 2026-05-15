@@ -103,8 +103,8 @@ class ManifestRow:
 
     source_path: str
     source_label: str
-    dest_path: Optional[str]   # relative path under dest root; None if SKIP/UNDATED
-    action: str                # KEEP | MOVE | SKIP | REVIEW_DUPLICATE | UNDATED
+    dest_path: Optional[str]   # relative path under dest root; None if UNDATED
+    action: str                # KEEP | MOVE | EXACT | REVIEW_DUPLICATE | UNDATED
     source_hash: str
     phash: Optional[str]
     hamming_distance: Optional[int]

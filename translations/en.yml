@@ -96,7 +96,7 @@ decision:
 # ScanDialog and its inner panels.
 scan_dialog:
   title: "Scan Sources"
-  notice: "Read-only scan — no files are moved or deleted. MOVE / SKIP in the log are planned actions stored in the manifest only."
+  notice: "Read-only scan — no files are moved or deleted."
   browse_group: "Browse source folders:"
   path_label: "Path:"
   path_placeholder: "Paste or type an absolute folder path…"

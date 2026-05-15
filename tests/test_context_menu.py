@@ -44,7 +44,7 @@ class TestSettableDecisions:
     def test_no_scanner_actions_in_settable_values(self):
         from app.views.constants import settable_decisions
         _SETTABLE_DECISIONS = settable_decisions()
-        scanner_actions = {"EXACT", "REVIEW_DUPLICATE", "MOVE", "KEEP", "UNDATED", "SKIP"}
+        scanner_actions = {"EXACT", "REVIEW_DUPLICATE", "MOVE", "KEEP", "UNDATED"}
         values = {v for _, v in _SETTABLE_DECISIONS}
         assert not scanner_actions.intersection(values)
 

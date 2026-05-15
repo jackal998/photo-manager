@@ -78,7 +78,7 @@ decision:
 
 scan_dialog:
   title: "掃描來源"
-  notice: "唯讀掃描 — 不會搬移或刪除任何檔案。紀錄中的 MOVE / SKIP 僅為預定動作,儲存於清單檔內。"
+  notice: "唯讀掃描 — 不會搬移或刪除任何檔案。"
   browse_group: "瀏覽來源資料夾:"
   path_label: "路徑:"
   path_placeholder: "貼上或輸入絕對資料夾路徑…"

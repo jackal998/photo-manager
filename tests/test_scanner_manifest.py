@@ -55,7 +55,7 @@ class TestWriteManifest:
         out = tmp_path / "manifest.sqlite"
         rows = [
             _row("/a/img1.jpg", "MOVE", dest_path="/dest/img1.jpg"),
-            _row("/a/img2.jpg", "SKIP", duplicate_of="/a/img1.jpg", reason="EXACT_DUPLICATE"),
+            _row("/a/img2.jpg", "REVIEW_DUPLICATE", duplicate_of="/a/img1.jpg", reason="EXACT_DUPLICATE"),
         ]
         write_manifest(rows, out)
         with sqlite3.connect(out) as conn:
@@ -74,7 +74,7 @@ class TestWriteManifest:
         out = tmp_path / "manifest.sqlite"
         write_manifest([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], out)
         gc.collect()  # release Windows file lock from the first connection
-        write_manifest([_row("/b.jpg", "SKIP")], out)
+        write_manifest([_row("/b.jpg", "REVIEW_DUPLICATE")], out)
         gc.collect()
         with sqlite3.connect(out) as conn:
             count = conn.execute("SELECT COUNT(*) FROM migration_manifest").fetchone()[0]
