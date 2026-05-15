@@ -11,7 +11,7 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. SCAN (photo-manager)                                                    │
-│     GUI: File > Scan Sources…  —or—  CLI: python scan.py …                  │
+│     GUI: File > Scan Sources…                                               │
 │     Walks any number of source folders, hashes every file,                  │
 │     writes  migration_manifest.sqlite                                       │
 │                                                                             │
@@ -22,8 +22,6 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 │       Right-click a file → Set Action → delete / keep                       │
 │       Action > Set Action by Field/Regex… → regex batch across any column   │
 │     File > Save Manifest Decisions… persists decisions to the manifest      │
-│                                                                             │
-│     CLI alternative: python review.py … for REVIEW_DUPLICATE triage         │
 │                                                                             │
 │  3. EXECUTE (photo-manager)                                                 │
 │     Action > Execute Action…  opens a full tree review (same columns as     │
@@ -211,49 +209,6 @@ immediately before execution.
 
 ---
 
-## Usage — CLI
-
-### `scan.py` — Deduplication scanner
-
-```powershell
-# Full recursive scan (sources listed in priority order)
-python scan.py `
-  --source photos="\\NAS\Photos\MobileBackup" `
-  --source archive="D:\Archive" `
-  --output migration_manifest.sqlite
-
-# Mix recursive + flat (non-recursive) sources
-python scan.py `
-  --source archive="D:\Archive" `
-  --source-flat inbox="D:\Inbox" `
-  --output migration_manifest.sqlite
-
-# Bounded debug run — stops after 200 files per source
-python scan.py ... --limit 200
-
-# Dry run — prints summary, does not write a manifest
-python scan.py ... --dry-run
-
-# Tighter near-duplicate threshold (default: 10 Hamming bits)
-python scan.py ... --similarity-threshold 6
-```
-
-### `review.py` — Near-duplicate review CLI
-
-Interactive terminal triage for `REVIEW_DUPLICATE` rows.
-
-```powershell
-python review.py --manifest migration_manifest.sqlite
-
-# Include rows already resolved in a previous session
-python review.py --manifest migration_manifest.sqlite --show-all
-```
-
-Per-pair choices: **[s]** skip candidate · **[k]** keep both · **[d]** defer  
-Decisions persist immediately — the session is resumable at any time.
-
----
-
 ## Classification rules
 
 | Condition | Action |
@@ -409,8 +364,6 @@ stays responsive while the manifest opens.
 photo-manager/
 ├── run.bat                  # Launch GUI (activates .venv automatically)
 ├── main.py                  # PySide6 GUI entry point
-├── scan.py                  # Deduplication scanner CLI
-├── review.py                # REVIEW_DUPLICATE triage CLI
 ├── run_all_linters.py       # Runs Black, isort, Ruff, Pylint in sequence
 │
 ├── scanner/                 # Scanner engine (no Qt dependency)
@@ -485,7 +438,6 @@ photo-manager/
     ├── test_dedup.py
     ├── test_hasher.py
     ├── test_walker.py
-    ├── test_review.py
     ├── test_manifest_repository.py
     ├── test_settings.py
     ├── test_utils.py
