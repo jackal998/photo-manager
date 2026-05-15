@@ -155,6 +155,14 @@ ALL_SCENARIOS = [
     # their decisions intact (executed=0). Destructive like s13 —
     # 2 files per run go to the recycle bin.
     "s44_execute_highlighted_rows",
+    # s45 (#121) — column-header sort flow + in-memory sort
+    # preservation across manifest reload. Clicks File Name + Size
+    # (Bytes) column headers, asserts the displayed row order toggles
+    # ASC ↔ DESC via a new y-filter-free read helper (avoids the
+    # read_result_rows y_min=600 trap on the smaller windows-latest
+    # render), then triggers File → Open Manifest on the same path
+    # and asserts the sort survives. Non-destructive.
+    "s45_sort_persistence",
     # s47 (#214) — column layout (visual order + widths) persists
     # across launches. Owns its own re-launch mid-scenario (mirrors
     # s39's lifecycle for window geometry, which has the same
