@@ -41,6 +41,10 @@ menu:
     open_delete_directory: "Open Delete Log Directory"
   view:
     title: "&View"
+    # #165 prototype — Execute Mode toggle. Lives on View because it's
+    # a window-state switch, not an action. Ctrl+E is the canonical
+    # shortcut.
+    execute_mode: "Execute Mode"
     language:
       title: "Language"
 
@@ -52,6 +56,12 @@ main_window:
   empty_state_open_button: "Open Manifest…"
   status_loaded: "Loaded manifest: {parts}"
   load_error_title: "Load Manifest Error"
+  # #165 prototype — Execute Mode signals. Suffix is appended to the
+  # window title so the destructive mode is obvious from the title
+  # bar; banner + button text live above the tree.
+  execute_mode_title_suffix: " — Execute Mode"
+  execute_button: "Execute…"
+  warning_complete_groups: "⚠ Group(s) {groups} will have ALL files deleted. Review decisions below before clicking Execute."
   discard_pending_title: "Discard pending decisions?"
   discard_pending_body: |
     You have {pending} on the loaded manifest.
