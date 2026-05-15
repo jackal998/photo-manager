@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from PySide6.QtCore import QSortFilterProxyModel, Qt
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtGui import QBrush, QColor, QStandardItem, QStandardItemModel
 
 from app.views.constants import (
     COL_ACTION,
@@ -121,12 +121,30 @@ def _score_display(score: float | None) -> str:
     return f"{score:.2f}"
 
 
+# #165 prototype — foreground brush for undecided rows in Execute mode.
+# Mid-grey so the row stays readable (text + path visible) but visibly
+# distinct from decided rows. Stamped on every cell when
+# ``grey_undecided=True`` and the record's ``user_decision`` is empty.
+_UNDECIDED_FG = QBrush(QColor(150, 150, 150))
+
+
 def build_model(
     groups: Iterable[object],
+    grey_undecided: bool = False,
 ) -> tuple[QStandardItemModel, QSortFilterProxyModel | None]:
     """Builds the tree model and a proxy for sorting with roles.
 
     Returns (model, proxy). Proxy can be None on failure.
+
+    Args:
+        groups: Iterable of group objects with ``items`` and
+            ``group_number``.
+        grey_undecided: When True, file rows whose ``user_decision``
+            is empty get a mid-grey ``Qt.ForegroundRole`` brush on
+            every cell. Used by the #165 Execute-mode prototype so
+            the user sees at a glance which rows still need a
+            decision. Default False keeps the existing Review-mode
+            rendering untouched.
     """
     model = QStandardItemModel()
     model.setHorizontalHeaderLabels(headers())
@@ -357,6 +375,14 @@ def build_model(
 
             for it in child_row:
                 it.setEditable(False)
+            # #165 prototype — grey undecided file rows in Execute mode.
+            # We stamp a foreground brush on every cell of the child row
+            # rather than only COL_NAME because Qt renders each cell with
+            # its own foreground; selectively colouring one column would
+            # produce a half-grey row.
+            if grey_undecided and not item_decision:
+                for it in child_row:
+                    it.setForeground(_UNDECIDED_FG)
             group_item.appendRow(child_row)
 
     # Install proxy for numeric/text sort with roles

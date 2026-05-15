@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QMainWindow, QMenuBar, QMessageBox
 
 from infrastructure.i18n import get_translator, t
@@ -13,11 +13,14 @@ from infrastructure.i18n import get_translator, t
 # Actions that are only meaningful with a manifest loaded. Both the
 # scan-then-load path (main_window) and the Open-Manifest path
 # (file_operations) flip these together so users see the same enabled set
-# regardless of how the manifest was acquired.
+# regardless of how the manifest was acquired. ``execute_mode`` is the
+# #165-prototype toggle — a destructive surface should stay greyed-out
+# until there's something to act on.
 MANIFEST_ACTIONS: tuple[str, ...] = (
     "save_manifest",
     "execute_action",
     "remove_from_list",
+    "execute_mode",
 )
 
 
@@ -76,6 +79,18 @@ class MenuController:
 
         # View Menu — Alt+V
         view_menu = menubar.addMenu(t("menu.view.title"))
+        # #165 prototype — Execute Mode toggle. Checkable so the menu
+        # entry itself acts as the active-mode indicator (no separate
+        # status pill needed for the prototype). Ctrl+E is the canonical
+        # shortcut from the issue's open-questions list. Disabled until
+        # a manifest loads (gated by MANIFEST_ACTIONS).
+        self.actions["execute_mode"] = view_menu.addAction(
+            t("menu.view.execute_mode")
+        )
+        self.actions["execute_mode"].setCheckable(True)
+        self.actions["execute_mode"].setShortcut(QKeySequence("Ctrl+E"))
+        self.actions["execute_mode"].setEnabled(False)
+        view_menu.addSeparator()
         language_menu = view_menu.addMenu(t("menu.view.language.title"))
         translator = get_translator()
         current = translator.locale

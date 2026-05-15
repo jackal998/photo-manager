@@ -30,6 +30,9 @@ menu:
     open_delete_directory: "開啟刪除紀錄資料夾"
   view:
     title: "檢視(&V)"
+    # #165 prototype — strings added under the prototype brief.
+    # Translation may need polish before merge.
+    execute_mode: "執行模式"
     language:
       title: "語言"
 
@@ -41,6 +44,11 @@ main_window:
   empty_state_open_button: "開啟清單檔…"
   status_loaded: "已載入清單:{parts}"
   load_error_title: "載入清單錯誤"
+  # #165 prototype — strings added under the prototype brief.
+  # Translation may need polish before merge.
+  execute_mode_title_suffix: " — 執行模式"
+  execute_button: "執行…"
+  warning_complete_groups: "⚠ 群組 {groups} 將會刪除全部檔案。請在按下「執行」前再次確認下方的決策。"
   discard_pending_title: "捨棄未儲存的決策?"
   discard_pending_body: |
     目前載入的清單上有 {pending} 尚未儲存。
