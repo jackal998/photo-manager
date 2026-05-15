@@ -30,6 +30,11 @@ Catches drift in:
   - The complete-group confirm NOT firing when scope is partial (the
     confirm copy claims "EVERY file deleted" which is false when only
     part of the group is in scope).
+
+Click coordinates are read live from UIA ``TreeItem.rectangle()`` rather
+than hard-coded pixel offsets (#229). The previous ``top+83 / top+105``
+anchors were tuned at 1x DPI; at 2x DPI the first click landed on the
+group header and only one file made it into the execute scope.
 """
 from __future__ import annotations
 
@@ -127,18 +132,47 @@ def _regen_fixture() -> list[Path]:
     return paths
 
 
-def _file_row_y(tree_rect, row_index: int) -> int:
-    """Return screen Y for the middle of the Nth (0-based) file row
-    inside the Execute Action dialog's tree.
+def _file_row_centers(tree) -> list[tuple[int, int]]:
+    """Return ``(cx, cy)`` screen-pixel centers of each file row in the
+    dialog tree, in visual order.
 
-    Anchored to s30's empirically-tuned value of ``top + 105`` for the
-    second file row (the 30/25/22-px layout sketch in s30's comment
-    underestimates the real header + group-row height on real DPI).
-    Working back: second file row ≈ top + 105, first file row ≈ 83,
-    Nth file row ≈ 83 + 22*N. The 22 px row pitch is robust across
-    DPI scaling within this DPI range.
+    Reads UIA TreeItem rectangles straight from accessibility, so coords
+    are correct at any DPI (#229: the previous hard-coded ``top+83/+105``
+    anchors were tuned at 1x DPI and missed the file rows at 2x — the
+    first click landed on the group header, so only one file made it
+    into the execute scope).
+
+    The dialog's QTreeView exposes one TreeItem per CELL (column), so
+    each visual row appears as ~``NUM_COLUMNS`` siblings sharing one Y
+    band. We cluster by ``rect.top``, skip the cluster whose leftmost
+    cell carries a "Group N" label (the group header is not a file row),
+    and return the remaining bands' centers.
     """
-    return tree_rect.top + 83 + 22 * row_index
+    by_y: dict[int, list] = {}
+    for it in tree.descendants(control_type="TreeItem"):
+        try:
+            r = it.rectangle()
+        except Exception:
+            continue
+        by_y.setdefault(r.top, []).append(it)
+    rows: list[tuple[int, int]] = []
+    for y_top in sorted(by_y):
+        cells = by_y[y_top]
+        if not cells:
+            continue
+        leftmost = min(cells, key=lambda c: c.rectangle().left)
+        rightmost = max(cells, key=lambda c: c.rectangle().right)
+        leftmost_text = (leftmost.window_text() or "").strip()
+        # Group header row carries "Group N" in its first cell; file rows
+        # carry similarity ("Ref" or "94%") or are blank.
+        if leftmost_text.lower().startswith("group "):
+            continue
+        lr = leftmost.rectangle()
+        rr = rightmost.rectangle()
+        cx = (lr.left + rr.right) // 2
+        cy = (lr.top + lr.bottom) // 2
+        rows.append((cx, cy))
+    return rows
 
 
 def _read_manifest_rows() -> list[tuple[str, str, int]]:
@@ -191,19 +225,25 @@ def main() -> int:
     print("step: locate_dialog_tree")
     tree = exec_dlg.descendants(control_type="Tree")[0]
     tree_rect = tree.rectangle()
-    cx = tree_rect.left + (tree_rect.right - tree_rect.left) // 2
-    row0_y = _file_row_y(tree_rect, 0)
-    row1_y = _file_row_y(tree_rect, 1)
+    file_rows = _file_row_centers(tree)
     print(f"  tree_rect={tree_rect}")
-    print(f"  click_coords_row0=({cx},{row0_y}) row1=({cx},{row1_y})")
+    print(f"  file_row_count_in_tree={len(file_rows)}")
+    if len(file_rows) < 2:
+        print(
+            f"FAIL: dialog tree exposed {len(file_rows)} file row(s) via UIA; "
+            f"need ≥2 to highlight two rows"
+        )
+        return 1
+    (row0_cx, row0_y), (row1_cx, row1_y) = file_rows[0], file_rows[1]
+    print(f"  click_coords_row0=({row0_cx},{row0_y}) row1=({row1_cx},{row1_y})")
 
     print("step: highlight_two_file_rows")
     _uia._focus(exec_dlg)
-    pywinauto.mouse.click(button="left", coords=(cx, row0_y))
+    pywinauto.mouse.click(button="left", coords=(row0_cx, row0_y))
     time.sleep(0.2)
     _uia._key_down(_uia._VK_CONTROL)
     try:
-        pywinauto.mouse.click(button="left", coords=(cx, row1_y))
+        pywinauto.mouse.click(button="left", coords=(row1_cx, row1_y))
     finally:
         _uia._key_up(_uia._VK_CONTROL)
     time.sleep(0.3)

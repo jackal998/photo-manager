@@ -1307,6 +1307,24 @@ class TestExecuteHighlightedRows:
             assert idx.isValid(), f"file row for {p!r} not in tree"
             sel.select(idx, QItemSelectionModel.Select | QItemSelectionModel.Rows)
 
+    @staticmethod
+    def _select_cells_like_real_clicks(dlg, paths: list[str]) -> None:
+        """Mimic the per-cell selection state produced by real mouse
+        clicks under ``ExtendedSelection`` (one cell selected per click,
+        not a whole row). The first click left-selects the COL_NAME cell
+        of the first path; each subsequent path is ctrl-added. This is
+        the scenario that broke #229 — ``_selected_file_paths`` walks
+        ``selectedIndexes()`` and must extract a path from each row even
+        when only one cell of the row is in the selection model.
+        """
+        from PySide6.QtCore import QItemSelectionModel
+        sel = dlg._tree.selectionModel()
+        sel.clear()
+        for p in paths:
+            idx = TestExecuteHighlightedRows._find_file_index(dlg, p)
+            assert idx.isValid(), f"file row for {p!r} not in tree"
+            sel.select(idx, QItemSelectionModel.Select)
+
     # — button label —
 
     def test_button_label_default_when_no_selection(self, qapp):
@@ -1379,6 +1397,61 @@ class TestExecuteHighlightedRows:
         assert deleted == ["/del.jpg"]
         assert "/keep.jpg" not in dlg.executed_paths
         assert "/other_del.jpg" not in deleted
+
+    def test_two_highlighted_paths_in_same_group_both_execute(self, qapp):
+        """#229 regression: ctrl-clicking 2 rows in the same group must
+        result in BOTH files being passed to ``_delete_file``. Uses the
+        single-cell selection state that real mouse clicks produce under
+        ``ExtendedSelection``, which is what surfaces the bug — selecting
+        whole rows via ``Select | Rows`` masks it.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/del1.jpg", "delete"),
+            _rec("/keep.jpg", "keep"),
+            _rec("/del2.jpg", "delete"),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_cells_like_real_clicks(dlg, ["/del1.jpg", "/del2.jpg"])
+
+        deleted: list[str] = []
+        with patch.object(dlg, "_delete_file", side_effect=deleted.append):
+            dlg._on_execute_requested()
+
+        assert set(deleted) == {"/del1.jpg", "/del2.jpg"}
+        assert "/keep.jpg" not in dlg.executed_paths
+
+    def test_two_highlighted_paths_across_groups_both_execute(self, qapp):
+        """#229 regression: ctrl-clicking one row from each of two groups
+        must delete BOTH. Mirrors the same single-cell selection state as
+        the same-group case but exercises the cross-group path through
+        the execute loop.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [
+            _group(
+                _rec("/g1_del.jpg", "delete"),
+                _rec("/g1_keep.jpg", "keep"),
+                number=1,
+            ),
+            _group(
+                _rec("/g2_del.jpg", "delete"),
+                _rec("/g2_keep.jpg", "keep"),
+                number=2,
+            ),
+        ]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        self._select_cells_like_real_clicks(dlg, ["/g1_del.jpg", "/g2_del.jpg"])
+
+        deleted: list[str] = []
+        with patch.object(dlg, "_delete_file", side_effect=deleted.append):
+            dlg._on_execute_requested()
+
+        assert set(deleted) == {"/g1_del.jpg", "/g2_del.jpg"}
+        # The non-highlighted keep rows are out of scope and should not
+        # land in executed_paths either.
+        assert "/g1_keep.jpg" not in dlg.executed_paths
+        assert "/g2_keep.jpg" not in dlg.executed_paths
 
     def test_no_selection_executes_all_decided_rows(self, qapp):
         from PySide6.QtWidgets import QMessageBox as _QMB
