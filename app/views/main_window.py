@@ -47,27 +47,8 @@ from app.views.window_state import (
     save_widget_geometry,
     window_state_qsettings,
 )
+from app.views.execute_mode_helpers import complete_delete_group_numbers
 from infrastructure.i18n import t
-
-
-def _complete_delete_group_numbers(groups: list) -> list[int]:
-    """Return the group_numbers whose every file row is decided ``delete``.
-
-    Lifted as a free function from
-    ``ExecuteActionDialog._complete_delete_groups`` so the
-    #165 Execute-mode banner can recompute the same value without
-    instantiating the dialog. Empty groups (no items) are skipped —
-    they wouldn't trigger a destructive op anyway and would otherwise
-    register as "all items deleted" against an empty set.
-    """
-    result: list[int] = []
-    for group in groups or []:
-        items = getattr(group, "items", [])
-        if not items:
-            continue
-        if all(getattr(rec, "user_decision", "") == "delete" for rec in items):
-            result.append(int(getattr(group, "group_number", 0)))
-    return sorted(result)
 
 
 class MainWindow(QMainWindow):
@@ -661,7 +642,7 @@ class MainWindow(QMainWindow):
         # 3. Banner — visible only when in Execute mode AND there's at
         #    least one group whose every row is decided as delete.
         if hasattr(self, "_warning_banner"):
-            complete = _complete_delete_group_numbers(self._vm.groups)
+            complete = complete_delete_group_numbers(self._vm.groups)
             if is_execute and complete:
                 group_list = ", ".join(str(g) for g in complete)
                 self._warning_label.setText(
