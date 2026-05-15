@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -431,6 +432,93 @@ def read_result_rows(win: UIAWrapper, y_min: int = 600) -> list[GroupedRow]:
         cells = tuple(t for _, t in sorted(by_row[y]))
         out.append(GroupedRow(y=y, cells=cells))
     return out
+
+
+# Basename regex used by read_tree_row_order to pick the file-name cell out
+# of each tree row. Listed extensions are the formats photo-manager scans
+# (see ``scanner/media_extract.py``). Case-insensitive; no leading dot.
+_BASENAME_RE = re.compile(
+    r"^[^/\\]+\.(jpg|jpeg|png|gif|bmp|tif|tiff|heic|heif|webp|"
+    r"raw|cr2|nef|arw|dng|orf|rw2|mp4|mov|m4v|avi|mkv)$",
+    re.IGNORECASE,
+)
+
+
+def read_tree_row_order(win: UIAWrapper) -> list[str]:
+    """Return basenames of file rows in display (top-to-bottom) order.
+
+    Unlike ``read_result_rows``, this helper does NOT y-filter — the
+    windows-latest CI runner renders the main window smaller, every
+    TreeItem's ``top < 600``, and ``read_result_rows`` silently returns
+    ``[]`` on CI. This helper walks raw ``TreeItem`` descendants,
+    clusters by a 30-px Y-bucket, and returns the cell that matches
+    :data:`_BASENAME_RE` for each row.
+
+    Group-header rows (whose text starts with ``"Group "``) have no
+    basename cell and are skipped — the returned list contains only
+    file rows, in the order Qt is currently displaying them. This is
+    the right oracle for sort-state assertions: it's what the user
+    sees, not what's in the database.
+    """
+    items = win.descendants(control_type="TreeItem")
+    by_row: dict[int, list[tuple[int, str]]] = {}
+    for it in items:
+        try:
+            txt = (it.window_text() or "").strip()
+            if not txt:
+                continue
+            r = it.rectangle()
+            key = r.top // 30 * 30   # 30-px row-height bucket
+            by_row.setdefault(key, []).append((r.left, txt))
+        except Exception:
+            continue
+    out: list[str] = []
+    for y in sorted(by_row):
+        # Sort cells left-to-right; pick the first that looks like a
+        # media filename. There's exactly one such cell per file row
+        # (the File Name column).
+        for _, t in sorted(by_row[y]):
+            if _BASENAME_RE.match(t):
+                out.append(t)
+                break
+    return out
+
+
+def click_column_header(win: UIAWrapper, header_text: str) -> None:
+    """Click the result-tree column header whose label equals ``header_text``.
+
+    PySide6's QTreeView exposes each section as its own top-level
+    ``Header`` control (the same shape s47 relies on for width probes
+    — see ``s47_column_layout_persist._column_width``). We find the
+    section by visible ``window_text`` and click its centre via
+    ``click_input``. ``invoke()`` doesn't work on header sections —
+    they're not invokable patterns; the click reaches Qt through
+    ``QHeaderView.mousePressEvent`` which is what fires
+    ``sectionClicked`` and ultimately ``MainWindow._on_header_clicked``.
+
+    Raises ``RuntimeError`` with the full list of visible header
+    labels when no match is found, mirroring s47's diagnostic so
+    label drift surfaces immediately on CI rather than as a confusing
+    "click did nothing" symptom.
+    """
+    for h in win.descendants(control_type="Header"):
+        try:
+            if not h.is_visible():
+                continue
+            if (h.window_text() or "").strip() == header_text:
+                h.click_input()
+                return
+        except Exception:
+            continue
+    seen: list[str] = []
+    for h in win.descendants(control_type="Header"):
+        try:
+            seen.append((h.window_text() or "").strip())
+        except Exception:
+            seen.append("<err>")
+    raise RuntimeError(
+        f"Header section {header_text!r} not found; saw: {seen!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
