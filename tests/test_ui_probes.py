@@ -77,17 +77,12 @@ def _show_action_dialog_ast() -> ast.FunctionDef:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#238 — Score and Resolution not yet in dialog dropdown. "
-           "Remove this marker when #238 lands.",
-)
 def test_probe_select_dialog_exposes_every_filterable_tree_column():
     """Every filterable tree column must appear in the Select dialog's
     field dropdown.
 
-    Catches: #238 (Score, Resolution missing from dialog despite being
-    visible as tree columns).
+    Forward-defensive against #238 recurring: if a new tree column lands
+    without being added to the dialog's field list, the probe flags it.
     """
     fn = _show_action_dialog_ast()
     # The fields list is a literal in show_action_dialog: locate the

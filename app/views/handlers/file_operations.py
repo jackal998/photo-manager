@@ -30,6 +30,12 @@ from infrastructure.i18n import t
 MANIFEST_FILE_FILTER = "SQLite Files (*.sqlite *.db);;All Files (*)"
 
 # Maps SelectDialog field names → PhotoRecord attribute names.
+# Resolution is a composite of pixel_width × pixel_height — the attr
+# mapping below points at pixel_width as a placeholder so the dict
+# lookup succeeds; the actual rendering is handled inline in
+# _get_record_field. Score's numeric ranking goes through the
+# numeric-condition panel (`_numeric_value_for`); the mapping below
+# is only consulted on the regex fallback path. #238.
 _FIELD_TO_ATTR: dict[str, str] = {
     "File Name":     "file_path",      # basename extracted in _get_record_field
     "Folder":        "folder_path",
@@ -38,6 +44,8 @@ _FIELD_TO_ATTR: dict[str, str] = {
     "Size (Bytes)":  "file_size_bytes",
     "Creation Date": "creation_date",
     "Shot Date":     "shot_date",
+    "Score":         "score",          # float ∈ [0, 1]; None for passenger MOVs (#238)
+    "Resolution":    "pixel_width",    # placeholder; rendered as "WxH" in _get_record_field (#238)
 }
 
 
@@ -50,12 +58,25 @@ def _get_record_field(rec: Any, field: str) -> str | None:
     rendered string matches what the COL_LOCK column shows in the tree
     (🔒 glyph for locked, empty for unlocked) — same conceptual values,
     different presentation.
+
+    The ``Resolution`` field formats ``pixel_width × pixel_height``
+    using the same ``×`` (U+00D7) glyph the tree's COL_RESOLUTION cell
+    uses (see ``tree_model_builder.build_model``). Returns None when
+    either dimension is missing — matches the tree's empty-cell
+    rendering for that case. Users regex-match ``^1920×1080$`` style
+    (#238).
     """
     from pathlib import Path
 
     attr = _FIELD_TO_ATTR.get(field)
     if attr is None:
         return None
+    if field == "Resolution":
+        px_w = getattr(rec, "pixel_width", None)
+        px_h = getattr(rec, "pixel_height", None)
+        if not px_w or not px_h:
+            return None
+        return f"{px_w}×{px_h}"
     val = getattr(rec, attr, None)
     if field == "Lock":
         # bool conversion explicitly — getattr can return False which

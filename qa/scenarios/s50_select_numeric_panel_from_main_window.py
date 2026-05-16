@@ -69,6 +69,16 @@ def main() -> int:
 
     # 3. Pick the numeric field. _on_field_changed should swap the
     # regex panel out and the numeric panel in.
+    #
+    # Dropdown completeness for the #238 fields (Score / Lock /
+    # Resolution) is pinned at layer 1 by the static probe
+    # `test_probe_select_dialog_exposes_every_filterable_tree_column`
+    # in tests/test_ui_probes.py. A runtime equivalent here is fragile
+    # because pywinauto's UIA ComboBox.select() only reliably reaches
+    # items inside Qt's default `maxVisibleItems` window (10) — items
+    # past index 9 (Resolution sits at 10 in the new list) can't be
+    # reached without expanding/scrolling the popup, which adds flake.
+    # The static probe is the source of truth.
     print(f"step: select_numeric_field field={SIZE_FIELD!r}")
     field_combo = _uia._find_descendant_by_aid_suffix(
         action_dlg, "ComboBox", ".regexFieldCombo"
