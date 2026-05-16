@@ -367,7 +367,7 @@ soft-probe upgrade path lives if applicable.
 | `test_probe_no_execute_mode_toggle_in_menu` | `menu_controller.py` no longer registers an `execute_mode` action | PASS | Forward-defensive against [#240](https://github.com/jackal998/photo-manager/issues/240) recurring |
 | `test_probe_action_handlers_impl_proxies_every_protocol_method` | Every method on `ActionHandlers` Protocol exists on `ActionHandlersImpl` | PASS | Future #175/#182-class bridge regression |
 | `test_probe_manifest_dependent_menu_actions_are_gated` | Every menu action that requires a loaded manifest is in `MANIFEST_ACTIONS` | XFAIL | [#244](https://github.com/jackal998/photo-manager/issues/244) |
-| `test_probe_zh_tw_translations_are_not_english_passthroughs` | zh_TW values that match en values must contain CJK chars (heuristic; tiny exempt list for product names) | XFAIL | [#245](https://github.com/jackal998/photo-manager/issues/245) |
+| `test_probe_zh_tw_translations_are_not_english_passthroughs` | zh_TW values that match en values must contain CJK chars (heuristic; tiny exempt list for product names) | PASS | Forward-defensive against [#245](https://github.com/jackal998/photo-manager/issues/245) recurring |
 | `s49` `step: verify_visual_selection_of_keeper` (hard live) | After scan-complete with auto-select on, the tree's selection model contains the keeper rows | PASS | Forward-defensive against [#239](https://github.com/jackal998/photo-manager/issues/239) recurring |
 
 When the corresponding bug lands, the static probes flip XFAIL→XPASS-strict
