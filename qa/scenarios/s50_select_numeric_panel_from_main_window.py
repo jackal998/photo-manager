@@ -130,7 +130,105 @@ def main() -> int:
         )
         return 1
 
-    # 5. Close the dialog without applying anything.
+    # 5. #238 — switch to Resolution and assert the panel toggles BACK
+    # to regex. Verifies (a) Resolution is a real selectable field —
+    # the #238 _FIELD_TO_ATTR entry is reachable — and (b) the panel
+    # switch from numeric → text re-surfaces the regex line edit, not
+    # only the numeric → numeric path that Size exercised above.
+    #
+    # Selection mechanics: Resolution sits at index 10 (past Qt's
+    # default maxVisibleItems=10 popup window), so pywinauto's popup-
+    # based .select() can't reach it on CI without scrolling. Qt's
+    # QComboBox ValuePattern SetValue is a silent no-op for non-
+    # editable combos. We use keyboard navigation instead: Qt cycles
+    # through items by first-letter prefix when a non-editable combo
+    # is focused — 'r' is unique among the field labels (only
+    # "Resolution" starts with R), so a single 'r' keystroke lands.
+    print("step: switch_to_resolution_via_keyboard")
+    from pywinauto.keyboard import send_keys
+
+    def _combo_current_text(combo) -> str:
+        """Read a Qt ComboBox's current text via the most reliable
+        method available. ``window_text()`` on UIA returns the widget
+        title (empty for a QComboBox), not the selected item — Qt
+        comboboxes expose the current text on a child Edit-like
+        element, or via the legacy IAccessible value."""
+        # First try LegacyIAccessible value (most reliable for Qt).
+        try:
+            txt = (combo.legacy_properties().get("Value") or "").strip()
+            if txt:
+                return txt
+        except Exception:
+            pass
+        # Then ValuePattern.CurrentValue.
+        try:
+            txt = (combo.iface_value.CurrentValue or "").strip()
+            if txt:
+                return txt
+        except Exception:
+            pass
+        # Last resort: walk children for a Text/Edit cell.
+        try:
+            for c in combo.descendants():
+                t = (c.window_text() or "").strip()
+                if t:
+                    return t
+        except Exception:
+            pass
+        return ""
+
+    pre_text = _combo_current_text(field_combo)
+    print(f"  field_combo.text_before={pre_text!r}")
+
+    # Expand the popup, navigate to End (last item — Resolution), commit.
+    try:
+        field_combo.expand()
+    except Exception:
+        # Fallback if ExpandCollapsePattern isn't reachable — click the
+        # combo's arrow to open the popup.
+        field_combo.click_input()
+    time.sleep(0.3)
+    send_keys("{END}")
+    time.sleep(0.2)
+    send_keys("{ENTER}")
+    time.sleep(0.3)
+    current_text = _combo_current_text(field_combo)
+    print(f"  field_combo.text_after={current_text!r}")
+    if current_text != "Resolution":
+        print(
+            f"FAIL: after expand → End → Enter, the field combo's "
+            f"current text is {current_text!r} (expected 'Resolution'). "
+            f"Resolution is either not the last item or not in the "
+            f"dropdown at all — see #238."
+        )
+        return 1
+
+    print("step: assert_regex_panel_resurfaced")
+    # numericValueEdit must now be HIDDEN (Resolution is a string field,
+    # not in _NUMERIC_FIELDS — the regex panel should be back). Re-find
+    # the widget rather than reusing the earlier reference — UIA may
+    # cache visibility properties on the wrapper.
+    value_edit_after = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "Edit", ".numericValueEdit"
+    )
+    try:
+        nv_visible = (
+            value_edit_after is not None
+            and bool(value_edit_after.is_visible())
+        )
+    except Exception:
+        nv_visible = False
+    print(f"  numericValueEdit.is_visible={nv_visible}")
+    if nv_visible:
+        print(
+            "FAIL: numericValueEdit still visible after switching to "
+            "Resolution — the panel-swap logic in _on_field_changed "
+            "did not fire. See #238 (Resolution must route through "
+            "the regex/Simple panel, not the numeric panel)."
+        )
+        return 1
+
+    # 6. Close the dialog without applying anything.
     print("step: close_dialog_no_apply")
     close_btn = _uia._find_dialog_button(action_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
     close_btn.click_input()
