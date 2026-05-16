@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QSettings
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QSplitter, QWidget
 
 # Stable QSettings keys for every persistable window-/dialog-geometry
 # blob. Changing any of these silently invalidates the round-trip
@@ -33,6 +33,13 @@ QSETTINGS_KEY_MAIN_SPLITTER_STATE = "geometry/main_splitter"
 QSETTINGS_KEY_COLUMN_HEADER_STATE = "geometry/column_header"
 QSETTINGS_KEY_SCAN_DIALOG_GEOM = "geometry/scan_dialog"
 QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM = "geometry/execute_action_dialog"
+# Splitter sizes for the in-dialog tree-vs-preview split (#165). Stored
+# separately from the dialog frame geometry because Qt's saveState blob
+# for a QSplitter and saveGeometry blob for a QWidget are independent;
+# round-tripping each via its own helper keeps the contract obvious.
+QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_SPLITTER_STATE = (
+    "geometry/execute_action_dialog_splitter"
+)
 QSETTINGS_KEY_ACTION_DIALOG_GEOM = "geometry/action_dialog"
 QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM = "geometry/save_manifest_dialog"
 
@@ -124,6 +131,35 @@ def save_widget_geometry(widget: QWidget, key: str) -> None:
     try:
         store = window_state_qsettings()
         store.setValue(key, widget.saveGeometry())
+        store.sync()
+    except Exception:
+        pass
+
+
+def restore_splitter_state(splitter: QSplitter, key: str) -> bool:
+    """Restore ``splitter.saveState()`` bytes saved under ``key``.
+
+    Returns ``True`` when a saved blob existed and was applied,
+    ``False`` when there was no blob or the blob was rejected. Unlike
+    geometry restore there's no off-screen guard — splitter state is a
+    list of pane sizes, not a screen rect.
+    """
+    store = window_state_qsettings()
+    blob = store.value(key)
+    if not blob:
+        return False
+    return bool(splitter.restoreState(blob))
+
+
+def save_splitter_state(splitter: QSplitter, key: str) -> None:
+    """Persist ``splitter.saveState()`` under ``key``.
+
+    Mirrors :func:`save_widget_geometry`: swallow OS-level QSettings
+    failures so a write error never aborts the dialog's close path.
+    """
+    try:
+        store = window_state_qsettings()
+        store.setValue(key, splitter.saveState())
         store.sync()
     except Exception:
         pass

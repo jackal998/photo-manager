@@ -196,6 +196,7 @@ class FileOperationsHandler:
         status_reporter: StatusReporter,
         checked_paths_provider: object | None = None,
         highlighted_items_provider: object | None = None,
+        task_runner: object | None = None,
     ) -> None:
         self.vm = vm
         self.settings = settings
@@ -204,6 +205,11 @@ class FileOperationsHandler:
         self.status_reporter = status_reporter
         self.checked_paths_provider = checked_paths_provider
         self.highlighted_items_provider = highlighted_items_provider
+        # #165 — forwarded into ExecuteActionDialog so its embedded
+        # PreviewPane can request thumbnails via the same runner the
+        # main window uses. Optional for handler-level unit tests that
+        # never reach the dialog.
+        self.task_runner = task_runner
         # Dirty since last load / save / execute. Decisions auto-persist
         # to SQLite, so leaving the app without an explicit Save isn't
         # a data-loss risk; the dirty flag is purely a UX cue for the
@@ -882,6 +888,7 @@ class FileOperationsHandler:
         dlg = ExecuteActionDialog(
             self.vm.groups, manifest_path, self.parent,
             settings=self.settings,
+            task_runner=self.task_runner,
         )
         accepted = dlg.exec() == QDialog.Accepted
         # When the user removed rows via the immediate single-row

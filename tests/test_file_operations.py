@@ -1276,6 +1276,40 @@ class TestEntryPointGuards:
         info.assert_called_once()
         assert "No manifest open" in info.call_args[0][2]
 
+    def test_execute_action_threads_task_runner_to_dialog(self):
+        """#165 — the handler must forward its ``task_runner`` to
+        ``ExecuteActionDialog`` so the dialog's embedded PreviewPane can
+        render previews. Silent drop here would surface as a no-op
+        preview pane in production with no error to trace it back."""
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        runner = MagicMock(name="image_task_runner")
+        vm = SimpleNamespace(
+            groups=[],
+            remove_deleted_and_prune=MagicMock(),
+            remove_from_list=MagicMock(),
+        )
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+            task_runner=runner,
+        )
+        handler._manifest_path = "/tmp/fake.sqlite"
+
+        # Patch the class symbol that file_operations imports lazily
+        # inside execute_action. The dialog instance is mocked so we
+        # don't drive into Qt — we're checking the construction kwargs.
+        with patch(
+            "app.views.dialogs.execute_action_dialog.ExecuteActionDialog"
+        ) as DlgCls:
+            DlgCls.return_value.exec.return_value = 0
+            DlgCls.return_value.removed_from_list_paths = []
+            DlgCls.return_value.deleted_paths = []
+            DlgCls.return_value.executed_paths = []
+            handler.execute_action()
+
+        assert DlgCls.call_args.kwargs["task_runner"] is runner
+
 
 # ── Item 2 — dirty-tracking flag + silent save ─────────────────────────────
 

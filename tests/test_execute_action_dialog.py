@@ -1583,3 +1583,171 @@ class TestExecuteHighlightedRows:
                 dlg._on_execute_requested()
 
         q.assert_called_once()
+
+
+# ── #165 — embedded PreviewPane wiring ─────────────────────────────────────
+
+class TestExecuteDialogPreviewPane:
+    """#165 — when a ``task_runner`` is threaded through the dialog
+    constructor, the tree is wrapped in a horizontal splitter alongside
+    an embedded ``PreviewPane`` and selection changes drive the preview.
+    With no runner (existing default), the dialog must keep the original
+    single-column layout untouched — every pre-#165 caller still works.
+    """
+
+    @staticmethod
+    def _mock_runner():
+        """Return a MagicMock that satisfies ``PreviewPane``'s contract.
+
+        ``PreviewPane.show_single`` may call ``request_single_preview``
+        on the runner; a plain MagicMock will return a Mock for that
+        method call without raising. We don't actually load any images
+        in unit tests — the assertion target is the dialog's wiring,
+        not the runner's behaviour."""
+        from unittest.mock import MagicMock
+        return MagicMock()
+
+    @staticmethod
+    def _find_file_index(dlg, path: str):
+        # Mirrors the helper in TestExecuteHighlightedRows so this
+        # class can stand alone if reordered.
+        from PySide6.QtCore import QModelIndex
+        from app.views.constants import COL_NAME, PATH_ROLE
+        model = dlg._tree.model()
+        if model is None:
+            return QModelIndex()
+        for grow in range(model.rowCount()):
+            gidx = model.index(grow, 0)
+            for frow in range(model.rowCount(gidx)):
+                fidx = model.index(frow, COL_NAME, gidx)
+                if fidx.data(PATH_ROLE) == path:
+                    return fidx
+        return QModelIndex()
+
+    @classmethod
+    def _select(cls, dlg, paths: list[str]) -> None:
+        from PySide6.QtCore import QItemSelectionModel
+        sel = dlg._tree.selectionModel()
+        sel.clear()
+        for p in paths:
+            idx = cls._find_file_index(dlg, p)
+            assert idx.isValid(), f"file row for {p!r} not in tree"
+            sel.select(idx, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+
+    def test_ctor_with_runner_builds_preview_and_splitter(self, qapp):
+        """Threading a runner through the constructor must materialise
+        the preview pane + splitter. The pre-#165 single-column layout
+        only checks for the tree; this catches a regression where the
+        runner was accepted but ignored."""
+        from PySide6.QtWidgets import QSplitter
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.preview_pane import PreviewPane
+
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, task_runner=self._mock_runner()
+        )
+        assert isinstance(dlg._preview, PreviewPane)
+        assert isinstance(dlg._splitter, QSplitter)
+        # Tree must be inside the splitter, not in the root layout, or
+        # the user's resize won't actually change anything.
+        assert dlg._splitter.indexOf(dlg._tree) >= 0
+        assert dlg._splitter.indexOf(dlg._preview) >= 0
+
+    def test_ctor_without_runner_keeps_single_column_layout(self, qapp):
+        """Existing callers that don't pass a runner must still get the
+        pre-#165 layout — no preview, no splitter. Catches the breaking-
+        change-by-default regression that would silently surface a half-
+        built preview pane to callers that have no runner to give it."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert dlg._preview is None
+        assert dlg._splitter is None
+
+    def test_selecting_single_row_calls_show_single_with_path_and_info(self, qapp):
+        """The selection-change handler must call ``preview.show_single``
+        with the row's file path and an info dict that at minimum
+        carries ``name`` and ``folder`` derived from the path. Catches
+        the silent miswiring where the signal connects but the preview
+        never updates because the wrong index is read."""
+        import os
+        from unittest.mock import patch
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        path = "/some/folder/a.jpg"
+        groups = [_group(_rec(path, "delete"))]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, task_runner=self._mock_runner()
+        )
+        with patch.object(dlg._preview, "show_single") as show_single:
+            self._select(dlg, [path])
+        assert show_single.called
+        call_path, call_info = show_single.call_args[0]
+        assert call_path == path
+        assert call_info["name"] == os.path.basename(path)
+        assert call_info["folder"] == os.path.dirname(path)
+
+    def test_selecting_zero_or_multi_rows_clears_preview(self, qapp):
+        """Multi-select would be ambiguous ("which file?"), and empty
+        selection should leave nothing showing. Both must call
+        ``preview.clear()`` rather than leaving stale state."""
+        from unittest.mock import patch
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "delete"))]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, task_runner=self._mock_runner()
+        )
+        # Multi-select → clear (not "first row wins").
+        with patch.object(dlg._preview, "clear") as clear_multi:
+            self._select(dlg, ["/a.jpg", "/b.jpg"])
+        assert clear_multi.called
+        # Empty selection → clear.
+        with patch.object(dlg._preview, "clear") as clear_empty:
+            dlg._tree.selectionModel().clear()
+        assert clear_empty.called
+
+    def test_splitter_state_persists_across_dialog_instances(
+        self, qapp, monkeypatch, tmp_path
+    ):
+        """Open dlg, resize the splitter, close, reopen → divider
+        position must round-trip. The off-screen-guard helpers don't
+        apply to splitter state (no screen rect), so this confirms the
+        save/restore wiring on its own — separate from the dialog's
+        geometry persistence covered in test_window_state.py."""
+        # Isolate QSettings to a tmp INI so the test never touches the
+        # real window_state.ini. Mirrors the isolated_qsettings fixture
+        # in tests/test_window_state.py (anchored at repo root because
+        # PHOTO_MANAGER_HOME is resolved relative to it).
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.window_state import qsettings_path
+        monkeypatch.setenv("PHOTO_MANAGER_HOME", str(tmp_path.name))
+        repo_root = qsettings_path().parent
+        repo_root.mkdir(parents=True, exist_ok=True)
+        ini = qsettings_path()
+        if ini.exists():
+            ini.unlink()
+
+        groups = [_group(_rec("/a.jpg", "delete"))]
+
+        runner = self._mock_runner()
+        dlg_a = ExecuteActionDialog(
+            groups, manifest_path=None, task_runner=runner
+        )
+        # Force a specific divider position then close → triggers save.
+        dlg_a._splitter.setSizes([700, 300])
+        sizes_a = dlg_a._splitter.sizes()
+        dlg_a.done(0)
+
+        dlg_b = ExecuteActionDialog(
+            groups, manifest_path=None, task_runner=runner
+        )
+        sizes_b = dlg_b._splitter.sizes()
+        # Qt may pixel-adjust by 1 for borders; compare with tolerance.
+        assert len(sizes_a) == len(sizes_b) == 2
+        for a, b in zip(sizes_a, sizes_b):
+            assert abs(a - b) <= 2, f"splitter sizes drifted: {sizes_a} → {sizes_b}"
+
+        if ini.exists():
+            ini.unlink()
