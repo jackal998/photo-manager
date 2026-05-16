@@ -189,6 +189,12 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # manifest so the menu item is enabled and ``records_provider``
     # has groups to pass to ActionDialog. Non-destructive.
     "s50_select_numeric_panel_from_main_window": ["qa/sandbox/near-duplicates"],
+    # s51 (#165) — Execute Action dialog now embeds a PreviewPane. Same
+    # near-duplicates fixture as s30/s34/s44: 5 JPEGs in one group is
+    # plenty for opening the dialog, selecting a row, and asserting the
+    # preview surface mounted. Non-destructive — cancels without
+    # executing.
+    "s51_execute_dialog_preview": ["qa/sandbox/near-duplicates"],
 }
 
 

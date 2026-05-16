@@ -191,6 +191,12 @@ ALL_SCENARIOS = [
     # destructive — just probes that the widgets surface after picking
     # a numeric field, then closes the dialog without applying.
     "s50_select_numeric_panel_from_main_window",
+    # s51 (#165) — Execute Action dialog now embeds a PreviewPane via a
+    # horizontal splitter. Non-destructive: opens the dialog with one
+    # row marked 'delete', clicks the row, asserts that the dialog
+    # contains both a tree and a preview pane visible to UIA, then
+    # cancels without executing.
+    "s51_execute_dialog_preview",
 ]
 
 

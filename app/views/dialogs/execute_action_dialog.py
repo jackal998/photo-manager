@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QPushButton,
+    QSplitter,
     QTreeView,
     QVBoxLayout,
 )
@@ -29,10 +30,14 @@ from app.views.constants import (
     UNLOCK_SENTINEL,
     settable_decisions,
 )
+from app.views.preview_pane import PreviewPane
 from app.views.tree_model_builder import build_model
 from app.views.window_state import (
     QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM,
+    QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_SPLITTER_STATE,
+    restore_splitter_state,
     restore_widget_geometry,
+    save_splitter_state,
     save_widget_geometry,
 )
 from infrastructure.i18n import t
@@ -56,6 +61,7 @@ class ExecuteActionDialog(QDialog):
         manifest_path: str | None,
         parent=None,
         settings: object | None = None,
+        task_runner: object | None = None,
     ) -> None:
         super().__init__(parent)
         # settings is optional so existing tests / callers that don't
@@ -64,6 +70,14 @@ class ExecuteActionDialog(QDialog):
         # recent-patterns survive across runs even when reached via
         # the Execute Action route.
         self._settings = settings
+        # task_runner is optional so unit tests that don't need a real
+        # image-loading pipeline can omit it. When absent, the dialog
+        # falls back to the pre-#165 single-column layout — no preview
+        # pane, no splitter. When present, the tree is wrapped in a
+        # horizontal splitter alongside the PreviewPane.
+        self._task_runner = task_runner
+        self._preview: PreviewPane | None = None
+        self._splitter: QSplitter | None = None
         self.setWindowTitle(t("execute_dialog.title"))
         self.setMinimumSize(900, 560)
         # #139 — QDialog.exec() sets WA_ShowModal but leaves windowModality
@@ -93,6 +107,15 @@ class ExecuteActionDialog(QDialog):
         # ``restore_widget_geometry`` falls back to that default when a
         # previously-saved rect would land on a disconnected monitor.
         restore_widget_geometry(self, QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM)
+        # #165 — splitter sizes round-trip independently of dialog
+        # geometry (saveState vs saveGeometry are separate Qt blobs).
+        # Only attempt restore when the preview-enabled layout actually
+        # built a splitter; the runner=None branch has no splitter.
+        if self._splitter is not None:
+            restore_splitter_state(
+                self._splitter,
+                QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_SPLITTER_STATE,
+            )
 
     # ------------------------------------------------------------------ helpers
 
@@ -144,7 +167,24 @@ class ExecuteActionDialog(QDialog):
         # Matches the main result tree (tree_controller.py:45).
         self._tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._rebuild_tree_model()
-        layout.addWidget(self._tree)
+        # #165 — when a task_runner was threaded through the constructor,
+        # wrap the tree in a horizontal splitter alongside an embedded
+        # PreviewPane so the user can see what each file looks like
+        # before confirming destructive action. Without a runner (the
+        # original test/legacy path) keep the single-column layout
+        # exactly as it was — no splitter, no preview.
+        if self._task_runner is not None:
+            self._preview = PreviewPane(self, self._task_runner)
+            self._splitter = QSplitter(Qt.Horizontal, self)
+            self._splitter.addWidget(self._tree)
+            self._splitter.addWidget(self._preview)
+            # Tree wider than preview by default; the persisted splitter
+            # state takes over once the user resizes the divider once.
+            self._splitter.setStretchFactor(0, 3)
+            self._splitter.setStretchFactor(1, 2)
+            layout.addWidget(self._splitter)
+        else:
+            layout.addWidget(self._tree)
 
         # Warning banner for complete-group deletions
         self._warning_banner = QFrame()
@@ -265,14 +305,33 @@ class ExecuteActionDialog(QDialog):
         ``execute_button_highlighted`` so the user sees that Execute is
         scoped to the highlight. Empty selection reverts to the default
         ``execute_button`` label.
+
+        #165 — also drives the embedded preview pane: exactly one file
+        row selected → show_single, anything else → clear. Multi-select
+        intentionally clears rather than showing the first row, so the
+        user isn't misled into thinking the preview reflects "the"
+        selection.
         """
         btn = self._btn_box.button(QDialogButtonBox.Ok)
         if btn is None:
             return
-        if self._selected_file_paths():
+        selected = self._selected_file_paths()
+        if selected:
             btn.setText(t("execute_dialog.execute_button_highlighted"))
         else:
             btn.setText(t("execute_dialog.execute_button"))
+        if self._preview is not None:
+            if len(selected) == 1:
+                path = next(iter(selected))
+                self._preview.show_single(
+                    path,
+                    {
+                        "name": os.path.basename(path),
+                        "folder": os.path.dirname(path),
+                    },
+                )
+            else:
+                self._preview.clear()
 
     def _on_jump_to_group(self, href: str) -> None:
         """Scroll the dialog tree to the group identified by ``href``.
@@ -959,6 +1018,15 @@ class ExecuteActionDialog(QDialog):
 
         ``done()`` funnels ``accept()``, ``reject()`` and the X-button
         path so this one hook catches every dismissal.
+
+        #165 — when the preview-enabled layout built a splitter, save
+        its state on the same close path so divider position survives
+        across opens.
         """
         save_widget_geometry(self, QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM)
+        if self._splitter is not None:
+            save_splitter_state(
+                self._splitter,
+                QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_SPLITTER_STATE,
+            )
         super().done(result)

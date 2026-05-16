@@ -198,6 +198,12 @@ class MainWindow(QMainWindow):
         self.status_reporter = StatusReporterImpl(self)
         self.ui_updater = UIUpdaterImpl(self)
 
+        # #165 — runner needs to exist before the file operations
+        # handler so the handler can forward it to ExecuteActionDialog's
+        # embedded PreviewPane. The PreviewPane in the main window
+        # (built later in _setup_ui) reuses this same runner instance.
+        self._runner = ImageTaskRunner(service=self._img, receiver=self)
+
         # Initialize file operations handler
         self.file_operations = FileOperationsHandler(
             vm=self._vm,
@@ -207,6 +213,7 @@ class MainWindow(QMainWindow):
             status_reporter=self.status_reporter,
             checked_paths_provider=None,
             highlighted_items_provider=self.tree_controller,
+            task_runner=self._runner,
         )
 
         # Tree data provider for dialog handler
@@ -275,8 +282,9 @@ class MainWindow(QMainWindow):
 
         right_widget, right_layout = self.layout_manager.create_preview_section()
 
-        # Create image task runner and preview pane
-        self._runner = ImageTaskRunner(service=self._img, receiver=self)
+        # Preview pane consumes the runner created in _setup_components
+        # (#165 — runner lifecycle moved up so FileOperationsHandler
+        # can forward it to ExecuteActionDialog's embedded preview).
         self._preview = PreviewPane(right_widget, self._runner, thumb_size=self._thumb_size)
         right_layout.addWidget(self._preview)
 
