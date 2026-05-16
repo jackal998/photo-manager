@@ -201,6 +201,38 @@ def main() -> int:
                 f"actions are MOVE / EXACT / REVIEW_DUPLICATE"
             )
 
+    # Probe #239 — auto-select must apply VISUAL selection to the
+    # keeper row, not just write action=KEEP to the manifest. Today
+    # the wiring stops one step short (main_window._load_manifest_from_path
+    # refreshes the tree but never selects KEEP rows). Logged here as
+    # a probe-status line — not a scenario failure — so qa-batch stays
+    # green until #239 lands. When the fix ships, flip the `if` branch
+    # to `failures.append(...)` and remove this guard comment.
+    print("step: probe_visual_selection")
+    try:
+        selected_basenames = _uia.read_selected_tree_row_basenames(win)
+    except Exception as exc:
+        # Helper isn't expected to raise (it swallows per-item errors)
+        # but a top-level catch keeps an unexpected exception from
+        # masking the manifest-side success that's the scenario's real
+        # contract today.
+        print(f"  probe_visual_selection_error: {exc!r}")
+        selected_basenames = []
+    print(f"  selected_basenames={selected_basenames}")
+    if EXPECTED_KEEPER not in selected_basenames:
+        print(
+            f"  probe_status: XFAIL_KNOWN_BUG_239 — "
+            f"after scan-complete + close-and-load, tree selection "
+            f"does not include {EXPECTED_KEEPER!r}; auto-select wrote "
+            f"action=KEEP to the manifest but did not apply visual "
+            f"selection. See https://github.com/jackal998/photo-manager/issues/239"
+        )
+    else:
+        # When this branch fires, the fix has landed — convert the
+        # probe to a hard failure (move into the failures list) and
+        # remove this whole guard block.
+        print("  probe_status: PASS (#239 fixed — promote this probe to a hard assertion)")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}")

@@ -483,6 +483,39 @@ def read_tree_row_order(win: UIAWrapper) -> list[str]:
     return [t for _, t in name_cells]
 
 
+def read_selected_tree_row_basenames(win: UIAWrapper) -> list[str]:
+    """Return basenames of currently-selected file rows in the result tree.
+
+    Counterpart to :func:`read_tree_row_order` for selection state.
+    Walks ``TreeItem`` descendants, filters by basename regex (file rows
+    only — group-header rows aren't selectable file targets), and keeps
+    only those whose UIA SelectionItem pattern reports selected.
+
+    Used by #243-style probes that inspect post-action UI state (e.g.
+    s49 verifying "Auto select after scan" actually highlights the
+    keeper row, not just writes ``action=KEEP`` to the manifest).
+    Returned order matches display order (sorted by row top).
+    """
+    items = win.descendants(control_type="TreeItem")
+    selected: list[tuple[int, str]] = []
+    for it in items:
+        try:
+            txt = (it.window_text() or "").strip()
+            if not txt or not _BASENAME_RE.match(txt):
+                continue
+            if not it.is_selected():
+                continue
+            r = it.rectangle()
+            selected.append((r.top, txt))
+        except Exception:
+            # is_selected() raises on TreeItems without a SelectionItem
+            # pattern (group-header rows on some Qt builds). Skip them
+            # rather than crashing the probe.
+            continue
+    selected.sort(key=lambda pair: pair[0])
+    return [t for _, t in selected]
+
+
 def click_column_header(win: UIAWrapper, header_text: str) -> None:
     """Click the result-tree column header whose label equals ``header_text``.
 

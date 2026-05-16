@@ -51,6 +51,28 @@ each with a comment naming the layer that DOES cover them.
   Ref row is at the bottom of its group.
 - *Misses:* Anything not exercised by the scripted scenario path.
 
+**Probes** (`tests/test_ui_probes.py` + sNN soft-probe blocks)
+- Cross-cutting structural invariants that *every* layer above misses
+  by design — added in [#243](https://github.com/jackal998/photo-manager/issues/243).
+- *Catches:* "Did the dialog dropdown drift from the tree columns?",
+  "Did a callsite drop a kwarg that gates a panel?", "Did a translation
+  ship as an English passthrough?", "Are two equivalent menu paths
+  reaching the same destructive surface?", "Is the bridge proxy out
+  of sync with its Protocol?".
+- *Why a separate layer:* scenario drivers replay one canonical path
+  each. Probes inspect a structural relationship — a single probe
+  catches a whole class of drift across many surfaces.
+- *Two flavours:*
+  - Static probes (`tests/test_ui_probes.py`) — AST or YAML
+    inspection, run as pytest in CI. Use `@pytest.mark.xfail(strict=True)`
+    so CI tolerates known-bug probes today and flips red the moment
+    the fix lands without removing the marker.
+  - Live soft-probes (extension blocks in `qa/scenarios/sNN_*.py`) —
+    UIA inspection for runtime state. Use a `print("probe_status: …")`
+    pattern instead of `failures.append` so qa-batch stays green
+    until the bug is fixed; comment block documents the one-line
+    upgrade to a hard failure.
+
 A bug in production likely lives at **a layer not currently asserted**.
 Knowing which layer you're skimping on is more important than the headline
 coverage number.
@@ -327,6 +349,31 @@ Running a shard locally for debugging:
 
 An explicit positional list (`python -m qa.scenarios._batch sNN_xyz …`)
 still works and overrides sharding — handy for targeted iteration.
+
+---
+
+## Probe inventory
+
+`tests/test_ui_probes.py` (static, AST/YAML) + soft probes inside
+scenario drivers. Each row names the invariant, the bug it catches
+today (XFAIL) or its forward-defensive role (PASS), and where the
+soft-probe upgrade path lives if applicable.
+
+| Probe | Invariant | Today | Catches |
+|---|---|---|---|
+| `test_probe_select_dialog_exposes_every_filterable_tree_column` | Every filterable tree column appears in the Select dialog's field dropdown | XFAIL | [#238](https://github.com/jackal998/photo-manager/issues/238) |
+| `test_probe_action_dialog_receives_groups_from_main_window_callsite` | Main-window callsite of `ActionDialog` passes `groups=` so the numeric panel can show | XFAIL | [#237](https://github.com/jackal998/photo-manager/issues/237) |
+| `test_probe_similarity_column_emits_at_most_one_ref_per_group` | At most one row per group renders as "Ref"; siblings fall back to similarity % or sentinel | XFAIL | [#241](https://github.com/jackal998/photo-manager/issues/241) |
+| `test_probe_no_execute_mode_toggle_in_menu` | `menu_controller.py` no longer registers an `execute_mode` action | XFAIL | [#240](https://github.com/jackal998/photo-manager/issues/240) |
+| `test_probe_action_handlers_impl_proxies_every_protocol_method` | Every method on `ActionHandlers` Protocol exists on `ActionHandlersImpl` | PASS | Future #175/#182-class bridge regression |
+| `test_probe_manifest_dependent_menu_actions_are_gated` | Every menu action that requires a loaded manifest is in `MANIFEST_ACTIONS` | XFAIL | [#244](https://github.com/jackal998/photo-manager/issues/244) |
+| `test_probe_zh_tw_translations_are_not_english_passthroughs` | zh_TW values that match en values must contain CJK chars (heuristic; tiny exempt list for product names) | XFAIL | [#245](https://github.com/jackal998/photo-manager/issues/245) |
+| `s49` `step: probe_visual_selection` (soft live) | After scan-complete with auto-select on, the tree's selection model contains the keeper rows | logs `XFAIL_KNOWN_BUG_239` | [#239](https://github.com/jackal998/photo-manager/issues/239) |
+
+When the corresponding bug lands, the static probes flip XFAIL→XPASS-strict
+and the bug-fix PR removes the marker. The soft probe is converted from
+`print(probe_status: …)` to `failures.append(…)` per the comment block in
+the scenario.
 
 ---
 
