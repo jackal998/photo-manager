@@ -177,10 +177,14 @@ The tree shows all files loaded from the manifest.
   contains / starts with / ends with / exactly matches and type plain
   text) and toggles to **Regex** for power users; both modes share a
   live preview pane so you see the matched filenames update as you
-  type. The "remove from list" action is a deferred decision: matched
-  rows are flagged and dropped on save, no files are moved or deleted.
-  Right-clicking a row in the main tree (single or multi-select) and
-  in the Execute Action dialog also opens the same dialog.
+  type. Click **+ Add condition** to stack additional conditions — the
+  **Match ALL / ANY** picker that appears combines them, and each
+  extra row has its own **NOT** toggle for "everything except this
+  pattern" matches. The "remove from list" action is a deferred
+  decision: matched rows are flagged and dropped on save, no files
+  are moved or deleted. Right-clicking a row in the main tree (single
+  or multi-select) and in the Execute Action dialog also opens the
+  same dialog.
 
 If you close the app with unsaved decisions a prompt appears with
 **Save & leave** / **Leave** / **Back**, so you don't lose work

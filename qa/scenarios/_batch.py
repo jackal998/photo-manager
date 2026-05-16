@@ -191,6 +191,15 @@ ALL_SCENARIOS = [
     # destructive — just probes that the widgets surface after picking
     # a numeric field, then closes the dialog without applying.
     "s50_select_numeric_panel_from_main_window",
+    # s52 (#173 Phase D) — multi-condition Set Action dialog with AND
+    # combinator. Drives row 0 regex + extra row Simple "contains";
+    # verifies AND short-circuits to the intersection (q88 + q80) only.
+    # Sister scenario s53 covers OR.
+    "s52_multi_condition_and",
+    # s53 (#173 Phase D) — same multi-condition dialog with OR. Same
+    # fixture as s52 but disjoint conditions and combinator ANY; the
+    # union of matches (4 of 5 rows) flips to delete.
+    "s53_multi_condition_or",
 ]
 
 

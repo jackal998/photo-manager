@@ -1771,3 +1771,319 @@ class TestSetDecisionByRegexLockConfirm:
         assert b.is_locked is False
         assert _read_locked(db, "/a.jpg") is False
         assert _read_locked(db, "/b.jpg") is False
+
+
+# ── #173 Phase D — multi-condition matcher + Apply path ────────────────────
+
+
+class TestBuildMatchFnConditions:
+    """``build_match_fn_for_conditions`` is the live-preview closure for
+    multi-row Apply. These tests pin the AND/OR + NOT semantics and the
+    short-circuit behavior on invalid input — drift here would make the
+    preview lie about what Apply will affect."""
+
+    def test_and_combinator_intersects_matches(self):
+        """Two regex conditions joined by AND match only records that
+        pass BOTH. Regression: if the combinator short-circuit flips,
+        an AND would silently widen to OR and Apply would delete
+        more than the user saw in the preview."""
+        from app.views.handlers.file_operations import (
+            CONDITION_COMBINATOR_AND, build_match_fn_for_conditions,
+        )
+
+        r1 = _rec("/photos/2023/IMG_001.jpg")
+        r1.folder_path = "/photos/2023"
+        r2 = _rec("/photos/2024/IMG_002.jpg")
+        r2.folder_path = "/photos/2024"
+        r3 = _rec("/photos/2023/note.txt")
+        r3.folder_path = "/photos/2023"
+        groups = [PhotoGroup(group_number=1, items=[r1, r2, r3])]
+
+        conditions = [
+            {"kind": "regex", "field": "File Name", "pattern": "IMG",
+             "negated": False},
+            {"kind": "regex", "field": "Folder", "pattern": "2023",
+             "negated": False},
+        ]
+        match_fn = build_match_fn_for_conditions(
+            groups, conditions, CONDITION_COMBINATOR_AND
+        )
+        matched, total, samples = match_fn()
+        assert matched == 1
+        assert total == 3
+        assert samples == ["IMG_001.jpg"]
+
+    def test_or_combinator_unions_matches(self):
+        """The OR combinator picks every record matching at least one
+        condition — same fixture as the AND test, opposite result. Pins
+        that the closure honours the picker's choice."""
+        from app.views.handlers.file_operations import (
+            CONDITION_COMBINATOR_OR, build_match_fn_for_conditions,
+        )
+
+        r1 = _rec("/photos/2023/IMG_001.jpg")
+        r1.folder_path = "/photos/2023"
+        r2 = _rec("/photos/2024/IMG_002.jpg")
+        r2.folder_path = "/photos/2024"
+        r3 = _rec("/photos/2023/note.txt")
+        r3.folder_path = "/photos/2023"
+        groups = [PhotoGroup(group_number=1, items=[r1, r2, r3])]
+
+        conditions = [
+            {"kind": "regex", "field": "File Name", "pattern": "IMG",
+             "negated": False},
+            {"kind": "regex", "field": "Folder", "pattern": "2023",
+             "negated": False},
+        ]
+        match_fn = build_match_fn_for_conditions(
+            groups, conditions, CONDITION_COMBINATOR_OR
+        )
+        matched, total, _samples = match_fn()
+        assert matched == 3
+        assert total == 3
+
+    def test_negation_inverts_single_condition(self):
+        """A negated single-condition group selects every record that
+        does NOT match — used by Apply's NOT toggle UX. Regression:
+        forgetting to XOR negated with the row outcome would make
+        NOT no-op silently."""
+        from app.views.handlers.file_operations import (
+            CONDITION_COMBINATOR_AND, build_match_fn_for_conditions,
+        )
+
+        recs = [_rec("/photos/IMG_001.jpg"), _rec("/photos/note.txt")]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+        conditions = [{
+            "kind": "regex", "field": "File Name", "pattern": "IMG",
+            "negated": True,
+        }]
+        match_fn = build_match_fn_for_conditions(
+            groups, conditions, CONDITION_COMBINATOR_AND
+        )
+        matched, total, samples = match_fn()
+        assert matched == 1
+        assert total == 2
+        assert samples == ["note.txt"]
+
+    def test_mixed_regex_and_numeric_and_combinator(self):
+        """A regex row AND'd with a numeric-threshold row evaluates per
+        record: the record must pass BOTH the regex on the text field
+        AND the numeric comparison on its numeric field. Regression:
+        if the numeric dispatch leaked to the regex path it'd fail to
+        compile ``__cmp__:`` and silently drop to zero matches."""
+        from app.views.handlers.file_operations import (
+            CONDITION_COMBINATOR_AND, build_match_fn_for_conditions,
+        )
+
+        # 3 IMG files; only 2 are above 1000 bytes.
+        r_small = _rec("/photos/IMG_001.jpg")
+        r_small.file_size_bytes = 500
+        r_big = _rec("/photos/IMG_002.jpg")
+        r_big.file_size_bytes = 2000
+        r_huge = _rec("/photos/IMG_003.jpg")
+        r_huge.file_size_bytes = 5000
+        # And one big file that's NOT an IMG.
+        r_other = _rec("/photos/note.txt")
+        r_other.file_size_bytes = 3000
+        groups = [PhotoGroup(
+            group_number=1, items=[r_small, r_big, r_huge, r_other]
+        )]
+        conditions = [
+            {"kind": "regex", "field": "File Name", "pattern": "IMG",
+             "negated": False},
+            {"kind": "numeric", "field": "Size (Bytes)", "op": ">",
+             "threshold": "1000", "negated": False},
+        ]
+        match_fn = build_match_fn_for_conditions(
+            groups, conditions, CONDITION_COMBINATOR_AND
+        )
+        matched, total, _samples = match_fn()
+        # Only IMG_002 and IMG_003 pass both — IMG_001 fails the
+        # threshold, note.txt fails the regex.
+        assert matched == 2
+        assert total == 4
+
+    def test_invalid_regex_in_or_does_not_blow_up_other_rows(self):
+        """An ``re.error`` in one OR condition must NOT poison the rest
+        — the bad row evaluates to False and the other condition still
+        gets the chance to match. Pins the silent-degrade-to-False
+        behavior the dialog's preview depends on (the dialog surfaces
+        the regex error via its inline validator, the closure stays
+        silent)."""
+        from app.views.handlers.file_operations import (
+            CONDITION_COMBINATOR_OR, build_match_fn_for_conditions,
+        )
+
+        recs = [_rec("/photos/IMG_001.jpg"), _rec("/photos/note.txt")]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+        conditions = [
+            {"kind": "regex", "field": "File Name", "pattern": "(unclosed",
+             "negated": False},
+            {"kind": "regex", "field": "File Name", "pattern": "IMG",
+             "negated": False},
+        ]
+        match_fn = build_match_fn_for_conditions(
+            groups, conditions, CONDITION_COMBINATOR_OR
+        )
+        matched, _total, _samples = match_fn()
+        # The valid regex still selected its match.
+        assert matched == 1
+
+    def test_empty_conditions_matches_nothing(self):
+        """Empty conditions list → no rule, no matches. Differentiated
+        from "no manifest loaded": the closure still returns sane
+        counts (matched=0, total=record_count) so the preview pane
+        shows the "no rule" empty state rather than an exception."""
+        from app.views.handlers.file_operations import (
+            CONDITION_COMBINATOR_AND, build_match_fn_for_conditions,
+        )
+
+        recs = [_rec("/a.jpg"), _rec("/b.jpg")]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+        match_fn = build_match_fn_for_conditions(
+            groups, [], CONDITION_COMBINATOR_AND
+        )
+        matched, total, samples = match_fn()
+        assert matched == 0
+        assert total == 2
+        assert samples == []
+
+
+class TestSetDecisionByConditions:
+    """Apply-path for the multi-row dialog. Mirrors the existing
+    ``TestSetDecisionByRegex`` tests but exercises the new entry point
+    directly so back-compat regressions on either path surface
+    independently."""
+
+    def test_no_manifest_shows_info(self):
+        from app.views.handlers.file_operations import (
+            CONDITION_COMBINATOR_AND, FileOperationsHandler,
+        )
+
+        handler = FileOperationsHandler(
+            vm=SimpleNamespace(groups=[]), settings=MagicMock(),
+            parent_widget=MagicMock(),
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.set_decision_by_conditions(
+                [{"kind": "regex", "field": "File Name", "pattern": "x",
+                  "negated": False}],
+                CONDITION_COMBINATOR_AND, "delete",
+            )
+        info.assert_called_once()
+
+    def test_and_matching_files_get_decision(self, tmp_path):
+        """End-to-end AND Apply against a real manifest: only the row
+        matching BOTH conditions has its decision flipped, the others
+        stay at their initial empty decision."""
+        from app.views.handlers.file_operations import CONDITION_COMBINATOR_AND
+
+        r_match = _rec("/photos/IMG_001.jpg")
+        r_match.folder_path = "/photos/2023"
+        r_skip_folder = _rec("/photos/IMG_002.jpg")
+        r_skip_folder.folder_path = "/photos/2024"
+        r_skip_name = _rec("/photos/note.txt")
+        r_skip_name.folder_path = "/photos/2023"
+        vm = SimpleNamespace(groups=[PhotoGroup(
+            group_number=1, items=[r_match, r_skip_folder, r_skip_name]
+        )])
+        db = _make_db(tmp_path, [
+            {"source_path": "/photos/IMG_001.jpg"},
+            {"source_path": "/photos/IMG_002.jpg"},
+            {"source_path": "/photos/note.txt"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_conditions(
+            [
+                {"kind": "regex", "field": "File Name", "pattern": "IMG",
+                 "negated": False},
+                {"kind": "regex", "field": "Folder", "pattern": "2023",
+                 "negated": False},
+            ],
+            CONDITION_COMBINATOR_AND,
+            "delete",
+        )
+
+        assert r_match.user_decision == "delete"
+        assert r_skip_folder.user_decision == ""
+        assert r_skip_name.user_decision == ""
+        assert _read_decision(db, "/photos/IMG_001.jpg") == "delete"
+
+    def test_or_union_of_matches(self, tmp_path):
+        """OR Apply across two regex conditions flips every record
+        matching either one. Pins union semantics end-to-end."""
+        from app.views.handlers.file_operations import CONDITION_COMBINATOR_OR
+
+        r1 = _rec("/photos/IMG_001.jpg")
+        r1.folder_path = "/photos/2023"
+        r2 = _rec("/photos/note.txt")
+        r2.folder_path = "/photos/2023"
+        r3 = _rec("/photos/2024/extra.txt")
+        r3.folder_path = "/photos/2024"
+        vm = SimpleNamespace(groups=[PhotoGroup(
+            group_number=1, items=[r1, r2, r3]
+        )])
+        db = _make_db(tmp_path, [
+            {"source_path": "/photos/IMG_001.jpg"},
+            {"source_path": "/photos/note.txt"},
+            {"source_path": "/photos/2024/extra.txt"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_conditions(
+            [
+                {"kind": "regex", "field": "File Name", "pattern": "IMG",
+                 "negated": False},
+                {"kind": "regex", "field": "Folder", "pattern": "2023",
+                 "negated": False},
+            ],
+            CONDITION_COMBINATOR_OR,
+            "keep",
+        )
+
+        # r1 matches both (still flipped), r2 matches folder only
+        # (still flipped), r3 matches neither (untouched).
+        assert r1.user_decision == "keep"
+        assert r2.user_decision == "keep"
+        assert r3.user_decision == ""
+
+    def test_empty_conditions_shows_no_match(self, tmp_path):
+        """Empty conditions list → no_match QMessageBox + no
+        decisions flipped. Matches the legacy ``no files matched``
+        UX rather than silently no-op'ing."""
+        from app.views.handlers.file_operations import CONDITION_COMBINATOR_AND
+
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.set_decision_by_conditions(
+                [], CONDITION_COMBINATOR_AND, "delete"
+            )
+        info.assert_called_once()
+        assert rec.user_decision == ""
+
+    def test_back_compat_set_decision_by_regex_delegates(self, tmp_path):
+        """The renamed ``set_decision_by_regex`` is now a back-compat
+        wrapper — verify it still ends up flipping the same row that
+        the new ``set_decision_by_conditions`` would have flipped for
+        an equivalent single-condition AND group. Pins the wrapper
+        contract."""
+        r_match = _rec("/photos/IMG_keep.jpg")
+        r_skip = _rec("/photos/other.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(
+            group_number=1, items=[r_match, r_skip]
+        )])
+        db = _make_db(tmp_path, [
+            {"source_path": "/photos/IMG_keep.jpg"},
+            {"source_path": "/photos/other.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_regex("File Name", r"IMG_keep", "keep")
+        assert r_match.user_decision == "keep"
+        assert r_skip.user_decision == ""

@@ -556,6 +556,10 @@ class TestCheatsheet:
 
 class TestRecentPatterns:
     def test_apply_records_pattern(self, qapp):
+        """#173 Phase D: Recent entries persist as condition-group dicts
+        (combinator + conditions list). Single-row regex Apply produces
+        a one-condition AND group — verifies the dialog records the
+        full Condition shape including the field name."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         settings = _FakeSettings()
@@ -568,9 +572,22 @@ class TestRecentPatterns:
         dlg._btn_set_action.click()
 
         recent = settings.get("ui.action_dialog.recent_patterns", [])
-        assert recent == [r"^IMG_\d+$"]
+        assert recent == [{
+            "combinator": "AND",
+            "conditions": [{
+                "kind": "regex",
+                "field": "File Name",
+                "pattern": r"^IMG_\d+$",
+                "negated": False,
+            }],
+        }]
 
     def test_recent_dedup_and_cap(self, qapp):
+        """Legacy ``list[str]`` Recent entries migrate to dict shape on
+        load (#173 Phase D). After migration, applying a previously-
+        stored pattern moves the matching dict to the front and caps
+        at 10 — the dedup keys off the full condition-group dict.
+        """
         from app.views.dialogs.select_dialog import ActionDialog
 
         settings = _FakeSettings({
@@ -584,13 +601,29 @@ class TestRecentPatterns:
         )
         dlg._mode_regex_btn.setChecked(True)
         # Reapply pattern_5 — must move to the front, drop the duplicate
-        # at its old position, and stay capped at 10.
+        # at its old position, and stay capped at 10. The legacy str
+        # entries have been wrapped to single-condition AND groups
+        # under field "File Name" (the dialog's default field), so the
+        # dedup compares against that exact shape.
         dlg.regex.setText("pattern_5")
         dlg._btn_set_action.click()
 
         recent = settings.get("ui.action_dialog.recent_patterns")
-        assert recent[0] == "pattern_5"
-        assert recent.count("pattern_5") == 1
+        # Top entry is the freshly-applied group in the new shape.
+        assert recent[0] == {
+            "combinator": "AND",
+            "conditions": [{
+                "kind": "regex",
+                "field": "File Name",
+                "pattern": "pattern_5",
+                "negated": False,
+            }],
+        }
+        # The duplicate at the old position is gone; cap stays at 10.
+        assert sum(
+            1 for g in recent
+            if any(c.get("pattern") == "pattern_5" for c in g.get("conditions", []))
+        ) == 1
         assert len(recent) == 10
 
     def test_apply_skips_empty_pattern(self, qapp):
@@ -1211,3 +1244,279 @@ class TestPatternEncoding:
         # rank with bogus order. None signals "treat as no-match".
         from app.views.dialogs.select_dialog import decode_top_n_pattern
         assert decode_top_n_pattern("__top_n__:3:garbage") is None
+
+
+# ── Phase D (#173) — multi-condition stack ─────────────────────────────────
+
+
+class TestMultiCondition:
+    """The multi-row Set Action dialog: combinator picker visibility,
+    extra-row creation/removal, NOT toggle, recent-patterns dict shape +
+    legacy migration, and signal payloads.
+
+    These tests pin behaviours the brief calls out explicitly so a
+    future refactor can't silently regress the new UX.
+    """
+
+    def test_add_row_shows_combinator_picker(self, qapp):
+        """Combinator picker is hidden when N==1 (single-row layout
+        stays close to today's UX) and visible the moment a second
+        condition is added."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name", "Folder"], match_fn=match_fn)
+        # N==1 default — picker hidden.
+        assert dlg._combinator_combo.isHidden()
+        assert dlg._combinator_label.isHidden()
+
+        dlg._on_add_condition_clicked()
+        assert not dlg._combinator_combo.isHidden()
+        assert not dlg._combinator_label.isHidden()
+        assert len(dlg._extra_rows) == 1
+
+    def test_remove_last_extra_hides_combinator(self, qapp):
+        """When the user removes the last extra row, the combinator
+        picker disappears again — the dialog reverts to the single-row
+        layout."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name", "Folder"], match_fn=match_fn)
+        dlg._on_add_condition_clicked()
+        row = dlg._extra_rows[0]
+        assert not dlg._combinator_combo.isHidden()
+        dlg._remove_extra_row(row)
+        assert dlg._combinator_combo.isHidden()
+        assert dlg._extra_rows == []
+
+    def test_add_row_defaults_to_file_name_simple(self, qapp):
+        """Newly-added rows open with field = "File Name" and the
+        Simple-op "contains" — so the user can start typing
+        immediately without picking a field. Pins the row default."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name", "Folder"], match_fn=match_fn)
+        dlg._on_add_condition_clicked()
+        row = dlg._extra_rows[0]
+        assert row._current_field() == "File Name"
+        assert row._simple_op_combo.currentData() == "contains"
+
+    def test_multi_row_apply_emits_conditions_signal(self, qapp):
+        """Two rows with AND combinator emit the multi-condition signal
+        carrying both Conditions in order. Legacy setActionRequested
+        does NOT fire when extras exist (the legacy signal can't carry
+        N conditions)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name", "Folder"], match_fn=match_fn)
+        # Row 0: regex "IMG"
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.combo.setCurrentText("File Name")
+        dlg.regex.setText("IMG")
+        # Row 1: Simple "contains 2023" on Folder.
+        dlg._on_add_condition_clicked()
+        row = dlg._extra_rows[0]
+        folder_idx = row._field_combo.findData("Folder")
+        row._field_combo.setCurrentIndex(folder_idx)
+        row._simple_text.setText("2023")
+        # Action = delete.
+        dlg._action_combo.setCurrentIndex(0)
+
+        legacy: list = []
+        multi: list = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: legacy.append((f, p, v))
+        )
+        dlg.setActionByConditionsRequested.connect(
+            lambda conds, comb, v: multi.append((list(conds), comb, v))
+        )
+        dlg._btn_set_action.click()
+
+        # Legacy signal silenced for N>1.
+        assert legacy == []
+        # Multi-condition signal carries both Conditions in order.
+        assert len(multi) == 1
+        conditions, combinator, value = multi[0]
+        assert combinator == "AND"
+        assert value == "delete"
+        assert len(conditions) == 2
+        assert conditions[0]["kind"] == "regex"
+        assert conditions[0]["field"] == "File Name"
+        assert conditions[0]["pattern"] == "IMG"
+        assert conditions[1]["kind"] == "regex"
+        assert conditions[1]["field"] == "Folder"
+        # Simple "contains 2023" synthesises as the escaped literal.
+        assert conditions[1]["pattern"] == "2023"
+
+    def test_row_negate_toggle_carries_into_condition(self, qapp):
+        """Checking the per-row NOT box flips ``negated`` on that
+        Condition. Pins the wire-level shape so a future renamed flag
+        doesn't silently drop NOT semantics."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name", "Folder"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("IMG")
+        dlg._on_add_condition_clicked()
+        row = dlg._extra_rows[0]
+        row._simple_text.setText("2023")
+        row._negate_check.setChecked(True)
+        dlg._action_combo.setCurrentIndex(0)
+
+        multi: list = []
+        dlg.setActionByConditionsRequested.connect(
+            lambda conds, comb, v: multi.append((list(conds), comb, v))
+        )
+        dlg._btn_set_action.click()
+
+        assert len(multi) == 1
+        conditions, _comb, _v = multi[0]
+        assert conditions[0]["negated"] is False
+        assert conditions[1]["negated"] is True
+
+    def test_legacy_string_recent_migrates_on_load(self, qapp):
+        """Legacy ``list[str]`` Recent entries (Phases B/C) silently
+        wrap to single-condition AND-group dicts on first load.
+        Field defaults to "File Name" (the dialog's default field;
+        the legacy store didn't keep per-pattern field). Migration is
+        in-memory — write back happens only on next Apply."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": [
+                "^IMG_\\d+$", "vacation", "[ab]+",
+            ]}}
+        })
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"], match_fn=match_fn,
+            settings=settings,
+        )
+        assert dlg._recent_patterns == [
+            {
+                "combinator": "AND",
+                "conditions": [{
+                    "kind": "regex",
+                    "field": "File Name",
+                    "pattern": "^IMG_\\d+$",
+                    "negated": False,
+                }],
+            },
+            {
+                "combinator": "AND",
+                "conditions": [{
+                    "kind": "regex",
+                    "field": "File Name",
+                    "pattern": "vacation",
+                    "negated": False,
+                }],
+            },
+            {
+                "combinator": "AND",
+                "conditions": [{
+                    "kind": "regex",
+                    "field": "File Name",
+                    "pattern": "[ab]+",
+                    "negated": False,
+                }],
+            },
+        ]
+
+    def test_mixed_legacy_and_new_recent_load(self, qapp):
+        """Settings with a mix of legacy str and new dict entries
+        loads everything in the new shape — protects users who flip
+        between an old build and a new build (or who have a partially-
+        migrated settings.json from a crash mid-write)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        new_entry = {
+            "combinator": "OR",
+            "conditions": [
+                {"kind": "regex", "field": "Folder", "pattern": "2024",
+                 "negated": False},
+                {"kind": "regex", "field": "File Name", "pattern": "RAW",
+                 "negated": True},
+            ],
+        }
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": [
+                new_entry,
+                "legacy_pattern",
+            ]}}
+        })
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"], match_fn=match_fn,
+            settings=settings,
+        )
+        assert len(dlg._recent_patterns) == 2
+        assert dlg._recent_patterns[0] == new_entry
+        # Second entry — the migrated legacy string.
+        assert dlg._recent_patterns[1]["conditions"][0]["pattern"] == "legacy_pattern"
+        assert dlg._recent_patterns[1]["conditions"][0]["field"] == "File Name"
+
+    def test_or_combinator_widens_preview(self, qapp):
+        """Toggling the combinator from AND to OR must change the
+        live-preview match count: the records that match EITHER
+        condition outnumber those matching BOTH. Verifies the
+        preview pulls combinator from the picker (not a stale snapshot)
+        on every refresh."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from core.models import PhotoGroup, PhotoRecord
+
+        # 3 records: one matches both, one matches only "IMG", one
+        # matches only "/2023/".
+        recs = [
+            PhotoRecord(
+                group_number=1, is_mark=False, is_locked=False,
+                folder_path="/photos/2023", file_path="/photos/2023/IMG_001.jpg",
+                capture_date=None, modified_date=None,
+                file_size_bytes=0, user_decision="",
+            ),
+            PhotoRecord(
+                group_number=1, is_mark=False, is_locked=False,
+                folder_path="/photos/2024", file_path="/photos/2024/IMG_002.jpg",
+                capture_date=None, modified_date=None,
+                file_size_bytes=0, user_decision="",
+            ),
+            PhotoRecord(
+                group_number=1, is_mark=False, is_locked=False,
+                folder_path="/photos/2023", file_path="/photos/2023/note.txt",
+                capture_date=None, modified_date=None,
+                file_size_bytes=0, user_decision="",
+            ),
+        ]
+        groups = [PhotoGroup(group_number=1, items=recs)]
+        # Pass match_fn so the preview pane wires up; the multi-row
+        # preview path uses build_match_fn_for_conditions directly on
+        # the dialog's groups, so the match_fn returned tuples don't
+        # matter for this test.
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+            groups=groups,
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.combo.setCurrentText("File Name")
+        dlg.regex.setText("IMG")
+        dlg._on_add_condition_clicked()
+        row = dlg._extra_rows[0]
+        folder_idx = row._field_combo.findData("Folder")
+        row._field_combo.setCurrentIndex(folder_idx)
+        row._simple_text.setText("2023")
+
+        # AND: only the one record matching both — IMG_001.jpg.
+        dlg._refresh_multi_preview()
+        and_text = dlg._match_counter.text()
+        assert "1 of 3" in and_text or "1 / 3" in and_text
+
+        # OR: all 3 records match at least one condition.
+        or_idx = dlg._combinator_combo.findData("OR")
+        dlg._combinator_combo.setCurrentIndex(or_idx)
+        dlg._refresh_multi_preview()
+        or_text = dlg._match_counter.text()
+        assert "3 of 3" in or_text or "3 / 3" in or_text

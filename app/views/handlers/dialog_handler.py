@@ -63,10 +63,19 @@ class DialogHandler:
         action_handler: Callable[[str, str, str], None] | None = None,
         records_provider: Callable[[], list] | None = None,
         settings: object | None = None,
+        condition_action_handler: Callable[[list, str, str], None] | None = None,
     ) -> None:
         self.parent = parent_widget
         self.tree_provider = tree_data_provider
         self.action_handler = action_handler
+        # #173 Phase D — multi-condition Apply route. Receives
+        # (conditions: list[dict], combinator: str, decision: str) and
+        # dispatches to file_operations.set_decision_by_conditions.
+        # Optional so legacy callers / tests that only wire
+        # ``action_handler`` keep working — the multi-condition signal
+        # is silently ignored in that case (single-row regex Apply
+        # also emits the legacy signal so nothing is lost).
+        self.condition_action_handler = condition_action_handler
         # Optional callable returning the loaded PhotoGroups so the
         # ActionDialog can build its live preview. We resolve it lazily
         # at dialog-open time so the latest manifest state is reflected
@@ -131,6 +140,10 @@ class DialogHandler:
 
         if self.action_handler is not None:
             dlg.setActionRequested.connect(self.action_handler)
+        if self.condition_action_handler is not None:
+            dlg.setActionByConditionsRequested.connect(
+                self.condition_action_handler
+            )
 
         dlg.exec()
 

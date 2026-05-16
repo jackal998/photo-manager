@@ -103,55 +103,209 @@ def _decision_display_label(decision: str) -> str:
     return decision
 
 
-def build_match_fn(
-    groups: list, sample_cap: int = 50
-) -> Callable[[str, str], tuple[int, int, list[str]]]:
-    """Return a closure that counts regex matches across the records.
+# ── Multi-condition matching (#173 Phase D) ────────────────────────────────
+# Conditions are plain dicts so they marshal through Qt signals and
+# settings.json without a custom encoder. Two discriminated kinds:
+#
+#   {"kind": "regex",   "field": str, "pattern": str,                   "negated": bool}
+#   {"kind": "numeric", "field": str, "op": str, "threshold": str,       "negated": bool}
+#
+# Both kinds share the same field-name vocabulary as today's regex flow
+# (`_FIELD_TO_ATTR` for text fields, `_numeric_value_for` in select_dialog
+# for numeric fields). N rows combine under ONE outer combinator:
+# "AND" (all must match) or "OR" (any must match). Single nested groups
+# are deferred (issue #173 Phase E).
+CONDITION_COMBINATOR_AND = "AND"
+CONDITION_COMBINATOR_OR = "OR"
 
-    The closure returned by this function powers the ActionDialog's live
-    preview pane. Calling it with a (field, pattern) pair returns a tuple
-    (matched, total, sample_basenames) where:
-      - matched: total number of records whose `field` value matches `pattern`
-        (case-insensitive) under the same `_FIELD_TO_ATTR` map that
-        `set_decision_by_regex` will use, so the preview is byte-for-byte
-        consistent with what Apply will affect.
-      - total: total number of records iterated. Records whose field is
-        unavailable (no `_FIELD_TO_ATTR` entry, or the attr is None) count
-        toward `total` but cannot match.
-      - sample_basenames: at most `sample_cap` basenames of matching files,
-        for display in the preview list. Iteration continues past the cap
-        so the matched count is always accurate.
 
-    On `re.error` returns (0, total, []) — the dialog handles invalid-regex
-    feedback through its own validation row, so the closure stays silent.
+def _eval_condition(rec: Any, group: Any, cond: dict, regex_cache: dict) -> bool:
+    """Evaluate one condition against one record. Returns True/False
+    BEFORE negation is applied — caller XORs with ``cond["negated"]``.
+
+    On ill-formed input (unknown kind, missing field value, invalid
+    regex, unparseable numeric threshold), returns False. Per the brief
+    the row simply contributes False to the combinator; the dialog's
+    validation row tells the user what's wrong.
+    """
+    kind = cond.get("kind", "regex")
+    field = cond.get("field", "")
+    if kind == "regex":
+        pattern = cond.get("pattern", "")
+        if not pattern:
+            # Empty pattern matches everything under re.search semantics.
+            # But "all match" is the trivial-true row a user gets BEFORE
+            # they've typed anything — surfacing it as a row that
+            # selects every record would silently widen an AND
+            # combinator to "all records" the moment they tab to the
+            # next row. Treat empty as "no rule yet" → False, which is
+            # also what the single-row preview did historically.
+            return False
+        value = _get_record_field(rec, field)
+        if value is None:
+            return False
+        rx = regex_cache.get(pattern, "__miss__")
+        if rx == "__miss__":
+            try:
+                rx = re.compile(pattern, re.IGNORECASE)
+            except re.error:
+                rx = None  # sentinel: invalid pattern → row evaluates False
+            regex_cache[pattern] = rx
+        if rx is None:
+            return False
+        return rx.search(value) is not None
+    if kind == "numeric":
+        # Imported lazily to avoid pulling Qt into this module's import
+        # path when the dialog never loads (CI without display).
+        from app.views.dialogs.select_dialog import (
+            _cmp_apply,
+            _numeric_value_for,
+            _parse_threshold,
+        )
+
+        op = cond.get("op", ">")
+        threshold_text = str(cond.get("threshold", ""))
+        threshold = _parse_threshold(field, threshold_text)
+        if threshold is None:
+            return False
+        val = _numeric_value_for(field, rec, group)
+        if val is None:
+            return False
+        return _cmp_apply(val, op, threshold)
+    return False
+
+
+def _record_matches_conditions(
+    rec: Any, group: Any, conditions: list[dict], combinator: str,
+    regex_cache: dict,
+) -> bool:
+    """Combine N condition evaluations with the given combinator.
+
+    Short-circuit semantics: AND stops at the first False, OR stops at
+    the first True. NOT is applied per row (XOR with cond["negated"])
+    BEFORE combining. Empty conditions → False (no rule → nothing
+    matches).
+    """
+    if not conditions:
+        return False
+    if combinator == CONDITION_COMBINATOR_OR:
+        for cond in conditions:
+            passed = _eval_condition(rec, group, cond, regex_cache)
+            if cond.get("negated"):
+                passed = not passed
+            if passed:
+                return True
+        return False
+    # Default to AND for any non-OR string — defensive against typos.
+    for cond in conditions:
+        passed = _eval_condition(rec, group, cond, regex_cache)
+        if cond.get("negated"):
+            passed = not passed
+        if not passed:
+            return False
+    return True
+
+
+def build_match_fn_for_conditions(
+    groups: list, conditions: list[dict], combinator: str,
+    sample_cap: int = 50,
+) -> Callable[[], tuple[int, int, list[str]]]:
+    """Return a zero-arg closure that counts matches for ``conditions``.
+
+    Unlike :func:`build_match_fn` (which curries on (field, pattern) so
+    the legacy single-row preview can keep typing into a single regex
+    box), this closure takes the conditions+combinator at build time —
+    the dialog rebuilds it whenever a row or combinator changes.
+
+    Returns the same (matched, total, samples) tuple as build_match_fn
+    so the preview-pane caller is identical.
     """
 
-    def _match(field: str, pattern: str) -> tuple[int, int, list[str]]:
+    def _match() -> tuple[int, int, list[str]]:
         from pathlib import Path
 
-        try:
-            rx = re.compile(pattern, re.IGNORECASE)
-        except re.error:
-            total = sum(len(g.items) for g in groups)
-            return (0, total, [])
-
+        regex_cache: dict = {}
         matched = 0
         total = 0
         samples: list[str] = []
         for grp in groups:
             for rec in grp.items:
                 total += 1
-                value = _get_record_field(rec, field)
-                if value is None:
-                    continue
-                if rx.search(value):
+                if _record_matches_conditions(
+                    rec, grp, conditions, combinator, regex_cache
+                ):
                     matched += 1
                     if len(samples) < sample_cap:
                         path_val = getattr(rec, "file_path", None)
                         samples.append(
-                            Path(str(path_val)).name if path_val else value
+                            Path(str(path_val)).name
+                            if path_val else str(path_val)
                         )
         return (matched, total, samples)
+
+    return _match
+
+
+def build_match_fn(
+    groups: list, sample_cap: int = 50
+) -> Callable[[str, str], tuple[int, int, list[str]]]:
+    """Legacy single-condition preview closure — back-compat wrapper.
+
+    Returns a closure ``(field, pattern) -> (matched, total, samples)``
+    that delegates to :func:`build_match_fn_for_conditions` with a
+    single regex Condition. Existing callers (dialog_handler's live
+    preview, ExecuteActionDialog's regex panel) and their tests
+    continue to use this entry point unchanged.
+    """
+
+    def _match(field: str, pattern: str) -> tuple[int, int, list[str]]:
+        # Empty pattern was a "nothing typed yet" no-op for the old
+        # preview — short-circuit so an empty input doesn't show
+        # 0-matches noise from running the closure over every row.
+        # (The old code did this implicitly via re.compile("") matching
+        # everything, then catching nothing useful.) We match the old
+        # behavior: compile + search on empty regex returns a 0-length
+        # match at every position, so EVERY record matches.
+        if pattern == "":
+            # Reproduce the legacy "empty regex matches all rows" so
+            # existing tests that assert (matched == total) for an
+            # empty pattern keep passing. Skip the conditions evaluator
+            # which treats empty as "no rule".
+            from pathlib import Path
+
+            try:
+                rx = re.compile(pattern, re.IGNORECASE)
+            except re.error:
+                total_only = sum(len(g.items) for g in groups)
+                return (0, total_only, [])
+            matched = 0
+            total = 0
+            samples: list[str] = []
+            for grp in groups:
+                for rec in grp.items:
+                    total += 1
+                    value = _get_record_field(rec, field)
+                    if value is None:
+                        continue
+                    if rx.search(value):
+                        matched += 1
+                        if len(samples) < sample_cap:
+                            path_val = getattr(rec, "file_path", None)
+                            samples.append(
+                                Path(str(path_val)).name if path_val else value
+                            )
+            return (matched, total, samples)
+
+        condition: dict = {
+            "kind": "regex",
+            "field": field,
+            "pattern": pattern,
+            "negated": False,
+        }
+        return build_match_fn_for_conditions(
+            groups, [condition], CONDITION_COMBINATOR_AND,
+            sample_cap=sample_cap,
+        )()
 
     return _match
 
@@ -815,24 +969,64 @@ class FileOperationsHandler:
             )
 
     def set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
-        """Find all file rows where field matches regex and route by action.
+        """Back-compat wrapper for the single-row regex path.
+
+        Wraps the (field, pattern) call into a one-element regex
+        Condition and delegates to :meth:`set_decision_by_conditions`.
+        Existing main_window slot, tests, and any third-party callers
+        keep working unchanged.
+
+        For the new multi-condition flow (#173 Phase D), the dialog
+        calls :meth:`set_decision_by_conditions` directly via the
+        ``setActionByConditionsRequested`` signal route.
+        """
+        # Eagerly validate the regex up front so this entry point keeps
+        # surfacing QMessageBox.warning("Invalid Regex") on bad input —
+        # the multi-condition evaluator silently treats unparseable
+        # patterns as "row evaluates False" (correct for the multi-row
+        # preview), but the single-row Apply has always shown a modal.
+        try:
+            re.compile(pattern, re.IGNORECASE)
+        except re.error as exc:
+            QMessageBox.warning(self.parent, t("file_op.invalid_regex_title"), str(exc))
+            return
+        condition: dict = {
+            "kind": "regex",
+            "field": field,
+            "pattern": pattern,
+            "negated": False,
+        }
+        self.set_decision_by_conditions(
+            [condition], CONDITION_COMBINATOR_AND, new_decision
+        )
+
+    def set_decision_by_conditions(
+        self, conditions: list[dict], combinator: str, new_decision: str,
+    ) -> None:
+        """Find file rows matching the compound condition and apply the action.
+
+        Multi-condition entry point (#173 Phase D). Iterates the loaded
+        groups once, evaluates each record against ``conditions`` joined
+        by ``combinator`` (``"AND"`` / ``"OR"``), and routes matched
+        paths through :meth:`set_decision_with_lock_check` so locked
+        rows surface the unified :class:`LockedRowsConfirmDialog`
+        (#182).
 
         Args:
-            field: Field name (e.g. "File Name", "Folder", "Action").
-            pattern: Regex pattern (case-insensitive).
+            conditions: List of dicts in the discriminated-union form
+                produced by ``ActionDialog`` —
+                ``{kind, field, ..., negated}``. An empty list is a
+                no-op + friendly QMessageBox; same UX as today's
+                "no match" branch.
+            combinator: ``"AND"`` (all conditions must pass) or
+                ``"OR"`` (any condition passes). Other values fall back
+                to AND defensively.
             new_decision: ``"delete"`` / ``""`` set the corresponding
                 user_decision; :data:`REMOVE_FROM_LIST_SENTINEL`
                 attaches the deferred remove decision; the
                 :data:`LOCK_SENTINEL` / :data:`UNLOCK_SENTINEL`
-                sentinels flip ``is_locked`` for matched rows
-                (idempotent — applied to all matched, no confirm
-                dialog). Destructive decisions route through
-                :meth:`set_decision_with_lock_check` so any locked
-                rows in the matched set surface the unified
-                :class:`LockedRowsConfirmDialog` (#182).
+                sentinels flip ``is_locked``.
         """
-        import re as _re
-
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             QMessageBox.information(
@@ -842,17 +1036,21 @@ class FileOperationsHandler:
             )
             return
 
-        try:
-            rx = _re.compile(pattern, _re.IGNORECASE)
-        except _re.error as exc:
-            QMessageBox.warning(self.parent, t("file_op.invalid_regex_title"), str(exc))
+        if not conditions:
+            QMessageBox.information(
+                self.parent,
+                t("file_op.set_action_no_match_title"),
+                t("file_op.set_action_no_match_body"),
+            )
             return
 
+        regex_cache: dict = {}
         matching: list[dict] = []
         for group in self.vm.groups:
             for rec in group.items:
-                value = _get_record_field(rec, field)
-                if value is not None and rx.search(value):
+                if _record_matches_conditions(
+                    rec, group, conditions, combinator, regex_cache
+                ):
                     matching.append({"type": "file", "path": rec.file_path})
 
         if not matching:
@@ -863,9 +1061,9 @@ class FileOperationsHandler:
             )
             return
 
-        # All destructive + lock/unlock routing now goes through the
-        # shared entry point so the dialog flow is identical to
-        # single-row right-click and bulk multi-select.
+        # All destructive + lock/unlock routing goes through the shared
+        # entry point so the dialog flow is identical to single-row
+        # right-click and bulk multi-select.
         self.set_decision_with_lock_check(matching, new_decision)
 
     def execute_action(self) -> None:

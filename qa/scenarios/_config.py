@@ -189,6 +189,17 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # manifest so the menu item is enabled and ``records_provider``
     # has groups to pass to ActionDialog. Non-destructive.
     "s50_select_numeric_panel_from_main_window": ["qa/sandbox/near-duplicates"],
+    # s52 (#173 Phase D) — multi-condition Set Action dialog: AND
+    # combinator. Same fixture as s14 / s43 / s50 (5 q-quality
+    # near-duplicates); the 5 distinct ``qXX`` substrings in the
+    # filenames let us write 2 conditions whose intersection is a
+    # non-empty subset of either alone.
+    "s52_multi_condition_and": ["qa/sandbox/near-duplicates"],
+    # s53 (#173 Phase D) — multi-condition Set Action dialog: OR
+    # combinator. Same fixture as s52 with disjoint conditions so the
+    # union is strictly larger than either condition's individual
+    # match set.
+    "s53_multi_condition_or": ["qa/sandbox/near-duplicates"],
 }
 
 

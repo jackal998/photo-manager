@@ -199,6 +199,13 @@ action_dialog:
   cmp_op_le: "<="
   cmp_op_eq: "=="
   cmp_op_ne: "!="
+  multi:
+    combinator_label: "符合"
+    combinator_all: "全部"
+    combinator_any: "任一"
+    add_condition: "+ 新增條件"
+    negate: "排除"
+    remove_condition: "移除條件"
 
 context_menu:
   set_action: "設定動作"

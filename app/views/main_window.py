@@ -224,6 +224,12 @@ class MainWindow(QMainWindow):
             action_handler=self._apply_action_by_regex,
             records_provider=lambda: self._vm.groups,
             settings=self._settings,
+            # #173 Phase D — multi-condition Apply route. The dialog
+            # emits ``setActionByConditionsRequested`` for any Apply
+            # that isn't a single-row regex (extra rows, numeric, NOT
+            # toggle); the slot below threads through to the new
+            # FileOperationsHandler entry point.
+            condition_action_handler=self._apply_action_by_conditions,
         )
 
         # Action handlers for context menu
@@ -862,6 +868,14 @@ class MainWindow(QMainWindow):
     def _apply_action_by_regex(self, field: str, pattern: str, action_value: str) -> None:
         """Apply an action to all files matching field/regex from the ActionDialog."""
         self.file_operations.set_decision_by_regex(field, pattern, action_value)
+
+    def _apply_action_by_conditions(
+        self, conditions: list, combinator: str, action_value: str,
+    ) -> None:
+        """Multi-condition Apply (#173 Phase D) — dispatch to file_operations."""
+        self.file_operations.set_decision_by_conditions(
+            conditions, combinator, action_value
+        )
 
     def _on_header_clicked(self, logical_index: int) -> None:
         """Handle tree header clicks to maintain sort state.

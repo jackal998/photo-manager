@@ -10,6 +10,7 @@ from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QGridLayout,
@@ -438,6 +439,262 @@ def _try_parse_simple(pattern: str) -> tuple[str, str] | None:
     return ("contains", text)
 
 
+# Multi-condition combinator labels — internal values (not localized).
+# Map to action_dialog.multi.combinator_{all,any} for display.
+COMBINATOR_AND = "AND"
+COMBINATOR_OR = "OR"
+
+
+class _ConditionRowWidget(QWidget):
+    """One condition row in the multi-condition stack (#173 Phase D).
+
+    Layout:
+        [Field ▾] [op ▾] [value]  [☐ NOT]  [×]
+
+    For text fields, ``op`` is one of the Simple ops (contains /
+    starts_with / ends_with / exact) and ``value`` is a plain QLineEdit;
+    the row's :meth:`get_condition` synthesises the regex via the
+    matching ``_SIMPLE_OPS`` builder. Power-user regex per row stays in
+    row 0 of the dialog (which keeps the full Simple/Regex toggle from
+    Phase C); extra rows are deliberately Simple-only so the row chrome
+    stays compact and the UI matches the email-rule-editor sketch in
+    the issue body.
+
+    For numeric fields, ``op`` is one of the ``_CMP_OPS`` cmp operators
+    and ``value`` is a numeric/date text edit — same parsing as the
+    single-row threshold panel via ``_parse_threshold`` at apply time.
+    Top-N is not offered in extra rows because "top N in group" is a
+    group-level operation that doesn't compose well with AND/OR row
+    semantics; users who want top-N use the single-row path (row 0).
+
+    Signals:
+        changed: emitted whenever any input mutates so the dialog can
+            refresh its live preview / match counter.
+        removeRequested: emitted when the user clicks the × button.
+    """
+
+    changed = Signal()
+    removeRequested = Signal()
+
+    def __init__(
+        self,
+        fields: list[str],
+        row_index: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._row_index = row_index
+        self._fields = list(fields)
+        self.setObjectName(f"extraConditionRow{row_index}")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        # Field combo — same population strategy as the dialog's row-0
+        # field combo so the displayed labels stay localized.
+        self._field_combo = QComboBox()
+        self._field_combo.setObjectName(f"extraConditionRow{row_index}.fieldCombo")
+        for fname in self._fields:
+            self._field_combo.addItem(_field_display(fname), userData=fname)
+        layout.addWidget(self._field_combo)
+
+        # Text-field panel: Simple op combo + plain text edit. The
+        # row always builds a regex internally — the Simple op is a
+        # UX shortcut, not a separate condition kind.
+        self._simple_op_combo = QComboBox()
+        self._simple_op_combo.setObjectName(
+            f"extraConditionRow{row_index}.simpleOpCombo"
+        )
+        for op_key, label_key, _builder in _SIMPLE_OPS:
+            self._simple_op_combo.addItem(t(label_key), userData=op_key)
+        layout.addWidget(self._simple_op_combo)
+        self._simple_text = QLineEdit()
+        self._simple_text.setObjectName(
+            f"extraConditionRow{row_index}.simpleText"
+        )
+        self._simple_text.setPlaceholderText(
+            t("action_dialog.simple_text_placeholder")
+        )
+        layout.addWidget(self._simple_text, stretch=1)
+
+        # Numeric-field panel: cmp op combo + value edit. Hidden until
+        # the user picks a numeric field.
+        self._num_cmp_combo = QComboBox()
+        self._num_cmp_combo.setObjectName(
+            f"extraConditionRow{row_index}.numCmpCombo"
+        )
+        for op_key, label_key in _CMP_OPS:
+            self._num_cmp_combo.addItem(t(label_key), userData=op_key)
+        layout.addWidget(self._num_cmp_combo)
+        self._num_value_edit = QLineEdit()
+        self._num_value_edit.setObjectName(
+            f"extraConditionRow{row_index}.numValueEdit"
+        )
+        self._num_value_edit.setPlaceholderText(
+            t("action_dialog.numeric_value_placeholder")
+        )
+        layout.addWidget(self._num_value_edit, stretch=1)
+
+        # NOT toggle and × remove button. Both live on every row even
+        # at N==1; the dialog hides them via ``set_chrome_visible``
+        # when this row is the only condition (matches today's UX for
+        # the single-row default — see #173 Phase D's "N=1 layout
+        # stays close to today" requirement).
+        self._negate_check = QCheckBox(t("action_dialog.multi.negate"))
+        self._negate_check.setObjectName(
+            f"extraConditionRow{row_index}.negateCheck"
+        )
+        layout.addWidget(self._negate_check)
+        self._remove_btn = QPushButton("×")
+        self._remove_btn.setObjectName(
+            f"extraConditionRow{row_index}.removeButton"
+        )
+        self._remove_btn.setToolTip(t("action_dialog.multi.remove_condition"))
+        self._remove_btn.setFixedWidth(28)
+        layout.addWidget(self._remove_btn)
+
+        # Wiring.
+        self._field_combo.currentIndexChanged.connect(self._on_field_changed)
+        self._simple_op_combo.currentIndexChanged.connect(self.changed)
+        self._simple_text.textChanged.connect(self.changed)
+        self._num_cmp_combo.currentIndexChanged.connect(self.changed)
+        self._num_value_edit.textChanged.connect(self.changed)
+        self._negate_check.toggled.connect(self.changed)
+        self._remove_btn.clicked.connect(self.removeRequested.emit)
+
+        # Default to File Name if present so the row opens in a
+        # ready-to-type state instead of whatever combo index happens
+        # to be first.
+        idx = self._field_combo.findData("File Name")
+        if idx >= 0:
+            self._field_combo.setCurrentIndex(idx)
+        self._refresh_panel_visibility()
+
+    # ── Panel visibility ───────────────────────────────────────────────────
+
+    def _current_field(self) -> str:
+        data = self._field_combo.currentData()
+        return str(data) if data is not None else self._field_combo.currentText()
+
+    def _is_numeric_field(self) -> bool:
+        return self._current_field() in _NUMERIC_FIELDS
+
+    def _refresh_panel_visibility(self) -> None:
+        """Show one of (Simple-op + text) or (numeric cmp + value).
+
+        Same gating rule as the single-row dialog's
+        ``_field_panel_is_numeric``: field-name membership in
+        ``_NUMERIC_FIELDS``. Extra rows don't have access to ``groups``
+        — the row widget is field-only — so the numeric panel always
+        switches on for numeric fields regardless of whether
+        ``self._groups`` would have been populated on the dialog. The
+        evaluator uses ``_numeric_value_for`` which itself handles
+        missing values gracefully.
+        """
+        numeric = self._is_numeric_field()
+        self._simple_op_combo.setVisible(not numeric)
+        self._simple_text.setVisible(not numeric)
+        self._num_cmp_combo.setVisible(numeric)
+        self._num_value_edit.setVisible(numeric)
+
+    def _on_field_changed(self, _idx: int) -> None:
+        self._refresh_panel_visibility()
+        self.changed.emit()
+
+    # ── Public API ─────────────────────────────────────────────────────────
+
+    def set_chrome_visible(self, visible: bool) -> None:
+        """Show/hide NOT + × widgets. Used to hide row chrome when this
+        is the only condition (N==1) so the dialog looks like its
+        single-row predecessor."""
+        self._negate_check.setVisible(visible)
+        self._remove_btn.setVisible(visible)
+
+    def get_condition(self) -> dict | None:
+        """Return this row's Condition dict, or None if empty.
+
+        Empty = no Simple text / no numeric threshold entered. Returning
+        None lets the dialog skip rows that haven't been filled in yet
+        when building the live preview (otherwise the preview would
+        evaluate an "empty Simple" row as False and silently drop the
+        whole AND combinator to 0 matches even when the other rows
+        match).
+        """
+        field = self._current_field()
+        negated = self._negate_check.isChecked()
+        if self._is_numeric_field():
+            value_text = self._num_value_edit.text().strip()
+            if not value_text:
+                return None
+            op = str(self._num_cmp_combo.currentData() or ">")
+            return {
+                "kind": "numeric",
+                "field": field,
+                "op": op,
+                "threshold": value_text,
+                "negated": negated,
+            }
+        text = self._simple_text.text()
+        if not text:
+            return None
+        op_key = self._simple_op_combo.currentData() or "contains"
+        # Synthesise the regex through the same builder the single-row
+        # Simple mode uses — keeps Apply byte-for-byte consistent with
+        # the row-0 Simple/Regex flow.
+        pattern = ""
+        for k, _label_key, builder in _SIMPLE_OPS:
+            if k == op_key:
+                pattern = builder(text)
+                break
+        if not pattern:
+            pattern = re.escape(text)
+        return {
+            "kind": "regex",
+            "field": field,
+            "pattern": pattern,
+            "negated": negated,
+        }
+
+    def set_condition(self, cond: dict) -> None:
+        """Load a stored Condition dict back into the row widgets.
+
+        For regex kinds, attempts ``_try_parse_simple`` to recover the
+        original Simple op + text. Unparseable regexes fall back to
+        ``contains <whole pattern>`` so the row at least surfaces
+        SOMETHING (better UX than a silent failure); the user can edit
+        afterwards.
+        """
+        field = cond.get("field", "File Name")
+        idx = self._field_combo.findData(field)
+        if idx >= 0:
+            self._field_combo.setCurrentIndex(idx)
+        self._negate_check.setChecked(bool(cond.get("negated")))
+        kind = cond.get("kind", "regex")
+        if kind == "numeric":
+            op = cond.get("op", ">")
+            op_idx = self._num_cmp_combo.findData(op)
+            if op_idx >= 0:
+                self._num_cmp_combo.setCurrentIndex(op_idx)
+            self._num_value_edit.setText(str(cond.get("threshold", "")))
+            return
+        pattern = cond.get("pattern", "")
+        parsed = _try_parse_simple(pattern)
+        if parsed is not None:
+            op_key, text = parsed
+            op_idx = self._simple_op_combo.findData(op_key)
+            if op_idx >= 0:
+                self._simple_op_combo.setCurrentIndex(op_idx)
+            self._simple_text.setText(text)
+        else:
+            # Pattern is too complex for Simple — drop the verbatim
+            # regex into the text edit as "contains" so it at least
+            # appears. Switching to row 0 lets the user re-edit it as a
+            # true regex.
+            self._simple_op_combo.setCurrentIndex(0)
+            self._simple_text.setText(pattern)
+
+
 class _MatchHighlightDelegate(QStyledItemDelegate):
     """Render preview-list rows with the regex match span emboldened.
 
@@ -514,6 +771,60 @@ class _MatchHighlightDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def _describe_recent_group(group: dict) -> str:
+    """Single-line summary for a Recent menu entry.
+
+    Single-condition groups read as just the pattern (matches the
+    legacy single-string Recent UX). Multi-condition groups read as
+    ``"AND: pat1 | pat2 | ..."`` so the user can spot the combinator
+    and the first few patterns without clicking through.
+    """
+    conditions = group.get("conditions") or []
+    if not conditions:
+        return ""
+    if len(conditions) == 1:
+        return str(conditions[0].get("pattern") or conditions[0].get("field") or "")
+    combinator = group.get("combinator", COMBINATOR_AND)
+    parts = [str(c.get("pattern") or c.get("field") or "?") for c in conditions]
+    return f"{combinator}: " + " | ".join(parts)
+
+
+def _migrate_recent_entry(entry: Any) -> dict:
+    """Normalise a Recent entry into the #173 Phase D dict shape.
+
+    Legacy persistence (Phases B/C) stored each Recent entry as a bare
+    regex string; the new shape is a condition-group dict
+    ``{"combinator": "AND"|"OR", "conditions": [Condition, ...]}``.
+    On a fresh load, every legacy ``str`` gets wrapped to a single-
+    condition AND group with field ``"File Name"`` — the dialog's
+    default field, which is also what the legacy single-row UI would
+    have used unless the user had picked something else (the field
+    wasn't persisted alongside the pattern under Phases B/C, so a
+    deterministic default is the best we can do without losing the
+    history entirely).
+
+    Already-migrated dict entries pass through unchanged.
+    """
+    if isinstance(entry, dict):
+        # Defensive shape check — bail to the default on a malformed
+        # entry rather than letting a stale write crash the dialog.
+        if "combinator" in entry and isinstance(entry.get("conditions"), list):
+            return entry
+    if isinstance(entry, str):
+        return {
+            "combinator": COMBINATOR_AND,
+            "conditions": [{
+                "kind": "regex",
+                "field": "File Name",
+                "pattern": entry,
+                "negated": False,
+            }],
+        }
+    # Fallback for any other shape — wrap as an empty AND group so the
+    # caller's len/iteration still works without exceptions.
+    return {"combinator": COMBINATOR_AND, "conditions": []}
+
+
 class ActionDialog(QDialog):
     """Dialog to set an action on rows matching a field+regex.
 
@@ -540,6 +851,15 @@ class ActionDialog(QDialog):
     """
 
     setActionRequested = Signal(str, str, str)  # field, regex, action_value
+    # Multi-condition signal (#173 Phase D). Emitted alongside the legacy
+    # signal for single-row regex Apply, and as the sole signal when the
+    # user has added extra rows, picked a numeric condition in row 0, or
+    # toggled NOT on the single row. Payload:
+    #   conditions: list[dict] in the Condition discriminated-union form
+    #               from app.views.handlers.file_operations
+    #   combinator: "AND" | "OR"
+    #   action_value: same decision string as the legacy signal
+    setActionByConditionsRequested = Signal(list, str, str)
 
     def __init__(
         self,
@@ -585,9 +905,18 @@ class ActionDialog(QDialog):
             persisted = self._settings_get(_MODE_KEY, MODE_SIMPLE)
             self._mode = _LEGACY_MODE_VALUES.get(persisted, MODE_SIMPLE)
 
-        self._recent_patterns: list[str] = list(
-            self._settings_get(_RECENT_KEY, []) or []
-        )
+        # Recent-patterns persistence: now a list of condition-group
+        # dicts (#173 Phase D). Each entry is
+        #   {"combinator": "AND"|"OR", "conditions": [Condition, ...]}.
+        # Legacy entries persisted under Phases B/C were bare strings
+        # (the regex); migrate on load by wrapping each into a single-
+        # condition AND group with field "File Name" (the dialog's
+        # default field — see `_set_default_field` below). The cap of
+        # 10 entries is preserved across the migration.
+        raw_recent = self._settings_get(_RECENT_KEY, []) or []
+        self._recent_patterns: list[dict] = [
+            _migrate_recent_entry(entry) for entry in raw_recent
+        ]
 
         # Build the per-field combo box, regex line edit, action combo, and
         # buttons. They live in this `left_layout` regardless of whether
@@ -814,6 +1143,49 @@ class ActionDialog(QDialog):
         self._numeric_widget.hide()  # initial state: hidden until field changes
         left_layout.addWidget(self._numeric_widget)
 
+        # ── Multi-condition block (#173 Phase D) ────────────────────────────
+        # The block holds: a combinator picker label+combo (hidden until
+        # the user adds an extra row), a container for the extra row
+        # widgets, and the "+ Add condition" button (always visible).
+        # Row 0's editor above is the FIRST condition; extras stack
+        # below. When N==1 the visible chrome is just the add-button —
+        # the dialog's single-row UX stays close to today's.
+        self._extra_rows: list[_ConditionRowWidget] = []
+
+        combinator_row = QHBoxLayout()
+        self._combinator_label = QLabel(t("action_dialog.multi.combinator_label"))
+        self._combinator_label.setObjectName("combinatorLabel")
+        combinator_row.addWidget(self._combinator_label)
+        self._combinator_combo = QComboBox()
+        self._combinator_combo.setObjectName("combinatorCombo")
+        self._combinator_combo.addItem(
+            t("action_dialog.multi.combinator_all"), userData=COMBINATOR_AND
+        )
+        self._combinator_combo.addItem(
+            t("action_dialog.multi.combinator_any"), userData=COMBINATOR_OR
+        )
+        combinator_row.addWidget(self._combinator_combo)
+        combinator_row.addStretch(1)
+        left_layout.addLayout(combinator_row)
+        # Hidden until first extra row is added.
+        self._combinator_label.hide()
+        self._combinator_combo.hide()
+
+        self._extras_container = QWidget()
+        self._extras_container.setObjectName("extraConditionsContainer")
+        self._extras_layout = QVBoxLayout(self._extras_container)
+        self._extras_layout.setContentsMargins(0, 0, 0, 0)
+        self._extras_layout.setSpacing(4)
+        left_layout.addWidget(self._extras_container)
+
+        add_row = QHBoxLayout()
+        self._btn_add_condition = QPushButton(t("action_dialog.multi.add_condition"))
+        self._btn_add_condition.setObjectName("addConditionButton")
+        self._btn_add_condition.clicked.connect(self._on_add_condition_clicked)
+        add_row.addWidget(self._btn_add_condition)
+        add_row.addStretch(1)
+        left_layout.addLayout(add_row)
+
         # ── Match counter row (visible in BOTH modes when match_fn) ────────
         # Lives outside the mode containers so toggling mode never hides
         # the live count — it's the primary feedback for both Beginner
@@ -924,6 +1296,11 @@ class ActionDialog(QDialog):
             self._num_order_combo.currentIndexChanged.connect(self._preview_timer.start)
             self._num_n_spin.valueChanged.connect(self._preview_timer.start)
             self._num_mode_threshold_btn.toggled.connect(self._preview_timer.start)
+            # #173 Phase D — combinator changes alter what the multi-
+            # condition preview reports; fire the same debounce.
+            self._combinator_combo.currentIndexChanged.connect(
+                self._preview_timer.start
+            )
 
         self._apply_exact_regex_for_current_field()
         # Default Simple op is "contains" (index 0) — most useful
@@ -1131,10 +1508,10 @@ class ActionDialog(QDialog):
             empty = menu.addAction(t("action_dialog.recent_empty"))
             empty.setEnabled(False)
         else:
-            for pat in self._recent_patterns:
-                act = menu.addAction(pat)
+            for group in self._recent_patterns:
+                act = menu.addAction(_describe_recent_group(group))
                 act.triggered.connect(
-                    lambda _checked=False, _pat=pat: self._apply_recent_pattern(_pat)
+                    lambda _checked=False, _g=group: self._apply_recent_pattern(_g)
                 )
             menu.addSeparator()
             clear_act = menu.addAction(t("action_dialog.recent_clear"))
@@ -1143,24 +1520,75 @@ class ActionDialog(QDialog):
         pos = self._recent_btn.mapToGlobal(QPoint(0, self._recent_btn.height()))
         menu.exec(pos)
 
-    def _apply_recent_pattern(self, pattern: str) -> None:
-        # Picking from Recent always lands the user in Regex mode — the
-        # stored patterns are raw regex strings, not Beginner tuples.
-        if self._mode != MODE_REGEX and self._match_fn is not None:
-            self._mode_regex_btn.setChecked(True)
-        self.regex.setText(pattern)
+    def _apply_recent_pattern(self, group: dict) -> None:
+        """Load a recent condition-group back into the dialog.
+
+        Drops any existing extra rows first so the loaded group is the
+        only state the user sees. Row 0 takes the first condition;
+        remaining conditions populate freshly-added extras. Picking a
+        Recent always lands the user in Regex mode on row 0 (the
+        stored patterns are regex strings) — Simple-mode reverse-
+        parsing happens automatically via ``_apply_mode_visibility``.
+        """
+        # Strip extras before loading so the recent group replaces the
+        # editor state cleanly. The combinator + add-button visibility
+        # are managed below.
+        for row in list(self._extra_rows):
+            self._remove_extra_row(row)
+
+        conditions = list(group.get("conditions") or [])
+        combinator = str(group.get("combinator") or COMBINATOR_AND)
+
+        if not conditions:
+            return
+
+        # Row 0 carries the first condition. We only load the regex
+        # form here — numeric / top_n recent groups are skipped at
+        # write time (see ``_emit_set_action``) so we won't encounter
+        # them on load in practice.
+        first = conditions[0]
+        if first.get("kind") == "regex":
+            if self._mode != MODE_REGEX and self._match_fn is not None:
+                self._mode_regex_btn.setChecked(True)
+            self.regex.setText(first.get("pattern", ""))
+            field = first.get("field", "File Name")
+            self._set_default_field(field)
+
+        # Each remaining condition becomes a fresh extra row.
+        for cond in conditions[1:]:
+            self._on_add_condition_clicked()
+            self._extra_rows[-1].set_condition(cond)
+
+        # Set combinator AFTER row construction so its picker is visible
+        # by the time we apply the value.
+        cb_idx = self._combinator_combo.findData(combinator)
+        if cb_idx >= 0:
+            self._combinator_combo.setCurrentIndex(cb_idx)
 
     def _clear_recent_patterns(self) -> None:
         self._recent_patterns = []
         self._settings_set(_RECENT_KEY, [])
 
-    def _record_recent_pattern(self, pattern: str) -> None:
-        if not pattern:
+    def _record_recent_pattern_group(
+        self, conditions: list[dict], combinator: str
+    ) -> None:
+        """Save an all-regex condition group to the Recent list.
+
+        Numeric and Top-N groups are not persisted — the row widget
+        can't reverse-load them and a "Recent" menu of opaque
+        ``__cmp__:>=:1000`` entries would be more confusing than
+        useful. Caller is responsible for the all-regex guard
+        (``_emit_set_action`` enforces it).
+
+        Dedup keys off the JSON-equivalent of the group dict so re-
+        applying the same multi-condition set moves the existing entry
+        to the front instead of stacking duplicates.
+        """
+        if not conditions:
             return
-        # Most-recent first, deduped, capped. The cap keeps the dropdown
-        # scannable and bounds settings.json growth.
-        existing = [p for p in self._recent_patterns if p != pattern]
-        self._recent_patterns = ([pattern] + existing)[:_RECENT_CAP]
+        new_entry = {"combinator": combinator, "conditions": conditions}
+        existing = [g for g in self._recent_patterns if g != new_entry]
+        self._recent_patterns = ([new_entry] + existing)[:_RECENT_CAP]
         self._settings_set(_RECENT_KEY, self._recent_patterns)
 
     # ── Preview pane (only built when match_fn is supplied) ────────────────
@@ -1242,16 +1670,25 @@ class ActionDialog(QDialog):
     def _refresh_preview(self) -> None:
         """Pull live counts + sample names from the injected match_fn.
 
-        Both modes funnel through this — the only difference is which
-        widget produced the pattern (Regex mode uses self.regex, Beginner
-        mode synthesises via _build_pattern). Match-span highlighting is
-        applied per-row by storing (start, end) on each list item; the
-        delegate paints from there.
+        Single-row regex / Simple uses the legacy ``match_fn(field,
+        pattern)`` closure — that keeps the per-row match-span
+        highlighting (which depends on the row's pattern being a real
+        regex). Numeric / Top-N rows use their own counting path
+        (``_refresh_numeric_preview``) because match_fn is regex-only.
 
-        Numeric panel uses its own counting path (groups + helpers)
-        because the match_fn closure is regex-only.
+        Multi-condition mode (any extra row) bypasses match_fn and
+        runs ``build_match_fn_for_conditions`` over the loaded groups
+        directly. Match-span highlighting is suppressed in that mode
+        — with N>1 conditions the "which span matched on this row"
+        question is ambiguous (the AND combinator means every span
+        contributed; OR means at least one did). Showing no highlight
+        is more honest than fabricating one.
         """
         if self._match_fn is None:
+            return
+
+        if self._extra_rows:
+            self._refresh_multi_preview()
             return
 
         if self._field_panel_is_numeric():
@@ -1290,6 +1727,60 @@ class ActionDialog(QDialog):
                         item.setData(Qt.UserRole, (m.start(), m.end()))
                 self._preview_list.addItem(item)
 
+        if matched > len(samples):
+            self._preview_truncated.setText(
+                t("action_dialog.preview_truncated").format(
+                    n=matched - len(samples)
+                )
+            )
+            self._preview_truncated.show()
+        else:
+            self._preview_truncated.hide()
+
+    def _refresh_multi_preview(self) -> None:
+        """Live preview for the multi-condition path.
+
+        Builds the closure each refresh (cheap — it just iterates
+        groups once on call). When neither row 0 nor any extra has a
+        usable condition the preview falls back to the empty-state
+        placeholder rather than reporting 0/total — same UX the single
+        row gives an empty regex.
+        """
+        from app.views.handlers.file_operations import (
+            build_match_fn_for_conditions,
+        )
+
+        conditions, combinator = self._collect_all_conditions()
+        total_records = sum(
+            len(getattr(g, "items", [])) for g in self._groups
+        )
+
+        if not conditions:
+            self._match_counter.setText(
+                t("action_dialog.match_counter").format(
+                    matched=0, total=total_records
+                )
+            )
+            self._preview_list.clear()
+            self._preview_list.addItem(t("action_dialog.preview_empty"))
+            self._preview_truncated.hide()
+            return
+
+        match_fn = build_match_fn_for_conditions(
+            self._groups, conditions, combinator, sample_cap=self._sample_cap
+        )
+        matched, total, samples = match_fn()
+        self._match_counter.setText(
+            t("action_dialog.match_counter").format(matched=matched, total=total)
+        )
+        self._preview_list.clear()
+        if matched == 0:
+            self._preview_list.addItem(t("action_dialog.preview_empty"))
+        else:
+            for name in samples:
+                # No per-row highlight — multi-condition match spans
+                # are ambiguous (see _refresh_preview docstring).
+                self._preview_list.addItem(QListWidgetItem(name))
         if matched > len(samples):
             self._preview_truncated.setText(
                 t("action_dialog.preview_truncated").format(
@@ -1348,21 +1839,146 @@ class ActionDialog(QDialog):
         data = self.combo.currentData()
         return str(data) if data is not None else self.combo.currentText()
 
-    def _emit_set_action(self) -> None:
+    # ── Multi-condition row management (#173 Phase D) ──────────────────────
+
+    def _row0_condition(self) -> dict | None:
+        """Build the first-row Condition from the existing dialog widgets.
+
+        Returns ``None`` when row 0 hasn't been filled in (empty regex
+        / empty Simple text / empty numeric threshold). Numeric Top-N
+        is preserved as a dedicated ``kind: "top_n"`` Condition because
+        Top-N is a group-level operation that the AND/OR evaluator
+        can't compose with — the dialog refuses to combine a Top-N row
+        with extras (see ``_emit_set_action`` for the assertion).
+        """
         field = self._current_field()
         if self._field_panel_is_numeric():
-            pattern = self._build_numeric_pattern()
-        else:
-            pattern = self._build_pattern()
-            # Recent-patterns only records raw regex strings — numeric
-            # pseudo-patterns (`__cmp__:`, `__top_n__:`) would be
-            # confusing in the Recent dropdown which lives in the
-            # regex panel. Record only when we're emitting a real
-            # regex.
-            self._record_recent_pattern(pattern)
+            if self._numeric_mode == NUMERIC_MODE_TOPN:
+                n = int(self._num_n_spin.value())
+                order = str(self._num_order_combo.currentData() or "desc")
+                if n <= 0:
+                    return None
+                return {
+                    "kind": "top_n",
+                    "field": field,
+                    "n": n,
+                    "order": order,
+                    "negated": False,
+                }
+            value_text = self._num_value_edit.text().strip()
+            if not value_text:
+                return None
+            op = str(self._num_cmp_combo.currentData() or ">")
+            return {
+                "kind": "numeric",
+                "field": field,
+                "op": op,
+                "threshold": value_text,
+                "negated": False,
+            }
+        pattern = self._build_pattern()
+        if not pattern:
+            return None
+        return {
+            "kind": "regex",
+            "field": field,
+            "pattern": pattern,
+            "negated": False,
+        }
+
+    def _collect_all_conditions(self) -> tuple[list[dict], str]:
+        """Return (conditions, combinator) for the full row set.
+
+        Row 0 contributes its condition first (or is omitted if empty),
+        followed by each extra row's condition (extras returning None
+        are likewise skipped so a half-filled row doesn't zero-out an
+        AND combinator).
+        """
+        conditions: list[dict] = []
+        c0 = self._row0_condition()
+        if c0 is not None:
+            conditions.append(c0)
+        for row in self._extra_rows:
+            c = row.get_condition()
+            if c is not None:
+                conditions.append(c)
+        combinator = str(self._combinator_combo.currentData() or COMBINATOR_AND)
+        return conditions, combinator
+
+    def _on_add_condition_clicked(self) -> None:
+        row = _ConditionRowWidget(
+            self._fields, len(self._extra_rows), parent=self._extras_container
+        )
+        row.changed.connect(self._on_extra_row_changed)
+        row.removeRequested.connect(lambda _r=row: self._remove_extra_row(_r))
+        self._extra_rows.append(row)
+        self._extras_layout.addWidget(row)
+        # Combinator picker is only meaningful with 2+ conditions; row
+        # 0 + the first extra hits that threshold.
+        self._combinator_label.show()
+        self._combinator_combo.show()
+        # Newly-added row's chrome is always visible — only the lone
+        # row-0 case hides the NOT + × widgets.
+        row.set_chrome_visible(True)
+        self._on_extra_row_changed()
+
+    def _remove_extra_row(self, row: _ConditionRowWidget) -> None:
+        if row not in self._extra_rows:
+            return
+        self._extra_rows.remove(row)
+        self._extras_layout.removeWidget(row)
+        row.deleteLater()
+        if not self._extra_rows:
+            self._combinator_label.hide()
+            self._combinator_combo.hide()
+        self._on_extra_row_changed()
+
+    def _on_extra_row_changed(self) -> None:
+        if self._match_fn is not None and hasattr(self, "_preview_timer"):
+            self._preview_timer.start()
+
+    # ── Apply / preview ────────────────────────────────────────────────────
+
+    def _emit_set_action(self) -> None:
+        field = self._current_field()
+        conditions, combinator = self._collect_all_conditions()
         idx = self._action_combo.currentIndex()
         _label, value = self._decisions[idx]
-        self.setActionRequested.emit(field, pattern, value)
+
+        # N=1 (no extras) keeps the legacy ``setActionRequested(field,
+        # pattern, value)`` signal firing so existing main_window /
+        # ExecuteActionDialog observers see every single-row Apply
+        # exactly as before — including the numeric pseudo-patterns
+        # (``__cmp__:OP:VALUE`` / ``__top_n__:N:ORDER``) the Execute
+        # dialog's inner Select-by-Field flow decodes today. The new
+        # multi-condition signal also fires so consumers wired to the
+        # new path see every Apply.
+        #
+        # N>1 (any extras) emits ONLY the new signal — legacy can't
+        # express multiple conditions, and the legacy back-compat
+        # callers don't know what to do with one condition out of N.
+        if not self._extra_rows:
+            if self._field_panel_is_numeric():
+                # Preserve today's encoded-string contract for the
+                # Execute dialog (#237/#238) — Apply with an empty
+                # numeric value stays a silent no-op (the encoded
+                # pattern would match nothing downstream anyway).
+                legacy_pattern = self._build_numeric_pattern()
+                self.setActionRequested.emit(field, legacy_pattern, value)
+            else:
+                legacy_pattern = self._build_pattern()
+                self.setActionRequested.emit(field, legacy_pattern, value)
+
+        # Record-and-emit the multi-condition signal. Recent-patterns
+        # persistence only records all-regex groups — numeric / top_n
+        # rows would surface "__cmp__:..." or {top_n,...} dicts in the
+        # Recent dropdown which the row widget can't load back.
+        if conditions and all(c.get("kind") == "regex" for c in conditions):
+            self._record_recent_pattern_group(conditions, combinator)
+        if conditions:
+            self.setActionByConditionsRequested.emit(
+                conditions, combinator, value
+            )
 
     def _build_numeric_pattern(self) -> str:
         """Encode the active numeric sub-panel as a pattern string."""

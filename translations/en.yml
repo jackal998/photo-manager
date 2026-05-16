@@ -233,6 +233,16 @@ action_dialog:
   cmp_op_le: "<="
   cmp_op_eq: "=="
   cmp_op_ne: "!="
+  # #173 Phase D — multi-condition stack: combinator picker (visible
+  # when 2+ conditions), per-row NOT toggle, "+ Add condition", and
+  # remove (×) tooltip.
+  multi:
+    combinator_label: "Match"
+    combinator_all: "ALL"
+    combinator_any: "ANY"
+    add_condition: "+ Add condition"
+    negate: "NOT"
+    remove_condition: "Remove condition"
 
 # Right-click context menu on the main tree.
 context_menu:
