@@ -125,6 +125,33 @@ jobs:
           # `$LASTEXITCODE` from the python invocation is what matters.
           exit $LASTEXITCODE
 
+      # Probe-layer promotion detector (#243 follow-up). Soft probes
+      # embedded inside scenarios print `probe_status: XFAIL_KNOWN_BUG_N`
+      # while the target bug exists, and `probe_status: PASS …` once
+      # the bug is fixed. The scenario itself still passes either way
+      # (soft-fail by design so qa-batch stays green during known-bug
+      # windows). This step closes the loop: when the bug is fixed
+      # and the probe starts emitting PASS, fail the job so the bug-fix
+      # PR is forced to either (a) promote the probe to a hard
+      # `failures.append(...)` in the scenario, or (b) delete the soft
+      # probe block entirely. Mirrors the role @pytest.mark.xfail(strict=True)
+      # plays for the static probes in tests/test_ui_probes.py.
+      - name: Detect probes ready for promotion
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path qa-batch.log)) { exit 0 }
+          $passes = Select-String -Path qa-batch.log -Pattern 'probe_status:\s*PASS'
+          if ($passes) {
+            Write-Host '::error::A soft probe is now passing — its target bug appears to be fixed.'
+            Write-Host '::error::Promote it to a hard assertion (failures.append) in the scenario, or delete the probe block.'
+            Write-Host '::error::See docs/testing.md "Probes" section and the comment block in the affected scenario.'
+            Write-Host ''
+            Write-Host 'Matching log lines:'
+            $passes | ForEach-Object { Write-Host "  $($_.Line)" }
+            exit 1
+          }
+
       # Always emit a per-scenario rc summary to the job page so triage from
       # the PR is one click. Runs even on failure so we see WHICH scenarios
       # failed without digging through the full log.
