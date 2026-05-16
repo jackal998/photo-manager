@@ -21,6 +21,7 @@ MANIFEST_ACTIONS: tuple[str, ...] = (
     "execute_action",
     "remove_from_list",
     "execute_mode",
+    "action_by_regex",
 )
 
 
@@ -57,6 +58,11 @@ class MenuController:
         # Action Menu — Alt+A
         action_menu = menubar.addMenu(t("menu.action.title"))
         self.actions["action_by_regex"] = action_menu.addAction(t("menu.action.by_regex"))
+        # Gated on a loaded manifest (#244) — the dialog operates on the
+        # current groups, so clicking it with no manifest is a no-op /
+        # crash. Re-enabled by set_manifest_actions() on manifest load,
+        # together with the rest of MANIFEST_ACTIONS.
+        self.actions["action_by_regex"].setEnabled(False)
         action_menu.addSeparator()
         self.actions["execute_action"] = action_menu.addAction(t("menu.action.execute"))
         self.actions["execute_action"].setEnabled(False)
