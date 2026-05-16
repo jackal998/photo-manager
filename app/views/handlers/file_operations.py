@@ -869,19 +869,7 @@ class FileOperationsHandler:
         self.set_decision_with_lock_check(matching, new_decision)
 
     def execute_action(self) -> None:
-        """Open the Execute Action review dialog and run planned operations.
-
-        #165 prototype note: the new ``View → Execute Mode`` (Ctrl+E)
-        toggle is the option-B surface that lives on the main window
-        with banner + action bar. We deliberately keep this dialog
-        path reachable from ``Action → Execute Action…`` so the user
-        can A/B-compare both surfaces in the same build, and so the
-        existing destructive QA scenarios (s13, s30, s33, s34, s36,
-        s43, s44, s48) keep verifying the destructive pipeline that
-        ``ExecuteRunner`` inherits. A clean option-B commit would
-        wire this handler to ``MainWindow._apply_mode("execute")``
-        instead — see the PR body for the rationale.
-        """
+        """Open the Execute Action review dialog and run planned operations."""
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             QMessageBox.information(

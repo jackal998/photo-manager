@@ -396,26 +396,17 @@ def test_probe_zh_tw_translations_are_not_english_passthroughs():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#240 — Execute Mode toggle (Option-B prototype for #165) "
-           "has not yet been removed. Remove this marker when #240 lands.",
-)
 def test_probe_no_execute_mode_toggle_in_menu():
-    """The Execute Mode toggle (Ctrl+E) was added in d8bd1dc as an
-    Option-B prototype for #165. The decision was made to remove it and
-    keep the legacy Execute Action dialog as the sole destructive path
-    (see #240). This probe enforces the absence so the toggle can't
-    silently come back.
-
-    Catches: #240 (Option-B prototype still registered in
-    menu_controller.py).
+    """The Execute Mode toggle (Ctrl+E) was an Option-B prototype for
+    #165 (added in d8bd1dc, removed in #240). This probe enforces the
+    absence so the toggle can't silently come back via a future
+    refactor or a partial revert.
     """
     src = MENU_CONTROLLER_PATH.read_text(encoding="utf-8")
     assert '"execute_mode"' not in src, (
-        "menu_controller.py still registers an 'execute_mode' action. "
-        "The Execute Mode toggle was decided to be removed in favor of "
-        "the legacy Execute Action dialog (see #240). All references "
-        "to 'execute_mode' should be deleted along with the supporting "
-        "code in main_window.py and execute_mode_helpers.py."
+        "menu_controller.py registers an 'execute_mode' action — the "
+        "Option-B prototype was deliberately removed in #240. If a new "
+        "use-case for a similar surface lands, give it a different name "
+        "and update this probe's guard string so the regression-vs-new-"
+        "feature distinction stays explicit."
     )
