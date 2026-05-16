@@ -344,20 +344,13 @@ _TRANSLATION_EXEMPT_KEYS: frozenset[str] = frozenset({
 _CJK_RE = re.compile(r"[一-鿿]")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#245 — 9 zh_TW values from #209 (numeric compare panel) "
-           "plus execute_dialog.execute_button_highlighted still ship "
-           "the raw English string. Remove this marker when #245 lands.",
-)
 def test_probe_zh_tw_translations_are_not_english_passthroughs():
     """Every zh_TW value that differs from the English string visually
     must actually be in Chinese — not a structurally-present key whose
     value was copy-pasted from en.yml during a feature PR.
 
-    Catches: the 9 numeric-panel keys from #209 and
-    ``execute_dialog.execute_button_highlighted`` that shipped with
-    English text in zh_TW. The existing
+    Forward-defensive against #245 recurring: catches keys whose values
+    were pasted-as-English during a future feature PR. The existing
     ``test_zh_tw_has_every_key_present_in_english`` only checks
     structural key parity; it cannot catch a key whose value was
     pasted-as-English.
