@@ -263,43 +263,49 @@ def test_probe_action_handlers_impl_proxies_every_protocol_method():
     # concern, not a structural invariant.
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#244 — action_by_regex is not in MANIFEST_ACTIONS, so "
-           "Set Action by Regex stays enabled before any manifest "
-           "loads. Remove this marker when #244 lands.",
-)
 def test_probe_manifest_dependent_menu_actions_are_gated():
     """Actions that operate on the loaded manifest MUST be in
     ``MANIFEST_ACTIONS`` so they're disabled before a manifest is open
     and re-enabled on load.
 
-    Catches: ``action_by_regex`` is registered in menu_controller.py but
-    is NOT in ``MANIFEST_ACTIONS`` and has no ``setEnabled(False)``
-    call — so "Set Action by Regex…" is always clickable, even before
-    any manifest exists. Clicking it on startup tries to filter an
-    empty record set.
-
-    We hardcode the design rule ("Set Action by Regex requires a
-    manifest") here rather than trying to derive it statically — that's
-    the probe's job. Add new gated actions to ``_MANIFEST_DEPENDENT``
-    when the menu grows.
+    Catches: ``action_by_regex`` not gated (#244, fixed). We hardcode
+    the design rule here rather than trying to derive it statically —
+    that's the probe's job. Add new gated actions to
+    ``_MANIFEST_DEPENDENT`` when the menu grows.
     """
     # Read MANIFEST_ACTIONS via AST — same coverage-isolation rationale
-    # as the other static probes.
+    # as the other static probes. The constant is declared with a type
+    # annotation (``MANIFEST_ACTIONS: tuple[str, ...] = (…)``) which
+    # parses as ast.AnnAssign, not ast.Assign — both forms must be
+    # walked or the probe silently sees an empty set and "passes" for
+    # the wrong reason.
     src = MENU_CONTROLLER_PATH.read_text(encoding="utf-8")
     tree = ast.parse(src)
     manifest_actions: set[str] = set()
     for node in ast.walk(tree):
+        target_id: str | None = None
+        value_node: ast.expr | None = None
         if (isinstance(node, ast.Assign)
                 and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "MANIFEST_ACTIONS"
-                and isinstance(node.value, ast.Tuple)):
-            for elt in node.value.elts:
-                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                    manifest_actions.add(elt.value)
-            break
+                and isinstance(node.targets[0], ast.Name)):
+            target_id = node.targets[0].id
+            value_node = node.value
+        elif (isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)):
+            target_id = node.target.id
+            value_node = node.value
+        if target_id != "MANIFEST_ACTIONS" or not isinstance(value_node, ast.Tuple):
+            continue
+        for elt in value_node.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                manifest_actions.add(elt.value)
+        break
+
+    assert manifest_actions, (
+        "Probe could not locate the MANIFEST_ACTIONS constant in "
+        f"{MENU_CONTROLLER_PATH}. Did the declaration form change "
+        "(Assign / AnnAssign / something else)? Update the AST walker."
+    )
 
     # Design-rule: actions that require a loaded manifest to make sense.
     # Add new entries here when the menu grows. Keep this list aligned

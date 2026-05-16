@@ -58,6 +58,30 @@ def main() -> int:
     app, win = _uia.connect_main()
     print(f"connected: pid={win.process_id()} title={win.window_text()!r}")
 
+    # #244 — Action menu items that operate on a loaded manifest must
+    # start greyed-out and re-enable after Open / Scan. We probe BEFORE
+    # the scan so a regression that re-enables the item too early (or
+    # never enables it) is caught here, not by user surprise. The full
+    # action-menu state is printed so future drift (e.g. a new Action
+    # menu item also needing to be gated) is visible in batch logs.
+    print("step: assert_action_menu_gated_pre_manifest")
+    action_items = _uia.probe_menu_items(win, _uia.MENU_ACTION)
+    print(f"  action_menu_items={action_items}")
+    gated_state = {title: enabled for title, enabled in action_items}
+    if gated_state.get(_uia.ACTION_BY_REGEX, True):
+        print(
+            f"FAIL: {_uia.ACTION_BY_REGEX!r} is enabled with no "
+            f"manifest loaded. Add it to MANIFEST_ACTIONS in "
+            f"menu_controller.py — see #244."
+        )
+        return 1
+    if gated_state.get(_uia.ACTION_EXECUTE, True):
+        print(
+            f"FAIL: {_uia.ACTION_EXECUTE!r} is enabled with no "
+            f"manifest loaded — Action menu gating regression."
+        )
+        return 1
+
     print("step: open_scan_dialog")
     dlg, _ = _uia.open_scan_dialog(win)
     print(f"  configured_sources={_uia.read_configured_sources(dlg)!r}")
