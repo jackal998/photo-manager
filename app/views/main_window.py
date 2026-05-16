@@ -26,7 +26,7 @@ from app.views.components.status_reporter_impl import StatusReporterImpl
 
 # Import extracted components
 from app.views.components.tree_controller import TreeController
-from app.views.constants import COL_CREATION_DATE, COL_FOLDER, COL_GROUP, COL_NAME, COL_SHOT_DATE, COL_SIZE_BYTES
+from app.views.constants import COL_CREATION_DATE, COL_FOLDER, COL_GROUP, COL_NAME, COL_SHOT_DATE, COL_SIZE_BYTES, PATH_ROLE
 from app.views.handlers.action_handlers import ActionHandlersImpl
 from app.views.handlers.context_menu import ContextMenuHandler
 from app.views.handlers.dialog_handler import DialogHandler
@@ -420,7 +420,7 @@ class MainWindow(QMainWindow):
         from app.views.dialogs.scan_dialog import ScanDialog
         dlg = ScanDialog(
             settings=self._settings,
-            on_scan_complete=self._load_manifest_from_path,
+            on_scan_complete=self._load_manifest_after_scan,
             parent=self,
             should_proceed=self._confirm_no_pending_decisions,
         )
@@ -505,6 +505,65 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:
             QMessageBox.critical(self, t("main_window.load_error_title"), str(exc))
+
+    def _load_manifest_after_scan(self, manifest_path: str) -> None:
+        """Load the manifest produced by a scan and apply tree selection
+        to any rows the worker pre-decided as keepers (#239).
+
+        Distinct from :meth:`_load_manifest_from_path` (the Open-Manifest
+        path) so re-opening an existing manifest that happens to carry
+        ``action="KEEP"`` rows doesn't clobber whatever selection the
+        user had in mind. The scan-complete path is the only place the
+        user has explicitly asked auto-select to choose for them.
+        """
+        self._load_manifest_from_path(manifest_path)
+        keeper_paths = {
+            getattr(rec, "file_path", "")
+            for group in self._vm.groups
+            for rec in getattr(group, "items", [])
+            if getattr(rec, "action", "") == "KEEP"
+        }
+        keeper_paths.discard("")
+        if keeper_paths:
+            self._select_rows_by_paths(keeper_paths)
+
+    def _select_rows_by_paths(self, target_paths: set[str]) -> None:
+        """Apply tree selection to every row whose PATH_ROLE is in
+        ``target_paths``. Scrolls to the first match so the user sees
+        the selection state, not just the count in the status bar.
+        Used by :meth:`_load_manifest_after_scan` for the auto-select
+        post-scan highlight (#239). Generalises :meth:`_reselect_by_path`
+        from single- to multi-target selection.
+        """
+        from PySide6.QtCore import QItemSelectionModel
+
+        if not target_paths:
+            return
+        model = self.tree.model()
+        if model is None:
+            return
+        sel_model = self.tree.selectionModel()
+        if sel_model is None:
+            return
+
+        sel_model.clearSelection()
+        first_idx = None
+        # Top-level rows are groups; their children are files. Same
+        # traversal shape as _reselect_by_path.
+        for group_row in range(model.rowCount()):
+            group_idx = model.index(group_row, COL_GROUP)
+            for child_row in range(model.rowCount(group_idx)):
+                name_idx = model.index(child_row, COL_NAME, group_idx)
+                path = model.data(name_idx, PATH_ROLE)
+                if path in target_paths:
+                    sel_model.select(
+                        name_idx,
+                        QItemSelectionModel.Select | QItemSelectionModel.Rows,
+                    )
+                    if first_idx is None:
+                        first_idx = name_idx
+        if first_idx is not None:
+            self.tree.scrollTo(first_idx)
 
     def on_open_manifest(self) -> None:
         """Handle Open Manifest action."""
