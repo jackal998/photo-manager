@@ -188,6 +188,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # differentiating signal so q95 is the deterministic per-group score
     # winner the scenario asserts on.
     "s49_scan_auto_select": ["qa/sandbox/near-duplicates"],
+    # s50 (#237) — Select dialog's numeric panel reachable from the
+    # main-window menu route. Same fixture as s43 — needs a loaded
+    # manifest so the menu item is enabled and ``records_provider``
+    # has groups to pass to ActionDialog. Non-destructive.
+    "s50_select_numeric_panel_from_main_window": ["qa/sandbox/near-duplicates"],
 }
 
 

@@ -104,6 +104,7 @@ class DialogHandler:
         initial_field = _COL_TO_FIELD.get(clicked_col) if clicked_col is not None else None
         row_values = self._get_highlighted_row_values()
         match_fn = None
+        groups: list = []
         if self.records_provider is not None:
             from app.views.handlers.file_operations import build_match_fn
 
@@ -113,10 +114,17 @@ class DialogHandler:
                 groups = []
             if groups:
                 match_fn = build_match_fn(groups)
+        # #237 — pass groups through so the numeric-condition panel is
+        # reachable when the user picks Size / Score / Group Count /
+        # Similarity / Creation Date / Shot Date from the dropdown.
+        # Without this, ActionDialog._groups stays empty and the numeric
+        # panel's visibility gate (`_field_panel_is_numeric`) silently
+        # keeps the regex panel shown instead.
         dlg = ActionDialog(
             fields=fields, parent=self.parent,
             row_values=row_values, initial_field=initial_field,
             match_fn=match_fn, settings=self.settings,
+            groups=groups,
         )
 
         if self.action_handler is not None:

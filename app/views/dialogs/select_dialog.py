@@ -1032,9 +1032,11 @@ class ActionDialog(QDialog):
         """True iff the numeric-condition panel should pre-empt the
         regex/simple panels. Gated on (a) selected field is numeric-capable
         and (b) groups were supplied — without groups, Top-N can't rank
-        and threshold comparisons have no rows to apply to from this
-        dialog's own context. The main-window callsite intentionally
-        leaves groups=None to preserve existing behavior (#209)."""
+        and threshold comparisons have no rows to apply to. Every
+        production callsite (main-window menu + right-click via
+        ``dialog_handler``, Execute Action dialog) now passes ``groups=``
+        explicitly; the gate only fires for unit-test callers that
+        construct the dialog with groups=None (#237)."""
         if not self._groups:
             return False
         return self._current_field() in _NUMERIC_FIELDS

@@ -165,21 +165,15 @@ def test_probe_similarity_column_emits_at_most_one_ref_per_group(qapp):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#237 — main-window callsite drops `groups=`, so the "
-           "numeric compare panel never appears when picking Size etc. "
-           "Remove this marker when #237 lands.",
-)
 def test_probe_action_dialog_receives_groups_from_main_window_callsite():
     """When the main window opens the Select dialog via right-click,
     the ``groups=`` parameter MUST be threaded through — otherwise the
     numeric-condition panel (>, <, =, Top-N) silently stays hidden even
     when the user picks a numeric field.
 
-    Catches: #237. We inspect dialog_handler.py's AST rather than
-    invoking the function so the probe doesn't pull dialog_handler.py
-    into coverage measurement.
+    Forward-defensive against #237 recurring. We inspect dialog_handler.py's
+    AST rather than invoking the function so the probe doesn't pull
+    dialog_handler.py into coverage measurement.
     """
     fn = _show_action_dialog_ast()
     # Find the `ActionDialog(...)` call inside show_action_dialog.

@@ -190,6 +190,13 @@ ALL_SCENARIOS = [
     # via UIA and asserts the top-scored row carries action="KEEP" in
     # the manifest; phase 2 toggles it OFF and asserts zero KEEP rows.
     "s49_scan_auto_select",
+    # s50 (#237) — Select dialog's numeric-condition panel must surface
+    # when the dialog is opened from the main-window menu route.
+    # Sister to s43 which covers the same numeric panel reached via the
+    # Execute Action dialog's "Select by Field/Regex…" button. Non-
+    # destructive — just probes that the widgets surface after picking
+    # a numeric field, then closes the dialog without applying.
+    "s50_select_numeric_panel_from_main_window",
 ]
 
 
