@@ -106,7 +106,7 @@ calls out what would be uncaught even with a green CI.
 | `core/models.py` | 100% | dataclasses |
 | `core/services/sort_service.py` | 100% | pure logic |
 | `core/services/interfaces.py` | 100% | dataclasses + protocols |
-| `core/services/auto_select.py` | 100% | pure helper for #212. Picks the top-scored row per duplicate group; consumed by `scan_worker._run_pipeline` when the dialog's "Auto select after scan" checkbox is on. Tie-break + None-handling mirror `select_paths_top_n` (`app/views/dialogs/select_dialog.py`) so manual and auto runs converge on the same keeper. Layer 3: s49. |
+| `core/services/auto_select.py` | 100% | pure helper for #212. Picks the top-scored row per duplicate group; consumed by `scan_worker._run_pipeline` when the dialog's "Auto select after scan" checkbox is on. Tie-break + None-handling mirror `select_paths_top_n` (`app/views/dialogs/select_dialog.py`) so manual and auto runs converge on the same keeper. Layer 3: s49 covers the full pipeline including #239's visual-selection step — `MainWindow._load_manifest_after_scan` walks `vm.groups` for `action="KEEP"` and applies the tree selection. |
 
 ### `infrastructure/`
 
@@ -368,7 +368,7 @@ soft-probe upgrade path lives if applicable.
 | `test_probe_action_handlers_impl_proxies_every_protocol_method` | Every method on `ActionHandlers` Protocol exists on `ActionHandlersImpl` | PASS | Future #175/#182-class bridge regression |
 | `test_probe_manifest_dependent_menu_actions_are_gated` | Every menu action that requires a loaded manifest is in `MANIFEST_ACTIONS` | XFAIL | [#244](https://github.com/jackal998/photo-manager/issues/244) |
 | `test_probe_zh_tw_translations_are_not_english_passthroughs` | zh_TW values that match en values must contain CJK chars (heuristic; tiny exempt list for product names) | XFAIL | [#245](https://github.com/jackal998/photo-manager/issues/245) |
-| `s49` `step: probe_visual_selection` (soft live) | After scan-complete with auto-select on, the tree's selection model contains the keeper rows | logs `XFAIL_KNOWN_BUG_239` | [#239](https://github.com/jackal998/photo-manager/issues/239) |
+| `s49` `step: verify_visual_selection_of_keeper` (hard live) | After scan-complete with auto-select on, the tree's selection model contains the keeper rows | PASS | Forward-defensive against [#239](https://github.com/jackal998/photo-manager/issues/239) recurring |
 
 When the corresponding bug lands, the static probes flip XFAIL→XPASS-strict
 and the bug-fix PR removes the marker. The soft probe is converted from
