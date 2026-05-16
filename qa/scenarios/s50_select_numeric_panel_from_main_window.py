@@ -67,15 +67,36 @@ def main() -> int:
     _uia._focus(action_dlg)
     time.sleep(0.3)
 
-    # 3. Pick the numeric field. _on_field_changed should swap the
-    # regex panel out and the numeric panel in.
-    print(f"step: select_numeric_field field={SIZE_FIELD!r}")
+    print("step: locate_field_combo")
     field_combo = _uia._find_descendant_by_aid_suffix(
         action_dlg, "ComboBox", ".regexFieldCombo"
     )
     if field_combo is None:
         print("FAIL: regexFieldCombo not found in action dialog")
         return 1
+
+    # #238 — Score / Lock / Resolution were missing from the dropdown
+    # despite being visible columns in the tree. Probe their presence
+    # by selecting each in turn; pywinauto raises when the requested
+    # item isn't in the combo. en-locale labels are the same as the
+    # internal field names (verified via translations/en.yml).
+    print("step: assert_new_fields_in_field_combo")
+    for new_field in ("Score", "Lock", "Resolution"):
+        try:
+            field_combo.select(new_field)
+        except Exception as exc:
+            print(
+                f"FAIL: field {new_field!r} not selectable in the field "
+                f"combo — likely missing from `fields` list in "
+                f"dialog_handler.show_action_dialog. See #238. ({exc!r})"
+            )
+            return 1
+        time.sleep(0.15)
+    print("  fields_present=['Score', 'Lock', 'Resolution']")
+
+    # 3. Pick the numeric field. _on_field_changed should swap the
+    # regex panel out and the numeric panel in.
+    print(f"step: select_numeric_field field={SIZE_FIELD!r}")
     field_combo.select(SIZE_FIELD)
     time.sleep(0.3)
 

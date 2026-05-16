@@ -92,6 +92,7 @@ class DialogHandler:
         fields = [
             "Similarity",
             "Action",
+            "Score",
             "Lock",
             "File Name",
             "Folder",
@@ -99,6 +100,7 @@ class DialogHandler:
             "Group Count",
             "Creation Date",
             "Shot Date",
+            "Resolution",
         ]
 
         initial_field = _COL_TO_FIELD.get(clicked_col) if clicked_col is not None else None

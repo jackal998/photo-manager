@@ -46,12 +46,15 @@ from infrastructure.i18n import t
 _FIELD_LABEL_KEYS: dict[str, str] = {
     "Similarity":    "column.similarity",
     "Action":        "column.action",
+    "Score":         "column.score",          # #238 — added after #187 scoring rollout
+    "Lock":          "column.lock",           # #238 — was emitting raw "Lock" before
     "File Name":     "column.file_name",
     "Folder":        "column.folder",
     "Size (Bytes)":  "column.size_bytes",
     "Group Count":   "column.group_count",
     "Creation Date": "column.creation_date",
     "Shot Date":     "column.shot_date",
+    "Resolution":    "column.resolution",     # #238 — string field; regex matches "WxH"
 }
 
 # Type alias for the live-preview match function. Callers (DialogHandler
