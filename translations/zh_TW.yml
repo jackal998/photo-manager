@@ -76,6 +76,8 @@ tree:
   group_label: "群組 {n}"
   similarity_ref: "參考"
   similarity_near_dup: "~近似"
+  # #241 — em-dash is universal; no localisation needed.
+  similarity_passenger: "—"
 
 decision:
   delete: "刪除"

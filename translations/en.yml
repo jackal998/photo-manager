@@ -92,6 +92,11 @@ tree:
   group_label: "Group {n}"
   similarity_ref: "Ref"
   similarity_near_dup: "~dup"
+  # #241 — within a group, only one row carries "Ref"; other Ref-tier
+  # rows (e.g. Live Photo MOV passenger sibling of an HEIC primary,
+  # multi-source duplicates that union-find collapsed into one group)
+  # render this neutral sentinel rather than confusingly repeating "Ref".
+  similarity_passenger: "—"
 
 # Decision labels shown in context menus and the action dialog.
 # The stored value is internal ("delete" / "") — only the label is
