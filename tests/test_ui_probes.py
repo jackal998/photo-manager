@@ -20,9 +20,11 @@ per-file gate. AST inspection sidesteps that entanglement.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.viewmodels.main_vm import PhotoGroup, PhotoRecord
 from app.views import constants
@@ -31,6 +33,10 @@ from app.views.tree_model_builder import build_model
 REPO = Path(__file__).resolve().parents[1]
 DIALOG_HANDLER_PATH = REPO / "app" / "views" / "handlers" / "dialog_handler.py"
 MENU_CONTROLLER_PATH = REPO / "app" / "views" / "components" / "menu_controller.py"
+ACTION_HANDLERS_PATH = REPO / "app" / "views" / "handlers" / "action_handlers.py"
+CONTEXT_MENU_PATH = REPO / "app" / "views" / "handlers" / "context_menu.py"
+EN_YAML = REPO / "translations" / "en.yml"
+ZH_TW_YAML = REPO / "translations" / "zh_TW.yml"
 
 
 # Tree columns that the user expects to filter against in the Select
@@ -200,6 +206,203 @@ def test_probe_action_dialog_receives_groups_from_main_window_callsite():
             "dropdown silently shows the regex panel instead of the "
             ">/</= panel. See #237."
         )
+
+
+def _ast_class_method_names(path: Path, class_name: str) -> set[str]:
+    """Return the set of public method names defined on a class, read
+    from source via AST so the probe doesn't import the module."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for cls in ast.walk(tree):
+        if isinstance(cls, ast.ClassDef) and cls.name == class_name:
+            return {
+                fn.name for fn in cls.body
+                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and not fn.name.startswith("_")
+            }
+    raise AssertionError(
+        f"class {class_name} not found in {path} — file may have been "
+        f"moved or renamed."
+    )
+
+
+def test_probe_action_handlers_impl_proxies_every_protocol_method():
+    """Every method on the ``ActionHandlers`` Protocol (the contract
+    the context menu invokes against) MUST be present on
+    ``ActionHandlersImpl`` (the manual proxy bridge to file_operations).
+
+    Catches: future drift of the bridge-pattern hole that caused #175
+    (forgot ``set_locked_state``) and #182 (forgot
+    ``set_decision_with_lock_check``). Python's Protocol is advisory —
+    a missing method survives until the menu item fires at runtime and
+    the AttributeError gets swallowed by Qt's signal dispatch. This
+    probe is the static enforcement the Protocol can't give us.
+
+    Today: passes (3 manual tests in
+    ``tests/test_context_menu.py::TestActionHandlersImplBridge`` cover
+    a subset; this probe enforces 100% Protocol parity automatically).
+    """
+    protocol_methods = _ast_class_method_names(
+        CONTEXT_MENU_PATH, "ActionHandlers"
+    )
+    impl_methods = _ast_class_method_names(
+        ACTION_HANDLERS_PATH, "ActionHandlersImpl"
+    )
+
+    missing = protocol_methods - impl_methods
+    assert not missing, (
+        f"ActionHandlersImpl is missing proxies for ActionHandlers "
+        f"Protocol methods: {sorted(missing)}. Context-menu items that "
+        f"invoke these will silently no-op via Qt's swallowed "
+        f"AttributeError. Background: feedback_action_handlers_bridge "
+        f"in memory; #175 / #182 are prior instances."
+    )
+
+    # Reverse direction is informative but not a hard error: the impl
+    # can carry helper methods that aren't part of the Protocol surface.
+    # If a stale proxy ever needs to be removed, that's a code-review
+    # concern, not a structural invariant.
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="#244 — action_by_regex is not in MANIFEST_ACTIONS, so "
+           "Set Action by Regex stays enabled before any manifest "
+           "loads. Remove this marker when #244 lands.",
+)
+def test_probe_manifest_dependent_menu_actions_are_gated():
+    """Actions that operate on the loaded manifest MUST be in
+    ``MANIFEST_ACTIONS`` so they're disabled before a manifest is open
+    and re-enabled on load.
+
+    Catches: ``action_by_regex`` is registered in menu_controller.py but
+    is NOT in ``MANIFEST_ACTIONS`` and has no ``setEnabled(False)``
+    call — so "Set Action by Regex…" is always clickable, even before
+    any manifest exists. Clicking it on startup tries to filter an
+    empty record set.
+
+    We hardcode the design rule ("Set Action by Regex requires a
+    manifest") here rather than trying to derive it statically — that's
+    the probe's job. Add new gated actions to ``_MANIFEST_DEPENDENT``
+    when the menu grows.
+    """
+    # Read MANIFEST_ACTIONS via AST — same coverage-isolation rationale
+    # as the other static probes.
+    src = MENU_CONTROLLER_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    manifest_actions: set[str] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "MANIFEST_ACTIONS"
+                and isinstance(node.value, ast.Tuple)):
+            for elt in node.value.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    manifest_actions.add(elt.value)
+            break
+
+    # Design-rule: actions that require a loaded manifest to make sense.
+    # Add new entries here when the menu grows. Keep this list aligned
+    # with the user expectation that "no manifest open" = "every
+    # manifest-mutating menu item is greyed out".
+    _MANIFEST_DEPENDENT = {
+        "save_manifest",
+        "execute_action",
+        "remove_from_list",
+        "action_by_regex",
+    }
+
+    missing = _MANIFEST_DEPENDENT - manifest_actions
+    assert not missing, (
+        f"Menu actions need manifest gating but are NOT in "
+        f"MANIFEST_ACTIONS: {sorted(missing)}. These will stay enabled "
+        f"before any manifest loads, so the user can click them and "
+        f"get an empty / undefined-behaviour dispatch. Add the missing "
+        f"entries to MANIFEST_ACTIONS in "
+        f"app/views/components/menu_controller.py."
+    )
+
+
+def _walk_yaml_leaf_strings(
+    d_en, d_zh, prefix: str = ""
+) -> list[tuple[str, str, str]]:
+    """Yield ``(dotted_key, en_value, zh_value)`` for every leaf string
+    where both locales define the same key. Skips missing-from-zh keys
+    (those are caught by the existing ``test_zh_tw_has_every_key_present_in_english``)."""
+    out: list[tuple[str, str, str]] = []
+    if not isinstance(d_en, dict) or not isinstance(d_zh, dict):
+        return out
+    for k, v_en in d_en.items():
+        v_zh = d_zh.get(k)
+        key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v_en, dict):
+            out.extend(_walk_yaml_leaf_strings(v_en, v_zh, key))
+        elif isinstance(v_en, str) and isinstance(v_zh, str):
+            out.append((key, v_en, v_zh))
+    return out
+
+
+# Keys that are intentionally identical in both locales — product /
+# proper-noun strings that are not localized. Keep this list tiny;
+# anything new added here should have an explicit reason in the PR
+# description (e.g. "brand name", "version string format").
+_TRANSLATION_EXEMPT_KEYS: frozenset[str] = frozenset({
+    "main_window.title",  # "Photo Manager" — product name, untranslated by design
+})
+
+_CJK_RE = re.compile(r"[一-鿿]")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="#245 — 9 zh_TW values from #209 (numeric compare panel) "
+           "plus execute_dialog.execute_button_highlighted still ship "
+           "the raw English string. Remove this marker when #245 lands.",
+)
+def test_probe_zh_tw_translations_are_not_english_passthroughs():
+    """Every zh_TW value that differs from the English string visually
+    must actually be in Chinese — not a structurally-present key whose
+    value was copy-pasted from en.yml during a feature PR.
+
+    Catches: the 9 numeric-panel keys from #209 and
+    ``execute_dialog.execute_button_highlighted`` that shipped with
+    English text in zh_TW. The existing
+    ``test_zh_tw_has_every_key_present_in_english`` only checks
+    structural key parity; it cannot catch a key whose value was
+    pasted-as-English.
+
+    Heuristic: zh value equals en value AND contains no CJK characters
+    AND has at least one Latin letter AND is at least 3 chars long.
+    The exempt list (``_TRANSLATION_EXEMPT_KEYS``) carries product /
+    proper-noun strings that are legitimately the same in both
+    locales.
+    """
+    en = yaml.safe_load(EN_YAML.read_text(encoding="utf-8"))
+    zh = yaml.safe_load(ZH_TW_YAML.read_text(encoding="utf-8"))
+
+    untranslated: list[tuple[str, str]] = []
+    for key, v_en, v_zh in _walk_yaml_leaf_strings(en, zh):
+        if key in _TRANSLATION_EXEMPT_KEYS:
+            continue
+        if v_zh != v_en:
+            continue  # different value — translated (even if poorly)
+        if _CJK_RE.search(v_zh):
+            continue  # contains Chinese — translated (just happens to match en in some part)
+        if not re.search(r"[A-Za-z]", v_zh):
+            continue  # no alphabetic content (numbers, punctuation only)
+        if len(v_zh.strip()) < 3:
+            continue  # too short to be a meaningful phrase
+        untranslated.append((key, v_zh))
+
+    assert not untranslated, (
+        f"zh_TW values appear to be untranslated English passthroughs "
+        f"({len(untranslated)} keys):\n  " +
+        "\n  ".join(f"{k!r}: {v!r}" for k, v in untranslated) +
+        "\n\nEither translate the values in translations/zh_TW.yml, or "
+        "if the string is legitimately identical (product name, etc.), "
+        "add the key to _TRANSLATION_EXEMPT_KEYS in this file with a "
+        "one-line reason."
+    )
 
 
 @pytest.mark.xfail(
