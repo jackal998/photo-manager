@@ -107,20 +107,16 @@ def test_probe_select_dialog_exposes_every_filterable_tree_column():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#241 — multiple Ref labels render in groups with multiple "
-           "MOVE-action rows (e.g. Live Photo HEIC + MOV passenger). "
-           "Remove this marker when #241 lands.",
-)
 def test_probe_similarity_column_emits_at_most_one_ref_per_group(qapp):
     """Within a single duplicate group, only one row should render as
     the reference / primary ("Ref"); the rest must show 100% (exact
-    duplicate), a similarity percentage (near-duplicate), or a neutral
-    sentinel.
+    duplicate), a similarity percentage (near-duplicate), or the
+    passenger sentinel ("—").
 
-    Catches: #241 (multiple MOVE rows in a group all render "Ref" —
-    Live Photo HEIC + MOV passenger, etc.).
+    Forward-defensive against #241 recurring: Live Photo HEIC primary +
+    MOV passenger, multi-source duplicates union-find collapsed into
+    one group, etc. all used to render two or three "Ref" labels in the
+    same group.
     """
     from infrastructure.i18n import t
 
