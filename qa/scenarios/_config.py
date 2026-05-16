@@ -169,10 +169,6 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # sort survives. Near-duplicates: 5 files with distinct sizes
     # (q-quality variants), so the size sort is deterministic.
     "s45_sort_persistence": ["qa/sandbox/near-duplicates"],
-    # s46 (#165 prototype) — Execute Mode toggle. Non-destructive;
-    # needs a loaded manifest so the View → Execute Mode action is
-    # enabled. Near-duplicates is the standard small fixture.
-    "s46_execute_mode_toggle": ["qa/sandbox/near-duplicates"],
     # s47 (#214) — column layout persists across launches. Needs a
     # fixture that produces at least one group so the result tree
     # renders and the header columns are interactable. Same fixture as

@@ -12,15 +12,10 @@ from typing import Any
 from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QTreeView,
-    QVBoxLayout,
-    QWidget,
 )
 from loguru import logger
 
@@ -47,7 +42,6 @@ from app.views.window_state import (
     save_widget_geometry,
     window_state_qsettings,
 )
-from app.views.execute_mode_helpers import complete_delete_group_numbers
 from infrastructure.i18n import t
 
 
@@ -276,55 +270,8 @@ class MainWindow(QMainWindow):
         )
         center_layout.addWidget(self._empty_state_widget)
 
-        # #165 prototype — amber warning banner. Lifted out of the
-        # shrunk Execute Action dialog. Lives above the tree in the
-        # center column and stays hidden in Review mode (and in
-        # Execute mode when there are no complete-delete groups).
-        # Rendered with HTML so banner_label inherits the same anchor
-        # behaviour the dialog used (#166), though click-to-jump
-        # wiring isn't carried over for the prototype.
-        self._warning_banner = QFrame()
-        self._warning_banner.setFrameShape(QFrame.StyledPanel)
-        self._warning_banner.setStyleSheet(
-            "QFrame { background: #fff3cd; border: 1px solid #ffc107;"
-            " border-radius: 4px; }"
-        )
-        banner_layout = QVBoxLayout(self._warning_banner)
-        banner_layout.setContentsMargins(8, 6, 8, 6)
-        self._warning_label = QLabel()
-        self._warning_label.setWordWrap(True)
-        self._warning_label.setStyleSheet("color: #856404; font-weight: bold;")
-        self._warning_label.setTextFormat(Qt.RichText)
-        banner_layout.addWidget(self._warning_label)
-        self._warning_banner.setVisible(False)
-        center_layout.addWidget(self._warning_banner)
-
         center_layout.addWidget(self.tree)
         self.tree.setVisible(False)
-
-        # #165 prototype — Execute action bar. A tinted strip below
-        # the tree containing the destructive Execute button. Hidden
-        # in Review mode entirely so users in Review can't fire the
-        # destructive flow by accident. Tint matches the banner so
-        # both Execute-mode signals read as one visual family.
-        self._execute_action_bar = QWidget()
-        action_bar_layout = QHBoxLayout(self._execute_action_bar)
-        action_bar_layout.setContentsMargins(8, 6, 8, 6)
-        self._execute_action_bar.setStyleSheet(
-            "QWidget { background: #fff3cd; }"
-        )
-        action_bar_layout.addStretch(1)
-        self._execute_button = QPushButton(t("main_window.execute_button"))
-        # Make the button visually destructive — red text and bold so
-        # the user reads the destructive nature alongside the banner.
-        self._execute_button.setStyleSheet(
-            "QPushButton { color: #842029; font-weight: bold;"
-            " padding: 4px 14px; }"
-        )
-        self._execute_button.clicked.connect(self._on_execute_clicked)
-        action_bar_layout.addWidget(self._execute_button)
-        self._execute_action_bar.setVisible(False)
-        center_layout.addWidget(self._execute_action_bar)
 
         right_widget, right_layout = self.layout_manager.create_preview_section()
 
@@ -359,10 +306,6 @@ class MainWindow(QMainWindow):
             "execute_action": self.on_execute_action,
             "action_by_regex": self.on_open_action_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
-            # #165 — View menu mode toggle. Checkable QAction; the
-            # bool passed by Qt's triggered signal is the new checked
-            # state, which we map directly to a mode string.
-            "execute_mode": self.on_toggle_execute_mode,
             "exit": self.close,
             "open_latest_log": self._open_latest_log,
             "open_latest_delete_log": self._open_latest_delete_log,
@@ -574,169 +517,6 @@ class MainWindow(QMainWindow):
     def on_execute_action(self) -> None:
         """Handle Execute Action — open review dialog and run planned operations."""
         self.file_operations.execute_action()
-
-    # #165 prototype — Execute Mode toggle ------------------------------
-
-    def on_toggle_execute_mode(self, checked: bool = False) -> None:
-        """Flip between Review and Execute mode.
-
-        Wired to ``View → Execute Mode`` (Ctrl+E). The ``checked``
-        argument is the new state Qt set on the checkable QAction
-        before this slot fired — we map it directly to a mode string.
-        Programmatic callers (e.g. ``file_operations.execute_action``)
-        should call :meth:`_apply_mode` with the desired mode instead
-        of toggling through here.
-        """
-        self._apply_mode("execute" if checked else "review")
-
-    def _apply_mode(self, mode: str) -> None:
-        """Switch UI into the given mode and keep the menu indicator in sync.
-
-        Wires up the prototype's three visual cues — window title
-        suffix, amber banner, and tinted Execute action bar — based
-        on the current ``vm.mode``. Banner + action bar are built
-        in :meth:`_setup_ui`; this method only flips their visibility.
-
-        The destructive run itself is invoked by the Execute button,
-        which routes to :meth:`_on_execute_clicked`.
-        """
-        self._vm.mode = mode
-        act = self.menu_controller.get_action("execute_mode")
-        if act is not None and act.isChecked() != (mode == "execute"):
-            act.setChecked(mode == "execute")
-        self._sync_execute_mode_ui()
-
-    def _sync_execute_mode_ui(self) -> None:
-        """Apply ``self._vm.mode`` to every mode-sensitive widget.
-
-        Idempotent: safe to call from :meth:`_apply_mode` (toggle path)
-        and from :meth:`refresh_tree` (post-load path) without risking
-        signal storms. Three visible signals:
-
-        * Window title gains/loses a suffix.
-        * Amber complete-delete warning banner shows above the tree
-          (only when there are ≥1 complete-delete groups; computed by
-          :func:`_complete_delete_group_numbers` lifted out of the
-          shrunk Execute dialog).
-        * Tinted action bar above the tree exposes the Execute button.
-
-        The tree itself is also re-rendered with ``grey_undecided``
-        flipped so the user sees which rows are still pending.
-        """
-        from app.views.tree_model_builder import build_model
-
-        mode = self._vm.mode
-        is_execute = mode == "execute"
-
-        # 1. Window title suffix.
-        base_title = t("main_window.title")
-        suffix = t("main_window.execute_mode_title_suffix") if is_execute else ""
-        self.setWindowTitle(f"{base_title}{suffix}")
-
-        # 2. Action bar (the bottom-of-tree tinted strip with the
-        #    Execute button). Built once in _setup_ui; only visibility
-        #    toggles here.
-        if hasattr(self, "_execute_action_bar"):
-            self._execute_action_bar.setVisible(is_execute)
-
-        # 3. Banner — visible only when in Execute mode AND there's at
-        #    least one group whose every row is decided as delete.
-        if hasattr(self, "_warning_banner"):
-            complete = complete_delete_group_numbers(self._vm.groups)
-            if is_execute and complete:
-                group_list = ", ".join(str(g) for g in complete)
-                self._warning_label.setText(
-                    t("main_window.warning_complete_groups", groups=group_list)
-                )
-                self._warning_banner.setVisible(True)
-            else:
-                self._warning_banner.setVisible(False)
-
-        # 4. Re-render the tree with grey-undecided turned on/off so
-        #    the user sees rows whose decision is still pending. Skip
-        #    when no manifest has been loaded yet (tree controller has
-        #    nothing to render).
-        if hasattr(self, "tree_controller") and self._vm.groups:
-            self.tree_controller.refresh_model(
-                self._vm.groups, grey_undecided=is_execute
-            )
-            # The model rebuild detaches the selection-changed handler
-            # along with the old QItemSelectionModel — reconnect so
-            # preview updates continue working after a mode toggle.
-            try:
-                self.tree_controller.reconnect_selection_handler(
-                    self.on_tree_selection_changed
-                )
-            except Exception:
-                pass
-
-    def _on_execute_clicked(self) -> None:
-        """Fire the destructive Execute pipeline from the action bar.
-
-        Delegates to :class:`ExecuteRunner` (the shrunk descendant of
-        ``ExecuteActionDialog``) which owns the lock-confirm,
-        complete-group confirm, send2trash loop, and missing-files
-        report. The runner reads / writes ``vm.groups`` directly, so
-        on return we just refresh the tree and tell the user how many
-        actions ran.
-        """
-        from app.views.dialogs.execute_action_dialog import ExecuteRunner
-
-        manifest_path = getattr(self.file_operations, "_manifest_path", None)
-        if not manifest_path:
-            QMessageBox.information(
-                self,
-                t("file_op.execute_no_manifest_title"),
-                t("file_op.execute_no_manifest_body"),
-            )
-            return
-
-        # The current tree selection — if non-empty — scopes the run to
-        # the highlighted file rows (the #211 behaviour, preserved). An
-        # empty selection means "act on every decided row".
-        scope: set[str] = set()
-        try:
-            for it in self.tree_controller.get_selected_items():
-                if it.get("type") == "file" and it.get("path"):
-                    scope.add(it["path"])
-        except Exception:
-            pass
-
-        runner = ExecuteRunner(
-            self._vm.groups,
-            manifest_path,
-            parent=self,
-            settings=self._settings,
-        )
-        ran = runner.run(scope=scope or None)
-        if not ran:
-            return
-
-        # Mirror file_operations.execute_action's post-run state sync.
-        if runner.deleted_paths:
-            self._vm.remove_deleted_and_prune(
-                runner.deleted_paths, prune_singles=False
-            )
-        if runner.removed_from_list_paths:
-            self._vm.remove_from_list(runner.removed_from_list_paths)
-        self._vm.removed_from_list_paths.extend(runner.removed_from_list_paths)
-        self.refresh_tree(self._vm.groups)
-
-        # Tell the status bar what happened. Reuses the existing
-        # pluralization helpers so the message reads identically to
-        # the dialog-era status update.
-        total = len(runner.deleted_paths) + len(runner.executed_paths)
-        if total:
-            verb = t("status.verb_executed")
-            noun = (
-                t("status.noun_action_singular") if total == 1
-                else t("status.noun_action_plural")
-            )
-            self._status_baseline.setText(f"{verb} {total} {noun}")
-        self.file_operations._mark_clean()
-        # After Execute, fall back to Review so the user sees a fresh
-        # tree without the destructive surface still attached.
-        self._apply_mode("review")
 
     def on_open_action_dialog(self) -> None:
         """Handle open Set Action by Field/Regex dialog."""

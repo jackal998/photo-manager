@@ -222,16 +222,13 @@ class TreeController:
             logger.error("Failed to restore column state: {}", exc)
             return False
 
-    def refresh_model(self, groups: list, grey_undecided: bool = False) -> None:
+    def refresh_model(self, groups: list) -> None:
         """Build and set the tree model, preserving sort order.
 
         Args:
             groups: List of group objects to display in the tree
-            grey_undecided: Pass-through to :func:`build_model`. When
-                True, file rows with empty ``user_decision`` get a
-                mid-grey foreground — the #165 Execute-mode signal.
         """
-        model, proxy = build_model(groups, grey_undecided=grey_undecided)
+        model, proxy = build_model(groups)
         if proxy is not None:
             proxy.setParent(self.tree)
             self.tree.setModel(proxy)
