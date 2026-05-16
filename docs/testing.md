@@ -373,7 +373,12 @@ soft-probe upgrade path lives if applicable.
 When the corresponding bug lands, the static probes flip XFAIL→XPASS-strict
 and the bug-fix PR removes the marker. The soft probe is converted from
 `print(probe_status: …)` to `failures.append(…)` per the comment block in
-the scenario.
+the scenario; the **"Detect probes ready for promotion"** step in
+[`.github/workflows/qa-batch.yml`](../.github/workflows/qa-batch.yml) greps
+`qa-batch.log` for `probe_status: PASS` and fails the job if any are
+found — same forcing-function as `xfail(strict=True)` for the static
+probes, so a bug-fix PR cannot merge while leaving a soft probe in its
+print-only state.
 
 ---
 
