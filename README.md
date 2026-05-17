@@ -131,7 +131,9 @@ The PySide6 desktop app is the primary interface. Launch it with `run.bat`.
 
 1. Browse the embedded folder tree to find source directories.
    - Double-click or press **+ Add Selected Folder** to add a folder to the list.
-   - Use **↑ / ↓** buttons to reorder sources (top row = highest dedup priority).
+   - The source list is displayed alphabetically by path. Scan order
+     (and therefore dedup priority for exact duplicates) is inferred
+     from the underlying insertion order, not the displayed row order.
    - Tick or untick the **Recursive** checkbox per source — recursive scans all
      subdirectories; unticked scans only the immediate folder.
    - Use **×** to remove a source; **Remove All** to clear the list.
