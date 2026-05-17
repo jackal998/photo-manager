@@ -98,14 +98,19 @@ logs/
 settings.json
 settings.local.json
 
-# Claude Code skills — never tracked. Skill files are the kind of
-# place a developer might reflex-paste a machine-specific path,
-# Synology IP, NAS hostname, or other PII without thinking. Mirror
-# the settings.json treatment: each developer's `.claude/skills/`
-# lives on disk only. Project-shareable templates (if any are added
-# later) should go under a separate `.claude/skills/.example/`
-# pattern that's NOT covered by this rule.
-.claude/skills/
+# Personal Claude Code skills (PII risk) live here. Project skills at
+# .claude/skills/<name>/ ARE tracked. The original blanket exclusion
+# of `.claude/skills/` was the source of #270: project-workflow skills
+# (impact-map, parallel-brief-generator, qa-explore, update-docs) had
+# to be `git add -f`'d to land them, which is the smell that
+# motivated splitting personal from project skills.
+#
+# A skill is "project" when its content is generic to the codebase
+# (workflow, conventions, test scaffolding) and contains no
+# machine-specific paths, Synology IPs, NAS hostnames, or credentials.
+# Audit before committing — see CLAUDE.md "Claude Code skills" for the
+# PII checklist.
+.claude/skills/personal/
 
 # Window geometry / splitter state — written by MainWindow.closeEvent on
 # every clean exit. Anchored under PHOTO_MANAGER_HOME (or repo root) so
