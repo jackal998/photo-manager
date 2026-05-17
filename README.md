@@ -208,6 +208,13 @@ window) showing all groups for final review.
 All decision changes are batch-persisted to SQLite in a single transaction
 immediately before execution.
 
+For the full Execute Action feature surface — lock-confirm dialog,
+preview pane, dialog geometry persistence, all-delete jump-to banner,
+scope-to-highlighted-rows — and for every other user-visible flow in
+the app, see [`docs/features.md`](docs/features.md). This Step 1-4
+walkthrough is the onboarding path; `docs/features.md` is the
+canonical catalogue.
+
 ---
 
 ## Classification rules
