@@ -225,6 +225,33 @@ worth surfacing — these are advisory, not gating:
 Limit to 3 observations. If you have more, pick the highest-impact
 three and say "+N more available on request".
 
+### Gate 6 — harness-security cross-promote
+
+Independent of Gates 1–5 (does not gate them). If the diff touches
+any of the following paths, emit an ℹ️ pointer to `/security-scan`
+in the output's "Harness security" section:
+
+- `.claude/**` (settings, agents, skills, hooks config)
+- `scripts/hooks/**` (project-side PreToolUse / Stop hooks)
+- `settings.json` / `settings.local.json` / `.mcp.json`
+- `CLAUDE.md` *only* when the touched lines change agent
+  permissions, install instructions, or hook directives (skip
+  for prose/section edits)
+
+Reason: `/pr-review` checks app-level drift (features.md, qa
+scenarios). It does NOT check harness-level risks — prompt
+injection in `CLAUDE.md`, command injection in hooks,
+over-permissive `Bash(*)` allow lists, MCP supply chain. Those
+are what `/security-scan` (AgentShield) catches. When a PR
+touches the harness, route the reviewer to the right tool.
+
+The pointer is **informational only**. It never flags ⚠ or ✗,
+never blocks, and never affects the Verdict line. It is a
+routing reminder, not a finding.
+
+If the diff does NOT touch any harness path, skip this gate
+entirely (do not emit an empty "Harness security" section).
+
 ## Output template
 
 Emit exactly this structure in chat. Use `## CLEAN` (no findings) or
@@ -249,9 +276,20 @@ Diff: origin/master...HEAD   |   Files in scope: <N behaviour-bearing> / <total>
 - <observation 1>
 - <observation 2>
 
+## Harness security
+ℹ️ This PR touches harness/config: <files>
+   Run `/security-scan` before merging — `/pr-review`'s rubric
+   does not check harness risks (prompt injection in CLAUDE.md,
+   hook command injection, over-permissive Bash allow-list,
+   MCP supply-chain).
+
 ## Verdict
 <one-line summary: CLEAN / N⚠ / M✗ / N ⚠ + M ✗>
 ```
+
+(Omit the **Harness security** section entirely when Gate 6
+finds no harness/config files touched — don't emit an empty
+header.)
 
 For a clean PR:
 
@@ -295,10 +333,17 @@ When the user runs `/pr-review` (with or without a PR number):
 
 6. **Scan for drive-by observations** (Gate 5). Limit to 3.
 
-7. **Emit the report** in the output-template structure. End with
+7. **Check harness-config touch** (Gate 6). If any file in the
+   diff matches `.claude/**`, `scripts/hooks/**`,
+   `settings.json` / `settings.local.json` / `.mcp.json`, or
+   a permissions/install line in `CLAUDE.md` — include the
+   "Harness security" section pointing at `/security-scan`.
+   Otherwise omit the section.
+
+8. **Emit the report** in the output-template structure. End with
    the Verdict line.
 
-8. **Stop.** Do NOT post anything to the PR. Wait for the user.
+9. **Stop.** Do NOT post anything to the PR. Wait for the user.
 
 ## Anti-patterns — what NOT to flag
 
