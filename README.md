@@ -157,6 +157,7 @@ The tree shows all files loaded from the manifest.
 |--------|---------|
 | **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
 | **Action** | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **Score** | Keep-worthiness ranking in `[0.0, 1.0]` (#187). Within-group rows sort by this descending — best copy at the top. Empty for Live Photo MOV passengers. |
 | **Lock** | 🔒 if the row is locked against bulk operations (#182), empty otherwise. Sortable; searchable via the regex dialog as `Locked` / `""`. |
 | **File Name** | File name |
 | **Folder** | Containing directory |
@@ -170,9 +171,9 @@ The tree shows all files loaded from the manifest.
 
 - *Per file*: right-click a file → **Set Action → delete** / **keep** /
   **remove from list**.
-- *By highlight*: click or multi-select rows in the tree, then
-  **Action › Set Action to Activated Files › delete** (or **keep** /
-  **remove from list**).
+- *Multiple files*: select rows (Ctrl/Shift-click), then right-click
+  any of them → **Set Action** opens the same submenu and applies the
+  chosen decision to every selected row.
 - *In bulk*: **Action › Set Action by Field/Regex…** — pick a column,
   describe what to match, choose an action (`delete`, `keep`, or
   `remove from list`). The dialog defaults to **Simple** mode (pick
@@ -183,6 +184,9 @@ The tree shows all files loaded from the manifest.
   rows are flagged and dropped on save, no files are moved or deleted.
   Right-clicking a row in the main tree (single or multi-select) and
   in the Execute Action dialog also opens the same dialog.
+
+**Navigating:** double-click a file row to open it in the OS default
+viewer (#143); double-click a group header to toggle expand / collapse.
 
 If you close the app with unsaved decisions a prompt appears with
 **Save & leave** / **Leave** / **Back**, so you don't lose work
