@@ -163,6 +163,38 @@ state change, new gating condition) — see the `update-docs` skill's
 "User-visible behaviour changed?" row. Enforced at PR-creation time
 by [`scripts/hooks/docs_guard.py`](scripts/hooks/docs_guard.py).
 
+## Claude Code skills
+
+Skills live in two homes, split by trust level:
+
+- **Project skills** — `.claude/skills/<name>/` — tracked in git,
+  shared across all contributors. Generic to the codebase: workflow,
+  conventions, test scaffolding, QA drivers. Today this includes
+  `impact-map/`, `parallel-brief-generator/`, `qa-explore/`,
+  `update-docs/`. New project skills land here.
+- **Personal skills** — `.claude/skills/personal/<name>/` (gitignored)
+  or `~/.claude/skills/<name>/` (user-level, never in any repo). For
+  ad-hoc skills with machine-specific paths, Synology IPs, NAS
+  hostnames, credentials, or anything else you wouldn't paste into a
+  PR. Use the `personal/` subdirectory when the skill is repo-scoped
+  but private; use `~/.claude/skills/` when the skill applies across
+  every project.
+
+**PII audit before committing a project skill** — run this on the
+SKILL.md and any sibling files; expected to be zero matches:
+
+```
+grep -i -E "C:\\\\Users|/Users/|/home/|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|password|secret|token|key=" <file>
+```
+
+The patterns cover: Windows / macOS / Linux home paths, IPv4
+addresses (Synology / NAS), and credential-like strings. False
+positives (e.g. `key=value` in a log-format example) are fine to wave
+through — surface them in chat before committing, don't silently
+include them. If any match is real (an actual path or IP), move the
+skill into `personal/` or `~/.claude/skills/` instead of committing
+it.
+
 ## Setup (one-time, per machine)
 
 `.claude/settings.json` is gitignored because it contains a machine-specific
