@@ -76,6 +76,19 @@ _DOC_FILE_PATTERNS = (
     re.compile(r"^translations/README\.md$"),
 )
 
+# Behavioural-modify trigger (#262): MODIFIED files under
+# app/views/{dialogs,handlers}/ shift user-visible behaviour by
+# definition — these are the dialog bodies and action handlers a
+# user reaches. When the diff is non-trivial, require
+# docs/features.md specifically rather than letting any doc touch
+# satisfy the gate. Trivial edits (typo, single-line comment) stay
+# under the diff-size / signature-change threshold and don't fire.
+_DOC_BEHAVIOURAL_MODIFY_PATTERN = re.compile(
+    r"^app/views/(dialogs|handlers)/[^/]+\.py$"
+)
+_BEHAVIOURAL_FEATURES_DOC = "docs/features.md"
+_BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD = 10
+
 _BYPASS_PATTERN = re.compile(r"\[docs-not-needed:[^\]]*\]")
 
 
@@ -119,14 +132,57 @@ def _new_files() -> set[str]:
     return added
 
 
+def _behavioural_modify_qualifies(path: str) -> bool:
+    """Decide whether a modify to ``path`` warrants firing the
+    behavioural docs gate.
+
+    Qualifies when EITHER the diff is at least
+    :data:`_BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD` added + deleted lines
+    OR a function signature line appears in the diff (heuristic: a
+    ``def`` or ``async def`` line on the + / - side of ``git diff
+    -U0``). Trivial edits (a single-line copy tweak, a comment fix)
+    fall under both bars and don't fire the gate.
+
+    Used to keep this trigger from blocking on edits that genuinely
+    don't shift user-visible behaviour.
+    """
+    try:
+        numstat_out = subprocess.check_output(
+            ["git", "diff", "--numstat", "origin/master...HEAD", "--", path],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    total = 0
+    for line in numstat_out.splitlines():
+        # numstat: "added\tdeleted\tpath"; binary files print "-".
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            total += int(parts[0]) + int(parts[1])
+    if total >= _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD:
+        return True
+    try:
+        diff_out = subprocess.check_output(
+            ["git", "diff", "-U0", "origin/master...HEAD", "--", path],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    return bool(re.search(r"^[+-]\s*(async\s+)?def\s", diff_out, re.MULTILINE))
+
+
 def _doc_relevant(changed: list[str], added: set[str]) -> list[tuple[str, str]]:
     """Return ``[(path, suggested_doc), …]`` for changes that need docs.
 
     NEW files under doc-relevant directories always trigger. MODIFIED
-    files only trigger for a narrow subset where the modification
-    typically shifts public-facing structure (qa scenarios — name /
-    coverage table; tests — count + tree; manifest_repository —
-    migration list).
+    files trigger for:
+      * qa scenarios — name / coverage table updates;
+      * ``infrastructure/manifest_repository.py`` — migration list;
+      * files under ``app/views/{dialogs,handlers}/`` that pass
+        :func:`_behavioural_modify_qualifies` — these shift
+        user-visible behaviour and require
+        :data:`_BEHAVIOURAL_FEATURES_DOC` specifically (enforced in
+        :func:`main`).
     """
     out: list[tuple[str, str]] = []
     for f in changed:
@@ -143,6 +199,15 @@ def _doc_relevant(changed: list[str], added: set[str]) -> list[tuple[str, str]]:
                 break
             if f == "infrastructure/manifest_repository.py":
                 out.append((f, "README.md schema table (if _MIGRATIONS changed)"))
+                break
+            # Behavioural-modify trigger (#262).
+            if (
+                _DOC_BEHAVIOURAL_MODIFY_PATTERN.match(f)
+                and _behavioural_modify_qualifies(f)
+            ):
+                out.append(
+                    (f, f"{_BEHAVIOURAL_FEATURES_DOC} (user-visible behaviour)")
+                )
                 break
     return out
 
@@ -176,11 +241,45 @@ def main() -> int:
         return 0
 
     docs = _docs_touched(changed)
+
+    # Behavioural-modify triggers (#262) are strict: they require
+    # docs/features.md specifically, not just any doc touch. New files
+    # keep the legacy coarse semantic ("did you think about docs at
+    # all"). The bypass token below still works for both.
+    behavioural = [
+        f for f, _ in relevant
+        if _DOC_BEHAVIOURAL_MODIFY_PATTERN.match(f) and f not in added
+    ]
+    if behavioural and _BEHAVIOURAL_FEATURES_DOC not in docs:
+        msg_lines = [
+            "docs guard fired — blocking `gh pr create`.",
+            "",
+            f"  user-visible behaviour change without a {_BEHAVIOURAL_FEATURES_DOC} update:",
+        ]
+        for f in behavioural:
+            msg_lines.append(f"    {f}")
+        msg_lines += [
+            "",
+            "  Behavioural changes under app/views/{dialogs,handlers}/",
+            f"  must update {_BEHAVIOURAL_FEATURES_DOC} so the canonical",
+            "  feature inventory stays in sync.",
+            "",
+            "  To unblock:",
+            f"    a) Add or update the corresponding section in {_BEHAVIOURAL_FEATURES_DOC}.",
+            "    b) Include `[docs-not-needed: <reason>]` in the gh pr create",
+            "       command (title or body) when the change is genuinely not",
+            "       user-visible (e.g. an internal refactor that preserves",
+            "       behaviour byte-for-byte).",
+        ]
+        sys.stderr.write("\n".join(msg_lines) + "\n")
+        return 2
+
     if docs:
         # At least one doc file was touched — accept the PR; we're
         # checking "did you think about docs at all," not "did you
         # update the exactly-correct line." The qa-scenario-guard
-        # applies the same coarse rule.
+        # applies the same coarse rule. (Behavioural-modify changes
+        # take the strict path above.)
         return 0
 
     msg_lines = [

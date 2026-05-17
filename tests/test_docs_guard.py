@@ -32,17 +32,27 @@ def _run(
     command: str,
     changed: list[str],
     added: list[str] | None = None,
+    behavioural_qualifies: bool = False,
 ) -> int:
     """Invoke ``main()`` with synthetic stdin + mocked diff helpers.
 
     ``added`` defaults to the same list as ``changed`` so tests can
     pass new files without restating them. To test the "modified
     existing file" branch, pass ``added=[]`` explicitly.
+
+    ``behavioural_qualifies`` controls the return value of the
+    ``_behavioural_modify_qualifies`` helper for every path queried
+    in this run. Defaults to ``False`` so legacy tests that don't
+    care about the #262 behavioural-modify gate stay below the
+    threshold by default.
     """
     mod = _load_hook()
     monkeypatch.setattr(mod, "_changed_files", lambda: list(changed))
     monkeypatch.setattr(
         mod, "_new_files", lambda: set(changed if added is None else added)
+    )
+    monkeypatch.setattr(
+        mod, "_behavioural_modify_qualifies", lambda path: behavioural_qualifies
     )
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
@@ -236,3 +246,143 @@ class TestStdinRobustness:
         payload = json.dumps({"tool_name": "Read", "tool_input": {}})
         monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
         assert mod.main() == 0
+
+
+# ── behavioural-modify trigger + strict-accept (#262) ─────────────────────
+
+
+class TestBehaviouralModifyTrigger:
+    """The #262 hardening: MODIFIED files under
+    app/views/{dialogs,handlers}/ trigger the docs gate when the diff
+    is non-trivial, AND they require docs/features.md specifically
+    rather than just any doc touch. New files keep the legacy
+    any-doc-touch semantic. Bypass token still works."""
+
+    def test_below_threshold_modify_does_not_trigger(self, monkeypatch):
+        """A trivial edit (< 10 lines, no signature change) doesn't
+        fire the behavioural gate even on a dialog/handler file. This
+        is what keeps the gate from blocking typo fixes."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'fix: copy tweak'",
+            changed=["app/views/dialogs/execute_action_dialog.py"],
+            added=[],
+            behavioural_qualifies=False,
+        )
+        assert rc == 0
+
+    def test_above_threshold_modify_without_features_blocks(self, monkeypatch, capsys):
+        """The core enforcement — a non-trivial dialog edit must touch
+        docs/features.md or the PR is blocked."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: scope execute to highlighted'",
+            changed=["app/views/dialogs/execute_action_dialog.py"],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "docs/features.md" in err
+        assert "execute_action_dialog.py" in err
+
+    def test_above_threshold_modify_with_features_passes(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: scope execute to highlighted'",
+            changed=[
+                "app/views/dialogs/execute_action_dialog.py",
+                "docs/features.md",
+            ],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 0
+
+    def test_handler_above_threshold_blocks_same_as_dialog(self, monkeypatch):
+        """Handlers (file_operations.py, context_menu.py, etc.) ride
+        the same gate as dialogs — both are user-visible behaviour."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: new context menu entry'",
+            changed=["app/views/handlers/context_menu.py"],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 2
+
+    def test_above_threshold_with_only_testing_doc_blocks(self, monkeypatch):
+        """docs/testing.md is not enough for a behavioural change —
+        features.md is the canonical user-visible-behaviour doc."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat'",
+            changed=[
+                "app/views/dialogs/execute_action_dialog.py",
+                "docs/testing.md",
+            ],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 2
+
+    def test_above_threshold_with_only_readme_blocks(self, monkeypatch):
+        """README.md alone is not enough for a behavioural change."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat'",
+            changed=[
+                "app/views/dialogs/execute_action_dialog.py",
+                "README.md",
+            ],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 2
+
+    def test_new_dialog_with_testing_doc_passes(self, monkeypatch):
+        """NEW files keep the legacy 'any doc touch is enough'
+        semantic — they're typically introducing new structure that
+        the docs map rows already cover."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: new dialog'",
+            changed=[
+                "app/views/dialogs/new_dialog.py",
+                "docs/testing.md",
+            ],
+            added=["app/views/dialogs/new_dialog.py"],
+            behavioural_qualifies=False,
+        )
+        assert rc == 0
+
+    def test_bypass_token_works_for_behavioural(self, monkeypatch):
+        """The bypass escape valve still works for behavioural-modify
+        triggers — needed for genuine internal refactors that
+        preserve behaviour byte-for-byte."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'refactor [docs-not-needed: pure refactor, no UX change]'",
+            changed=["app/views/dialogs/execute_action_dialog.py"],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 0
+
+    def test_above_threshold_workers_dir_not_in_behavioural_scope(self, monkeypatch):
+        """Only dialogs/ and handlers/ are in the behavioural scope —
+        workers/, components/, widgets/, layout/, viewmodels/ stay
+        on the legacy any-doc-touch rule because they're internal
+        plumbing (background QThreads, layout helpers, viewmodels)
+        that don't independently shift user-facing UX."""
+        # A modified worker file with no docs at all — should NOT
+        # trigger because workers are not in the behavioural pattern
+        # and not in the existing MODIFIED-trigger set.
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'fix: worker thread cleanup'",
+            changed=["app/views/workers/scan_worker.py"],
+            added=[],
+            behavioural_qualifies=True,  # would have qualified if scope included workers
+        )
+        assert rc == 0
