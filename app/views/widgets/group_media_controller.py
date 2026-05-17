@@ -14,6 +14,15 @@ from PySide6.QtWidgets import (
 )
 
 from app.views.media_utils import format_duration
+from app.views.widgets.group_media_controller_helpers import (
+    compute_master_position,
+    compute_mute_target_volume,
+    is_majority_playing,
+    play_button_icon_for_state,
+    should_track_player_position,
+    should_update_master_duration,
+    volume_icon_for_value,
+)
 from app.views.widgets.video_player import VideoPlayerWidget
 
 
@@ -148,10 +157,8 @@ class GroupMediaController(QWidget):
     def _toggle_mute(self) -> None:
         """Toggle mute for all registered players."""
         # Mute state is per-player, so we broadcast volume 0 or current volume
-        if self._volume_slider.value() > 0:
-            self._volume_slider.setValue(0)
-        else:
-            self._volume_slider.setValue(50)
+        target = compute_mute_target_volume(self._volume_slider.value())
+        self._volume_slider.setValue(target)
 
     def _on_volume_changed(self, value: int) -> None:
         """Handle volume slider changes."""
@@ -176,40 +183,32 @@ class GroupMediaController(QWidget):
 
     def _on_player_duration_changed(self, duration: int) -> None:
         """Handle duration change from a player."""
-        if duration > self._master_duration:
+        if should_update_master_duration(duration, self._master_duration):
             self._master_duration = duration
             self._progress_slider.setRange(0, duration)
             self._duration_label.setText(format_duration(duration))
 
     def _on_player_position_changed(self, position: int) -> None:
         """Handle position change from a player."""
-        if not self._slider_dragging:
-            # Update master position from the first playing player
-            if not self._is_playing:
-                self._master_position = position
-                self._progress_slider.setValue(position)
-                self._update_current_time(position)
+        if should_track_player_position(self._slider_dragging, self._is_playing):
+            self._master_position = position
+            self._progress_slider.setValue(position)
+            self._update_current_time(position)
 
     def _on_player_state_changed(self, state: Any) -> None:
         """Handle state change from a player."""
         # Update master playing state based on majority
         playing_count = sum(1 for p in self._players if p.is_playing())
-        self._is_playing = playing_count > len(self._players) // 2
+        self._is_playing = is_majority_playing(playing_count, len(self._players))
         self._update_play_button()
 
     def _update_play_button(self) -> None:
         """Update play button text."""
-        if self._is_playing:
-            self._play_button.setText("⏸")
-        else:
-            self._play_button.setText("▶")
+        self._play_button.setText(play_button_icon_for_state(self._is_playing))
 
     def _update_volume_button(self) -> None:
         """Update volume button icon."""
-        if self._volume_slider.value() == 0:
-            self._volume_button.setText("🔇")
-        else:
-            self._volume_button.setText("🔊")
+        self._volume_button.setText(volume_icon_for_value(self._volume_slider.value()))
 
     def _update_current_time(self, position: int) -> None:
         """Update current time display."""
@@ -232,6 +231,6 @@ class GroupMediaController(QWidget):
         Args:
             position_ratio: Position ratio from 0.0 to 1.0
         """
-        if self._master_duration > 0:
-            position = int(position_ratio * self._master_duration)
+        position = compute_master_position(position_ratio, self._master_duration)
+        if position is not None:
             self.positionRequested.emit(position)
