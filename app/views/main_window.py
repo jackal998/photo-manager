@@ -467,8 +467,7 @@ class MainWindow(QMainWindow):
 
     def _load_manifest_from_path(self, manifest_path: str) -> None:
         """Load a manifest directly (called after scan completes or from Open Manifest)."""
-        import sqlite3
-
+        from app.views.main_window_helpers import count_isolated_rows
         from infrastructure.manifest_repository import ManifestRepository
         try:
             self._vm.load_from_repo(ManifestRepository(), manifest_path)
@@ -484,16 +483,8 @@ class MainWindow(QMainWindow):
             # produced zero near-duplicate groups don't see an empty review
             # pane with no explanation. Isolated = total manifest rows
             # minus rows that ended up in any group.
-            isolated = 0
-            try:
-                with sqlite3.connect(manifest_path) as conn:
-                    total = conn.execute(
-                        "SELECT COUNT(*) FROM migration_manifest"
-                    ).fetchone()[0] or 0
-                grouped = sum(len(g.items) for g in self._vm.groups)
-                isolated = max(0, total - grouped)
-            except (sqlite3.Error, OSError):
-                pass
+            grouped = sum(len(g.items) for g in self._vm.groups)
+            isolated = count_isolated_rows(manifest_path, grouped)
             parts = [pluralize(
                 n,
                 t("status.noun_group_singular"),
@@ -524,14 +515,10 @@ class MainWindow(QMainWindow):
         user had in mind. The scan-complete path is the only place the
         user has explicitly asked auto-select to choose for them.
         """
+        from app.views.main_window_helpers import extract_keeper_paths
+
         self._load_manifest_from_path(manifest_path)
-        keeper_paths = {
-            getattr(rec, "file_path", "")
-            for group in self._vm.groups
-            for rec in getattr(group, "items", [])
-            if getattr(rec, "action", "") == "KEEP"
-        }
-        keeper_paths.discard("")
+        keeper_paths = extract_keeper_paths(self._vm.groups)
         if keeper_paths:
             self._select_rows_by_paths(keeper_paths)
 
@@ -545,33 +532,22 @@ class MainWindow(QMainWindow):
         """
         from PySide6.QtCore import QItemSelectionModel
 
-        if not target_paths:
-            return
-        model = self.tree.model()
-        if model is None:
+        from app.views.main_window_helpers import find_paths_in_model
+
+        matches = find_paths_in_model(self.tree.model(), target_paths)
+        if not matches:
             return
         sel_model = self.tree.selectionModel()
         if sel_model is None:
             return
 
         sel_model.clearSelection()
-        first_idx = None
-        # Top-level rows are groups; their children are files. Same
-        # traversal shape as _reselect_by_path.
-        for group_row in range(model.rowCount()):
-            group_idx = model.index(group_row, COL_GROUP)
-            for child_row in range(model.rowCount(group_idx)):
-                name_idx = model.index(child_row, COL_NAME, group_idx)
-                path = model.data(name_idx, PATH_ROLE)
-                if path in target_paths:
-                    sel_model.select(
-                        name_idx,
-                        QItemSelectionModel.Select | QItemSelectionModel.Rows,
-                    )
-                    if first_idx is None:
-                        first_idx = name_idx
-        if first_idx is not None:
-            self.tree.scrollTo(first_idx)
+        for name_idx in matches:
+            sel_model.select(
+                name_idx,
+                QItemSelectionModel.Select | QItemSelectionModel.Rows,
+            )
+        self.tree.scrollTo(matches[0])
 
     def on_open_manifest(self) -> None:
         """Handle Open Manifest action."""
@@ -779,11 +755,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
+            from app.views.main_window_helpers import extract_first_selected_file_path
+
             items = self.tree_controller.get_selected_items()
-            for it in items:
-                if it.get("type") == "file" and it.get("path"):
-                    state["selected_path"] = it["path"]
-                    break
+            state["selected_path"] = extract_first_selected_file_path(items)
         except Exception:
             pass
         return state
@@ -819,23 +794,16 @@ class MainWindow(QMainWindow):
         """Walk the tree and select the row whose PATH_ROLE matches."""
         from PySide6.QtCore import QItemSelectionModel
 
-        model = self.tree.model()
-        if model is None:
+        from app.views.main_window_helpers import find_path_in_model
+
+        name_idx = find_path_in_model(self.tree.model(), target_path)
+        if name_idx is None:
             return
-        # Top-level rows are groups; their children are files.
-        for group_row in range(model.rowCount()):
-            group_idx = model.index(group_row, COL_GROUP)
-            for child_row in range(model.rowCount(group_idx)):
-                name_idx = model.index(child_row, COL_NAME, group_idx)
-                # PATH_ROLE is the integer 32 (Qt.UserRole); see constants.py.
-                path = model.data(name_idx, 32)
-                if path == target_path:
-                    self.tree.scrollTo(name_idx)
-                    self.tree.selectionModel().select(
-                        name_idx,
-                        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
-                    )
-                    return
+        self.tree.scrollTo(name_idx)
+        self.tree.selectionModel().select(
+            name_idx,
+            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+        )
 
     def relocalize(self) -> None:
         """Rebuild the window in the locale persisted to settings.
