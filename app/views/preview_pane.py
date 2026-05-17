@@ -15,6 +15,18 @@ from app.views.constants import (
 )
 from app.views.image_tasks import ImageTaskRunner
 from app.views.media_utils import is_video, normalize_windows_path
+from app.views.preview_pane_helpers import (
+    aspect_bucket_from_resolution,
+    attach_resolutions,
+    build_info_rows,
+    classify_image_token,
+    compute_fit_width,
+    compute_grid_geometry,
+    format_info_html,
+    format_resolution_string,
+    get_file_size_bytes,
+    normalize_grid_items,
+)
 from app.views.widgets.group_media_controller import GroupMediaController
 from app.views.widgets.video_player import VideoPlayerWidget
 from infrastructure.i18n import t
@@ -74,18 +86,6 @@ def _read_resolution(path: str) -> str | None:
     except Exception:
         pass
     return None
-
-
-def _format_info_html(rows: list[tuple[str, str]]) -> str:
-    """Render (label, value) pairs as an HTML two-column table for QLabel."""
-    if not rows:
-        return ""
-    cells = "".join(
-        f"<tr><td style='color:#888;padding-right:8px;white-space:nowrap'>{lbl}</td>"
-        f"<td>{val}</td></tr>"
-        for lbl, val in rows
-    )
-    return f"<table>{cells}</table>"
 
 
 class PreviewPane(QWidget):
@@ -161,18 +161,14 @@ class PreviewPane(QWidget):
                 self.preview_area.setWidgetResizable(True)
                 self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
                 if info and isinstance(info, dict):
-                    name = info.get("name") or ""
-                    folder = info.get("folder") or ""
-                    size_txt = info.get("size") or ""
-                    creation = info.get("creation") or ""
-                    shot = info.get("shot") or ""
-                    info_rows: list[tuple[str, str]] = []
-                    if name:      info_rows.append((t("preview.info_name"), name))
-                    if folder:    info_rows.append((t("preview.info_folder"), folder))
-                    if size_txt:  info_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
-                    if creation:  info_rows.append((t("preview.info_created"), creation))
-                    if shot:      info_rows.append((t("preview.info_shot"), shot))
-                    html = _format_info_html(info_rows)
+                    info_rows = build_info_rows(
+                        name=info.get("name") or "",
+                        folder=info.get("folder") or "",
+                        size_txt=info.get("size") or "",
+                        creation_txt=info.get("creation") or "",
+                        shot_txt=info.get("shot") or "",
+                    )
+                    html = format_info_html(info_rows)
                     if html:
                         self._single_info_label.setTextFormat(Qt.RichText)
                         self._single_info_label.setText(html)
@@ -194,20 +190,16 @@ class PreviewPane(QWidget):
             # Show image preview with persistent info block
             self._single_label.setVisible(True)
             if info and isinstance(info, dict):
-                name = info.get("name") or ""
-                folder = info.get("folder") or ""
-                size_txt = info.get("size") or ""
-                creation = info.get("creation") or ""
-                shot = info.get("shot") or ""
                 res = _read_resolution(normalize_windows_path(path))
-                info_rows: list[tuple[str, str]] = []
-                if name:      info_rows.append((t("preview.info_name"), name))
-                if folder:    info_rows.append((t("preview.info_folder"), folder))
-                if size_txt:  info_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
-                if res:       info_rows.append((t("preview.info_resolution"), res))
-                if creation:  info_rows.append((t("preview.info_created"), creation))
-                if shot:      info_rows.append((t("preview.info_shot"), shot))
-                html = _format_info_html(info_rows)
+                info_rows = build_info_rows(
+                    name=info.get("name") or "",
+                    folder=info.get("folder") or "",
+                    size_txt=info.get("size") or "",
+                    creation_txt=info.get("creation") or "",
+                    shot_txt=info.get("shot") or "",
+                    resolution=res or "",
+                )
+                html = format_info_html(info_rows)
                 if html:
                     self._single_info_label.setTextFormat(Qt.RichText)
                     self._single_info_label.setText(html)
@@ -253,52 +245,16 @@ class PreviewPane(QWidget):
                 pass
             return 0, 0
 
-        def _size_key(path: str) -> int:
-            try:
-                import os
-                return int(os.path.getsize(path))
-            except Exception:
-                return 0
-
-        normalized: list[tuple[str, str, str, str, str, str, str]] = []
-        for it in items:
-            if len(it) == 4:
-                p, n, f, s = it  # type: ignore
-                normalized.append((normalize_windows_path(p), n, f, s, "", "", ""))
-            else:
-                p, n, f, s, c, sh = it  # type: ignore
-                normalized.append((normalize_windows_path(p), n, f, s, c or "", sh or "", ""))
-
-        # Compute dimensions once per image; attach resolution string to each tuple.
-        result: list[tuple[str, str, str, str, str, str, str]] = []
-        for it in normalized:
-            p = it[0]
-            if not is_video(p):
-                w, h = _image_dims(p)
-                res = f"{w}*{h}" if w > 0 else ""
-            else:
-                res = ""
-            result.append((p, it[1], it[2], it[3], it[4], it[5], res))
+        normalized = normalize_grid_items(items, normalize_windows_path)
+        result = attach_resolutions(normalized, _image_dims, is_video)
 
         # Videos first by aspect (landscape→square→portrait), then larger first; images after.
         videos = [it for it in result if is_video(it[0])]
         images = [it for it in result if not is_video(it[0])]
 
-        def _aspect_bucket_from_res(res: str) -> int:
-            # 0: landscape, 1: square/unknown, 2: portrait
-            if res:
-                try:
-                    w, h = (int(x) for x in res.split("*"))
-                    if w > h:
-                        return 0
-                    if w == h:
-                        return 1
-                    return 2
-                except Exception:
-                    pass
-            return 1
-
-        videos.sort(key=lambda it: (_aspect_bucket_from_res(it[6]), -_size_key(it[0])))
+        videos.sort(
+            key=lambda it: (aspect_bucket_from_resolution(it[6]), -get_file_size_bytes(it[0]))
+        )
         self._grid_items = videos + images
 
         self._grid_container = QWidget()
@@ -346,14 +302,15 @@ class PreviewPane(QWidget):
                 v.addWidget(img_lbl)
                 self._grid_pending_video_labels[p] = img_lbl
 
-                tile_rows: list[tuple[str, str]] = []
-                if name:         tile_rows.append((t("preview.info_name"), name))
-                if folder:       tile_rows.append((t("preview.info_folder"), folder))
-                if size_txt:     tile_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
-                if creation_txt: tile_rows.append((t("preview.info_created"), creation_txt))
-                if shot_txt:     tile_rows.append((t("preview.info_shot"), shot_txt))
-                tile_rows.append((t("preview.info_duration"), t("preview.info_duration_unknown")))
-                info = QLabel(_format_info_html(tile_rows))
+                tile_rows = build_info_rows(
+                    name=name,
+                    folder=folder,
+                    size_txt=size_txt,
+                    creation_txt=creation_txt,
+                    shot_txt=shot_txt,
+                    duration_unknown=True,
+                )
+                info = QLabel(format_info_html(tile_rows))
                 info.setTextFormat(Qt.RichText)
                 info.setWordWrap(True)
                 v.addWidget(info)
@@ -368,14 +325,15 @@ class PreviewPane(QWidget):
                 img_lbl.setFixedSize(thumb_side, thumb_side)
                 img_lbl.setAlignment(Qt.AlignCenter)
                 v.addWidget(img_lbl)
-                tile_rows: list[tuple[str, str]] = []
-                if name:         tile_rows.append((t("preview.info_name"), name))
-                if folder:       tile_rows.append((t("preview.info_folder"), folder))
-                if size_txt:     tile_rows.append((t("preview.info_size"), t("preview.info_size_value", bytes=size_txt)))
-                if res:          tile_rows.append((t("preview.info_resolution"), res))
-                if creation_txt: tile_rows.append((t("preview.info_created"), creation_txt))
-                if shot_txt:     tile_rows.append((t("preview.info_shot"), shot_txt))
-                info = QLabel(_format_info_html(tile_rows))
+                tile_rows = build_info_rows(
+                    name=name,
+                    folder=folder,
+                    size_txt=size_txt,
+                    creation_txt=creation_txt,
+                    shot_txt=shot_txt,
+                    resolution=res,
+                )
+                info = QLabel(format_info_html(tile_rows))
                 info.setTextFormat(Qt.RichText)
                 info.setWordWrap(True)
                 info.setObjectName("info_label")
@@ -488,7 +446,8 @@ class PreviewPane(QWidget):
 
     def on_image_loaded(self, token: str, path: str, image: Any) -> None:
         try:
-            if token.startswith("single|"):
+            kind = classify_image_token(token)
+            if kind == "single":
                 if token != self._current_single_token:
                     return
                 if image is None:
@@ -501,7 +460,7 @@ class PreviewPane(QWidget):
                 self._single_pm = pm
                 self._apply_single_pixmap_fit()
                 self._single_label.setText("")
-            elif token.startswith("grid|"):
+            elif kind == "grid":
                 lbl = self._grid_labels.get(token)
                 if not lbl:
                     return
@@ -769,25 +728,18 @@ class PreviewPane(QWidget):
 
     def _compute_grid_geometry(self) -> tuple[int, int]:
         viewport = self.preview_area.viewport()
-        width = max(1, viewport.width())
         spacing = max(2, GRID_SPACING_PX // 2)
         min_px = max(150, GRID_MIN_THUMB_PX - 50)
         try:
-            max_px = int(self._thumb_size) if int(self._thumb_size) > 0 else 600
+            max_px = int(self._thumb_size)
         except Exception:
-            max_px = 600
-        best_cols = 1
-        best_cell = min_px
-        for cols in range(1, 64):
-            total_spacing = spacing * (cols - 1)
-            cell = (width - total_spacing) // cols
-            if cell < min_px:
-                break
-            cand = min(cell, max_px)
-            if cand >= best_cell:
-                best_cell = cand
-                best_cols = cols
-        return best_cols, best_cell
+            max_px = 0
+        return compute_grid_geometry(
+            viewport_width=viewport.width(),
+            thumb_size_max=max_px,
+            spacing=spacing,
+            min_px=min_px,
+        )
 
     def _apply_single_pixmap_fit(self) -> None:
         try:
@@ -796,11 +748,8 @@ class PreviewPane(QWidget):
             if self._single_pm is None or self._single_pm.isNull():
                 return
             vp = self.preview_area.viewport()
-            max_w = max(1, vp.width())
             pm = self._single_pm
-            target_w = min(pm.width(), max_w - 1)
-            if target_w <= 0:
-                target_w = pm.width()
+            target_w = compute_fit_width(pm.width(), vp.width())
             if pm.width() != target_w:
                 scaled = pm.scaledToWidth(target_w, Qt.SmoothTransformation)
                 self._single_label.setPixmap(scaled)
