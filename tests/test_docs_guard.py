@@ -386,3 +386,77 @@ class TestBehaviouralModifyTrigger:
             behavioural_qualifies=True,  # would have qualified if scope included workers
         )
         assert rc == 0
+
+
+# ── CI mode (#273) ────────────────────────────────────────────────────────
+
+
+class TestCiMode:
+    """The ``--ci`` entry point used by .github/workflows/pr-gates.yml.
+
+    Three regressions worth catching:
+      1. ``--ci`` flag not detected → falls through to the stdin path,
+         which hangs (no stdin) or errors. CI runs become red for the
+         wrong reason.
+      2. ``PR_BODY`` env var unset → silent crash or, worse, silent
+         pass that bypasses the gate.
+      3. ``DIFF_BASE`` env var ignored → diff is computed against
+         ``origin/master`` for stacked PRs whose base is a feature
+         branch, surfacing files from earlier stages as false positives.
+    """
+
+    def test_ci_mode_blocks_when_pr_body_empty_and_docs_missing(
+        self, monkeypatch, capsys
+    ):
+        """Doc-relevant change, no bypass token, no docs touched →
+        exit 2. PR_BODY explicitly unset (PRs from the web UI can have
+        an empty body)."""
+        mod = _load_hook()
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "app/views/dialogs/new_dialog.py",
+        ])
+        monkeypatch.setattr(mod, "_new_files", lambda: {
+            "app/views/dialogs/new_dialog.py",
+        })
+        monkeypatch.setattr(sys, "argv", ["docs_guard.py", "--ci"])
+        monkeypatch.setenv("PR_TITLE", "feat: new dialog")
+        monkeypatch.delenv("PR_BODY", raising=False)
+        rc = mod.main()
+        assert rc == 2
+        assert "new_dialog.py" in capsys.readouterr().err
+
+    def test_ci_mode_honours_bypass_token_in_pr_body(self, monkeypatch):
+        """CI mode must read PR_BODY for the bypass token — otherwise
+        PRs opened from the web UI can't use the documented escape
+        valve."""
+        mod = _load_hook()
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "app/views/dialogs/new_dialog.py",
+        ])
+        monkeypatch.setattr(mod, "_new_files", lambda: {
+            "app/views/dialogs/new_dialog.py",
+        })
+        monkeypatch.setattr(sys, "argv", ["docs_guard.py", "--ci"])
+        monkeypatch.setenv("PR_TITLE", "feat: new dialog")
+        monkeypatch.setenv(
+            "PR_BODY", "details here\n[docs-not-needed: internal scaffold]\n"
+        )
+        assert mod.main() == 0
+
+    def test_diff_base_env_var_overrides_default(self, monkeypatch):
+        """DIFF_BASE plumbing: the git diff command must include the
+        env-supplied base, not always ``origin/master``."""
+        mod = _load_hook()
+        captured: list[list[str]] = []
+
+        def fake_check_output(cmd, **kwargs):
+            captured.append(cmd)
+            return ""
+
+        monkeypatch.setattr(mod.subprocess, "check_output", fake_check_output)
+        monkeypatch.setenv("DIFF_BASE", "origin/feat/parent-branch")
+        mod._changed_files()
+        assert captured, "expected git diff to be invoked"
+        assert any(
+            "origin/feat/parent-branch...HEAD" in arg for arg in captured[0]
+        )

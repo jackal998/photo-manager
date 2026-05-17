@@ -238,3 +238,56 @@ class TestBypassTokenShape:
             changed=["app/views/handlers/file_operations.py"],
         )
         assert rc == 2
+
+
+# ── CI mode (#273) ────────────────────────────────────────────────────────
+
+
+class TestCiMode:
+    """The ``--ci`` entry point used by .github/workflows/pr-gates.yml.
+
+    Mirrors the regressions tested in test_docs_guard.py::TestCiMode —
+    same shape, same failure modes, same fix.
+    """
+
+    def test_ci_mode_blocks_when_user_facing_change_lacks_qa(
+        self, monkeypatch, capsys
+    ):
+        mod = _load_hook(monkeypatch)
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "app/views/handlers/file_operations.py",
+        ])
+        monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
+        monkeypatch.setenv("PR_TITLE", "feat: lock state")
+        monkeypatch.delenv("PR_BODY", raising=False)
+        rc = mod.main()
+        assert rc == 2
+        assert "file_operations.py" in capsys.readouterr().err
+
+    def test_ci_mode_honours_bypass_token_in_pr_body(self, monkeypatch):
+        mod = _load_hook(monkeypatch)
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "app/views/handlers/file_operations.py",
+        ])
+        monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
+        monkeypatch.setenv("PR_TITLE", "refactor: rename internal fn")
+        monkeypatch.setenv(
+            "PR_BODY", "details\n[qa-not-needed: pure rename, no UX change]\n"
+        )
+        assert mod.main() == 0
+
+    def test_diff_base_env_var_overrides_default(self, monkeypatch):
+        mod = _load_hook(monkeypatch)
+        captured: list[list[str]] = []
+
+        def fake_check_output(cmd, **kwargs):
+            captured.append(cmd)
+            return ""
+
+        monkeypatch.setattr(mod.subprocess, "check_output", fake_check_output)
+        monkeypatch.setenv("DIFF_BASE", "origin/feat/parent-branch")
+        mod._changed_files()
+        assert captured, "expected git diff to be invoked"
+        assert any(
+            "origin/feat/parent-branch...HEAD" in arg for arg in captured[0]
+        )

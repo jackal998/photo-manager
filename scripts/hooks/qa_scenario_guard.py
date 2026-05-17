@@ -29,10 +29,19 @@ Hook protocol
   is rejected. Per Claude Code hook docs.
 * any other non-zero exit — surfaced to the user but does NOT block.
   We deliberately use exit 2 for the enforcement path.
+
+CI mode
+-------
+Invoke with ``--ci`` to run the same gate against a GitHub Actions
+pull-request payload (see ``.github/workflows/pr-gates.yml``). Reads
+``PR_TITLE`` + ``PR_BODY`` from the environment for bypass-token
+detection, and ``DIFF_BASE`` (default ``origin/master``) for the
+diff base. Same exit-2-on-block contract; same bypass token.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,11 +56,19 @@ QA_SCENARIO_PATTERN = re.compile(r"^qa/scenarios/s\d+.*\.py$")
 BYPASS_PATTERN = re.compile(r"\[qa-not-needed:[^\]]*\]")
 
 
+def _diff_base() -> str:
+    """Resolve the base ref for the branch-diff. CI mode sets DIFF_BASE
+    to ``origin/<github.event.pull_request.base.ref>`` so stacked PRs
+    diff against their immediate parent, not always master."""
+    return os.environ.get("DIFF_BASE", "origin/master")
+
+
 def _changed_files() -> list[str]:
-    """Return files changed on the current branch vs origin/master."""
+    """Return files changed on the current branch vs the diff base."""
+    base = _diff_base()
     try:
         out = subprocess.check_output(
-            ["git", "diff", "--name-only", "origin/master...HEAD"],
+            ["git", "diff", "--name-only", f"{base}...HEAD"],
             text=True, stderr=subprocess.DEVNULL,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -59,26 +76,24 @@ def _changed_files() -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except (ValueError, json.JSONDecodeError):
-        return 0  # don't block on malformed input — fail open
+def check(pr_text: str) -> tuple[int, str]:
+    """Run the gate against the current branch.
 
-    if payload.get("tool_name") != "Bash":
-        return 0
-    cmd = (payload.get("tool_input") or {}).get("command") or ""
-    if "gh pr create" not in cmd:
-        return 0
+    ``pr_text`` is searched for the bypass token — pass the
+    ``gh pr create`` command line in PreToolUse mode, or the PR
+    title + body concatenated in CI mode.
 
-    if BYPASS_PATTERN.search(cmd):
-        return 0
+    Returns ``(exit_code, stderr_message)``. ``exit_code`` is 0
+    (allow) or 2 (block). When 0, ``stderr_message`` is empty.
+    """
+    if BYPASS_PATTERN.search(pr_text):
+        return 0, ""
 
     changed = _changed_files()
     if not changed:
-        # No diff against origin/master — nothing to check (or no remote).
+        # No diff against the base — nothing to check (or no remote).
         # Don't block; CI / review will surface other issues if relevant.
-        return 0
+        return 0, ""
 
     user_facing = [
         f for f in changed if any(p.match(f) for p in USER_FACING_PATTERNS)
@@ -106,10 +121,43 @@ def main() -> int:
             "       command (title or body) — the reason will be visible in",
             "       review so the choice is auditable.",
         ]
-        sys.stderr.write("\n".join(msg_lines) + "\n")
-        return 2
+        return 2, "\n".join(msg_lines) + "\n"
 
-    return 0
+    return 0, ""
+
+
+def _run_ci() -> int:
+    """CI mode: read PR title + body from env vars; check the diff."""
+    pr_text = (
+        os.environ.get("PR_TITLE", "")
+        + "\n"
+        + os.environ.get("PR_BODY", "")
+    )
+    rc, msg = check(pr_text)
+    if msg:
+        sys.stderr.write(msg)
+    return rc
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--ci":
+        return _run_ci()
+
+    try:
+        payload = json.load(sys.stdin)
+    except (ValueError, json.JSONDecodeError):
+        return 0  # don't block on malformed input — fail open
+
+    if payload.get("tool_name") != "Bash":
+        return 0
+    cmd = (payload.get("tool_input") or {}).get("command") or ""
+    if "gh pr create" not in cmd:
+        return 0
+
+    rc, msg = check(cmd)
+    if msg:
+        sys.stderr.write(msg)
+    return rc
 
 
 if __name__ == "__main__":
