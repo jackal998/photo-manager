@@ -31,6 +31,42 @@ to miss on a fresh checkout:
 
 ---
 
+## PR template and pre-merge checklist
+
+Every new PR auto-fills from
+[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).
+GitHub picks it up automatically regardless of how the PR is opened
+(CLI, web UI, mobile, fork) — you don't need to copy it in by hand.
+
+The template puts the **Pre-merge checklist** above **Summary** on
+purpose: reviewers scanning a PR see the doc / test / qa-scenario
+boxes first, which makes drift cheap to catch even when local
+hooks (`docs_guard`, `qa_scenario_guard`) didn't run.
+
+**Bypass affordance.** For a checklist item that legitimately
+doesn't apply to your change, replace `[ ]` with `[N/A]`. That
+mirrors the project's `[docs-not-needed: <reason>]` convention but
+at line granularity, and it's reviewer-visible — the box doesn't
+silently disappear, it announces that you considered the rule and
+made a deliberate call. Don't delete checklist lines; leaving the
+`[N/A]` in keeps the template legible from PR to PR.
+
+Enforcement today is honor-system. A CI gate that fails on un-ticked
+boxes is a possible follow-up if drift recurs — see
+[#271](https://github.com/jackal998/photo-manager/issues/271) for
+the design discussion.
+
+CLI users opening a PR via `gh pr create` can pipe the template
+straight into the body:
+
+```
+gh pr create --body-file .github/PULL_REQUEST_TEMPLATE.md
+```
+
+The web UI does this for you automatically.
+
+---
+
 ## Adding a UI string
 
 **Every user-facing string in the app lives in `translations/<locale>.yml`,
