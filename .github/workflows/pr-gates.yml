@@ -1,0 +1,71 @@
+name: pr-gates
+
+# Server-side enforcement of the two PreToolUse gates that previously
+# only fired inside a Claude Code session configured via .claude/settings.json
+# (which is gitignored and per-machine). Without this workflow, a PR opened
+# from the GitHub web UI / mobile app / a fork / a teammate's machine
+# bypasses both gates silently. See #273.
+#
+# Hooks involved:
+#   - scripts/hooks/docs_guard.py        — blocks doc-relevant code without docs
+#   - scripts/hooks/qa_scenario_guard.py — blocks user-facing code without QA driver
+#
+# Both scripts share an exit-2-on-block contract, a [<key>-not-needed: <reason>]
+# bypass token convention, and a DIFF_BASE env var for the diff base. Tests
+# in tests/test_{docs,qa_scenario}_guard.py cover the gate logic exhaustively;
+# this workflow just wires the same logic into CI.
+#
+# Status posture: REQUIRED, matching tests.yml. Per the #273 acceptance
+# criteria ("match tests.yml posture") these gates encode substantive
+# correctness rules (docs/features.md staleness, missing QA coverage) and a
+# red status should block merge until resolved.
+
+on:
+  # Run on every PR regardless of target branch — stacked PRs (whose base is
+  # another feature branch, not master) need per-stage gate enforcement too.
+  # Without this, intermediate PRs in a multi-PR feature chain bypass the
+  # gates entirely. See tests.yml / qa-batch.yml for the matching pattern.
+  pull_request:
+
+concurrency:
+  group: pr-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+# Public-repo hardening: workflow is read-only, no write back to the repo.
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Diff base must be the PR's actual base (origin/<base.ref>), not always
+      # origin/master. This matters for stacked PRs targeting a feature branch:
+      # diffing against master would surface files from earlier PRs in the
+      # stack as "changed", firing the gates on already-reviewed code.
+      DIFF_BASE: origin/${{ github.event.pull_request.base.ref }}
+      # PR title + body feed the bypass-token check ([docs-not-needed: ...] /
+      # [qa-not-needed: ...]). Passed via env (not shell args) so PR bodies
+      # containing $(...), backticks, or quotes can't break the invocation.
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+    steps:
+      # fetch-depth: 0 so `git diff origin/<base>...HEAD` has full history
+      # to compute the merge-base. Without it the diff returns nothing and
+      # both gates silently no-op.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Two separate steps so each gate gets its own pass/fail line in the
+      # GitHub Actions UI — triage is one click instead of grepping a log.
+      - name: docs_guard
+        run: python scripts/hooks/docs_guard.py --ci
+
+      - name: qa_scenario_guard
+        run: python scripts/hooks/qa_scenario_guard.py --ci

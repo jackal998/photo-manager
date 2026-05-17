@@ -566,5 +566,13 @@ Setup: `.claude/settings.json` is gitignored. Copy
 `.claude/settings.json.example` to `.claude/settings.json` on a fresh
 checkout to install all three.
 
+Server-side mirror: `qa_scenario_guard` and `docs_guard` also run in
+CI via [`.github/workflows/pr-gates.yml`](.github/workflows/pr-gates.yml)
+(#273), so the same gate decision applies to PRs opened from the web
+UI, a fork, mobile, or a machine without `.claude/settings.json`
+configured. The bypass tokens work identically server-side (CI parses
+PR title + body). `zombie_check` stays local-only — it inspects host
+processes and has no CI analogue.
+
 ---
 
