@@ -170,8 +170,17 @@ Skills live in two homes, split by trust level:
 - **Project skills** — `.claude/skills/<name>/` — tracked in git,
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
-  `impact-map/`, `parallel-brief-generator/`, `qa-explore/`,
-  `update-docs/`. New project skills land here.
+  `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
+  `qa-explore/`, `update-docs/`. New project skills land here.
+
+  `/pr-review` runs the semantic-content review the file-touch
+  gates (`docs_guard.py`, `qa_scenario_guard.py`) cannot do — it
+  reads the branch diff and compares it against `docs/features.md`
+  entries and `qa/scenarios/sNN_*.py` drivers, reporting drift in
+  chat. Invoke manually after `git push` and before `gh pr create`;
+  pass an optional PR number to spot-check an existing PR. The
+  skill never posts to GitHub without an explicit follow-up
+  confirmation.
 - **Personal skills** — `.claude/skills/personal/<name>/` (gitignored)
   or `~/.claude/skills/<name>/` (user-level, never in any repo). For
   ad-hoc skills with machine-specific paths, Synology IPs, NAS
