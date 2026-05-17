@@ -156,6 +156,13 @@ the per-module table in [`docs/testing.md`](docs/testing.md). The doc
 is the canonical answer to "what's covered, what's not, what's the
 residual risk" — keep it honest.
 
+The canonical feature inventory lives at [`docs/features.md`](docs/features.md).
+Update it whenever user-visible behaviour changes (button label,
+conditional dialog, action scope, new shortcut/menu, post-action
+state change, new gating condition) — see the `update-docs` skill's
+"User-visible behaviour changed?" row. Enforced at PR-creation time
+by [`scripts/hooks/docs_guard.py`](scripts/hooks/docs_guard.py).
+
 ## Setup (one-time, per machine)
 
 `.claude/settings.json` is gitignored because it contains a machine-specific

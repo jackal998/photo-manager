@@ -1,0 +1,118 @@
+---
+name: update-docs
+description: Use after implementing any fix or new feature in photo-manager to keep documentation in sync. Checks README.md and pyproject.toml against what actually changed. Applies only surgical edits to affected sections.
+origin: local
+---
+
+# Update Docs After Each Fix / Feature
+
+Activate this skill after implementing any non-trivial change to photo-manager so that documentation stays in sync with the code.
+
+## When to activate
+
+- After adding, renaming, or deleting a source file
+- After adding a test file
+- After changing the SQLite schema (new columns, renamed columns)
+- After adding or removing a service, interface, or module
+- After changing menu actions or UI flow
+- After bumping the Python version
+- After adding or removing a `settings.json` key
+- After deprecating or deleting code
+- After **any change that shifts what each test layer covers**:
+  - Adding or removing an entry in `[tool.coverage.run] omit`
+  - Adding a `tests/integration/` test (layer 2 spot-add — record it
+    in `docs/testing.md` per-module table; layer 2 is on-demand, not
+    a maintained suite, so each addition is an event worth noting)
+  - Adding or modifying a `qa/scenarios/sNN_*.py` driver (layer 3)
+  - A module's layer-1 coverage changes by ≥5pp (e.g. lifted from 73 → 90)
+
+---
+
+## Docs map for `photo-manager`
+
+| File | What it tracks | Sections / spots to check |
+|------|---------------|--------------------------|
+| `README.md` | Project structure tree, test list, test count, "Run tests" section | `## Project structure` block; `tests/` subtree; `# NNN tests` comment; layer-summary table in "Run tests" |
+| `docs/features.md` | Canonical feature inventory — entry points, triggers, conditions, related PRs/issues/scenarios | Per-feature sections; the alphabetical index table at the top |
+| `pyproject.toml` | Python version for Black / Ruff / Pylint; coverage `omit` list (each entry needs a justification + cross-layer pointer) | `target-version = ["py3XX"]`, `target-version = "py3XX"`, `py-version = "3.XX"`; `[tool.coverage.run] omit = [...]` comments |
+| `docs/testing.md` | The 3-layer model + per-module residual-risk table — canonical answer to "what's covered, what's not, what's the risk" | Per-module rows under each section (`scanner/`, `core/`, `infrastructure/`, `app/`); "Open work" list at the end |
+| `CLAUDE.md` | Hard testing rules (no padding, 3 layers, 70% per-file floor, 3-trigger rule for new features) | "Testing ground rules" section — only update if the policy itself changes |
+
+---
+
+## Checklist
+
+Work through every item below. Check only the items relevant to your change.
+
+### Files changed?
+- [ ] Added a `.py` file → add it to `README.md` project structure tree at the right indentation level
+- [ ] Added a test file `tests/test_*.py` → add it to `README.md` test list; bump the `# 270+ tests` count
+- [ ] Removed or deprecated a file → mark `[deprecated]` in `README.md`; do **not** delete the entry
+- [ ] Renamed a file → update `README.md`
+
+### Schema changed?
+- [ ] Added column(s) to `migration_manifest` → update `README.md` manifest schema table (§ "Scanner features" / manifest schema)
+- [ ] Updated `_MIGRATIONS` list → verify migration note in `README.md` is still accurate
+
+### Service / interface changed?
+- [ ] Added or removed an infrastructure class → update `README.md` infrastructure tree
+
+### UI / menu changed?
+- [ ] Changed a dialog → update `README.md` dialogs tree
+
+### User-visible behaviour changed?
+- [ ] Button label change, conditional dialog, action scope change,
+      new keyboard shortcut, new menu item, post-action state change,
+      new condition affecting a flow → add or update the corresponding
+      section in `docs/features.md` (the canonical feature inventory).
+      Touch `README.md § Usage — GUI § Step N` only if the change is
+      part of the documented Step-1-4 happy path; otherwise the
+      `docs/features.md` entry is sufficient. Enforced by
+      `scripts/hooks/docs_guard.py` at `gh pr create` time — see the
+      [`docs/features.md`](../../../docs/features.md) "How to update
+      this file" section.
+
+### Settings changed?
+- [ ] Added a new `settings.json` key → add it to `README.md` Configuration section
+- [ ] Removed a key → remove or annotate it in `README.md`
+
+### Python version bumped?
+- [ ] `pyproject.toml` — update `target-version` (Black + Ruff) and `py-version` (Pylint)
+
+### Background worker / major flow changed?
+- [ ] New `QThread` worker → add to `README.md` workers/ subtree
+
+---
+
+## How to apply
+
+1. Read the changed source file(s) to understand exactly what changed.
+2. For each checked item above, read the relevant doc section.
+3. Apply **surgical edits** — replace only the stale sentence/row/bullet; do not rewrite entire sections.
+4. After all edits, run `python -m pytest tests/ -q --tb=short` to confirm no regressions.
+   If coverage drops below the configured `fail_under` threshold in `pyproject.toml`,
+   add tests for the new code before committing.
+5. Commit the doc changes alongside the code change (or as an immediate follow-up commit on the same branch).
+
+---
+
+## Example edit patterns
+
+**New file added** (`app/views/dialogs/export_dialog.py`):
+```
+# In README.md project structure, find the dialogs/ block and add:
+│   │   │   ├── export_dialog.py            # Export decisions to CSV
+```
+
+**New settings key** (`"preview_max_side": 1024`):
+```
+# In README.md Configuration section, add the key to the example JSON block.
+```
+
+**Deprecated a file** (`app/views/dialogs/legacy_dialog.py`):
+```
+# In README.md project structure, change:
+│   │   │   └── legacy_dialog.py
+# to:
+│   │   │   └── legacy_dialog.py            # [deprecated — legacy stub]
+```
