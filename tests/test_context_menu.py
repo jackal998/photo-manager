@@ -168,6 +168,16 @@ class TestActionHandlersImplBridge:
         impl.set_locked_state(items, True)
         file_ops.set_locked_state.assert_called_once_with(items, True)
 
+    def test_remove_items_from_list_delegates_to_file_ops(self):
+        """#185 — the third proxy in the bridge contract. Same failure
+        mode class as #175: a refactor that adds a context-menu item
+        but forgets the ActionHandlersImpl proxy silently no-ops the
+        menu item with zero crash. Test pins delegation."""
+        impl, file_ops = self._make_impl()
+        items = [{"type": "file", "path": "/a.jpg"}]
+        impl.remove_items_from_list(items)
+        file_ops.remove_items_from_list.assert_called_once_with(items)
+
 
 # ── handler routing ────────────────────────────────────────────────────────
 
