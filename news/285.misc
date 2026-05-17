@@ -1,0 +1,1 @@
+Add layer-1 coverage for `app/views/widgets/group_media_controller.py` via helper extraction + fake-self thin-proxy tests (#185).
