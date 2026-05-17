@@ -131,7 +131,9 @@ The PySide6 desktop app is the primary interface. Launch it with `run.bat`.
 
 1. Browse the embedded folder tree to find source directories.
    - Double-click or press **+ Add Selected Folder** to add a folder to the list.
-   - Use **↑ / ↓** buttons to reorder sources (top row = highest dedup priority).
+   - The source list is displayed alphabetically by path. Scan order
+     (and therefore dedup priority for exact duplicates) is inferred
+     from the underlying insertion order, not the displayed row order.
    - Tick or untick the **Recursive** checkbox per source — recursive scans all
      subdirectories; unticked scans only the immediate folder.
    - Use **×** to remove a source; **Remove All** to clear the list.
@@ -155,6 +157,7 @@ The tree shows all files loaded from the manifest.
 |--------|---------|
 | **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
 | **Action** | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **Score** | Keep-worthiness ranking in `[0.0, 1.0]` (#187). Within-group rows sort by this descending — best copy at the top. Empty for Live Photo MOV passengers. |
 | **Lock** | 🔒 if the row is locked against bulk operations (#182), empty otherwise. Sortable; searchable via the regex dialog as `Locked` / `""`. |
 | **File Name** | File name |
 | **Folder** | Containing directory |
@@ -168,9 +171,9 @@ The tree shows all files loaded from the manifest.
 
 - *Per file*: right-click a file → **Set Action → delete** / **keep** /
   **remove from list**.
-- *By highlight*: click or multi-select rows in the tree, then
-  **Action › Set Action to Activated Files › delete** (or **keep** /
-  **remove from list**).
+- *Multiple files*: select rows (Ctrl/Shift-click), then right-click
+  any of them → **Set Action** opens the same submenu and applies the
+  chosen decision to every selected row.
 - *In bulk*: **Action › Set Action by Field/Regex…** — pick a column,
   describe what to match, choose an action (`delete`, `keep`, or
   `remove from list`). The dialog defaults to **Simple** mode (pick
@@ -181,6 +184,9 @@ The tree shows all files loaded from the manifest.
   rows are flagged and dropped on save, no files are moved or deleted.
   Right-clicking a row in the main tree (single or multi-select) and
   in the Execute Action dialog also opens the same dialog.
+
+**Navigating:** double-click a file row to open it in the OS default
+viewer (#143); double-click a group header to toggle expand / collapse.
 
 If you close the app with unsaved decisions a prompt appears with
 **Save & leave** / **Leave** / **Back**, so you don't lose work
@@ -200,7 +206,11 @@ window) showing all groups for final review.
 - Right-click any file row → **Set Action** → change its decision before executing.
 - If every file in a group is marked `delete`, an amber warning banner appears
   in the dialog. Clicking **Execute** shows a confirmation prompt before proceeding.
-- Click **Execute** to carry out all decisions:
+- Click **Execute**. With no rows highlighted, every decided row is
+  processed. Highlight one or more rows first (Ctrl/Shift-click) to
+  scope execution to just those — the button label changes to
+  **Execute Action (highlighted)** when in scope (#211).
+- The chosen rows are then carried out:
   - `delete` → file sent to the recycle bin (`send2trash`)
   - `keep` → marked as executed in the manifest (no file operation)
   - Files that no longer exist on disk are skipped and listed in a warning dialog.
