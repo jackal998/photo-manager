@@ -206,7 +206,11 @@ window) showing all groups for final review.
 - Right-click any file row → **Set Action** → change its decision before executing.
 - If every file in a group is marked `delete`, an amber warning banner appears
   in the dialog. Clicking **Execute** shows a confirmation prompt before proceeding.
-- Click **Execute** to carry out all decisions:
+- Click **Execute**. With no rows highlighted, every decided row is
+  processed. Highlight one or more rows first (Ctrl/Shift-click) to
+  scope execution to just those — the button label changes to
+  **Execute Action (highlighted)** when in scope (#211).
+- The chosen rows are then carried out:
   - `delete` → file sent to the recycle bin (`send2trash`)
   - `keep` → marked as executed in the manifest (no file operation)
   - Files that no longer exist on disk are skipped and listed in a warning dialog.
