@@ -267,6 +267,73 @@ worth knowing up front so your first PR doesn't bounce on style:
 
 ---
 
+## Adding a news fragment for your PR
+
+Every PR adds a one-line entry to the next release's changelog by
+dropping a small file into [`news/`](news/). The
+[`news-gate`](.github/workflows/news-gate.yml) CI workflow fails any
+PR that doesn't, so this is mechanical — but the rules below keep the
+generated [`CHANGELOG.md`](CHANGELOG.md) readable.
+
+### Filename — `news/<PR-number>.<type>`
+
+| Type      | Use it for                                                      |
+|-----------|-----------------------------------------------------------------|
+| `feature` | User-visible new behaviour (new menu item, dialog, scoring)     |
+| `bugfix`  | Fixes a wrong behaviour a user could hit                        |
+| `doc`     | Documentation only (README, CONTRIBUTING, docs/, comments)      |
+| `removal` | Removed feature, removed dependency, breaking schema change     |
+| `misc`    | Refactor, CI, tooling, anything else without user-visible diff  |
+
+The filename is the **PR number** (not the issue number). If you don't
+know the PR number yet, open the PR first with a placeholder and
+update the filename in a follow-up commit before merge.
+
+### Content — one line, present-tense imperative
+
+```text
+Add Execute Action preview pane (#165).
+```
+
+- One line, no trailing prose. The line is concatenated with bullets
+  in the rendered changelog.
+- Present tense, imperative — "Add foo", not "Added foo" or "Adds foo".
+- If the PR closes a tracked issue, end with `(#<issue>)`. Towncrier's
+  `issue_format` renders the link automatically.
+
+### Bypass — `[skip-news: <reason>]`
+
+A PR that genuinely has no entry worth recording (e.g. a typo fix in
+a code comment, a transitive-dep bump with no behaviour change) can
+skip the gate by including the literal token `[skip-news: <reason>]`
+in the PR title or body. The reason is for the reviewer — keep it
+specific (`[skip-news: comment typo]`, not `[skip-news: trivial]`).
+
+This is the same convention as `[docs-not-needed]` for the docs-guard
+hook.
+
+### Release-time mechanics (you usually don't run this yourself)
+
+At release time, the maintainer runs:
+
+```bash
+python -m towncrier build --version <next-version> --yes
+```
+
+This consumes every fragment file in `news/`, prepends a versioned
+section to [`CHANGELOG.md`](CHANGELOG.md), deletes the consumed files,
+and stages everything. You don't run this in your feature PR — only
+fragment authoring.
+
+To preview what the next release section would look like without
+modifying any files:
+
+```bash
+python -m towncrier build --draft
+```
+
+---
+
 ## Where to ask
 
 - Behavior questions about photo-manager itself: open an issue.

@@ -1,0 +1,76 @@
+name: news-gate
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: news-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  require-news-fragment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check for news fragment or skip token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 1. Bypass: title OR body contains the literal token
+          #    `[skip-news:` followed by any reason. Mirrors the
+          #    `[docs-not-needed]` convention enforced by docs_guard.
+          if printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" | grep -Fq '[skip-news:'; then
+            echo "Bypass token [skip-news: ...] present — gate passes."
+            exit 0
+          fi
+
+          # 2. Look for a `news/<integer>.<type>` file added in this PR.
+          #    Use the GitHub API (paginated) instead of `gh pr diff` so
+          #    we don't depend on git history depth.
+          ADDED_FILES=$(gh api \
+            --paginate \
+            "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | select(.status == "added") | .filename')
+
+          NEWS_RE='^news/[0-9]+\.(feature|bugfix|doc|removal|misc)$'
+          MATCHES=$(printf '%s\n' "$ADDED_FILES" | grep -E "$NEWS_RE" || true)
+
+          if [ -n "$MATCHES" ]; then
+            echo "Found news fragment(s):"
+            printf '  %s\n' $MATCHES
+            exit 0
+          fi
+
+          # 3. No fragment, no bypass — fail with guidance.
+          cat <<'EOF' >&2
+
+          ✗ news-gate: this PR adds no news/<PR>.<type> fragment.
+
+          Add one of:
+            - news/<this-PR-number>.feature   (user-visible new behaviour)
+            - news/<this-PR-number>.bugfix    (fixes a user-hitting bug)
+            - news/<this-PR-number>.doc       (documentation only)
+            - news/<this-PR-number>.removal   (removed feature / breaking change)
+            - news/<this-PR-number>.misc      (refactor, CI, tooling, no user diff)
+
+          File contents: one line, present-tense imperative.
+            Example:  Add Execute Action preview pane (#165).
+
+          If this PR genuinely has no entry worth recording, include the
+          literal token `[skip-news: <reason>]` in the PR title or body.
+
+          See CONTRIBUTING.md § Adding a news fragment for your PR.
+          EOF
+          exit 1
