@@ -1,4 +1,14 @@
-"""ExecuteActionDialog — review and confirm planned file operations."""
+"""ExecuteActionDialog — review and confirm planned file operations.
+
+SMOKE TEST SENTINEL (#273 pr-gates verification) — REVERT BEFORE MERGE
+---------------------------------------------------------------------
+This block exists solely to add ≥10 added lines to a file under
+app/views/dialogs/ to trigger the docs_guard behavioural-modify
+gate path in CI. The PR carrying this commit must NOT merge.
+Lines 4–13 of this docstring are the smoke sentinel; total added
+lines: 12 > _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD (10).
+End sentinel.
+"""
 
 from __future__ import annotations
 
