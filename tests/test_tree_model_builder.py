@@ -18,6 +18,7 @@ from app.views.tree_model_builder import (
     _action_display,
     _file_similarity,
     _hamming_to_pct,
+    _pick_ref_winner,
     build_model,
 )
 
@@ -87,6 +88,178 @@ class TestFileSimilarity:
     @pytest.mark.parametrize("action", ["KEEP", "MOVE", "UNDATED", "", "FOO_UNKNOWN"])
     def test_other_actions_render_as_ref(self, action):
         assert _file_similarity(action, _rec()) == "Ref"
+
+
+# ── #253: % against the displayed Ref, not the scanner's anchor ────────────
+
+
+class TestFileSimilarityAgainstDisplayedRef:
+    """#253 — REVIEW_DUPLICATE rows render % measured against the Ref
+    winner ``_pick_ref_winner`` selects, NOT the scanner's anchor whose
+    distance lives in ``record.hamming_distance``. After #241 the two
+    can diverge: scanner anchors on the lex-first MOVE row, but the
+    score-aware Ref pick may select a different Ref-tier sibling.
+    """
+
+    def test_render_time_recomputation_supersedes_stored_hamming(self):
+        """The stored hamming_distance (vs scanner anchor) should be
+        ignored when ref_phash is supplied — render-time recomputation
+        wins. Concrete divergence: stored=63 (would render "2%") vs
+        recomputed=1 (renders "98%"). If the fix walks back, the legacy
+        2% would resurface and this test would catch it.
+        """
+        dup = _rec(
+            action="REVIEW_DUPLICATE",
+            phash="0000000000000001",
+            hamming_distance=63,  # scanner measured this against a different anchor
+        )
+        result = _file_similarity(
+            "REVIEW_DUPLICATE", dup, ref_phash="0000000000000000",
+        )
+        # round((64-1)/64*100) == round(98.4375) == 98
+        assert result == "98%"
+
+    def test_falls_back_to_stored_hamming_when_ref_phash_missing(self):
+        """Old manifests pre-date the phash column wiring through
+        PhotoRecord; when ref_phash is None the renderer must still
+        produce a meaningful % from the legacy stored value rather
+        than blanking the cell.
+        """
+        dup = _rec(
+            action="REVIEW_DUPLICATE",
+            phash="0000000000000001",
+            hamming_distance=2,
+        )
+        result = _file_similarity(
+            "REVIEW_DUPLICATE", dup, ref_phash=None,
+        )
+        # round((64-2)/64*100) == 97
+        assert result == "97%"
+
+    def test_falls_back_to_stored_hamming_when_record_phash_missing(self):
+        """Symmetric to the previous case — a row whose own phash is
+        None (video / RAW with no thumbnail / hash failure) cannot
+        be re-measured, so the stored hamming_distance is the only
+        signal available.
+        """
+        dup = _rec(
+            action="REVIEW_DUPLICATE",
+            phash=None,
+            hamming_distance=4,
+        )
+        result = _file_similarity(
+            "REVIEW_DUPLICATE", dup, ref_phash="0000000000000000",
+        )
+        # round((64-4)/64*100) == round(93.75) == 94
+        assert result == "94%"
+
+    def test_recompute_path_handles_zero_distance(self):
+        """A REVIEW_DUPLICATE row whose pHash exactly matches the
+        Ref winner's renders 100% — same arithmetic as EXACT but
+        reached via the recomputation branch instead of the action
+        check, so this catches an off-by-one in the new code path.
+        """
+        dup = _rec(
+            action="REVIEW_DUPLICATE",
+            phash="abcdef0123456789",
+            hamming_distance=10,  # ignored
+        )
+        result = _file_similarity(
+            "REVIEW_DUPLICATE", dup, ref_phash="abcdef0123456789",
+        )
+        assert result == "100%"
+
+
+# ── _pick_ref_winner ───────────────────────────────────────────────────────
+
+
+class TestPickRefWinner:
+    """``_pick_ref_winner`` returns the items_list element that should
+    carry the "Ref" label. #253 changed the return type from id() to
+    the item itself so the caller can read ``winner.phash`` — the
+    score-aware tie-break itself must still match #241's behaviour.
+    """
+
+    def test_returns_none_when_no_ref_tier(self):
+        only_dups = [
+            _rec(file_path="/p/a.jpg", action="REVIEW_DUPLICATE"),
+            _rec(file_path="/p/b.jpg", action="EXACT"),
+        ]
+        assert _pick_ref_winner(only_dups) is None
+
+    def test_returns_the_winner_item_not_just_its_id(self):
+        """Regression guard for the API change: previous helper returned
+        ``id(item)``. Callers reading ``winner.phash`` would crash on an
+        int — this test pins that the returned value is the actual
+        record-shaped object.
+        """
+        ref_a = _rec(file_path="/p/a.jpg", action="MOVE", score=0.9, phash="aaaa")
+        ref_b = _rec(file_path="/p/b.jpg", action="MOVE", score=0.5, phash="bbbb")
+        winner = _pick_ref_winner([ref_a, ref_b])
+        assert winner is ref_a
+        assert getattr(winner, "phash") == "aaaa"
+
+    def test_score_winner_supersedes_lex_order(self):
+        """The #241 canonical case: two Ref-tier rows, the lex-first
+        (ref_b) loses to the higher-scored ref_a. With this in place,
+        ``build_model`` reads the higher-scored row's phash and that
+        becomes the basis for #253's render-time recomputation.
+        """
+        ref_a = _rec(file_path="/p/zzz.jpg", action="MOVE", score=0.9)
+        ref_b = _rec(file_path="/p/aaa.jpg", action="MOVE", score=0.5)
+        winner = _pick_ref_winner([ref_a, ref_b])
+        assert winner is ref_a
+
+
+# ── #253: build_model end-to-end against the displayed Ref ─────────────────
+
+
+class TestBuildModelSimilarityAgainstDisplayedRef:
+    """End-to-end through build_model: a group whose score-winner
+    differs from where the scanner would have anchored its
+    hamming_distance must render the REVIEW_DUPLICATE row's % against
+    the score-winner's phash. The stored hamming_distance is left in
+    place so old manifests still degrade gracefully, but it is NOT what
+    the user sees when phashes are available."""
+
+    def test_review_duplicate_pct_uses_score_winner_phash(self, qapp):
+        from app.views.constants import COL_GROUP, COL_NAME, PATH_ROLE
+        # Group: two Ref-tier rows (score-winner != lex-first) + one
+        # REVIEW_DUPLICATE whose stored hamming was measured against
+        # ref_low (the lex-first scanner anchor).
+        ref_high = _rec(
+            file_path="/p/ref_high.jpg",
+            action="MOVE",
+            score=0.9,
+            phash="0000000000000000",
+        )
+        ref_low = _rec(
+            file_path="/p/aaa_ref_low.jpg",  # lex-first
+            action="MOVE",
+            score=0.3,
+            phash="ffffffffffffffff",
+        )
+        # Stored hamming=63 vs ref_low (the scanner's anchor).
+        # Distance to the score-winner (ref_high) is 1 → should render 98%.
+        dup = _rec(
+            file_path="/p/dup.jpg",
+            action="REVIEW_DUPLICATE",
+            phash="0000000000000001",
+            hamming_distance=63,
+        )
+        model, _ = build_model([_group([ref_high, ref_low, dup])])
+        group_row = model.item(0, 0)
+        # Find the dup row by file path and read its similarity cell.
+        dup_sim = None
+        for r in range(group_row.rowCount()):
+            name_item = group_row.child(r, COL_NAME)
+            if name_item.data(PATH_ROLE) == "/p/dup.jpg":
+                dup_sim = group_row.child(r, COL_GROUP).text()
+        assert dup_sim == "98%", (
+            f"REVIEW_DUPLICATE row should render % against ref_high (score=0.9, "
+            f"distance=1 → 98%), not against ref_low (stored hamming=63 → 2%); "
+            f"got {dup_sim!r}"
+        )
 
 
 # ── _ACTION_SORT / _DECISION_SORT mappings ─────────────────────────────────

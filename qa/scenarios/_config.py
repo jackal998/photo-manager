@@ -195,6 +195,12 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # preview surface mounted. Non-destructive — cancels without
     # executing.
     "s51_execute_dialog_preview": ["qa/sandbox/near-duplicates"],
+    # s52 (#253) — pHash recomputation against displayed Ref. The
+    # near-duplicates fixture (5 JPEG re-saves at qualities 95/88/80/72/65)
+    # gives one Ref-tier MOVE row + four REVIEW_DUPLICATE rows with
+    # populated pHash strings — the minimal end-to-end shape the new
+    # render path needs.
+    "s52_similarity_against_displayed_ref": ["qa/sandbox/near-duplicates"],
 }
 
 

@@ -197,6 +197,15 @@ ALL_SCENARIOS = [
     # contains both a tree and a preview pane visible to UIA, then
     # cancels without executing.
     "s51_execute_dialog_preview",
+    # s52 (#253) — REVIEW_DUPLICATE rows' Similarity % is recomputed at
+    # render time against the *displayed* Ref winner (which can diverge
+    # from the scanner's anchor after #241's score-aware tie-break).
+    # Scans the near-duplicates fixture, reads back the manifest, and
+    # verifies that for every REVIEW_DUPLICATE row the (Ref-winner pHash,
+    # row pHash) Hamming distance reaches the renderer — phash column
+    # has to be wired through PhotoRecord for the new render path to
+    # work. Read-only on the manifest.
+    "s52_similarity_against_displayed_ref",
 ]
 
 

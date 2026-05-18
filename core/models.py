@@ -33,6 +33,12 @@ class PhotoRecord:
     # User's planned file operation (delete | keep | "" = undecided)
     user_decision: str = ""
     hamming_distance: int | None = None
+    # Perceptual hash hex string (16 chars / 64 bits via imagehash). Used
+    # at render time (#253) to recompute the Similarity % against the
+    # *displayed* Ref winner, which can diverge from the scanner's anchor
+    # after #241's score-aware Ref pick. None for videos, RAW-only rows,
+    # and rows from manifests that pre-date the phash column.
+    phash: str | None = None
     # Keep-worthiness score in [0.0, 1.0] (#187). None for isolated rows
     # (no peers to score against) and Live Photo MOV passengers (inherit
     # their HEIC's decision). Computed at scan time by scanner.scoring;
