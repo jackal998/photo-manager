@@ -51,6 +51,7 @@ for the chore plan.
 | [Scan dialog — collapse Advanced Settings](#scan-dialog--collapse-advanced-settings) | Scan |
 | [Scan dialog — folder list (no priority arrows)](#scan-dialog--folder-list-no-priority-arrows) | Scan |
 | [Scan dialog — multi-source scan](#scan-dialog--multi-source-scan) | Scan |
+| [Scan flow — manifest summary in progress log](#scan-flow--manifest-summary-in-progress-log) | Scan |
 | [Scan flow — rescan confirm](#scan-flow--rescan-confirm) | Scan |
 | [Scan flow — visual selection of KEEP rows after scan](#scan-flow--visual-selection-of-keep-rows-after-scan) | Scan |
 | [Set Action dialog — Beginner / Regex mode toggle](#set-action-dialog--beginner--regex-mode-toggle) | Set Action dialog |
@@ -387,6 +388,17 @@ for the chore plan.
 - **Conditions / variants:** Source paths persist to `settings.json` (`sources.list`) between sessions. The Scan dialog accepts invalid / missing paths but surfaces a validation toast on Start Scan ([`qa/scenarios/s38_scan_dialog_invalid_path.py`](../qa/scenarios/s38_scan_dialog_invalid_path.py)).
 - **Related:** [PR #17](https://github.com/jackal998/photo-manager/pull/17) (dynamic multi-source scan); [PR #160](https://github.com/jackal998/photo-manager/pull/160) (two-column layout); QA scenarios [`qa/scenarios/s10_multi_source.py`](../qa/scenarios/s10_multi_source.py), [`qa/scenarios/s17_scan_dialog_widgets.py`](../qa/scenarios/s17_scan_dialog_widgets.py).
 - **Last verified:** 2026-05-17 (PR for [#262](https://github.com/jackal998/photo-manager/issues/262))
+
+---
+
+### Scan flow — manifest summary in progress log
+
+- **Entry point:** [scanner/manifest.py:92](../scanner/manifest.py#L92) `print_summary()` — output captured by [app/views/workers/scan_worker.py](../app/views/workers/scan_worker.py) `_emit` and routed to the scan-dialog progress log.
+- **Trigger:** Scan finishes and the worker emits the summary block.
+- **Behaviour:** The progress log prints a "Migration Manifest Summary" table with one row per action bucket (kept, to be moved, exact duplicates, near-duplicates (review), no shot date), each row showing the count and percentage. The headline `Indexed in manifest` line counts manifest rows; `Skipped (unreadable)` reconciles the headline against the per-step "Hashed N/M" log line earlier. A second "Group Summary" block follows with group count, files-in-groups, and isolated-file counts.
+- **Conditions / variants:** Action-bucket row labels are localised via [`translations/en.yml`](../translations/en.yml) / [`translations/zh_TW.yml`](../translations/zh_TW.yml) `manifest_summary:` keys — raw internal action strings (`KEEP` / `MOVE` / `EXACT` / `REVIEW_DUPLICATE` / `UNDATED`) no longer leak into the log. The `Skipped (unreadable)` row is omitted when the count is zero.
+- **Related:** [PR #310](https://github.com/jackal998/photo-manager/pull/310) (fix for [#242](https://github.com/jackal998/photo-manager/issues/242)); also [#87](https://github.com/jackal998/photo-manager/issues/87) (headline-label + skipped reconciliation).
+- **Last verified:** 2026-05-19 (PR for [#242](https://github.com/jackal998/photo-manager/issues/242))
 
 ---
 
