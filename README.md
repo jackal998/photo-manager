@@ -113,7 +113,7 @@ Read that before adding tests for a new feature. Short version:
 | 1 — Unit + mocks (CI) | Refactoring bugs, parser logic | Real third-party behavior |
 | 2 — Integration (local, on-demand) | Spot-tests for specific boundary bugs already hit (exiftool / send2trash / rawpy edge cases) | GUI behavior; anything you haven't written a spot-test for |
 | 3 — `/qa-explore` (local) | Label drift, dialog regressions, state-transition bugs, boundary happy paths | Anything off the scripted path |
-| Probes — `tests/test_ui_probes.py` + sNN soft-probe blocks (CI) | Cross-cutting invariants: dropdown drift, missing kwargs, label uniqueness, translation passthroughs, menu-gating drift, bridge-pattern holes ([#243](https://github.com/jackal998/photo-manager/issues/243)) | Anything not framed as a structural invariant |
+| Probes — `tests/test_ui_probes.py` + sNN soft-probe blocks (CI) + `qa/probes/` (local) | Cross-cutting invariants: dropdown drift, missing kwargs, label uniqueness, translation passthroughs, menu-gating drift, bridge-pattern holes ([#243](https://github.com/jackal998/photo-manager/issues/243)) | Anything not framed as a structural invariant |
 
 **No test padding.** A test that exists only to clear a coverage gate
 is metric gaming, not engineering — see the testing rules in
