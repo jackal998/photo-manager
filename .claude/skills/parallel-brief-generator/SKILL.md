@@ -114,6 +114,15 @@ For each issue mentioned (or implied by bundle name):
    history of the project (if available) is the next-best source.
 4. If two open issues plausibly match the user's description, ask
    ONE clarifying question. Otherwise don't outsource research.
+5. **Whenever you write `#N` in a brief or in your own output,
+   prefix it with the object kind: `[PR #N]` or `[issue #N]`.**
+   Bare `#N` is ambiguous — a number in the user's intent might
+   be either, and the cold session reading the brief cannot
+   re-derive which. (Filed via
+   [#292](https://github.com/jackal998/photo-manager/issues/292)
+   after a brief named `#245` as a PR when it was the issue
+   closed by PR #256.) The matching `gh` check that validates
+   each label lives in Step 2.
 
 You also need (these are usually trivial to infer):
 
@@ -142,6 +151,28 @@ the likely rebase cost. Don't silently fan out overlapping work.
 Pre-assign slot numbers: if bundles A, B, C each need a new
 `qa/scenarios/sNN_*.py`, hand out `sNN`, `sNN+1`, `sNN+2` from the
 first free slot.
+
+**Validate every `#N` reference before emitting briefs.** For each
+number you've decided to put in a brief — sample sets ("run
+`/pr-review` against PRs #A, #B, #C"), `Closes #N` trailers, "see
+PR #N for prior art", "this depends on issue #N" — run the check
+that matches the kind you've labelled it (Step 1 bullet 5):
+
+```
+# If you wrote [PR #N]:
+gh pr view <N> --json number,state,title >/dev/null \
+  || echo "MISMATCH: #N is not a PR — check gh issue view <N>"
+
+# If you wrote [issue #N]:
+gh issue view <N> --json number,title >/dev/null \
+  || echo "MISMATCH: #N is not an issue — check gh pr view <N>"
+```
+
+On mismatch, do NOT emit the brief — either swap for the correct
+object (e.g. the PR that closed the issue, or vice versa) or
+surface to the user. Do not pass-through a labelled `#N` that
+doesn't resolve to that kind. (See [#292](https://github.com/jackal998/photo-manager/issues/292)
+for the recurrence the check defends against.)
 
 ### Step 3 — Generate one brief per task
 
@@ -355,6 +386,15 @@ from here; they own their work end-to-end.
   backtick are different fence chars, so inner ``` is unambiguously
   content. This was caught mid-session on 2026-05-15 (briefs for
   #230 and #212 rendered invisible).
+- **Emitting bare `#N` references in a brief, or labelling one as
+  `[PR #N]` / `[issue #N]` without running the matching `gh pr
+  view` / `gh issue view` check first.** The two fixes are
+  redundant on purpose — the prefix is for the human reader and the
+  cold session, the validation is for the orchestrator. Filed as
+  [#292](https://github.com/jackal998/photo-manager/issues/292)
+  after a brief listed issue #245 as a PR in a "5 recent clean PRs"
+  sample set; the executing session caught the mismatch in-band
+  and substituted PR #255, but burned context doing it.
 
 ## Photo-manager-specific reminders to bake into every brief
 
