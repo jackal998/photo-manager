@@ -1,0 +1,1 @@
+Pin the legacy `sources.{iphone,takeout,jdrive}` → `sources.list` migration shim in `ScanDialog._load_from_settings` with a layer-1 regression test, so a future cleanup PR cannot silently empty source lists for users upgrading from a pre-`sources.list` build (#258).
