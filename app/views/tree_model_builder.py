@@ -25,6 +25,7 @@ from app.views.constants import (
     headers,
 )
 from infrastructure.i18n import t
+from scanner.phash_distance import hamming_distance as _phash_hamming
 
 
 _LOCK_GLYPH = "\U0001F512"  # 🔒
@@ -89,11 +90,23 @@ def _hamming_to_pct(hamming: int | None) -> str:
 
 
 def _file_similarity(
-    action: str, record: object, is_ref_winner: bool = True
+    action: str,
+    record: object,
+    is_ref_winner: bool = True,
+    ref_phash: str | None = None,
 ) -> str:
     """Return similarity label for a file row.
 
-    EXACT → "100%"; REVIEW_DUPLICATE → percentage from hamming_distance.
+    EXACT → "100%"; REVIEW_DUPLICATE → percentage from pHash Hamming
+    distance against the *displayed* Ref winner (#253). The render-time
+    recomputation preserves #241's score-aware Ref pick: when the
+    scanner anchored on a different Ref-tier file than ``_pick_ref_winner``
+    selects, the stored ``hamming_distance`` would read "X% similar to
+    *what?*" — so we re-measure against the row the user actually sees
+    as the group's Ref. Falls back to the scanner's stored
+    ``hamming_distance`` when either pHash is missing (old manifests
+    pre-phash, video rows, or imagehash unavailable).
+
     For Ref-tier actions (KEEP / MOVE / UNDATED / ""): when
     ``is_ref_winner`` is True the row carries the "Ref" label; when
     False it falls back to the neutral passenger sentinel "—". Within
@@ -102,23 +115,28 @@ def _file_similarity(
     duplicates union-find collapsed into one group, etc. all used to
     render two or three "Ref" labels in the same group.
 
-    Default ``is_ref_winner=True`` keeps the legacy behaviour for
-    callers that don't track within-group winners (notably the unit
-    tests in ``tests/test_tree_model_builder.py::TestFileSimilarity``,
-    which exercise the helper in isolation).
+    Default ``is_ref_winner=True`` and ``ref_phash=None`` keep the
+    legacy behaviour for callers that don't track within-group winners
+    (notably the unit tests in
+    ``tests/test_tree_model_builder.py::TestFileSimilarity``, which
+    exercise the helper in isolation).
     """
     if action == "EXACT":
         return "100%"
     if action == "REVIEW_DUPLICATE":
+        record_phash = getattr(record, "phash", None)
+        recomputed = _phash_hamming(ref_phash, record_phash)
+        if recomputed is not None:
+            return _hamming_to_pct(recomputed)
         return _hamming_to_pct(getattr(record, "hamming_distance", None))
     if is_ref_winner:
         return t("tree.similarity_ref")
     return t("tree.similarity_passenger")
 
 
-def _pick_ref_winner_id(items_list: Iterable[object]) -> int | None:
-    """Return ``id()`` of the items_list element that should carry the
-    "Ref" label within its group, or ``None`` if no item is Ref-tier.
+def _pick_ref_winner(items_list: Iterable[object]) -> object | None:
+    """Return the items_list element that should carry the "Ref" label
+    within its group, or ``None`` if no item is Ref-tier.
 
     Tie-break (ascending — smallest tuple wins):
       1. ``_ACTION_SORT`` priority (Ref-tier == 1 always beats
@@ -128,10 +146,14 @@ def _pick_ref_winner_id(items_list: Iterable[object]) -> int | None:
          canonical case)
       3. ``file_path`` lexicographic (deterministic when score ties)
 
-    Only returns an id when the candidate is genuinely Ref-tier
+    Only returns an item when the candidate is genuinely Ref-tier
     (priority 1). A group of only EXACT/REVIEW_DUPLICATE rows has no
     Ref winner — those rows render their own similarity labels and
     no "Ref" should appear.
+
+    Returning the item itself (not just its ``id()``) lets the caller
+    read the winner's pHash to drive #253's render-time Similarity %
+    recomputation.
     """
     best_item: object | None = None
     best_key: tuple | None = None
@@ -152,7 +174,7 @@ def _pick_ref_winner_id(items_list: Iterable[object]) -> int | None:
         if best_key is None or key < best_key:
             best_key = key
             best_item = it
-    return id(best_item) if best_item is not None else None
+    return best_item
 
 
 # Sentinel SORT_ROLE value for unscored rows (Live Photo MOV passengers,
@@ -322,7 +344,15 @@ def build_model(
         # once per group instead of tracking ref_seen in the loop so
         # the source-model iteration order stays untouched (sort happens
         # downstream through QSortFilterProxyModel).
-        ref_winner_id = _pick_ref_winner_id(items_list)
+        #
+        # #253 — also grab the winner's pHash so REVIEW_DUPLICATE rows
+        # can render % against the *displayed* Ref rather than the
+        # scanner's anchor (which may differ when #241's score-aware
+        # tie-break picks a different Ref-tier row).
+        ref_winner = _pick_ref_winner(items_list)
+        ref_winner_phash = (
+            getattr(ref_winner, "phash", None) if ref_winner is not None else None
+        )
 
         for p in items_list:
             name = Path(getattr(p, "file_path", "")).name
@@ -343,7 +373,10 @@ def build_model(
             # the per-group winner, "—" for sibling Ref-tier rows (#241).
             file_action = getattr(p, "action", "") or ""
             file_match = _file_similarity(
-                file_action, p, is_ref_winner=(id(p) == ref_winner_id),
+                file_action,
+                p,
+                is_ref_winner=(p is ref_winner),
+                ref_phash=ref_winner_phash,
             )
 
             # Col 1: user's decision (delete / keep / "" / remove_from_list).

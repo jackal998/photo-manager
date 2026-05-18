@@ -57,6 +57,7 @@ for the chore plan.
 | [Set Action dialog — live preview + validation](#set-action-dialog--live-preview--validation) | Set Action dialog |
 | [Set Action dialog — numeric comparison panel](#set-action-dialog--numeric-comparison-panel) | Set Action dialog |
 | [Set Action dialog — Score / Lock / Resolution fields](#set-action-dialog--score--lock--resolution-fields) | Set Action dialog |
+| [Similarity column](#similarity-column) | Review |
 
 ---
 
@@ -453,6 +454,17 @@ for the chore plan.
 - **Conditions / variants:** All three labels go through `t()` so they translate correctly. Without this addition, picking Score from the combo would have rendered untranslated; Lock would have been picker-visible but raw-English; Resolution wasn't there at all.
 - **Related:** [PR #250](https://github.com/jackal998/photo-manager/pull/250) (closes [#238](https://github.com/jackal998/photo-manager/issues/238)); QA scenario [`qa/scenarios/s50_select_numeric_panel_from_main_window.py`](../qa/scenarios/s50_select_numeric_panel_from_main_window.py).
 - **Last verified:** 2026-05-17 (PR for [#262](https://github.com/jackal998/photo-manager/issues/262))
+
+---
+
+### Similarity column
+
+- **Entry point:** First column of the main result tree (COL_GROUP at index 0) — [app/views/tree_model_builder.py](../app/views/tree_model_builder.py). On the group header row it shows the localised "Group N" label; on each file row it shows one of: `Ref`, `100%`, an `N%` similarity, `—`, or `~dup`.
+- **Trigger:** Populated automatically when a manifest is loaded; no user action.
+- **Behaviour:** Per file row, the cell renders one of five values: (a) `Ref` — exactly one row per group, picked via the score-aware tie-break (highest score among Ref-tier action rows, lex name as final tiebreaker); (b) `100%` — `action='EXACT'` (SHA / format duplicate); (c) `N%` — `action='REVIEW_DUPLICATE'`, computed at render time as `round((64 - hamming) / 64 * 100)` where `hamming` is the pHash Hamming distance between the row's pHash and **the displayed Ref's pHash**, not the scanner's anchor's pHash; (d) `—` — Ref-tier sibling row (e.g. Live Photo MOV passenger sitting alongside the HEIC primary) that did not win the Ref pick; (e) `~dup` — fallback placeholder when neither pHash can be read.
+- **Conditions / variants:** The render-time recomputation requires both the displayed Ref's pHash and the row's pHash to be populated. When either is missing (old manifests pre-phash column, video rows, or imagehash not installed), the cell falls back to the scanner's stored `hamming_distance` so old manifests degrade gracefully. The manifest's `hamming_distance` column is still written by the scanner but is no longer the source of truth for the rendered % when phashes are available — the rendered value is always relative to the row the user sees as `Ref`.
+- **Related:** [#253](https://github.com/jackal998/photo-manager/issues/253) (render against displayed Ref); [#241](https://github.com/jackal998/photo-manager/issues/241) (score-aware Ref tie-break); QA scenarios [`qa/scenarios/s52_similarity_against_displayed_ref.py`](../qa/scenarios/s52_similarity_against_displayed_ref.py); helper module [`scanner/phash_distance.py`](../scanner/phash_distance.py).
+- **Last verified:** 2026-05-19 (PR for [#253](https://github.com/jackal998/photo-manager/issues/253))
 
 ---
 
