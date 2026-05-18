@@ -1,0 +1,1 @@
+Trim `parallel-brief-generator` description from 1064 → 676 chars to fit Anthropic's 1024-char limit; trigger examples moved into the body's "When to use" section.

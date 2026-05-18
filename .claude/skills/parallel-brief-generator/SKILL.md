@@ -1,6 +1,6 @@
 ---
 name: parallel-brief-generator
-description: Generate self-contained briefs for one or more cold Claude Code desktop sessions that will work in isolated parallel worktrees. The orchestrator session (where this skill is invoked) takes the user's high-level intent, researches each task independently via `gh issue view` + codebase Read/Grep, runs pre-flight (clean tree, base SHA pin, `.worktreeinclude` check, scenario slot pre-assignment, file-disjoint collision matrix), and outputs N copy-paste-ready prompts. The user pastes each into a fresh "+ New session" with the "create worktree" option enabled so each session is truly isolated — never sees, never touches the others' work. Use whenever the user wants to scope out one or more issues for cold-session work; single-task input is valid (the cross-bundle steps are no-ops at N=1) and parallel multi-issue is the primary use case. Triggers include "fan out X, Y, Z in parallel", "brief out these issues", "generate work brief for #N", "prepare a cold session to do …", "ship the status-bar bundle and the scan-dialog fix in parallel".
+description: Generate self-contained briefs for one or more cold Claude Code desktop sessions that will work in isolated parallel worktrees. Researches each task via `gh issue view` + codebase Read/Grep, runs pre-flight (clean tree, base SHA pin, scenario slot pre-assignment, file-disjoint collision matrix), and outputs N copy-paste-ready prompts. The user pastes each into a fresh "+ New session" with the "create worktree" option enabled so each session is truly isolated. Use whenever the user wants to scope out one or more issues for cold-session work; single-task input is valid (cross-bundle steps are no-ops at N=1) and parallel multi-issue is the primary use case.
 ---
 
 # parallel-brief-generator — briefs for isolated parallel sessions
@@ -41,6 +41,14 @@ steps (collision check, slot pre-assignment) are no-ops at N=1, but
 the research and brief-template benefits still apply.
 
 ## When to use vs when to skip
+
+Trigger phrases that should activate this skill:
+
+- "fan out X, Y, Z in parallel"
+- "brief out these issues"
+- "generate work brief for #N"
+- "prepare a cold session to do …"
+- "ship the status-bar bundle and the scan-dialog fix in parallel"
 
 Use this skill whenever:
 - **Multiple independent items** the user wants briefed for parallel
