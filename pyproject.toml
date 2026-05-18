@@ -75,22 +75,33 @@ omit = [
   "run_all_linters.py",               # dev tooling shell, not user-facing
   "infrastructure/image_service.py",  # requires running QApplication for decode; covered by qa-explore preview pane (s05)
   "infrastructure/logging.py",        # module-level loguru sink setup; no executable surface beyond import
-  # The four files below are the qa-explore territory of the preview /
-  # dialog-dispatch stacks: Qt-widget rendering + QThreadPool dispatch +
-  # Qt MediaPlayer wrapper + QFileDialog dispatch. They are loaded
-  # into the layer-1 coverage report by two distinct triggers:
-  #   * #165 / #260 — instantiating ExecuteActionDialog with a task_runner
-  #     pulls in preview_pane + image_tasks + video_player.
-  #   * #185 — importing MainWindow at layer 1 (test_main_window.py)
-  #     transitively imports all four.
-  # Each exercises only constructor + a thin slice well below the 70%
-  # per-file floor. Layer-3 covers the real surface (rendering, fit-on-
-  # width, video lifecycle, dialog open paths). The layer-1 cascade is
-  # noise (see feedback_test_import_cascade.md). Sibling #185 PR for
-  # preview_pane.py will add focused L1 and remove that entry; the
-  # group_media_controller entry was removed by #284 (helper extraction
-  # + fake-self thin-proxy tests).
-  "app/views/preview_pane.py",                       # Qt rendering, image fit + video player wiring; covered by qa-explore s05 (huge preview) + s11 (video live)
+  # The four files below are the qa-explore territory of the
+  # preview / dialog-dispatch stacks. They are loaded into the
+  # layer-1 coverage report by two distinct triggers:
+  #   * #165 / #260 — instantiating ExecuteActionDialog with a
+  #     task_runner pulls in preview_pane + image_tasks + video_player.
+  #   * #185 — importing MainWindow at layer 1 transitively imports
+  #     all four.
+  # Each exercises only constructor + a thin slice well below the
+  # 70% per-file floor. Layer-3 covers the real surface (rendering,
+  # video lifecycle, dialog open paths). The layer-1 cascade is
+  # noise (see feedback_test_import_cascade.md). group_media_controller
+  # was removed from this list by #285 (helper extraction + thin-proxy
+  # tests cleared the 70% bar honestly).
+  #
+  # preview_pane.py NOTE (final #185 PR): the testable surface is
+  # extracted to app/views/preview_pane_helpers.py (10 helpers, 99%
+  # covered) + 25 fake-self dispatch tests in tests/test_preview_pane.py.
+  # The remaining ~330 stmts in preview_pane.py are genuine Qt-widget
+  # assembly (show_grid tile-build, resizeEvent geometry, VideoPlayerWidget
+  # instantiation) that can't be unit-tested without mocking
+  # QGridLayout / QLabel / QVBoxLayout — the exact "mock-the-world"
+  # padding CLAUDE.md rejects. The L3 scenarios s01/s05/s11/s48
+  # exercise the real surface. The owner's 2026-05-16 comment on
+  # #185 explicitly flagged this file as needing the genuine-vs-
+  # padding discipline that landed us at "extract what's pure, keep
+  # the rest at L3."
+  "app/views/preview_pane.py",                       # Heavy Qt widget assembly; testable surface extracted to preview_pane_helpers.py (99%); rest is QGridLayout/QLabel construction covered by L3 (s01/s05/s11/s48)
   "app/views/handlers/dialog_handler.py",            # QFileDialog dispatch; opening real dialogs in tests requires mock-the-world; L3 covers every dialog-open path (s12 manifest save, s14/s29/s30 regex, s17 scan sources, s38 path-field validation)
   "app/views/image_tasks.py",                        # QThreadPool dispatch + signal plumbing; covered by qa-explore s05 + s44 (highlighted-rows preview)
   "app/views/widgets/video_player.py",               # QMediaPlayer + QVideoWidget wrapper; covered by qa-explore s11

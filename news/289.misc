@@ -1,0 +1,1 @@
+Add layer-1 coverage for `app/views/preview_pane.py` via helper extraction (closes #185).
