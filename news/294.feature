@@ -1,0 +1,1 @@
+Add `/pr-review` Gate 11 (PII audit on project skills) — pattern-scans added/modified lines in `.claude/skills/<name>/` for home paths, IPv4, credential-shaped literals, with a critical filter rule that distinguishes pattern descriptions from literal values.
