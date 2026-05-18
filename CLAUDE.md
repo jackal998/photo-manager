@@ -186,7 +186,8 @@ Skills live in two homes, split by trust level:
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
   `app-security-patterns/`, `conventional-comments/`,
-  `docs-features-drift/`, `github-pr-review-pending/`,
+  `docs-features-drift/`, `github-pr-review-fetch/`,
+  `github-pr-review-pending/`, `github-pr-review-submitted/`,
   `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
   `qa-explore/`, `qa-scenario-drift/`, `scanner-perf-patterns/`,
   `skill-pii-audit/`, `sqlite-migration-safety/`,
@@ -219,11 +220,29 @@ Skills live in two homes, split by trust level:
   formats.
 
   `github-pr-review-pending/` is the optional post-back mechanic
-  invoked from `/pr-review` — it creates a **pending (draft)**
-  GitHub review via `gh api` (no `event` key, so nothing is
-  submitted) and stops, leaving the human to click "Submit review"
-  in the GitHub UI. The pending-draft POST itself is gated under
-  this file's "Opening PRs or pushing to a remote" rule.
+  invoked from `/pr-review` in **human-in-loop mode** — it creates
+  a **pending (draft)** GitHub review via `gh api` (no `event`
+  key, so nothing is submitted) and stops, leaving the human to
+  click "Submit review" in the GitHub UI.
+
+  `github-pr-review-submitted/` is the sibling mechanic for
+  **agent-driven mode** — when the review is being posted by an
+  agent (scheduled, peer agent in a multi-agent pipeline) with no
+  human to click Submit. It POSTs with `event` set to `COMMENT`
+  (or `REQUEST_CHANGES` if findings are blocking) so the review
+  goes live in one call. Agents never use `APPROVE` — that's a
+  human-only trust signal.
+
+  `github-pr-review-fetch/` is the **inbound** counterpart to the
+  two outbound siblings. When a dev agent resumes work on a PR
+  after a separate review agent (or human reviewer) posted
+  findings, this skill fetches all submitted reviews, line-anchored
+  threads, and issue-style PR comments via `gh api` + GraphQL,
+  then emits a structured chat report ready for the dev agent to
+  walk through as a to-do list. Inbound + outbound + manager
+  together form the agent-to-agent review loop:
+  dev → push → review agent (`/pr-review` + `-submitted`) → PR has feedback →
+  dev agent (`-fetch` to ingest) → fix + push → loop.
 - **Personal skills** — `.claude/skills/personal/<name>/` (gitignored)
   or `~/.claude/skills/<name>/` (user-level, never in any repo). For
   ad-hoc skills with machine-specific paths, Synology IPs, NAS

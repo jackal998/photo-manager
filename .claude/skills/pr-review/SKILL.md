@@ -99,7 +99,9 @@ logic) that handles it:
 | **9** — scanner / threading perf | diff touches `scanner/**.py`, `app/views/workers/**.py`, or adds a `QThread` / `QRunnable` / `ThreadPoolExecutor` | → `scanner-perf-patterns/` (project skill) → composes `photo-scanner-patterns` (global lens) |
 | **10** — test padding patterns | diff adds or modifies `tests/test_*.py` or `tests/integration/test_*.py` | → `test-padding-patterns/` (project skill) → composes `python-testing` (global lens) |
 | **11** — PII audit on project skills | diff adds or modifies files under `.claude/skills/<name>/` (NOT `.claude/skills/personal/`) | → `skill-pii-audit/` (project skill) |
-| **Optional post-back** | user explicitly says "post to PR" after the chat report | → `github-pr-review-pending/` (project skill) → composes `conventional-comments` (format spec) |
+| **Optional post-back (human-in-loop)** | user explicitly says "post to PR" for self-review before submit | → `github-pr-review-pending/` (project skill) → composes `conventional-comments` |
+| **Optional post-back (agent-driven)** | calling agent or `/pr-review` user says "submit this review" / no human will click Submit | → `github-pr-review-submitted/` (project skill) → composes `conventional-comments` |
+| **Reading back feedback** | dev agent resumes work on a PR that has reviews posted on it | → `github-pr-review-fetch/` (project skill) — inbound counterpart |
 
 Composition depth = 2 at most. If a gate's condition does NOT
 fire, skip its handler entirely — don't load the sub-skill, don't
@@ -325,38 +327,103 @@ ignored):
   Skill cross-references belong in the sub-skill's "See also"
   section, not in pr-review's output.
 
-## Optional post-back to the PR (explicitly gated)
+## Optional post-back to the PR
 
-After the user has read the chat report, they may want to publish
-findings as PR review comments. This is a **separate, explicit
-step** — and it routes through the `github-pr-review-pending`
-skill, NOT through `gh pr review --comment` (which would submit
-immediately and bypass the project's "never publish without a
-yes" gate).
+After the chat report, findings may be published to the PR. Pick
+the right mechanic based on **whether there's a human in the
+loop**:
 
-When the user says "post that to the PR" or similar:
+### Mode A — human-in-loop (pending draft)
 
-1. Confirm the PR number explicitly. If the skill was invoked
-   without a number (current branch), ask for the PR number first.
-2. Show the exact thread bodies that will be posted, one per
+When a human runs `/pr-review` to self-check before opening PR
+discussion, OR when reviewing in a context where a draft-for-review
+is the right ergonomic (the user wants to read findings in the
+GitHub UI before deciding to publish):
+
+1. Show the exact thread bodies that will be posted, one per
    line-anchored finding. **Apply the dual-format rule:** chat
    findings keep `⚠` / `✗` / `ℹ️` icons; PR thread bodies get
-   rewritten into full `conventional-comments` shape (`**suggestion
-   (non-blocking):** ...`) using the icon-to-label mapping in
-   `conventional-comments/SKILL.md`. Trim Gate 5 drive-by
-   observations to the top three.
-3. Hand off to `github-pr-review-pending/SKILL.md` Phase 2 (build
+   rewritten into full `conventional-comments` shape using the
+   icon-to-label mapping. Trim Gate 5 drive-by observations to
+   the top three.
+2. Hand off to `github-pr-review-pending/SKILL.md` Phase 2 (build
    the JSON) and Phase 3 (POST). That skill creates a **pending
    (draft) review** — no notifications fire; the user submits in
    the GitHub UI when ready.
-4. Per `github-pr-review-pending` Phase 4, tell the user the
+3. Per `github-pr-review-pending` Phase 4, tell the user the
    review is pending and they need to click **Submit review** (or
    **Discard pending review**) in the GitHub UI.
 
-Do NOT auto-post under any circumstances. Do NOT use
-`gh pr review --comment / --approve / --request-changes` — those
-all submit immediately. The skill's job is to surface findings;
-the user decides what reaches the PR and when.
+### Mode B — agent-driven (submitted in one call)
+
+When `/pr-review` runs in an autonomous / agent-driven context
+(scheduled review agent, bot reviewing a peer agent's PR, no
+human will click Submit):
+
+1. Same Phase-2 prep — rewrite findings into
+   `conventional-comments` shape.
+2. Compute the `event` value per the severity-to-event mapping in
+   `github-pr-review-submitted/SKILL.md`:
+   - Any ✗ finding → `event: "REQUEST_CHANGES"`
+   - Only ⚠ / `note:` / `ℹ️` → `event: "COMMENT"`
+   - All CLEAN → **do not post a review at all** (an agent must
+     never auto-`APPROVE`). End the session, or `gh pr comment <N>`
+     a one-liner if a status signal is needed.
+3. Hand off to `github-pr-review-submitted/SKILL.md` Phase 2-3.
+   The review goes live immediately, notifications fire, and the
+   dev agent (in a separate session) can read it via
+   `github-pr-review-fetch/SKILL.md`.
+
+### How to choose the mode
+
+- If the user's request was "review my PR" and they're sitting in
+  this session → **Mode A** (pending).
+- If the calling context is clearly an agent loop (scheduled
+  task, multi-agent pipeline, sibling agent), or the user's
+  request used words like "submit", "publish", "send review",
+  "ship feedback" → **Mode B** (submitted).
+- If ambiguous, **ask once** which mode. Defaulting wrong is
+  reversible for Mode A (delete pending), irreversible for Mode B
+  (submitted reviews can't be un-submitted) — so when in doubt,
+  Mode A is safer.
+
+### Never
+
+- Auto-`APPROVE` from an agent. Even if all gates pass clean,
+  approve is a trust signal that should come from a human. A
+  `gh pr comment <N> --body "review agent: no findings, CLEAN"`
+  is fine for autonomous flows that need to record the clean
+  outcome.
+- Use `gh pr review --comment / --approve / --request-changes` —
+  those all submit immediately and bypass both mechanics above.
+- Auto-merge after a clean review. `gh pr merge` is not part of
+  this skill or its sub-skills.
+
+## Reading review feedback back into a session
+
+When a dev agent resumes work on a PR after a review agent has
+posted findings (Mode B above, or a human reviewer), the dev
+agent needs to **read** the feedback into its session context.
+That's the job of `github-pr-review-fetch/SKILL.md` — the
+inbound counterpart to the two outbound posting skills.
+
+Typical agent-driven loop:
+
+```
+Agent A (dev)   →   /pr-review (Mode B post-back)   →   PR has submitted review
+                                                          │
+Agent B (dev again, new session)   ←   github-pr-review-fetch   ←   reads reviews
+   │
+   addresses findings, pushes new commits
+   │
+   loop until verdict is CLEAN
+```
+
+Invoke `github-pr-review-fetch <PR-number>` (or no arg to use the
+current branch's PR) at the start of a fix-and-iterate session.
+The skill emits a structured chat report of all submitted
+reviews, all line-anchored threads, and all issue-style PR
+comments — ready for the agent to walk through as a to-do list.
 
 ## Why this exists
 
