@@ -185,17 +185,64 @@ Skills live in two homes, split by trust level:
 - **Project skills** — `.claude/skills/<name>/` — tracked in git,
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
+  `app-security-patterns/`, `conventional-comments/`,
+  `docs-features-drift/`, `github-pr-review-fetch/`,
+  `github-pr-review-pending/`, `github-pr-review-submitted/`,
   `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
-  `qa-explore/`, `update-docs/`. New project skills land here.
+  `qa-explore/`, `qa-scenario-drift/`, `scanner-perf-patterns/`,
+  `skill-pii-audit/`, `sqlite-migration-safety/`,
+  `test-padding-patterns/`, `update-docs/`. New project skills
+  land here.
 
   `/pr-review` runs the semantic-content review the file-touch
   gates (`docs_guard.py`, `qa_scenario_guard.py`) cannot do — it
   reads the branch diff and compares it against `docs/features.md`
   entries and `qa/scenarios/sNN_*.py` drivers, reporting drift in
-  chat. Invoke manually after `git push` and before `gh pr create`;
-  pass an optional PR number to spot-check an existing PR. The
-  skill never posts to GitHub without an explicit follow-up
-  confirmation.
+  chat. **Acts as a manager** that dispatches to per-gate
+  sub-skills (`docs-features-drift`, `qa-scenario-drift`,
+  `app-security-patterns`, `sqlite-migration-safety`,
+  `scanner-perf-patterns`, `test-padding-patterns`,
+  `skill-pii-audit`) plus the global `/security-scan` (harness
+  audit) — see the Composition graph in `pr-review/SKILL.md`.
+  Each sub-skill owns one gate's rubric and is invoked only when
+  the diff matches its trigger condition. Invoke manually after
+  `git push` and before `gh pr create`; pass an optional PR
+  number to spot-check an existing PR. The skill never posts to
+  GitHub without an explicit follow-up confirmation.
+
+  `conventional-comments/` defines the uniform label + decoration
+  + subject shape (`**suggestion (non-blocking):** …`) and the
+  **dual-format rule**: `/pr-review`'s chat output uses the
+  scan-fast icons (`✗` / `⚠` / `ℹ️`); the full label format kicks
+  in only when findings get posted as PR thread bodies via
+  `github-pr-review-pending/`. The icon → label mapping in
+  `conventional-comments/SKILL.md` is what bridges the two
+  formats.
+
+  `github-pr-review-pending/` is the optional post-back mechanic
+  invoked from `/pr-review` in **human-in-loop mode** — it creates
+  a **pending (draft)** GitHub review via `gh api` (no `event`
+  key, so nothing is submitted) and stops, leaving the human to
+  click "Submit review" in the GitHub UI.
+
+  `github-pr-review-submitted/` is the sibling mechanic for
+  **agent-driven mode** — when the review is being posted by an
+  agent (scheduled, peer agent in a multi-agent pipeline) with no
+  human to click Submit. It POSTs with `event` set to `COMMENT`
+  (or `REQUEST_CHANGES` if findings are blocking) so the review
+  goes live in one call. Agents never use `APPROVE` — that's a
+  human-only trust signal.
+
+  `github-pr-review-fetch/` is the **inbound** counterpart to the
+  two outbound siblings. When a dev agent resumes work on a PR
+  after a separate review agent (or human reviewer) posted
+  findings, this skill fetches all submitted reviews, line-anchored
+  threads, and issue-style PR comments via `gh api` + GraphQL,
+  then emits a structured chat report ready for the dev agent to
+  walk through as a to-do list. Inbound + outbound + manager
+  together form the agent-to-agent review loop:
+  dev → push → review agent (`/pr-review` + `-submitted`) → PR has feedback →
+  dev agent (`-fetch` to ingest) → fix + push → loop.
 - **Personal skills** — `.claude/skills/personal/<name>/` (gitignored)
   or `~/.claude/skills/<name>/` (user-level, never in any repo). For
   ad-hoc skills with machine-specific paths, Synology IPs, NAS
