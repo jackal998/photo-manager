@@ -62,16 +62,27 @@ each with a comment naming the layer that DOES cover them.
 - *Why a separate layer:* scenario drivers replay one canonical path
   each. Probes inspect a structural relationship — a single probe
   catches a whole class of drift across many surfaces.
-- *Two flavours:*
+- *Three flavours:*
   - Static probes (`tests/test_ui_probes.py`) — AST or YAML
     inspection, run as pytest in CI. Use `@pytest.mark.xfail(strict=True)`
     so CI tolerates known-bug probes today and flips red the moment
     the fix lands without removing the marker.
   - Live soft-probes (extension blocks in `qa/scenarios/sNN_*.py`) —
-    UIA inspection for runtime state. Use a `print("probe_status: …")`
-    pattern instead of `failures.append` so qa-batch stays green
-    until the bug is fixed; comment block documents the one-line
-    upgrade to a hard failure.
+    UIA inspection for runtime state, piggy-backing on an existing
+    scenario's setup. Use a `print("probe_status: …")` pattern
+    instead of `failures.append` so qa-batch stays green until the
+    bug is fixed; comment block documents the one-line upgrade to
+    a hard failure.
+  - Live exploration probes (`qa/probes/<name>.py`) — standalone
+    UIA modules that launch the app, load a fixture, inspect a
+    structural relationship, and exit non-zero on FAIL. Self-runnable
+    via `python -m qa.probes.<name>`. Each module includes its own
+    configure → launch → scan teardown (shared via
+    `qa.probes._runtime.app_with_manifest`), so they don't depend
+    on the scenario batch's surrounding orchestration. Use these
+    for invariants that scripted scenarios architecturally can't
+    cover (dropdown ↔ column diff, per-group label-count audits,
+    selection-vs-manifest consistency).
 
 A bug in production likely lives at **a layer not currently asserted**.
 Knowing which layer you're skimping on is more important than the headline
@@ -374,6 +385,8 @@ soft-probe upgrade path lives if applicable.
 | `test_probe_manifest_dependent_menu_actions_are_gated` | Every menu action that requires a loaded manifest is in `MANIFEST_ACTIONS` | XFAIL | [#244](https://github.com/jackal998/photo-manager/issues/244) |
 | `test_probe_zh_tw_translations_are_not_english_passthroughs` | zh_TW values that match en values must contain CJK chars (heuristic; tiny exempt list for product names) | PASS | Forward-defensive against [#245](https://github.com/jackal998/photo-manager/issues/245) recurring |
 | `s49` `step: verify_visual_selection_of_keeper` (hard live) | After scan-complete with auto-select on, the tree's selection model contains the keeper rows | PASS | Forward-defensive against [#239](https://github.com/jackal998/photo-manager/issues/239) recurring |
+| `qa/probes/field_dropdown_inventory.py` (live exploration) | Result-tree column headers == Set-Action-by-Field/Regex dialog field dropdown items | PASS | Forward-defensive against [#238](https://github.com/jackal998/photo-manager/issues/238) recurring at the runtime UIA layer (the layer-1 probe pins source-level invariant; this probe verifies the running app actually exposes the dropdown the user sees) |
+| `qa/probes/group_label_audit.py` (live exploration) | At most one row per group renders "Ref" in the rendered tree; no row carries both "Ref" and a "delete" decision | PASS | Forward-defensive against [#241](https://github.com/jackal998/photo-manager/issues/241) recurring at the rendered tree layer (catches drift between `build_model`'s invariant and the QSortFilterProxyModel + delegate stack the user actually sees) |
 
 When the corresponding bug lands, the static probes flip XFAIL→XPASS-strict
 and the bug-fix PR removes the marker. The soft probe is converted from
@@ -384,6 +397,15 @@ the scenario; the **"Detect probes ready for promotion"** step in
 found — same forcing-function as `xfail(strict=True)` for the static
 probes, so a bug-fix PR cannot merge while leaving a soft probe in its
 print-only state.
+
+Live exploration probes (`qa/probes/`) are **local-run only** at v1:
+no CI wiring, no batch runner, no shard split. Run them manually
+after changes that affect the relevant surface
+(`python -m qa.probes.field_dropdown_inventory`,
+`python -m qa.probes.group_label_audit`) and during qa-explore
+sessions. Wiring into CI is deferred until the probe count grows
+enough to justify a batch runner — see [#243](https://github.com/jackal998/photo-manager/issues/243)
+and its follow-up issues.
 
 ---
 

@@ -553,6 +553,146 @@ def click_column_header(win: UIAWrapper, header_text: str) -> None:
     )
 
 
+def read_column_headers(win: UIAWrapper) -> list[str]:
+    """Return the visible tree column-header labels in display order.
+
+    Walks ``win.descendants(control_type="Header")`` (same approach
+    :func:`click_column_header` uses), filters to visible sections,
+    and orders by the section's screen left coordinate so the result
+    matches what the user sees left-to-right.
+
+    Used by ``qa/probes/field_dropdown_inventory.py`` (#243) to diff
+    the result-tree header set against the Select dialog's field
+    dropdown — see #238 for the bug class this catches. Empty header
+    text is skipped (the leftmost decorative section on some Qt
+    builds reports as a blank Header).
+    """
+    pairs: list[tuple[int, str]] = []
+    for h in win.descendants(control_type="Header"):
+        try:
+            if not h.is_visible():
+                continue
+            text = (h.window_text() or "").strip()
+            if not text:
+                continue
+            pairs.append((h.rectangle().left, text))
+        except Exception:
+            continue
+    pairs.sort(key=lambda p: p[0])
+    return [t for _, t in pairs]
+
+
+def read_combobox_items(combo: UIAWrapper) -> list[str]:
+    """Return all item texts of a QComboBox in dropdown order.
+
+    Expands the combo, walks the popup ``List`` widget's ``ListItem``
+    descendants for visible items, then sends End-key + Home-key
+    through Win32 ``keybd_event`` so Qt scrolls the popup and any items
+    past ``maxVisibleItems`` (default 10) come into view too. Re-walks
+    descendants on each scroll, deduping by text. Collapses the combo
+    before returning so the dialog is left in its previous state.
+
+    pywinauto's ``ComboBoxWrapper.texts()`` looks ideal at first glance
+    but Qt's QComboBox doesn't expose ItemContainerPattern through UIA
+    (verified empirically — ``iface_item_container`` raises
+    ``NoPatternInterfaceError``) and the fallback iterates the combo's
+    direct children, which on Qt6 is just an empty ``List`` wrapper.
+    The s50 commit message documents the visibility/scroll behaviour
+    this helper has to work around to enumerate the 11th item
+    ("Resolution") on the Set Action Field dropdown — see #238.
+
+    Order is the first-discovery order across scroll positions, which
+    matches the popup's display order (top to bottom) under End-only
+    scrolling. Callers that need set-based diffs (the typical inventory
+    probe use case) can convert to a ``set`` directly.
+
+    Empty strings are filtered out. Whitespace is preserved otherwise
+    so diff probes catch accidental label trimming.
+    """
+    def _collect(seen: set[str], out: list[str]) -> None:
+        for d in combo.descendants(control_type="ListItem"):
+            try:
+                text = (d.window_text() or "").strip()
+            except Exception:
+                continue
+            if text and text not in seen:
+                seen.add(text)
+                out.append(text)
+
+    seen: set[str] = set()
+    out: list[str] = []
+
+    expanded = False
+    try:
+        try:
+            combo.expand()
+            expanded = True
+        except Exception:
+            # ExpandCollapsePattern unavailable — fall back to reading
+            # whatever's already there. Won't find any items on Qt6 but
+            # gives the caller a clean empty result rather than a crash.
+            pass
+        time.sleep(0.25)
+        _collect(seen, out)
+
+        # End-key scrolls Qt's QComboBoxListView to the last item — the
+        # items beyond ``maxVisibleItems`` now render as descendants.
+        # Home-key brings the view back so the dialog's visual state is
+        # restored before collapse.
+        _user32.keybd_event(0x23, 0, 0, 0)   # VK_END down
+        _user32.keybd_event(0x23, 0, 2, 0)   # VK_END up
+        time.sleep(0.2)
+        _collect(seen, out)
+        _user32.keybd_event(0x24, 0, 0, 0)   # VK_HOME down
+        _user32.keybd_event(0x24, 0, 2, 0)   # VK_HOME up
+        time.sleep(0.1)
+    finally:
+        if expanded:
+            try:
+                combo.collapse()
+            except Exception:
+                pass
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Set Action by Field/Regex dialog — open / close (no form drive)
+# ---------------------------------------------------------------------------
+
+
+def open_action_by_regex_dialog(
+    win: UIAWrapper, dialog_timeout: float = 5
+) -> tuple[UIAWrapper, int]:
+    """Open the Set Action by Field/Regex dialog from the menu bar.
+
+    Counterpart to :func:`mark_all_via_regex_standalone` for probes that
+    want to inspect the dialog *without* filling and applying the form.
+    Returns ``(action_dlg, hwnd)``. Caller owns the dialog and must
+    close it via :func:`close_action_dialog` when done.
+
+    Used by ``qa/probes/field_dropdown_inventory.py`` (#243).
+    """
+    pid = win.process_id()
+    menu_path(win, MENU_ACTION, ACTION_BY_REGEX)
+    hwnd = wait_for_dialog(pid, ACTION_DIALOG_TITLE, timeout=dialog_timeout)
+    dlg = connect_by_handle(hwnd)
+    _focus(dlg)
+    time.sleep(0.2)
+    return dlg, hwnd
+
+
+def close_action_dialog(action_dlg: UIAWrapper) -> None:
+    """Click the Set-Action-by-Field/Regex dialog's Close button.
+
+    Counterpart to :func:`open_action_by_regex_dialog` — leaves the
+    main window focused so subsequent probes can continue.
+    """
+    close_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_CLOSE)
+    close_btn.click_input()
+    time.sleep(0.3)
+
+
 # ---------------------------------------------------------------------------
 # Main-window state probes (first-run hint #42, status bar #58, menu #52)
 # ---------------------------------------------------------------------------
