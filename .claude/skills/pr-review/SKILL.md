@@ -511,6 +511,75 @@ Severity: all ⚠. Gate 10 doesn't ✗-block; it flags for reviewer
 attention because the line between "real test of error branch"
 and "padding" requires human judgement.
 
+### Gate 11 — PII audit on project skills
+
+Fire only when the diff adds or modifies files under
+`.claude/skills/<name>/` (NOT `.claude/skills/personal/<name>/` —
+that path is gitignored by design). Same scope as the
+"PII audit before committing a project skill" rule in
+[`CLAUDE.md`](../../../CLAUDE.md) — Gate 11 enforces what CLAUDE.md
+asks the author to do manually.
+
+For each added/modified line in those files, look for:
+
+- **Absolute home paths.** `C:\Users\<name>\…`, `/Users/<name>/…`,
+  `/home/<name>/…`. A real path leaks the author's username.
+  Placeholders (`<USER>`, `~/`, `$HOME`, `%USERPROFILE%`) are
+  fine.
+- **IPv4 addresses.** `\d+\.\d+\.\d+\.\d+`. Most often NAS,
+  Synology, or VPN endpoints. Filter out:
+  - Software version numbers (`1.0.0.0`, `pyqt6 6.6.1`)
+  - RFC 5737 documentation IPs (`192.0.2.0/24`, `198.51.100.0/24`,
+    `203.0.113.0/24`)
+  - RFC 1918 ranges *in commented examples* (`192.168.0.0/24` in
+    "block this subnet" context — fine; bare `192.168.1.42` as a
+    config target — flag)
+- **Credential-shaped literals.** Tokens with provider-specific
+  prefixes — `ghp_…` (36+ chars), `AKIA[0-9A-Z]{16}`, JWT (three
+  dot-separated base64 segments ≥10 chars each), generic ≥32-char
+  high-entropy strings next to `key=` / `token=` / `password=` /
+  `secret=`.
+
+**Critical filtering rule — pattern descriptions are NOT literal values.**
+A skill that documents its own scan (like Gate 7's pattern list,
+or a regex example in a README) will contain text like
+`password\s*=\s*["'][^"']+["']` — that's the REGEX, not a
+hardcoded password. DO NOT flag pattern descriptions.
+
+Specifically, do NOT flag:
+
+- Pattern strings inside backticks / code blocks that
+  describe what to LOOK for (regex literals, glob patterns,
+  CLI invocations).
+- Variable names containing the trigger word: `LOCK_KEY`,
+  `auth_token_param`, `password_field`, `api_key_setting`.
+- Test-fixture placeholders: `"test-key"`, `"dummy-token"`,
+  `"changeme"`, `"…"`, `"<your-token-here>"`.
+- Comments referencing the concept: `# Don't commit secrets`,
+  `// API key goes in env var`.
+- Strings whose value is obviously a category label, not a
+  credential: `"key=value"` (a format-string description),
+  `"password"` (a UI label).
+
+When in doubt, surface the match in chat and ASK the user:
+"line N matches pattern X — placeholder or real?" rather than
+silently flagging or silently dismissing. This is one of the
+rare gates where false-positive-aversion AND false-negative-
+aversion BOTH matter (an unflagged real token is catastrophic;
+a noisy false flag erodes trust).
+
+Severity escalation:
+
+- ✗ for a confirmed-real GitHub / AWS / Slack token. Recommend
+  rotate-then-force-push-to-scrub. Don't ship.
+- ⚠ for likely-real home path / IP / generic credential shape.
+- ℹ️ for "matches pattern but probably FP — confirm please".
+
+If the diff doesn't add or modify any
+`.claude/skills/<name>/` file (and `.claude/skills/personal/`
+is correctly gitignored — Gate 11 doesn't reach into personal
+skills), skip this gate entirely.
+
 ## Output template
 
 Emit exactly this structure in chat. Use `## CLEAN` (no findings) or
@@ -546,6 +615,10 @@ Diff: origin/master...HEAD   |   Files in scope: <N behaviour-bearing> / <total>
 
 ## Test quality (Gate 10)
 ⚠ <file:line> — <anti-pattern>: <evidence>
+
+## PII audit (Gate 11)
+⚠ <file:line> — <category>: <evidence>
+ℹ️ <file:line> — possible <category>: <evidence> — confirm placeholder vs real
 
 ## Harness security (Gate 6)
 ℹ️ This PR touches harness/config: <files>
@@ -641,10 +714,19 @@ When the user runs `/pr-review` (with or without a PR number):
     `pytest.skip()` in body, stub-AttributeError, branch-reached-only
     assertions. Emit ⚠ per the gate rules. Omit if no test touch.
 
-12. **Emit the report** in the output-template structure. End with
+12. **PII audit on project skills** (Gate 11). If the diff
+    adds or modifies any `.claude/skills/<name>/` file (NOT
+    `.claude/skills/personal/`), pattern-scan added/modified
+    lines for home paths, IPv4, credential-shaped literals.
+    Apply the critical filter rule — patterns descriptions in
+    code blocks are NOT literal values. Surface ⚠/ℹ️/✗ per the
+    gate rules, or ask in chat when uncertain. Omit if no
+    project-skill touch.
+
+13. **Emit the report** in the output-template structure. End with
     the Verdict line.
 
-13. **Stop.** Do NOT post anything to the PR. Wait for the user.
+14. **Stop.** Do NOT post anything to the PR. Wait for the user.
 
 ## Anti-patterns — what NOT to flag
 
