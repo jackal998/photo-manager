@@ -185,23 +185,39 @@ Skills live in two homes, split by trust level:
 - **Project skills** — `.claude/skills/<name>/` — tracked in git,
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
-  `conventional-comments/`, `github-pr-review-pending/`,
+  `app-security-patterns/`, `conventional-comments/`,
+  `docs-features-drift/`, `github-pr-review-pending/`,
   `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
-  `qa-explore/`, `update-docs/`. New project skills land here.
+  `qa-explore/`, `qa-scenario-drift/`, `scanner-perf-patterns/`,
+  `skill-pii-audit/`, `sqlite-migration-safety/`,
+  `test-padding-patterns/`, `update-docs/`. New project skills
+  land here.
 
   `/pr-review` runs the semantic-content review the file-touch
   gates (`docs_guard.py`, `qa_scenario_guard.py`) cannot do — it
   reads the branch diff and compares it against `docs/features.md`
   entries and `qa/scenarios/sNN_*.py` drivers, reporting drift in
-  chat. Invoke manually after `git push` and before `gh pr create`;
-  pass an optional PR number to spot-check an existing PR. The
-  skill never posts to GitHub without an explicit follow-up
-  confirmation.
+  chat. **Acts as a manager** that dispatches to per-gate
+  sub-skills (`docs-features-drift`, `qa-scenario-drift`,
+  `app-security-patterns`, `sqlite-migration-safety`,
+  `scanner-perf-patterns`, `test-padding-patterns`,
+  `skill-pii-audit`) plus the global `/security-scan` (harness
+  audit) — see the Composition graph in `pr-review/SKILL.md`.
+  Each sub-skill owns one gate's rubric and is invoked only when
+  the diff matches its trigger condition. Invoke manually after
+  `git push` and before `gh pr create`; pass an optional PR
+  number to spot-check an existing PR. The skill never posts to
+  GitHub without an explicit follow-up confirmation.
 
   `conventional-comments/` defines the uniform label + decoration
-  + subject shape (`**suggestion (non-blocking):** …`) that
-  `/pr-review` uses for its findings and that
-  `github-pr-review-pending/` posts as inline thread bodies.
+  + subject shape (`**suggestion (non-blocking):** …`) and the
+  **dual-format rule**: `/pr-review`'s chat output uses the
+  scan-fast icons (`✗` / `⚠` / `ℹ️`); the full label format kicks
+  in only when findings get posted as PR thread bodies via
+  `github-pr-review-pending/`. The icon → label mapping in
+  `conventional-comments/SKILL.md` is what bridges the two
+  formats.
+
   `github-pr-review-pending/` is the optional post-back mechanic
   invoked from `/pr-review` — it creates a **pending (draft)**
   GitHub review via `gh api` (no `event` key, so nothing is

@@ -45,15 +45,27 @@ the spec.
 | `chore:` | Process item before merge (e.g. "rebase on master"). |
 | `todo:` | A small must-do before acceptance. |
 
-When the project's `pr-review` skill emits its existing severity icons
-(`⚠`, `✗`, `ℹ️`), map them to conventional labels in the body so the
-finding is unambiguous at a glance:
+## Dual-format rule — chat vs PR threads
+
+`/pr-review`'s **chat output** keeps the scan-fast icons (`✗` / `⚠`
+/ `ℹ️` / `note:`) for fast triage when triaging multiple findings
+in one report. The full `**label (decorations):** subject` format
+kicks in **only at the `github-pr-review-pending` boundary** when
+findings get rewritten into PR thread bodies — that's where
+industry parity matters because reviewers across the team read
+labels uniformly.
+
+The icon → label mapping below is what bridges the two formats.
+`github-pr-review-pending/SKILL.md` Phase 2 applies the mapping
+when building the `comments[].body` JSON; the chat report never
+goes through that rewrite.
 
 | pr-review icon | Conventional label |
 |---|---|
 | `✗` (severe — missing entry, breaks contract) | `issue (blocking):` |
 | `⚠` (drift — stale text, missing branch coverage) | `suggestion:` (add `(blocking)` only if merge should wait) |
 | `ℹ️` (informational — historical caveat, routing pointer) | `note:` |
+| `note:` (hygiene preference, e.g. generic regression-test name) | `nitpick:` or `note:` |
 
 ## Example — photo-manager flavoured
 
