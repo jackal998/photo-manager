@@ -3,6 +3,14 @@
 These rules apply to every session, not just one. They supplement, not
 replace, the global `~/.claude/CLAUDE.md`.
 
+## My decision style
+
+See `~/.claude/CLAUDE.md` "My decision style — pick tech, surface gates."
+tl;dr: my input is conceptual ("transparent, traceable, visible
+long-term"); pick the technical approach yourself and tell me what +
+why. Ask me only on gated actions (next section), manual blockers,
+or high irreversible risk.
+
 ## Security gates — confirm in chat before acting, every time
 
 The following actions require my explicit "yes" in chat before you do them,
