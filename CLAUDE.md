@@ -229,3 +229,9 @@ home path. To enable the security gates above on a fresh checkout:
    (e.g. `C:/Users/J` on Windows, `/home/you` on Linux, `/Users/you` on macOS)
 3. Restart your Claude Code session, then run `/permissions` to confirm the
    `ask` rules are loaded
+
+When `.claude/settings.json.example` changes (new `ask` / `deny`
+entries, new hooks), your local `.claude/settings.json` does NOT
+auto-update — it's gitignored. Diff the example against your local
+copy after pulling and port over any new entries by hand. Watch for
+PRs that touch the example file (e.g. #288, #291).
