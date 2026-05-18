@@ -599,7 +599,14 @@ class ScanDialog(QDialog):
             ]
             self._source_list.set_entries(entries)
         else:
-            # Migrate from the legacy three-key format (iphone / takeout / jdrive)
+            # Migration shim (since the 2025 "sources.list" rollout):
+            # users upgrading from pre-sources.list builds still carry
+            # only the legacy sources.{iphone,takeout,jdrive} keys.
+            # Removing this branch silently empties their source list
+            # on first launch -- no error, no warning, just zero sources.
+            # tests/test_settings_migration.py pins the contract; a PR
+            # that intentionally drops this shim must drop that test
+            # too and ship a migration story. See #258.
             entries = []
             for key in ("iphone", "takeout", "jdrive"):
                 path = self.settings.get(f"sources.{key}", "")
