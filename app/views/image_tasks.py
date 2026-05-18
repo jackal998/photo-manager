@@ -5,6 +5,8 @@ from typing import Any
 from PySide6.QtCore import QObject, QRunnable, QThreadPool
 from loguru import logger
 
+from app.views.image_tasks_helpers import make_grid_token, make_single_token
+
 
 class _ImageTask(QRunnable):
     """QRunnable for background image loading.
@@ -31,7 +33,7 @@ class _ImageTask(QRunnable):
                 img = self._service.get_preview(self._path, self._side)
             else:
                 img = self._service.get_thumbnail(self._path, self._side)
-        except Exception as ex:  # pragma: no cover - GUI background task
+        except Exception as ex:
             logger.error("Image task failed: {}", ex)
             img = None
         try:
@@ -44,9 +46,9 @@ class _ImageTask(QRunnable):
 class ImageTaskRunner:
     """Dispatches image load tasks to the global thread pool.
 
-    Tokens must keep the original format:
-    - Single preview: "single|{path}|{side}"
-    - Grid thumbnail: "grid|{path}|{thumb_side}"
+    Tokens use the canonical format defined in
+    :mod:`app.views.image_tasks_helpers`. Their classification on the
+    receiver side lives in :func:`app.views.preview_pane_helpers.classify_image_token`.
     """
 
     def __init__(self, *, service: Any, receiver: QObject) -> None:
@@ -57,7 +59,7 @@ class ImageTaskRunner:
     def request_single_preview(self, path: str) -> str:
         """Request a single-image preview. Returns the token string."""
         side = 0
-        token = f"single|{path}|{side}"
+        token = make_single_token(path, side)
         if self._service is None:
             return token
         task = _ImageTask(
@@ -73,7 +75,7 @@ class ImageTaskRunner:
 
     def request_grid_thumbnail(self, path: str, thumb_side: int) -> str:
         """Request a grid thumbnail for `path` with given `thumb_side`. Returns token."""
-        token = f"grid|{path}|{thumb_side}"
+        token = make_grid_token(path, thumb_side)
         if self._service is None:
             return token
         task = _ImageTask(

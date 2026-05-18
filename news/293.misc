@@ -1,0 +1,1 @@
+Add layer-1 coverage for `app/views/handlers/dialog_handler.py`, `app/views/image_tasks.py`, and `app/views/widgets/video_player.py` via helper extraction + fake-self thin-proxy tests; remove all three from the cascade-omit list (closes #293).

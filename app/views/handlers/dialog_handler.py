@@ -1,4 +1,11 @@
-"""DialogHandler: Coordinates dialog operations and user interactions."""
+"""DialogHandler: Coordinates dialog operations and user interactions.
+
+The load-bearing decision logic — initial-field lookup, canonical
+field list, per-row values dict assembly, safe records-provider
+invocation — lives in :mod:`app.views.handlers.dialog_handler_helpers`
+so it is unit-testable without cascade-importing the Qt dialog
+stack. This file is the thin Qt-binding layer over those helpers.
+"""
 
 from __future__ import annotations
 
@@ -8,29 +15,16 @@ from typing import Protocol
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QMessageBox
 
-from app.views.constants import (
-    COL_ACTION,
-    COL_CREATION_DATE,
-    COL_FOLDER,
-    COL_GROUP,
-    COL_GROUP_COUNT,
-    COL_NAME,
-    COL_SHOT_DATE,
-    COL_SIZE_BYTES,
+from app.views.handlers.dialog_handler_helpers import (
+    CHILD_ROW_FIELDS,
+    GROUP_ROW_FIELDS,
+    TOP_ROW_FIELDS,
+    default_action_dialog_fields,
+    dict_from_pairs,
+    resolve_initial_field,
+    safe_call_records_provider,
 )
 from infrastructure.i18n import t
-
-# Maps tree column index → dialog field name.
-_COL_TO_FIELD: dict[int, str] = {
-    COL_GROUP:         "Similarity",
-    COL_ACTION:        "Action",
-    COL_NAME:          "File Name",
-    COL_FOLDER:        "Folder",
-    COL_SIZE_BYTES:    "Size (Bytes)",
-    COL_GROUP_COUNT:   "Group Count",
-    COL_CREATION_DATE: "Creation Date",
-    COL_SHOT_DATE:     "Shot Date",
-}
 
 
 class TreeDataProvider(Protocol):
@@ -89,33 +83,16 @@ class DialogHandler:
             )
             return
 
-        fields = [
-            "Similarity",
-            "Action",
-            "Score",
-            "Lock",
-            "File Name",
-            "Folder",
-            "Size (Bytes)",
-            "Group Count",
-            "Creation Date",
-            "Shot Date",
-            "Resolution",
-        ]
-
-        initial_field = _COL_TO_FIELD.get(clicked_col) if clicked_col is not None else None
+        fields = list(default_action_dialog_fields())
+        initial_field = resolve_initial_field(clicked_col)
         row_values = self._get_highlighted_row_values()
+
+        groups = safe_call_records_provider(self.records_provider)
         match_fn = None
-        groups: list = []
-        if self.records_provider is not None:
+        if groups:
             from app.views.handlers.file_operations import build_match_fn
 
-            try:
-                groups = self.records_provider() or []
-            except Exception:
-                groups = []
-            if groups:
-                match_fn = build_match_fn(groups)
+            match_fn = build_match_fn(groups)
         # #237 — pass groups through so the numeric-condition panel is
         # reachable when the user picks Size / Score / Group Count /
         # Similarity / Creation Date / Shot Date from the dropdown.
@@ -164,26 +141,19 @@ class DialogHandler:
             if idx.parent().isValid():
                 parent_idx = idx.parent()
 
-                def _gcol(col: int) -> str:
+                def _child(col: int) -> str:
                     return model.data(model.index(idx.row(), col, parent_idx)) or ""
 
-                def _group_col(col: int) -> str:
+                def _group(col: int) -> str:
                     return model.data(model.index(parent_idx.row(), col, parent_idx.parent())) or ""
 
-                values["Similarity"] = _group_col(COL_GROUP)
-                values["Group Count"] = _group_col(COL_GROUP_COUNT)
-                values["Action"] = _gcol(COL_ACTION)
-                values["File Name"] = _gcol(COL_NAME)
-                values["Folder"] = _gcol(COL_FOLDER)
-                values["Size (Bytes)"] = _gcol(COL_SIZE_BYTES)
-                values["Creation Date"] = _gcol(COL_CREATION_DATE)
-                values["Shot Date"] = _gcol(COL_SHOT_DATE)
+                values.update(dict_from_pairs(GROUP_ROW_FIELDS, _group))
+                values.update(dict_from_pairs(CHILD_ROW_FIELDS, _child))
             else:
-                def _top_col(col: int) -> str:
+                def _top(col: int) -> str:
                     return model.data(model.index(idx.row(), col)) or ""
 
-                values["Similarity"] = _top_col(COL_GROUP)
-                values["Group Count"] = _top_col(COL_GROUP_COUNT)
+                values.update(dict_from_pairs(TOP_ROW_FIELDS, _top))
         except Exception:
             pass
 
