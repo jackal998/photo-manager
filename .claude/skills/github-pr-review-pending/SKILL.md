@@ -1,38 +1,53 @@
 ---
 name: github-pr-review-pending
-description: Post pr-review findings to a GitHub PR as a **pending (draft) review** — created with `gh api` against the `/reviews` endpoint with `event` omitted, leaving the human to click "Submit review" in the GitHub UI. Use only when invoked by pr-review's "Optional post-back" step after explicit user yes. The pending-draft POST itself is gated under CLAUDE.md "Opening PRs or pushing to a remote".
+description: Post pr-review findings to a GitHub PR as a **pending (draft) review** — created with `gh api` against the `/reviews` endpoint with `event` omitted, leaving the human to click "Submit review" in the GitHub UI. Invoked by pr-review's "Optional post-back" step in human-in-loop mode (Mode A). The POST fires on invocation — no per-POST confirmation gate; the surrounding context (autonomous vs human, dry-run framing) decides whether to invoke. Pending reviews are reversible via `DELETE .../reviews/{id}` and visible only to the author's gh identity until submitted, so the action is low-stakes.
 origin: local
 ---
 
 # GitHub PR review — pending draft (mechanics)
 
-photo-manager's `pr-review` skill emits findings in chat. When the user
-asks to publish those findings to the PR, this skill is the **mechanic**
-— it posts the findings as a **pending (draft)** GitHub review, never
-submitted, so the human can read them in the GitHub UI and click
-**Submit review** themselves (or discard).
+photo-manager's `pr-review` skill emits findings in chat. When the
+Optional post-back step is invoked in **Mode A (human-in-loop)** —
+the user wants to see findings in the GitHub UI before publishing,
+or wants a draft they can selectively edit/discard — this skill is
+the mechanic. It posts a **pending (draft)** GitHub review: never
+submitted, no notifications, no shared-state mutation. The human
+clicks **Submit review** in the GitHub UI when ready (or **Discard
+pending review** to throw it away).
 
-This is the right behaviour for photo-manager because CLAUDE.md
-explicitly gates **"Opening PRs or pushing to a remote"** — submitting
-a review is a remote mutation that fires notifications. Creating a
-pending draft leaves the user in control of when (or whether) it goes
-out.
+For the **agent-driven** case (no human to click Submit), use the
+sibling `github-pr-review-submitted/` skill instead. The two skills
+have parallel mechanics; only `event` (omitted here vs set there)
+distinguishes them.
 
-## Gate first — surface before POST
+## Invocation contract
 
-The pending-draft POST is itself a gated action under CLAUDE.md.
-Before calling `gh api --method POST .../reviews`:
+This skill **posts on invocation** — the calling code (typically
+`pr-review`'s Optional post-back step) decides whether to invoke
+it. Don't add an extra confirmation gate inside this skill; the
+surrounding context (autonomous loop vs human session, "preview
+only" framing) is what gates the POST.
 
-1. Confirm the PR number explicitly. If pr-review was invoked without a
-   number (current branch), ask for it now.
-2. Show the exact JSON body that will be POSTed (the `comments[]`
-   array built from pr-review's chat findings).
-3. Ask: "Create pending draft review on PR #N? You will submit it
-   yourself in the GitHub UI. (yes/no)"
-4. Only after explicit "yes": run the command.
+What this skill does on invocation:
 
-If the user says no, stop. Don't propose a different mechanic — the
-chat report is the deliverable, the PR post-back is an optional extra.
+1. Confirm the PR number is known. If pr-review handed off without
+   one, look it up via `gh pr view --json number`. Stop and surface
+   to the caller only if no PR exists for the branch.
+2. Build the pending-review JSON per Phase 2 below.
+3. POST it via `gh api` per Phase 3.
+4. Output the "review is pending" status per Phase 4.
+
+**The pending POST is reversible** (`DELETE .../reviews/{id}`)
+and the draft is visible only to the author's `gh` identity until
+submitted. Those two properties are why no per-POST gate exists
+inside this skill — the action is low-stakes and the caller has
+already decided to invoke. CLAUDE.md's "Opening PRs or pushing to
+a remote" gate doesn't apply: pending reviews aren't published,
+aren't visible to others, and can be deleted in one call.
+
+If the calling code wants a dry-run, it should construct the JSON
+and emit it to chat instead of calling this skill — same Phase 2
+shape, no Phase 3 POST.
 
 ## Prerequisites
 
