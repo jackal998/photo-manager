@@ -185,6 +185,7 @@ Skills live in two homes, split by trust level:
 - **Project skills** — `.claude/skills/<name>/` — tracked in git,
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
+  `conventional-comments/`, `github-pr-review-pending/`,
   `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
   `qa-explore/`, `update-docs/`. New project skills land here.
 
@@ -196,6 +197,17 @@ Skills live in two homes, split by trust level:
   pass an optional PR number to spot-check an existing PR. The
   skill never posts to GitHub without an explicit follow-up
   confirmation.
+
+  `conventional-comments/` defines the uniform label + decoration
+  + subject shape (`**suggestion (non-blocking):** …`) that
+  `/pr-review` uses for its findings and that
+  `github-pr-review-pending/` posts as inline thread bodies.
+  `github-pr-review-pending/` is the optional post-back mechanic
+  invoked from `/pr-review` — it creates a **pending (draft)**
+  GitHub review via `gh api` (no `event` key, so nothing is
+  submitted) and stops, leaving the human to click "Submit review"
+  in the GitHub UI. The pending-draft POST itself is gated under
+  this file's "Opening PRs or pushing to a remote" rule.
 - **Personal skills** — `.claude/skills/personal/<name>/` (gitignored)
   or `~/.claude/skills/<name>/` (user-level, never in any repo). For
   ad-hoc skills with machine-specific paths, Synology IPs, NAS

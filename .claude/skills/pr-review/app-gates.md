@@ -265,6 +265,16 @@ Flag ⚠ when ANY of these appear in a new/modified test:
   with a mock — flag. Real tests assert observable behaviour, not
   internal control-flow.
 
+- **A test added "to fix a bug" but named generically** (e.g.,
+  `test_save_dialog`, `test_scoring`). When the PR description /
+  linked issue says "fix bug X", the regression test should name
+  the bug it prevents — `test_pr_NNN_<symptom>` or
+  `test_issue_NNN_<symptom>`. Generic names regress silently when
+  someone refactors and accidentally reverts the fix; named tests
+  fail with a stack trace that points back to the original bug.
+  Flag `note:` (not ⚠) — naming is a hygiene preference, not a
+  defect.
+
 Anti-patterns (do NOT flag):
 
 - Legitimate mocks of EXTERNAL services (network, GitHub API,

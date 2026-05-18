@@ -56,13 +56,49 @@ The skill reads:
    the canonical answer.
 
 Side effects: **none by default**. The skill produces a report in
-chat. The user decides whether to act on it. The `gh pr review
---comment` post-back is a separate, explicitly-gated step.
+chat. The user decides whether to act on it. The optional post-back
+to the PR routes through `github-pr-review-pending/SKILL.md` (creates
+a pending draft review only — human submits in the GitHub UI) and is
+a separate, explicitly-gated step.
 
 ## Review rubric
 
 Apply the rubric in the order below. Stop at the first gate that
 short-circuits to CLEAN — don't keep digging.
+
+### Gate 0 — task alignment
+
+Fires when the PR body has `Fixes #N`, `Closes #N`, or `Resolves #N`,
+OR when the user supplied an issue number directly with `/pr-review`.
+Skip entirely if no issue link.
+
+**What it does:**
+
+1. `gh issue view <N> --json title,body,labels` (run in parallel with
+   step 1's other fetches — see "How to apply" step 1).
+2. Compare:
+   - Issue title vs PR title.
+   - Issue body's "what we want" / acceptance criteria vs the diff's
+     visible behaviour changes.
+3. Emit one of:
+   - ✓ aligned: PR addresses what the issue describes. No output
+     unless something's noteworthy.
+   - ⚠ scope: PR delivers more than the issue asks, or different.
+     One-line summary: `⚠ scope: PR adds X; issue #N asks for Y`.
+     Rule: **issue wins** — recommend aligning the PR or updating
+     the issue.
+   - ⚠ unclear-issue: issue body is empty / vague / contradicts
+     itself. One-line `note:` and continue.
+4. If no issue link in PR body and no number supplied → emit one
+   `note: no linked issue` and continue. Don't block.
+
+**What it does NOT do:**
+
+- Doesn't read closed/related issues from other PRs.
+- Doesn't try to second-guess the issue's intent — just compare
+  what's said against what's done.
+- Doesn't gate later gates. A scope mismatch is a finding, not a
+  CLEAN short-circuit.
 
 ### Gate 1 — is the diff behaviour-bearing?
 
@@ -264,8 +300,8 @@ each gate that fires on this diff.
 |---|---|---|
 | 7 | Diff is behaviour-bearing | SQL injection (f-string `execute`), hardcoded secrets, unsafe deserialisation (`pickle.load`, `yaml.load`), shell injection (`subprocess shell=True` with interpolation), `eval`/`exec` on diff content, path traversal |
 | 8 | `_MIGRATIONS` (in `infrastructure/manifest_repository.py`) or `CREATE TABLE migration_manifest` (in `scanner/manifest.py`) touched | Non-additive migrations, mid-list insertion, missing companion edits to `ManifestRow` + schema SQL, missing README schema-table update |
-| 9 | `scanner/**.py`, `app/views/workers/**.py`, or new `QThread` / `QRunnable` / `ThreadPoolExecutor` added | Per-row I/O in a loop, nested O(N²) over filesystem paths, subprocess-in-loop without `-stay_open` batching, `QThread.run()` without progress/cancel, subprocess without timeout |
-| 10 | `tests/test_*.py` or `tests/integration/test_*.py` added/modified | Monkeypatch-to-cover-defensive (`QStandardItem.setData` raising etc.), forced feature-flag fallback, undocumented `@pytest.mark.skip`, `pytest.skip()` in body, stub-AttributeError, branch-reached-only assertions |
+| 9 | `scanner/**.py`, `app/views/workers/**.py`, or new `QThread` / `QRunnable` / `ThreadPoolExecutor` added | Per-row I/O in a loop, nested O(N²) over filesystem paths, subprocess-in-loop without `-stay_open` batching, `QThread.run()` without progress/cancel, subprocess without timeout. **Also consult `photo-scanner-patterns` (global skill) before judging — it covers known boundary failure modes (exiftool batching, SMB latency, pHash collision on flat images, sidecar matching) that drive most of this gate's findings.** |
+| 10 | `tests/test_*.py` or `tests/integration/test_*.py` added/modified | Monkeypatch-to-cover-defensive (`QStandardItem.setData` raising etc.), forced feature-flag fallback, undocumented `@pytest.mark.skip`, `pytest.skip()` in body, stub-AttributeError, branch-reached-only assertions, generic test names for what should be regression tests (`test_pr_NNN_<symptom>`) |
 | 11 | `.claude/skills/<name>/` files added/modified (NOT `.claude/skills/personal/`) | Absolute home paths, IPv4 addresses, credential-shaped literals — with the **critical filter rule** that pattern descriptions inside code blocks are NOT literal values |
 
 For each gate whose trigger fires:
@@ -285,6 +321,11 @@ the per-section pattern below.
 ```
 PR review — <branch-name> (<commit-count> commits, <file-count> files touched)
 Diff: origin/master...HEAD   |   Files in scope: <N behaviour-bearing> / <total>
+
+## Task alignment (Gate 0)
+✓ PR matches issue #N
+⚠ scope: PR adds X; issue #N asks for Y — ticket wins
+note: no linked issue / unclear issue body
 
 ## docs/features.md coverage
 ✓ <feature-name>: <one-line summary of why it's covered>
@@ -354,37 +395,46 @@ When the user runs `/pr-review` (with or without a PR number):
    - No args: run `git diff origin/master...HEAD --stat` then
      `git diff origin/master...HEAD`.
    - With number: run `gh pr diff <N>` and
-     `gh pr view <N> --json title,body,headRefOid,baseRefOid,files`.
+     `gh pr view <N> --json title,body,baseRefName,headRefName,headRefOid,url,state,files,additions,deletions,author,closingIssuesReferences`
+     (the extended field list — `closingIssuesReferences` and `body`
+     drive Gate 0, `headRefOid` is needed if Optional post-back fires).
+   - **Run these in parallel** when invoked with a PR number: the
+     `gh pr diff`, `gh pr view --json`, and (if Gate 0 fires)
+     `gh issue view` calls have no dependencies on each other. Fire
+     all of them in a single message with multiple tool calls and
+     synthesise after all return — don't serialise.
 
-2. **List behaviour-bearing files** (Gate 1). State explicitly:
+2. **Check task alignment** (Gate 0). See Gate 0 in §Review rubric.
+
+3. **List behaviour-bearing files** (Gate 1). State explicitly:
    "behaviour-bearing: [list]. Out of scope: [list]." If empty,
    short-circuit to the CLEAN output.
 
-3. **Per behaviour-bearing file, search features.md** for matching
+4. **Per behaviour-bearing file, search features.md** for matching
    entries — by file path AND by PR number (Gate 2).
    - Read the matched entries in full.
    - Read the diff's hunks for that file in full.
    - Decide ✓ / ⚠ / ✗ per the Gate 2 criteria.
 
-4. **Per matched entry, check the qa scenario named in `Related:`**
+5. **Per matched entry, check the qa scenario named in `Related:`**
    (Gate 3).
    - Read the scenario file.
    - Decide ✓ / ⚠ per Gate 3 criteria.
 
-5. **If invoked with a PR number, check historical context** (Gate
+6. **If invoked with a PR number, check historical context** (Gate
    4). Run `git show <head-sha>:docs/features.md` to detect
    pre-features.md PRs and apply the caveat.
 
-6. **Scan for drive-by observations** (Gate 5). Limit to 3.
+7. **Scan for drive-by observations** (Gate 5). Limit to 3.
 
-7. **Check harness-config touch** (Gate 6). If any file in the
+8. **Check harness-config touch** (Gate 6). If any file in the
    diff matches `.claude/**`, `scripts/hooks/**`,
    `settings.json` / `settings.local.json` / `.mcp.json`, or
    a permissions/install line in `CLAUDE.md` — include the
    "Harness security" section pointing at `/security-scan`.
    Otherwise omit the section.
 
-8. **Run application-level gates (7-11)** per
+9. **Run application-level gates (7-11)** per
    [`app-gates.md`](app-gates.md). For each gate whose trigger
    fires (see trigger table in §Review rubric above), read that
    gate's section in `app-gates.md` and apply its rubric. Emit
@@ -393,10 +443,10 @@ When the user runs `/pr-review` (with or without a PR number):
    Gate 6. If no gate's trigger fires on this diff, skip reading
    `app-gates.md` entirely.
 
-9. **Emit the report** in the output-template structure. End with
-   the Verdict line.
+10. **Emit the report** in the output-template structure. End with
+    the Verdict line.
 
-10. **Stop.** Do NOT post anything to the PR. Wait for the user.
+11. **Stop.** Do NOT post anything to the PR. Wait for the user.
 
 ## Anti-patterns — what NOT to flag
 
@@ -432,22 +482,32 @@ Misuses that erode trust in the skill (a noisy skill gets ignored):
 ## Optional post-back to the PR (explicitly gated)
 
 After the user has read the chat report, they may want to publish
-findings as a PR review comment. This is a **separate, explicit
-step**.
+findings as PR review comments. This is a **separate, explicit
+step** — and it routes through the `github-pr-review-pending`
+skill, NOT through `gh pr review --comment` (which would submit
+immediately and bypass the project's "never publish without a yes"
+gate).
 
 When the user says "post that to the PR" or similar:
 
 1. Confirm the PR number explicitly. If the skill was invoked
    without a number (current branch), ask for the PR number first.
-2. Show the exact text that will be posted (the chat report,
-   reformatted as markdown). Trim Gate 5 drive-by observations to
-   the top three.
-3. Ask: "Post this as `gh pr review <N> --comment --body ...`?
-   (yes/no)"
-4. Only after explicit "yes": run the command.
+2. Show the exact thread bodies that will be posted, one per
+   line-anchored finding, formatted per
+   `conventional-comments/SKILL.md`. Trim Gate 5 drive-by
+   observations to the top three.
+3. Hand off to `github-pr-review-pending/SKILL.md` Phase 2 (build
+   the JSON) and Phase 3 (POST). That skill creates a **pending
+   (draft) review** — no notifications fire, the user submits in
+   the GitHub UI when ready.
+4. Per `github-pr-review-pending` Phase 4, tell the user the
+   review is pending and they need to click **Submit review** (or
+   **Discard pending review**) in the GitHub UI.
 
-Do NOT auto-post under any circumstances. The skill's job is to
-surface findings; the user decides what reaches the PR.
+Do NOT auto-post under any circumstances. Do NOT use
+`gh pr review --comment / --approve / --request-changes` — those
+all submit immediately. The skill's job is to surface findings;
+the user decides what reaches the PR and when.
 
 ## Why this exists
 
