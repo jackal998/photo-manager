@@ -1,0 +1,1 @@
+Localise the action-bucket row labels in the scan-dialog progress log so raw internal action strings (`KEEP` / `MOVE` / `EXACT` / `REVIEW_DUPLICATE` / `UNDATED`) stop leaking into user-visible output; internal values stay unchanged (#242).

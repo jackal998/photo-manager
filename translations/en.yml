@@ -98,6 +98,19 @@ decision:
   lock: "lock"
   unlock: "unlock"
 
+# Friendly row labels for the scan-dialog progress log's action-count
+# summary table (scanner.manifest.print_summary). The raw action
+# strings ("KEEP", "MOVE", "EXACT", "REVIEW_DUPLICATE", "UNDATED")
+# stay internal — they drive sort order and tree rendering — but the
+# user only sees these labels.
+manifest_summary:
+  keep: "kept (no action)"
+  move: "to be moved"
+  exact: "exact duplicates"
+  review_duplicate: "near-duplicates (review)"
+  undated: "no shot date"
+  other: "other"
+
 # ScanDialog and its inner panels.
 scan_dialog:
   title: "Scan Sources"
