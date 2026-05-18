@@ -78,6 +78,14 @@ decision:
   lock: "鎖定"
   unlock: "解除鎖定"
 
+manifest_summary:
+  keep: "已保留 (無動作)"
+  move: "待搬移"
+  exact: "完全重複"
+  review_duplicate: "近似重複 (待檢閱)"
+  undated: "無拍攝日期"
+  other: "其他"
+
 scan_dialog:
   title: "掃描來源"
   notice: "唯讀掃描 — 不會搬移或刪除任何檔案。"

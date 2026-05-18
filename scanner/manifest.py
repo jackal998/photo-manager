@@ -106,20 +106,33 @@ def print_summary(rows: list[ManifestRow], skipped: int = 0) -> None:
     every file was decode-skipped (#87).
     """
     from collections import Counter
+    from infrastructure.i18n import t
     counts: Counter = Counter(r.action for r in rows)
     total = len(rows)
+
+    # Internal action strings stay as dict keys (they drive sort order
+    # and tree rendering); only the row labels are localised. See #242.
+    action_label_keys = (
+        ("KEEP", "manifest_summary.keep"),
+        ("MOVE", "manifest_summary.move"),
+        ("EXACT", "manifest_summary.exact"),
+        ("REVIEW_DUPLICATE", "manifest_summary.review_duplicate"),
+        ("UNDATED", "manifest_summary.undated"),
+    )
 
     print("\n── Migration Manifest Summary ──────────────────────")
     print(f"  Indexed in manifest : {total:>7,}")
     if skipped:
         print(f"  Skipped (unreadable): {skipped:>7,}")
-    for action in ("KEEP", "MOVE", "EXACT", "REVIEW_DUPLICATE", "UNDATED"):
+    for action, key in action_label_keys:
+        label = t(key)
         n = counts.get(action, 0)
         pct = 100 * n / total if total else 0
-        print(f"  {action:<20}: {n:>7,}  ({pct:.1f}%)")
-    other = total - sum(counts[a] for a in ("KEEP", "MOVE", "EXACT", "REVIEW_DUPLICATE", "UNDATED"))
+        print(f"  {label:<26}: {n:>7,}  ({pct:.1f}%)")
+    other = total - sum(counts[a] for a, _ in action_label_keys)
     if other:
-        print(f"  {'other':<20}: {other:>7,}")
+        other_label = t("manifest_summary.other")
+        print(f"  {other_label:<26}: {other:>7,}")
     print("────────────────────────────────────────────────────")
 
     n_groups = len({r.group_id for r in rows if r.group_id})

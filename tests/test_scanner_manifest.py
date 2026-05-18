@@ -153,9 +153,15 @@ class TestPrintSummary:
         )
         print_summary(rows)
         out = capsys.readouterr().out
-        assert "MOVE" in out
-        assert "EXACT" in out
-        assert "REVIEW_DUPLICATE" in out
+        # Friendly labels render instead of raw internal action names
+        # (#242 — internal MOVE/EXACT/REVIEW_DUPLICATE must not leak
+        # into the user-visible scan-dialog log).
+        assert "to be moved" in out
+        assert "exact duplicates" in out
+        assert "near-duplicates (review)" in out
+        assert "MOVE" not in out
+        assert "EXACT" not in out
+        assert "REVIEW_DUPLICATE" not in out
 
     def test_empty_rows_no_crash(self, capsys):
         print_summary([])
