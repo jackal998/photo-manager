@@ -27,6 +27,13 @@ For each gated action, surface a one-paragraph summary BEFORE acting:
 
 When classification is ambiguous, treat as gated, not as ungated.
 
+**Per gated action, not per pipeline.** One outline + one "yes" approves
+only the actions named in that outline. If you discover a follow-up
+gated step mid-task (push → PR → news fragment → comment), each one
+needs its own surface + "yes" before acting. "Let's go" / "ship it" /
+"looks good" approve the next gated action *only*, not the rest of
+the pipeline.
+
 ## Always-on rules
 
 - Reversible actions preferred; propose a backup before destructive ones
