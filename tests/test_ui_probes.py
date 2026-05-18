@@ -11,11 +11,15 @@ us at least once. The current state of each invariant when the probe
 was added is recorded in a comment next to the test so a failing CI run
 points the maintainer at the right open issue.
 
-Implementation note: probes #237 and #238 inspect ``dialog_handler.py``
-via ``ast.parse(file.read_text())`` instead of importing it. Importing
-the module would force coverage measurement (#185 lists this file as
-out-of-scope for layer-1 — it's a thin Qt wrapper) and would trip the
-per-file gate. AST inspection sidesteps that entanglement.
+Implementation note: probe #237 still inspects ``dialog_handler.py``
+via ``ast.parse(file.read_text())`` because its invariant is at the
+callsite ("the ``ActionDialog(...)`` call passes ``groups=``") — that's
+inherently a source-text shape, not a runtime fact. Probe #238 was
+formerly AST-only for the same coverage-gate reason; after #293 cleared
+``dialog_handler.py`` from the omit list and extracted the canonical
+field list to ``dialog_handler_helpers.py``, probe #238 now imports
+the helper directly (no Qt cascade) and compares its return value
+against the tree columns.
 """
 from __future__ import annotations
 
@@ -83,21 +87,16 @@ def test_probe_select_dialog_exposes_every_filterable_tree_column():
 
     Forward-defensive against #238 recurring: if a new tree column lands
     without being added to the dialog's field list, the probe flags it.
+
+    Post-#293: the field list lives in
+    ``dialog_handler_helpers.default_action_dialog_fields()``. The helper
+    has no Qt cascade so importing it is cheap.
     """
-    fn = _show_action_dialog_ast()
-    # The fields list is a literal in show_action_dialog: locate the
-    # `fields = [...]` assignment and read its string constants.
-    declared: set[str] = set()
-    for node in ast.walk(fn):
-        if (isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "fields"
-                and isinstance(node.value, ast.List)):
-            for elt in node.value.elts:
-                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                    declared.add(elt.value)
-            break
+    from app.views.handlers.dialog_handler_helpers import (
+        default_action_dialog_fields,
+    )
+
+    declared = set(default_action_dialog_fields())
 
     missing = set(_FILTERABLE_COLUMNS.values()) - declared
     assert not missing, (

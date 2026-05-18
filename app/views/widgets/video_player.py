@@ -17,6 +17,13 @@ from PySide6.QtWidgets import (
 from loguru import logger
 
 from app.views.media_utils import format_duration
+from app.views.widgets.video_player_helpers import (
+    play_button_glyph,
+    should_use_file_protocol,
+    volume_button_glyph,
+    volume_float_to_slider_int,
+    volume_int_to_float,
+)
 from infrastructure.i18n import t
 
 
@@ -54,7 +61,7 @@ class VideoPlayerWidget(QWidget):
         # Load video first
         try:
             # Ensure local file path is correctly mapped
-            if not path.lower().startswith(("file://",)):
+            if should_use_file_protocol(path):
                 source = QUrl.fromLocalFile(path)
             else:
                 source = QUrl(path)
@@ -158,7 +165,7 @@ class VideoPlayerWidget(QWidget):
 
     def _on_volume_changed(self, value: int) -> None:
         """Handle volume slider changes."""
-        self._audio_output.setVolume(value / 100.0)
+        self._audio_output.setVolume(volume_int_to_float(value))
 
     def _on_slider_pressed(self) -> None:
         """Handle slider press - pause updates."""
@@ -182,17 +189,17 @@ class VideoPlayerWidget(QWidget):
 
     def _update_play_button(self) -> None:
         """Update play button text based on state."""
-        if self._media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self._play_button.setText("⏸")
-        else:
-            self._play_button.setText("▶")
+        is_playing = (
+            self._media_player.playbackState()
+            == QMediaPlayer.PlaybackState.PlayingState
+        )
+        self._play_button.setText(play_button_glyph(is_playing))
 
     def _update_volume_button(self) -> None:
         """Update volume button icon based on mute state."""
-        if self._audio_output.isMuted():
-            self._volume_button.setText("🔇")
-        else:
-            self._volume_button.setText("🔊")
+        self._volume_button.setText(
+            volume_button_glyph(self._audio_output.isMuted())
+        )
 
     def _on_duration_changed(self, duration: int) -> None:
         """Handle duration change."""
@@ -245,7 +252,7 @@ class VideoPlayerWidget(QWidget):
     def set_volume(self, volume: float) -> None:
         """Set volume (0.0 to 1.0)."""
         self._audio_output.setVolume(volume)
-        self._volume_slider.setValue(int(volume * 100))
+        self._volume_slider.setValue(volume_float_to_slider_int(volume))
 
     def get_position(self) -> int:
         """Get current position in milliseconds."""

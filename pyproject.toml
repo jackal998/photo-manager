@@ -75,19 +75,22 @@ omit = [
   "run_all_linters.py",               # dev tooling shell, not user-facing
   "infrastructure/image_service.py",  # requires running QApplication for decode; covered by qa-explore preview pane (s05)
   "infrastructure/logging.py",        # module-level loguru sink setup; no executable surface beyond import
-  # The four files below are the qa-explore territory of the
-  # preview / dialog-dispatch stacks. They are loaded into the
-  # layer-1 coverage report by two distinct triggers:
+  # Files previously omitted as "the qa-explore territory of the
+  # preview / dialog-dispatch stacks" — loaded into the layer-1
+  # coverage report by two distinct triggers:
   #   * #165 / #260 — instantiating ExecuteActionDialog with a
   #     task_runner pulls in preview_pane + image_tasks + video_player.
   #   * #185 — importing MainWindow at layer 1 transitively imports
-  #     all four.
-  # Each exercises only constructor + a thin slice well below the
-  # 70% per-file floor. Layer-3 covers the real surface (rendering,
-  # video lifecycle, dialog open paths). The layer-1 cascade is
-  # noise (see feedback_test_import_cascade.md). group_media_controller
-  # was removed from this list by #285 (helper extraction + thin-proxy
-  # tests cleared the 70% bar honestly).
+  #     the same set.
+  # The cascade is noise (see feedback_test_import_cascade.md);
+  # each file gets a focused L1 surface via helper extraction +
+  # fake-self thin-proxy tests, then is removed from this list.
+  # Status of the original five cascade-omits:
+  #   group_media_controller.py — cleared by #285 (76%)
+  #   dialog_handler.py         — cleared by #293 (90%)
+  #   image_tasks.py            — cleared by #293 (100%)
+  #   video_player.py           — cleared by #293 (87%)
+  #   preview_pane.py           — stays omitted; see note below
   #
   # preview_pane.py NOTE (final #185 PR): the testable surface is
   # extracted to app/views/preview_pane_helpers.py (10 helpers, 99%
@@ -102,9 +105,6 @@ omit = [
   # padding discipline that landed us at "extract what's pure, keep
   # the rest at L3."
   "app/views/preview_pane.py",                       # Heavy Qt widget assembly; testable surface extracted to preview_pane_helpers.py (99%); rest is QGridLayout/QLabel construction covered by L3 (s01/s05/s11/s48)
-  "app/views/handlers/dialog_handler.py",            # QFileDialog dispatch; opening real dialogs in tests requires mock-the-world; L3 covers every dialog-open path (s12 manifest save, s14/s29/s30 regex, s17 scan sources, s38 path-field validation)
-  "app/views/image_tasks.py",                        # QThreadPool dispatch + signal plumbing; covered by qa-explore s05 + s44 (highlighted-rows preview)
-  "app/views/widgets/video_player.py",               # QMediaPlayer + QVideoWidget wrapper; covered by qa-explore s11
 ]
 
 [tool.towncrier]
