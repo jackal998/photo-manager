@@ -1,0 +1,1 @@
+Render Similarity column % against the displayed Ref winner (recomputed at render time from each row's pHash), preserving #241's score-aware Ref pick and removing the "X% similar to *what?*" ambiguity that surfaced when the scanner's anchor diverged from the displayed Ref (#253).
