@@ -133,11 +133,13 @@ If everything is already populated, skip the regen and move on.
 
 ## Phase 3 — Plan
 
-**Default behavior — invoked with no additional prompt:** run **all
-21 scenarios** in batch via `qa.scenarios._batch`. Don't print the
+**Default behavior — invoked with no additional prompt:** run **the
+full scenario batch** via `qa.scenarios._batch`. Don't print the
 menu, don't ask which to run. Get one `yes batch` approval up front
 (per the gate rule below) and proceed. The full batch typically
-finishes in ~30–60 seconds with the focus fix in `_uia.py`.
+finishes in a few minutes wall-clock (52 scenarios as of 2026-05-19
+— the canonical list lives at
+[`qa/scenarios/_batch.py:ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)).
 
 **Invoked with hints** (e.g. `/qa-explore smoke`, `/qa-explore 1,2,9`,
 `/qa-explore failed 8`): respect the hint, run only the named subset,
