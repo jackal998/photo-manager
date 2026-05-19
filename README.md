@@ -396,12 +396,16 @@ photo-manager/
 │
 ├── app/                     # PySide6 GUI
 │   ├── views/
-│   │   ├── main_window.py         # Main window — wires all components
-│   │   ├── tree_model_builder.py  # Builds QStandardItemModel from groups
-│   │   ├── constants.py           # Column indices and header labels
-│   │   ├── preview_pane.py        # Image/video preview; grid + single-file modes
-│   │   ├── image_tasks.py         # Background image loading tasks
-│   │   ├── media_utils.py         # Media type helpers for the views layer
+│   │   ├── main_window.py             # Main window — wires all components
+│   │   ├── main_window_helpers.py     # Pure-logic helpers extracted from main_window (layer-1 testable)
+│   │   ├── tree_model_builder.py      # Builds QStandardItemModel from groups
+│   │   ├── constants.py               # Column indices and header labels
+│   │   ├── preview_pane.py            # Image/video preview; grid + single-file modes
+│   │   ├── preview_pane_helpers.py    # Pure-logic helpers extracted from preview_pane (layer-1 testable)
+│   │   ├── image_tasks.py             # Background image loading tasks
+│   │   ├── image_tasks_helpers.py     # Pure-logic token-format helpers extracted from image_tasks (layer-1 testable)
+│   │   ├── media_utils.py             # Media type helpers for the views layer
+│   │   ├── window_state.py            # Shared geometry persistence (MainWindow + dialogs)
 │   │   ├── components/
 │   │   │   ├── menu_controller.py      # Menu creation + "Set Action" submenu
 │   │   │   ├── status_messages.py      # Centralized status-bar copy formatter
