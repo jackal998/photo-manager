@@ -1,0 +1,1 @@
+Correct five stale cross-references in docs/features.md after the tree_controller module moved from handlers/ to components/ and the main_window.py handlers shifted line numbers.
