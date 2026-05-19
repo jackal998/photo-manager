@@ -1,0 +1,1 @@
+Fold #311 (news-gate omission) and #312 (`docs_guard` single-trigger misread) cold-session feedback into the `parallel-brief-generator` skill so generated briefs name the `news-gate` CI workflow and `docs_guard`'s behavioural-modify trigger precisely (#314).
