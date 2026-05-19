@@ -249,29 +249,166 @@ def select_shard(
 
 
 def _close_window() -> None:
+    """Close the Photo Manager top window; dismiss the dirty prompt if it fires.
+
+    Many scenarios end with the manifest in a dirty state (any decision
+    set during the run flips the dirty flag — see s28_exit_dirty_prompt).
+    On close, the app fires the "Unsaved Changes" QMessageBox
+    (`exit.confirm_title` / `exit.button_leave` in translations/en.yml).
+    Before this dismissal logic, that prompt blocked the close and the
+    batch runner force-terminated the process — 14/52 scenarios printed
+    ``app did not exit cleanly, terminating`` on a green run, which is
+    cosmetic noise that obscures real launch / shutdown bugs.
+
+    Picking "Leave" is non-destructive because decisions auto-persist
+    to the manifest as soon as they're set (see s12_save_manifest and
+    the comments in MainWindow.set_decision). The prompt's real purpose
+    is "save first if you want a SEPARATE manifest file" — irrelevant
+    in batch mode.
+
+    Implementation note: we use ``PostMessage(WM_CLOSE)`` via ctypes
+    instead of pywinauto's ``top_window().close()``. The pywinauto call
+    drives the UIA Window pattern's Close, which is synchronous and
+    blocks while the modal QMessageBox runs — leaving us no chance to
+    click Leave. PostMessage is fire-and-forget, so the close request
+    queues, Qt fires closeEvent, the dialog opens, and we get a window
+    of time to dismiss it.
+
+    The Leave click is done via ``PostMessage(WM_KEYDOWN, VK_TAB)`` +
+    ``VK_RETURN`` rather than via pywinauto's UIA selectors because the
+    QMessageBox dialog doesn't surface in UIA's top-level window list
+    until after some refresh — pywinauto's ``connect(title='Unsaved
+    Changes')`` empirically times out even when ``EnumWindows`` sees
+    the dialog. The Tab+Tab+Enter sequence relies on the button-add
+    order in :meth:`MainWindow.closeEvent` — Save & leave (AcceptRole),
+    Leave (DestructiveRole), Back (RejectRole, default focus). Tab
+    twice from Back lands on Leave; Enter clicks it.
+    """
     code = (
-        "from pywinauto import Application;"
-        "import sys;"
-        "Application(backend='uia').connect(title_re=r'.*Photo Manager.*', timeout=3).top_window().close()"
+        "import sys, time, ctypes\n"
+        "from ctypes import wintypes\n"
+        "user32 = ctypes.windll.user32\n"
+        "WM_CLOSE = 0x0010\n"
+        "WM_KEYDOWN = 0x0100\n"
+        "WM_KEYUP = 0x0101\n"
+        "VK_TAB = 0x09\n"
+        "VK_RETURN = 0x0D\n"
+        "WNDENUMPROC = ctypes.WINFUNCTYPE("
+        "ctypes.c_int, wintypes.HWND, wintypes.LPARAM)\n"
+        "found = []\n"
+        "def cb(hwnd, _):\n"
+        "    if not user32.IsWindowVisible(hwnd):\n"
+        "        return True\n"
+        "    title = ctypes.create_unicode_buffer(256)\n"
+        "    user32.GetWindowTextW(hwnd, title, 256)\n"
+        "    if 'Photo Manager' in title.value:\n"
+        "        found.append(hwnd)\n"
+        "    return True\n"
+        "user32.EnumWindows(WNDENUMPROC(cb), 0)\n"
+        "for hwnd in found:\n"
+        "    user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)\n"
+        "time.sleep(0.7)\n"
+        "dlg_hwnds = []\n"
+        "def cb2(hwnd, _):\n"
+        "    if not user32.IsWindowVisible(hwnd):\n"
+        "        return True\n"
+        "    title = ctypes.create_unicode_buffer(256)\n"
+        "    user32.GetWindowTextW(hwnd, title, 256)\n"
+        "    if title.value == 'Unsaved Changes':\n"
+        "        dlg_hwnds.append(hwnd)\n"
+        "    return True\n"
+        "user32.EnumWindows(WNDENUMPROC(cb2), 0)\n"
+        "for dlg in dlg_hwnds:\n"
+        "    user32.SetForegroundWindow(dlg)\n"
+        "    time.sleep(0.15)\n"
+        "    for _ in range(2):\n"
+        "        user32.PostMessageW(dlg, WM_KEYDOWN, VK_TAB, 0)\n"
+        "        user32.PostMessageW(dlg, WM_KEYUP, VK_TAB, 0)\n"
+        "        time.sleep(0.05)\n"
+        "    user32.PostMessageW(dlg, WM_KEYDOWN, VK_RETURN, 0)\n"
+        "    user32.PostMessageW(dlg, WM_KEYUP, VK_RETURN, 0)\n"
     )
-    subprocess.run([PY, "-c", code], cwd=REPO, capture_output=True, timeout=10)
+    subprocess.run([PY, "-c", code], cwd=REPO, capture_output=True, timeout=15)
 
 
 _user32 = ctypes.windll.user32
+_kernel32 = ctypes.windll.kernel32
 _WNDENUMPROC = ctypes.WINFUNCTYPE(
     ctypes.c_int, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
 )
 
 
-def _wait_for_main_window(pid: int, timeout: float = 8.0) -> bool:
-    """Poll until photo-manager's main window is visible for ``pid``.
+class _PROCESSENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.wintypes.DWORD),
+        ("cntUsage", ctypes.wintypes.DWORD),
+        ("th32ProcessID", ctypes.wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_void_p),
+        ("th32ModuleID", ctypes.wintypes.DWORD),
+        ("cntThreads", ctypes.wintypes.DWORD),
+        ("th32ParentProcessID", ctypes.wintypes.DWORD),
+        ("pcPriClassBase", ctypes.wintypes.LONG),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("szExeFile", ctypes.wintypes.WCHAR * 260),
+    ]
+
+
+def _find_descendants(parent_pid: int) -> set[int]:
+    """Return the transitive descendant pids of ``parent_pid``.
+
+    The venv's ``python.exe`` (Windows Python launcher behaviour) can
+    spawn the actual interpreter as a child process — empirically
+    confirmed: ``Popen([sys.executable, 'main.py']).pid`` differs from
+    the pid that ends up owning the QMainWindow. Without descendant
+    awareness, ``_wait_for_main_window`` polled for the launcher pid
+    forever and timed out on every scenario (the WARN noise that
+    obscured real launch failures).
+    """
+    TH32CS_SNAPPROCESS = 0x00000002
+    INVALID_HANDLE_VALUE = -1
+    snap = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snap == INVALID_HANDLE_VALUE:
+        return set()
+    try:
+        children_by_parent: dict[int, list[int]] = {}
+        entry = _PROCESSENTRY32()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32)
+        if not _kernel32.Process32FirstW(snap, ctypes.byref(entry)):
+            return set()
+        while True:
+            children_by_parent.setdefault(
+                entry.th32ParentProcessID, []
+            ).append(entry.th32ProcessID)
+            if not _kernel32.Process32NextW(snap, ctypes.byref(entry)):
+                break
+        descendants: set[int] = set()
+        stack = [parent_pid]
+        while stack:
+            pid = stack.pop()
+            for child in children_by_parent.get(pid, ()):
+                if child not in descendants:
+                    descendants.add(child)
+                    stack.append(child)
+        return descendants
+    finally:
+        _kernel32.CloseHandle(snap)
+
+
+def _wait_for_main_window(launcher_pid: int, timeout: float = 8.0) -> bool:
+    """Poll until photo-manager's main window is visible under ``launcher_pid``
+    or any of its descendants.
 
     Replaces a fixed ``time.sleep`` after launching ``main.py``. The
     window typically appears in ~0.5–1.5 s on a real desktop and 2–4 s
     on hosted CI runners — fixed sleeps either over-wait or are too
     short under runner contention. Polling adapts to whichever side
-    you're on and saves cumulative time across the batch (~2 s × 21
-    scenarios ≈ 40 s on a green run).
+    you're on and saves cumulative time across the batch on green runs.
+
+    Descendant-pid awareness fixes the pid race that fired
+    ``WARN: main window did not appear within 8s`` on every scenario
+    (see ``_find_descendants`` docstring). The Toolhelp32 snapshot is
+    refreshed every poll iteration so a slow fork doesn't make us miss
+    the child window.
 
     Uses ctypes ``EnumWindows`` rather than spawning pywinauto so the
     cost per check is microseconds, not subprocess-startup overhead.
@@ -282,22 +419,24 @@ def _wait_for_main_window(pid: int, timeout: float = 8.0) -> bool:
     deadline = time.monotonic() + timeout
     found = [False]
 
-    def cb(hwnd, _):
-        if not _user32.IsWindowVisible(hwnd):
-            return True
-        ppid = ctypes.c_ulong()
-        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(ppid))
-        if ppid.value != pid:
-            return True
-        title = ctypes.create_unicode_buffer(256)
-        _user32.GetWindowTextW(hwnd, title, 256)
-        if "Photo Manager" in title.value:
-            found[0] = True
-            return False
-        return True
-
     while time.monotonic() < deadline:
+        target_pids = _find_descendants(launcher_pid) | {launcher_pid}
         found[0] = False
+
+        def cb(hwnd, _):
+            if not _user32.IsWindowVisible(hwnd):
+                return True
+            ppid = ctypes.c_ulong()
+            _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(ppid))
+            if ppid.value not in target_pids:
+                return True
+            title = ctypes.create_unicode_buffer(256)
+            _user32.GetWindowTextW(hwnd, title, 256)
+            if "Photo Manager" in title.value:
+                found[0] = True
+                return False
+            return True
+
         _user32.EnumWindows(_WNDENUMPROC(cb), 0)
         if found[0]:
             # Small grace for the QApplication event loop to finish

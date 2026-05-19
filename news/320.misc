@@ -1,0 +1,1 @@
+qa-batch runner: resolve descendant pids when waiting for the main window (silences a per-scenario false "main window did not appear" warning) and dismiss the unsaved-changes prompt on close (eliminates the spurious "app did not exit cleanly, terminating" log on 14/52 scenarios).
