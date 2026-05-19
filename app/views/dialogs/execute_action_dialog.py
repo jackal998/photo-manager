@@ -62,6 +62,7 @@ class ExecuteActionDialog(QDialog):
         parent=None,
         settings: object | None = None,
         task_runner: object | None = None,
+        status_reporter: object | None = None,
     ) -> None:
         super().__init__(parent)
         # settings is optional so existing tests / callers that don't
@@ -76,6 +77,11 @@ class ExecuteActionDialog(QDialog):
         # pane, no splitter. When present, the tree is wrapped in a
         # horizontal splitter alongside the PreviewPane.
         self._task_runner = task_runner
+        # status_reporter is optional so unit tests can omit it. When
+        # present, the regex-apply path emits "Decision set" so the
+        # main window's status bar gets the same confirmation the s14
+        # main-menu route already produces (#316).
+        self._status_reporter = status_reporter
         self._preview: PreviewPane | None = None
         self._splitter: QSplitter | None = None
         self.setWindowTitle(t("execute_dialog.title"))
@@ -755,6 +761,15 @@ class ExecuteActionDialog(QDialog):
                 logger.warning("Failed to persist batch decisions: {}", exc)
 
         self._refresh_ui_after_decision_change()
+        # Mirror the s14 main-menu regex flow's status confirmation
+        # (file_operations.set_decision_by_regex emits the same key).
+        # Without this, the main window's status bar still shows the
+        # initial "Loaded manifest" baseline after the user applies a
+        # regex here — see #316.
+        if batch and self._status_reporter is not None:
+            self._status_reporter.show_status(
+                t("file_op.decision_set_status", decision=new_decision)
+            )
         if locked_paths and len(apply_paths) < len(matched_paths):
             logger.info(
                 "Set {} decisions, skipped {} locked rows",
