@@ -45,6 +45,12 @@ running.
 | 26 | Keyboard-only navigation: tree arrows, Alt+F mnemonic, scan dialog Tab cycle, Esc (#125) | `qa.scenarios.s26_keyboard_navigation` | ✓ ready |
 | 27 | Re-scan with pending decisions → confirmation prompt (#142) | `qa.scenarios.s27_rescan_confirm` | ✓ ready |
 
+The table above lists the original menu (s01–s27). The full set has
+grown well past it — see
+[`qa.scenarios._batch.ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)
+or `Glob("qa/scenarios/s*.py")` for the canonical, always-current
+list. Don't trust this table for completeness; trust the directory.
+
 Several drivers also call cross-scenario invariant probes from
 `qa/scenarios/_invariants.py` — they assert that the status bar matches
 an expected shape after a manifest-changing action, that all
@@ -105,7 +111,7 @@ windows leak — document the residual in the driver header.
 in one go, use `qa.scenarios._batch`:
 
 ```
-.venv/Scripts/python.exe -m qa.scenarios._batch              # all 21 (s01–s21)
+.venv/Scripts/python.exe -m qa.scenarios._batch              # full sweep
 .venv/Scripts/python.exe -m qa.scenarios._batch s04_corrupted s09_walker_exclusions
 ```
 
@@ -113,11 +119,13 @@ For each scenario it: configures `qa/settings.json` → launches
 `main.py` → polls (ctypes `EnumWindows`) until the main window is
 visible (max 8 s; typically <2 s) → runs the driver → closes the
 window → waits for the subprocess to exit → moves to the next.
-Prints a final SUMMARY table with rc per scenario. The whole batch
-(21 scenarios) typically finishes in ~5–7 minutes (5m19s on
-`windows-latest` after the #133 poll change). Each app launch is
-still a real launch — get the user's "yes batch" once before
-starting.
+Prints a final SUMMARY table with rc per scenario. The full batch
+(52 scenarios as of 2026-05-19 — see
+[`qa.scenarios._batch.ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)
+for the canonical list) typically finishes in a few minutes
+wall-clock locally and ~5 minutes per shard on CI's 5-way matrix.
+Each app launch is still a real launch — get the user's "yes batch"
+once before starting.
 
 **Optional optimization — skip the per-run Bash prompt.** Add this
 to `.allow` in `.claude/settings.json` so driver runs don't prompt:
