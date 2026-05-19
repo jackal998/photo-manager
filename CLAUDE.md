@@ -23,8 +23,11 @@ even mid-task, even in long autonomous runs. Never self-approve.
   for memory and plan files — those are fine)
 - Shell commands that modify system state (anything beyond read-only)
 - Disabling or bypassing the sandbox / permission mode
-- Opening PRs or pushing to a remote
+- Opening PRs (`gh pr create`) or pushing branches (`git push`) to a remote
 - `git` commands that rewrite history or discard work
+- Submitting / publishing a GitHub PR review (`gh pr review --comment/--approve/--request-changes`,
+  or `gh api .../reviews/{id}/events`, or `gh api .../pulls/{N}/reviews` with a non-null `event`).
+  Exception below for **draft pending** reviews via `github-pr-review-{pending,submitted}` skills
 
 For each gated action, surface a one-paragraph summary BEFORE acting:
 
@@ -64,6 +67,22 @@ So the gates aren't either too tight or too loose:
 - `pip install`, `npm install`, `git clone <url>` ARE gated
 - `git push`, `git reset --hard`, `git rebase`, `git checkout --`,
   `git pull` ARE gated
+- **Posting a pending or submitted PR review via the project skills
+  `github-pr-review-pending` / `github-pr-review-submitted` is
+  auto-approved.** Those skills already encode the gate decision in
+  their own invocation contracts (default-on with a "preview only"
+  opt-out). The mechanic distinction:
+  - `-pending` POSTs `gh api .../reviews` with `event` **omitted** —
+    creates a PENDING draft, no notifications, visible only to the
+    author's `gh` identity, reversible via `DELETE`.
+  - `-submitted` POSTs `gh api .../reviews` with `event` set to
+    `COMMENT` or `REQUEST_CHANGES` (never `APPROVE` from an agent) —
+    intentional for autonomous agent-to-agent flow.
+  The user opts out per-invocation by saying "preview only" / "dry
+  run" / "don't post" *before* running `/pr-review`. Once that
+  phrase isn't present, the post-back fires by default and does NOT
+  need a fresh "yes" gate. This is the explicit design decision in
+  PR #306
 
 ## Mid-task pause protocol
 
