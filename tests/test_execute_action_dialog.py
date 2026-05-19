@@ -1751,3 +1751,123 @@ class TestExecuteDialogPreviewPane:
 
         if ini.exists():
             ini.unlink()
+
+
+# ── #318 — status-bar parity across all decision-changing paths ────────────
+
+class TestExecuteDialogStatusEmission:
+    """Every decision-changing path in ExecuteActionDialog must emit a
+    confirmation through the injected ``status_reporter``. #316/#317
+    plumbed the reporter and wired the bulk-regex destructive branch;
+    #318 extends the same emit to the four remaining refresh sites
+    (single-row lock, single-row decision-set, multi-row remove-from-list,
+    bulk-regex lock branch). Without these, a user applying the action
+    via the Execute Action dialog gets no status-bar feedback — the
+    main-window equivalents emit, so the inconsistency is user-felt.
+
+    These tests pin the emit so a future refactor that drops it surfaces
+    immediately. The mock is exercised against the public dialog API
+    (the same calls the right-click context menu / regex dialog issue
+    in production), not the private status_reporter attribute.
+    """
+
+    def test_set_lock_single_row_emits_locked_status(self, qapp):
+        from unittest.mock import MagicMock
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        reporter = MagicMock()
+        rec = _rec("/a.jpg", "")
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, status_reporter=reporter
+        )
+        dlg._set_lock("/a.jpg", True)
+        reporter.show_status.assert_called_once()
+        msg = reporter.show_status.call_args[0][0]
+        assert "Locked" in msg and "1 row" in msg
+
+    def test_set_lock_single_row_unlock_emits_unlocked_status(self, qapp):
+        from unittest.mock import MagicMock
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        reporter = MagicMock()
+        rec = _rec("/a.jpg", "")
+        rec.is_locked = True
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, status_reporter=reporter
+        )
+        dlg._set_lock("/a.jpg", False)
+        msg = reporter.show_status.call_args[0][0]
+        assert "Unlocked" in msg and "1 row" in msg
+
+    def test_set_decision_single_row_emits_decision_status(self, qapp):
+        from unittest.mock import MagicMock
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        reporter = MagicMock()
+        rec = _rec("/a.jpg", "")
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, status_reporter=reporter
+        )
+        dlg._set_decision("/a.jpg", "delete")
+        reporter.show_status.assert_called_once()
+        msg = reporter.show_status.call_args[0][0]
+        assert "Decision set" in msg and "delete" in msg
+
+    def test_remove_from_list_paths_emits_removed_status(self, qapp):
+        from unittest.mock import MagicMock
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        reporter = MagicMock()
+        groups = [_group(_rec("/a.jpg", ""), _rec("/b.jpg", ""))]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, status_reporter=reporter
+        )
+        dlg._remove_from_list_paths(["/a.jpg", "/b.jpg"])
+        reporter.show_status.assert_called_once()
+        msg = reporter.show_status.call_args[0][0]
+        assert "Removed" in msg and "2" in msg and "items from list" in msg
+
+    def test_regex_lock_branch_emits_locked_count(self, qapp):
+        """Bulk-lock via the regex dialog (LOCK_SENTINEL) was the
+        highest-friction path called out in #318: there's no per-row
+        visible feedback for which N rows just got the flag flip."""
+        from unittest.mock import MagicMock
+        from app.views.constants import LOCK_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        reporter = MagicMock()
+        groups = [_group(
+            _rec("/photo_01.jpg", ""),
+            _rec("/photo_02.jpg", ""),
+            _rec("/other.jpg", ""),
+        )]
+        dlg = ExecuteActionDialog(
+            groups, manifest_path=None, status_reporter=reporter
+        )
+        dlg._set_decision_by_regex("File Name", r"photo_", LOCK_SENTINEL)
+        reporter.show_status.assert_called_once()
+        msg = reporter.show_status.call_args[0][0]
+        assert "Locked" in msg and "2 row" in msg
+
+    def test_no_reporter_means_no_crash(self, qapp):
+        """Default constructor omits status_reporter — every emit path
+        must short-circuit cleanly when the reporter is None so existing
+        callers (unit tests, future contexts) don't break.
+
+        Uses distinct paths per call to avoid the lock-confirm modal
+        that would fire if we delete-a-locked-row in the same test;
+        that's a separate concern covered by TestExecuteDialogLock.
+        """
+        from app.views.constants import LOCK_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/lock.jpg", ""),
+            _rec("/decide.jpg", ""),
+            _rec("/remove.jpg", ""),
+            _rec("/bulk1.jpg", ""),
+            _rec("/bulk2.jpg", ""),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)  # no reporter
+        # All four paths should run without raising.
+        dlg._set_lock("/lock.jpg", True)
+        dlg._set_decision("/decide.jpg", "delete")
+        dlg._remove_from_list_paths(["/remove.jpg"])
+        dlg._set_decision_by_regex("File Name", r"bulk", LOCK_SENTINEL)
