@@ -180,8 +180,16 @@ def main() -> int:
 
     print("step: invariant_status_bar")
     _, win = _uia.connect_main()
+    # #316 — the Execute Action dialog's regex-apply path must emit the
+    # same "Decision set" confirmation as the s14 main-menu route. The
+    # bug was that ExecuteActionDialog had no status_reporter plumbed
+    # in, so the status bar still showed the stale "Loaded manifest"
+    # baseline after the apply. Hard-asserting here per the probe-then-
+    # fix pattern: the assertion is paired with the source fix in the
+    # same PR so the bug can't regress silently.
     if not _invariants.assert_status_bar_matches(win, r"Decision set", within_s=2.0):
-        print("WARN: status bar did not echo 'Decision set' (may have cleared on timeout)")
+        print("FAIL: status bar did not echo 'Decision set' after regex apply (#316)")
+        return 1
 
     print("step: verify_decisions_after_apply")
     post = _read_decisions()

@@ -1,0 +1,1 @@
+Emit "Decision set to '<decision>'" status confirmation when applying a regex via the Execute Action dialog's right-click route (#316).

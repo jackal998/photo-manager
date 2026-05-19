@@ -889,6 +889,7 @@ class FileOperationsHandler:
             self.vm.groups, manifest_path, self.parent,
             settings=self.settings,
             task_runner=self.task_runner,
+            status_reporter=self.status_reporter,
         )
         accepted = dlg.exec() == QDialog.Accepted
         # When the user removed rows via the immediate single-row
