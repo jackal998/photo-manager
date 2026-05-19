@@ -274,13 +274,57 @@ session, then reuse.
   7. **Gated:** surface push intent to user, on approval
      `git push -u origin <your-branch>`.
   8. **Gated:** surface PR-create intent, on approval
-     `gh pr create --title "<title>" --body "<body>"`. Hooks
-     (`qa_scenario_guard`, `docs_guard`) will fire — if blocked,
-     surface the hook message and decide with user:
+     `gh pr create --title "<title>" --body "<body>"`. Three gates
+     can fail this PR — know which one your scope tripwires:
+       * `qa_scenario_guard` (PreToolUse hook) — fires on diffs
+         touching `app/views/{handlers,dialogs,components,workers}/`
+         without a `qa/scenarios/sNN_*.py` change.
+         Bypass: `[qa-not-needed: <reason>]` in title or body.
+       * `docs_guard` (PreToolUse hook) — **two triggers**:
+         - **New files** under `app/views/{dialogs,handlers,workers,components,widgets,layout,viewmodels}/`,
+           `infrastructure/`, `scanner/`, `core/{models,services/}`,
+           `tests/test_*.py`, or `qa/scenarios/s*.py` → satisfied
+           by ANY edit to `README.md` / `docs/*.md` / `CLAUDE.md`
+           / `pyproject.toml`.
+         - **Modified files** under `app/views/{dialogs,handlers}/`
+           crossing the behavioural threshold (≥10 added+deleted
+           lines OR any `def` signature change) → **specifically
+           require `docs/features.md`**. Other doc touches do NOT
+           satisfy this stricter trigger.
+         Bypass for either: `[docs-not-needed: <reason>]` in title
+         or body.
+       * `news-gate` (CI workflow, not a local hook — fires on
+         every PR after creation) — requires
+         `news/<PR#>.{feature,bugfix,doc,removal,misc}` to exist
+         in the diff. PR# isn't known until `gh pr create` returns,
+         so this step has to follow PR creation — see step 8b.
+         Bypass: `[skip-news: <reason>]` in title or body.
+     If a PreToolUse gate blocks the gh command, decide with user:
        a) hand-fix and retry
-       b) bypass with `[qa-not-needed: <reason>]` or
-          `[docs-not-needed: <reason>]` in the gh command
+       b) include the relevant bypass token in `--title` or `--body`
        c) skip this branch
+  8b. **Add the news fragment for this PR.** After `gh pr create`
+      returns the PR number N:
+        - Pick the type: `feature` for user-visible new behaviour;
+          `bugfix` for user-hit bugs; `doc` for doc-only; `removal`
+          for removed feature / breaking change; `misc` for
+          refactor / CI / tooling / no user diff. (Test-only
+          refactors with no user impact → `misc`. Pure-rename
+          refactors → `misc`. Behaviour-preserving helper
+          extraction → `misc`.)
+        - Write `news/<N>.<type>` with ONE LINE, present-tense
+          imperative, ending in `(#<N>)`. Examples in `news/`:
+          ```
+          Add `/pr-review` skill for catching semantic drift … (#272).
+          Extend `/pr-review` with Gates 7-10 … (#288).
+          ```
+        - `git add news/<N>.<type> && git commit -m "news(#<N>): ..."`
+        - **Gated:** surface push intent to user, on approval
+          `git push`.
+      If the change genuinely has no user-recordable diff and no
+      fragment makes sense, you can amend the PR title or body to
+      include `[skip-news: <reason>]` instead. Don't ship a PR
+      that fails news-gate in CI; fix it before reporting done.
   9. Capture PR URL, report to user.
 
 ## Cleanup — after the PR merges
@@ -395,15 +439,83 @@ from here; they own their work end-to-end.
   after a brief listed issue #245 as a PR in a "5 recent clean PRs"
   sample set; the executing session caught the mismatch in-band
   and substituted PR #255, but burned context doing it.
+- **Omitting the news-fragment step from the workflow.** The
+  `news-gate` CI workflow runs on every PR and fails when no
+  `news/<PR#>.<type>` is added. It is a CI workflow, not a
+  PreToolUse hook — so it doesn't surface in the gh pr create
+  output and a brief that lists only the local hooks
+  (`qa_scenario_guard`, `docs_guard`) misses it. Cold session pays
+  for the omission with a failed CI run + amendment commit. Filed
+  via [#311](https://github.com/jackal998/photo-manager/issues/311).
+  Always include step 8b (post-PR news fragment) in the brief
+  template, with the format example and the `[skip-news: <reason>]`
+  bypass token spelled out.
+- **Treating `docs_guard` as a single trigger.** The hook has
+  two: a coarse new-file trigger (any doc touch satisfies) and a
+  strict behavioural-modify trigger on `app/views/{dialogs,handlers}/`
+  MODIFIED files (only `docs/features.md` satisfies). A brief that
+  says "docs_guard fires on the new tests — docs/testing.md update
+  satisfies it" for a task editing handler files is wrong on both
+  counts: docs_guard fires on the SOURCE file location not the
+  test, and docs/testing.md doesn't satisfy the strict trigger.
+  Filed via [#312](https://github.com/jackal998/photo-manager/issues/312).
+  When in-scope files include MODIFIED `app/views/{dialogs,handlers}/*.py`,
+  the brief must explicitly name the behavioural-modify trigger
+  AND either (a) require a features.md update or (b) pre-write
+  `[docs-not-needed: <reason>]` into the PR-body template if the
+  change is behaviour-preserving.
 
 ## Photo-manager-specific reminders to bake into every brief
 
-- **Hooks gating `gh pr create`** — `qa_scenario_guard` blocks PRs
-  that change `app/views/{handlers,dialogs,components,workers}/`
-  without a `qa/scenarios/sNN_*.py` change. `docs_guard` blocks PRs
-  that add new modules under `app/`, `infrastructure/`, `scanner/`,
-  `core/services/` (or new tests, or qa-scenario changes) without
-  touching `README.md` / `docs/*.md` / `CLAUDE.md` / `pyproject.toml`.
+- **Three PR-creation gates — name them precisely in each brief**:
+    1. `qa_scenario_guard` (PreToolUse on `gh pr create`) — fires on
+       `app/views/{handlers,dialogs,components,workers}/` diffs
+       without a `qa/scenarios/sNN_*.py` change. Bypass:
+       `[qa-not-needed: <reason>]`.
+    2. `docs_guard` (PreToolUse on `gh pr create`) — has **two
+       distinct triggers**, easy to confuse:
+       - **new-file trigger**: NEW `.py` files under the structured
+         dirs (`app/views/{dialogs,handlers,workers,components,widgets,layout,viewmodels}/`,
+         `infrastructure/`, `scanner/`, `core/{models,services/}`,
+         `tests/test_*.py`, `qa/scenarios/s*.py`). Satisfied by
+         ANY edit to `README.md` / `docs/*.md` / `CLAUDE.md` /
+         `pyproject.toml`.
+       - **behavioural-modify trigger** (#262): MODIFIED files
+         under `app/views/{dialogs,handlers}/` with ≥10 added+
+         deleted lines OR a `def` signature change. **Strict:
+         requires `docs/features.md` specifically.** Other doc
+         touches (docs/testing.md, README, CLAUDE.md, pyproject)
+         do NOT satisfy this trigger.
+       Bypass for either: `[docs-not-needed: <reason>]`.
+    3. `news-gate` (CI workflow, not a local hook — fires after
+       PR creation): requires `news/<PR#>.<type>` where type ∈
+       `{feature, bugfix, doc, removal, misc}`. Bypass:
+       `[skip-news: <reason>]`. See step 8b in the template.
+- **When in-scope files trip the behavioural-modify trigger**, the
+  brief MUST: (a) name the trigger and the docs/features.md
+  requirement explicitly (don't bury it under generic "hooks may
+  fire"), and (b) pre-stage the recommended action in the PR-body
+  template — usually one of:
+    - "Add or update the `<feature name>` entry in
+      `docs/features.md`" (when the change IS user-visible), OR
+    - Pre-written `[docs-not-needed: <reason>]` token in the
+      `<body>` placeholder, e.g.
+      `[docs-not-needed: test-only refactor — helper extraction
+      preserves behaviour byte-for-byte]` (when the change is
+      pure-refactor / behaviour-preserving).
+- **Pattern-PR cross-check before saying "follow PR-X's pattern".**
+  If a brief tells the cold session to mirror a prior PR's
+  approach, verify PR-X's target files were under the **same
+  gated subdir** as the new task's targets. The gates' predicates
+  are PATH-based, not pattern-based. Example failure mode (#312):
+  briefing #293 to "follow #283/#285/#289's helper-extraction
+  pattern" — those PRs touched `app/views/main_window.py` and
+  `app/views/widgets/*` (outside the behavioural-modify subdirs),
+  so they never triggered docs_guard's strict mode. #293 targeted
+  `app/views/handlers/dialog_handler.py` (INSIDE the strict subdir),
+  which DID trigger, and the brief's "docs/testing.md update
+  satisfies it" was wrong as a result. Run this check before
+  citing prior-art PRs as templates.
 - **`read_result_rows` is broken on CI** — has a `y_min=600` filter
   that drops all rows on the smaller CI render. Use sqlite reads
   (pattern: s14, s32, s35) for tree-content assertions.
