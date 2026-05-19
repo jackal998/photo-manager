@@ -1,0 +1,1 @@
+Correct stale "21 scenarios / 30-60 seconds" claims in the qa-explore skill docs; point at qa.scenarios._batch.ALL_SCENARIOS as the canonical scenario list.
