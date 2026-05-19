@@ -130,7 +130,7 @@ for the chore plan.
 
 ### Execute Action — base flow
 
-- **Entry point:** Main window menu → "Execute Action…" — [app/views/main_window.py:584](../app/views/main_window.py#L584) → [app/views/handlers/file_operations.py:877](../app/views/handlers/file_operations.py#L877)
+- **Entry point:** Main window menu → "Execute Action…" — [app/views/main_window.py:560](../app/views/main_window.py#L560) → [app/views/handlers/file_operations.py:877](../app/views/handlers/file_operations.py#L877)
 - **Trigger:** User clicks "Execute Action…" from the menu (label defined at [translations/en.yml:32](../translations/en.yml#L32)).
 - **Behaviour:** Opens the `ExecuteActionDialog` (a modal review window) listing every record with a non-empty `user_decision`, grouped by duplicate-set. The user reviews the planned actions and clicks **Execute** to apply them or **Close** to dismiss without applying. Execute carries out deletes (via `delete_service`) and writes the manifest changes; Close discards no decisions — they remain queued until the next open.
 - **Conditions / variants:** Execute button is disabled when no rows have a `user_decision`. Several layered behaviours modify the flow — see the other Execute Action entries below.
@@ -197,7 +197,7 @@ for the chore plan.
 ### Execute Action — scope to highlighted rows
 
 - **Entry point:** Tree's `selectionChanged` signal in `ExecuteActionDialog` — [app/views/dialogs/execute_action_dialog.py:278](../app/views/dialogs/execute_action_dialog.py#L278) (`_selected_file_paths`, `_on_selection_changed`, scoped `_on_execute_requested`).
-- **Trigger:** User highlights one or more file rows in the dialog's tree (multi-row via `ExtendedSelection` mode, matching the main result tree at [tree_controller.py:45](../app/views/handlers/tree_controller.py#L45)). With an empty selection, falls back to "execute every decided row".
+- **Trigger:** User highlights one or more file rows in the dialog's tree (multi-row via `ExtendedSelection` mode, matching the main result tree at [tree_controller.py:45](../app/views/components/tree_controller.py#L45)). With an empty selection, falls back to "execute every decided row".
 - **Behaviour:** Execute button label tracks the selection — `Execute` ↔ `Execute Action (highlighted)` — and clicking it processes ONLY the highlighted rows' decisions. Empty selection preserves the pre-#211 "execute every decided row" semantics. Lock guard narrows with scope: locked rows OUTSIDE the highlight don't fire `LockedRowsConfirmDialog`; locked rows INSIDE the highlight still do (scope narrows, never skips).
 - **Conditions / variants:** Complete-group "ALL files will be deleted" confirm only fires when the highlighted scope fully covers a group's delete-decision rows. Partial selections suppress that confirm so the "EVERY file deleted" copy stays accurate. The selection listener must be re-wired on every `_rebuild_tree_model` because `QTreeView.setModel` installs a fresh `QItemSelectionModel`.
 - **Related:** [PR #219](https://github.com/jackal998/photo-manager/pull/219) (closes [#211](https://github.com/jackal998/photo-manager/issues/211)); QA scenario [`qa/scenarios/s44_execute_highlighted_rows.py`](../qa/scenarios/s44_execute_highlighted_rows.py).
@@ -284,7 +284,7 @@ for the chore plan.
 
 ### Main window — keyboard navigation
 
-- **Entry point:** Main result tree's built-in `QTreeView` keyboard handling, augmented in [tree_controller.py](../app/views/handlers/tree_controller.py).
+- **Entry point:** Main result tree's built-in `QTreeView` keyboard handling, augmented in [tree_controller.py](../app/views/components/tree_controller.py).
 - **Trigger:** User presses arrow keys / Home / End / Page Up / Page Down with the tree focused.
 - **Behaviour:** Navigate rows with arrow keys; expand/collapse groups with Left/Right at group-header rows. Selected row is preserved across model rebuilds (e.g. after a decision change) so keyboard-driven review doesn't lose place.
 - **Conditions / variants:** Multi-select works with Shift+arrow and Ctrl+click as in the standard Qt tree behaviour. The selection model is preserved across `setModel` calls so the highlighted row survives a tree refresh.
@@ -295,7 +295,7 @@ for the chore plan.
 
 ### Main window — results tree double-click
 
-- **Entry point:** `TreeController` double-click dispatcher — [tree_controller.py](../app/views/handlers/tree_controller.py) (dispatcher added in [PR #198](https://github.com/jackal998/photo-manager/pull/198)).
+- **Entry point:** `TreeController` double-click dispatcher — [tree_controller.py](../app/views/components/tree_controller.py) (dispatcher added in [PR #198](https://github.com/jackal998/photo-manager/pull/198)).
 - **Trigger:** User double-clicks a row in the main result tree.
 - **Behaviour:** **File row** → opens the file in the OS default viewer (`QDesktopServices.openUrl`). **Group header row** → toggles expand/collapse for that group. Qt's built-in `setExpandsOnDoubleClick` is disabled so the toggle path doesn't race the default expansion behaviour.
 - **Conditions / variants:** The OS-spawn branch for files is layer-1 covered only — spawning a real viewer has no deterministic close-trigger across image apps. The Open Folder cascade is shared with the context menu via [app/views/handlers/file_opener.py](../app/views/handlers/file_opener.py).
@@ -306,7 +306,7 @@ for the chore plan.
 
 ### Main window — sort persistence within session
 
-- **Entry point:** Header-click handler — `MainWindow._on_header_clicked` ([app/views/main_window.py:806](../app/views/main_window.py#L806)) stashes `(logical_index, order)` on the `TreeController`. `TreeController.refresh_model` ([tree_controller.py:225](../app/views/handlers/tree_controller.py#L225)) replays the stashed state on every model rebuild.
+- **Entry point:** Header-click handler — `MainWindow._on_header_clicked` ([app/views/main_window.py:842](../app/views/main_window.py#L842)) stashes `(logical_index, order)` on the `TreeController`. `TreeController.refresh_model` ([tree_controller.py:225](../app/views/components/tree_controller.py#L225)) replays the stashed state on every model rebuild.
 - **Trigger:** User clicks a column header to change sort field/direction.
 - **Behaviour:** Within the session, the chosen sort survives every model rebuild — a File → Open Manifest, a decision change, an execute run — without reverting to defaults. Within-group rows always sort by score descending first (the keep-worthiness ranking), with the user's column sort layered on top.
 - **Conditions / variants:** The across-launch surface (writing the sort state to `window_state.ini` so a fresh process restores it) is **not** implemented today — sort resets on app restart. Tracked separately from the within-session persistence.
