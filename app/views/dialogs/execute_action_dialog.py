@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
+from app.views.components.status_messages import report_count
 from app.views.constants import (
     COL_GROUP,
     COL_NAME,
@@ -432,6 +433,17 @@ class ExecuteActionDialog(QDialog):
             except Exception as exc:
                 logger.warning("Failed to persist lock state: {}", exc)
         self._refresh_ui_after_decision_change()
+        # #318 — match the main-window route's confirmation. Without
+        # this emit, single-row Lock/Unlock from the Execute Action
+        # dialog left the status bar at its prior baseline.
+        if self._status_reporter is not None:
+            report_count(
+                self._status_reporter,
+                t("file_op.locked_verb") if locked else t("file_op.unlocked_verb"),
+                1,
+                t("file_op.noun_row_singular"),
+                t("file_op.noun_row_plural"),
+            )
 
     def _set_decision(self, path: str, decision: str) -> None:
         if decision == LOCK_SENTINEL:
@@ -487,6 +499,11 @@ class ExecuteActionDialog(QDialog):
                     rec.user_decision = decision
                     break
         self._refresh_ui_after_decision_change()
+        # #318 — match the main-window route's confirmation.
+        if self._status_reporter is not None:
+            self._status_reporter.show_status(
+                t("file_op.decision_set_status", decision=decision)
+            )
 
     def _row_is_locked(self, path: str) -> bool:
         for group in self._groups:
@@ -556,6 +573,16 @@ class ExecuteActionDialog(QDialog):
                 logger.warning("Failed to sync removed paths to manifest: {}", exc)
         self.removed_from_list_paths.extend(paths)
         self._refresh_ui_after_decision_change()
+        # #318 — match the main-window route's confirmation
+        # (set_locked_state's report_count pattern, file_operations.py).
+        if self._status_reporter is not None and paths:
+            report_count(
+                self._status_reporter,
+                t("status.verb_removed"),
+                len(paths),
+                t("status.noun_item_from_list_singular"),
+                plural=t("status.noun_item_from_list_plural"),
+            )
 
     # ------------------------------------------------------------------ set action by regex
 
@@ -696,6 +723,19 @@ class ExecuteActionDialog(QDialog):
                 except Exception as exc:
                     logger.warning("Failed to persist lock state: {}", exc)
             self._refresh_ui_after_decision_change()
+            # #318 — match the main-window route's bulk-lock
+            # confirmation. The bulk path is higher-friction than the
+            # single-row paths because there's no per-row visible
+            # feedback for which N rows just got the flag flip.
+            if self._status_reporter is not None and lock_batch:
+                report_count(
+                    self._status_reporter,
+                    t("file_op.locked_verb") if target_locked
+                    else t("file_op.unlocked_verb"),
+                    len(lock_batch),
+                    t("file_op.noun_row_singular"),
+                    t("file_op.noun_row_plural"),
+                )
             return
 
         # Bulk regex remove behaves like bulk regex delete/keep —
