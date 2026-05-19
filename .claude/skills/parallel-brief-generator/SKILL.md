@@ -40,6 +40,28 @@ the orchestrator. Single-task input is valid; the cross-bundle
 steps (collision check, slot pre-assignment) are no-ops at N=1, but
 the research and brief-template benefits still apply.
 
+## Skill layout — manager + on-demand resources
+
+This SKILL.md is the **manager** (Anthropic's documented pattern
+per [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills)).
+It coordinates the workflow but does not carry the bulky content
+that goes INTO each emitted brief. Two sibling resource files
+hold that content; the orchestrator `Read`s them only at the step
+that needs them:
+
+- **[brief-template.md](brief-template.md)** — the canonical
+  template the orchestrator emits per task (pre-flight,
+  task-spec, conventions, PR workflow with all three gates,
+  cleanup). Loaded in Step 3 below; substitute placeholders, wrap
+  in `~~~~`, emit.
+- **[pm-reminders.md](pm-reminders.md)** — photo-manager-specific
+  content to bake into each brief: the three-gate breakdown
+  (qa_scenario_guard, docs_guard's two triggers, news-gate),
+  the behavioural-modify pre-staging rule, the pattern-PR
+  cross-check, scanner-side gotchas. Loaded in Step 3.
+
+Anti-patterns and orchestrator-side guidance stay here in SKILL.md.
+
 ## When to use vs when to skip
 
 Trigger phrases that should activate this skill:
@@ -180,155 +202,53 @@ Each brief is **fully self-contained**. The cold session has no
 memory of this conversation; everything it needs must be in its
 brief.
 
-**Fence-delimiter rule when you emit briefs** — wrap each brief in
-a tilde fence (`~~~~`), NOT a backtick fence. Briefs routinely
-contain unindented triple-backtick code blocks (the cold session's
-cleanup snippets, repro commands, etc.), and Claude Code's
-markdown renderer treats a nested ``` as a premature close even
-inside a quad-backtick outer fence — earlier briefs rendered
+**Load the resource files now**:
+
+1. `Read` [brief-template.md](brief-template.md) — gets the
+   canonical template into context with all the placeholders
+   (`<base-sha-noted-by-orchestrator>`, `<your-branch>`, etc.) and
+   the full PR-workflow step list including the three gates and
+   step 8b (news fragment).
+2. `Read` [pm-reminders.md](pm-reminders.md) — gets the
+   photo-manager-specific guidance: which gates each task's scope
+   will trigger, the behavioural-modify pre-staging rule, the
+   pattern-PR cross-check, scanner-side gotchas.
+
+For each task:
+
+- Substitute every `<placeholder>` in the template with the
+  task-specific content from Steps 1–2 (issue summary, files in
+  scope / NOT in scope, slot, branch slug, acceptance).
+- Apply the pm-reminders relevant to the task's scope:
+  - **Universal**: name the three gates the cold session may hit
+    (already in the template's step 8).
+  - **If MODIFIED `app/views/{dialogs,handlers}/*.py` is
+    in-scope**: apply the behavioural-modify pre-staging rule —
+    name the trigger explicitly in the Acceptance section AND
+    pre-write either the features.md action or
+    `[docs-not-needed: <reason>]` into the `<body>` placeholder.
+  - **If citing a prior-art PR**: run the pattern-PR cross-check
+    (PR-X's files in the same gated subdir? if not, don't claim
+    its pattern transfers wholesale).
+  - **If scope touches `scanner/`**: bake in the scanner-side
+    gotchas (`read_result_rows` y_min=600, trailing periods,
+    Live Photo clusters).
+  - **If scope adds qa scenarios**: name s13 / s36 as destructive
+    if extending recycle-bin coverage.
+
+**Fence-delimiter rule when you emit briefs** — wrap each
+brief in a tilde fence (`~~~~`), NOT a backtick fence. Briefs
+routinely contain unindented triple-backtick code blocks (the cold
+session's cleanup snippets, repro commands, etc.), and Claude
+Code's markdown renderer treats a nested ``` as a premature close
+even inside a quad-backtick outer fence — earlier briefs rendered
 "invisible" past the first nested block. Tilde fences are a
 different fence character entirely, so any inner ``` is
-unambiguously content. (The template below is shown inside a
-backtick fence for skill readability — but when you OUTPUT each
-brief to the user, wrap with `~~~~`.) Template structure:
-
-```
-You are working on photo-manager issue(s) #<N> in a fresh Claude Code
-desktop session. If the user opened this session with the
-"create worktree" option enabled, you're in your own auto-worktree
-under `.claude/worktrees/<your-session-name>/` — isolated from any
-other sessions. If the option was off, you share the current
-checkout — fine for sequential work, risky for true parallel work.
-
-The orchestrator session that generated this brief is independent;
-you have no visibility into it or into any sibling sessions, and
-they have none into you.
-
-## Pre-flight — verify before touching code
-
-  - [ ] `git status -sb` — should be clean. If not, ask user.
-  - [ ] `git rev-parse HEAD` — should be `<base-sha-noted-by-orchestrator>`
-        (or ahead via origin fetch). If behind, ask user.
-  - [ ] `test -f .claude/settings.json` — must exist. If missing,
-        `.worktreeinclude` isn't carrying it; STOP and tell user
-        before doing anything else (hooks won't fire).
-  - [ ] `ls qa/scenarios/<your-pre-assigned-slot>_*.py` — should be
-        empty (slot is yours). If a file already exists there, slot
-        was contested; ask user how to renumber.
-
-## Your task
-
-Issue: <one-paragraph summary including the user-visible problem>
-
-Files in scope:
-  - <path:line> — <what to change>
-  - <path:line> — <what to change>
-
-Files NOT in scope (other cold sessions own these — touching them
-will cost a rebase at PR-merge time):
-  - <path> — owned by sibling session doing #<M>
-  - <path> — owned by sibling session doing #<P>
-
-Pre-assigned scenario slot: <sNN> (if you add a new layer-3 scenario)
-Suggested branch: <prefix>/<slug>
-
-Acceptance:
-  - <test-layer requirements, e.g. layer-1 + layer-3 scenario>
-  - <coverage floor, e.g. 70% per-file on every file touched>
-  - <docs that must update if applicable>
-  - <any task-specific gotchas>
-
-## Project conventions (non-negotiable)
-
-  - Python — the venv lives at the **main repo root**, not inside the
-    worktree. From inside a worktree (cwd is
-    `.../<repo>/.claude/worktrees/<name>/`) the correct path is
-    `../../../.venv/Scripts/python.exe`. From a normal checkout it's
-    `.venv/Scripts/python.exe`. Don't burn turns trying both — pick
-    based on `pwd`. (System Python lacks PySide6.)
-  - Branch off `<base-ref>` at SHA `<base-sha>`.
-  - No `--no-verify` under any circumstances.
-  - No mock-driven test padding — every assertion must catch a real
-    user-visible bug. (`CLAUDE.md` "Testing hard floor" applies.)
-  - Bridge pattern: if you add a new method on a handler class
-    surfaced via the main-window context menu, also add the proxy on
-    `ActionHandlersImpl` (`feedback_action_handlers_bridge` in
-    auto-memory).
-
-## Workflow through PR
-
-In every command below, **PY** is the venv python — from a worktree
-that's `../../../.venv/Scripts/python.exe`, from a normal checkout
-it's `.venv/Scripts/python.exe`. Resolve once at the start of your
-session, then reuse.
-
-  1. `git checkout -b <your-branch>` (your worktree starts on master).
-  2. Implement the change.
-  3. `PY -m pytest` — must pass.
-  4. `PY scripts/check_coverage_per_file.py` — 70% per-file floor on
-     every file touched.
-  5. If you added a new layer-3 scenario, run it:
-     `PY -m qa.scenarios._batch <sNN>_<name>`
-  6. Commit with conventional-commit message + `Closes #<N>` trailer
-     + `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
-  7. **Gated:** surface push intent to user, on approval
-     `git push -u origin <your-branch>`.
-  8. **Gated:** surface PR-create intent, on approval
-     `gh pr create --title "<title>" --body "<body>"`. Hooks
-     (`qa_scenario_guard`, `docs_guard`) will fire — if blocked,
-     surface the hook message and decide with user:
-       a) hand-fix and retry
-       b) bypass with `[qa-not-needed: <reason>]` or
-          `[docs-not-needed: <reason>]` in the gh command
-       c) skip this branch
-  9. Capture PR URL, report to user.
-
-## Cleanup — after the PR merges
-
-The cold session that did the work (this one, or any future session
-opened against the same worktree) is responsible for cleanup. The
-orchestrator never does it. Workflow:
-
-1. Confirm the merge landed — proves the work is preserved before
-   you delete anything:
-   ```
-   git fetch --prune origin
-   git log origin/master --grep="#<N>" --oneline | head -3
-   ```
-   If nothing matches, STOP — the PR may have been closed without
-   merge, or you're looking at the wrong issue. Don't delete.
-
-2. Check the remote branch — GitHub usually auto-deletes on merge:
-   ```
-   git ls-remote --heads origin <your-branch>
-   ```
-   Empty output means GitHub already cleaned it up. If a SHA prints,
-   the remote branch survived — **gated:** surface intent, on
-   approval `git push origin --delete <your-branch>`.
-
-3. Delete the local branch. You can't delete the branch that's
-   currently checked out in your worktree, so detach HEAD first:
-   ```
-   git checkout --detach HEAD
-   git branch -D <your-branch>
-   ```
-   Use `-D` (force) because upstream is `gone` after merge (or after
-   step 2), which makes `-d`'s upstream-merge check unresolvable.
-   Work IS preserved on origin/master per step 1, so `-D` is safe —
-   **gated:** surface intent briefly before running per CLAUDE.md.
-
-4. Remove the worktree itself. This step has to run from the MAIN
-   repo, not from inside the worktree — you can't remove your own
-   cwd. Tell the user; they run from the main checkout:
-   ```
-   git worktree remove .claude/worktrees/<your-session-name>
-   ```
-   Or right-click the session in the desktop sidebar → Delete.
-```
+unambiguously content.
 
 ### Step 4 — Hand briefs to user
 
-Output each brief in its own clearly-labeled code block. Tell the
+Output each brief in its own clearly-labeled section. Tell the
 user the desktop flow:
 
 > Open Claude Code desktop → click **+ New session** in the sidebar →
@@ -395,24 +315,35 @@ from here; they own their work end-to-end.
   after a brief listed issue #245 as a PR in a "5 recent clean PRs"
   sample set; the executing session caught the mismatch in-band
   and substituted PR #255, but burned context doing it.
-
-## Photo-manager-specific reminders to bake into every brief
-
-- **Hooks gating `gh pr create`** — `qa_scenario_guard` blocks PRs
-  that change `app/views/{handlers,dialogs,components,workers}/`
-  without a `qa/scenarios/sNN_*.py` change. `docs_guard` blocks PRs
-  that add new modules under `app/`, `infrastructure/`, `scanner/`,
-  `core/services/` (or new tests, or qa-scenario changes) without
-  touching `README.md` / `docs/*.md` / `CLAUDE.md` / `pyproject.toml`.
-- **`read_result_rows` is broken on CI** — has a `y_min=600` filter
-  that drops all rows on the smaller CI render. Use sqlite reads
-  (pattern: s14, s32, s35) for tree-content assertions.
-- **Trailing-period Windows paths**, **Live Photo pair-clusters**,
-  **case-insensitive pathlib** — these are scanner-side gotchas;
-  only bake into briefs whose scope touches `scanner/`.
-- **Destructive QA scenarios** — `s13`, `s36` send real files to the
-  recycle bin per run. Do NOT extend destructive coverage without
-  explicit user agreement.
+- **Omitting the news-fragment step from the workflow.** The
+  `news-gate` CI workflow runs on every PR and fails when no
+  `news/<PR#>.<type>` is added. It is a CI workflow, not a
+  PreToolUse hook — so it doesn't surface in the gh pr create
+  output and a brief that lists only the local hooks
+  (`qa_scenario_guard`, `docs_guard`) misses it. Cold session pays
+  for the omission with a failed CI run + amendment commit. Filed
+  via [#311](https://github.com/jackal998/photo-manager/issues/311).
+  Always include step 8b (post-PR news fragment) in the brief
+  template — the canonical template in brief-template.md has it.
+- **Treating `docs_guard` as a single trigger.** The hook has
+  two: a coarse new-file trigger (any doc touch satisfies) and a
+  strict behavioural-modify trigger on `app/views/{dialogs,handlers}/`
+  MODIFIED files (only `docs/features.md` satisfies). A brief that
+  says "docs_guard fires on the new tests — docs/testing.md update
+  satisfies it" for a task editing handler files is wrong on both
+  counts: docs_guard fires on the SOURCE file location not the
+  test, and docs/testing.md doesn't satisfy the strict trigger.
+  Filed via [#312](https://github.com/jackal998/photo-manager/issues/312).
+  See pm-reminders.md for the precise predicates and the pre-staging
+  rule.
+- **Inlining brief-template.md or pm-reminders.md content into
+  SKILL.md.** This SKILL.md is intentionally thin (the manager
+  layer). Bulk content lives in the sibling resource files and is
+  loaded on-demand. Inlining defeats the on-demand load Anthropic's
+  skill docs argue for and brings the recurring per-session
+  context cost back. If you find yourself wanting to add 50 lines
+  of brief content here, you almost certainly want to add them to
+  one of the resource files instead.
 
 ## Output shape — what the orchestrator's final message looks like
 
@@ -458,8 +389,11 @@ Done. Open Claude Code desktop → + New session × N → Select folder
 1. User: high-level intent — "fan out X, Y, Z" / "brief #N" / "prep
    a session to do …".
 2. Orchestrator researches each task (`gh issue view`, Read/Grep),
-   runs pre-flight (steps 1–3 of this skill).
-3. Orchestrator outputs N briefs + collision report.
+   runs pre-flight (Steps 1–2 of this skill).
+3. Orchestrator `Read`s [brief-template.md](brief-template.md) and
+   [pm-reminders.md](pm-reminders.md), composes N briefs by
+   substituting placeholders + applying the scope-relevant
+   reminders, emits each wrapped in `~~~~`.
 4. User opens N "+ New session" windows (or fewer, or one — N is
    the user's call) — enabling the worktree option for parallel
    work — and pastes briefs in as first messages.
