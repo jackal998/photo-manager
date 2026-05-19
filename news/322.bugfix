@@ -1,0 +1,1 @@
+Extend the "Decision set" status-bar confirmation in the Execute Action dialog from the bulk-regex destructive branch (#316/#317) to every other decision-changing path: single-row right-click lock/unlock, single-row right-click decision-set, multi-row remove-from-list, and bulk-regex lock (#318).
