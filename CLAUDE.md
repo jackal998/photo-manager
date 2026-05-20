@@ -93,6 +93,75 @@ If a gate fires mid-task:
 3. Wait for "yes" before continuing
 4. Don't roll back unless I ask
 
+## Team mode discipline
+
+Anthropic's experimental Agent Teams feature is opt-in per
+`/pr-review` invocation. When team mode is enabled the LEAD session
+spawns up to three teammates from `.claude/agents/` to apply the
+pr-review gates in parallel:
+
+- `docs-reviewer` — Gates 2+3 (features.md drift, qa scenario coverage)
+- `app-security-reviewer` — Gate 7 (app-level security patterns)
+- `quality-reviewer` — Gates 8+9+10 (migrations, scanner perf, test padding)
+
+The discipline below applies whenever team mode is active.
+
+### Security gates still belong to LEAD
+
+A teammate's recommendation does **not** satisfy the per-action "yes"
+gate. The Security gates list above applies unchanged: even if all
+three teammates report CLEAN, LEAD must still surface and get
+explicit "yes" before `git push`, `gh pr *`, `gh issue create`, or
+any install. Teammates are evidence-producers, not decision-makers.
+
+### Only LEAD writes to remotes
+
+Each teammate's permission constraints block remote-write and
+install commands. If a teammate suggests a change that would require
+one of these actions, it describes the action in findings — LEAD
+decides whether to surface the gate and ask. Teammates never:
+
+- run `git push` / `git reset --hard` / `git rebase` / anything that
+  writes to a remote
+- run `gh pr *` / `gh issue *` / `gh api .../reviews` (with or
+  without `event`) — including the `-pending` and `-submitted` review
+  posting that's auto-approved for LEAD
+- run `pip install` / `npm install` / `git clone <url>`
+- modify source files, tests, hooks, settings, or docs in-place
+
+### Team mode is opt-in per invocation
+
+The default `/pr-review` mode is single-session. Team mode is
+explicit (user types something like "/pr-review team" or the calling
+context enables it). Token cost is roughly 4× single-session for a
+three-teammate run, so team mode should decline on small PRs (≤5
+behaviour-bearing files OR ≤300 diff lines) and on PRs whose Gate 1
+classifier short-circuits to CLEAN.
+
+### Project agents shadow user-level — use distinct names
+
+Project `.claude/agents/<name>.md` definitions shadow user-level
+`~/.claude/agents/<name>.md` of the same name. To avoid silent
+shadow, the project's security teammate is named
+`app-security-reviewer` (not `security-reviewer`) — the user-level
+generic-OWASP `security-reviewer` remains unshadowed and reachable
+for ad-hoc invocations.
+
+### Hook wiring (one-time, per machine)
+
+`.claude/settings.json` (gitignored) is where team-event hooks are
+wired. The three new scripts ship in
+`scripts/hooks/team_task_{created,completed}.py` and
+`scripts/hooks/team_teammate_idle.py`. Their stdin/exit-code contract
+matches the existing `qa_scenario_guard.py` / `docs_guard.py` pattern.
+The Agent-Teams event-name and payload schema is not yet documented
+upstream at the time these scripts ship — they sniff known key paths
+and fail open on unrecognised shapes, so they are safe to wire in
+advance. Wire them once Claude Code's team-event dispatch is
+confirmed (a teammate spawn followed by a TaskCreate / TaskUpdate
+should fire the corresponding script; verify with a smoke test
+before enforcing).
+
 ## Testing ground rules — non-negotiable
 
 The full testing strategy lives in [`docs/testing.md`](docs/testing.md);
