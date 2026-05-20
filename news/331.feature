@@ -1,0 +1,1 @@
+Add `researcher-agent` — read-only 3-angle investigator (impact map, history, test coverage) that spawns parallel sub-investigations and returns a structured research brief with complexity score and recommended workflow; first component of the `/work` meta-orchestrator pipeline.
