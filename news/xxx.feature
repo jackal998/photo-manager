@@ -1,0 +1,1 @@
+Add `/work` universal task entry point — accepts any trigger (issue number, free text, branch name, or nothing), spawns researcher-agent for 3-angle investigation, presents complexity-scored plan for human approval, then routes to the right coordination mode (single-session, dev subagent with worktree isolation, or /pr-review team).

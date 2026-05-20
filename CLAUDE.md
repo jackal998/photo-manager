@@ -279,7 +279,7 @@ Skills live in two homes, split by trust level:
   `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
   `qa-explore/`, `qa-scenario-drift/`, `scanner-perf-patterns/`,
   `skill-pii-audit/`, `sqlite-migration-safety/`,
-  `test-padding-patterns/`, `update-docs/`. New project skills
+  `test-padding-patterns/`, `update-docs/`, `work/`. New project skills
   land here.
 
   `/pr-review` runs the semantic-content review the file-touch
