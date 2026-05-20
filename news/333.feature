@@ -1,0 +1,1 @@
+Add `developer-agent` and `qa-agent` — worktree-isolated implementation agent (Write/Edit/Bash, self-corrects up to 2 test-failure rounds, returns structured completion report) and read-only validation agent (runs targeted + full test suite, checks acceptance criteria and coverage gaps, returns PASS/FAIL with actionable details for next dev iteration).
