@@ -1,0 +1,1 @@
+Wire team-mode opt-in branch into `/pr-review` skill — `/pr-review team` spawns `docs-reviewer` (Gates 2+3), `app-security-reviewer` (Gate 7), and `quality-reviewer` (Gates 8+9+10) as parallel teammates; LEAD retains Gates 0, 1, 4, 5, 6, 11 and the post-back; auto-declines on ≤5 behaviour-bearing files or ≤300 diff lines.

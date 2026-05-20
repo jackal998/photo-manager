@@ -51,6 +51,8 @@ before or during the chat report.
 ```
 /pr-review                   # current branch vs origin/master
 /pr-review <PR-number>       # `gh pr diff <N>`
+/pr-review team              # current branch, team mode (parallel gate execution)
+/pr-review <PR-number> team  # PR number, team mode
 ```
 
 The skill reads:
@@ -109,6 +111,142 @@ logic) that handles it:
 Composition depth = 2 at most. If a gate's condition does NOT
 fire, skip its handler entirely — don't load the sub-skill, don't
 emit its section in the output.
+
+## Team mode (opt-in)
+
+Invoke with the `team` keyword to run the parallelisable gate
+lanes (2+3, 7, 8+9+10) as separate Claude Code teammates instead
+of sequentially in the same session. LEAD still owns the inline
+gates and the post-back.
+
+```
+/pr-review team              # current branch
+/pr-review <PR-number> team  # against an existing PR
+```
+
+### Auto-decline
+
+Team mode is **automatically skipped** (falls back to
+single-session, no message needed) when Gate 1 classifies:
+
+- **≤ 5 behaviour-bearing files**, OR
+- **≤ 300 diff lines** (additions + deletions from `--stat`)
+
+Rationale: three-teammate run costs roughly **4× single-session**.
+Small PRs don't justify the overhead.
+
+### Gate delegation
+
+| Who | Gates owned | Teammate name |
+|---|---|---|
+| **LEAD** | 0, 1, 4, 5, 6, 11 + post-back | — |
+| **docs-reviewer** | 2 + 3 | `docs-reviewer` |
+| **app-security-reviewer** | 7 | `app-security-reviewer` |
+| **quality-reviewer** | 8 + 9 + 10 | `quality-reviewer` |
+
+Gates 2+3 are co-assigned to the same teammate because Gate 3
+chains on Gate 2's match list. The docs-reviewer runs both in
+sequence before sending its `SendMessage` reply.
+
+### Team mode execution order
+
+1. **Resolve diff + Gate 0** (inline) — task alignment before
+   touching the Teams API.
+2. **Gate 1** (inline) — run the behaviour-bearing classifier.
+   Apply auto-decline now. If declined, continue single-session.
+3. **Token-cost note** — before spawning, print:
+   ```
+   note: team mode active (~4× single-session).
+   Spawning: docs-reviewer (Gates 2+3), app-security-reviewer
+   (Gate 7), quality-reviewer (Gates 8+9+10).
+   ```
+4. **TeamCreate**:
+   ```python
+   TeamCreate(name="pr-review-<branch-short>")
+   ```
+   Use the first 12 characters of the branch name as
+   `<branch-short>` (hyphens preserved, slashes stripped).
+5. **Spawn teammates** — three `Agent` calls in a single message
+   so they start in parallel:
+   ```python
+   Agent(team_name="pr-review-<branch-short>",
+         name="docs-reviewer",        subagent_type="docs-reviewer")
+   Agent(team_name="pr-review-<branch-short>",
+         name="app-security-reviewer", subagent_type="app-security-reviewer")
+   Agent(team_name="pr-review-<branch-short>",
+         name="quality-reviewer",     subagent_type="quality-reviewer")
+   ```
+6. **Create tasks** — one `TaskCreate` per teammate. Subjects must
+   match the allowlist in `scripts/hooks/team_task_created.py`:
+   ```
+   docs-reviewer       → "Gates 2+3: features.md and qa scenario coverage"
+   app-security-reviewer → "Gate 7: app-level security review"
+   quality-reviewer    → "Gates 8+9+10: migration / perf / test review"
+   ```
+7. **LEAD runs its own gates in parallel** while teammates work:
+   Gates 4, 5, 6, 11. Load their sub-skills as normal.
+8. **Collect teammate findings** — each teammate `SendMessage`s
+   LEAD with a structured reply (see "Findings aggregation" below).
+   If a teammate is silent for the remainder of the session, log
+   the gap and continue with whatever was received — never block
+   on a missing reply.
+9. **Aggregate** — fold teammate findings into the standard output
+   template alongside LEAD's own results. Section headings are
+   unchanged; only the executor differs.
+10. **Shut down teammates** — send `{"type": "shutdown_request"}`
+    via `SendMessage` to each teammate; wait for
+    `shutdown_approved` + `teammate_terminated` system messages.
+11. **TeamDelete** after all terminations confirmed:
+    ```python
+    TeamDelete(name="pr-review-<branch-short>")
+    ```
+12. **Post-back** (Mode A or B) — unchanged; LEAD owns the
+    post-back.
+
+### Findings aggregation protocol
+
+Each teammate sends a `SendMessage` reply in this shape:
+
+```
+SUMMARY: N findings
+
+## <Gate section heading>
+<findings lines using ✗ / ⚠ / ℹ️ / note: icons>
+```
+
+Aggregation rules:
+
+- `SUMMARY: 0 findings — CLEAN` contributes no section to the
+  output.
+- Findings are inserted verbatim into the matching output
+  template sections (same headings as the composition graph).
+- LEAD's inline gate findings are ordered by gate number
+  (0 → 4 → 5 → 6 → 11), not by arrival time.
+- A gate whose trigger did NOT fire on this diff contributes no
+  task and no section — don't spawn a teammate for gates that
+  don't apply.
+- Severity precedence is unchanged: ✗ > ⚠ > ℹ️ > note. The
+  final Verdict is computed from the full aggregated set.
+
+### Known limits (as of 2026-05-20)
+
+- **Event schema unverified.** `TeammateIdle`, `TaskCreated`,
+  `TaskCompleted` payloads are not yet documented by Anthropic.
+  Hook scripts in `scripts/hooks/` are fail-open on unrecognised
+  shapes — they won't block team operation, but their signals may
+  not arrive as expected.
+- **Permission prompts.** Teammate prompts surface to the same
+  terminal as LEAD. A stalled prompt may freeze the pipeline; the
+  `TeammateIdle` hook (`scripts/hooks/team_teammate_idle.py`) logs
+  teammates idle > 180 s so operators can inspect.
+- **Agent definition hot-load.** Whether `.claude/agents/`
+  definitions are picked up without a session restart is
+  unverified on the current CLI build. If a spawn fails with an
+  unknown-agent error, restart the Claude Code session.
+- **`/qa-explore` isolation.** Each teammate inherits LEAD's
+  working directory. Running `/qa-explore` inside a teammate is
+  deferred until per-teammate `PHOTO_MANAGER_HOME` isolation is
+  available — track in a follow-up issue at PR 2 merge.
 
 ## How to apply the rubric
 
