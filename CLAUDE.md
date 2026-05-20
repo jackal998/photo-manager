@@ -273,7 +273,7 @@ Skills live in two homes, split by trust level:
 - **Project skills** — `.claude/skills/<name>/` — tracked in git,
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
-  `app-security-patterns/`, `conventional-comments/`,
+  `agentic-engineering/`, `app-security-patterns/`, `conventional-comments/`,
   `docs-features-drift/`, `github-pr-review-fetch/`,
   `github-pr-review-pending/`, `github-pr-review-submitted/`,
   `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
