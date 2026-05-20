@@ -112,6 +112,12 @@ settings.local.json
 # PII checklist.
 .claude/skills/personal/
 
+# Runtime log written by scripts/hooks/team_teammate_idle.py when an
+# Agent-Teams teammate stays idle past the warning threshold. It's a
+# per-machine diagnostic, not a tracked artifact — operators grep it
+# locally to spot dropped task assignments.
+.claude/team_idle.log
+
 # Window geometry / splitter state — written by MainWindow.closeEvent on
 # every clean exit. Anchored under PHOTO_MANAGER_HOME (or repo root) so
 # the QA scenario can isolate from the user's real install; never
