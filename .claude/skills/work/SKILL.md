@@ -24,7 +24,7 @@ Before spawning anything, classify the input:
 |---|---|
 | `#N` or `#N #M …` | `gh issue view N --json number,title,body,labels,state` for each |
 | Quoted string | Treat as intent — grep codebase for related files |
-| `feature/…` or `fix/…` or any branch name | `git diff origin/master...<branch> --stat` + `gh pr list --head <branch>` |
+| `feature/…` or `fix/…` or any branch name | **Short-circuit: skip Phases 1–3. Run `/pr-review <branch>` directly.** (Use `git diff origin/master...<branch> --stat` only to confirm the branch exists.) |
 | Nothing | `gh issue list --assignee @me --state open --limit 5` + `git branch --show-current` |
 
 If multiple issues: fan-out to one researcher-agent invocation per
@@ -155,10 +155,13 @@ Execute the approved workflow. Route based on complexity score:
    - Hard limit: 4 iterations. On 4th `FAIL`, stop and surface to human:
      "QA failed after 4 attempts — remaining issues: <list>."
 
-4. **Merge dev worktree into LEAD's branch:**
+4. **Merge dev worktree into LEAD's branch** *(gated — surface before running):*
    ```bash
    git merge <worktree-branch>   # or cherry-pick if cleaner
    ```
+   Per CLAUDE.md security gates, `git merge` modifies local state and
+   requires an explicit "yes" from the user before running. Surface:
+   "Merging branch `<name>` into current branch — proceed?"
 
 5. Run `/pr-review team` if diff qualifies (> 5 behaviour-bearing files
    or > 300 lines); otherwise `/pr-review` single-session.

@@ -21,6 +21,24 @@
             "command": ".venv/Scripts/python.exe scripts/hooks/zombie_check.py"
           }
         ]
+      },
+      {
+        "matcher": "TaskCreate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".venv/Scripts/python.exe scripts/hooks/team_task_created.py"
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".venv/Scripts/python.exe scripts/hooks/team_task_completed.py"
+          }
+        ]
       }
     ]
   },

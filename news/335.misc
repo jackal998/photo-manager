@@ -1,0 +1,1 @@
+Patch audit gaps in /work pipeline: wire team-event hooks in settings.json.example, add security gate reminder to git merge step, document pipeline agents in CLAUDE.md, and short-circuit branch input directly to /pr-review.
