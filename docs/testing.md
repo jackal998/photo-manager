@@ -388,7 +388,7 @@ soft-probe upgrade path lives if applicable.
 | `test_probe_similarity_column_emits_at_most_one_ref_per_group` | At most one row per group renders as "Ref"; siblings fall back to similarity % or "—" sentinel | PASS | Forward-defensive against [#241](https://github.com/jackal998/photo-manager/issues/241) recurring |
 | `test_probe_no_execute_mode_toggle_in_menu` | `menu_controller.py` no longer registers an `execute_mode` action | PASS | Forward-defensive against [#240](https://github.com/jackal998/photo-manager/issues/240) recurring |
 | `test_probe_action_handlers_impl_proxies_every_protocol_method` | Every method on `ActionHandlers` Protocol exists on `ActionHandlersImpl` | PASS | Future #175/#182-class bridge regression |
-| `test_probe_manifest_dependent_menu_actions_are_gated` | Every menu action that requires a loaded manifest is in `MANIFEST_ACTIONS` | XFAIL | [#244](https://github.com/jackal998/photo-manager/issues/244) |
+| `test_probe_manifest_dependent_menu_actions_are_gated` | Every menu action that requires a loaded manifest is in `MANIFEST_ACTIONS` | PASS | Forward-defensive against [#244](https://github.com/jackal998/photo-manager/issues/244) recurring |
 | `test_probe_zh_tw_translations_are_not_english_passthroughs` | zh_TW values that match en values must contain CJK chars (heuristic; tiny exempt list for product names) | PASS | Forward-defensive against [#245](https://github.com/jackal998/photo-manager/issues/245) recurring |
 | `s49` `step: verify_visual_selection_of_keeper` (hard live) | After scan-complete with auto-select on, the tree's selection model contains the keeper rows | PASS | Forward-defensive against [#239](https://github.com/jackal998/photo-manager/issues/239) recurring |
 | `qa/probes/field_dropdown_inventory.py` (live exploration) | Result-tree column headers == Set-Action-by-Field/Regex dialog field dropdown items | PASS | Forward-defensive against [#238](https://github.com/jackal998/photo-manager/issues/238) recurring at the runtime UIA layer (the layer-1 probe pins source-level invariant; this probe verifies the running app actually exposes the dropdown the user sees) |
@@ -412,6 +412,197 @@ after changes that affect the relevant surface
 sessions. Wiring into CI is deferred until the probe count grows
 enough to justify a batch runner — see [#243](https://github.com/jackal998/photo-manager/issues/243)
 and its follow-up issues.
+
+---
+
+## Probe layer — authoring a new probe
+
+### When to add a probe
+
+**Rule of thumb:** the bug class bit once and could plausibly recur across a different surface.
+
+A probe targets a *structural invariant* — a relationship between two parts of the codebase that must stay in sync. If you can describe the bug as "A grew without updating B" or "callsite X stopped passing argument Y," that's a probe candidate, not a unit test.
+
+Each of the 7 existing probes owns a different drift class:
+
+| Pattern | Example bug |
+|---|---|
+| Field list grows without updating a dropdown | [#238](https://github.com/jackal998/photo-manager/issues/238) — Score / Lock / Resolution missing from Select dialog |
+| Callsite drops a required keyword argument | [#237](https://github.com/jackal998/photo-manager/issues/237) — `groups=` dropped, numeric panel hidden |
+| Within-group labeling emits more than one "Ref" | [#241](https://github.com/jackal998/photo-manager/issues/241) — Live Photo HEIC + MOV both labeled Ref |
+| Menu action added without gating on manifest-loaded | [#244](https://github.com/jackal998/photo-manager/issues/244) — `action_by_regex` enabled before manifest opens |
+| Bridge proxy not updated to match Protocol | [#175](https://github.com/jackal998/photo-manager/issues/175) / [#182](https://github.com/jackal998/photo-manager/issues/182) — menu item silently no-ops |
+| Translation key copy-pasted from en.yml | [#245](https://github.com/jackal998/photo-manager/issues/245) — zh_TW value is English passthrough |
+| Removed UI option reintroduced by accident | [#240](https://github.com/jackal998/photo-manager/issues/240) — Execute Mode toggle removed but probe guards the absence |
+
+If the bug fits this pattern: file the issue, then add a probe before or in the same PR as the fix. The probe lets the fix prove it works and the probe lives on as a forward-defensive guard.
+
+---
+
+### Probe flavours — pick one
+
+Three flavours exist. Pick the first one that reaches the invariant.
+
+**1 — Static probe** (`tests/test_ui_probes.py`)
+
+For source-level invariants you can verify by reading the AST or YAML.
+Runs as `pytest` in CI on every commit. Fastest, most reliable.
+
+When to use: callsite passes the right kwargs, list A ⊆ list B, string absent from file, class method set ⊇ Protocol method set, constant declared with expected members.
+
+**2 — Soft live probe** (extension block inside `qa/scenarios/sNN_*.py`)
+
+For runtime state only reachable via UIA — rendered selection, visible dropdown items, widget text after a live operation.
+Piggybacks on an existing scenario's app setup. Runs in the qa-batch CI shards.
+
+When to use: the invariant requires the app to be running and a UIA query to observe.
+
+**3 — Live exploration probe** (`qa/probes/<name>.py`)
+
+For invariants that scripted scenarios architecturally can't cover
+(e.g. tree column headers ↔ dialog dropdown diff, per-group label-count audit).
+Self-contained: launch → load fixture → inspect → exit non-zero on FAIL.
+Local run only — no CI wiring at v1.
+
+When to use: the invariant needs a live app but doesn't fit naturally into any existing scenario.
+
+---
+
+### Static probe — copyable skeleton
+
+```python
+@pytest.mark.xfail(strict=True, reason="Bug #NNN — remove marker when fix lands")
+def test_probe_<invariant_name>():
+    """One sentence: what structural relationship this probe checks.
+
+    Forward-defensive against #NNN recurring: describe what drifts and
+    what surface would break silently if left uncaught.
+    """
+    # Prefer AST text-parse over importing the module — see
+    # "Coverage-cascade warning" below.
+    src_path = REPO / "app" / "path" / "to_target.py"
+    tree = ast.parse(src_path.read_text(encoding="utf-8"))
+
+    collected: set[str] = set()
+    for node in ast.walk(tree):
+        # Walk ast.Assign AND ast.AnnAssign — see "Common pitfalls".
+        target_id: str | None = None
+        value_node = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target_id = node.targets[0].id
+            value_node = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target_id = node.target.id
+            value_node = node.value
+        if target_id != "MY_CONSTANT" or not isinstance(value_node, ast.Tuple):
+            continue
+        for elt in value_node.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                collected.add(elt.value)
+
+    assert collected, (
+        "Probe could not locate MY_CONSTANT in "
+        f"{src_path}. Did the declaration form or name change? "
+        "Update the AST walker to match."
+    )
+
+    _REQUIRED = {"entry_a", "entry_b"}
+    missing = _REQUIRED - collected
+    assert not missing, (
+        f"MY_CONSTANT is missing entries: {sorted(missing)}. "
+        f"See #NNN."
+    )
+```
+
+**Lifecycle:** when the fix lands, `strict=True` turns XPASS → CI red, forcing the PR to remove the `@pytest.mark.xfail` decorator. After the decorator is gone the probe lives on as a forward-defensive guard.
+
+---
+
+### Soft live probe — copyable skeleton
+
+Inside an existing `qa/scenarios/sNN_*.py`, immediately after the setup step whose state you want to inspect:
+
+```python
+# ---------- Probe #NNN: <one-line invariant description> ----------
+# Currently XFAIL: <what is broken today and why>.
+# Promote when fixed: swap the two commented lines below (print → failures.append).
+# The qa-batch "Detect probes ready for promotion" step greps qa-batch.log
+# for "probe_status: PASS" and fails the job — so this probe cannot survive
+# a merge after the target bug is closed.
+print("step: probe_nnn_<invariant_name>")
+observed = _some_uia_call(win)
+if not _invariant_holds(observed):
+    print(f"probe_status: XFAIL_KNOWN_BUG_NNN — {observed!r}")
+    # failures.append(f"#NNN invariant violated: {observed!r}")  # ← promote to this
+else:
+    print(f"probe_status: PASS — {observed!r}")
+    # ^ qa-batch greps for this line and fails the job when the bug is fixed.
+# ---------- end probe #NNN ----------
+```
+
+Once promoted (bug fixed, PR merges), collapse the entire block to the single `failures.append(...)` inside the regular assertion block.
+
+---
+
+### Forcing-function design
+
+Two mechanisms ensure probes never stagnate silently:
+
+**Static probes — `xfail(strict=True)`.**
+The moment the bug is fixed the probe emits XPASS. With `strict=True`, XPASS is a CI failure. The bug-fix PR cannot merge until the `@pytest.mark.xfail` decorator is removed.
+
+**Soft live probes — the "Detect probes ready for promotion" step.**
+The `qa-batch.yml` workflow greps `qa-batch.log` for `probe_status: PASS` after every shard. If any match is found, the step fails with: *"A soft probe is now passing — promote it to a hard assertion or delete the probe block."* A probe stuck in its `print()`-only state cannot survive a merge after the bug is fixed.
+
+Both paths produce a CI-red moment that forces the probe lifecycle forward:
+
+```
+Active (bug open)  →  Triggered (bug fixed, probe not promoted)  →  Promoted (permanent guard)
+   XFAIL / print         CI red                                       hard assertion
+```
+
+---
+
+### Coverage-cascade warning
+
+Static probes should **not** import the module they inspect unless that module is already in coverage measurement. Importing `dialog_handler.py` from a test pulls 5 heavy GUI files into coverage and tanks the 80% gate — see memory entry `feedback_test_import_cascade`.
+
+**Default path:** parse as text via `ast.parse(path.read_text())`. This lets you inspect callsites, constant declarations, and method lists without touching the import graph.
+
+**Exception:** if the module is already measured (check `[tool.coverage.run] omit` in `pyproject.toml`), importing it directly is fine — simpler and less fragile than re-parsing AST. Example: after #293 moved `dialog_handler_helpers.py` out of omit, probe #238 switched from AST to a direct import.
+
+---
+
+### Common pitfalls
+
+#### `ast.AnnAssign` vs `ast.Assign`
+
+Both constant declaration forms exist in this codebase:
+
+```python
+MANIFEST_ACTIONS = ("save_manifest", "execute_action")     # ast.Assign
+MANIFEST_ACTIONS: tuple[str, ...] = ("save_manifest", ...)  # ast.AnnAssign
+```
+
+If your AST walker only handles `ast.Assign`, it silently sees an empty set and the probe "passes" for the wrong reason — the exact failure mode that kept probe #244 green on a broken codebase until #248 caught it. Always walk both forms. The skeleton above includes both.
+
+#### Pywinauto UIA: `ComboBox.select()` and Qt's `maxVisibleItems=10`
+
+Qt's `QComboBox` limits popup visibility to 10 items by default. Pywinauto's `ComboBox.select("Item Name")` only reaches items in the visible viewport — items 11+ are inaccessible via the standard call.
+
+Fix: use the `ItemContainer` pattern to walk the full virtualised list. See the field-selection helper in `qa/scenarios/s50_*.py` for the implementation.
+
+#### Re-find UIA widgets after panel toggles
+
+After clicking a control that shows or hides a panel (e.g. switching between the regex panel and the numeric panel in the Select dialog), the UIA wrapper you held before the toggle is stale. `pywinauto` caches visibility on the original wrapper; after the toggle the old wrapper still reports `is_visible() == True`. Any interaction with it either silently succeeds against the hidden widget or raises a confusing error.
+
+Fix: always re-find the target control from the window root after any show/hide trigger. Never reuse a wrapper across panel state changes — see the #251 post-mortem.
+
+#### Exempt-list pattern for translation probes
+
+The translation probe (`test_probe_zh_tw_translations_are_not_english_passthroughs`) uses the heuristic: `zh_value == en_value` AND contains Latin letters AND no CJK characters → flag as untranslated. Some strings are legitimately identical in both locales — product names, version format strings.
+
+Pattern: keep a `_TRANSLATION_EXEMPT_KEYS: frozenset[str]` set in `test_ui_probes.py`. Any new entry must carry a one-line reason in the PR description (e.g. "brand name", "technical term"). Don't add entries to silence a false positive without verifying the string genuinely doesn't need translation.
 
 ---
 
