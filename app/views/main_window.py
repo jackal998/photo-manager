@@ -549,7 +549,7 @@ class MainWindow(QMainWindow):
         post-scan highlight (#239). Generalises :meth:`_reselect_by_path`
         from single- to multi-target selection.
         """
-        from PySide6.QtCore import QItemSelectionModel
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
         from app.views.main_window_helpers import find_paths_in_model
 
@@ -560,12 +560,18 @@ class MainWindow(QMainWindow):
         if sel_model is None:
             return
 
-        sel_model.clearSelection()
+        # Batch the selection into one .select() call. The per-index loop this
+        # replaces emitted selectionChanged once per match, and the wired
+        # handler (on_tree_selection_changed → _preview.show_single) is a
+        # heavy image/video load on the UI thread — N=hundreds of keepers
+        # froze the window after Close & Load. See #344.
+        selection = QItemSelection()
         for name_idx in matches:
-            sel_model.select(
-                name_idx,
-                QItemSelectionModel.Select | QItemSelectionModel.Rows,
-            )
+            selection.select(name_idx, name_idx)
+        sel_model.select(
+            selection,
+            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+        )
         self.tree.scrollTo(matches[0])
 
     def on_open_manifest(self) -> None:

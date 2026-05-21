@@ -1,0 +1,1 @@
+Fix UI freeze after scan + Close & Load when auto-select produced many keepers — selection is now applied in one batched QItemSelection.select() call instead of per-keeper, so selectionChanged + preview load fires once regardless of N (#344).

@@ -341,32 +341,64 @@ def test_reselect_by_path_does_nothing_when_helper_returns_none():
     fake_tree.selectionModel.assert_not_called()
 
 
-def test_select_rows_by_paths_clears_then_selects_each_match():
-    """Multi-target version: clear existing selection, then ``select``
-    each returned index, then ``scrollTo`` the first.
+def test_select_rows_by_paths_applies_selection_in_one_call():
+    """Multi-target version: build a single QItemSelection, apply it
+    in one ``select(...)`` call with ClearAndSelect | Rows, then
+    ``scrollTo`` the first match.
 
-    Failure mode: the loop drops the clearSelection() call and the
-    new selection ADDS to the old one — user sees the wrong subset
-    highlighted after a scan-complete auto-select.
+    Failure mode: regressing to a per-index loop over ``sel_model.select(idx, ...)``
+    emits ``selectionChanged`` once per match. The wired handler
+    (``on_tree_selection_changed`` → ``_preview.show_single``) is a
+    heavy image/video load on the UI thread — N=hundreds of keepers
+    freezes the window after Close & Load (see #344). Test pins the
+    contract: select() must be called exactly once regardless of N.
     """
-    idx_a = object()
-    idx_b = object()
+    from PySide6.QtCore import QItemSelectionModel
+    from PySide6.QtGui import QStandardItem, QStandardItemModel
+
+    # Real QModelIndex objects — QItemSelection.select is type-checked
+    # PySide6 code and rejects bare object() mocks.
+    real_model = QStandardItemModel()
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        real_model.appendRow(QStandardItem(name))
+    idx_a = real_model.index(0, 0)
+    idx_b = real_model.index(1, 0)
+    idx_c = real_model.index(2, 0)
+
     fake_tree = MagicMock()
-    fake_tree.model.return_value = MagicMock()
+    fake_tree.model.return_value = real_model
     fake_sel = MagicMock()
     fake_tree.selectionModel.return_value = fake_sel
     fake_self = SimpleNamespace(tree=fake_tree)
 
     import app.views.main_window_helpers as helpers
     real = helpers.find_paths_in_model
-    helpers.find_paths_in_model = lambda model, targets: [idx_a, idx_b]
+    helpers.find_paths_in_model = lambda model, targets: [idx_a, idx_b, idx_c]
     try:
-        MainWindow._select_rows_by_paths(fake_self, {"/a.jpg", "/b.jpg"})
+        MainWindow._select_rows_by_paths(fake_self, {"/a.jpg", "/b.jpg", "/c.jpg"})
     finally:
         helpers.find_paths_in_model = real
 
-    fake_sel.clearSelection.assert_called_once_with()
-    assert fake_sel.select.call_count == 2
+    # The freeze regression check: exactly one .select() call no matter
+    # how many keepers the auto-select produces.
+    assert fake_sel.select.call_count == 1, (
+        f"sel_model.select() called {fake_sel.select.call_count}x — "
+        f"regressed to per-index loop; will refreeze on real scans (see #344)"
+    )
+
+    # Verify the single call uses ClearAndSelect | Rows (replaces the
+    # previous clearSelection() + Select-each pair atomically).
+    args, _ = fake_sel.select.call_args
+    flags = args[1]
+    assert flags & QItemSelectionModel.ClearAndSelect, (
+        "select() flags must include ClearAndSelect — otherwise stale "
+        "selection from before the scan is kept"
+    )
+    assert flags & QItemSelectionModel.Rows, (
+        "select() flags must include Rows — single-cell selection "
+        "doesn't highlight the full row"
+    )
+
     fake_tree.scrollTo.assert_called_once_with(idx_a)
 
 
