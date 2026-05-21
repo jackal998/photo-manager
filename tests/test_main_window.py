@@ -1157,3 +1157,113 @@ def test_on_tree_selection_changed_uses_proxy_mapping_when_proxy_present():
 
     fake_proxy.mapToSource.assert_called_once_with(view_idx)
     fake_preview.show_single.assert_called_once()
+
+
+class TestExitDialogButtonsConstant:
+    """Pin the ``EXIT_DIALOG_BUTTONS`` spec used by ``MainWindow.closeEvent``.
+
+    The qa batch runner (``qa/scenarios/_close_window_helper.py``)
+    looks up the "Leave" button by its display text. If a future PR
+    reorders / renames / removes entries in ``EXIT_DIALOG_BUTTONS``
+    the runner's label-based click can break silently — the symptom
+    is qa scenarios printing "app did not exit cleanly, terminating"
+    again, exactly the regression #325 fixed.
+
+    These tests cost ~0ms — they import a tuple and check its shape,
+    no Qt event loop, no QMessageBox instance. The metric-gaming
+    rejection in CLAUDE.md applies to *defensive branches* not to
+    real-bug probes; this one catches a documented past regression
+    class, so it earns its keep.
+    """
+
+    def test_constant_lists_exactly_three_buttons_in_dialog_order(self) -> None:
+        """save → leave → back is the order ``MainWindow.closeEvent``
+        adds buttons and the order Qt renders them left-to-right. The
+        qa helper's positional ``fallback_tab_enter`` (Tab Tab Enter
+        from default-focused Back) only works if Leave sits at index 1.
+        """
+        from app.views.main_window import EXIT_DIALOG_BUTTONS
+
+        names = [name for name, _key, _role in EXIT_DIALOG_BUTTONS]
+        assert names == ["save", "leave", "back"], (
+            f"EXIT_DIALOG_BUTTONS order changed: got {names!r} — update "
+            "qa/scenarios/_close_window_helper.py::fallback_tab_enter "
+            "to match, then update this test."
+        )
+
+    def test_leave_button_carries_destructive_role(self) -> None:
+        """``DestructiveRole`` is what tells QMessageBox to render the
+        button with the "irreversible action" affordance (different
+        styling on some platforms). The qa helper doesn't read role
+        directly, but a reviewer eyeballing the dialog should see
+        save=accept, leave=destructive, back=reject — losing
+        DestructiveRole on Leave would change the visible UI without
+        any other test catching it.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.views.main_window import EXIT_DIALOG_BUTTONS
+
+        leave_entry = next(
+            entry for entry in EXIT_DIALOG_BUTTONS if entry[0] == "leave"
+        )
+        assert leave_entry[1] == "exit.button_leave"
+        assert leave_entry[2] == QMessageBox.DestructiveRole
+
+    def test_translation_keys_resolve_to_non_empty_strings_in_both_locales(self) -> None:
+        """Every translation key in the spec must resolve to a non-
+        empty display string in both ``en`` and ``zh_TW`` — otherwise
+        the qa runner would look up an empty-string button label and
+        match nothing. This is the regression class #325 is *prevent-
+        ing*: silent label drift between the constant and translations.
+        """
+        from pathlib import Path
+
+        from app.views.main_window import EXIT_DIALOG_BUTTONS
+        from infrastructure.i18n import Translator
+
+        translations_dir = Path(__file__).resolve().parents[1] / "translations"
+        for locale in ("en", "zh_TW"):
+            translator = Translator(locale, translations_dir)
+            for name, key, _role in EXIT_DIALOG_BUTTONS:
+                resolved = translator.t(key)
+                assert resolved and resolved != key, (
+                    f"{key!r} (button {name!r}) didn't resolve in {locale!r}: "
+                    f"got {resolved!r} — translations/{locale}.yml may be "
+                    "missing the key."
+                )
+
+    def test_close_event_body_uses_the_constant_not_inline_addbutton_calls(self) -> None:
+        """The whole point of extracting ``EXIT_DIALOG_BUTTONS`` is
+        that ``closeEvent`` reads from it. If a future PR inlines
+        ``box.addButton(t("exit.button_leave"), ...)`` again, the
+        constant becomes a lie. Catch that by parsing the source.
+
+        This is a source-level check, not a behaviour check, but the
+        behaviour version (real QMessageBox, real exec()) would cost
+        ~25s per run and need a qapp fixture — far above the value of
+        what's being asserted.
+        """
+        import inspect
+
+        from app.views.main_window import MainWindow
+
+        source = inspect.getsource(MainWindow.closeEvent)
+        # The pre-#325 body called addButton(t("exit.button_leave"), ...)
+        # inline three times. Forbid that exact pattern as a regression
+        # tripwire — closeEvent should iterate over the constant.
+        assert "EXIT_DIALOG_BUTTONS" in source, (
+            "closeEvent no longer references EXIT_DIALOG_BUTTONS — if you "
+            "removed the constant on purpose, also remove this test and "
+            "update qa/scenarios/_close_window_helper.py's docstring."
+        )
+        # An explicit inline 't(\"exit.button_' call inside closeEvent
+        # (beyond the dialog title/body) would mean someone added a
+        # button outside the constant — that's the drift we want to
+        # block.
+        for forbidden_key in ("exit.button_save_leave", "exit.button_leave", "exit.button_back"):
+            assert forbidden_key not in source, (
+                f"closeEvent contains a hard-coded reference to "
+                f"{forbidden_key!r}. Move it into EXIT_DIALOG_BUTTONS so "
+                "the qa helper's label-based selector stays in sync."
+            )

@@ -248,6 +248,33 @@ def select_shard(
     return [name for unit in selected_units for name in unit]
 
 
+def _resolve_exit_button_labels() -> tuple[str, str]:
+    """Resolve the localised ``("Leave" button, "Unsaved Changes" title)``
+    pair for the locale currently persisted in ``qa/settings.json``.
+
+    Reading the locale at parent-process time (here) keeps the
+    subprocess helper free of YAML/Qt imports at startup, and means
+    locale switches by previous scenarios (e.g. s22_language_switch
+    runs but doesn't fully restore) don't make the close-window dance
+    look for "Leave" when the running app actually shows "離開". On any
+    failure we fall back to the English strings — that matches the
+    pre-#325 behaviour exactly, so the worst case is "no worse than
+    before" rather than "broken differently".
+    """
+    try:
+        from infrastructure.i18n import init_translator
+        from infrastructure.settings import JsonSettings
+
+        home_env = os.environ.get("PHOTO_MANAGER_HOME") or ""
+        config_home = (REPO / home_env).resolve() if home_env else REPO
+        settings = JsonSettings(config_home / "settings.json")
+        locale = settings.get("ui.locale", "en") or "en"
+        translator = init_translator(locale, REPO / "translations")
+        return translator.t("exit.button_leave"), translator.t("exit.confirm_title")
+    except Exception:
+        return "Leave", "Unsaved Changes"
+
+
 def _close_window() -> None:
     """Close the Photo Manager top window; dismiss the dirty prompt if it fires.
 
@@ -266,69 +293,31 @@ def _close_window() -> None:
     is "save first if you want a SEPARATE manifest file" — irrelevant
     in batch mode.
 
-    Implementation note: we use ``PostMessage(WM_CLOSE)`` via ctypes
-    instead of pywinauto's ``top_window().close()``. The pywinauto call
-    drives the UIA Window pattern's Close, which is synchronous and
-    blocks while the modal QMessageBox runs — leaving us no chance to
-    click Leave. PostMessage is fire-and-forget, so the close request
-    queues, Qt fires closeEvent, the dialog opens, and we get a window
-    of time to dismiss it.
-
-    The Leave click is done via ``PostMessage(WM_KEYDOWN, VK_TAB)`` +
-    ``VK_RETURN`` rather than via pywinauto's UIA selectors because the
-    QMessageBox dialog doesn't surface in UIA's top-level window list
-    until after some refresh — pywinauto's ``connect(title='Unsaved
-    Changes')`` empirically times out even when ``EnumWindows`` sees
-    the dialog. The Tab+Tab+Enter sequence relies on the button-add
-    order in :meth:`MainWindow.closeEvent` — Save & leave (AcceptRole),
-    Leave (DestructiveRole), Back (RejectRole, default focus). Tab
-    twice from Back lands on Leave; Enter clicks it.
+    Implementation moved to :mod:`qa.scenarios._close_window_helper`
+    (#325). The helper uses pywinauto's UIA backend with
+    ``connect(handle=...)`` to look up the Leave button by its display
+    text rather than by Tab-traversal position, which was load-bearing
+    on ``MainWindow.closeEvent`` button order — a future reorder used
+    to silently route Enter to the wrong button. ``EnumWindows`` +
+    ``WM_CLOSE`` are kept (in the helper) because pywinauto's
+    ``top_window().close()`` is synchronous and blocks while the modal
+    runs, leaving no chance to click Leave.
     """
-    code = (
-        "import sys, time, ctypes\n"
-        "from ctypes import wintypes\n"
-        "user32 = ctypes.windll.user32\n"
-        "WM_CLOSE = 0x0010\n"
-        "WM_KEYDOWN = 0x0100\n"
-        "WM_KEYUP = 0x0101\n"
-        "VK_TAB = 0x09\n"
-        "VK_RETURN = 0x0D\n"
-        "WNDENUMPROC = ctypes.WINFUNCTYPE("
-        "ctypes.c_int, wintypes.HWND, wintypes.LPARAM)\n"
-        "found = []\n"
-        "def cb(hwnd, _):\n"
-        "    if not user32.IsWindowVisible(hwnd):\n"
-        "        return True\n"
-        "    title = ctypes.create_unicode_buffer(256)\n"
-        "    user32.GetWindowTextW(hwnd, title, 256)\n"
-        "    if 'Photo Manager' in title.value:\n"
-        "        found.append(hwnd)\n"
-        "    return True\n"
-        "user32.EnumWindows(WNDENUMPROC(cb), 0)\n"
-        "for hwnd in found:\n"
-        "    user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)\n"
-        "time.sleep(0.7)\n"
-        "dlg_hwnds = []\n"
-        "def cb2(hwnd, _):\n"
-        "    if not user32.IsWindowVisible(hwnd):\n"
-        "        return True\n"
-        "    title = ctypes.create_unicode_buffer(256)\n"
-        "    user32.GetWindowTextW(hwnd, title, 256)\n"
-        "    if title.value == 'Unsaved Changes':\n"
-        "        dlg_hwnds.append(hwnd)\n"
-        "    return True\n"
-        "user32.EnumWindows(WNDENUMPROC(cb2), 0)\n"
-        "for dlg in dlg_hwnds:\n"
-        "    user32.SetForegroundWindow(dlg)\n"
-        "    time.sleep(0.15)\n"
-        "    for _ in range(2):\n"
-        "        user32.PostMessageW(dlg, WM_KEYDOWN, VK_TAB, 0)\n"
-        "        user32.PostMessageW(dlg, WM_KEYUP, VK_TAB, 0)\n"
-        "        time.sleep(0.05)\n"
-        "    user32.PostMessageW(dlg, WM_KEYDOWN, VK_RETURN, 0)\n"
-        "    user32.PostMessageW(dlg, WM_KEYUP, VK_RETURN, 0)\n"
+    leave_label, dialog_title = _resolve_exit_button_labels()
+    subprocess.run(
+        [
+            PY,
+            "-m",
+            "qa.scenarios._close_window_helper",
+            "--leave-label",
+            leave_label,
+            "--dialog-title",
+            dialog_title,
+        ],
+        cwd=REPO,
+        capture_output=True,
+        timeout=15,
     )
-    subprocess.run([PY, "-c", code], cwd=REPO, capture_output=True, timeout=15)
 
 
 _user32 = ctypes.windll.user32
@@ -502,7 +491,7 @@ def run_one(name: str) -> tuple[int, str]:
             driver_err = "non-zero exit"
     except subprocess.TimeoutExpired as exc:
         driver_err = "driver timeout"
-        print(f"DRIVER TIMEOUT after 180s", flush=True)
+        print("DRIVER TIMEOUT after 180s", flush=True)
         # Surface whatever the driver printed before hanging — by default
         # TimeoutExpired drops it on the floor, which makes hangs
         # essentially undebuggable from CI logs.
@@ -526,7 +515,7 @@ def run_one(name: str) -> tuple[int, str]:
     try:
         proc.wait(timeout=8)
     except subprocess.TimeoutExpired:
-        print(f"app did not exit cleanly, terminating", flush=True)
+        print("app did not exit cleanly, terminating", flush=True)
         proc.terminate()
         try:
             proc.wait(timeout=5)
