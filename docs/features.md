@@ -68,7 +68,7 @@ for the chore plan.
 - **Trigger:** In the Set Action dialog (opened from main window menu or right-click), pick "remove from list" as the action and Apply.
 - **Behaviour:** Matched rows get `user_decision='remove_from_list'` set (a third decision value alongside `delete` and `keep`), displayed in the Action column via a localised label. Files are not moved or deleted — rows are reviewed in Execute Action like delete/keep decisions and the actual removal (flag as removed in the manifest, drop from the view) happens at execute time. Single-row right-click in the Execute Action dialog stays IMMEDIATE with its own confirm — that path is set + execute on one click, which is intentionally distinct from the bulk deferred path.
 - **Conditions / variants:** The `remove from list` entry appears in the dropdown only when `include_remove=True` is passed (currently the regex dialog and the Execute Action dialog's right-click submenu). The main-window right-click submenu omits it because it already has a top-level **List > Remove from List** item.
-- **Related:** [PR #158](https://github.com/jackal998/photo-manager/pull/158); QA scenario [`qa/scenarios/s29_remove_from_list_by_regex.py`](../qa/scenarios/s29_remove_from_list_by_regex.py); related multi-select flow [`qa/scenarios/s20_multi_remove_from_list.py`](../qa/scenarios/s20_multi_remove_from_list.py).
+- **Related:** [PR #158](https://github.com/jackal998/photo-manager/pull/158); QA scenario [`qa/scenarios/s29_remove_from_list_by_regex.py`](../qa/scenarios/s29_remove_from_list_by_regex.py); related multi-select flow [`qa/scenarios/s20_multi_remove_from_list.py`](../qa/scenarios/s20_multi_remove_from_list.py); single-row IMMEDIATE path inside the Execute Action dialog covered by [`qa/scenarios/s54_execute_dialog_remove_from_list.py`](../qa/scenarios/s54_execute_dialog_remove_from_list.py).
 - **Last verified:** 2026-05-17 (PR for [#262](https://github.com/jackal998/photo-manager/issues/262))
 
 ---
@@ -79,7 +79,7 @@ for the chore plan.
 - **Trigger:** User right-clicks a file row (single or multi-select) and picks **Lock** or **Unlock**.
 - **Behaviour:** Flips the orthogonal `is_locked` flag on each selected row's manifest record. Locked rows display the 🔒 prefix in the Lock column and freeze their `user_decision` against bulk-regex changes and against execute-time deletion (the lock-confirm dialog gates any attempted change — see [Execute Action — lock-confirm dialog](#execute-action--lock-confirm-dialog)).
 - **Conditions / variants:** Lock and Unlock are always idempotent — they never surface the lock-confirm dialog themselves. They are the escape valve for the freeze semantic.
-- **Related:** [PR #175](https://github.com/jackal998/photo-manager/pull/175) (closes [#164](https://github.com/jackal998/photo-manager/issues/164)); QA scenario [`qa/scenarios/s35_lock_via_context_menu.py`](../qa/scenarios/s35_lock_via_context_menu.py).
+- **Related:** [PR #175](https://github.com/jackal998/photo-manager/pull/175) (closes [#164](https://github.com/jackal998/photo-manager/issues/164)); QA scenarios [`qa/scenarios/s35_lock_via_context_menu.py`](../qa/scenarios/s35_lock_via_context_menu.py) (main-window route) and [`qa/scenarios/s53_execute_dialog_lock_decision.py`](../qa/scenarios/s53_execute_dialog_lock_decision.py) (Execute Action dialog route).
 - **Last verified:** 2026-05-17 (PR for [#262](https://github.com/jackal998/photo-manager/issues/262))
 
 ---
@@ -101,7 +101,7 @@ for the chore plan.
 - **Trigger:** User right-clicks a file row (single or multi-select) and picks **Set Action > delete / keep / remove from list**.
 - **Behaviour:** Sets `user_decision` on each selected row to the chosen value. Multi-select applies the same decision to every selected row in one batch. For multi-select with locked rows in the set, the lock-confirm dialog gates the write (see [Execute Action — lock-confirm dialog](#execute-action--lock-confirm-dialog)).
 - **Conditions / variants:** Single-row right-click also offers **Set Action by Field/Regex…** (multi-select got that entry too in [PR #162](https://github.com/jackal998/photo-manager/pull/162) — parity with single-select). The "remove from list" entry behaves differently per context: from the main-window submenu it's the same deferred decision as the bulk path; from the Execute Action dialog's single-row right-click it's IMMEDIATE (set + execute on one click).
-- **Related:** Foundation in [PR #19](https://github.com/jackal998/photo-manager/pull/19); QA scenario [`qa/scenarios/s15_context_menu.py`](../qa/scenarios/s15_context_menu.py).
+- **Related:** Foundation in [PR #19](https://github.com/jackal998/photo-manager/pull/19); QA scenarios [`qa/scenarios/s15_context_menu.py`](../qa/scenarios/s15_context_menu.py) (main-window route) and [`qa/scenarios/s53_execute_dialog_lock_decision.py`](../qa/scenarios/s53_execute_dialog_lock_decision.py) (Set Action → delete via Execute Action dialog's right-click, verified through the status-bar "Decision set" emit).
 - **Last verified:** 2026-05-17 (PR for [#262](https://github.com/jackal998/photo-manager/issues/262))
 
 ---

@@ -201,6 +201,14 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # populated pHash strings — the minimal end-to-end shape the new
     # render path needs.
     "s52_similarity_against_displayed_ref": ["qa/sandbox/near-duplicates"],
+    # s53 (#324) — Execute Action dialog non-regex decision paths
+    # (Lock / Unlock / Set Action → delete via right-click). Same
+    # fixture as s30/s32/s35: 5 near-duplicates in one group.
+    "s53_execute_dialog_lock_decision": ["qa/sandbox/near-duplicates"],
+    # s54 (#324) — Execute Action dialog Remove from List via right-
+    # click. Same fixture as s53; the row removed is non-destructive
+    # at the filesystem level (manifest UPDATE, not a file delete).
+    "s54_execute_dialog_remove_from_list": ["qa/sandbox/near-duplicates"],
 }
 
 
