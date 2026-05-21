@@ -1,0 +1,1 @@
+Add Phase 5 (post-PR completion) to the `/work` skill — inline news-fragment write, `gh pr checks --watch` with 20-min timeout, one auto-iteration on red, `/work watch <N>` resume mode for listener-flakiness recovery, plus a Phase 2 file-overlap check that forces multi-issue tasks with shared files to sequence in a single session (#343).
