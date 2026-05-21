@@ -1,0 +1,1 @@
+Replace the qa batch runner's Tab+Tab+Enter positional close with a UIA label-based selector, and extract `MainWindow.closeEvent`'s "Unsaved Changes" button list into a module-level spec pinned by L1 tests so a future button-order reorder fails fast instead of silently leaking "app did not exit cleanly, terminating" (#325).
