@@ -109,43 +109,56 @@ Execute the approved workflow. Route based on complexity score:
 
 ### complex — subagent pipeline
 
-1. **Dev subagent** (worktree-isolated):
+1. **developer-agent** (worktree-isolated):
    ```
    Agent(
-     subagent_type="general-purpose",
+     subagent_type="developer-agent",
      isolation="worktree",
      prompt="""
-     Research brief: <paste brief>
-     Implement the changes described. Use the affected-files list as
-     your starting point. Run tests before returning.
-     Return: branch name, list of changed files, test result summary.
+     RESEARCH BRIEF:
+     <paste full researcher-agent brief>
+
+     TASK:
+     <one-paragraph implementation instruction derived from the brief>
+
+     WORKTREE:
+     <this will be your working directory — probe for venv as per your instructions>
      """
    )
    ```
-   Receive back: branch name + changed files + test summary.
+   Receive back: `IMPLEMENTATION REPORT` with status, changed files,
+   test results, and worktree branch name.
 
-2. **QA subagent** (reads dev branch):
+2. **qa-agent** (validates the dev worktree):
    ```
    Agent(
-     subagent_type="general-purpose",
+     subagent_type="qa-agent",
      prompt="""
-     Dev branch: <branch name from step 1>
-     Changed files: <list>
-     Run: python -m pytest <affected tests> -v
-     Check: does the behaviour match the research brief's acceptance criteria?
-     Return: PASS or FAIL with specific failure details.
+     RESEARCH BRIEF:
+     <paste full researcher-agent brief>
+
+     IMPLEMENTATION REPORT:
+     <paste developer-agent's IMPLEMENTATION REPORT>
+
+     WORKTREE PATH:
+     <absolute path returned by the developer-agent's worktree>
      """
    )
    ```
+   Receive back: `QA REPORT` with `PASS` / `FAIL` / `PASS_WITH_NOTES`.
 
-3. **Loop** until QA returns PASS:
-   - On FAIL: spawn new dev subagent with QA's failure details appended
-     to the brief. Each iteration is a fresh worktree.
-   - On PASS: proceed to step 4.
-   - Hard limit: 4 iterations. On 4th failure, surface to human:
-     "QA failed after 4 attempts — here are the remaining issues."
+3. **Loop** until qa-agent returns `PASS` or `PASS_WITH_NOTES`:
+   - On `FAIL`: spawn a new `developer-agent` (fresh `isolation="worktree"`)
+     with the original brief PLUS qa-agent's failure details appended.
+     Each iteration gets a clean worktree — don't re-use the previous one.
+   - On `PASS` / `PASS_WITH_NOTES`: proceed to step 4.
+   - Hard limit: 4 iterations. On 4th `FAIL`, stop and surface to human:
+     "QA failed after 4 attempts — remaining issues: <list>."
 
-4. **Merge dev branch into working branch** (LEAD cherry-picks or merges).
+4. **Merge dev worktree into LEAD's branch:**
+   ```bash
+   git merge <worktree-branch>   # or cherry-pick if cleaner
+   ```
 
 5. Run `/pr-review team` if diff qualifies (> 5 behaviour-bearing files
    or > 300 lines); otherwise `/pr-review` single-session.

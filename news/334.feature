@@ -1,0 +1,1 @@
+Wire /work execution layer — replace generic subagent placeholders with named developer-agent (worktree-isolated implementation) and qa-agent (acceptance + coverage validation), completing the research → develop → QA → /pr-review team pipeline.
