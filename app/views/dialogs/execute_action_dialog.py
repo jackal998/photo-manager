@@ -107,6 +107,10 @@ class ExecuteActionDialog(QDialog):
         # is already updated in place because self._groups aliases it.
         self.removed_from_list_paths: list[str] = []
         self._missing_paths: list[str] = []
+        # (path, reason) pairs for files whose delete raised an exception
+        # — kept separate from `_missing_paths` so the post-execute UI
+        # can show "didn't exist" vs "tried and failed" distinctly (#68).
+        self._failed_paths: list[tuple[str, str]] = []
         self._src_model = None
         self._build_ui()
         # #215 — restore last saved geometry. ``setMinimumSize`` above
@@ -1050,6 +1054,21 @@ class ExecuteActionDialog(QDialog):
                 t("execute_dialog.files_not_found_body", missing=missing_list, suffix=suffix),
             )
 
+        if self._failed_paths:
+            from PySide6.QtWidgets import QMessageBox
+            failed_lines = [f"{p} — {reason}" for p, reason in self._failed_paths[:20]]
+            failed_list = "\n".join(failed_lines)
+            suffix = (
+                t("execute_dialog.files_failed_more", n=len(self._failed_paths) - 20)
+                if len(self._failed_paths) > 20
+                else ""
+            )
+            QMessageBox.warning(
+                self,
+                t("execute_dialog.files_failed_title"),
+                t("execute_dialog.files_failed_body", failed=failed_list, suffix=suffix),
+            )
+
         self.accept()
 
     def _delete_file(self, path: str) -> None:
@@ -1067,6 +1086,7 @@ class ExecuteActionDialog(QDialog):
             logger.info("Deleted file: {}", path)
         except Exception as exc:
             logger.warning("Failed to delete {}: {}", path, exc)
+            self._failed_paths.append((path, str(exc)))
 
     def done(self, result: int) -> None:
         """Persist geometry on every close path (#215).

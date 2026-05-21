@@ -604,6 +604,105 @@ class TestMissingFileHandling:
         mock_trash.assert_not_called()
 
 
+# ── _delete_file: failed-delete handling (#68) ─────────────────────────────
+
+class TestFailedDeleteHandling:
+    """When send2trash / os.remove raises on an existing file, the user
+    must see the failure — not just a log line. Tests guard against
+    regressing to the silent-warning behaviour that motivated #68."""
+
+    def test_exception_appends_to_failed_paths(self, qapp, tmp_path):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        f = tmp_path / "locked.jpg"
+        f.write_bytes(b"fake")
+        dlg = ExecuteActionDialog([], manifest_path=None)
+
+        with patch("send2trash.send2trash", side_effect=PermissionError("locked")):
+            dlg._delete_file(str(f))
+
+        assert len(dlg._failed_paths) == 1
+        path, reason = dlg._failed_paths[0]
+        assert path == str(f)
+        assert "locked" in reason
+        assert str(f) not in dlg.deleted_paths
+        # missing_paths is reserved for the "didn't exist" bucket — the
+        # file IS on disk here, so it must NOT land in missing.
+        assert str(f) not in dlg._missing_paths
+
+    def test_failed_paths_initially_empty(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog([], manifest_path=None)
+        assert dlg._failed_paths == []
+
+    def test_missing_file_does_not_land_in_failed_paths(self, qapp):
+        """The pre-existence check returns early — `_failed_paths` is for
+        exceptions only, not for files that never reached send2trash."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog([], manifest_path=None)
+        dlg._delete_file("/nonexistent/photo.jpg")
+        assert dlg._failed_paths == []
+        assert "/nonexistent/photo.jpg" in dlg._missing_paths
+
+
+# ── _on_execute: failure-bucket QMessageBox flow (#68) ─────────────────────
+
+class TestOnExecuteFailureWarnings:
+    """The two buckets must surface as two separate QMessageBox.warning
+    calls — collapsing them would re-introduce the #68 bug where
+    error-failures hid behind 'Files Not Found' (or worse, were silent)."""
+
+    def test_failed_paths_triggers_warning(self, qapp, tmp_path):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        f = tmp_path / "locked.jpg"
+        f.write_bytes(b"fake")
+        dlg = ExecuteActionDialog([_group(_rec(str(f), "delete"))], manifest_path=None)
+
+        with patch("send2trash.send2trash", side_effect=PermissionError("locked")):
+            with patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+                dlg._on_execute()
+
+        titles = [call.args[1] for call in mock_warn.call_args_list]
+        bodies = [call.args[2] for call in mock_warn.call_args_list]
+        assert any("Failed to Delete" in title for title in titles), (
+            f"Expected a 'Failed to Delete' warning, got: {titles}"
+        )
+        # The file path must appear in the body so the user knows WHICH
+        # file failed — a title-only warning would be useless.
+        assert any(str(f) in body for body in bodies)
+
+    def test_missing_and_failed_show_separate_warnings(self, qapp, tmp_path):
+        """Both buckets non-empty → two distinct QMessageBox.warning
+        calls. A single combined dialog would re-merge the buckets."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        existing = tmp_path / "locked.jpg"
+        existing.write_bytes(b"fake")
+        groups = [_group(
+            _rec(str(existing), "delete"),
+            _rec("/nonexistent/gone.jpg", "delete"),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        with patch("send2trash.send2trash", side_effect=PermissionError("locked")):
+            with patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+                dlg._on_execute()
+
+        titles = [call.args[1] for call in mock_warn.call_args_list]
+        assert any("Not Found" in t for t in titles)
+        assert any("Failed to Delete" in t for t in titles)
+        # Two buckets → two warnings. One merged warning would regress.
+        assert len(mock_warn.call_args_list) == 2
+
+    def test_no_warning_when_both_buckets_empty(self, qapp):
+        """A clean execute must NOT pop spurious warnings."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog([_group(_rec("/a.jpg", "keep"))], manifest_path=None)
+
+        with patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+            dlg._on_execute()
+
+        mock_warn.assert_not_called()
+
+
 # ── group filtering ────────────────────────────────────────────────────────
 
 class TestGroupFiltering:
