@@ -45,6 +45,25 @@ from app.views.window_state import (
 from infrastructure.i18n import t
 
 
+# Button specs for the "Unsaved Changes" QMessageBox built in
+# :meth:`MainWindow.closeEvent`. Tuple order is the order buttons appear
+# in the dialog (left → right), which determines Tab traversal and is
+# load-bearing for the qa batch runner's close-window dance — see
+# :func:`qa.scenarios._close_window_helper.click_leave_button` and the
+# matching L1 test in tests/test_main_window.py.
+#
+# Each entry: (name, translation_key, ButtonRole). ``name`` is the
+# internal identifier closeEvent uses to look the button up after
+# constructing them; it intentionally does NOT depend on locale or
+# button text. ``"leave"`` is the only name external code (the qa
+# helper) needs to know about.
+EXIT_DIALOG_BUTTONS: tuple[tuple[str, str, QMessageBox.ButtonRole], ...] = (
+    ("save", "exit.button_save_leave", QMessageBox.AcceptRole),
+    ("leave", "exit.button_leave", QMessageBox.DestructiveRole),
+    ("back", "exit.button_back", QMessageBox.RejectRole),
+)
+
+
 class MainWindow(QMainWindow):
     """Main application window with refactored architecture.
 
@@ -705,9 +724,15 @@ class MainWindow(QMainWindow):
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle(t("exit.confirm_title"))
         box.setText(t("exit.confirm_body"))
-        btn_save = box.addButton(t("exit.button_save_leave"), QMessageBox.AcceptRole)
-        btn_leave = box.addButton(t("exit.button_leave"), QMessageBox.DestructiveRole)
-        btn_back = box.addButton(t("exit.button_back"), QMessageBox.RejectRole)
+        # Iterate over the module-level spec so the qa helper and the
+        # closeEvent body cannot disagree about button order/roles.
+        buttons_by_name = {
+            name: box.addButton(t(key), role)
+            for name, key, role in EXIT_DIALOG_BUTTONS
+        }
+        btn_save = buttons_by_name["save"]
+        btn_leave = buttons_by_name["leave"]
+        btn_back = buttons_by_name["back"]
         # Default to Back so an accidental Enter/Esc keeps the user in the app.
         box.setDefaultButton(btn_back)
         box.exec()
