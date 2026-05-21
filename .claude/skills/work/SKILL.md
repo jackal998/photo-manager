@@ -22,10 +22,14 @@ Before spawning anything, classify the input:
 
 | Input shape | How to resolve |
 |---|---|
-| `#N` or `#N #M …` | `gh issue view N --json number,title,body,labels,state` for each |
+| `#N` or `#N #M …` | Strip `#`; validate remainder is numeric. Then `gh issue view N --json number,title,body,labels,state` for each. |
 | Quoted string | Treat as intent — grep codebase for related files |
-| `feature/…` or `fix/…` or any branch name | **Short-circuit: skip Phases 1–3. Run `/pr-review <branch>` directly.** (Use `git diff origin/master...<branch> --stat` only to confirm the branch exists.) |
+| `feature/…` or `fix/…` or any branch name | **Short-circuit: skip Phases 1–3. Run `/pr-review <branch>` directly.** Confirm branch exists first: `git rev-parse --verify <branch>`. Reject names starting with `-`. |
 | Nothing | `gh issue list --assignee @me --state open --limit 5` + `git branch --show-current` |
+
+**`gh` preflight** (applies to `#N` and `Nothing` shapes): run `gh auth status`
+before any `gh` call. If it fails, report "gh CLI unavailable — falling back
+to grep-only resolution" and treat the input as free-text instead.
 
 If multiple issues: fan-out to one researcher-agent invocation per
 issue (parallel), merge briefs before planning.
@@ -178,7 +182,9 @@ Execute the approved workflow. Route based on complexity score:
 
 **Context budget:** After each major phase (research, dev iteration,
 QA), check whether the context window is getting heavy. If the
-conversation has > ~40 tool calls, run `/compact` before the next phase.
+conversation has > ~40 tool calls, tell the user: "Context is getting
+heavy — please run `/compact` before we continue." (`/compact` is a
+user-triggered CLI command; LEAD cannot invoke it directly.)
 
 **Loop guard:** Never iterate more than 4 dev→QA cycles without
 surfacing to the human. Autonomous loops that spin indefinitely are
