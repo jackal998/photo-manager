@@ -206,6 +206,18 @@ ALL_SCENARIOS = [
     # has to be wired through PhotoRecord for the new render path to
     # work. Read-only on the manifest.
     "s52_similarity_against_displayed_ref",
+    # s53 (#324) — Execute Action dialog right-click → Lock / Unlock /
+    # Set Action → delete. Layer-3 anchor for the non-regex decision
+    # paths #322 plumbed status_reporter through under [qa-not-needed].
+    # L1 tests (TestExecuteDialogStatusEmission) pin the methods when
+    # called directly; this driver pins the right-click → context menu
+    # → method chain.
+    "s53_execute_dialog_lock_decision",
+    # s54 (#324) — Execute Action dialog right-click → Set Action →
+    # Remove from List → Yes-confirm. Companion to s53 covering the
+    # fourth non-regex decision path, which adds a QMessageBox confirm
+    # the L1 unit tests can't drive.
+    "s54_execute_dialog_remove_from_list",
 ]
 
 

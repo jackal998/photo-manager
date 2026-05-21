@@ -1,0 +1,1 @@
+Add layer-3 qa coverage for `ExecuteActionDialog`'s right-click context-menu paths (s53 — Lock / Unlock / Set Action → delete via right-click; s54 — Set Action → "remove from list" with its Yes-confirm), closing the gap PR #322 left under `[qa-not-needed]` (#324).
