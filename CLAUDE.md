@@ -213,6 +213,18 @@ not a synthetic test.
 | 2 — Integration with real binaries (on-demand — see `docs/testing.md`) | `tests/integration/test_*.py` (`@pytest.mark.integration`, skip-if-missing) | Local only — CI doesn't have `exiftool` / RAW codecs / etc. | Boundary error modes hard to reproduce via the GUI. **No maintained suite** — add a spot-test only when a specific bug surfaces. Layer 3 covers the boundary happy paths. |
 | 3 — End-to-end via `/qa-explore` | `qa/scenarios/sNN_*.py` | Local via `python -m qa.scenarios._batch` | Label drift, state-transition bugs, UX regressions |
 
+**Probe layer** ([`tests/test_ui_probes.py`](tests/test_ui_probes.py) +
+soft-probe blocks in qa scenarios) complements the three layers above
+by catching cross-cutting structural invariants that scripted tests
+can't: dropdown drift, missing method proxies, label uniqueness,
+translation passthroughs, menu-gating holes, bridge-pattern gaps. Two
+forms: static probes (AST/YAML inspection in
+[`tests/test_ui_probes.py`](tests/test_ui_probes.py), run in CI) and
+live soft-probes (`print("probe_status: …")` blocks injected into
+`qa/scenarios/sNN_*.py` setups). See
+[`docs/testing.md`](docs/testing.md) (Probes section) for the full
+inventory and authoring recipe.
+
 CI covers layer 1 only. Knowing which layer you're skimping on matters
 more than the headline coverage number.
 
