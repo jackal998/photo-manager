@@ -147,20 +147,32 @@ shadow, the project's security teammate is named
 generic-OWASP `security-reviewer` remains unshadowed and reachable
 for ad-hoc invocations.
 
+### Pipeline agents (spawned by /work)
+
+Three additional agents live in `.claude/agents/` and are invoked by the
+`/work` skill only — not by `/pr-review` team mode.
+
+| File | Role | Spawned by |
+|---|---|---|
+| `researcher-agent.md` | 3-angle read-only investigator | `/work` Phase 1 |
+| `developer-agent.md` | Worktree-isolated implementation | `/work` Phase 4 (complex) |
+| `qa-agent.md` | Post-implementation validator | `/work` Phase 4 (complex) |
+
+These agents never commit, push, or open PRs — LEAD owns all git operations.
+
 ### Hook wiring (one-time, per machine)
 
 `.claude/settings.json` (gitignored) is where team-event hooks are
-wired. The three new scripts ship in
+wired. The three scripts ship in
 `scripts/hooks/team_task_{created,completed}.py` and
-`scripts/hooks/team_teammate_idle.py`. Their stdin/exit-code contract
-matches the existing `qa_scenario_guard.py` / `docs_guard.py` pattern.
-The Agent-Teams event-name and payload schema is not yet documented
-upstream at the time these scripts ship — they sniff known key paths
-and fail open on unrecognised shapes, so they are safe to wire in
-advance. Wire them once Claude Code's team-event dispatch is
-confirmed (a teammate spawn followed by a TaskCreate / TaskUpdate
-should fire the corresponding script; verify with a smoke test
-before enforcing).
+`scripts/hooks/team_teammate_idle.py`. The `TaskCreate` and
+`TaskUpdate` matchers are now wired in `.claude/settings.json.example`
+as PreToolUse hooks — copy the example to bootstrap a new machine.
+`team_teammate_idle.py` requires a `TeammateIdle` event type whose
+payload schema is not yet documented upstream; wire it separately once
+Claude Code's team-event dispatch is confirmed. All three scripts sniff
+known key paths and fail open on unrecognised shapes — safe to have
+active before the schema stabilises.
 
 ## Testing ground rules — non-negotiable
 
