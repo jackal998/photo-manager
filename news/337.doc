@@ -1,0 +1,1 @@
+Add probe-layer authoring recipe to docs/testing.md: when to add a probe, three flavours (static/soft-live/exploration), copyable skeletons, forcing-function design, coverage-cascade warning, and common pitfalls.

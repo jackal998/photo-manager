@@ -20,6 +20,8 @@ formerly AST-only for the same coverage-gate reason; after #293 cleared
 field list to ``dialog_handler_helpers.py``, probe #238 now imports
 the helper directly (no Qt cascade) and compares its return value
 against the tree columns.
+
+Authoring guide: ``docs/testing.md`` — "Probe layer — authoring a new probe".
 """
 from __future__ import annotations
 
