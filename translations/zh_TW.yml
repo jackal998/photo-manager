@@ -142,6 +142,9 @@ execute_dialog:
   files_not_found_title: "找不到檔案"
   files_not_found_body: "下列檔案找不到,已略過:\n\n{missing}{suffix}"
   files_not_found_more: "\n…以及其餘 {n} 個"
+  files_failed_title: "刪除失敗"
+  files_failed_body: "下列檔案無法刪除(權限不足、檔案鎖定或路徑過長):\n\n{failed}{suffix}"
+  files_failed_more: "\n…以及其餘 {n} 個"
 
 # LockedRowsConfirmDialog — photo-manager#182(取代 #175 的混合語意)。
 locked_confirm:
