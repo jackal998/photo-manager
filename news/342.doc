@@ -1,0 +1,1 @@
+Refresh six stale source line references in `docs/features.md` (Execute Action cluster + sort persistence) and bump the verification date to 2026-05-21 across the remaining entries whose Behaviour text still matches current source (#326).
