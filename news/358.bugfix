@@ -1,0 +1,1 @@
+Rename Set Action dialog title to "Set Action by Field" and show field-aware hints in the numeric threshold input (date fields get a YYYY-MM-DD hint, number fields a "type a number" hint) (#347).

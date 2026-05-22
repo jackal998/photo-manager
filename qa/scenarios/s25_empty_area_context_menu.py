@@ -212,7 +212,7 @@ def main() -> int:
     EXPECTED_ITEMS = {
         "Set Action",
         "Open Folder",
-        "Set Action by Field/Regex…",
+        "Set Action by Field…",
         "Remove from List",
     }
     print("step: branch_c_row_without_prior_selection")

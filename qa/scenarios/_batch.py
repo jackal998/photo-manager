@@ -143,7 +143,7 @@ ALL_SCENARIOS = [
     # is the only signal that differs across the 5 files, so q95 wins.
     "s42_scoring",
     # s43 (#209) — Set Action dialog's new numeric-condition panel.
-    # Opens Execute Action → Set Action by Field/Regex → switches the
+    # Opens Execute Action → Set Action by Field → switches the
     # field combo to Size (Bytes) → verifies the numeric panel
     # surfaces → sets a threshold > (q72's size) → verifies the 3
     # larger files are marked delete and the 2 smaller ones stay

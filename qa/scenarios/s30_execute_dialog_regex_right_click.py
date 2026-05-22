@@ -1,4 +1,4 @@
-"""Scenario 30 — Execute Action dialog: right-click → Set Action by Field/Regex…
+"""Scenario 30 — Execute Action dialog: right-click → Set Action by Field…
 
 Required source: qa/sandbox/near-duplicates (5 files, basenames neardup_NN_qXX.jpg).
 
@@ -9,7 +9,7 @@ button; non-destructive right-clicks gave you delete / keep / remove
 from list but no regex entry. This scenario pins the new behavior:
 
   scan → close & load → open Execute Action dialog →
-  right-click first file row → click "Set Action by Field/Regex…" →
+  right-click first file row → click "Set Action by Field…" →
   ActionDialog opens with a populated live-preview pane →
   field=File Name, regex=q[89]\\d, action=delete → assert counter shows
   "3 of 5 match" → Apply → Close inner → Close outer (no execute) →
@@ -45,7 +45,7 @@ ACTION = "delete"
 # en.yml value of execute_dialog.set_action_by_regex_menu — drift
 # here surfaces as a popup-menu-item-not-found error from
 # select_popup_menu_path.
-REGEX_MENU_LABEL = "Set Action by Field/Regex…"
+REGEX_MENU_LABEL = "Set Action by Field…"
 
 
 def _read_decisions() -> dict[str, str]:

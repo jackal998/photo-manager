@@ -5,8 +5,8 @@ Required source: qa/sandbox/near-duplicates (5 JPEGs — same fixture as s43).
 What this exercises (the bug #237 fixed by dialog_handler.py passing
 ``groups=`` through to ActionDialog):
 
-  1. Open the standalone Set Action by Field/Regex dialog via the
-     main-window menu route (Action → Set Action by Field/Regex…).
+  1. Open the standalone Set Action by Field dialog via the
+     main-window menu route (Action → Set Action by Field…).
   2. Pick a numeric-capable field (Size (Bytes)) from the field combo.
   3. Assert the numeric-condition panel (>=/</== threshold + Top-N)
      actually surfaces — specifically, the ``numericValueEdit`` widget

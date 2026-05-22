@@ -21,7 +21,7 @@ manifest gets the right column update, and the rows stay visible
 in the tree afterwards.
 
 What's verified:
-  * Action menu → Set Action by Field/Regex… → action="remove from list"
+  * Action menu → Set Action by Field… → action="remove from list"
     Apply → matched rows have user_decision='remove_from_list' in
     SQLite; non-matched rows are unchanged.
   * No file is actually removed from the manifest's review-set yet

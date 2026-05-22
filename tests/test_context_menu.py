@@ -331,7 +331,7 @@ class TestClickedColumnPassthrough:
                                                clicked_col=4)
 
         select_action = next(
-            (a for a in menu.actions() if "Field/Regex" in a.text()), None
+            (a for a in menu.actions() if "Set Action by Field" in a.text()), None
         )
         assert select_action is not None
         select_action.trigger()
@@ -348,7 +348,7 @@ class TestClickedColumnPassthrough:
         handler._create_single_selection_menu(menu, {"type": "file", "path": "/a.jpg"})
 
         select_action = next(
-            (a for a in menu.actions() if "Field/Regex" in a.text()), None
+            (a for a in menu.actions() if "Set Action by Field" in a.text()), None
         )
         assert select_action is not None
         select_action.trigger()
@@ -519,7 +519,7 @@ class TestContextMenuPolicyAndSlot:
 class TestGroupSingleSelection:
     """Right-clicking a group row (item['type'] != 'file') skips the
     file-only Set Action submenu and the Open Folder action — but the
-    common actions (Set Action by Field/Regex…, Remove from List) are
+    common actions (Set Action by Field…, Remove from List) are
     still present."""
 
     def test_group_item_skips_file_only_actions(self, qapp):
@@ -539,7 +539,7 @@ class TestGroupSingleSelection:
         labels = [a.text() for a in menu.actions() if a.text()]
         assert "Set Action" not in labels
         assert "Open Folder" not in labels
-        assert "Set Action by Field/Regex…" in labels
+        assert "Set Action by Field…" in labels
         assert "Remove from List" in labels
 
 

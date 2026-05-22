@@ -243,7 +243,7 @@ class MainWindow(QMainWindow):
         # manifest state at open time (no caching — picks up any
         # in-memory changes since the last open). settings is threaded
         # through so the regex dialog can persist Phase B preferences
-        # (Beginner/Regex mode + recent-patterns history).
+        # (Simple/Regex mode + recent-patterns history).
         self.dialog_handler = DialogHandler(
             parent_widget=self,
             tree_data_provider=self.tree_data_provider,
@@ -587,7 +587,7 @@ class MainWindow(QMainWindow):
         self.file_operations.execute_action()
 
     def on_open_action_dialog(self) -> None:
-        """Handle open Set Action by Field/Regex dialog."""
+        """Handle open Set Action by Field dialog."""
         self.dialog_handler.show_action_dialog()
 
     # PRESERVED: Tree selection change handler

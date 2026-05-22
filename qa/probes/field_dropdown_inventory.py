@@ -1,4 +1,4 @@
-"""Probe: tree column headers ↔ Set-Action-by-Field/Regex dialog dropdown.
+"""Probe: tree column headers ↔ Set-Action-by-Field dialog dropdown.
 
 Would have caught #238 (Score / Lock / Resolution missing from Select
 dialog field dropdown). Complements the static AST-based probe
@@ -12,7 +12,7 @@ mid-init mutations).
 Behaviour (per #243 design comment):
   1. Launch the app, load a near-duplicates fixture.
   2. Read result-tree column headers via UIA → ``column_headers``.
-  3. Open Action menu → "Set Action by Field/Regex…".
+  3. Open Action menu → "Set Action by Field…".
   4. Read the field dropdown's items via UIA ItemContainer pattern
      → ``dropdown_fields`` (walks the full virtualized list — past
      Qt's ``maxVisibleItems`` cap; see s50 history for why

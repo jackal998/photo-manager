@@ -14,7 +14,7 @@ is the single source of truth, so the Simple inputs write through
 to the regex line edit on every change. This scenario verifies
 both layers:
 
-  scan → close & load → Action menu → Set Action by Field/Regex…
+  scan → close & load → Action menu → Set Action by Field…
   → assert Simple mode is the active default
   → set op="contains" + text="q9"
   → assert counter shows "1 of 5 match"

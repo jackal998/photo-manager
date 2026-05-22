@@ -67,12 +67,12 @@ class DialogHandler:
         # without re-wiring on every load.
         self.records_provider = records_provider
         # Optional JsonSettings handle for persistence — the regex
-        # dialog uses it for the Beginner/Regex mode preference and the
+        # dialog uses it for the Simple/Regex mode preference and the
         # recent-patterns history. Optional so test callers can pass None.
         self.settings = settings
 
     def show_action_dialog(self, clicked_col: int | None = None) -> None:
-        """Show the Set Action by Field/Regex dialog."""
+        """Show the Set Action by Field dialog."""
         try:
             from app.views.dialogs.select_dialog import ActionDialog
         except Exception:

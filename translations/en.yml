@@ -28,7 +28,7 @@ menu:
     exit: "Exit"
   action:
     title: "&Action"
-    by_regex: "Set Action by Field/Regex…"
+    by_regex: "Set Action by Field…"
     execute: "Execute Action…"
   list:
     title: "&List"
@@ -165,7 +165,7 @@ execute_dialog:
   no_match_title: "Set Action — No Match"
   no_match_body: "No files matched the pattern."
   invalid_regex_title: "Invalid Regex"
-  set_action_by_regex_menu: "Set Action by Field/Regex…"
+  set_action_by_regex_menu: "Set Action by Field…"
   files_not_found_title: "Files Not Found"
   files_not_found_body: "The following files could not be found and were skipped:\n\n{missing}{suffix}"
   files_not_found_more: "\n…and {n} more"
@@ -184,17 +184,12 @@ locked_confirm:
   btn_unlocked_only: "Apply to Unlocked Only"
   btn_cancel: "Cancel"
 
-# ActionDialog (Set Action by Field/Regex).
+# ActionDialog (Set Action by Field).
 action_dialog:
-  title: "Set Action by Field/Regex"
-  field_label: "Field"
-  regex_label: "Regex"
+  title: "Set Action by Field"
+  field_label: "Field:"
+  regex_label: "Regex:"
   regex_placeholder: "e.g. ^IMG_\\d+\\.HEIC$"
-  regex_tips: |
-    Regex tips:
-      Exact match: ^text$     Any substring: .*     Digits: \d+
-      Examples:  ^IMG_\d+\.HEIC$  (File Name),  ^delete$  (Action),
-                 ^exact$  (Similarity),  ^H:\\Photos\\2023\\  (Folder)
   set_action_label: "Set Action:"
   apply_button: "Apply"
   close_button: "Close"
@@ -219,14 +214,14 @@ action_dialog:
   simple_op_exact: "exactly matches"
   simple_text_placeholder: "type the text to match…"
   simple_complex_notice: "This pattern is more advanced than Simple can express — switch to Regex to keep editing it."
-  cheatsheet_label: "Insert:"
+  cheatsheet_label: "Insert into pattern:"
   cheatsheet_any: ".* — any text"
   cheatsheet_digit: "\\d — digit"
   cheatsheet_word: "\\w — word char"
   cheatsheet_start: "^ — start"
   cheatsheet_end: "$ — end"
   cheatsheet_dot: "\\. — literal dot"
-  cheatsheet_set: "[abc] — any of"
+  cheatsheet_set: "[abc] — any of these chars"
   recent_button: "Recent ▾"
   recent_empty: "(no recent patterns)"
   recent_clear: "Clear recent patterns"
@@ -238,11 +233,12 @@ action_dialog:
   numeric_mode_threshold: "Threshold"
   numeric_mode_topn: "Top N per group"
   numeric_threshold_label: "Where the value is"
-  numeric_topn_label: "Pick"
-  numeric_topn_suffix: "per group"
+  numeric_topn_label: "Pick the"
+  numeric_topn_suffix: "in each group"
   numeric_order_top: "Top"
   numeric_order_bottom: "Bottom"
-  numeric_value_placeholder: "type a number (or YYYY-MM-DD for dates)…"
+  numeric_value_placeholder_number: "type a number…"
+  numeric_value_placeholder_date: "type a date (YYYY-MM-DD)…"
   cmp_op_gt: ">"
   cmp_op_ge: ">="
   cmp_op_lt: "<"
@@ -254,7 +250,7 @@ action_dialog:
 context_menu:
   set_action: "Set Action"
   open_folder: "Open Folder"
-  set_action_by_regex: "Set Action by Field/Regex…"
+  set_action_by_regex: "Set Action by Field…"
   remove_from_list: "Remove from List"
   lock: "Lock"
   unlock: "Unlock"
