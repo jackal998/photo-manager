@@ -151,6 +151,47 @@ def main() -> int:
         print("FAIL: Simple mode is not the default")
         return 1
 
+    # #354 — Apply-button gating probe (Simple-mode variant).
+    # Layer-1 tests in tests/test_select_dialog.py::TestApplyGate cover
+    # the no-emit rule on _emit_set_action when the pattern is empty or
+    # invalid, but they don't observe the live button's enabled state.
+    # This probe reads dlg._btn_set_action.isEnabled() through UIA for
+    # both gate paths so a future PR that rewires the button (e.g. a
+    # QToolButton swap, or dropping the setEnabled(False) calls in
+    # _validate_regex) trips a visible regression here. Probe state is
+    # restored before the existing happy-path flow continues.
+    print("step: probe_apply_gate")
+    probe_apply = _uia._find_dialog_button(
+        action_dlg, _uia.ACTION_DIALOG_BTN_APPLY
+    )
+    # Empty-text case — Simple text is empty by default on dialog open.
+    # The 150 ms live-preview debounce has already elapsed by the time
+    # we get here (the assert_simple_mode_is_default block above takes
+    # well over 150 ms), so the gate has settled.
+    print(f"  probe_status: apply_enabled_empty={probe_apply.is_enabled()}")
+    # Invalid-pattern case — Simple mode synthesises via re.escape so
+    # no Simple input is ever syntactically invalid; the gate path that
+    # disables Apply on re.error lives behind the Regex-mode line edit
+    # (select_dialog.py line 1266). Toggle into Regex mode to exercise
+    # it, then restore Simple state so the existing happy path runs
+    # unchanged.
+    regex_radio.click_input()
+    time.sleep(0.3)
+    probe_regex_edit = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "Edit", ".regexLineEdit"
+    )
+    if probe_regex_edit is not None:
+        probe_regex_edit.iface_value.SetValue("(unclosed")
+        time.sleep(0.3)
+    print(f"  probe_status: apply_enabled_invalid={probe_apply.is_enabled()}")
+    # Clear the line edit before toggling back so Simple's reverse-parse
+    # doesn't see the malformed "(unclosed" pattern.
+    if probe_regex_edit is not None:
+        probe_regex_edit.iface_value.SetValue("")
+        time.sleep(0.2)
+    simple_radio.click_input()
+    time.sleep(0.3)
+
     print("step: select_field")
     field_combo = _uia._find_descendant_by_aid_suffix(
         action_dlg, "ComboBox", ".regexFieldCombo"

@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from qa.scenarios import _invariants, _uia
@@ -105,6 +106,45 @@ def main() -> int:
     print(f"  pre_total={len(pre)}")
     print(f"  pre_delete={sum(1 for v in pre.values() if v == 'delete')}")
     print(f"  pre_empty={sum(1 for v in pre.values() if v == '')}")
+
+    # #354 — Apply-button gating probe. Layer-1 tests in
+    # tests/test_select_dialog.py::TestApplyGate pin _validate_regex +
+    # _compute_apply_enabled (no-emit on empty / invalid), but no
+    # layer-3 driver asserts that the *button itself* honors
+    # setEnabled(False). If a future PR rewires _btn_set_action to a
+    # control that ignores setEnabled, or drops the setEnabled(False)
+    # calls in _validate_regex, layer-1 still passes while the UI
+    # silently regresses. The probe opens the dialog, exercises both
+    # gated cases, prints the live enabled state, then closes — the
+    # main flow below reopens the dialog and proceeds unchanged.
+    print("step: probe_apply_gate")
+    probe_dlg, _ = _uia.open_action_by_regex_dialog(win)
+    regex_radio = _uia._find_descendant_by_aid_suffix(
+        probe_dlg, "RadioButton", ".regexModeRegex"
+    )
+    if regex_radio is not None:
+        try:
+            if not regex_radio.is_selected():
+                regex_radio.click_input()
+                time.sleep(0.2)
+        except Exception:
+            pass
+    probe_apply = _uia._find_dialog_button(probe_dlg, _uia.ACTION_DIALOG_BTN_APPLY)
+    probe_regex = _uia._find_descendant_by_aid_suffix(
+        probe_dlg, "Edit", ".regexLineEdit"
+    )
+    if probe_regex is not None:
+        probe_regex.iface_value.SetValue("")
+        # Past the 150 ms live-preview debounce so _validate_regex has
+        # run before we read the button state.
+        time.sleep(0.3)
+    print(f"  probe_status: apply_enabled_empty={probe_apply.is_enabled()}")
+    if probe_regex is not None:
+        probe_regex.iface_value.SetValue("(unclosed")
+        time.sleep(0.3)
+    print(f"  probe_status: apply_enabled_invalid={probe_apply.is_enabled()}")
+    _uia.close_action_dialog(probe_dlg)
+    _, win = _uia.connect_main()
 
     print("step: apply_regex_via_menu")
     rx = re.compile(REGEX, re.IGNORECASE)
