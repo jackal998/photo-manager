@@ -903,6 +903,11 @@ class ActionDialog(QDialog):
             self._set_default_field(initial_field)
         else:
             self._set_default_field("File Name")
+        # A1 from #347: track the prior field so _on_field_changed can
+        # tell whether the user typed something custom (preserve it)
+        # or the regex is still the auto-default from the prior field
+        # (safe to overwrite with the new field's default).
+        self._previous_field = self._current_field()
         self.combo.currentIndexChanged.connect(self._on_field_changed)
 
         # Live validation on the regex input. Simple mode synthesises
@@ -1176,9 +1181,13 @@ class ActionDialog(QDialog):
     def _apply_recent_pattern(self, pattern: str) -> None:
         # Picking from Recent always lands the user in Regex mode — the
         # stored patterns are raw regex strings, not Simple tuples.
+        # A12 from #347: set self.regex FIRST, then flip the mode. If
+        # the order were reversed, the mode flip's reverse-parse would
+        # read the *outgoing* Simple state into self.regex, briefly
+        # making the canonical pattern lie about what Apply will run.
+        self.regex.setText(pattern)
         if self._mode != MODE_REGEX and self._match_fn is not None:
             self._mode_regex_btn.setChecked(True)
-        self.regex.setText(pattern)
 
     def _clear_recent_patterns(self) -> None:
         self._recent_patterns = []
@@ -1457,25 +1466,45 @@ class ActionDialog(QDialog):
             pass
 
     def _on_field_changed(self, _index: int) -> None:
-        # Switching to a numeric-capable field swaps the panel stack.
-        # _apply_mode_visibility is the single source of truth for
-        # which panel is visible — call it BEFORE re-stamping the
-        # regex line edit so the regex panel (now potentially hidden)
-        # doesn't drive a spurious live-preview refresh.
+        # A1 from #347: preserve user-typed regex across field changes.
+        # Compare the current text to the prior field's auto-default;
+        # only overwrite when they match (or the field is empty). A
+        # user who typed `\d{4}-\d{2}` against File Name and then
+        # mis-clicked the combo would otherwise lose their work with
+        # no undo.
+        #
+        # A1-ext from #347: order swap. Apply the new pre-fill FIRST
+        # (when allowed), then call _apply_mode_visibility so Simple
+        # reverse-parses the new canonical value rather than the stale
+        # one. The previous comment justified the visibility-first
+        # order via a "spurious preview refresh" concern, but
+        # combo.currentIndexChanged already triggers _preview_timer
+        # independently — the order swap is a no-op for the preview
+        # timer and a win for Simple-panel consistency.
+        prev_default = re.escape(self._row_values.get(self._previous_field, ""))
+        current_text = self.regex.text()
+        if current_text == prev_default or current_text == "":
+            self._apply_exact_regex_for_current_field()
         self._apply_mode_visibility()
-        self._apply_exact_regex_for_current_field()
         # A5 from #347: refresh the numeric placeholder so date fields
         # get the date hint and number fields get the number hint.
         self._update_numeric_value_placeholder()
         # Validation icon would otherwise read the (now-irrelevant)
         # regex value in numeric-panel mode; suppress it explicitly.
         self._validate_regex()
+        self._previous_field = self._current_field()
 
     def _apply_exact_regex_for_current_field(self) -> None:
+        # B10 from #348: emit a "contains" pattern (no ^/$ anchors).
+        # The reverse-parser in _try_parse_simple then naturally lifts
+        # this into (op="contains", text=value) — matching the
+        # documented default Simple op ("most-useful starting state").
+        # Pre-B10, this method stamped ^X$ which reverse-parsed as
+        # "exact", silently overriding the documented default.
         field = self._current_field()
         value = self._row_values.get(field, "")
         if value:
-            self.regex.setText(f"^{re.escape(value)}$")
+            self.regex.setText(re.escape(value))
         else:
             self.regex.clear()
 

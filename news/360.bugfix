@@ -1,0 +1,1 @@
+Preserve user-typed regex across Set Action dialog field changes and seed the Simple panel as ("contains", value) when a row is highlighted at open (#347).
