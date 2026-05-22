@@ -368,6 +368,18 @@ them unless the human says to.
   agents degrades performance up to 70% on sequential tasks. The
   complexity table is the gate.
 
+**MAST failure-category coverage** (arxiv 2503.13657, 14 modes in 3
+categories — Multi-Agent System Failure Taxonomy):
+(i) system design issues → addressed by Phase 2 complexity gate +
+Phase 3 human plan-approval. /pr-review's gate decomposition is the
+same pattern at the manager level (narrow trigger conditions, sub-skills
+independently editable).
+(ii) inter-agent misalignment → addressed by single-direction brief
+passing (researcher → developer → qa, no loops) and central LEAD
+ownership of merges and remote writes.
+(iii) task verification → addressed by qa-agent (Generator-Verifier)
+and the 4-cycle dev↔QA loop cap.
+
 ## Invocation examples
 
 ```
