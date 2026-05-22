@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 from typing import Any, Callable
 
+from loguru import logger
+
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -43,6 +45,17 @@ from infrastructure.i18n import t
 # regex matching and column dispatch) to its column.* translation key.
 # The dialog displays the translated label but emits the English name
 # in setActionRequested so downstream regex matchers stay locale-free.
+#
+# C15 from #349 (Wave 6, won't-fix): this map deliberately lives here,
+# not in app.views.constants where ``settable_decisions`` lives. The
+# two paths cover different semantic domains: field labels are
+# dialog-local column-display names used only by this combo, while
+# decision labels are app-wide action choices also consumed by
+# ``context_menu.py`` and ``execute_action_dialog.py``. Unifying
+# them would push field-label logic into a constants module where
+# it doesn't belong, or pull decision logic into this dialog where
+# it can't be shared — both worse couplings than the current
+# separation.
 _FIELD_LABEL_KEYS: dict[str, str] = {
     "Similarity":    "column.similarity",
     "Action":        "column.action",
@@ -638,9 +651,21 @@ class ActionDialog(QDialog):
             persisted = self._settings_get(_MODE_KEY, MODE_SIMPLE)
             self._mode = _LEGACY_MODE_VALUES.get(persisted, MODE_SIMPLE)
 
-        self._recent_patterns: list[str] = list(
-            self._settings_get(_RECENT_KEY, []) or []
-        )
+        # E2 from #351 (Wave 6): defend against a corrupt persisted
+        # value (e.g. a dict ends up at this key) by filtering to
+        # strings only. A bare `list(value)` would silently iterate
+        # a dict's keys; here we drop anything non-string and write
+        # the cleaned list back so settings.json self-heals on next
+        # session — the user doesn't lose all of Recent history on
+        # one corrupt entry.
+        _raw_recent = self._settings_get(_RECENT_KEY, []) or []
+        if not isinstance(_raw_recent, list):
+            _raw_recent = []
+        self._recent_patterns: list[str] = [
+            p for p in _raw_recent if isinstance(p, str)
+        ]
+        if len(self._recent_patterns) != len(_raw_recent):
+            self._settings_set(_RECENT_KEY, self._recent_patterns)
 
         # Build the per-field combo box, regex line edit, action combo, and
         # buttons. They live in this `left_layout` regardless of whether
@@ -919,6 +944,15 @@ class ActionDialog(QDialog):
         # include_lock=True adds "lock" / "unlock" so users can bulk-pin
         # decisions before a broader regex sweep, and bulk-unlock at
         # execute time as the escape hatch. See photo-manager#164.
+        # B13 from #348 (Wave 6, won't-fix): _action_combo is populated
+        # once here and never re-localized. That's safe because locale
+        # change is wired through MenuController._on_language_chosen →
+        # MainWindow.relocalize() which tears down and rebuilds the
+        # entire MainWindow — including any open ActionDialog, which
+        # is modal and therefore cannot be open during a locale
+        # switch in the first place. Repopulation is structurally
+        # impossible while the dialog is alive; no signal subscribe
+        # is needed.
         self._decisions = settable_decisions(include_remove=True, include_lock=True)
         for label, _value in self._decisions:
             self._action_combo.addItem(label)
@@ -1015,9 +1049,11 @@ class ActionDialog(QDialog):
             self._num_mode_threshold_btn.toggled.connect(self._preview_timer.start)
 
         self._apply_exact_regex_for_current_field()
-        # Default Simple op is "contains" (index 0) — most useful
-        # starting state and matches the most-common user intent.
-        self._simple_op_combo.setCurrentIndex(0)
+        # Default Simple op is "contains" (the first item added to
+        # _simple_op_combo above) — most useful starting state and
+        # matches the most-common user intent. The combo already
+        # reads index 0 after addItem; no explicit setCurrentIndex
+        # call is needed (E6 from #351, Wave 6 — dead-line removal).
         # Apply the mode visibility AFTER all widgets exist.
         self._apply_mode_visibility()
         self._update_numeric_value_placeholder()
@@ -1028,21 +1064,36 @@ class ActionDialog(QDialog):
     # ── Settings helpers ───────────────────────────────────────────────────
 
     def _settings_get(self, key: str, default):
+        # E1 from #351 (Wave 6): preserve the no-throw guarantee but
+        # log on failure so a corrupt settings file leaves a
+        # breadcrumb. Pre-Wave-6 the bare-except meant a malformed
+        # ``ui.action_dialog.recent_patterns`` value (e.g. a string
+        # where a list was expected) failed silently and the user's
+        # Recent dropdown stayed empty with no signal.
         if self._settings is None:
             return default
         try:
             return self._settings.get(key, default)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "ActionDialog: settings.get({!r}) failed: {}", key, exc
+            )
             return default
 
     def _settings_set(self, key: str, value) -> None:
+        # E9 from #351 (Wave 6): mirror E1 on the write path. A
+        # read-only settings file or full disk used to silently fail
+        # — user believed their patterns persisted; next launch
+        # showed an empty Recent dropdown.
         if self._settings is None:
             return
         try:
             self._settings.set(key, value)
             self._settings.save()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "ActionDialog: settings.set({!r}) failed: {}", key, exc
+            )
 
     # ── Mode toggle ────────────────────────────────────────────────────────
 
