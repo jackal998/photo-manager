@@ -1,0 +1,1 @@
+Add `test_probe_destructive_surface_inventory` static probe to flag duplicate destructive entry points across menu bar + context menu (#353).
