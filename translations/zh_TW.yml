@@ -160,7 +160,7 @@ action_dialog:
   title: "依欄位/正規式設定動作"
   field_label: "欄位"
   regex_label: "正規式"
-  regex_placeholder: "例如:.*\\iPhone\\2023\\02\\.*"
+  regex_placeholder: "例如:^IMG_\\d+\\.HEIC$"
   regex_tips: |
     正規式提示:
       完全相符:^text$     任意子字串:.*     數字:\d+

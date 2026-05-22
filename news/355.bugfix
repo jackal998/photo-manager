@@ -1,0 +1,1 @@
+Refuse Apply on empty/invalid regex in the Set Action dialog, preventing every-row destructive actions when the pattern is blank (#347).

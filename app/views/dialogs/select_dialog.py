@@ -1187,8 +1187,35 @@ class ActionDialog(QDialog):
 
     # ── Validation (synchronous) ───────────────────────────────────────────
 
+    def _compute_apply_enabled(self) -> bool:
+        """Whether Apply is safe to fire right now. A9 + A10 from #347.
+
+        Empty pattern + Delete decision would otherwise wipe every row
+        (``re.search("", anything)`` is truthy), and an invalid regex
+        would raise at the receiver and still enter Recent. We gate the
+        button here so both the click path AND any programmatic callers
+        of ``_emit_set_action`` see the same rule.
+
+        Numeric panel: empty/invalid threshold yields matched=0 (no
+        destructive Apply), and the Top-N spinbox is Qt-bounded to ≥1.
+        Safe-by-default — return True.
+        """
+        if self._field_panel_is_numeric():
+            return True
+        pattern = self.regex.text()
+        if not pattern:
+            return False
+        # Simple mode synthesises patterns via re.escape so they always
+        # compile; the empty-text path already returned False above.
+        if self._mode == MODE_REGEX:
+            try:
+                re.compile(pattern, re.IGNORECASE)
+            except re.error:
+                return False
+        return True
+
     def _validate_regex(self) -> None:
-        """Update ✓/✗ icon and the friendly error label.
+        """Update ✓/✗ icon, friendly error label, AND Apply-button state.
 
         In Beginner mode the synthesised pattern is always valid (we
         re.escape the user's input), so the icon stays empty and we
@@ -1198,12 +1225,17 @@ class ActionDialog(QDialog):
         green ✓, error hidden. Invalid regex → red ✗, error shown with
         the `re.error` message. The match counter falls back to an em
         dash while the regex is invalid.
+
+        Apply button is gated via ``_compute_apply_enabled`` on every
+        path (A9+A10 from #347) so empty/invalid patterns cannot fire
+        destructive actions.
         """
         if self._mode == MODE_SIMPLE or self._field_panel_is_numeric():
             self._validation_icon.setText("")
             self._validation_icon.setStyleSheet("")
             self._validation_icon.setAccessibleName("")
             self._validation_error.hide()
+            self._btn_set_action.setEnabled(self._compute_apply_enabled())
             return
 
         pattern = self.regex.text()
@@ -1212,10 +1244,11 @@ class ActionDialog(QDialog):
             self._validation_icon.setStyleSheet("")
             self._validation_icon.setAccessibleName("")
             self._validation_error.hide()
+            self._btn_set_action.setEnabled(False)
             return
 
         try:
-            re.compile(pattern)
+            re.compile(pattern, re.IGNORECASE)
         except re.error as exc:
             self._validation_icon.setText("✗")
             self._validation_icon.setStyleSheet("color: #d62728; font-weight: bold;")
@@ -1230,12 +1263,14 @@ class ActionDialog(QDialog):
                 self._match_counter.setText(
                     t("action_dialog.match_counter_invalid")
                 )
+            self._btn_set_action.setEnabled(False)
             return
 
         self._validation_icon.setText("✓")
         self._validation_icon.setStyleSheet("color: #2ca02c; font-weight: bold;")
         self._validation_icon.setAccessibleName("Regex valid")
         self._validation_error.hide()
+        self._btn_set_action.setEnabled(True)
 
     # ── Preview (debounced) ────────────────────────────────────────────────
 
@@ -1349,20 +1384,29 @@ class ActionDialog(QDialog):
         return str(data) if data is not None else self.combo.currentText()
 
     def _emit_set_action(self) -> None:
+        # A9+A10 from #347: defense-in-depth. The Apply button is also
+        # disabled via _validate_regex when the pattern is empty or
+        # invalid, but tests + programmatic callers can reach this
+        # method directly. Empty patterns would match every row
+        # (re.search("", anything) is truthy) and invalid patterns
+        # would raise at the receiver and still poison Recent.
+        if not self._compute_apply_enabled():
+            return
         field = self._current_field()
         if self._field_panel_is_numeric():
             pattern = self._build_numeric_pattern()
         else:
             pattern = self._build_pattern()
-            # Recent-patterns only records raw regex strings — numeric
-            # pseudo-patterns (`__cmp__:`, `__top_n__:`) would be
-            # confusing in the Recent dropdown which lives in the
-            # regex panel. Record only when we're emitting a real
-            # regex.
-            self._record_recent_pattern(pattern)
         idx = self._action_combo.currentIndex()
         _label, value = self._decisions[idx]
         self.setActionRequested.emit(field, pattern, value)
+        # Recent-patterns only records raw regex strings — numeric
+        # pseudo-patterns (`__cmp__:`, `__top_n__:`) would be confusing
+        # in the Recent dropdown which lives in the regex panel.
+        # A9 from #347: record AFTER successful emit, not before, so
+        # broken patterns never enter Recent and persist across sessions.
+        if not self._field_panel_is_numeric():
+            self._record_recent_pattern(self._build_pattern())
 
     def _build_numeric_pattern(self) -> str:
         """Encode the active numeric sub-panel as a pattern string."""
