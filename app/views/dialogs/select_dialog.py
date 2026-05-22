@@ -118,7 +118,14 @@ _CHEATSHEET_TOKENS: list[tuple[str, str]] = [
 # Cap chosen so the dropdown stays scannable without scroll on a
 # typical screen.
 _RECENT_KEY = "ui.action_dialog.recent_patterns"
-_MODE_KEY = "ui.action_dialog.mode"
+# A8: mode key is now per-context (see context_id parameter). The
+# legacy key "ui.action_dialog.mode" is read as a fallback so
+# existing user state migrates seamlessly.
+_MODE_KEY_TEMPLATE = "ui.action_dialog.{context_id}.mode"
+_MODE_KEY_LEGACY = "ui.action_dialog.mode"
+# A8: field and simple_op keys are also per-context (E3, E8).
+_FIELD_KEY_TEMPLATE = "ui.action_dialog.{context_id}.field"
+_SIMPLE_OP_KEY_TEMPLATE = "ui.action_dialog.{context_id}.simple_op"
 _RECENT_CAP = 10
 
 # Fields whose underlying record attribute is numeric (or a datetime
@@ -616,6 +623,7 @@ class ActionDialog(QDialog):
         match_fn: MatchFn | None = None,
         settings: object | None = None,
         groups: list | None = None,
+        context_id: str = "main",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("action_dialog.title"))
@@ -638,33 +646,62 @@ class ActionDialog(QDialog):
         self._groups = groups if groups is not None else []
         self._numeric_mode = NUMERIC_MODE_THRESHOLD
 
-        # Mode is only meaningful when match_fn is supplied (Simple
-        # mode would have nothing to live-preview against). Default is
-        # Simple — the on-ramp for non-regex users; power users who
-        # prefer Regex flip the toggle once and the choice persists.
-        # _LEGACY_MODE_VALUES translates the Phase B "beginner" string
-        # so users who upgraded from Phase B don't silently flip back
-        # to the default.
+        # A8: per-context settings keys so "main" and "execute" entry
+        # points persist independent mode/field/op preferences.
+        self._context_id = context_id
+        self._mode_key = _MODE_KEY_TEMPLATE.format(context_id=context_id)
+        self._field_key = _FIELD_KEY_TEMPLATE.format(context_id=context_id)
+        self._simple_op_key = _SIMPLE_OP_KEY_TEMPLATE.format(context_id=context_id)
+
+        # C1+C4: mode toggle is always created (Simple disabled when
+        # match_fn is None). Default logic: no match_fn → Regex only;
+        # with match_fn → read per-context key, fall back to legacy
+        # global key, then default to Simple.
         if self._match_fn is None:
             self._mode = MODE_REGEX
         else:
-            persisted = self._settings_get(_MODE_KEY, MODE_SIMPLE)
+            # A8: per-context key first, legacy global key as fallback.
+            persisted = self._settings_get(self._mode_key, None)
+            if persisted is None:
+                persisted = self._settings_get(_MODE_KEY_LEGACY, MODE_SIMPLE)
             self._mode = _LEGACY_MODE_VALUES.get(persisted, MODE_SIMPLE)
 
-        # E2 from #351 (Wave 6): defend against a corrupt persisted
-        # value (e.g. a dict ends up at this key) by filtering to
-        # strings only. A bare `list(value)` would silently iterate
-        # a dict's keys; here we drop anything non-string and write
-        # the cleaned list back so settings.json self-heals on next
-        # session — the user doesn't lose all of Recent history on
-        # one corrupt entry.
+        # A6 + E2-upgrade: _recent_patterns now stores (field, pattern)
+        # tuples. The shape-validator accepts: valid tuples, legacy bare
+        # strings (migrated to (None, str) with a warning), and drops
+        # anything malformed with a warning.
         _raw_recent = self._settings_get(_RECENT_KEY, []) or []
         if not isinstance(_raw_recent, list):
             _raw_recent = []
-        self._recent_patterns: list[str] = [
-            p for p in _raw_recent if isinstance(p, str)
-        ]
-        if len(self._recent_patterns) != len(_raw_recent):
+        _cleaned: list[tuple[str | None, str]] = []
+        _changed = False
+        for entry in _raw_recent:
+            if (
+                isinstance(entry, tuple)
+                and len(entry) == 2
+                and isinstance(entry[0], str)
+                and isinstance(entry[1], str)
+                and entry[0]
+                and entry[1]
+            ):
+                _cleaned.append(entry)
+            elif isinstance(entry, str) and entry:
+                # Legacy bare-string: migrate to (None, pattern).
+                # None field means "applies to any field" — shown in
+                # Recent menu only when field-gating allows it.
+                logger.warning(
+                    "ActionDialog: migrating legacy recent pattern {!r} to tuple",
+                    entry,
+                )
+                _cleaned.append((None, entry))
+                _changed = True
+            else:
+                logger.warning(
+                    "ActionDialog: dropping malformed recent entry {!r}", entry
+                )
+                _changed = True
+        self._recent_patterns: list[tuple[str | None, str]] = _cleaned
+        if _changed:
             self._settings_set(_RECENT_KEY, self._recent_patterns)
 
         # Build the per-field combo box, regex line edit, action combo, and
@@ -675,25 +712,39 @@ class ActionDialog(QDialog):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ── Mode toggle (only when match_fn is provided) ───────────────────
-        if self._match_fn is not None:
-            mode_row = QHBoxLayout()
-            mode_row.addWidget(QLabel(t("action_dialog.mode_label")))
-            self._mode_simple_btn = QRadioButton(t("action_dialog.mode_simple"))
-            self._mode_simple_btn.setObjectName("regexModeSimple")
-            self._mode_regex_btn = QRadioButton(t("action_dialog.mode_regex"))
-            self._mode_regex_btn.setObjectName("regexModeRegex")
-            mode_row.addWidget(self._mode_simple_btn)
-            mode_row.addWidget(self._mode_regex_btn)
-            mode_row.addStretch(1)
-            left_layout.addLayout(mode_row)
-            mode_group = QButtonGroup(self)
-            mode_group.addButton(self._mode_simple_btn)
-            mode_group.addButton(self._mode_regex_btn)
-            self._mode_button_group = mode_group  # keep ref alive
+        # ── Mode toggle (C1: always created; Simple disabled when no match_fn)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel(t("action_dialog.mode_label")))
+        self._mode_simple_btn = QRadioButton(t("action_dialog.mode_simple"))
+        self._mode_simple_btn.setObjectName("regexModeSimple")
+        self._mode_regex_btn = QRadioButton(t("action_dialog.mode_regex"))
+        self._mode_regex_btn.setObjectName("regexModeRegex")
+        mode_row.addWidget(self._mode_simple_btn)
+        mode_row.addWidget(self._mode_regex_btn)
+        # C2: Recent button lives in the mode row (always visible, not
+        # buried inside _regex_widget where it disappeared in Simple mode).
+        self._recent_btn = QPushButton(t("action_dialog.recent_button"))
+        self._recent_btn.setObjectName("regexRecentButton")
+        self._recent_btn.clicked.connect(self._show_recent_menu)
+        mode_row.addWidget(self._recent_btn)
+        mode_row.addStretch(1)
+        left_layout.addLayout(mode_row)
+        mode_group = QButtonGroup(self)
+        mode_group.addButton(self._mode_simple_btn)
+        mode_group.addButton(self._mode_regex_btn)
+        self._mode_button_group = mode_group  # keep ref alive
+        if self._match_fn is None:
+            # C1: Simple is meaningless without a live-preview data source —
+            # disable it with a descriptive tooltip.
+            self._mode_simple_btn.setEnabled(False)
+            self._mode_simple_btn.setToolTip(
+                t("action_dialog.simple_disabled_no_match_fn")
+            )
+            self._mode_regex_btn.setChecked(True)
+        else:
             (self._mode_simple_btn if self._mode == MODE_SIMPLE
              else self._mode_regex_btn).setChecked(True)
-            self._mode_simple_btn.toggled.connect(self._on_mode_toggled)
+        self._mode_simple_btn.toggled.connect(self._on_mode_toggled)
 
         # ── Field row ──────────────────────────────────────────────────────
         row = QHBoxLayout()
@@ -735,10 +786,25 @@ class ActionDialog(QDialog):
         self._simple_complex_notice.setWordWrap(True)
         self._simple_complex_notice.hide()
         simple_outer.addWidget(self._simple_complex_notice)
+        # B2+B4: "Switch to Regex" button shown alongside the complex-pattern
+        # notice. Created unconditionally at __init__ time (not on notice-show)
+        # to avoid GC issues. Hidden by default; shown/hidden with the notice.
+        # On click, triggers _mode_regex_btn (the regex line edit already holds
+        # the complex pattern — lossless switch).
+        self._switch_to_regex_btn = QPushButton(t("action_dialog.switch_to_regex"))
+        self._switch_to_regex_btn.setObjectName("regexSwitchToRegexBtn")
+        self._switch_to_regex_btn.clicked.connect(
+            lambda: self._mode_regex_btn.setChecked(True)
+        )
+        self._switch_to_regex_btn.hide()
+        simple_outer.addWidget(self._switch_to_regex_btn)
         left_layout.addWidget(self._simple_widget)
 
-        # ── Regex-mode container (regex line edit + validation + counter +
-        #    Recent button + cheatsheet chips + tips) ──────────────────────
+        # ── Regex-mode container (regex line edit + validation +
+        #    cheatsheet chips) ─────────────────────────────────────────────
+        # C3: cheatsheet stays inside _regex_widget (Regex-specific affordance
+        # only meaningful when actively typing a regex; moving it to an
+        # always-visible row would clutter Simple-mode users who never need it).
         self._regex_widget = QWidget()
         self._regex_widget.setObjectName("regexRegexRow")
         regex_layout = QVBoxLayout(self._regex_widget)
@@ -755,12 +821,6 @@ class ActionDialog(QDialog):
         self._validation_icon.setObjectName("regexValidationIcon")
         self._validation_icon.setFixedWidth(16)
         regex_row.addWidget(self._validation_icon)
-
-        # Recent-patterns dropdown — click to pick a previous pattern.
-        self._recent_btn = QPushButton(t("action_dialog.recent_button"))
-        self._recent_btn.setObjectName("regexRecentButton")
-        self._recent_btn.clicked.connect(self._show_recent_menu)
-        regex_row.addWidget(self._recent_btn)
         regex_layout.addLayout(regex_row)
 
         # Friendly error string sits directly under the regex row, hidden
@@ -1002,9 +1062,17 @@ class ActionDialog(QDialog):
         self._btn_set_action.clicked.connect(self._emit_set_action)
 
         if initial_field and self.combo.findData(initial_field) >= 0:
+            # E8: initial_field from caller (column-click) takes precedence
+            # over any persisted field preference.
             self._set_default_field(initial_field)
         else:
-            self._set_default_field("File Name")
+            # E8: restore persisted field only when initial_field is None
+            # (no column context from the caller).
+            saved_field = self._settings_get(self._field_key, None)
+            if saved_field and self.combo.findData(saved_field) >= 0:
+                self._set_default_field(saved_field)
+            else:
+                self._set_default_field("File Name")
         # A1 from #347: track the prior field so _on_field_changed can
         # tell whether the user typed something custom (preserve it)
         # or the regex is still the auto-default from the prior field
@@ -1049,13 +1117,27 @@ class ActionDialog(QDialog):
             self._num_mode_threshold_btn.toggled.connect(self._preview_timer.start)
 
         self._apply_exact_regex_for_current_field()
-        # Default Simple op is "contains" (the first item added to
-        # _simple_op_combo above) — most useful starting state and
-        # matches the most-common user intent. The combo already
-        # reads index 0 after addItem; no explicit setCurrentIndex
-        # call is needed (E6 from #351, Wave 6 — dead-line removal).
         # Apply the mode visibility AFTER all widgets exist.
         self._apply_mode_visibility()
+        # E3: restore persisted simple_op AFTER _apply_mode_visibility so the
+        # visibility call's reverse-parse doesn't overwrite the user's preferred
+        # op. findData returns -1 for a stale/unknown key — leave combo at
+        # index 0 ("contains") rather than calling setCurrentIndex(-1), which
+        # would leave it blank. Only apply when Simple mode is actually showing
+        # (when the regex is empty the reverse-parse reads ("contains", ""),
+        # so the restore is the authoritative override).
+        _saved_op = self._settings_get(self._simple_op_key, None)
+        if _saved_op is not None and self._mode == MODE_SIMPLE:
+            _op_idx = self._simple_op_combo.findData(_saved_op)
+            if _op_idx >= 0:
+                self._simple_op_combo.blockSignals(True)
+                try:
+                    self._simple_op_combo.setCurrentIndex(_op_idx)
+                finally:
+                    self._simple_op_combo.blockSignals(False)
+                # Sync regex after op change (signals were blocked).
+                self._writeto_regex_from_simple()
+            # If findData returned -1 (stale key), leave combo at index 0.
         self._update_numeric_value_placeholder()
         self._validate_regex()
         if self._match_fn is not None:
@@ -1106,7 +1188,8 @@ class ActionDialog(QDialog):
             self._mode = MODE_SIMPLE
         else:
             return
-        self._settings_set(_MODE_KEY, self._mode)
+        # A8: persist under per-context key.
+        self._settings_set(self._mode_key, self._mode)
         self._apply_mode_visibility()
         self._validate_regex()
         if self._match_fn is not None:
@@ -1142,9 +1225,11 @@ class ActionDialog(QDialog):
         parsed = _try_parse_simple(self.regex.text())
         if parsed is None:
             # Regex too complex to represent in Simple — keep the regex
-            # value verbatim, show the notice, disable Simple inputs so
-            # the user can't accidentally clobber the regex by typing.
+            # value verbatim, show the notice + Switch-to-Regex button,
+            # disable Simple inputs so the user can't accidentally clobber
+            # the regex by typing.
             self._simple_complex_notice.show()
+            self._switch_to_regex_btn.show()
             self._simple_op_combo.setEnabled(False)
             self._simple_text.setEnabled(False)
             return
@@ -1167,6 +1252,7 @@ class ActionDialog(QDialog):
         finally:
             self._simple_text.blockSignals(False)
         self._simple_complex_notice.hide()
+        self._switch_to_regex_btn.hide()
         self._simple_op_combo.setEnabled(True)
         self._simple_text.setEnabled(True)
 
@@ -1327,12 +1413,20 @@ class ActionDialog(QDialog):
     # ── Recent patterns ────────────────────────────────────────────────────
 
     def _show_recent_menu(self) -> None:
+        # A6: gate by current field at render time — only show entries
+        # recorded for this field (or legacy entries with field=None,
+        # which apply to any field).
+        current_field = self._current_field()
+        visible = [
+            (field, pat) for field, pat in self._recent_patterns
+            if field is None or field == current_field
+        ]
         menu = QMenu(self)
-        if not self._recent_patterns:
+        if not visible:
             empty = menu.addAction(t("action_dialog.recent_empty"))
             empty.setEnabled(False)
         else:
-            for pat in self._recent_patterns:
+            for _field, pat in visible:
                 act = menu.addAction(pat)
                 act.triggered.connect(
                     lambda _checked=False, _pat=pat: self._apply_recent_pattern(_pat)
@@ -1345,15 +1439,25 @@ class ActionDialog(QDialog):
         menu.exec(pos)
 
     def _apply_recent_pattern(self, pattern: str) -> None:
-        # Picking from Recent always lands the user in Regex mode — the
-        # stored patterns are raw regex strings, not Simple tuples.
         # A12 from #347: set self.regex FIRST, then flip the mode. If
         # the order were reversed, the mode flip's reverse-parse would
         # read the *outgoing* Simple state into self.regex, briefly
         # making the canonical pattern lie about what Apply will run.
         self.regex.setText(pattern)
-        if self._mode != MODE_REGEX and self._match_fn is not None:
-            self._mode_regex_btn.setChecked(True)
+        # A7: if the picked pattern is Simple-representable, flip to
+        # Simple mode so the user sees the pattern in the familiar UI.
+        # Otherwise land in Regex (as before).
+        if self._match_fn is not None and self._mode_simple_btn.isEnabled():
+            parsed = _try_parse_simple(pattern)
+            if parsed is not None:
+                if self._mode != MODE_SIMPLE:
+                    self._mode_simple_btn.setChecked(True)
+                else:
+                    # Already Simple — re-apply visibility to refresh the inputs.
+                    self._apply_mode_visibility()
+            else:
+                if self._mode != MODE_REGEX:
+                    self._mode_regex_btn.setChecked(True)
 
     def _clear_recent_patterns(self) -> None:
         self._recent_patterns = []
@@ -1362,10 +1466,16 @@ class ActionDialog(QDialog):
     def _record_recent_pattern(self, pattern: str) -> None:
         if not pattern:
             return
-        # Most-recent first, deduped, capped. The cap keeps the dropdown
-        # scannable and bounds settings.json growth.
-        existing = [p for p in self._recent_patterns if p != pattern]
-        self._recent_patterns = ([pattern] + existing)[:_RECENT_CAP]
+        # A13: strip before dedup so "IMG " and "IMG" don't appear as
+        # separate entries and trailing-space user input self-cleans.
+        pattern = pattern.strip()
+        if not pattern:
+            return
+        field = self._current_field()
+        entry: tuple[str | None, str] = (field, pattern)
+        # Most-recent first, deduped by (field, pattern), capped.
+        existing = [e for e in self._recent_patterns if e != entry]
+        self._recent_patterns = ([entry] + existing)[:_RECENT_CAP]
         self._settings_set(_RECENT_KEY, self._recent_patterns)
 
     # ── Preview pane (only built when match_fn is supplied) ────────────────
@@ -1717,15 +1827,26 @@ class ActionDialog(QDialog):
             self.regex.clear()
 
     def done(self, result: int) -> None:
-        """Persist geometry on every close path (#215).
+        """Persist geometry, simple_op, and field on every close path.
 
-        Only saves when the preview pane is wired up (match_fn given),
-        because that's the only branch that runs the resizable
-        QSplitter layout — the flat layout has no user-resizable
-        geometry to preserve.
+        Geometry only saves when the preview pane is wired up (match_fn
+        given), because that's the only branch that runs the resizable
+        QSplitter layout — the flat layout has no user-resizable geometry
+        to preserve.
+
+        E3: simple_op persisted under per-context key at close time.
+        E8: field persisted under per-context key at close time.
         """
         if self._match_fn is not None:
             save_widget_geometry(self, QSETTINGS_KEY_ACTION_DIALOG_GEOM)
+        # E3: persist simple_op so it restores on next open.
+        op_data = self._simple_op_combo.currentData()
+        if op_data:
+            self._settings_set(self._simple_op_key, op_data)
+        # E8: persist current field so it restores on next open.
+        current_field = self._current_field()
+        if current_field:
+            self._settings_set(self._field_key, current_field)
         super().done(result)
 
 

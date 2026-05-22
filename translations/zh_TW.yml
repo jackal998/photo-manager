@@ -182,6 +182,8 @@ action_dialog:
   simple_op_exact: "完全等於"
   simple_text_placeholder: "輸入要比對的文字…"
   simple_complex_notice: "此規則比簡易模式可表達的更進階,切回正規式以繼續編輯。"
+  switch_to_regex: "切換至正規式"
+  simple_disabled_no_match_fn: "簡易模式需要即時預覽資料來源"
   cheatsheet_label: "插入到規則:"
   cheatsheet_any: ".* — 任意文字"
   cheatsheet_digit: "\\d — 數字"
