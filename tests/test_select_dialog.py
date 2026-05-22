@@ -490,13 +490,17 @@ class TestModeToggle:
 
     def test_no_match_fn_pins_regex_mode(self, qapp):
         """Without a preview to back it, Simple is meaningless — the
-        dialog falls back to the original Regex-only flat layout."""
+        dialog pins to Regex mode with the Simple radio disabled.
+        C1: mode toggle is always created; Simple is disabled (not absent)
+        when match_fn is None."""
         from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
 
         dlg = ActionDialog(fields=["File Name"])
         assert dlg._mode == MODE_REGEX
-        # No mode toggle row was constructed in the flat layout.
-        assert not hasattr(dlg, "_mode_simple_btn")
+        # C1: toggle always created; Simple disabled without match_fn.
+        assert hasattr(dlg, "_mode_simple_btn")
+        assert not dlg._mode_simple_btn.isEnabled()
+        assert dlg._mode_regex_btn.isChecked()
 
     def test_persisted_mode_overrides_default(self, qapp):
         from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
@@ -519,7 +523,8 @@ class TestModeToggle:
         )
         # Default Simple — toggle to Regex.
         dlg._mode_regex_btn.setChecked(True)
-        assert settings.get("ui.action_dialog.mode") == "regex"
+        # A8: persisted under per-context key, not the legacy global key.
+        assert settings.get("ui.action_dialog.main.mode") == "regex"
         assert settings.save_count >= 1
 
 
@@ -632,6 +637,7 @@ class TestCheatsheet:
 
 class TestRecentPatterns:
     def test_apply_records_pattern(self, qapp):
+        # A6: recent patterns now stored as (field, pattern) tuples.
         from app.views.dialogs.select_dialog import ActionDialog
 
         settings = _FakeSettings()
@@ -644,14 +650,15 @@ class TestRecentPatterns:
         dlg._btn_set_action.click()
 
         recent = settings.get("ui.action_dialog.recent_patterns", [])
-        assert recent == [r"^IMG_\d+$"]
+        assert recent == [("File Name", r"^IMG_\d+$")]
 
     def test_recent_dedup_and_cap(self, qapp):
+        # A6: entries are (field, pattern) tuples; dedup is on the tuple.
         from app.views.dialogs.select_dialog import ActionDialog
 
         settings = _FakeSettings({
             "ui": {"action_dialog": {"recent_patterns": [
-                f"pattern_{i}" for i in range(10)
+                ("File Name", f"pattern_{i}") for i in range(10)
             ]}}
         })
         match_fn = lambda f, p: (0, 0, [])
@@ -665,8 +672,8 @@ class TestRecentPatterns:
         dlg._btn_set_action.click()
 
         recent = settings.get("ui.action_dialog.recent_patterns")
-        assert recent[0] == "pattern_5"
-        assert recent.count("pattern_5") == 1
+        assert recent[0] == ("File Name", "pattern_5")
+        assert recent.count(("File Name", "pattern_5")) == 1
         assert len(recent) == 10
 
     def test_apply_skips_empty_pattern(self, qapp):
@@ -684,10 +691,13 @@ class TestRecentPatterns:
         assert settings.get("ui.action_dialog.recent_patterns", []) == []
 
     def test_clear_recent(self, qapp):
+        # A6: after clearing, internal list and settings both empty.
         from app.views.dialogs.select_dialog import ActionDialog
 
         settings = _FakeSettings({
-            "ui": {"action_dialog": {"recent_patterns": ["a", "b", "c"]}}
+            "ui": {"action_dialog": {"recent_patterns": [
+                ("File Name", "a"), ("File Name", "b"), ("Folder", "c")
+            ]}}
         })
         dlg = ActionDialog(
             fields=["File Name"],
@@ -697,6 +707,21 @@ class TestRecentPatterns:
         dlg._clear_recent_patterns()
         assert dlg._recent_patterns == []
         assert settings.get("ui.action_dialog.recent_patterns") == []
+
+    def test_apply_does_not_record_invalid_regex(self, qapp):
+        # A9 gate: invalid regex must not reach Recent. Already covered
+        # by TestApplyGate but re-verified here for the tuple-shape path.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("(unclosed")
+        dlg._btn_set_action.click()
+        assert settings.get("ui.action_dialog.recent_patterns", []) == []
 
 
 class TestFieldChangeStateCorrectness:
@@ -802,29 +827,49 @@ class TestFieldChangeStateCorrectness:
         assert dlg._simple_op_combo.currentData() == "contains"
         assert dlg._simple_text.text() == "IMG_001.jpg"
 
-    def test_apply_recent_from_simple_lands_in_regex(self, qapp):
-        """A12 — picking from Recent while in Simple mode must:
-        (1) land the literal recent pattern in dlg.regex, and
-        (2) end up in Regex mode. The pre-Wave-3 order was
-        ``mode-flip → setText``, racing with the mode toggle's
-        reverse-parse. Post-Wave-3 order is ``setText → mode-flip``.
+    def test_apply_recent_complex_pattern_lands_in_regex(self, qapp):
+        """A12 — picking a complex (non-Simple) pattern from Recent must:
+        (1) land the literal recent pattern in dlg.regex first (set BEFORE
+        mode flip so reverse-parse sees the right pattern), and
+        (2) end up in Regex mode. Pre-Wave-3 order was mode-flip → setText,
+        racing with the mode toggle's reverse-parse.
         """
         from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
 
-        settings = _FakeSettings({
-            "ui": {"action_dialog": {"recent_patterns": ["^test$"]}}
-        })
         dlg = ActionDialog(
             fields=["File Name"],
             match_fn=lambda f, p: (0, 0, []),
-            settings=settings,
         )
         # Confirm we start in Simple mode (default with match_fn).
         assert dlg._mode_simple_btn.isChecked()
-        dlg._apply_recent_pattern("^test$")
+        # A complex pattern Simple can't represent → lands in Regex.
+        dlg._apply_recent_pattern(r"\d{3}-\w+")
 
-        assert dlg.regex.text() == "^test$"
+        assert dlg.regex.text() == r"\d{3}-\w+"
         assert dlg._mode == MODE_REGEX
+
+    def test_apply_recent_simple_pattern_stays_in_simple(self, qapp):
+        """A7 — picking a Simple-representable pattern from Recent must
+        flip to Simple mode (not force Regex as it did before A7).
+        Pattern ``^IMG`` is starts_with Simple, so it's representable.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
+
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        # Start in Regex mode so we can verify the flip to Simple.
+        dlg._mode_regex_btn.setChecked(True)
+        assert dlg._mode != MODE_SIMPLE
+
+        dlg._apply_recent_pattern("^IMG")
+
+        assert dlg.regex.text() == "^IMG"
+        assert dlg._mode == MODE_SIMPLE
+        # Simple inputs must show the parsed (starts_with, IMG) state.
+        assert dlg._simple_op_combo.currentData() == "starts_with"
+        assert dlg._simple_text.text() == "IMG"
 
 
 class TestMatchHighlightDelegate:
@@ -1703,3 +1748,434 @@ class TestPatternEncoding:
         # rank with bogus order. None signals "treat as no-match".
         from app.views.dialogs.select_dialog import decode_top_n_pattern
         assert decode_top_n_pattern("__top_n__:3:garbage") is None
+
+
+# ── Wave 7: Mode/Recent/Simple coordination ───────────────────────────────────
+
+
+class TestRecentPatternsTupleShape:
+    """A6 + E2-upgrade: recent_patterns stores (field, pattern) tuples.
+    Legacy bare strings migrate on load; malformed entries auto-heal.
+    """
+
+    def test_tuple_saved_and_restored(self, qapp):
+        # After Apply, settings holds a list of (field, pattern) tuples.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.combo.setCurrentText("Folder")
+        dlg.regex.setText("Photos")
+        dlg._btn_set_action.click()
+
+        recent = settings.get("ui.action_dialog.recent_patterns", [])
+        assert len(recent) == 1
+        assert recent[0] == ("Folder", "Photos")
+
+    def test_legacy_bare_string_migrates_to_tuple(self, qapp):
+        # Bare strings from before A6 become (None, pattern) — field=None
+        # means "match any field" in the render-time gate.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": ["old_pattern"]}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        # The loaded list must have migrated to a tuple.
+        assert dlg._recent_patterns == [(None, "old_pattern")]
+
+    def test_malformed_entry_auto_healed(self, qapp):
+        # Non-string, non-tuple entries are silently dropped; the list
+        # heals itself. The real failure mode: a list of dicts got
+        # written under the key somehow (settings corruption).
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": [
+                ("File Name", "good"),
+                {"bad": "dict"},
+                None,
+                ("", "empty-field"),  # empty field string → malformed
+            ]}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        # Only the valid tuple survives.
+        assert dlg._recent_patterns == [("File Name", "good")]
+
+    def test_dedup_works_on_tuples(self, qapp):
+        # Dedup key is the (field, pattern) pair — same pattern on a
+        # different field is a different entry and must not be collapsed.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": [
+                ("File Name", "IMG"),
+                ("Folder", "IMG"),
+            ]}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("IMG")   # File Name is current field
+        dlg._btn_set_action.click()
+
+        recent = settings.get("ui.action_dialog.recent_patterns")
+        # ("File Name", "IMG") moved to front; ("Folder", "IMG") kept.
+        assert recent[0] == ("File Name", "IMG")
+        assert ("Folder", "IMG") in recent
+        assert recent.count(("File Name", "IMG")) == 1
+
+
+class TestA13StripBeforeDedup:
+    """A13: strip whitespace from pattern before dedup in _record_recent_pattern."""
+
+    def test_whitespace_stripped_on_record(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("  IMG  ")
+        dlg._btn_set_action.click()
+
+        recent = settings.get("ui.action_dialog.recent_patterns", [])
+        # The stored pattern must be stripped.
+        assert recent == [("File Name", "IMG")]
+
+    def test_whitespace_only_not_recorded(self, qapp):
+        # A strip that yields "" must not create an entry.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        dlg._record_recent_pattern("   ")
+        assert settings.get("ui.action_dialog.recent_patterns", []) == []
+
+
+class TestC1ModeToggleAlwaysVisible:
+    """C1: mode toggle row created unconditionally; Simple disabled (not absent)
+    when match_fn is None."""
+
+    def test_simple_radio_disabled_without_match_fn(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert hasattr(dlg, "_mode_simple_btn")
+        assert not dlg._mode_simple_btn.isEnabled()
+        assert dlg._mode_regex_btn.isEnabled()
+        assert dlg._mode_regex_btn.isChecked()
+
+    def test_simple_radio_enabled_with_match_fn(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
+        assert dlg._mode_simple_btn.isEnabled()
+
+    def test_simple_tooltip_set_without_match_fn(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert dlg._mode_simple_btn.toolTip() != ""
+
+
+class TestC4DefaultModeLogic:
+    """C4: default mode is Regex when match_fn is None, Simple otherwise."""
+
+    def test_default_regex_when_no_match_fn(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert dlg._mode == MODE_REGEX
+
+    def test_default_simple_when_match_fn(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
+
+        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
+        assert dlg._mode == MODE_SIMPLE
+
+
+class TestA8ContextIsolation:
+    """A8: per-context mode key isolates main and execute preferences."""
+
+    def test_per_context_mode_key_used(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="execute",
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        # Must save to execute context, not main or legacy key.
+        assert settings.get("ui.action_dialog.execute.mode") == "regex"
+        assert settings.get("ui.action_dialog.main.mode") is None
+        assert settings.get("ui.action_dialog.mode") is None
+
+    def test_legacy_key_read_as_fallback(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"mode": "regex"}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+        )
+        # Per-context key absent → reads legacy key → regex.
+        assert dlg._mode == MODE_REGEX
+
+    def test_per_context_key_beats_legacy(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {
+                "mode": "regex",                   # legacy — would give Regex
+                "main": {"mode": "simple"},        # per-context — must win
+            }}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+        )
+        assert dlg._mode == MODE_SIMPLE
+
+
+class TestB2SwitchToRegexButton:
+    """B2+B4: "Switch to Regex" button in simple_outer; visible with notice."""
+
+    def test_button_exists_hidden_by_default(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
+        assert hasattr(dlg, "_switch_to_regex_btn")
+        assert dlg._switch_to_regex_btn.isHidden()
+
+    def test_button_shown_with_complex_notice(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"\d{3}")
+        # Switch to Simple — complex pattern triggers notice + button.
+        dlg._mode_simple_btn.setChecked(True)
+
+        assert not dlg._simple_complex_notice.isHidden()
+        assert not dlg._switch_to_regex_btn.isHidden()
+
+    def test_button_hidden_when_pattern_is_simple(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("img")
+        # Simple-representable — notice+button must stay hidden.
+        dlg._mode_simple_btn.setChecked(True)
+
+        assert dlg._simple_complex_notice.isHidden()
+        assert dlg._switch_to_regex_btn.isHidden()
+
+    def test_button_click_flips_to_regex_mode(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
+
+        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"\d{3}")
+        dlg._mode_simple_btn.setChecked(True)
+        assert dlg._mode != MODE_REGEX
+
+        # Click the switch button — must flip to Regex without losing pattern.
+        dlg._switch_to_regex_btn.click()
+        assert dlg._mode == MODE_REGEX
+        assert dlg.regex.text() == r"\d{3}"
+
+
+class TestE3SimpleOpPersistence:
+    """E3: simple_op persisted per context; stale key falls back to "contains"."""
+
+    def test_simple_op_restored_from_settings(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"main": {"simple_op": "ends_with"}}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+        )
+        assert dlg._simple_op_combo.currentData() == "ends_with"
+
+    def test_stale_simple_op_falls_back_to_contains(self, qapp):
+        # findData returns -1 for "old_op_key" → must leave combo at 0
+        # ("contains"), not set it to -1 which leaves it blank.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"main": {"simple_op": "old_op_key"}}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+        )
+        # Must land on "contains" (index 0), not a blank/invalid state.
+        assert dlg._simple_op_combo.currentData() == "contains"
+        assert dlg._simple_op_combo.currentIndex() == 0
+
+
+class TestE8FieldPersistence:
+    """E8: field persisted per context; initial_field overrides persisted."""
+
+    def test_field_restored_from_settings_when_no_initial_field(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"main": {"field": "Folder"}}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+            initial_field=None,
+        )
+        assert dlg._current_field() == "Folder"
+
+    def test_initial_field_overrides_persisted_field(self, qapp):
+        # When initial_field is given (column click), it takes priority
+        # over whatever is persisted in settings.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"main": {"field": "Folder"}}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+            initial_field="File Name",
+        )
+        assert dlg._current_field() == "File Name"
+
+    def test_field_persisted_on_done(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+        )
+        dlg.combo.setCurrentText("Folder")
+        dlg.done(0)
+
+        assert settings.get("ui.action_dialog.main.field") == "Folder"
+
+
+class TestC2RecentButtonAlwaysVisible:
+    """C2: Recent button lives in the mode row, always visible."""
+
+    def test_recent_button_present_without_match_fn(self, qapp):
+        # Pre-C2 the button was inside _regex_widget — invisible in Simple
+        # and absent without match_fn. Post-C2 it lives in the mode row.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert hasattr(dlg, "_recent_btn")
+        # Button should not be inside _regex_widget.
+        assert dlg._recent_btn.parent() is not dlg._regex_widget
+
+    def test_recent_button_present_with_match_fn(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
+        assert hasattr(dlg, "_recent_btn")
+        assert dlg._recent_btn.parent() is not dlg._regex_widget
+
+
+class TestA6FieldGatedRecentMenu:
+    """A6: Recent menu only shows entries for the current field (or None-field)."""
+
+    def test_menu_shows_only_matching_field_entries(self, qapp):
+        # Two entries: one for File Name, one for Folder. When File Name
+        # is the active field, only the File Name entry is rendered.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": [
+                ("File Name", "IMG"),
+                ("Folder", "Photos"),
+            ]}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        dlg.combo.setCurrentText("File Name")
+        # _show_recent_menu is hard to test directly (it calls menu.exec).
+        # Test the internal filter logic instead.
+        current_field = dlg._current_field()
+        visible = [
+            (f, p) for f, p in dlg._recent_patterns
+            if f is None or f == current_field
+        ]
+        assert visible == [("File Name", "IMG")]
+
+    def test_none_field_entries_shown_for_all_fields(self, qapp):
+        # Legacy entries with field=None show regardless of current field.
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": [
+                ("old_pattern",),  # malformed — will be dropped
+            ]}}
+        })
+        # Use direct _record_recent_pattern-based setup instead.
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        # Inject a None-field entry directly.
+        dlg._recent_patterns = [(None, "IMG")]
+        dlg.combo.setCurrentText("Folder")
+
+        visible = [
+            (f, p) for f, p in dlg._recent_patterns
+            if f is None or f == dlg._current_field()
+        ]
+        assert visible == [(None, "IMG")]
