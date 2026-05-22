@@ -1450,7 +1450,13 @@ class TestBuildMatchFn:
 
         assert matched == 2
         assert total == 3
-        assert samples == ["IMG_001.jpg", "IMG_002.jpg"]
+        # A2 (Wave 4): sample tuple is (basename, matched_field_str).
+        # For File Name field the two are identical — preview behaviour
+        # against File Name regexes is unchanged from pre-Wave-4.
+        assert samples == [
+            ("IMG_001.jpg", "IMG_001.jpg"),
+            ("IMG_002.jpg", "IMG_002.jpg"),
+        ]
 
     def test_invalid_regex_returns_zero_with_total(self):
         """A live-preview must not crash on a partial regex; it returns
@@ -1497,8 +1503,15 @@ class TestBuildMatchFn:
         assert matched == 1
 
     def test_folder_field_returns_folder(self):
-        """And Folder must NOT use the basename — pinning the field-map
-        routing matches what set_decision_by_regex does."""
+        """And Folder must NOT use the basename for the match — pinning
+        the field-map routing matches what set_decision_by_regex does.
+
+        A2 from #347 (Wave 4): the sample tuple now carries both the
+        basename AND the matched-field string so the preview can show
+        the folder path the regex actually matched against. Pre-Wave-4
+        the preview displayed only basenames, leaving the highlight
+        delegate silently no-op for non-File-Name regexes.
+        """
         from app.views.handlers.file_operations import build_match_fn
 
         recs = [
@@ -1511,9 +1524,11 @@ class TestBuildMatchFn:
         matched, _, samples = match_fn("Folder", r"2023$")
 
         assert matched == 1
-        # Sample is the basename of the matching record's file_path,
-        # not the folder string — so users see WHICH file matched.
-        assert samples == ["a.jpg"]
+        # Sample shape is (basename, matched_field_str). The basename
+        # tells the user WHICH file matched; matched_field_str is what
+        # the regex actually ran against (and what the preview pane
+        # will display + highlight).
+        assert samples == [("a.jpg", "/photos/2023")]
 
     def test_unmapped_field_skips_without_match(self):
         """Group Count / Similarity have no _FIELD_TO_ATTR entry — they

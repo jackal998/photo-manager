@@ -60,9 +60,13 @@ _FIELD_LABEL_KEYS: dict[str, str] = {
 # Type alias for the live-preview match function. Callers (DialogHandler
 # from MainWindow, ExecuteActionDialog inline) build this via
 # `app.views.handlers.file_operations.build_match_fn` and pass it in.
-# Returns (matched_count, total_count, sample_basenames). Sample list is
-# bounded by build_match_fn's sample_cap; matched count is the full total.
-MatchFn = Callable[[str, str], tuple[int, int, list[str]]]
+# Returns (matched_count, total_count, samples) where each sample is a
+# (basename, matched_field_str) tuple. The preview displays
+# matched_field_str so non-File-Name regexes show *why* each row
+# matched (A2 from #347 — Wave 4). For the File Name field the two
+# tuple elements are identical. Sample list is bounded by
+# build_match_fn's sample_cap; matched count is the full total.
+MatchFn = Callable[[str, str], tuple[int, int, list[tuple[str, str]]]]
 
 MODE_SIMPLE = "simple"
 MODE_REGEX = "regex"
@@ -296,6 +300,43 @@ def select_paths_top_n(
         for _val, path in ranked[:n]:
             matched.append(path)
     return matched
+
+
+def _select_top_n_with_metadata(
+    groups: list, field: str, n: int, order: str
+) -> list[tuple[int, str, float]]:
+    """Like :func:`select_paths_top_n` but also returns each pick's
+    group identifier (1-based) and the value the ranking selected on.
+
+    Used by :meth:`ActionDialog._refresh_numeric_preview` to label
+    preview rows with their group + value (D5 + D8 from #350, Wave 4).
+    The public :func:`select_paths_top_n` keeps its ``list[str]``
+    shape because :meth:`ExecuteActionDialog._matched_paths_for_pattern`
+    only needs paths to encode the ``__top_n__:`` pseudo-pattern.
+    """
+    if n <= 0 or order not in ("asc", "desc"):
+        return []
+    out: list[tuple[int, str, float]] = []
+    reverse = (order == "desc")
+    for group_idx, group in enumerate(groups, start=1):
+        group_no = getattr(group, "group_number", None) or group_idx
+        ranked: list[tuple[float, str]] = []
+        for rec in getattr(group, "items", []):
+            val = _numeric_value_for(field, rec, group)
+            if val is None:
+                continue
+            ranked.append((val, rec.file_path))
+        ranked.sort(key=lambda t: (t[0], t[1]), reverse=False)
+        if reverse:
+            ranked.reverse()
+            from itertools import groupby
+            fixed: list[tuple[float, str]] = []
+            for _val, grp in groupby(ranked, key=lambda t: t[0]):
+                fixed.extend(sorted(grp, key=lambda t: t[1]))
+            ranked = fixed
+        for val, path in ranked[:n]:
+            out.append((group_no, path, val))
+    return out
 
 
 def encode_cmp_pattern(op: str, value_text: str) -> str:
@@ -1356,10 +1397,14 @@ class ActionDialog(QDialog):
         if matched == 0:
             self._preview_list.addItem(t("action_dialog.preview_empty"))
         else:
-            for name in samples:
-                item = QListWidgetItem(name)
+            # A2 from #347 (Wave 4): display the matched-field string,
+            # not the basename, so highlight runs against the right text
+            # for non-File-Name regexes (Folder / Score / Date / etc.).
+            # For File Name field the two are identical.
+            for _basename, matched_field_str in samples:
+                item = QListWidgetItem(matched_field_str)
                 if rx is not None:
-                    m = rx.search(name)
+                    m = rx.search(matched_field_str)
                     if m is not None:
                         item.setData(Qt.UserRole, (m.start(), m.end()))
                 self._preview_list.addItem(item)
@@ -1375,24 +1420,49 @@ class ActionDialog(QDialog):
             self._preview_truncated.hide()
 
     def _refresh_numeric_preview(self) -> None:
-        """Populate the preview pane + counter from the numeric panel."""
+        """Populate the preview pane + counter from the numeric panel.
+
+        D5 + D8 from #350 (Wave 4): when Top-N is the active sub-mode,
+        each preview row carries its group identifier and the value
+        the ranking selected on. This makes the per-group semantic of
+        Top-N visible (D5) and surfaces the tiebreaker context for
+        equal-value records (D8 — same stable value-then-path order,
+        but the user can now see the values that drove ordering).
+        Threshold mode keeps the flat basename-only rendering since
+        the threshold applies across the entire group set, not per-group.
+        """
         from pathlib import Path
+        from datetime import datetime
 
         field = self._current_field()
         total = sum(len(getattr(g, "items", [])) for g in self._groups)
+        is_date = field in _DATE_NUMERIC_FIELDS
+
+        def _fmt_value(val: float) -> str:
+            if is_date:
+                try:
+                    return datetime.fromtimestamp(val).strftime("%Y-%m-%d")
+                except (OSError, OverflowError, ValueError):
+                    return f"{val:g}"
+            return f"{val:g}"
 
         if self._numeric_mode == NUMERIC_MODE_TOPN:
             n = int(self._num_n_spin.value())
             order = str(self._num_order_combo.currentData() or "desc")
-            paths = select_paths_top_n(self._groups, field, n, order)
+            rows = _select_top_n_with_metadata(self._groups, field, n, order)
+            labels: list[str] = [
+                f"Group {group_no} — {Path(path).name} ({_fmt_value(val)})"
+                for group_no, path, val in rows
+            ]
         else:
             op = str(self._num_cmp_combo.currentData() or ">")
             value_text = self._num_value_edit.text()
             paths = select_paths_by_threshold(
                 self._groups, field, op, value_text
             )
+            labels = [Path(p).name for p in paths]
 
-        matched = len(paths)
+        matched = len(labels)
         self._match_counter.setText(
             t("action_dialog.match_counter").format(matched=matched, total=total)
         )
@@ -1401,9 +1471,8 @@ class ActionDialog(QDialog):
         if matched == 0:
             self._preview_list.addItem(t("action_dialog.preview_empty"))
         else:
-            for path in paths[: self._sample_cap]:
-                item = QListWidgetItem(Path(path).name)
-                self._preview_list.addItem(item)
+            for label in labels[: self._sample_cap]:
+                self._preview_list.addItem(QListWidgetItem(label))
 
         if matched > self._sample_cap:
             self._preview_truncated.setText(
