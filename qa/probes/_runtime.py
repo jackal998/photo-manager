@@ -45,15 +45,24 @@ SETTINGS_PATH = REPO / "qa" / "settings.json"
 QA_WINDOW_STATE_INI = REPO / "qa" / "window_state.ini"
 
 
-def _write_probe_settings(sources: list[str]) -> None:
+def _write_probe_settings(
+    sources: list[str], *, auto_select: bool = False
+) -> None:
     """Write ``qa/settings.json`` with ``sources`` as the source list.
 
     Mirrors ``qa.scenarios._config.build_settings`` — same thumbnail
     cache + output-manifest path so probes see the same QA-sandbox
     layout the scenario batch sees. Inlined rather than imported so
     probes don't need a SCENARIO_SOURCES entry.
+
+    ``auto_select=True`` writes ``ui.scan_dialog.auto_select_enabled``
+    so ``ScanDialog`` loads the "Auto select after scan" checkbox in
+    the ON state (the dialog reads this key on init — see
+    ``app/views/dialogs/scan_dialog.py``). Probes that depend on the
+    auto-select branch firing (e.g. ``post_scan_visual_state``) pass
+    True; others default to False to match scenario defaults.
     """
-    cfg = {
+    cfg: dict = {
         "_comment": "Auto-written by qa.probes._runtime.",
         "thumbnail_size": 256,
         "thumbnail_mem_cache": 128,
@@ -63,6 +72,8 @@ def _write_probe_settings(sources: list[str]) -> None:
             "output": "qa/run-manifest.sqlite",
         },
     }
+    if auto_select:
+        cfg["ui"] = {"scan_dialog": {"auto_select_enabled": True}}
     SETTINGS_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
@@ -87,6 +98,8 @@ def _terminate(proc: subprocess.Popen) -> None:
 def app_with_manifest(
     sources: list[str],
     scan_timeout: float = 60,
+    *,
+    auto_select: bool = False,
 ) -> Iterator[UIAWrapper]:
     """Yield a main-window UIA wrapper with a manifest scanned + loaded.
 
@@ -106,7 +119,7 @@ def app_with_manifest(
                 # ...inspect win via qa.scenarios._uia helpers...
                 return 0
     """
-    _write_probe_settings(sources)
+    _write_probe_settings(sources, auto_select=auto_select)
     if QA_WINDOW_STATE_INI.exists():
         QA_WINDOW_STATE_INI.unlink()
 
