@@ -1,0 +1,1 @@
+Retire scenario-drivers table; point at qa.scenarios._batch.ALL_SCENARIOS (#352).
