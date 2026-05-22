@@ -41,6 +41,10 @@ QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_SPLITTER_STATE = (
     "geometry/execute_action_dialog_splitter"
 )
 QSETTINGS_KEY_ACTION_DIALOG_GEOM = "geometry/action_dialog"
+# C13 from #349 (Wave 8): splitter handle sizes for the ActionDialog's
+# left-vs-preview split — independent from the outer-window geometry
+# blob, same reason as the Execute Action splitter key above.
+QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE = "geometry/action_dialog_splitter"
 QSETTINGS_KEY_SAVE_MANIFEST_DIALOG_GEOM = "geometry/save_manifest_dialog"
 
 

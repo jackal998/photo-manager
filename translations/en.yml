@@ -193,6 +193,11 @@ action_dialog:
   set_action_label: "Set Action:"
   apply_button: "Apply"
   close_button: "Close"
+  # E5 from #351 (Wave 8): clears persisted window+splitter geometry so
+  # the dialog reopens at default size. Mode/field/op preferences are
+  # NOT touched — they live under settings.json, not window_state.ini.
+  reset_window_size_button: "Reset window size"
+  reset_window_size_tooltip: "Reset dialog window size and pane split to defaults (Ctrl+0). Does not affect Mode, Field, or recent patterns."
   preview_label: "Preview"
   match_counter: "{matched} of {total} match"
   # B6 from #348 (Wave 5): Top-N mode counter — "{matched} matched"
@@ -237,7 +242,9 @@ action_dialog:
   cheatsheet_end: "$ — end"
   cheatsheet_dot: "\\. — literal dot"
   cheatsheet_set: "[abc] — any of these chars"
-  recent_button: "Recent ▾"
+  # C16 from #349 (Wave 8): dropdown arrow now rendered via QStyle's
+  # standard SP_ArrowDown icon (theme-aware glyph). Keep label text only.
+  recent_button: "Recent"
   recent_empty: "(no recent patterns)"
   recent_clear: "Clear recent patterns"
   # #209 — numeric-condition panel. Shown when the selected field is
