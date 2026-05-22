@@ -177,7 +177,7 @@ class TestPreviewPane:
 
         match_fn = MagicMock(return_value=(2, 3, ["a.jpg", "b.jpg"]))
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        # Phase B introduced Beginner-mode default — switch to Regex
+        # Phase B introduced Simple-mode default — switch to Regex
         # mode so dlg.regex is the active pattern source.
         dlg._mode_regex_btn.setChecked(True)
 
@@ -435,7 +435,7 @@ class TestObjectNames:
         assert dlg._preview_truncated.objectName() == "regexPreviewTruncated"
 
 
-# ── Phase B: Beginner / Regex mode toggle, cheatsheet, recent ──────────────
+# ── Phase B: Simple / Regex mode toggle, cheatsheet, recent ──────────────
 
 
 class _FakeSettings:
@@ -475,12 +475,12 @@ class TestModeToggle:
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         assert dlg._mode == MODE_SIMPLE
-        # Beginner widgets visible, regex widgets hidden.
+        # Simple widgets visible, regex widgets hidden.
         assert not dlg._simple_widget.isHidden()
         assert dlg._regex_widget.isHidden()
 
     def test_no_match_fn_pins_regex_mode(self, qapp):
-        """Without a preview to back it, Beginner is meaningless — the
+        """Without a preview to back it, Simple is meaningless — the
         dialog falls back to the original Regex-only flat layout."""
         from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
 
@@ -508,7 +508,7 @@ class TestModeToggle:
         dlg = ActionDialog(
             fields=["File Name"], match_fn=match_fn, settings=settings
         )
-        # Default Beginner — toggle to Regex.
+        # Default Simple — toggle to Regex.
         dlg._mode_regex_btn.setChecked(True)
         assert settings.get("ui.action_dialog.mode") == "regex"
         assert settings.save_count >= 1
@@ -556,7 +556,7 @@ class TestSimpleMode:
         assert dlg._build_pattern() == r"^abc$"
 
     def test_empty_text_returns_empty_pattern(self, qapp):
-        """Empty Beginner input must NOT produce ``^$`` etc — we return
+        """Empty Simple input must NOT produce ``^$`` etc — we return
         empty string so the preview pane shows the no-pattern state
         rather than 'matches everything that's empty', which is
         confusing."""
@@ -668,7 +668,7 @@ class TestRecentPatterns:
         dlg = ActionDialog(
             fields=["File Name"], match_fn=match_fn, settings=settings
         )
-        # Beginner mode default — empty text → empty pattern. Don't
+        # Simple mode default — empty text → empty pattern. Don't
         # pollute the recent list with a no-op.
         dlg._simple_text.setText("")
         dlg._btn_set_action.click()
@@ -980,6 +980,63 @@ class TestNumericPanelVisibility:
         )
         dlg.combo.setCurrentText("Size (Bytes)")
         assert dlg._numeric_widget.isHidden()
+
+
+class TestFieldAwareNumericPlaceholder:
+    """A5 from #347 — placeholder swaps between number and date hints
+    when the field combo moves between numeric and date fields.
+
+    The single-string placeholder ("type a number or YYYY-MM-DD for
+    dates") was field-blind — Size users saw the date hint, Date users
+    saw the number hint. The wiring lives in
+    ``_update_numeric_value_placeholder`` called from ``__init__`` and
+    ``_on_field_changed``.
+    """
+
+    def test_number_field_shows_number_hint(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=10)])
+        dlg = ActionDialog(
+            fields=["Size (Bytes)", "Creation Date"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        placeholder = dlg._num_value_edit.placeholderText()
+        assert "number" in placeholder.lower() or "數字" in placeholder
+        assert "YYYY-MM-DD" not in placeholder
+
+    def test_date_field_shows_date_hint(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=10)])
+        dlg = ActionDialog(
+            fields=["Size (Bytes)", "Creation Date"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Creation Date")
+        placeholder = dlg._num_value_edit.placeholderText()
+        assert "YYYY-MM-DD" in placeholder
+
+    def test_placeholder_swaps_on_field_change(self, qapp):
+        """The real bug — user switches from Size to Creation Date and
+        expects the hint to update. Static hint at __init__ wouldn't
+        catch this; the per-field call in _on_field_changed does.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=10)])
+        dlg = ActionDialog(
+            fields=["Size (Bytes)", "Creation Date"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        first = dlg._num_value_edit.placeholderText()
+        dlg.combo.setCurrentText("Creation Date")
+        second = dlg._num_value_edit.placeholderText()
+        assert first != second
+        assert "YYYY-MM-DD" in second
+        assert "YYYY-MM-DD" not in first
 
 
 class TestThresholdEmit:

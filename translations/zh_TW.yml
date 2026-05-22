@@ -17,7 +17,7 @@ menu:
     exit: "結束"
   action:
     title: "動作(&A)"
-    by_regex: "依欄位/正規式設定動作…"
+    by_regex: "依欄位設定動作…"
     execute: "執行動作…"
   list:
     title: "清單(&L)"
@@ -138,7 +138,7 @@ execute_dialog:
   no_match_title: "設定動作 — 無相符項目"
   no_match_body: "沒有檔案符合此正規式。"
   invalid_regex_title: "正規式錯誤"
-  set_action_by_regex_menu: "依欄位/正規式設定動作…"
+  set_action_by_regex_menu: "依欄位設定動作…"
   files_not_found_title: "找不到檔案"
   files_not_found_body: "下列檔案找不到,已略過:\n\n{missing}{suffix}"
   files_not_found_more: "\n…以及其餘 {n} 個"
@@ -157,15 +157,10 @@ locked_confirm:
   btn_cancel: "取消"
 
 action_dialog:
-  title: "依欄位/正規式設定動作"
-  field_label: "欄位"
-  regex_label: "正規式"
+  title: "依欄位設定動作"
+  field_label: "欄位:"
+  regex_label: "正規式:"
   regex_placeholder: "例如:^IMG_\\d+\\.HEIC$"
-  regex_tips: |
-    正規式提示:
-      完全相符:^text$     任意子字串:.*     數字:\d+
-      範例:  ^IMG_\d+\.HEIC$  (檔名),  ^delete$  (動作),
-             ^exact$  (相似度),  ^H:\\Photos\\2023\\  (資料夾)
   set_action_label: "設定動作:"
   apply_button: "套用"
   close_button: "關閉"
@@ -185,7 +180,7 @@ action_dialog:
   simple_op_exact: "完全等於"
   simple_text_placeholder: "輸入要比對的文字…"
   simple_complex_notice: "此規則比簡易模式可表達的更進階,切回正規式以繼續編輯。"
-  cheatsheet_label: "插入:"
+  cheatsheet_label: "插入到規則:"
   cheatsheet_any: ".* — 任意文字"
   cheatsheet_digit: "\\d — 數字"
   cheatsheet_word: "\\w — 字元"
@@ -199,11 +194,12 @@ action_dialog:
   numeric_mode_threshold: "門檻值"
   numeric_mode_topn: "每組前 N 名"
   numeric_threshold_label: "當數值"
-  numeric_topn_label: "選取"
-  numeric_topn_suffix: "每組"
+  numeric_topn_label: "選取每組的"
+  numeric_topn_suffix: "名"
   numeric_order_top: "前"
   numeric_order_bottom: "後"
-  numeric_value_placeholder: "輸入數字 (日期請用 YYYY-MM-DD)…"
+  numeric_value_placeholder_number: "輸入數字…"
+  numeric_value_placeholder_date: "輸入日期 (YYYY-MM-DD)…"
   cmp_op_gt: ">"
   cmp_op_ge: ">="
   cmp_op_lt: "<"
@@ -214,7 +210,7 @@ action_dialog:
 context_menu:
   set_action: "設定動作"
   open_folder: "開啟資料夾"
-  set_action_by_regex: "依欄位/正規式設定動作…"
+  set_action_by_regex: "依欄位設定動作…"
   remove_from_list: "從清單移除"
   lock: "鎖定"
   unlock: "解除鎖定"

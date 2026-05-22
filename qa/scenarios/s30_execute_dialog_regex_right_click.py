@@ -45,7 +45,7 @@ ACTION = "delete"
 # en.yml value of execute_dialog.set_action_by_regex_menu — drift
 # here surfaces as a popup-menu-item-not-found error from
 # select_popup_menu_path.
-REGEX_MENU_LABEL = "Set Action by Field/Regex…"
+REGEX_MENU_LABEL = "Set Action by Field…"
 
 
 def _read_decisions() -> dict[str, str]:

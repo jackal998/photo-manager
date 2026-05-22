@@ -75,7 +75,7 @@ LOG_TITLE_LOG_DIR_NOT_FOUND = "Log Directory Not Found"
 LOG_TITLE_DELETE_LOG_DIR_NOT_FOUND = "Delete Log Directory Not Found"
 
 # Action menu items
-ACTION_BY_REGEX = "Set Action by Field/Regex…"
+ACTION_BY_REGEX = "Set Action by Field…"
 ACTION_EXECUTE = "Execute Action…"
 
 # Scan dialog
@@ -107,8 +107,8 @@ EXECUTE_BTN = "Execute"
 EXECUTE_BTN_SELECT_BY_REGEX = "Select by Field/Regex…"
 EXECUTE_CONFIRM_TITLE = "All Files Will Be Deleted"
 
-# Set Action by Field/Regex dialog (inner — opened from Execute dialog)
-ACTION_DIALOG_TITLE = "Set Action by Field/Regex"
+# Set Action by Field dialog (inner — opened from Execute dialog)
+ACTION_DIALOG_TITLE = "Set Action by Field"
 ACTION_DIALOG_BTN_APPLY = "Apply"
 ACTION_DIALOG_BTN_CLOSE = "Close"
 
@@ -1654,10 +1654,11 @@ def _drive_action_dialog_form(
     without ``match_fn``). Scenarios can assert on this to verify the
     preview is reachable and reflects the typed pattern.
     """
-    # Phase B introduced a Beginner / Regex mode toggle that defaults
-    # to Beginner. This helper drives the regex line edit / Set Action
-    # combo / Apply button, all of which only make sense in Regex mode
-    # (Beginner hides the regex line entirely). Click the Regex radio
+    # Phase B introduced a Simple / Regex mode toggle that defaults
+    # to Simple (originally named "Beginner"; renamed in Phase C). This
+    # helper drives the regex line edit / Set Action combo / Apply
+    # button, all of which only make sense in Regex mode (Simple hides
+    # the regex line entirely). Click the Regex radio
     # if it exists; without the toggle (no match_fn → flat layout) the
     # dialog is permanently Regex-only and we skip cleanly.
     for radio in action_dlg.descendants(control_type="RadioButton"):
@@ -1684,7 +1685,7 @@ def _drive_action_dialog_form(
 
     # Find the named widgets by auto_id suffix (Phase A pinned
     # objectName values for exactly this purpose). Falling back to
-    # geometry would now give the wrong combo because Beginner mode
+    # geometry would now give the wrong combo because Simple mode
     # also has its own op combo.
     field_combo = _find_descendant_by_aid_suffix(
         action_dlg, "ComboBox", ".regexFieldCombo"

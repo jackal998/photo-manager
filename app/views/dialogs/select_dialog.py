@@ -119,6 +119,16 @@ _NUMERIC_FIELDS: frozenset[str] = frozenset({
     "Shot Date",
 })
 
+# Subset of _NUMERIC_FIELDS where the threshold input expects an ISO
+# date (YYYY-MM-DD) rather than a bare number. Drives the field-aware
+# placeholder in the numeric panel's value line edit. A5 from #347 —
+# without this, Size users were told "or YYYY-MM-DD" and Date users
+# were told "type a number".
+_DATE_NUMERIC_FIELDS: frozenset[str] = frozenset({
+    "Creation Date",
+    "Shot Date",
+})
+
 # Threshold-comparison operators. Order is the dropdown order shown
 # to the user; the first item (">") is the default because it matches
 # the most common intent ("delete rows below score X" → keep > X).
@@ -523,10 +533,12 @@ class ActionDialog(QDialog):
 
     Phase A added a live preview pane / counter / inline validator when
     a ``match_fn`` is supplied. Phase B layers on top:
-      * Beginner / Regex mode toggle. Beginner replaces the regex line
+      * Simple / Regex mode toggle. Simple replaces the regex line
         edit with "Find rows where it [contains | starts with | ends
         with | exactly matches] [text]" and builds the regex internally
         so non-regex users never type a ``\\d`` in their lives.
+        (Phase B shipped this as "Beginner" mode; renamed to "Simple"
+        in Phase C for tone — see ``_LEGACY_MODE_VALUES``.)
       * Cheatsheet chips below the regex row (Regex mode only) — click
         to insert tokens at the caret.
       * Recent-patterns dropdown next to the regex line edit, populated
@@ -779,9 +791,9 @@ class ActionDialog(QDialog):
         threshold_row.addWidget(self._num_cmp_combo)
         self._num_value_edit = QLineEdit()
         self._num_value_edit.setObjectName("numericValueEdit")
-        self._num_value_edit.setPlaceholderText(
-            t("action_dialog.numeric_value_placeholder")
-        )
+        # Placeholder is field-aware (A5 from #347) — set via
+        # _update_numeric_value_placeholder so date and number fields
+        # get their own hint text rather than one combined string.
         threshold_row.addWidget(self._num_value_edit, stretch=1)
         numeric_outer.addWidget(self._num_threshold_widget)
 
@@ -816,7 +828,7 @@ class ActionDialog(QDialog):
 
         # ── Match counter row (visible in BOTH modes when match_fn) ────────
         # Lives outside the mode containers so toggling mode never hides
-        # the live count — it's the primary feedback for both Beginner
+        # the live count — it's the primary feedback for both Simple
         # and Regex inputs.
         counter_row = QHBoxLayout()
         counter_row.addStretch(1)
@@ -871,7 +883,7 @@ class ActionDialog(QDialog):
             # Shrunk after dropping the wrapped tips paragraph and
             # restructuring chips into compact button-with-aside-label
             # rows. The dialog used to feel "too tall" — particularly
-            # in Beginner mode where the regex/chip section is hidden.
+            # in Simple mode where the regex/chip section is hidden.
             # #215 — previously hardcoded ``self.resize(780, 420)``;
             # now the minimum is the only hardcoded default and the
             # user's last manual resize is restored on top of it.
@@ -931,6 +943,7 @@ class ActionDialog(QDialog):
         self._simple_op_combo.setCurrentIndex(0)
         # Apply the mode visibility AFTER all widgets exist.
         self._apply_mode_visibility()
+        self._update_numeric_value_placeholder()
         self._validate_regex()
         if self._match_fn is not None:
             self._refresh_preview()
@@ -1050,6 +1063,23 @@ class ActionDialog(QDialog):
         self._num_threshold_widget.setVisible(is_threshold)
         self._num_topn_widget.setVisible(not is_threshold)
 
+    def _update_numeric_value_placeholder(self) -> None:
+        """Set the threshold-value placeholder based on the current field.
+
+        A5 from #347: date fields (Creation Date, Shot Date) need a
+        date-format hint; pure numeric fields need a number hint. A
+        single combined placeholder ("type a number, or YYYY-MM-DD for
+        dates") was field-blind — selecting Size still told the user
+        "or YYYY-MM-DD" while selecting Creation Date still told them
+        "type a number".
+        """
+        key = (
+            "action_dialog.numeric_value_placeholder_date"
+            if self._current_field() in _DATE_NUMERIC_FIELDS
+            else "action_dialog.numeric_value_placeholder_number"
+        )
+        self._num_value_edit.setPlaceholderText(t(key))
+
     def _on_numeric_mode_toggled(self, checked_threshold: bool) -> None:
         # Mirror _on_mode_toggled: act on the True side only so the
         # apply runs once per user click.
@@ -1145,7 +1175,7 @@ class ActionDialog(QDialog):
 
     def _apply_recent_pattern(self, pattern: str) -> None:
         # Picking from Recent always lands the user in Regex mode — the
-        # stored patterns are raw regex strings, not Beginner tuples.
+        # stored patterns are raw regex strings, not Simple tuples.
         if self._mode != MODE_REGEX and self._match_fn is not None:
             self._mode_regex_btn.setChecked(True)
         self.regex.setText(pattern)
@@ -1217,7 +1247,7 @@ class ActionDialog(QDialog):
     def _validate_regex(self) -> None:
         """Update ✓/✗ icon, friendly error label, AND Apply-button state.
 
-        In Beginner mode the synthesised pattern is always valid (we
+        In Simple mode the synthesised pattern is always valid (we
         re.escape the user's input), so the icon stays empty and we
         hide the error label.
 
@@ -1278,7 +1308,7 @@ class ActionDialog(QDialog):
         """Pull live counts + sample names from the injected match_fn.
 
         Both modes funnel through this — the only difference is which
-        widget produced the pattern (Regex mode uses self.regex, Beginner
+        widget produced the pattern (Regex mode uses self.regex, Simple
         mode synthesises via _build_pattern). Match-span highlighting is
         applied per-row by storing (start, end) on each list item; the
         delegate paints from there.
@@ -1434,6 +1464,9 @@ class ActionDialog(QDialog):
         # doesn't drive a spurious live-preview refresh.
         self._apply_mode_visibility()
         self._apply_exact_regex_for_current_field()
+        # A5 from #347: refresh the numeric placeholder so date fields
+        # get the date hint and number fields get the number hint.
+        self._update_numeric_value_placeholder()
         # Validation icon would otherwise read the (now-irrelevant)
         # regex value in numeric-panel mode; suppress it explicitly.
         self._validate_regex()

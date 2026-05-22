@@ -51,7 +51,7 @@ class ActionHandlersImpl:
         self.file_ops.remove_items_from_list(items)
 
     def show_action_dialog(self, clicked_col: int | None = None) -> None:
-        """Show the Set Action by Field/Regex dialog."""
+        """Show the Set Action by Field dialog."""
         self.dialog.show_action_dialog(clicked_col=clicked_col)
 
     def set_decision(self, items: list[dict], decision: str) -> None:

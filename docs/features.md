@@ -54,7 +54,7 @@ for the chore plan.
 | [Scan flow — manifest summary in progress log](#scan-flow--manifest-summary-in-progress-log) | Scan |
 | [Scan flow — rescan confirm](#scan-flow--rescan-confirm) | Scan |
 | [Scan flow — visual selection of KEEP rows after scan](#scan-flow--visual-selection-of-keep-rows-after-scan) | Scan |
-| [Set Action dialog — Beginner / Regex mode toggle](#set-action-dialog--beginner--regex-mode-toggle) | Set Action dialog |
+| [Set Action dialog — Simple / Regex mode toggle](#set-action-dialog--simple--regex-mode-toggle) | Set Action dialog |
 | [Set Action dialog — live preview + validation](#set-action-dialog--live-preview--validation) | Set Action dialog |
 | [Set Action dialog — numeric comparison panel](#set-action-dialog--numeric-comparison-panel) | Set Action dialog |
 | [Set Action dialog — Score / Lock / Resolution fields](#set-action-dialog--score--lock--resolution-fields) | Set Action dialog |
@@ -100,7 +100,7 @@ for the chore plan.
 - **Entry point:** Right-click submenu on file rows in the main result tree — [app/views/handlers/context_menu.py](../app/views/handlers/context_menu.py).
 - **Trigger:** User right-clicks a file row (single or multi-select) and picks **Set Action > delete / keep / remove from list**.
 - **Behaviour:** Sets `user_decision` on each selected row to the chosen value. Multi-select applies the same decision to every selected row in one batch. For multi-select with locked rows in the set, the lock-confirm dialog gates the write (see [Execute Action — lock-confirm dialog](#execute-action--lock-confirm-dialog)).
-- **Conditions / variants:** Single-row right-click also offers **Set Action by Field/Regex…** (multi-select got that entry too in [PR #162](https://github.com/jackal998/photo-manager/pull/162) — parity with single-select). The "remove from list" entry behaves differently per context: from the main-window submenu it's the same deferred decision as the bulk path; from the Execute Action dialog's single-row right-click it's IMMEDIATE (set + execute on one click).
+- **Conditions / variants:** Single-row right-click also offers **Set Action by Field…** (multi-select got that entry too in [PR #162](https://github.com/jackal998/photo-manager/pull/162) — parity with single-select). The "remove from list" entry behaves differently per context: from the main-window submenu it's the same deferred decision as the bulk path; from the Execute Action dialog's single-row right-click it's IMMEDIATE (set + execute on one click).
 - **Related:** Foundation in [PR #19](https://github.com/jackal998/photo-manager/pull/19); QA scenarios [`qa/scenarios/s15_context_menu.py`](../qa/scenarios/s15_context_menu.py) (main-window route) and [`qa/scenarios/s53_execute_dialog_lock_decision.py`](../qa/scenarios/s53_execute_dialog_lock_decision.py) (Set Action → delete via Execute Action dialog's right-click, verified through the status-bar "Decision set" emit).
 - **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
 
@@ -425,14 +425,14 @@ for the chore plan.
 
 ---
 
-### Set Action dialog — Beginner / Regex mode toggle
+### Set Action dialog — Simple / Regex mode toggle
 
 - **Entry point:** Radio toggle at the top of the Set Action dialog — [app/views/dialogs/select_dialog.py](../app/views/dialogs/select_dialog.py).
-- **Trigger:** User opens **Action > Set Action by Field/Regex…** (or right-clicks a row → **Set Action by Field/Regex…**). Beginner is the default for new users.
-- **Behaviour:** **Beginner** mode replaces the regex line edit with "Find rows where it [contains | starts with | ends with | exactly matches] [text]". The dialog synthesises the regex internally (via `re.escape` so the user's plain text stays literal — no need to know that `()/.` are special). **Regex** mode exposes the raw pattern input plus a cheatsheet chip row (`.*`, `\d`, `\w`, `^`, `$`, `\.`, `[abc]`) for power users. Recent patterns dropdown (capped at 10, deduped, persisted under `ui.action_dialog.recent_patterns`) is reachable from a `Recent ▾` button next to the regex input; picking from Recent always lands the user in Regex mode (the stored values are raw regex, not Beginner tuples).
-- **Conditions / variants:** Mode persists in `settings.json` under `ui.action_dialog.mode` so power users who flip to Regex once stay there. The match counter sits in a dedicated row visible in both modes — toggling mode never hides the live count, which is the primary feedback for both inputs. Match-span highlighting in the preview emboldens the matched substring in each row regardless of mode.
-- **Related:** [PR #167](https://github.com/jackal998/photo-manager/pull/167) (Phase B — Beginner mode, cheatsheet, recent patterns, match highlight); [PR #168](https://github.com/jackal998/photo-manager/pull/168) (Phase C — Simple rename + 3-col cheatsheet); QA scenario [`qa/scenarios/s31_simple_mode_regex.py`](../qa/scenarios/s31_simple_mode_regex.py).
-- **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+- **Trigger:** User opens **Action > Set Action by Field…** (or right-clicks a row → **Set Action by Field…**). Simple is the default for new users.
+- **Behaviour:** **Simple** mode replaces the regex line edit with "Find rows where it [contains | starts with | ends with | exactly matches] [text]". The dialog synthesises the regex internally (via `re.escape` so the user's plain text stays literal — no need to know that `()/.` are special). **Regex** mode exposes the raw pattern input plus a cheatsheet chip row (`.*`, `\d`, `\w`, `^`, `$`, `\.`, `[abc]`) for power users. Recent patterns dropdown (capped at 10, deduped, persisted under `ui.action_dialog.recent_patterns`) is reachable from a `Recent ▾` button next to the regex input; picking from Recent always lands the user in Regex mode (the stored values are raw regex, not Simple tuples).
+- **Conditions / variants:** Mode persists in `settings.json` under `ui.action_dialog.mode` so power users who flip to Regex once stay there. The match counter sits in a dedicated row visible in both modes — toggling mode never hides the live count, which is the primary feedback for both inputs. Match-span highlighting in the preview emboldens the matched substring in each row regardless of mode. Dialog title is "Set Action by Field" (not "Set Action by Field/Regex") — the panel inside (Simple / Regex / Numeric) acts as the implicit qualifier.
+- **Related:** [PR #167](https://github.com/jackal998/photo-manager/pull/167) (Phase B — Simple/Beginner mode, cheatsheet, recent patterns, match highlight); [PR #168](https://github.com/jackal998/photo-manager/pull/168) (Phase C — Simple rename + 3-col cheatsheet); QA scenario [`qa/scenarios/s31_simple_mode_regex.py`](../qa/scenarios/s31_simple_mode_regex.py).
+- **Last verified:** 2026-05-22 (Wave 2 i18n + label sweep)
 
 ---
 
