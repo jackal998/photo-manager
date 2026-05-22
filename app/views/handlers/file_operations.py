@@ -105,12 +105,12 @@ def _decision_display_label(decision: str) -> str:
 
 def build_match_fn(
     groups: list, sample_cap: int = 50
-) -> Callable[[str, str], tuple[int, int, list[str]]]:
+) -> Callable[[str, str], tuple[int, int, list[tuple[str, str]]]]:
     """Return a closure that counts regex matches across the records.
 
     The closure returned by this function powers the ActionDialog's live
     preview pane. Calling it with a (field, pattern) pair returns a tuple
-    (matched, total, sample_basenames) where:
+    (matched, total, samples) where:
       - matched: total number of records whose `field` value matches `pattern`
         (case-insensitive) under the same `_FIELD_TO_ATTR` map that
         `set_decision_by_regex` will use, so the preview is byte-for-byte
@@ -118,15 +118,23 @@ def build_match_fn(
       - total: total number of records iterated. Records whose field is
         unavailable (no `_FIELD_TO_ATTR` entry, or the attr is None) count
         toward `total` but cannot match.
-      - sample_basenames: at most `sample_cap` basenames of matching files,
-        for display in the preview list. Iteration continues past the cap
-        so the matched count is always accurate.
+      - samples: at most ``sample_cap`` ``(basename, matched_field_str)``
+        tuples for matching files. The dialog displays ``matched_field_str``
+        in the preview list so the user can see *why* a non-File-Name
+        regex matched (A2 from #347: pre-Wave-4 the preview showed
+        basenames for Folder / Size / Score / Date / Lock / Action /
+        Resolution regexes too, leaving the match-span highlighter
+        silently no-op because ``rx.search(basename)`` returned None).
+        For the File Name field the two strings are equal and the
+        previous one-string sample shape is preserved at render time.
+        Iteration continues past the cap so the matched count is always
+        accurate.
 
     On `re.error` returns (0, total, []) — the dialog handles invalid-regex
     feedback through its own validation row, so the closure stays silent.
     """
 
-    def _match(field: str, pattern: str) -> tuple[int, int, list[str]]:
+    def _match(field: str, pattern: str) -> tuple[int, int, list[tuple[str, str]]]:
         from pathlib import Path
 
         try:
@@ -137,7 +145,7 @@ def build_match_fn(
 
         matched = 0
         total = 0
-        samples: list[str] = []
+        samples: list[tuple[str, str]] = []
         for grp in groups:
             for rec in grp.items:
                 total += 1
@@ -148,9 +156,10 @@ def build_match_fn(
                     matched += 1
                     if len(samples) < sample_cap:
                         path_val = getattr(rec, "file_path", None)
-                        samples.append(
+                        basename = (
                             Path(str(path_val)).name if path_val else value
                         )
+                        samples.append((basename, value))
         return (matched, total, samples)
 
     return _match

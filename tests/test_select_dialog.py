@@ -175,7 +175,7 @@ class TestPreviewPane:
         from app.views.dialogs.select_dialog import ActionDialog
         from unittest.mock import MagicMock
 
-        match_fn = MagicMock(return_value=(2, 3, ["a.jpg", "b.jpg"]))
+        match_fn = MagicMock(return_value=(2, 3, [("a.jpg", "a.jpg"), ("b.jpg", "b.jpg")]))
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         # Phase B introduced Simple-mode default — switch to Regex
         # mode so dlg.regex is the active pattern source.
@@ -191,7 +191,10 @@ class TestPreviewPane:
         """Preview list shows the sample names returned by match_fn."""
         from app.views.dialogs.select_dialog import ActionDialog
 
-        match_fn = lambda f, p: (3, 100, ["one.jpg", "two.jpg", "three.jpg"])
+        match_fn = lambda f, p: (
+            3, 100,
+            [("one.jpg", "one.jpg"), ("two.jpg", "two.jpg"), ("three.jpg", "three.jpg")],
+        )
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         dlg.regex.setText(".*")
         dlg._refresh_preview()
@@ -208,7 +211,10 @@ class TestPreviewPane:
         from app.views.dialogs.select_dialog import ActionDialog
 
         # 50 samples, 200 total matches — 150 are hidden.
-        match_fn = lambda f, p: (200, 4500, [f"x{i}.jpg" for i in range(50)])
+        match_fn = lambda f, p: (
+            200, 4500,
+            [(f"x{i}.jpg", f"x{i}.jpg") for i in range(50)],
+        )
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         dlg.regex.setText(".*")
         dlg._refresh_preview()
@@ -222,7 +228,10 @@ class TestPreviewPane:
         hidden — otherwise users see "…and 0 more" which is confusing."""
         from app.views.dialogs.select_dialog import ActionDialog
 
-        match_fn = lambda f, p: (5, 100, ["a", "b", "c", "d", "e"])
+        match_fn = lambda f, p: (
+            5, 100,
+            [(s, s) for s in ("a", "b", "c", "d", "e")],
+        )
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         dlg.regex.setText(".*")
         dlg._refresh_preview()
@@ -826,7 +835,10 @@ class TestMatchHighlightDelegate:
         from PySide6.QtCore import Qt
 
         # match_fn returns 2 samples both containing 'IMG'.
-        match_fn = lambda f, p: (2, 100, ["IMG_001.jpg", "before_IMG_after.jpg"])
+        match_fn = lambda f, p: (
+            2, 100,
+            [("IMG_001.jpg", "IMG_001.jpg"), ("before_IMG_after.jpg", "before_IMG_after.jpg")],
+        )
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("IMG")
@@ -840,6 +852,145 @@ class TestMatchHighlightDelegate:
 
 
 # ── Phase C: regex-as-single-source-of-truth + reverse-parse + legacy alias
+
+
+class TestPreviewAccuracy:
+    """Wave 4 of the regex-dialog audit (#347 A2, #350 D5+D8).
+
+    A2: preview pane previously showed file basenames even when the
+    regex was applied to a non-name field (Folder, Score, Date, etc.).
+    Sample list now carries (basename, matched_field_str) tuples and
+    the preview displays matched_field_str so the user can see WHY
+    each row matched (highlight delegate also runs against the
+    matched-field string).
+
+    D5+D8: Top-N preview previously showed a flat basename list.
+    Rows now include the group identifier (D5) and the numeric value
+    that drove the ranking (D8).
+    """
+
+    def test_regex_preview_shows_matched_field_not_basename(self, qapp):
+        """A2 — when the regex targets Folder, the preview row text is
+        the folder path, not the basename."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (
+            1, 10,
+            [("vacation.jpg", "/photos/2023/summer")],
+        )
+        dlg = ActionDialog(fields=["Folder"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"2023")
+        dlg._refresh_preview()
+
+        item = dlg._preview_list.item(0)
+        assert item is not None
+        assert item.text() == "/photos/2023/summer"
+
+    def test_regex_preview_shows_basename_for_file_name_field(self, qapp):
+        """A2 — File Name field: basename and matched_field_str are
+        the same; preview behaviour is preserved (no regression).
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (
+            1, 10,
+            [("IMG_001.jpg", "IMG_001.jpg")],
+        )
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"IMG")
+        dlg._refresh_preview()
+
+        item = dlg._preview_list.item(0)
+        assert item is not None
+        assert item.text() == "IMG_001.jpg"
+
+    def test_match_span_computed_against_matched_field_string(self, qapp):
+        """A2 — delegate span runs against the matched-field string so
+        the bold span lands on the regex hit inside the folder path,
+        not on a non-existent hit inside the basename.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+        from PySide6.QtCore import Qt
+
+        match_fn = lambda f, p: (
+            1, 10,
+            [("vacation.jpg", "/photos/2023/summer")],
+        )
+        dlg = ActionDialog(fields=["Folder"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"2023")
+        dlg._refresh_preview()
+
+        item = dlg._preview_list.item(0)
+        assert item is not None
+        span = item.data(Qt.UserRole)
+        assert span is not None, "Highlight span missing — delegate would no-op"
+        start, end = span
+        assert item.text()[start:end] == "2023"
+
+    def test_topn_preview_row_includes_group_identifier(self, qapp):
+        """D5 — Top-N preview shows per-group context. Each picked row
+        text contains a 'Group N' prefix matching the group it came from.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog, NUMERIC_MODE_TOPN
+
+        g1 = _make_group([
+            _make_record(file_path="a/x.jpg", score=80.0),
+            _make_record(file_path="a/y.jpg", score=60.0),
+        ])
+        g2 = _make_group([
+            _make_record(file_path="b/p.jpg", score=90.0),
+            _make_record(file_path="b/q.jpg", score=70.0),
+        ])
+        dlg = ActionDialog(
+            fields=["Score"], groups=[g1, g2],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Score")
+        dlg._numeric_mode = NUMERIC_MODE_TOPN
+        dlg._num_n_spin.setValue(1)  # top 1 per group
+        dlg._refresh_numeric_preview()
+
+        texts = [
+            dlg._preview_list.item(i).text()
+            for i in range(dlg._preview_list.count())
+        ]
+        assert any("Group 1" in t for t in texts), texts
+        assert any("Group 2" in t for t in texts), texts
+
+    def test_topn_preview_row_includes_numeric_value(self, qapp):
+        """D8 — Top-N preview shows the value the ranking selected on.
+        Pre-Wave-4 the user couldn't see WHY a particular row was picked
+        (especially for ties), which made the deterministic
+        alphabetic-by-path tiebreaker invisible.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog, NUMERIC_MODE_TOPN
+
+        g = _make_group([
+            _make_record(file_path="x.jpg", score=85.0),
+            _make_record(file_path="y.jpg", score=42.0),
+        ])
+        dlg = ActionDialog(
+            fields=["Score"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Score")
+        dlg._numeric_mode = NUMERIC_MODE_TOPN
+        dlg._num_n_spin.setValue(1)
+        dlg._num_order_combo.setCurrentIndex(
+            dlg._num_order_combo.findData("desc")
+        )
+        dlg._refresh_numeric_preview()
+
+        texts = [
+            dlg._preview_list.item(i).text()
+            for i in range(dlg._preview_list.count())
+        ]
+        # Top 1 desc by score → x.jpg (85.0) wins, y.jpg (42.0) loses.
+        assert any("85" in t for t in texts), texts
+        assert not any("42" in t for t in texts), texts
 
 
 class TestTryParseSimple:
