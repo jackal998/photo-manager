@@ -195,8 +195,17 @@ action_dialog:
   close_button: "Close"
   preview_label: "Preview"
   match_counter: "{matched} of {total} match"
+  # B6 from #348 (Wave 5): Top-N mode counter — "{matched} matched"
+  # with the per-group context that Top-N specifically operates on
+  # (≤N per group × number-of-groups). Regex and Threshold modes
+  # keep the simpler ``match_counter`` shape since they apply
+  # across all records, not per-group.
+  match_counter_topn: "{matched} matched (≤{n} per group × {group_count} groups)"
   match_counter_invalid: "—"
   invalid_regex: "Invalid regex: {error}"
+  # A4 from #347 (Wave 5): shown when the threshold input is non-empty
+  # but ``_parse_threshold`` can't read it as a number or ISO date.
+  invalid_threshold: "Couldn't parse '{input}' as a value for this field"
   preview_truncated: "…and {n} more"
   preview_empty: "No matches"
   # Phase B/C — Simple / Regex mode toggle and friends. ("Simple"

@@ -1318,6 +1318,95 @@ class TestFieldAwareNumericPlaceholder:
         assert "YYYY-MM-DD" not in first
 
 
+class TestNumericPolish:
+    """Wave 5 of the regex-dialog audit (#347 A4, #348 B6).
+
+    A4: threshold input grows a ✓/✗ icon + error label. Pre-Wave-5
+    unparseable input silently produced 0 matches with no signal
+    that the threshold (not the data) was the problem.
+
+    B6: Top-N counter format carries the per-group bound that the
+    operation actually has — generic "X of Y match" loses the
+    "≤N per group × G groups" semantics specific to Top-N.
+    """
+
+    def test_threshold_invalid_input_shows_x_and_error(self, qapp):
+        """A4 — non-empty unparseable threshold → ✗ icon + visible
+        error label echoing the bad input.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=100)])
+        dlg = ActionDialog(
+            fields=["Size (Bytes)"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        dlg._num_value_edit.setText("not-a-number")
+
+        assert dlg._num_threshold_icon.text() == "✗"
+        assert not dlg._num_threshold_error.isHidden()
+        assert "not-a-number" in dlg._num_threshold_error.text()
+
+    def test_threshold_empty_input_is_neutral(self, qapp):
+        """A4 — empty threshold is the neutral state (no icon, no
+        error). The user hasn't committed to a value yet, so showing
+        ✗ would be premature noise.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=100)])
+        dlg = ActionDialog(
+            fields=["Size (Bytes)"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        # Type something invalid, then clear — confirms the clear-path
+        # resets the icon (catches a regression where ✗ stays sticky).
+        dlg._num_value_edit.setText("garbage")
+        assert dlg._num_threshold_icon.text() == "✗"
+
+        dlg._num_value_edit.setText("")
+        assert dlg._num_threshold_icon.text() == ""
+        assert dlg._num_threshold_error.isHidden()
+
+    def test_topn_counter_uses_per_group_format(self, qapp):
+        """B6 — Top-N counter reads "{matched} matched (≤N per group
+        × G groups)", not the generic regex/threshold format. Catches
+        a regression where the counter format key gets swapped back.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog, NUMERIC_MODE_TOPN
+
+        g1 = _make_group([
+            _make_record(file_path="a/x.jpg", score=80.0),
+            _make_record(file_path="a/y.jpg", score=60.0),
+        ])
+        g2 = _make_group([
+            _make_record(file_path="b/p.jpg", score=90.0),
+            _make_record(file_path="b/q.jpg", score=70.0),
+        ])
+        dlg = ActionDialog(
+            fields=["Score"], groups=[g1, g2],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Score")
+        dlg._numeric_mode = NUMERIC_MODE_TOPN
+        dlg._num_n_spin.setValue(1)
+        dlg._refresh_numeric_preview()
+
+        counter = dlg._match_counter.text()
+        # The Top-N format contains the per-group bound ("per group"
+        # or "每組") and the group count digits (2 groups). The
+        # generic format is "{matched} of {total} match" — its "of"
+        # absence in the en string is the differentiator here.
+        assert (
+            "per group" in counter or "每組" in counter
+        ), f"Top-N counter missing per-group context: {counter!r}"
+        assert "2" in counter, (
+            f"Top-N counter missing group count: {counter!r}"
+        )
+
+
 class TestThresholdEmit:
     """Apply with threshold mode emits an encoded __cmp__: pattern."""
 

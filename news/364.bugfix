@@ -1,0 +1,1 @@
+Surface threshold validation feedback (✓/✗ icon plus error label on unparseable input) in the Set Action dialog's numeric panel, and switch the Top-N counter to show the per-group bound ("X matched (≤N per group × G groups)") (#347).

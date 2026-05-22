@@ -820,10 +820,15 @@ class ActionDialog(QDialog):
         num_mode_group.addButton(self._num_mode_topn_btn)
         self._num_mode_button_group = num_mode_group  # retain ref
 
-        # Threshold sub-panel: op combo + value line edit.
+        # Threshold sub-panel: op combo + value line edit + validation
+        # icon + (collapsible) error label. A4 from #347 (Wave 5) adds
+        # the icon and error so unparseable threshold input is surfaced
+        # — pre-Wave-5 bad input silently produced 0 matches with no
+        # signal that the *threshold*, not the data, was the problem.
         self._num_threshold_widget = QWidget()
-        threshold_row = QHBoxLayout(self._num_threshold_widget)
-        threshold_row.setContentsMargins(0, 0, 0, 0)
+        threshold_outer = QVBoxLayout(self._num_threshold_widget)
+        threshold_outer.setContentsMargins(0, 0, 0, 0)
+        threshold_row = QHBoxLayout()
         threshold_row.addWidget(QLabel(t("action_dialog.numeric_threshold_label")))
         self._num_cmp_combo = QComboBox()
         self._num_cmp_combo.setObjectName("numericCmpCombo")
@@ -836,6 +841,17 @@ class ActionDialog(QDialog):
         # _update_numeric_value_placeholder so date and number fields
         # get their own hint text rather than one combined string.
         threshold_row.addWidget(self._num_value_edit, stretch=1)
+        self._num_threshold_icon = QLabel("")
+        self._num_threshold_icon.setObjectName("numericThresholdIcon")
+        self._num_threshold_icon.setFixedWidth(16)
+        threshold_row.addWidget(self._num_threshold_icon)
+        threshold_outer.addLayout(threshold_row)
+        self._num_threshold_error = QLabel("")
+        self._num_threshold_error.setObjectName("numericThresholdError")
+        self._num_threshold_error.setStyleSheet("color: #d62728;")
+        self._num_threshold_error.setWordWrap(True)
+        self._num_threshold_error.hide()
+        threshold_outer.addWidget(self._num_threshold_error)
         numeric_outer.addWidget(self._num_threshold_widget)
 
         # Top-N sub-panel: order combo (Top/Bottom) + N spinbox.
@@ -852,7 +868,11 @@ class ActionDialog(QDialog):
         topn_row.addWidget(self._num_order_combo)
         self._num_n_spin = QSpinBox()
         self._num_n_spin.setObjectName("numericNSpinBox")
-        self._num_n_spin.setRange(1, 999)
+        # A14 from #347 (Wave 5): cap was 999, raised to 10_000 so
+        # large-group manifests can "keep everything" via Top-N when
+        # a group has >999 records. Qt requires an upper bound on
+        # QSpinBox, so this is the new practical ceiling.
+        self._num_n_spin.setRange(1, 10_000)
         self._num_n_spin.setValue(1)
         topn_row.addWidget(self._num_n_spin)
         topn_row.addWidget(QLabel(t("action_dialog.numeric_topn_suffix")))
@@ -861,8 +881,15 @@ class ActionDialog(QDialog):
         self._num_topn_widget.hide()  # threshold is the default sub-mode
 
         # Connect the numeric-mode radios so toggling shows/hides the
-        # right sub-panel and re-runs the live preview.
-        self._num_mode_threshold_btn.toggled.connect(self._on_numeric_mode_toggled)
+        # right sub-panel and re-runs the live preview. E7 from #351
+        # (Wave 5): wired via QButtonGroup.buttonToggled rather than
+        # the single-radio .toggled signal. The group fires once per
+        # button per flip with (button, checked) so the handler can
+        # identify which radio went active — robust against a third
+        # radio being added later.
+        self._num_mode_button_group.buttonToggled.connect(
+            self._on_numeric_mode_toggled
+        )
 
         self._numeric_widget.hide()  # initial state: hidden until field changes
         left_layout.addWidget(self._numeric_widget)
@@ -978,6 +1005,10 @@ class ActionDialog(QDialog):
             # preview so the match counter updates as the user types
             # a threshold or scrolls the Top-N spinbox.
             self._num_value_edit.textChanged.connect(self._preview_timer.start)
+            # A4 from #347 (Wave 5): threshold validation runs
+            # synchronously (not debounced) on every keystroke so the
+            # ✓/✗ icon tracks input without lag.
+            self._num_value_edit.textChanged.connect(self._validate_threshold)
             self._num_cmp_combo.currentIndexChanged.connect(self._preview_timer.start)
             self._num_order_combo.currentIndexChanged.connect(self._preview_timer.start)
             self._num_n_spin.valueChanged.connect(self._preview_timer.start)
@@ -1109,6 +1140,50 @@ class ActionDialog(QDialog):
         self._num_threshold_widget.setVisible(is_threshold)
         self._num_topn_widget.setVisible(not is_threshold)
 
+    def _validate_threshold(self) -> None:
+        """Update threshold ✓/✗ icon + error label. A4 from #347 (Wave 5).
+
+        Empty input is neutral (no icon, no error) — the user hasn't
+        committed to a value yet. Non-empty but unparseable produces a
+        ✗ + error string echoing the bad input so the user can see
+        what didn't parse. Parseable input shows ✓.
+
+        Re-runs on every keystroke (wired synchronously to
+        ``_num_value_edit.textChanged`` so the icon tracks input
+        without lag) AND from ``_on_field_changed`` because the same
+        text can parse differently for Date vs Number fields.
+        """
+        if not self._field_panel_is_numeric():
+            return
+        text = self._num_value_edit.text().strip()
+        if not text:
+            self._num_threshold_icon.setText("")
+            self._num_threshold_icon.setStyleSheet("")
+            self._num_threshold_icon.setAccessibleName("")
+            self._num_threshold_error.hide()
+            return
+        field = self._current_field()
+        parsed = _parse_threshold(field, text)
+        if parsed is None:
+            self._num_threshold_icon.setText("✗")
+            self._num_threshold_icon.setStyleSheet(
+                "color: #d62728; font-weight: bold;"
+            )
+            self._num_threshold_icon.setAccessibleName(
+                f"Threshold invalid: {text}"
+            )
+            self._num_threshold_error.setText(
+                t("action_dialog.invalid_threshold").format(input=text)
+            )
+            self._num_threshold_error.show()
+        else:
+            self._num_threshold_icon.setText("✓")
+            self._num_threshold_icon.setStyleSheet(
+                "color: #2ca02c; font-weight: bold;"
+            )
+            self._num_threshold_icon.setAccessibleName("Threshold valid")
+            self._num_threshold_error.hide()
+
     def _update_numeric_value_placeholder(self) -> None:
         """Set the threshold-value placeholder based on the current field.
 
@@ -1126,21 +1201,20 @@ class ActionDialog(QDialog):
         )
         self._num_value_edit.setPlaceholderText(t(key))
 
-    def _on_numeric_mode_toggled(self, checked_threshold: bool) -> None:
-        # Mirror _on_mode_toggled: act on the True side only so the
-        # apply runs once per user click.
-        if checked_threshold:
+    def _on_numeric_mode_toggled(self, button, checked: bool) -> None:
+        # E7 from #351 (Wave 5): wired via QButtonGroup.buttonToggled,
+        # which fires once per button per flip. Act on the
+        # button-becoming-checked side only — without this guard we'd
+        # apply twice (one off + one on) per user click.
+        if not checked:
+            return
+        if button is self._num_mode_threshold_btn:
             self._numeric_mode = NUMERIC_MODE_THRESHOLD
-        elif self._num_mode_topn_btn.isChecked():
+        elif button is self._num_mode_topn_btn:
             self._numeric_mode = NUMERIC_MODE_TOPN
         else:
             return
         self._apply_numeric_sub_visibility()
-        # Numeric panel doesn't have a regex line edit to validate;
-        # the match-counter is best-effort refreshed off the regex
-        # input. We don't currently live-preview numeric matches —
-        # the user clicks Apply and sees the result in the parent
-        # dialog's tree refresh.
 
     # ── Simple → regex write-through ───────────────────────────────────────
 
@@ -1454,6 +1528,15 @@ class ActionDialog(QDialog):
                 f"Group {group_no} — {Path(path).name} ({_fmt_value(val)})"
                 for group_no, path, val in rows
             ]
+            # B6 from #348 (Wave 5): Top-N counter carries per-group
+            # context — generic "X of Y match" loses the fact that
+            # the operation is bounded to ≤N per group across G
+            # groups. B7 from #348 is subsumed: the explicit (≤n per
+            # group × group_count groups) text answers "what does N
+            # mean here?" without an extra UI element.
+            counter_text = t("action_dialog.match_counter_topn").format(
+                matched=len(labels), n=n, group_count=len(self._groups),
+            )
         else:
             op = str(self._num_cmp_combo.currentData() or ">")
             value_text = self._num_value_edit.text()
@@ -1461,11 +1544,12 @@ class ActionDialog(QDialog):
                 self._groups, field, op, value_text
             )
             labels = [Path(p).name for p in paths]
+            counter_text = t("action_dialog.match_counter").format(
+                matched=len(labels), total=total,
+            )
 
         matched = len(labels)
-        self._match_counter.setText(
-            t("action_dialog.match_counter").format(matched=matched, total=total)
-        )
+        self._match_counter.setText(counter_text)
 
         self._preview_list.clear()
         if matched == 0:
@@ -1558,6 +1642,10 @@ class ActionDialog(QDialog):
         # A5 from #347: refresh the numeric placeholder so date fields
         # get the date hint and number fields get the number hint.
         self._update_numeric_value_placeholder()
+        # A4 from #347 (Wave 5): the same text can parse differently
+        # for Date vs Number fields, so re-validate on every field
+        # change to keep the ✓/✗ icon honest.
+        self._validate_threshold()
         # Validation icon would otherwise read the (now-irrelevant)
         # regex value in numeric-panel mode; suppress it explicitly.
         self._validate_regex()
