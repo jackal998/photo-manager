@@ -13,7 +13,7 @@ dialogs:
 
   * ScanDialog (File → Scan Sources…)
   * ExecuteActionDialog (Action → Execute Action…)
-  * ActionDialog (Action → Set Action by Field/Regex…) — only after
+  * ActionDialog (Action → Set Action by Field…) — only after
     a manifest is loaded, so its preview pane / QSplitter layout is
     in force (the flat layout doesn't persist geometry by design;
     layer-1 pins that contract).

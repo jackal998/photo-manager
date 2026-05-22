@@ -657,14 +657,14 @@ def read_combobox_items(combo: UIAWrapper) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Set Action by Field/Regex dialog — open / close (no form drive)
+# Set Action by Field dialog — open / close (no form drive)
 # ---------------------------------------------------------------------------
 
 
 def open_action_by_regex_dialog(
     win: UIAWrapper, dialog_timeout: float = 5
 ) -> tuple[UIAWrapper, int]:
-    """Open the Set Action by Field/Regex dialog from the menu bar.
+    """Open the Set Action by Field dialog from the menu bar.
 
     Counterpart to :func:`mark_all_via_regex_standalone` for probes that
     want to inspect the dialog *without* filling and applying the form.
@@ -1637,7 +1637,7 @@ def _drive_action_dialog_form(
     action_label: str,
     expect_lock_confirm: str | None = None,
 ) -> str | None:
-    """Fill the Set Action by Field/Regex dialog and submit.
+    """Fill the Set Action by Field dialog and submit.
 
     Shared by both entry points (menu-bar standalone and Execute-dialog
     inner). Caller must have already focused `action_dlg`.
@@ -1834,7 +1834,7 @@ def mark_all_via_regex(
     dialog_timeout: float = 5,
     expect_lock_confirm: str | None = None,
 ) -> str | None:
-    """Open the inner Set Action by Field/Regex dialog from inside the
+    """Open the inner Set Action by Field dialog from inside the
     Execute Action dialog, set field+regex+action, click Apply, then Close.
 
     `field` is the visible text in the Field combo (e.g. "File Name").
@@ -1874,10 +1874,10 @@ def mark_all_via_regex_standalone(
     dialog_timeout: float = 5,
     expect_lock_confirm: str | None = None,
 ) -> str | None:
-    """Drive the standalone Set Action by Field/Regex flow from the menu bar.
+    """Drive the standalone Set Action by Field flow from the menu bar.
 
     Distinct from `mark_all_via_regex` — this opens the dialog via
-    Action menu → "Set Action by Field/Regex…" (no Execute Action dialog
+    Action menu → "Set Action by Field…" (no Execute Action dialog
     in the picture). After Close, focus returns to the main window
     rather than the Execute dialog.
 

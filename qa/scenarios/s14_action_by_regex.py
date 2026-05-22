@@ -1,9 +1,9 @@
-"""Scenario 14 — Action > Set Action by Field/Regex (standalone, from menu).
+"""Scenario 14 — Action > Set Action by Field (standalone, from menu).
 
 Required source: qa/sandbox/near-duplicates (5 files, basenames neardup_NN_qXX.jpg).
 
 Drives the standalone bulk-decision flow end-to-end:
-  scan → close & load → Action menu → Set Action by Field/Regex… →
+  scan → close & load → Action menu → Set Action by Field… →
   field=File Name, regex=q[89]\\d, action=delete → Apply → Close →
   verify (a) the 3 matching rows now have user_decision='delete' in the
   manifest, (b) the 2 non-matching rows are unchanged from their pre-state.

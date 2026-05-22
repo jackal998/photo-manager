@@ -281,7 +281,7 @@ def main() -> int:
     # Pin the expected winner for the scoring-mixed group: the clean
     # variant has GPS + clean filename + clean path and must outscore
     # all three penalised variants. The actual decision-setting step
-    # belongs to the Set Action by Field/Regex dialog (#209) — this
+    # belongs to the Set Action by Field dialog (#209) — this
     # scenario only verifies the underlying score signal.
     expected_mixed_winner = max(pre_mixed, key=lambda n: pre_mixed[n]["score"])
     if expected_mixed_winner != MIXED_CLEAN:
