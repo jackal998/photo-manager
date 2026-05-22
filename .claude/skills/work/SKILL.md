@@ -362,6 +362,11 @@ them unless the human says to.
   briefs show file overlap — sequence them in a single session
   instead. Parallel sessions on shared files cost more in merge
   conflicts than they save in latency.
+- ✗ Don't add subagents to a "medium" task to "be thorough". Google
+  Research (arxiv 2512.08296, 2026) shows independent agents amplify
+  errors 17.2× vs 4.4× for centrally-coordinated ones, and adding
+  agents degrades performance up to 70% on sequential tasks. The
+  complexity table is the gate.
 
 ## Invocation examples
 
