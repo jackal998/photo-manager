@@ -9,47 +9,20 @@ points here when Claude is extending or adding a scenario.
 
 ## Scenario drivers
 
-Each scenario in the menu has (or will have) a pre-built driver under
-`qa/scenarios/`. Drivers are version-controlled, deterministic, and
-print structured `step:` / `key=value` lines to stdout. Run them with
+Each scenario has a pre-built driver under `qa/scenarios/`. Drivers
+are version-controlled, deterministic, and print structured `step:` /
+`key=value` lines to stdout. Run a single driver with
 `.venv/Scripts/python.exe -m qa.scenarios.<module>` while the app is
 running.
 
-| # | Scenario | Module | Status |
-|---|---|---|---|
-| 1 | Happy path: scan + review + mark | `qa.scenarios.s01_happy_path` | ✓ ready |
-| 2 | Empty folder | `qa.scenarios.s02_empty_folder` | ✓ ready |
-| 3 | Cancel scan mid-run | `qa.scenarios.s03_cancel_scan` | ✓ ready |
-| 4 | Corrupted file handling | `qa.scenarios.s04_corrupted` | ✓ ready |
-| 5 | Heavy preview interaction | `qa.scenarios.s05_huge_preview` | ✓ ready |
-| 6 | Multi-format scan | `qa.scenarios.s06_formats` | ✓ ready |
-| 7 | Format duplicate (HEIC vs JPG) | `qa.scenarios.s07_format_dup` | ✓ ready |
-| 8 | EXIF edge cases | `qa.scenarios.s08_exif_edge` | ✓ ready |
-| 9 | Walker exclusion rules | `qa.scenarios.s09_walker_exclusions` | ✓ ready |
-| 10 | Multi-source priority + dedup | `qa.scenarios.s10_multi_source` | ✓ ready |
-| 11 | Video + Live Photo | `qa.scenarios.s11_video_live` | ✓ ready |
-| 12 | Save Manifest Decisions | `qa.scenarios.s12_save_manifest` | ✓ ready |
-| 13 | Execute Action (destructive — sends to recycle bin) | `qa.scenarios.s13_execute_action` | ✓ ready |
-| 14 | Set Action by Field/Regex (menu-bar path) | `qa.scenarios.s14_action_by_regex` | ✓ ready |
-| 15 | Right-click context menu Set Action → delete / keep | `qa.scenarios.s15_context_menu` | ✓ ready |
-| 16 | File → Open Manifest async load (happy + error path) | `qa.scenarios.s16_open_manifest` | ✓ ready |
-| 17 | Scan dialog widgets (add / remove / reorder / recursive) | `qa.scenarios.s17_scan_dialog_widgets` | ✓ ready |
-| 18 | Log menu (Open Latest Log / Delete Log / Log Dir / Delete Log Dir) | `qa.scenarios.s18_log_menu` | ✓ ready |
-| 19 | Right-click context menu → Open Folder (explorer.exe /select integration) | `qa.scenarios.s19_context_menu_open_folder` | ✓ ready |
-| 20 | Right-click multi-selection → Remove from List (file-multi / group + file) | `qa.scenarios.s20_multi_remove_from_list` | ✓ ready |
-| 21 | List menu → Remove from List (no-selection / single / multi) | `qa.scenarios.s21_list_menu_remove` | ✓ ready |
-| 23a | Scan dialog: GUI mutates settings, persists via Start Scan (#122) | `qa.scenarios.s23a_set_settings` | ✓ ready |
-| 23b | Scan dialog: fresh launch reloads what s23a wrote (#122) | `qa.scenarios.s23b_verify_settings` | ✓ ready |
-| 24 | Open manifest whose source files were deleted after scan (stale paths, #123) | `qa.scenarios.s24_stale_manifest_paths` | ✓ ready |
-| 25 | Right-click on empty area / menu bar / unselected row → no Qt popup (#124) | `qa.scenarios.s25_empty_area_context_menu` | ✓ ready |
-| 26 | Keyboard-only navigation: tree arrows, Alt+F mnemonic, scan dialog Tab cycle, Esc (#125) | `qa.scenarios.s26_keyboard_navigation` | ✓ ready |
-| 27 | Re-scan with pending decisions → confirmation prompt (#142) | `qa.scenarios.s27_rescan_confirm` | ✓ ready |
-
-The table above lists the original menu (s01–s27). The full set has
-grown well past it — see
+The canonical list of scenarios is
 [`qa.scenarios._batch.ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)
-or `Glob("qa/scenarios/s*.py")` for the canonical, always-current
-list. Don't trust this table for completeness; trust the directory.
+— that's the source of truth used by the batch runner and CI shards.
+For an ad-hoc directory view use `Glob("qa/scenarios/s*.py")`. Slot
+numbers go `sNN_<short_slug>.py`; slots are append-only (gaps from
+retired scenarios stay gaps so re-numbering doesn't churn git history
+and external issue references). Each driver's module docstring
+states which user-facing flow or issue it exercises.
 
 Several drivers also call cross-scenario invariant probes from
 `qa/scenarios/_invariants.py` — they assert that the status bar matches
@@ -70,11 +43,12 @@ This is allowlisted in `.claude/settings.json` so it doesn't prompt.
 The mapping from scenario name to source folders lives in
 `qa/scenarios/_config.py`.
 
-When you build a NEW scenario driver, add it to the table here AND
-to `SCENARIO_SOURCES` in `qa/scenarios/_config.py`. Keep drivers
-short — they should encode the canonical happy path, nothing more.
-Open-ended exploration is the LLM's job, on top of the driver's
-output.
+When you build a NEW scenario driver, register it in `ALL_SCENARIOS`
+in `qa/scenarios/_batch.py` (the canonical list used by the batch
+runner and CI) AND in `SCENARIO_SOURCES` in `qa/scenarios/_config.py`
+(folder mapping). Keep drivers short — they should encode the
+canonical happy path, nothing more. Open-ended exploration is the
+LLM's job, on top of the driver's output.
 
 If your driver needs a NEW shared helper that issues a click and
 expects a window to appear afterwards (popup, dialog, context menu),
