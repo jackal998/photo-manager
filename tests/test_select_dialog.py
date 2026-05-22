@@ -326,6 +326,73 @@ class TestRegexValidation:
         assert dlg._match_counter.text() == "—"
 
 
+class TestApplyGate:
+    """A9 + A10 from #347 — Apply must refuse to fire on empty or
+    invalid patterns. Empty + Delete decision would wipe every row
+    (``re.search("", anything)`` is truthy); invalid patterns would
+    raise at the receiver and still poison Recent because the original
+    code recorded BEFORE emitting.
+    """
+
+    def test_apply_with_invalid_regex_does_not_emit(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("(unclosed")
+
+        received = []
+        dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
+        dlg._btn_set_action.click()
+
+        assert received == []
+
+    def test_apply_with_invalid_regex_does_not_record_recent(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        settings = _FakeSettings()
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=match_fn, settings=settings
+        )
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("(unclosed")
+        dlg._btn_set_action.click()
+
+        assert settings.get("ui.action_dialog.recent_patterns", []) == []
+
+    def test_apply_with_empty_regex_mode_does_not_emit(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("")
+
+        received = []
+        dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
+        dlg._btn_set_action.click()
+
+        assert received == []
+
+    def test_apply_with_empty_simple_mode_does_not_emit(self, qapp):
+        """Simple mode synthesises the regex via re.escape, so an empty
+        Simple text produces an empty pattern — same every-row-match
+        bug as Regex mode's empty input, different code path.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        # Simple is the default when match_fn is supplied.
+        dlg._simple_text.setText("")
+
+        received = []
+        dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
+        dlg._btn_set_action.click()
+
+        assert received == []
+
+
 class TestMatchCounter:
     def test_counter_format_uses_translation(self, qapp):
         """Counter text is built from the action_dialog.match_counter

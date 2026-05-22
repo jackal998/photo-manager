@@ -189,7 +189,7 @@ action_dialog:
   title: "Set Action by Field/Regex"
   field_label: "Field"
   regex_label: "Regex"
-  regex_placeholder: "e.g. .*\\iPhone\\2023\\02\\.*"
+  regex_placeholder: "e.g. ^IMG_\\d+\\.HEIC$"
   regex_tips: |
     Regex tips:
       Exact match: ^text$     Any substring: .*     Digits: \d+
