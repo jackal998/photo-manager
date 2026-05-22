@@ -311,6 +311,122 @@ def main() -> int:
             print(f"FAIL: {f}")
         return 1
 
+
+    # ---------- Probe A7: recent-pattern pick flips to Simple mode ----------
+    # Wave-7 (A7) added _apply_recent_pattern logic so that picking a
+    # Simple-representable pattern from the Recent menu flips the mode to
+    # Simple. This probe verifies the UIA-observable side: after clicking
+    # the recent "q9" entry (recorded during the Apply step above), the
+    # Simple radio must be checked.
+    # Promote when regression detected: swap print -> failures.append.
+    print("step: probe_a7_recent_picks_simple")
+    _, win = _uia.connect_main()
+    _uia.menu_path(win, _uia.MENU_ACTION, _uia.ACTION_BY_REGEX)
+    probe_dlg_hwnd = _uia.wait_for_dialog(pid, _uia.ACTION_DIALOG_TITLE, timeout=5)
+    probe_dlg = _uia.connect_by_handle(probe_dlg_hwnd)
+    _uia._focus(probe_dlg)
+    time.sleep(0.4)
+    # Apply above recorded ("File Name", "q9") in Recent. Click the Recent
+    # button to open the popup, then click the "q9" menu entry.
+    probe_recent_btn = _uia._find_descendant_by_aid_suffix(
+        probe_dlg, "Button", ".regexRecentButton"
+    )
+    if probe_recent_btn is None:
+        print("probe_status: A7-recent-picks-simple FAIL — regexRecentButton not found")
+    else:
+        probe_recent_btn.click_input()
+        time.sleep(0.4)
+        probe_popup_hwnd = _uia.find_popup(pid)
+        if probe_popup_hwnd is None:
+            print("probe_status: A7-recent-picks-simple FAIL — Recent menu popup did not appear")
+        else:
+            probe_popup = _uia.connect_by_handle(probe_popup_hwnd)
+            try:
+                probe_popup.child_window(
+                    title=SIMPLE_TEXT, control_type="MenuItem"
+                ).click_input()
+                time.sleep(0.4)
+                probe_simple_radio = _uia._find_descendant_by_aid_suffix(
+                    probe_dlg, "RadioButton", ".regexModeSimple"
+                )
+                if probe_simple_radio is not None and probe_simple_radio.is_selected():
+                    print("probe_status: A7-recent-picks-simple PASS")
+                else:
+                    _selected = probe_simple_radio.is_selected() if probe_simple_radio else None
+                    print(
+                        f"probe_status: A7-recent-picks-simple FAIL — "
+                        f"simple_radio.is_selected()={_selected!r}"
+                    )
+            except Exception as _exc:
+                print(f"probe_status: A7-recent-picks-simple FAIL — {_exc!r}")
+    # ---------- end probe A7 ----------
+
+    # ---------- Probe B2: Switch-to-Regex button appears and works ----------
+    # Wave-7 (B2+B4) added _switch_to_regex_btn inside simple_outer —
+    # shown alongside _simple_complex_notice when the current regex is not
+    # Simple-representable. Clicking it flips to Regex losslessly.
+    print("step: probe_b2_switch_to_regex_button")
+    # Type a non-Simple pattern in Regex mode, then toggle back to Simple
+    # to trigger the notice + button. Verify the button is visible, click
+    # it, and assert mode == Regex with pattern preserved.
+    probe_regex_radio = _uia._find_descendant_by_aid_suffix(
+        probe_dlg, "RadioButton", ".regexModeRegex"
+    )
+    probe_regex_edit2 = _uia._find_descendant_by_aid_suffix(
+        probe_dlg, "Edit", ".regexLineEdit"
+    )
+    _COMPLEX = r"\d{3}"
+    if probe_regex_radio is None or probe_regex_edit2 is None:
+        print("probe_status: B2-switch-to-regex FAIL — regex radio or line edit not found")
+    else:
+        probe_regex_radio.click_input()
+        time.sleep(0.3)
+        probe_regex_edit2.iface_value.SetValue(_COMPLEX)
+        time.sleep(0.2)
+        probe_simple_radio2 = _uia._find_descendant_by_aid_suffix(
+            probe_dlg, "RadioButton", ".regexModeSimple"
+        )
+        if probe_simple_radio2 is not None:
+            probe_simple_radio2.click_input()
+            time.sleep(0.4)
+        probe_switch_btn = _uia._find_descendant_by_aid_suffix(
+            probe_dlg, "Button", ".regexSwitchToRegexBtn"
+        )
+        if probe_switch_btn is None:
+            print("probe_status: B2-switch-to-regex FAIL — regexSwitchToRegexBtn not in UIA tree")
+        elif probe_switch_btn.is_visible():
+            probe_switch_btn.click_input()
+            time.sleep(0.3)
+            probe_regex_radio2 = _uia._find_descendant_by_aid_suffix(
+                probe_dlg, "RadioButton", ".regexModeRegex"
+            )
+            _regex_checked = (
+                probe_regex_radio2 is not None and probe_regex_radio2.is_selected()
+            )
+            _pattern_ok = probe_regex_edit2.window_text() == _COMPLEX
+            if _regex_checked and _pattern_ok:
+                print("probe_status: B2-switch-to-regex PASS")
+            else:
+                print(
+                    f"probe_status: B2-switch-to-regex FAIL — "
+                    f"regex_checked={_regex_checked} pattern_preserved={_pattern_ok}"
+                )
+        else:
+            print(
+                "probe_status: B2-switch-to-regex FAIL — "
+                "regexSwitchToRegexBtn present but not visible after Simple-toggle "
+                "with complex pattern"
+            )
+    # ---------- end probe B2 ----------
+
+    # Close the probe dialog before the final DONE print.
+    try:
+        _probe_close = _uia._find_dialog_button(probe_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
+        _probe_close.click_input()
+        time.sleep(0.3)
+    except Exception:
+        pass
+
     print("scenario: s31_simple_mode_regex DONE")
     return 0
 

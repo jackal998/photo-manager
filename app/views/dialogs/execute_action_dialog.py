@@ -608,6 +608,7 @@ class ExecuteActionDialog(QDialog):
             # records for Top-N within group and run threshold
             # comparisons against numeric/date fields.
             groups=self._groups,
+            context_id="execute",  # A8: isolate from main-window preference
         )
         dlg.setActionRequested.connect(self._set_decision_by_regex)
         dlg.exec()

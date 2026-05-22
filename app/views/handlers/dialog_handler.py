@@ -104,6 +104,7 @@ class DialogHandler:
             row_values=row_values, initial_field=initial_field,
             match_fn=match_fn, settings=self.settings,
             groups=groups,
+            context_id="main",  # A8: isolate from execute-dialog preference
         )
 
         if self.action_handler is not None:
