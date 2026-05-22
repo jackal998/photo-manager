@@ -1,0 +1,1 @@
+`/work` now routes high-blast-radius small changes (migrations, settings keys, workers) through dev↔QA validation instead of skipping them as "simple" (#370).

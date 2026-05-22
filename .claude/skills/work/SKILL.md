@@ -79,6 +79,12 @@ Map complexity → execution workflow:
 | **complex** | Dev subagent (`isolation: "worktree"`) → QA subagent loop → `/pr-review team`. |
 | **multi-issue** | `/parallel-brief-generator` to fan out; each issue → its own session. |
 
+**The complexity score IS the auto-decline gate for subagent spawn.**
+`simple` and `medium` stay in LEAD; `complex` and `multi-issue` spawn
+subagents at roughly 4× single-session cost. Same shape as `/pr-review`
+team mode's auto-decline at ≤5 files / ≤300 diff lines — don't pay the
+overhead unless the score justifies it.
+
 ## Phase 3 — present to human for approval
 
 Print the plan in this format before doing anything else:
@@ -99,6 +105,8 @@ Workflow:
   …
 
 Cost estimate: ~<N>× single-session
+  (covers: researcher + dev iterations + qa iterations; excludes
+  LEAD overhead and Phase-5 /pr-review-team multiplier)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Say "go" to execute, or adjust: "go but skip QA", "go with team review", etc.
 ```
