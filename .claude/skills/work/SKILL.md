@@ -362,6 +362,23 @@ them unless the human says to.
   briefs show file overlap — sequence them in a single session
   instead. Parallel sessions on shared files cost more in merge
   conflicts than they save in latency.
+- ✗ Don't add subagents to a "medium" task to "be thorough". Google
+  Research (arxiv 2512.08296, 2026) shows independent agents amplify
+  errors 17.2× vs 4.4× for centrally-coordinated ones, and adding
+  agents degrades performance up to 70% on sequential tasks. The
+  complexity table is the gate.
+
+**MAST failure-category coverage** (arxiv 2503.13657, 14 modes in 3
+categories — Multi-Agent System Failure Taxonomy):
+(i) system design issues → addressed by Phase 2 complexity gate +
+Phase 3 human plan-approval. /pr-review's gate decomposition is the
+same pattern at the manager level (narrow trigger conditions, sub-skills
+independently editable).
+(ii) inter-agent misalignment → addressed by single-direction brief
+passing (researcher → developer → qa, no loops) and central LEAD
+ownership of merges and remote writes.
+(iii) task verification → addressed by qa-agent (Generator-Verifier)
+and the 4-cycle dev↔QA loop cap.
 
 ## Invocation examples
 
