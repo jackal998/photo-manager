@@ -41,6 +41,7 @@ DIALOG_HANDLER_PATH = REPO / "app" / "views" / "handlers" / "dialog_handler.py"
 MENU_CONTROLLER_PATH = REPO / "app" / "views" / "components" / "menu_controller.py"
 ACTION_HANDLERS_PATH = REPO / "app" / "views" / "handlers" / "action_handlers.py"
 CONTEXT_MENU_PATH = REPO / "app" / "views" / "handlers" / "context_menu.py"
+MAIN_WINDOW_PATH = REPO / "app" / "views" / "main_window.py"
 EN_YAML = REPO / "translations" / "en.yml"
 ZH_TW_YAML = REPO / "translations" / "zh_TW.yml"
 
@@ -404,3 +405,256 @@ def test_probe_no_execute_mode_toggle_in_menu():
         "and update this probe's guard string so the regression-vs-new-"
         "feature distinction stays explicit."
     )
+
+
+# ------------------------------------------------------------------------
+# Surface inventory — destructive entry-point enumeration (#302).
+#
+# Forward-defensive version of `test_probe_no_execute_mode_toggle_in_menu`.
+# That probe pins the specific absence of "execute_mode" from
+# menu_controller.py; this probe asks the structural question — how many
+# distinct user-facing surfaces reach each destructive handler — without
+# anyone having to know in advance which menu key to grep for.
+#
+# Architecture: pure static AST scan (per #302 design discussion). The
+# menu-bar surfaces live in `MainWindow._connect_signals`'s handlers
+# dict; the context-menu surfaces live in `ContextMenuHandler._create_*`
+# lambdas. Two files, one AST walk each, then bucket by handler name.
+#
+# Same-handler definition: the short name of the bound callable.
+#   - Menu bar: RHS of each entry in the handlers dict (e.g. `self.on_execute_action`
+#     → "on_execute_action").
+#   - Context menu: the `.handlers.X(...)` method name inside each
+#     lambda body (e.g. `self.handlers.set_decision_with_lock_check(...)`
+#     → "set_decision_with_lock_check"). Plain QMenu.addAction
+#     connections (Open Folder, language pick) are not destructive and
+#     are filtered out by the destructive-handler set below.
+
+# Destructive handler names (per #302 architecture decision). A handler
+# is "destructive" if user-visible file state can change as a result —
+# either immediately (Execute) or upon a subsequent flush (set_decision,
+# remove_from_list). The Select-by-Field/Regex dialog (show_action_dialog
+# / on_open_action_dialog) IS destructive because it is the bulk
+# gateway: the dialog's own action combo sets decisions on the model.
+#
+# Lock state changes (set_locked_state) are deliberately EXCLUDED —
+# recoverable by toggling back, no FS mutation, just a flag in the
+# manifest. Adding it would force every Lock/Unlock surface into the
+# allowlist for no real signal.
+_DESTRUCTIVE_HANDLERS: frozenset[str] = frozenset({
+    "on_execute_action",
+    "set_decision",
+    "set_decision_with_lock_check",
+    "remove_items_from_list",
+    "_remove_from_list_toolbar",
+    "show_action_dialog",
+    "on_open_action_dialog",
+})
+
+# Handlers that intentionally have ≥2 reach surfaces. The probe FAILS
+# only if a destructive handler reaches from 2+ surfaces AND is not in
+# this map. Each entry needs a one-line justification — adding a new
+# entry is a deliberate design choice, not an automatic exemption.
+#
+# The pairs counted as "context-menu single-select", "context-menu
+# multi-select", and "menu bar" are three distinct surfaces from the
+# user's POV even when they share lambda code — clicking a right-click
+# entry feels separate from clicking a menu-bar entry.
+_INTENTIONAL_DUPLICATE_SURFACES: dict[str, str] = {
+    # Action menu + right-click single + right-click multi. The dialog
+    # is the bulk power tool; per context_menu.py's comment, "right-click
+    # parity with the single-selection branch — the regex dialog is the
+    # bulk power tool, so it has to be reachable from multi-select
+    # right-click too".
+    "show_action_dialog": (
+        "Action menu (action_by_regex) + right-click single + right-click "
+        "multi — intentional bulk-power-tool reach. See context_menu.py."
+    ),
+    # List menu + right-click single + right-click multi. Mirrors the
+    # set-action-by-regex reach for the same reason — remove-from-list
+    # is a bulk operation users invoke equally from menu and right-click.
+    "remove_items_from_list": (
+        "List menu route + right-click single + right-click multi — "
+        "intentional bulk reach mirroring set-action-by-regex."
+    ),
+    # Set Action submenu (single-select) routes set_decision_with_lock_check
+    # per settable_decision label; multi-select submenu routes the same.
+    # That's two surfaces for one handler by design (#182 unified path).
+    "set_decision_with_lock_check": (
+        "Right-click single-select Set Action submenu + right-click "
+        "multi-select Set Action submenu — intentional #182 unified path."
+    ),
+}
+
+
+def _menu_bar_handler_bindings() -> dict[str, str]:
+    """Return ``{menu_action_name: handler_short_name}`` parsed from
+    ``MainWindow._connect_signals``'s ``handlers`` dict.
+
+    Reads `main_window.py` as text + ``ast.parse`` so the probe doesn't
+    pull main_window.py into coverage (same rationale as the other
+    static probes in this file)."""
+    tree = ast.parse(MAIN_WINDOW_PATH.read_text(encoding="utf-8"))
+    for cls in ast.walk(tree):
+        if not (isinstance(cls, ast.ClassDef) and cls.name == "MainWindow"):
+            continue
+        for fn in cls.body:
+            if not (isinstance(fn, ast.FunctionDef)
+                    and fn.name == "_connect_signals"):
+                continue
+            for node in ast.walk(fn):
+                if not (isinstance(node, ast.Assign)
+                        and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                        and node.targets[0].id == "handlers"
+                        and isinstance(node.value, ast.Dict)):
+                    continue
+                bindings: dict[str, str] = {}
+                for key_node, val_node in zip(node.value.keys, node.value.values):
+                    if not (isinstance(key_node, ast.Constant)
+                            and isinstance(key_node.value, str)):
+                        continue
+                    handler_name: str | None = None
+                    # `self.on_execute_action` → Attribute(value=Name('self'),
+                    # attr='on_execute_action').
+                    if (isinstance(val_node, ast.Attribute)
+                            and isinstance(val_node.value, ast.Name)
+                            and val_node.value.id == "self"):
+                        handler_name = val_node.attr
+                    if handler_name is not None:
+                        bindings[key_node.value] = handler_name
+                return bindings
+    raise AssertionError(
+        "Could not locate the `handlers = {...}` dict in "
+        f"MainWindow._connect_signals ({MAIN_WINDOW_PATH}). The probe "
+        "walks this dict to enumerate menu-bar reach — update the AST "
+        "walker if the wiring layout changed."
+    )
+
+
+def _context_menu_handler_calls() -> dict[str, list[str]]:
+    """Return ``{handler_short_name: [surface_label, ...]}`` for every
+    ``lambda: self.handlers.X(...)`` connection in ``context_menu.py``.
+
+    Surface label is the enclosing builder method's name —
+    ``_create_single_selection_menu`` vs ``_create_multi_selection_menu``
+    — so duplicate detection can tell apart the two right-click modes
+    (which ARE distinct from the user's POV)."""
+    tree = ast.parse(CONTEXT_MENU_PATH.read_text(encoding="utf-8"))
+    out: dict[str, list[str]] = {}
+    for cls in ast.walk(tree):
+        if not (isinstance(cls, ast.ClassDef) and cls.name == "ContextMenuHandler"):
+            continue
+        for fn in cls.body:
+            if not (isinstance(fn, ast.FunctionDef)
+                    and fn.name.startswith("_create_")):
+                continue
+            surface_label = f"context_menu.{fn.name}"
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Lambda):
+                    continue
+                for inner in ast.walk(node.body):
+                    # Match `self.handlers.X(...)` Calls.
+                    if not (isinstance(inner, ast.Call)
+                            and isinstance(inner.func, ast.Attribute)
+                            and isinstance(inner.func.value, ast.Attribute)
+                            and isinstance(inner.func.value.value, ast.Name)
+                            and inner.func.value.value.id == "self"
+                            and inner.func.value.attr == "handlers"):
+                        continue
+                    handler_name = inner.func.attr
+                    out.setdefault(handler_name, []).append(surface_label)
+    return out
+
+
+def test_probe_destructive_surface_inventory():
+    """No destructive handler reaches from 2+ surfaces unless allowlisted.
+
+    Forward-defensive version of `test_probe_no_execute_mode_toggle_in_menu`:
+    rather than pinning the absence of ONE removed menu key, this probe
+    enumerates EVERY destructive handler's reach surface and flags the
+    next #240-class duplication automatically.
+
+    A failure here means a destructive code path became reachable from
+    a new surface. Decide:
+      (a) the new surface is intentional → add the handler to
+          `_INTENTIONAL_DUPLICATE_SURFACES` above with a one-line reason.
+      (b) the new surface is a #240-class accidental duplication
+          (e.g. a menu toggle that re-opens an already-reachable
+          destructive dialog) → revert / unwire the new surface.
+    """
+    menu_bindings = _menu_bar_handler_bindings()
+    context_calls = _context_menu_handler_calls()
+
+    # Bucket: handler short name → list of human-readable surface labels.
+    reach: dict[str, list[str]] = {}
+    for menu_key, handler_name in menu_bindings.items():
+        reach.setdefault(handler_name, []).append(f"menu_bar.{menu_key}")
+    for handler_name, surfaces in context_calls.items():
+        reach.setdefault(handler_name, []).extend(surfaces)
+
+    duplicates: dict[str, list[str]] = {
+        h: surfaces for h, surfaces in reach.items()
+        if h in _DESTRUCTIVE_HANDLERS and len(surfaces) >= 2
+    }
+
+    unauthorized = {
+        h: surfaces for h, surfaces in duplicates.items()
+        if h not in _INTENTIONAL_DUPLICATE_SURFACES
+    }
+
+    assert not unauthorized, (
+        "Destructive handlers reachable from 2+ surfaces without an "
+        f"_INTENTIONAL_DUPLICATE_SURFACES entry:\n  " +
+        "\n  ".join(
+            f"{h!r} reachable from {len(surfaces)}: {surfaces!r}"
+            for h, surfaces in sorted(unauthorized.items())
+        ) +
+        "\n\nThis is the #240-class pattern: two distinct user-facing "
+        "surfaces invoking the same destructive code path. Either revert "
+        "the new surface, or add the handler to "
+        "_INTENTIONAL_DUPLICATE_SURFACES in this file with a one-line "
+        "reason. See #302."
+    )
+
+
+def test_probe_destructive_surface_inventory_finds_known_handlers():
+    """The AST scan actually finds the destructive handlers we expect.
+
+    Defends against a silent-pass regression: if the AST walker breaks
+    (e.g. _connect_signals gets refactored into a different shape), the
+    main probe would see an empty `reach` map and pass for the wrong
+    reason. Pinning a positive expectation on the known handlers
+    surfaces that failure mode immediately.
+    """
+    menu_bindings = _menu_bar_handler_bindings()
+    context_calls = _context_menu_handler_calls()
+
+    # Menu bar must wire at least these destructive handlers today.
+    # If any of these stop being wired, the test fails — at which point
+    # the maintainer either updates the expectation (the menu item was
+    # removed by design — like execute_mode in #240) or fixes the bug
+    # that dropped the binding.
+    assert "on_execute_action" in menu_bindings.values(), (
+        "Menu bar no longer wires on_execute_action — "
+        f"current bindings: {menu_bindings!r}"
+    )
+    assert "on_open_action_dialog" in menu_bindings.values(), (
+        "Menu bar no longer wires on_open_action_dialog — "
+        f"current bindings: {menu_bindings!r}"
+    )
+    assert "_remove_from_list_toolbar" in menu_bindings.values(), (
+        "Menu bar no longer wires _remove_from_list_toolbar — "
+        f"current bindings: {menu_bindings!r}"
+    )
+
+    # Context menu must reach at least these destructive handlers.
+    for expected in (
+        "set_decision_with_lock_check",
+        "remove_items_from_list",
+        "show_action_dialog",
+    ):
+        assert expected in context_calls, (
+            f"Context menu no longer reaches {expected!r} — "
+            f"current calls: {sorted(context_calls)!r}"
+        )
