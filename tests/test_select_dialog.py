@@ -690,6 +690,134 @@ class TestRecentPatterns:
         assert settings.get("ui.action_dialog.recent_patterns") == []
 
 
+class TestFieldChangeStateCorrectness:
+    """Wave 3 of the regex-dialog audit (#347 A1/A1-ext/A12, #348 B10).
+
+    Field combo changes used to silently destroy user-typed regex
+    patterns (A1) and leave the Simple panel showing stale text (A1-ext).
+    Row pre-fill used `^X$` (exact) when the documented Simple default
+    is "contains" (B10). Picking from Recent flipped mode before
+    setting the regex, racing with the mode toggle's reverse-parse (A12).
+    These tests pin all four invariants together.
+    """
+
+    def test_user_regex_survives_field_change_no_prefill(self, qapp):
+        """A1 — type a custom regex, change field to one with no
+        row_value; the typed pattern must survive.
+
+        Constructed without ``match_fn`` so mode is pinned to Regex
+        and dlg.regex.setText is authoritative without a toggle.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name", "Folder"])
+        dlg.regex.setText(r"\d{4}-\d{2}")
+
+        dlg.combo.setCurrentText("Folder")  # no row_value for Folder
+
+        assert dlg.regex.text() == r"\d{4}-\d{2}"
+
+    def test_user_regex_survives_field_change_when_new_field_has_prefill(self, qapp):
+        """A1 — even when the *new* field has a pre-fill value, the
+        user's custom pattern must NOT be replaced. This is the riskier
+        case: the guard checks the PREVIOUS field's default, not the
+        new field's.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            row_values={"Folder": "Photos"},
+        )
+        custom = r"\d{4}-\d{2}"
+        dlg.regex.setText(custom)
+        dlg.combo.setCurrentText("Folder")
+
+        # The pre-fill for Folder would be re.escape("Photos") == "Photos".
+        # User's custom pattern must beat it.
+        assert dlg.regex.text() == custom
+
+    def test_field_change_overwrites_when_regex_is_still_prior_default(self, qapp):
+        """A1 — when the regex IS still the prior field's auto-default
+        (user never customized), switching field should refresh to the
+        new field's default. This is the no-customization-lost path.
+        """
+        import re as _re
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            row_values={"File Name": "IMG_001.jpg", "Folder": "Photos"},
+        )
+        # initial_field defaults to File Name → pre-fill is
+        # re.escape("IMG_001.jpg"). Verify untouched, then switch.
+        assert dlg.regex.text() == _re.escape("IMG_001.jpg")
+
+        dlg.combo.setCurrentText("Folder")
+        assert dlg.regex.text() == _re.escape("Photos")
+
+    def test_simple_panel_reflects_new_field_after_change(self, qapp):
+        """A1-ext — after a field change, the Simple panel must show
+        the NEW field's content, not the prior field's stale reverse-parse.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            row_values={"File Name": "IMG_001.jpg", "Folder": "Photos"},
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        # Default mode is Simple when match_fn is provided.
+        dlg.combo.setCurrentText("Folder")
+
+        # Simple panel must now show the Folder pre-fill, not the
+        # File Name one.
+        assert dlg._simple_op_combo.currentData() == "contains"
+        assert dlg._simple_text.text() == "Photos"
+
+    def test_row_prefill_uses_contains_not_exact(self, qapp):
+        """B10 — row pre-fill produces a "contains" Simple op, not
+        "exact". Pre-Wave-3 the pre-fill was ^X$ which reverse-parsed
+        as exact, contradicting the documented default Simple op
+        ("contains", "most-useful starting state").
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name"],
+            row_values={"File Name": "IMG_001.jpg"},
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        # Initial field = File Name with pre-fill IMG_001.jpg.
+        # Simple panel should show ("contains", "IMG_001.jpg").
+        assert dlg._simple_op_combo.currentData() == "contains"
+        assert dlg._simple_text.text() == "IMG_001.jpg"
+
+    def test_apply_recent_from_simple_lands_in_regex(self, qapp):
+        """A12 — picking from Recent while in Simple mode must:
+        (1) land the literal recent pattern in dlg.regex, and
+        (2) end up in Regex mode. The pre-Wave-3 order was
+        ``mode-flip → setText``, racing with the mode toggle's
+        reverse-parse. Post-Wave-3 order is ``setText → mode-flip``.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"recent_patterns": ["^test$"]}}
+        })
+        dlg = ActionDialog(
+            fields=["File Name"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+        )
+        # Confirm we start in Simple mode (default with match_fn).
+        assert dlg._mode_simple_btn.isChecked()
+        dlg._apply_recent_pattern("^test$")
+
+        assert dlg.regex.text() == "^test$"
+        assert dlg._mode == MODE_REGEX
+
+
 class TestMatchHighlightDelegate:
     def test_match_span_stored_on_preview_items(self, qapp):
         """Each row that matches should carry its (start, end) span on
