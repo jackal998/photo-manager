@@ -1,0 +1,1 @@
+Surface settings-persistence errors via loguru warnings in the Set Action dialog, validate and auto-heal corrupt entries in the Recent-patterns store, and drop a dead `setCurrentIndex(0)` call (#351).
