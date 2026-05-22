@@ -1,0 +1,1 @@
+Set Action dialog preview now displays the matched-field string (folder path, score, date, etc.) instead of the file basename for non-File-Name regex, and Top-N preview rows are labeled with their group and value (#347).
