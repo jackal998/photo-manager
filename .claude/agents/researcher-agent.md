@@ -59,6 +59,15 @@ After all three angles return, classify the task:
 | **complex** | > 10 files, cross-cutting, coverage gaps, multiple independent lanes | Full `/work` pipeline: subagents + `/pr-review team` |
 | **multi-issue** | Touches unrelated areas or multiple acceptance criteria | Consider `/parallel-brief-generator` for fan-out |
 
+**Blast-radius override.** If any affected file has `blast-radius: high`
+from Angle A — e.g. SQLite migrations (`_MIGRATIONS` list, `CREATE TABLE`),
+`settings.json` keys, background workers, or anything matching the
+[impact-map activation list](../skills/impact-map/SKILL.md) — upgrade the
+score by one tier (simple → medium, medium → complex). Rationale: a 2-file
+migration touch would otherwise score `simple` by file count and skip the
+dev↔QA Generator-Verifier loop entirely, despite being a Gate 8 high-risk
+area for `/pr-review`.
+
 ## Output format — send to LEAD via SendMessage
 
 ```
