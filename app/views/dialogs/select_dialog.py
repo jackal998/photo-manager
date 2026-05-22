@@ -9,7 +9,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -36,8 +36,12 @@ from PySide6.QtWidgets import (
 from app.views.constants import settable_decisions
 from app.views.window_state import (
     QSETTINGS_KEY_ACTION_DIALOG_GEOM,
+    QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE,
+    restore_splitter_state,
     restore_widget_geometry,
+    save_splitter_state,
     save_widget_geometry,
+    window_state_qsettings,
 )
 from infrastructure.i18n import t
 
@@ -645,6 +649,12 @@ class ActionDialog(QDialog):
         # standalone) keep the existing regex/simple-only behavior.
         self._groups = groups if groups is not None else []
         self._numeric_mode = NUMERIC_MODE_THRESHOLD
+        # C13 from #349 (Wave 8): the splitter exists only when match_fn
+        # is supplied. Promote it to self._splitter so `done()` can save
+        # its state — pre-Wave-8 it was a local variable and the handle
+        # position was lost on every close. ``None`` for the flat-layout
+        # branch which has no splitter at all (E4 invariant).
+        self._splitter: QSplitter | None = None
 
         # A8: per-context settings keys so "main" and "execute" entry
         # points persist independent mode/field/op preferences.
@@ -725,6 +735,13 @@ class ActionDialog(QDialog):
         # buried inside _regex_widget where it disappeared in Simple mode).
         self._recent_btn = QPushButton(t("action_dialog.recent_button"))
         self._recent_btn.setObjectName("regexRecentButton")
+        # C16 from #349 (Wave 8): use QStyle's standard down-arrow icon
+        # instead of the Unicode "▾" character. Unicode rendering varies
+        # by font/platform (sometimes shows the literal "Recent ▾" with a
+        # tofu glyph); the standard icon follows the system theme.
+        self._recent_btn.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
+        )
         self._recent_btn.clicked.connect(self._show_recent_menu)
         mode_row.addWidget(self._recent_btn)
         mode_row.addStretch(1)
@@ -782,7 +799,13 @@ class ActionDialog(QDialog):
         simple_outer.addLayout(simple_inputs_row)
         self._simple_complex_notice = QLabel(t("action_dialog.simple_complex_notice"))
         self._simple_complex_notice.setObjectName("regexSimpleComplexNotice")
-        self._simple_complex_notice.setStyleSheet("color: #a86200;")  # amber
+        # C9 from #349 (Wave 8): hex amber stylesheet removed — broke dark
+        # mode. Bold weight conveys emphasis; the notice text itself ("switch
+        # to Regex") supplies the warning semantics. Qt has no canonical
+        # "warning" palette role, so system text color is the right neutral.
+        _notice_font = self._simple_complex_notice.font()
+        _notice_font.setBold(True)
+        self._simple_complex_notice.setFont(_notice_font)
         self._simple_complex_notice.setWordWrap(True)
         self._simple_complex_notice.hide()
         simple_outer.addWidget(self._simple_complex_notice)
@@ -829,7 +852,12 @@ class ActionDialog(QDialog):
         # native Windows style on PySide6).
         self._validation_error = QLabel("")
         self._validation_error.setObjectName("regexValidationError")
-        self._validation_error.setStyleSheet("color: #d62728;")
+        # C8 from #349 (Wave 8): hex red stylesheet removed — broke dark
+        # mode. Bold weight gives emphasis; the prefix "Invalid regex:"
+        # supplies the error semantics. Qt has no "error" palette role.
+        _err_font = self._validation_error.font()
+        _err_font.setBold(True)
+        self._validation_error.setFont(_err_font)
         self._validation_error.setWordWrap(True)
         self._validation_error.hide()
         regex_layout.addWidget(self._validation_error)
@@ -933,7 +961,11 @@ class ActionDialog(QDialog):
         threshold_outer.addLayout(threshold_row)
         self._num_threshold_error = QLabel("")
         self._num_threshold_error.setObjectName("numericThresholdError")
-        self._num_threshold_error.setStyleSheet("color: #d62728;")
+        # C8 from #349 (Wave 8): hex red removed (see _validation_error
+        # for rationale). Bold + system text color.
+        _num_err_font = self._num_threshold_error.font()
+        _num_err_font.setBold(True)
+        self._num_threshold_error.setFont(_num_err_font)
         self._num_threshold_error.setWordWrap(True)
         self._num_threshold_error.hide()
         threshold_outer.addWidget(self._num_threshold_error)
@@ -1025,8 +1057,21 @@ class ActionDialog(QDialog):
 
         # ── Close ──────────────────────────────────────────────────────────
         close_row = QHBoxLayout()
-        self.btn_close = QPushButton(t("action_dialog.close_button"))
+        # E5 from #351 (Wave 8): "Reset window size" wipes the persisted
+        # geometry + splitter blobs so the dialog reopens at the hardcoded
+        # defaults (720×380, [420, 380]). Only meaningful when the splitter
+        # exists — wired up below in the match_fn branch. Created
+        # unconditionally so test fixtures can find it by objectName.
+        self.btn_reset_geometry = QPushButton(
+            t("action_dialog.reset_window_size_button")
+        )
+        self.btn_reset_geometry.setObjectName("regexResetGeometryButton")
+        self.btn_reset_geometry.setToolTip(
+            t("action_dialog.reset_window_size_tooltip")
+        )
+        close_row.addWidget(self.btn_reset_geometry)
         close_row.addStretch(1)
+        self.btn_close = QPushButton(t("action_dialog.close_button"))
         close_row.addWidget(self.btn_close)
         left_layout.addLayout(close_row)
 
@@ -1037,11 +1082,15 @@ class ActionDialog(QDialog):
         # shape, so their UIA paths and findChild lookups stay valid.
         root = QVBoxLayout(self)
         if self._match_fn is not None:
-            splitter = QSplitter(Qt.Orientation.Horizontal)
-            splitter.addWidget(left_widget)
-            splitter.addWidget(self._build_preview_pane())
-            splitter.setSizes([420, 380])
-            root.addWidget(splitter)
+            self._splitter = QSplitter(Qt.Orientation.Horizontal)
+            self._splitter.addWidget(left_widget)
+            self._splitter.addWidget(self._build_preview_pane())
+            self._splitter.setSizes([420, 380])
+            # D1 from #350 (Wave 8): default Qt splitter handle is ~1-5 px
+            # wide on Windows — easy to miss. 8 px gives a comfortable
+            # grab target without dominating the layout.
+            self._splitter.setHandleWidth(8)
+            root.addWidget(self._splitter)
             # Shrunk after dropping the wrapped tips paragraph and
             # restructuring chips into compact button-with-aside-label
             # rows. The dialog used to feel "too tall" — particularly
@@ -1054,12 +1103,37 @@ class ActionDialog(QDialog):
             # rect would land on a disconnected monitor.
             self.setMinimumSize(720, 380)
             restore_widget_geometry(self, QSETTINGS_KEY_ACTION_DIALOG_GEOM)
+            # C13: restore the saved splitter handle position on top of the
+            # default [420, 380]. ``restore_splitter_state`` is a no-op when
+            # no blob exists, so first-time users keep the default sizes.
+            restore_splitter_state(
+                self._splitter, QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE
+            )
         else:
+            # E4 from #351 (Wave 8): the flat-layout branch is intentionally
+            # geometry-free — there is no splitter and no user-resizable
+            # frame to persist. The audit item ("restore on both branches")
+            # is scoped here by C13 making the splitter branch fully
+            # symmetric; the flat branch needs no save and no restore.
             root.addWidget(left_widget)
             left_layout.setContentsMargins(11, 11, 11, 11)
 
         self.btn_close.clicked.connect(self.accept)
         self._btn_set_action.clicked.connect(self._emit_set_action)
+        # E5: reset only makes sense when the splitter exists (there's
+        # nothing else resizable on the flat-layout branch). Hide the
+        # button there to avoid offering a no-op. Ctrl+0 shortcut is
+        # also splitter-only for the same reason.
+        if self._splitter is not None:
+            self.btn_reset_geometry.clicked.connect(self._reset_geometry)
+            self._reset_geometry_shortcut = QShortcut(
+                QKeySequence("Ctrl+0"), self
+            )
+            self._reset_geometry_shortcut.activated.connect(
+                self._reset_geometry
+            )
+        else:
+            self.btn_reset_geometry.hide()
 
         if initial_field and self.combo.findData(initial_field) >= 0:
             # E8: initial_field from caller (column-click) takes precedence
@@ -1277,6 +1351,25 @@ class ActionDialog(QDialog):
         self._num_threshold_widget.setVisible(is_threshold)
         self._num_topn_widget.setVisible(not is_threshold)
 
+    def _set_status_icon(self, label: QLabel, status: str | None) -> None:
+        """Render a theme-aware status icon on ``label`` (C8 from #349, Wave 8).
+
+        ``status`` is ``"valid"`` / ``"invalid"`` / ``None``. ``None`` clears
+        the label (no pixmap, no text). The pixmaps come from the active
+        Qt style's standard-icon set so they follow the system theme
+        (Fusion light/dark, Windows native, etc.) instead of being pinned
+        to the previous hex stylesheets that broke under dark mode.
+        """
+        if status is None:
+            label.clear()
+            return
+        sp = (
+            QStyle.StandardPixmap.SP_DialogApplyButton
+            if status == "valid"
+            else QStyle.StandardPixmap.SP_MessageBoxCritical
+        )
+        label.setPixmap(self.style().standardIcon(sp).pixmap(16, 16))
+
     def _validate_threshold(self) -> None:
         """Update threshold ✓/✗ icon + error label. A4 from #347 (Wave 5).
 
@@ -1294,18 +1387,14 @@ class ActionDialog(QDialog):
             return
         text = self._num_value_edit.text().strip()
         if not text:
-            self._num_threshold_icon.setText("")
-            self._num_threshold_icon.setStyleSheet("")
+            self._set_status_icon(self._num_threshold_icon, None)
             self._num_threshold_icon.setAccessibleName("")
             self._num_threshold_error.hide()
             return
         field = self._current_field()
         parsed = _parse_threshold(field, text)
         if parsed is None:
-            self._num_threshold_icon.setText("✗")
-            self._num_threshold_icon.setStyleSheet(
-                "color: #d62728; font-weight: bold;"
-            )
+            self._set_status_icon(self._num_threshold_icon, "invalid")
             self._num_threshold_icon.setAccessibleName(
                 f"Threshold invalid: {text}"
             )
@@ -1314,10 +1403,7 @@ class ActionDialog(QDialog):
             )
             self._num_threshold_error.show()
         else:
-            self._num_threshold_icon.setText("✓")
-            self._num_threshold_icon.setStyleSheet(
-                "color: #2ca02c; font-weight: bold;"
-            )
+            self._set_status_icon(self._num_threshold_icon, "valid")
             self._num_threshold_icon.setAccessibleName("Threshold valid")
             self._num_threshold_error.hide()
 
@@ -1546,8 +1632,7 @@ class ActionDialog(QDialog):
         destructive actions.
         """
         if self._mode == MODE_SIMPLE or self._field_panel_is_numeric():
-            self._validation_icon.setText("")
-            self._validation_icon.setStyleSheet("")
+            self._set_status_icon(self._validation_icon, None)
             self._validation_icon.setAccessibleName("")
             self._validation_error.hide()
             self._btn_set_action.setEnabled(self._compute_apply_enabled())
@@ -1555,8 +1640,7 @@ class ActionDialog(QDialog):
 
         pattern = self.regex.text()
         if not pattern:
-            self._validation_icon.setText("")
-            self._validation_icon.setStyleSheet("")
+            self._set_status_icon(self._validation_icon, None)
             self._validation_icon.setAccessibleName("")
             self._validation_error.hide()
             self._btn_set_action.setEnabled(False)
@@ -1565,8 +1649,12 @@ class ActionDialog(QDialog):
         try:
             re.compile(pattern, re.IGNORECASE)
         except re.error as exc:
-            self._validation_icon.setText("✗")
-            self._validation_icon.setStyleSheet("color: #d62728; font-weight: bold;")
+            # B3 from #348 (Wave 8): when the error label is shown the icon
+            # is redundant — the prefixed "Invalid regex: ..." text already
+            # tells the user what's wrong. Hide the icon so the row reads
+            # cleaner (icon + error + Recent button previously crowded the
+            # single row).
+            self._set_status_icon(self._validation_icon, None)
             self._validation_icon.setAccessibleName(
                 f"Regex invalid: {exc}"
             )
@@ -1581,8 +1669,7 @@ class ActionDialog(QDialog):
             self._btn_set_action.setEnabled(False)
             return
 
-        self._validation_icon.setText("✓")
-        self._validation_icon.setStyleSheet("color: #2ca02c; font-weight: bold;")
+        self._set_status_icon(self._validation_icon, "valid")
         self._validation_icon.setAccessibleName("Regex valid")
         self._validation_error.hide()
         self._btn_set_action.setEnabled(True)
@@ -1826,19 +1913,56 @@ class ActionDialog(QDialog):
         else:
             self.regex.clear()
 
-    def done(self, result: int) -> None:
-        """Persist geometry, simple_op, and field on every close path.
+    def _reset_geometry(self) -> None:
+        """E5 from #351 (Wave 8): clear persisted geometry + splitter blobs
+        and immediately resize the dialog back to the hardcoded defaults.
 
-        Geometry only saves when the preview pane is wired up (match_fn
-        given), because that's the only branch that runs the resizable
-        QSplitter layout — the flat layout has no user-resizable geometry
-        to preserve.
+        Only the geometry keys in ``window_state.ini`` are wiped —
+        ``ui.action_dialog.{context_id}.{mode,field,simple_op}`` in
+        ``settings.json`` are untouched, so the user's mode/field/op
+        preferences survive a window-size reset (they're conceptually
+        separate from chrome size).
+        """
+        if self._splitter is None:
+            return
+        try:
+            store = window_state_qsettings()
+            store.remove(QSETTINGS_KEY_ACTION_DIALOG_GEOM)
+            store.remove(QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE)
+            store.sync()
+        except Exception:
+            # Mirror save_widget_geometry's swallow — a read-only INI
+            # shouldn't block the user from at least the in-memory reset.
+            logger.warning(
+                "ActionDialog: failed to clear persisted geometry keys"
+            )
+        # Apply the hardcoded defaults in-memory so the user sees the
+        # reset immediately (without needing to close-and-reopen).
+        self.resize(self.minimumSize())
+        self._splitter.setSizes([420, 380])
+
+    def done(self, result: int) -> None:
+        """Persist geometry, splitter state, simple_op, and field on close.
+
+        Geometry + splitter state only save when the preview pane is wired
+        up (match_fn given), because that's the only branch that runs the
+        resizable QSplitter layout — the flat layout has no user-resizable
+        geometry to preserve (E4 invariant).
+
+        C13 from #349 (Wave 8): splitter handle position now persists in
+        addition to the outer-window geometry. Pre-Wave-8 only the window
+        rect was saved, so the user's [pane-A | pane-B] balance reset to
+        [420, 380] every time the dialog reopened.
 
         E3: simple_op persisted under per-context key at close time.
         E8: field persisted under per-context key at close time.
         """
         if self._match_fn is not None:
             save_widget_geometry(self, QSETTINGS_KEY_ACTION_DIALOG_GEOM)
+        if self._splitter is not None:
+            save_splitter_state(
+                self._splitter, QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE
+            )
         # E3: persist simple_op so it restores on next open.
         op_data = self._simple_op_combo.currentData()
         if op_data:

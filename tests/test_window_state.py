@@ -257,27 +257,41 @@ class TestSaveWidgetGeometry:
 
 class TestActionDialogNoHardcodedResize:
     """#215 — hardcoded ``self.resize(780, 420)`` was replaced by a
-    geometry restore. Pin that the call doesn't drift back in via a
-    careless edit — the issue requires "treat hardcoded values as
-    defaults only", and Qt's default-sizing flow is the source of truth
-    now."""
+    geometry restore. Pin that the hardcoded-pixel form doesn't drift
+    back in via a careless edit — the issue requires "treat hardcoded
+    values as defaults only", and Qt's default-sizing flow is the source
+    of truth now.
 
-    def test_action_dialog_source_has_no_resize_call(self):
+    Wave 8 (E5 from #351) added a user-initiated "Reset window size"
+    affordance that calls ``self.resize(self.minimumSize())`` — that
+    explicit defaults-driven shape is allowed; only literal-pixel
+    ``self.resize(NNN, MMM)`` calls violate #215.
+    """
+
+    def test_action_dialog_source_has_no_hardcoded_resize_call(self):
+        import re as _re
         from pathlib import Path
         src = Path(__file__).resolve().parents[1] / "app" / "views" / "dialogs" / "select_dialog.py"
         text = src.read_text(encoding="utf-8")
-        # The string "self.resize(" should not appear inside ActionDialog
-        # (it can appear in comments referencing the historical value —
-        # we strip comment lines before checking).
         code_lines = [
             line for line in text.splitlines()
             if not line.lstrip().startswith("#")
         ]
-        joined = "\n".join(code_lines)
-        assert "self.resize(" not in joined, (
-            "ActionDialog must not call self.resize() — geometry comes "
-            "from setMinimumSize + restore_widget_geometry (#215)."
-        )
+        # Find every line containing `self.resize(`. The only allowed
+        # shape is `self.resize(self.minimumSize())` (E5 from #351, Wave 8 —
+        # user-initiated reset back to setMinimumSize defaults).
+        # Blocked shape: `self.resize(780, 420)` (the #215 antipattern).
+        for line in code_lines:
+            if "self.resize(" not in line:
+                continue
+            stripped = line.strip()
+            assert stripped == "self.resize(self.minimumSize())", (
+                f"Hardcoded resize call found: {stripped!r}. "
+                f"ActionDialog geometry must come from setMinimumSize + "
+                f"restore_widget_geometry (#215). The only allowed "
+                f"resize call is `self.resize(self.minimumSize())` "
+                f"(E5 reset, Wave 8)."
+            )
 
 
 class TestActionDialogDoneSavesGeometry:

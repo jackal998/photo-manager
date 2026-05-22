@@ -276,6 +276,38 @@ def main() -> int:
         failures,
     )
 
+    # ── Probe — Wave 8 C13: ActionDialog splitter state persists ─────
+    # The Round 3 close goes through ActionDialog.done(), which now ALSO
+    # saves splitter state under QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE
+    # (Wave 8 C13). Pre-Wave-8 only the outer-window geometry was saved
+    # and the splitter handle reset to the [420, 380] default on every
+    # reopen. The probe asserts the new blob actually lands in
+    # window_state.ini after a normal close — catches a regression
+    # where the save_splitter_state call gets dropped from done().
+    print("step: probe_action_dialog_splitter_state_persisted")
+    from PySide6.QtCore import QSettings
+    ini_path = REPO / "qa" / "window_state.ini"
+    if ini_path.exists():
+        store = QSettings(str(ini_path), QSettings.IniFormat)
+        blob = store.value("geometry/action_dialog_splitter")
+        if blob is None:
+            print(
+                "probe_status: C13-splitter-state-persisted FAIL "
+                "(geometry/action_dialog_splitter key missing from "
+                f"{ini_path} after ActionDialog close — splitter handle "
+                "position will not restore on reopen)"
+            )
+            failures.append(
+                "C13: splitter state not saved to INI after ActionDialog close"
+            )
+        else:
+            print("probe_status: C13-splitter-state-persisted PASS")
+    else:
+        print(
+            f"probe_status: C13-splitter-state-persisted SKIP "
+            f"({ini_path} not found — Round 3 above may have already failed)"
+        )
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}")

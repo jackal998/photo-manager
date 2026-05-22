@@ -281,35 +281,53 @@ class TestRegexValidation:
         dlg.regex.setText("^IMG_\\d+$")
         dlg._validate_regex()
 
-        assert dlg._validation_icon.text() == "✓"
+        # C8 from #349 (Wave 8): icon is now a theme-aware pixmap from
+        # QStyle.standardIcon, not a text glyph. A valid pattern should
+        # produce a non-null pixmap on the validation icon.
+        assert not dlg._validation_icon.pixmap().isNull()
+        assert dlg._validation_icon.accessibleName() == "Regex valid"
         assert dlg._validation_error.isHidden()
 
-    def test_invalid_regex_shows_x_and_error(self, qapp):
+    def test_invalid_regex_hides_icon_and_shows_error(self, qapp):
+        """B3 from #348 (Wave 8): when the error label is visible the icon
+        is redundant — the prefixed "Invalid regex: ..." text already
+        explains the problem. Icon should be cleared on the invalid path.
+        """
         from app.views.dialogs.select_dialog import ActionDialog
 
         dlg = ActionDialog(fields=["File Name"])
         dlg.regex.setText("(unclosed")
         dlg._validate_regex()
 
-        assert dlg._validation_icon.text() == "✗"
+        # B3: icon must be cleared (no pixmap, no text) when error is shown.
+        assert dlg._validation_icon.pixmap().isNull()
         assert not dlg._validation_error.isHidden()
         # Localized prefix from action_dialog.invalid_regex.
         assert "Invalid regex" in dlg._validation_error.text() \
             or "正規式錯誤" in dlg._validation_error.text()
+        # Accessible name still announces the failure for screen readers
+        # even though the visual icon is hidden.
+        assert "Regex invalid" in dlg._validation_icon.accessibleName()
 
     def test_empty_regex_clears_validation_state(self, qapp):
         """Empty input is neutral — no icon, no error. Otherwise the
-        dialog feels broken before the user has typed anything."""
+        dialog feels broken before the user has typed anything.
+
+        B3 from #348 (Wave 8): the invalid branch ALSO clears the icon
+        now (error label alone conveys the problem), so the "icon empty"
+        invariant holds for both empty and invalid states.
+        """
         from app.views.dialogs.select_dialog import ActionDialog
 
         dlg = ActionDialog(fields=["File Name"])
         dlg.regex.setText("(")
         dlg._validate_regex()
-        assert dlg._validation_icon.text() == "✗"
+        # B3: even on invalid, icon is empty (only the error label shows).
+        assert dlg._validation_icon.pixmap().isNull()
 
         dlg.regex.setText("")
         dlg._validate_regex()
-        assert dlg._validation_icon.text() == ""
+        assert dlg._validation_icon.pixmap().isNull()
         assert dlg._validation_error.isHidden()
 
     def test_invalid_regex_does_not_call_match_fn(self, qapp):
@@ -1389,7 +1407,10 @@ class TestNumericPolish:
         dlg.combo.setCurrentText("Size (Bytes)")
         dlg._num_value_edit.setText("not-a-number")
 
-        assert dlg._num_threshold_icon.text() == "✗"
+        # C8 from #349 (Wave 8): threshold icon is now a theme-aware pixmap.
+        # The numeric row has no separate error label below the icon (unlike
+        # the regex row), so B3 does NOT apply here — icon stays visible.
+        assert not dlg._num_threshold_icon.pixmap().isNull()
         assert not dlg._num_threshold_error.isHidden()
         assert "not-a-number" in dlg._num_threshold_error.text()
 
@@ -1409,10 +1430,11 @@ class TestNumericPolish:
         # Type something invalid, then clear — confirms the clear-path
         # resets the icon (catches a regression where ✗ stays sticky).
         dlg._num_value_edit.setText("garbage")
-        assert dlg._num_threshold_icon.text() == "✗"
+        assert not dlg._num_threshold_icon.pixmap().isNull()
 
         dlg._num_value_edit.setText("")
-        assert dlg._num_threshold_icon.text() == ""
+        # C8 from #349 (Wave 8): clear-path also nulls the pixmap.
+        assert dlg._num_threshold_icon.pixmap().isNull()
         assert dlg._num_threshold_error.isHidden()
 
     def test_topn_counter_uses_per_group_format(self, qapp):
@@ -2179,3 +2201,179 @@ class TestA6FieldGatedRecentMenu:
             if f is None or f == dlg._current_field()
         ]
         assert visible == [(None, "IMG")]
+
+
+# ── Wave 8 (#349/#350/#351) — geometry persistence + reset ────────────────────
+
+
+class TestSplitterPersistence:
+    """C13 from #349 (Wave 8): the dialog's splitter handle position
+    persists across open/close cycles. Pre-Wave-8 only the outer window
+    geometry was saved; the user's [left | preview] balance reset to
+    [420, 380] on every reopen, which the user perceived as the dialog
+    "forgetting" their preferred layout.
+    """
+
+    def test_splitter_state_round_trips(self, qapp, monkeypatch, tmp_path):
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.window_state import qsettings_path
+
+        monkeypatch.setenv("PHOTO_MANAGER_HOME", str(tmp_path.name))
+        repo_root = qsettings_path().parent
+        repo_root.mkdir(parents=True, exist_ok=True)
+        ini = qsettings_path()
+        if ini.exists():
+            ini.unlink()
+
+        dlg_a = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        # Force a divider split that's clearly not the default.
+        dlg_a._splitter.setSizes([600, 200])
+        sizes_a = dlg_a._splitter.sizes()
+        dlg_a.done(0)
+
+        dlg_b = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        sizes_b = dlg_b._splitter.sizes()
+        assert len(sizes_a) == len(sizes_b) == 2
+        # Qt may pixel-adjust by 1-2 for frame chrome; allow small tolerance.
+        for a, b in zip(sizes_a, sizes_b):
+            assert abs(a - b) <= 2, (
+                f"splitter sizes drifted across reopen: {sizes_a} → {sizes_b}"
+            )
+
+        if ini.exists():
+            ini.unlink()
+
+    def test_splitter_is_none_without_match_fn(self, qapp):
+        """E4 invariant: the flat-layout branch has no splitter and
+        nothing is persisted. The done() path must handle this without
+        crashing (no save_splitter_state call on the None branch)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert dlg._splitter is None
+        # done() must not raise on the no-match_fn branch.
+        dlg.done(0)
+
+
+class TestResetGeometry:
+    """E5 from #351 (Wave 8): "Reset window size" wipes the persisted
+    geometry + splitter state under window_state.ini. The reset must
+    NOT touch settings.json keys (mode/field/simple_op) — those are
+    separate user preferences that survive a chrome-size reset.
+    """
+
+    def test_reset_clears_geometry_keys(self, qapp, monkeypatch, tmp_path):
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.window_state import (
+            QSETTINGS_KEY_ACTION_DIALOG_GEOM,
+            QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE,
+            qsettings_path,
+            window_state_qsettings,
+        )
+
+        monkeypatch.setenv("PHOTO_MANAGER_HOME", str(tmp_path.name))
+        repo_root = qsettings_path().parent
+        repo_root.mkdir(parents=True, exist_ok=True)
+        ini = qsettings_path()
+        if ini.exists():
+            ini.unlink()
+
+        # Seed both keys by opening + closing with a non-default geometry.
+        dlg_a = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        dlg_a._splitter.setSizes([700, 100])
+        dlg_a.resize(900, 500)
+        dlg_a.done(0)
+
+        store = window_state_qsettings()
+        assert store.value(QSETTINGS_KEY_ACTION_DIALOG_GEOM) is not None
+        assert store.value(
+            QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE
+        ) is not None
+
+        # Reset on a fresh dialog instance — clears both keys.
+        dlg_b = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        dlg_b._reset_geometry()
+
+        store2 = window_state_qsettings()
+        assert store2.value(QSETTINGS_KEY_ACTION_DIALOG_GEOM) is None
+        assert store2.value(
+            QSETTINGS_KEY_ACTION_DIALOG_SPLITTER_STATE
+        ) is None
+
+        if ini.exists():
+            ini.unlink()
+
+    def test_reset_does_not_touch_settings_json(
+        self, qapp, monkeypatch, tmp_path
+    ):
+        """E5 scope guard: mode/field/simple_op live in settings.json
+        under ui.action_dialog.*, NOT in window_state.ini. The reset
+        must leave them alone — wiping mode preferences on a window
+        resize would be surprising.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.window_state import qsettings_path
+
+        monkeypatch.setenv("PHOTO_MANAGER_HOME", str(tmp_path.name))
+        repo_root = qsettings_path().parent
+        repo_root.mkdir(parents=True, exist_ok=True)
+
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {
+                "main": {
+                    "mode": "regex",
+                    "field": "Folder",
+                    "simple_op": "ends_with",
+                },
+            }}
+        })
+        dlg = ActionDialog(
+            fields=["File Name", "Folder"],
+            match_fn=lambda f, p: (0, 0, []),
+            settings=settings,
+            context_id="main",
+        )
+        # Snapshot the settings.json state before reset.
+        before = dict(settings._data["ui"]["action_dialog"]["main"])
+        dlg._reset_geometry()
+        after = dict(settings._data["ui"]["action_dialog"]["main"])
+        assert before == after, (
+            f"_reset_geometry leaked into settings.json: {before} → {after}"
+        )
+
+    def test_reset_button_hidden_without_match_fn(self, qapp):
+        """E5 scope: no splitter → no resizable geometry → nothing to
+        reset. Hide the button so the user isn't offered a no-op."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert dlg.btn_reset_geometry.isHidden()
+
+    def test_reset_shortcut_wired_with_match_fn(self, qapp):
+        """E5 wiring: when the splitter exists, Ctrl+0 must trigger
+        _reset_geometry. The attribute existence is the load-bearing
+        invariant — the no-splitter branch does not create the shortcut
+        (assertion mirrors the test_splitter_is_none_without_match_fn
+        check above)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        assert hasattr(dlg, "_reset_geometry_shortcut")
+        assert dlg._reset_geometry_shortcut.key().toString() == "Ctrl+0"
+
+    def test_reset_shortcut_not_wired_without_match_fn(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        # No splitter → no resizable chrome → no shortcut.
+        assert not hasattr(dlg, "_reset_geometry_shortcut")
