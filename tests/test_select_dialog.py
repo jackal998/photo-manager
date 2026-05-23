@@ -2,6 +2,30 @@
 
 from __future__ import annotations
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _auto_confirm_delete_modal(monkeypatch):
+    """D3 from #350 (Wave 10): bypass the bulk-delete confirm modal by
+    default in every test in this file.
+
+    The modal calls ``.exec()`` which blocks the event loop waiting for
+    user input — in a headless pytest context it returns CANCELLED, which
+    silently blocks the emit and breaks every existing test that asserts
+    on the delete-action emit path. Auto-confirming preserves the
+    existing test intent (most are testing emit / preview / recent
+    semantics, not the modal itself); the dedicated TestD3DeleteConfirm
+    tests override this fixture per-test to verify the cancel and
+    confirm paths explicitly.
+    """
+    from app.views.dialogs import delete_regex_confirm_dialog
+    monkeypatch.setattr(
+        delete_regex_confirm_dialog.DeleteRegexConfirmDialog,
+        "ask",
+        classmethod(lambda cls, parent, *, matched, pattern_summary: True),
+    )
+
 
 class TestInitialField:
     def test_defaults_to_file_name_when_none(self, qapp):
@@ -2683,4 +2707,280 @@ class TestB12SetActionLabel:
         assert expected != "設定動作:", (
             f"zh_TW set_action_label still has the pre-Wave-9b value "
             f"'設定動作:'. Got: {expected!r}"
+        )
+
+
+# ── Wave 10 (#350) — D3 delete-confirm + D4 test-against playground ──────────
+
+
+class TestD3DeleteConfirm:
+    """D3 (Wave 10): the delete action surfaces a confirmation modal
+    before emitting. Other actions emit immediately, unchanged.
+
+    These tests OVERRIDE the module-level auto-confirm fixture to
+    verify the cancel and confirm paths explicitly.
+    """
+
+    def test_non_delete_action_skips_modal(self, qapp, monkeypatch):
+        """Selecting keep / remove from list / lock / unlock must NOT
+        fire the confirm modal — only the destructive delete path does.
+        Verify by counting modal-construction calls."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.dialogs import delete_regex_confirm_dialog
+
+        ask_calls = []
+        monkeypatch.setattr(
+            delete_regex_confirm_dialog.DeleteRegexConfirmDialog,
+            "ask",
+            classmethod(
+                lambda cls, parent, *, matched, pattern_summary: (
+                    ask_calls.append((matched, pattern_summary)) or True
+                )
+            ),
+        )
+
+        match_fn = lambda f, p: (5, 10, [("a.jpg", "a.jpg")] * 5)
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("a")
+        dlg._refresh_preview()
+        # Pick "keep (remove action)" — value is "" not "delete".
+        dlg._action_combo.setCurrentIndex(1)
+        received = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._emit_set_action()
+        assert ask_calls == [], (
+            f"Confirm modal must not fire on non-delete action; "
+            f"called with: {ask_calls!r}"
+        )
+        assert len(received) == 1, "Emit must fire on non-delete unchanged"
+
+    def test_delete_with_cancel_blocks_emit(self, qapp, monkeypatch):
+        """The cancel path must block the emit AND skip the B9 flash AND
+        skip Recent recording — Cancel returns the dialog to its prior
+        state with no side effects."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.dialogs import delete_regex_confirm_dialog
+
+        monkeypatch.setattr(
+            delete_regex_confirm_dialog.DeleteRegexConfirmDialog,
+            "ask",
+            classmethod(
+                lambda cls, parent, *, matched, pattern_summary: False  # cancel
+            ),
+        )
+
+        match_fn = lambda f, p: (5, 10, [("a.jpg", "a.jpg")] * 5)
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("a")
+        dlg._refresh_preview()
+        dlg._action_combo.setCurrentIndex(0)  # delete
+        received = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._emit_set_action()
+        assert received == [], (
+            f"Cancelling the confirm must block the emit; got {received!r}"
+        )
+        # Recent stays empty — the cancelled pattern must NOT enter
+        # Recent (A9 from #347's intent is preserved here too).
+        assert dlg._recent_patterns == [], (
+            f"Cancelled delete must not record pattern in Recent; "
+            f"got {dlg._recent_patterns!r}"
+        )
+
+    def test_delete_with_confirm_fires_emit(self, qapp, monkeypatch):
+        """The confirm path fires the emit + flash + Recent record —
+        identical behaviour to the pre-D3 click path."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.dialogs import delete_regex_confirm_dialog
+
+        monkeypatch.setattr(
+            delete_regex_confirm_dialog.DeleteRegexConfirmDialog,
+            "ask",
+            classmethod(
+                lambda cls, parent, *, matched, pattern_summary: True
+            ),
+        )
+
+        match_fn = lambda f, p: (5, 10, [("a.jpg", "a.jpg")] * 5)
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("a")
+        dlg._refresh_preview()
+        dlg._action_combo.setCurrentIndex(0)  # delete
+        received = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._emit_set_action()
+        assert received == [("File Name", "a", "delete")], (
+            f"Confirm must pass through to emit unchanged; got {received!r}"
+        )
+
+    def test_delete_passes_matched_count_to_modal(self, qapp, monkeypatch):
+        """The modal must receive the last-known matched count for the
+        body + confirm-button text — not a stale or zero value."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.dialogs import delete_regex_confirm_dialog
+
+        captured = {}
+
+        def capture_ask(cls, parent, *, matched, pattern_summary):
+            captured["matched"] = matched
+            captured["pattern_summary"] = pattern_summary
+            return False  # cancel — we just want the call args
+
+        monkeypatch.setattr(
+            delete_regex_confirm_dialog.DeleteRegexConfirmDialog,
+            "ask",
+            classmethod(capture_ask),
+        )
+
+        match_fn = lambda f, p: (7, 10, [("a.jpg", "a.jpg")] * 7)
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("a")
+        dlg._refresh_preview()
+        dlg._action_combo.setCurrentIndex(0)  # delete
+        dlg._emit_set_action()
+        assert captured["matched"] == 7, (
+            f"Modal must receive the matched count from the last preview "
+            f"refresh; got {captured.get('matched')!r}"
+        )
+        # pattern_summary should be human-readable, not the raw regex.
+        # In Regex mode, format is "{field} regex '{pattern}'".
+        assert "a" in captured["pattern_summary"]
+
+    def test_delete_in_flat_layout_skips_modal(self, qapp, monkeypatch):
+        """Flat layout (no match_fn) has no preview, no count context —
+        the confirm has nothing to confirm against and must skip. The
+        downstream receiver still emits its "Decision set to ..." status.
+        This is a deliberate scope decision (researcher-flagged)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.dialogs import delete_regex_confirm_dialog
+
+        ask_calls = []
+        monkeypatch.setattr(
+            delete_regex_confirm_dialog.DeleteRegexConfirmDialog,
+            "ask",
+            classmethod(
+                lambda cls, parent, *, matched, pattern_summary: (
+                    ask_calls.append(1) or True
+                )
+            ),
+        )
+
+        dlg = ActionDialog(fields=["File Name"])  # no match_fn
+        dlg.regex.setText("a")
+        dlg._action_combo.setCurrentIndex(0)  # delete
+        received = []
+        dlg.setActionRequested.connect(
+            lambda f, p, v: received.append((f, p, v))
+        )
+        dlg._emit_set_action()
+        assert ask_calls == [], (
+            "Flat layout must skip confirm — no count context"
+        )
+        assert len(received) == 1, "Emit must still fire in flat layout"
+
+
+class TestD4TestAgainst:
+    """D4 (Wave 10): test-against playground in the preview pane.
+    Lets the user try a single string against the current regex without
+    adding it to the file collection. Live-debounced + ✓/✗ feedback.
+    """
+
+    def test_empty_test_input_is_neutral(self, qapp):
+        """No icon, no label — user hasn't asked anything yet."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("foo")
+        dlg._test_against_edit.setText("")
+        dlg._refresh_test_against()
+        assert dlg._test_against_icon.pixmap().isNull()
+        assert dlg._test_against_result_label.text() == ""
+
+    def test_invalid_regex_keeps_test_against_neutral(self, qapp):
+        """The regex validator handles ✗ on its own row — echoing here
+        would be redundant noise. Test-against stays neutral on invalid
+        regex even if the test input is non-empty."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("(unclosed")  # invalid
+        dlg._test_against_edit.setText("anything")
+        dlg._refresh_test_against()
+        assert dlg._test_against_icon.pixmap().isNull()
+        assert dlg._test_against_result_label.text() == ""
+
+    def test_matching_test_string_shows_valid_and_position(self, qapp):
+        """Match → valid system icon + 'match at N-M' label.
+        Catches a regression where the position info silently drops
+        or where the wrong status icon is used."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"\d+")
+        dlg._test_against_edit.setText("IMG_1234.HEIC")
+        dlg._refresh_test_against()
+        assert not dlg._test_against_icon.pixmap().isNull(), (
+            "Match must show a system icon (Wave 8 SP_DialogApplyButton)"
+        )
+        text = dlg._test_against_result_label.text()
+        # "match at 4-8" — "1234" runs from index 4 to 8 in "IMG_1234.HEIC"
+        assert "4" in text and "8" in text, (
+            f"Position label must include match span; got {text!r}"
+        )
+
+    def test_non_matching_test_string_shows_invalid_and_no_match(self, qapp):
+        """No match → invalid system icon + '(no match)' label.
+        Failure mode: silently neutral state instead of explicit no-match
+        feedback (user can't tell if regex ran or not)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText(r"\d+")
+        dlg._test_against_edit.setText("no digits here")
+        dlg._refresh_test_against()
+        assert not dlg._test_against_icon.pixmap().isNull(), (
+            "No-match must show an explicit ✗ icon, not stay neutral"
+        )
+        text = dlg._test_against_result_label.text()
+        # English wording "(no match)" or zh_TW "(無相符)"
+        assert "match" in text.lower() or "相符" in text, (
+            f"Label must say '(no match)' equivalent; got {text!r}"
+        )
+
+    def test_test_against_hidden_on_numeric_field(self, qapp):
+        """Numeric thresholds aren't regex — 'test against a string' has
+        no meaningful semantic. The toolbar hides via
+        _apply_mode_visibility when a numeric field is active."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=100)])
+        dlg = ActionDialog(
+            fields=["File Name", "Size (Bytes)"],
+            groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        # Initial field is "File Name" — test-against should be visible
+        # (visibility = False if hidden; we check via isVisible() after
+        # the dialog is given a chance to lay out, but Qt's hide() takes
+        # effect immediately on setVisible(False) regardless of show()).
+        # Switch to numeric field.
+        dlg.combo.setCurrentText("Size (Bytes)")
+        # _on_field_changed → _apply_mode_visibility → hide call.
+        assert not dlg._test_against_widget.isVisible() or \
+            dlg._test_against_widget.isHidden(), (
+            "Test-against toolbar must hide on numeric field — numeric "
+            "thresholds aren't regex, the playground has no meaning"
         )

@@ -156,6 +156,13 @@ locked_confirm:
   btn_unlocked_only: "僅套用至未鎖定"
   btn_cancel: "取消"
 
+# DeleteRegexConfirmDialog — D3 from #350 (Wave 10).
+delete_regex_confirm:
+  title: "確認批次刪除"
+  body: "將透過 {pattern_summary} 把 {matched} 個檔案移至資源回收筒。\n\n此動作會將檔案送至資源回收筒,難以輕易復原。"
+  confirm_button: "刪除 {matched} 個檔案"
+  cancel: "取消"
+
 action_dialog:
   title: "依欄位設定動作"
   field_label: "欄位:"
@@ -166,6 +173,16 @@ action_dialog:
   close_button: "關閉(&C)"
   reset_window_size_button: "重設視窗大小(&W)"
   reset_window_size_tooltip: "重設對話框大小與面板分割為預設值 (Ctrl+0)。不會影響模式、欄位或最近使用的規則。"
+  # D4 (Wave 10): 測試字串
+  test_against_label: "以字串測試:"
+  test_against_placeholder: "輸入字串測試目前的正規式…"
+  test_against_match_at: "在 {start}-{end} 相符"
+  test_against_no_match: "(無相符)"
+  # D3 (Wave 10): 刪除確認對話框的條件摘要
+  pattern_summary_simple: "{field} {op}「{text}」"
+  pattern_summary_regex: "{field} 正規式「{pattern}」"
+  pattern_summary_numeric_threshold: "{field} {op} {value}"
+  pattern_summary_numeric_topn: "每組依 {field} 取 {order} {n} 名"
   preview_label: "預覽"
   match_counter: "{matched} / {total} 相符"
   match_counter_topn: "相符 {matched} 筆 (每組最多 {n} × 共 {group_count} 組)"

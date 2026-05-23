@@ -341,6 +341,13 @@ def _walk_yaml_leaf_strings(
 # description (e.g. "brand name", "version string format").
 _TRANSLATION_EXEMPT_KEYS: frozenset[str] = frozenset({
     "main_window.title",  # "Photo Manager" — product name, untranslated by design
+    # D3 from #350 (Wave 10): `{field} {op} {value}` is purely
+    # placeholders + a mathematical operator (`>`, `>=`, etc.) with
+    # nothing language-specific to translate. The other three
+    # pattern_summary keys ARE translated (Simple/Regex/TopN have
+    # natural-language structure that differs by locale); this one is
+    # the format-template degenerate case.
+    "action_dialog.pattern_summary_numeric_threshold",
 })
 
 _CJK_RE = re.compile(r"[一-鿿]")
