@@ -35,8 +35,8 @@ Add Execute Action preview pane (#165).
 
 ## Bypass
 
-A PR that genuinely has no user-visible or contributor-visible change
-worth noting (e.g. fixing a typo in a comment, bumping a transitive
-dep with no behaviour change) can skip the fragment by including the
-literal token `[skip-news: <reason>]` in the PR title or body. CI
-enforces this; reviewers see the reason inline.
+A PR with no diff worth a one-line record (e.g. fixing a typo in a
+comment, bumping a transitive dep with no behaviour change) can skip
+the fragment by including the literal token `[skip-news: <reason>]`
+in the PR title or body. CI enforces this; reviewers see the reason
+inline.
