@@ -794,6 +794,8 @@ class ActionDialog(QDialog):
         simple_inputs_row.addWidget(self._simple_op_combo)
         self._simple_text = QLineEdit()
         self._simple_text.setObjectName("regexSimpleText")
+        # D2 from #350 (Wave 9a): native "×" clear button — one-click input wipe.
+        self._simple_text.setClearButtonEnabled(True)
         self._simple_text.setPlaceholderText(t("action_dialog.simple_text_placeholder"))
         simple_inputs_row.addWidget(self._simple_text, stretch=1)
         simple_outer.addLayout(simple_inputs_row)
@@ -837,6 +839,8 @@ class ActionDialog(QDialog):
         regex_row.addWidget(QLabel(t("action_dialog.regex_label")))
         self.regex = QLineEdit()
         self.regex.setObjectName("regexLineEdit")
+        # D2 from #350 (Wave 9a): native "×" clear button — one-click input wipe.
+        self.regex.setClearButtonEnabled(True)
         self.regex.setPlaceholderText(t("action_dialog.regex_placeholder"))
         regex_row.addWidget(self.regex)
 
@@ -1135,6 +1139,13 @@ class ActionDialog(QDialog):
         else:
             self.btn_reset_geometry.hide()
 
+        # D9 from #350 (Wave 9a): Ctrl+Enter is the power-user shortcut
+        # for Apply. Unconditional (no setDefault() on the button, so Enter
+        # alone does NOT trigger Apply — only Ctrl+Enter does). Works in
+        # both splitter and flat layouts because Apply is universal.
+        self._apply_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self._apply_shortcut.activated.connect(self._emit_set_action)
+
         if initial_field and self.combo.findData(initial_field) >= 0:
             # E8: initial_field from caller (column-click) takes precedence
             # over any persisted field preference.
@@ -1216,6 +1227,29 @@ class ActionDialog(QDialog):
         self._validate_regex()
         if self._match_fn is not None:
             self._refresh_preview()
+        self._focus_default_input()
+
+    def _focus_default_input(self) -> None:
+        """B14 from #350 (Wave 9a): land focus on the input the user is most
+        likely to type into, picked per current mode/panel state.
+
+        Pre-Wave-9a Qt's default first-focusable-widget behavior put focus
+        on the field combo — the user always had to Tab or click before
+        typing. After Wave 9a, opening the dialog drops the user straight
+        into the relevant text input.
+
+        Numeric panel takes precedence over mode because picking a numeric
+        field swaps out the regex/Simple panels entirely.
+        """
+        if self._field_panel_is_numeric():
+            if self._numeric_mode == NUMERIC_MODE_TOPN:
+                self._num_n_spin.setFocus()
+            else:
+                self._num_value_edit.setFocus()
+        elif self._mode == MODE_SIMPLE:
+            self._simple_text.setFocus()
+        else:
+            self.regex.setFocus()
 
     # ── Settings helpers ───────────────────────────────────────────────────
 
@@ -1389,15 +1423,21 @@ class ActionDialog(QDialog):
         if not text:
             self._set_status_icon(self._num_threshold_icon, None)
             self._num_threshold_icon.setAccessibleName("")
+            self._num_threshold_icon.setToolTip("")
             self._num_threshold_error.hide()
             return
         field = self._current_field()
         parsed = _parse_threshold(field, text)
         if parsed is None:
             self._set_status_icon(self._num_threshold_icon, "invalid")
-            self._num_threshold_icon.setAccessibleName(
-                f"Threshold invalid: {text}"
-            )
+            # B11 from #348 (Wave 9a): mirror accessibleName → toolTip
+            # for sighted hover users. Unlike _validate_regex (Wave 8 B3
+            # hides icon on invalid), the threshold icon stays visible
+            # on BOTH valid and invalid because its row layout has no
+            # separate error label below the icon.
+            tooltip_text = f"Threshold invalid: {text}"
+            self._num_threshold_icon.setAccessibleName(tooltip_text)
+            self._num_threshold_icon.setToolTip(tooltip_text)
             self._num_threshold_error.setText(
                 t("action_dialog.invalid_threshold").format(input=text)
             )
@@ -1405,6 +1445,7 @@ class ActionDialog(QDialog):
         else:
             self._set_status_icon(self._num_threshold_icon, "valid")
             self._num_threshold_icon.setAccessibleName("Threshold valid")
+            self._num_threshold_icon.setToolTip("Threshold valid")
             self._num_threshold_error.hide()
 
     def _update_numeric_value_placeholder(self) -> None:
@@ -1488,13 +1529,23 @@ class ActionDialog(QDialog):
     # ── Cheatsheet ─────────────────────────────────────────────────────────
 
     def _insert_token(self, token: str) -> None:
-        """Insert a regex token at the regex line edit's caret position."""
+        """Insert a regex token at the regex line edit's caret position.
+
+        D6 from #350 (Wave 9a): the ``[abc]`` chip is a placeholder pattern —
+        the user almost always wants to replace the inner ``abc`` with their
+        own characters. After insertion, select the inner 3 chars so the
+        user's next keystroke replaces them without manual selection.
+        """
         self.regex.setFocus()
         cur = self.regex.cursorPosition()
         text = self.regex.text()
         new_text = text[:cur] + token + text[cur:]
         self.regex.setText(new_text)
         self.regex.setCursorPosition(cur + len(token))
+        if token == "[abc]":
+            # setSelection(start, length) — select "abc" (3 chars starting
+            # 1 char past the inserted "[").
+            self.regex.setSelection(cur + 1, 3)
 
     # ── Recent patterns ────────────────────────────────────────────────────
 
@@ -1634,6 +1685,9 @@ class ActionDialog(QDialog):
         if self._mode == MODE_SIMPLE or self._field_panel_is_numeric():
             self._set_status_icon(self._validation_icon, None)
             self._validation_icon.setAccessibleName("")
+            # B11 (Wave 9a): clear toolTip alongside the icon so a stale
+            # "Regex valid" tooltip from a prior validation doesn't linger.
+            self._validation_icon.setToolTip("")
             self._validation_error.hide()
             self._btn_set_action.setEnabled(self._compute_apply_enabled())
             return
@@ -1642,6 +1696,7 @@ class ActionDialog(QDialog):
         if not pattern:
             self._set_status_icon(self._validation_icon, None)
             self._validation_icon.setAccessibleName("")
+            self._validation_icon.setToolTip("")
             self._validation_error.hide()
             self._btn_set_action.setEnabled(False)
             return
@@ -1658,6 +1713,9 @@ class ActionDialog(QDialog):
             self._validation_icon.setAccessibleName(
                 f"Regex invalid: {exc}"
             )
+            # B11 (Wave 9a): icon is hidden on this branch (B3), so the
+            # toolTip would never surface — clear it explicitly to match.
+            self._validation_icon.setToolTip("")
             self._validation_error.setText(
                 t("action_dialog.invalid_regex").format(error=str(exc))
             )
@@ -1671,6 +1729,11 @@ class ActionDialog(QDialog):
 
         self._set_status_icon(self._validation_icon, "valid")
         self._validation_icon.setAccessibleName("Regex valid")
+        # B11 from #348 (Wave 9a): mirror accessibleName to toolTip so
+        # sighted-but-non-screen-reader users get the same info on hover.
+        # Only the valid path needs this — invalid path hides the icon
+        # entirely (Wave 8 B3) so a toolTip would never surface.
+        self._validation_icon.setToolTip("Regex valid")
         self._validation_error.hide()
         self._btn_set_action.setEnabled(True)
 

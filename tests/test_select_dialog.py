@@ -2420,3 +2420,157 @@ class TestResetGeometry:
         dlg = ActionDialog(fields=["File Name"])
         # No splitter → no resizable chrome → no shortcut.
         assert not hasattr(dlg, "_reset_geometry_shortcut")
+
+
+# ── Wave 9a (#348/#350) — passive a11y + keyboard polish ─────────────────────
+
+
+class TestWave9aPolish:
+    """Six small focused improvements: hover toolTips mirroring accessibleName
+    (B11), focus landing on the typing widget per mode (B14), native clear
+    buttons on text inputs (D2), inner-char selection after [abc] chip insert
+    (D6), Ctrl+Enter shortcut for Apply (D9), Alt-letter mnemonics on action
+    buttons (D10).
+    """
+
+    def test_b11_valid_regex_sets_tooltip(self, qapp):
+        """B11: hover users get the same info screen readers already do."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("^IMG_\\d+$")
+        dlg._validate_regex()
+        assert dlg._validation_icon.toolTip() == "Regex valid"
+        # Sanity: accessibleName is the same string (B11's whole point).
+        assert dlg._validation_icon.accessibleName() == "Regex valid"
+
+    def test_b11_invalid_regex_clears_tooltip(self, qapp):
+        """B11 + Wave 8 B3: icon is hidden on invalid, so a stale toolTip
+        from a prior valid would be misleading. Must be cleared explicitly.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("^IMG_\\d+$")
+        dlg._validate_regex()
+        assert dlg._validation_icon.toolTip() == "Regex valid"
+        # Now type invalid — icon hidden (B3) AND toolTip cleared (B11).
+        dlg.regex.setText("(unclosed")
+        dlg._validate_regex()
+        assert dlg._validation_icon.toolTip() == ""
+
+    def test_b11_threshold_icon_tooltip_on_valid_and_invalid(self, qapp):
+        """B11 for the numeric panel — icon stays visible on both branches
+        (unlike _validation_icon), so BOTH need toolTip mirroring."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        g = _make_group([_make_record(file_path="a/x.jpg", file_size_bytes=100)])
+        dlg = ActionDialog(
+            fields=["Size (Bytes)"], groups=[g],
+            match_fn=lambda f, p: (0, 0, []),
+        )
+        dlg.combo.setCurrentText("Size (Bytes)")
+        dlg._num_value_edit.setText("not-a-number")
+        assert "Threshold invalid" in dlg._num_threshold_icon.toolTip()
+        assert "not-a-number" in dlg._num_threshold_icon.toolTip()
+
+        dlg._num_value_edit.setText("100")
+        assert dlg._num_threshold_icon.toolTip() == "Threshold valid"
+
+    def test_b14_focus_lands_on_simple_text_in_simple_mode(self, qapp):
+        """B14: pre-Wave-9a Qt put focus on the field combo. Should land on
+        the typing widget per mode."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        # match_fn supplied → Simple is default mode → focus _simple_text.
+        assert dlg.focusWidget() is dlg._simple_text
+
+    def test_b14_focus_lands_on_regex_in_regex_mode(self, qapp):
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        # No match_fn → C1 pins MODE_REGEX → focus self.regex.
+        dlg = ActionDialog(fields=["File Name"])
+        assert dlg.focusWidget() is dlg.regex
+
+    def test_d2_clear_button_enabled_on_both_inputs(self, qapp):
+        """D2: native × clear button so the user can wipe input with one
+        click (no more triple-click → delete)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        assert dlg.regex.isClearButtonEnabled()
+        assert dlg._simple_text.isClearButtonEnabled()
+
+    def test_d6_set_chip_selects_inner_chars(self, qapp):
+        """D6: after inserting [abc], select the inner 'abc' so the user's
+        next keystroke replaces them. Pre-Wave-9a the cursor was past the
+        token and the user had to manually back-select."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("")
+        dlg.regex.setCursorPosition(0)
+        dlg._insert_token("[abc]")
+        # Inserted text is "[abc]" — select chars at index 1..3 (the "abc").
+        assert dlg.regex.text() == "[abc]"
+        assert dlg.regex.selectedText() == "abc"
+        assert dlg.regex.selectionStart() == 1
+
+    def test_d6_non_set_chip_does_not_select(self, qapp):
+        """D6 scope: only the [abc] chip selects inner chars — the other
+        tokens (\\d, ^, $, .* etc.) are atomic and have nothing to replace."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("")
+        dlg.regex.setCursorPosition(0)
+        dlg._insert_token("\\d")
+        assert dlg.regex.text() == "\\d"
+        assert dlg.regex.selectedText() == ""
+
+    def test_d9_apply_shortcut_wired(self, qapp):
+        """D9: Ctrl+Enter triggers Apply. Wired unconditionally (works in
+        both splitter and flat layouts — Apply is universal, unlike Wave 8
+        E5's Ctrl+0 which is splitter-only)."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        assert hasattr(dlg, "_apply_shortcut")
+        assert dlg._apply_shortcut.key().toString() == "Ctrl+Return"
+
+    def test_d9_apply_shortcut_present_in_both_layouts(self, qapp):
+        """D9: Apply is universal — shortcut must exist on both branches.
+        Contrast with Wave 8 E5: _reset_geometry_shortcut is splitter-only."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        flat = ActionDialog(fields=["File Name"])
+        split = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        assert hasattr(flat, "_apply_shortcut")
+        assert hasattr(split, "_apply_shortcut")
+
+    def test_d10_mnemonics_present_on_action_buttons(self, qapp):
+        """D10: Alt-letter mnemonics — pins that the & character lands in
+        the translated button text. Catches a regression where a future
+        translation edit drops the &."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(
+            fields=["File Name"], match_fn=lambda f, p: (0, 0, [])
+        )
+        # English mnemonic shape: "&X..." prefix.
+        # Chinese mnemonic shape: "...(&X)" suffix.
+        # Either is valid — we just assert "&" appears in the text.
+        assert "&" in dlg._btn_set_action.text(), "Apply mnemonic missing"
+        assert "&" in dlg.btn_close.text(), "Close mnemonic missing"
+        assert "&" in dlg._recent_btn.text(), "Recent mnemonic missing"
+        assert "&" in dlg._switch_to_regex_btn.text(), \
+            "Switch to Regex mnemonic missing"
+        assert "&" in dlg.btn_reset_geometry.text(), \
+            "Reset window size mnemonic missing"
