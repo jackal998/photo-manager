@@ -303,10 +303,10 @@ Add Execute Action preview pane (#165).
 
 ### Bypass — `[skip-news: <reason>]`
 
-A PR that genuinely has no entry worth recording (e.g. a typo fix in
-a code comment, a transitive-dep bump with no behaviour change) can
-skip the gate by including the literal token `[skip-news: <reason>]`
-in the PR title or body. The reason is for the reviewer — keep it
+A PR with no diff worth a one-line record (e.g. a typo fix in a code
+comment, a transitive-dep bump with no behaviour change) can skip
+the gate by including the literal token `[skip-news: <reason>]` in
+the PR title or body. The reason is for the reviewer — keep it
 specific (`[skip-news: comment typo]`, not `[skip-news: trivial]`).
 
 This is the same convention as `[docs-not-needed]` for the docs-guard
