@@ -191,12 +191,16 @@ action_dialog:
   regex_label: "Regex:"
   regex_placeholder: "e.g. ^IMG_\\d+\\.HEIC$"
   set_action_label: "Set Action:"
-  apply_button: "Apply"
-  close_button: "Close"
+  # D10 from #350 (Wave 9a): keyboard mnemonics via "&X" — Alt+X fires the
+  # button. Allocations: A=Apply, C=Close, R=Recent, S=Switch to Regex,
+  # W=Reset (W)indow size. No internal collisions; main-menu mnemonics
+  # are blocked while the dialog is ApplicationModal so no external risk.
+  apply_button: "&Apply"
+  close_button: "&Close"
   # E5 from #351 (Wave 8): clears persisted window+splitter geometry so
   # the dialog reopens at default size. Mode/field/op preferences are
   # NOT touched — they live under settings.json, not window_state.ini.
-  reset_window_size_button: "Reset window size"
+  reset_window_size_button: "Reset &window size"
   reset_window_size_tooltip: "Reset dialog window size and pane split to defaults (Ctrl+0). Does not affect Mode, Field, or recent patterns."
   preview_label: "Preview"
   match_counter: "{matched} of {total} match"
@@ -230,7 +234,8 @@ action_dialog:
   simple_complex_notice: "This pattern is more advanced than Simple can express — switch to Regex to keep editing it."
   # B2/B4: button shown alongside simple_complex_notice to let the user
   # switch to Regex mode without losing the complex pattern.
-  switch_to_regex: "Switch to Regex"
+  # D10 (Wave 9a): Alt+S mnemonic.
+  switch_to_regex: "&Switch to Regex"
   # C1: tooltip on the Simple radio when match_fn is not provided (no
   # live-preview data source to back Simple-mode feedback).
   simple_disabled_no_match_fn: "Simple mode requires a live preview data source"
@@ -244,7 +249,7 @@ action_dialog:
   cheatsheet_set: "[abc] — any of these chars"
   # C16 from #349 (Wave 8): dropdown arrow now rendered via QStyle's
   # standard SP_ArrowDown icon (theme-aware glyph). Keep label text only.
-  recent_button: "Recent"
+  recent_button: "&Recent"
   recent_empty: "(no recent patterns)"
   recent_clear: "Clear recent patterns"
   # #209 — numeric-condition panel. Shown when the selected field is
