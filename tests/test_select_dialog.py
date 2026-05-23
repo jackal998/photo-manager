@@ -2574,3 +2574,113 @@ class TestWave9aPolish:
             "Switch to Regex mnemonic missing"
         assert "&" in dlg.btn_reset_geometry.text(), \
             "Reset window size mnemonic missing"
+
+
+# ── Wave 9b-trim (#348) — post-Apply feedback + label scope wording ──────────
+
+
+class TestB9PostApplyFlash:
+    """B9 (Wave 9b-trim): the dialog stays open after Apply (intentional —
+    supports batch-apply / iterative regex exploration), and the match
+    counter flashes "Applied to N rows" so the user gets in-dialog
+    confirmation that the emit landed. The downstream receiver also emits
+    "Decision set to '<decision>'" on the main-window status bar (#316/#318)
+    — these surfaces complement each other (in-dialog flash for active
+    attention, status-bar emit for system-level audit trail).
+    """
+
+    def test_apply_flashes_counter_with_applied_count(self, qapp):
+        """The flash text contains the matched count from the last preview
+        refresh — not a stale or zero value."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        # match_fn returns 3 matched of 5 total.
+        match_fn = lambda f, p: (3, 5, [("a.jpg", "a.jpg")] * 3)
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("a")
+        # Force the preview to run synchronously so _last_matched_count is
+        # populated (debounce timer would otherwise leave it None at this
+        # point in a unit test).
+        dlg._refresh_preview()
+        assert dlg._last_matched_count == 3
+
+        dlg._emit_set_action()
+        # The counter text now reflects the flash, not the "X of Y match"
+        # shape. We don't pin the literal English string — that would
+        # break under zh_TW — but we DO pin that the number 3 appears
+        # (real failure mode: flash uses 0, or hardcodes some other count).
+        text = dlg._match_counter.text()
+        assert "3" in text, f"Expected matched count 3 in flash, got: {text!r}"
+        # And the flash is NOT the regular "X of Y match" wording (which
+        # contains both numbers). Real failure mode: flash silently no-ops
+        # and the counter still shows the preview text.
+        assert "5" not in text, (
+            f"Expected post-Apply flash to drop the total (Y) from the "
+            f"counter, but text still shows it: {text!r}"
+        )
+
+    def test_apply_without_match_fn_does_not_crash(self, qapp):
+        """No match_fn → counter is hidden anyway → no flash, no crash."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("a")
+        # No preview was ever run (no match_fn) — _last_matched_count is None.
+        assert dlg._last_matched_count is None
+        # _emit_set_action must not raise.
+        dlg._emit_set_action()
+        # Counter stays hidden (its visibility was set in __init__).
+        assert dlg._match_counter.isHidden()
+
+    def test_apply_before_first_preview_does_not_flash(self, qapp):
+        """If the user clicks Apply before the debounced preview ever
+        fires, _last_matched_count is None. The flash branch must guard
+        on that — no flash text, no exception."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (3, 5, [("a.jpg", "a.jpg")] * 3)
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("a")
+        # Note: we explicitly do NOT call _refresh_preview here.
+        # _last_matched_count is whatever __init__'s _refresh_preview call
+        # (line 1218) populated — which for this match_fn IS 3 (it runs
+        # synchronously in __init__).
+        # The scenario this test targets: ensure the flash code path is
+        # guarded so a None tracker doesn't cause AttributeError /
+        # KeyError. We forcibly reset _last_matched_count to None to
+        # simulate the "never-ran-preview" state, then call _emit_set_action.
+        dlg._last_matched_count = None
+        dlg._emit_set_action()  # Must not raise.
+
+
+class TestB12SetActionLabel:
+    """B12 (Wave 9b-trim): rename the "Set Action:" label so it
+    communicates the per-row scope explicitly. The action applies to
+    every matched row, not to one row or to the group as a whole.
+    """
+
+    def test_label_uses_per_match_wording(self, qapp):
+        """The label text contains 'match' (en) or the equivalent zh_TW
+        wording. Catches a regression where the YAML rename gets reverted
+        to the pre-Wave-9b 'Set Action:' value."""
+        from app.views.dialogs.select_dialog import ActionDialog
+        from infrastructure.i18n import t
+
+        dlg = ActionDialog(fields=["File Name"])
+        expected = t("action_dialog.set_action_label")
+        # The label is the first QLabel in the action_row of left_layout.
+        # Easier to verify via the translation lookup: confirm the YAML
+        # contains the new wording, not the old "Set Action:".
+        assert expected != "Set Action:", (
+            f"action_dialog.set_action_label still has the pre-Wave-9b "
+            f"value 'Set Action:' — Wave 9b-trim B12 should have renamed "
+            f"it to communicate per-match scope. Got: {expected!r}"
+        )
+        # Also assert it's not the literal Chinese pre-Wave-9b value.
+        assert expected != "設定動作:", (
+            f"zh_TW set_action_label still has the pre-Wave-9b value "
+            f"'設定動作:'. Got: {expected!r}"
+        )

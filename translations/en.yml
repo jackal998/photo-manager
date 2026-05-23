@@ -190,7 +190,10 @@ action_dialog:
   field_label: "Field:"
   regex_label: "Regex:"
   regex_placeholder: "e.g. ^IMG_\\d+\\.HEIC$"
-  set_action_label: "Set Action:"
+  # B12 from #348 (Wave 9b-trim): label rewords from the generic
+  # "Set Action:" to make the per-row scope explicit — the chosen
+  # action applies to EVERY matched row, not to one row or the group.
+  set_action_label: "Action for each match:"
   # D10 from #350 (Wave 9a): keyboard mnemonics via "&X" — Alt+X fires the
   # button. Allocations: A=Apply, C=Close, R=Recent, S=Switch to Regex,
   # W=Reset (W)indow size. No internal collisions; main-menu mnemonics
@@ -211,6 +214,11 @@ action_dialog:
   # across all records, not per-group.
   match_counter_topn: "{matched} matched (≤{n} per group × {group_count} groups)"
   match_counter_invalid: "—"
+  # B9 from #348 (Wave 9b-trim): post-Apply flash in the match counter.
+  # Confirms the action emit landed without duplicating the main-window
+  # status bar's "Decision set to ..." emit (#316/#318) — this surfaces
+  # the same news inside the dialog the user is actively looking at.
+  match_counter_applied: "Applied to {matched} rows"
   invalid_regex: "Invalid regex: {error}"
   # A4 from #347 (Wave 5): shown when the threshold input is non-empty
   # but ``_parse_threshold`` can't read it as a number or ISO date.
