@@ -649,6 +649,11 @@ class ActionDialog(QDialog):
         # standalone) keep the existing regex/simple-only behavior.
         self._groups = groups if groups is not None else []
         self._numeric_mode = NUMERIC_MODE_THRESHOLD
+        # B9 from #348 (Wave 9b-trim): remember the most recent matched
+        # count from the last preview refresh so _emit_set_action can flash
+        # "Applied to N rows" in the match counter. None when no preview
+        # has run yet (i.e. match_fn is None — flat layout never tracks).
+        self._last_matched_count: int | None = None
         # C13 from #349 (Wave 8): the splitter exists only when match_fn
         # is supplied. Promote it to self._splitter so `done()` can save
         # its state — pre-Wave-8 it was a local variable and the handle
@@ -1773,6 +1778,8 @@ class ActionDialog(QDialog):
 
         field = self._current_field()
         matched, total, samples = self._match_fn(field, pattern)
+        # B9 (Wave 9b-trim): track for the post-Apply counter flash.
+        self._last_matched_count = matched
 
         self._match_counter.setText(
             t("action_dialog.match_counter").format(matched=matched, total=total)
@@ -1860,6 +1867,8 @@ class ActionDialog(QDialog):
             )
 
         matched = len(labels)
+        # B9 (Wave 9b-trim): track for the post-Apply counter flash.
+        self._last_matched_count = matched
         self._match_counter.setText(counter_text)
 
         self._preview_list.clear()
@@ -1903,6 +1912,22 @@ class ActionDialog(QDialog):
         idx = self._action_combo.currentIndex()
         _label, value = self._decisions[idx]
         self.setActionRequested.emit(field, pattern, value)
+        # B9 from #348 (Wave 9b-trim): flash "Applied to N rows" in the
+        # match counter so the user gets in-dialog confirmation that the
+        # action was applied. The receiver (file_operations.set_decision_
+        # by_regex / execute_action_dialog._set_decision_by_regex) ALSO
+        # emits "Decision set to ..." on the main-window status bar
+        # (#316/#318) — these two surfaces complement each other rather
+        # than duplicating the same emit path. The counter's normal text
+        # is restored organically on the next preview refresh (any
+        # subsequent typing / mode toggle / field change retriggers the
+        # debounced preview).
+        if self._match_fn is not None and self._last_matched_count is not None:
+            self._match_counter.setText(
+                t("action_dialog.match_counter_applied").format(
+                    matched=self._last_matched_count
+                )
+            )
         # Recent-patterns only records raw regex strings — numeric
         # pseudo-patterns (`__cmp__:`, `__top_n__:`) would be confusing
         # in the Recent dropdown which lives in the regex panel.
