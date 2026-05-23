@@ -1,0 +1,1 @@
+Replace the skip-news classification criterion ("user-visible or contributor-visible change worth noting") with a capability test ("no diff worth a one-line record") so authors can apply it without judging visibility boundaries (#375).
