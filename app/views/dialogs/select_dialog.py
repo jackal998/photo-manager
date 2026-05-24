@@ -1064,25 +1064,26 @@ class ActionDialog(QDialog):
         action_row.addStretch(1)
         left_layout.addLayout(action_row)
 
-        # ── Close ──────────────────────────────────────────────────────────
-        close_row = QHBoxLayout()
         # E5 from #351 (Wave 8): "Reset window size" wipes the persisted
         # geometry + splitter blobs so the dialog reopens at the hardcoded
         # defaults (720×380, [420, 380]). Only meaningful when the splitter
         # exists — wired up below in the match_fn branch. Created
-        # unconditionally so test fixtures can find it by objectName.
+        # unconditionally + parented to ``self`` so test fixtures can find
+        # it by objectName even on the flat-layout branch where it never
+        # gets added to a visible layout. #391 moved it from the close-row
+        # to the preview-header (added inside _build_preview_pane).
         self.btn_reset_geometry = QPushButton(
-            t("action_dialog.reset_window_size_button")
+            t("action_dialog.reset_window_size_button"), self
         )
         self.btn_reset_geometry.setObjectName("regexResetGeometryButton")
         self.btn_reset_geometry.setToolTip(
             t("action_dialog.reset_window_size_tooltip")
         )
-        close_row.addWidget(self.btn_reset_geometry)
-        close_row.addStretch(1)
-        self.btn_close = QPushButton(t("action_dialog.close_button"))
-        close_row.addWidget(self.btn_close)
-        left_layout.addLayout(close_row)
+        # #391: Close button removed. OS title-bar X and Esc-key already
+        # cover dismissal — Qt's default key event handling on a QDialog
+        # maps Esc to reject(), and the title-bar X fires the same path.
+        # No close_row exists anymore; the bottom of the left pane is the
+        # Apply / mode-toggle action row.
 
         # ── Compose root layout ────────────────────────────────────────────
         # Two shapes: with preview (QSplitter holding left + right panes)
@@ -1127,12 +1128,13 @@ class ActionDialog(QDialog):
             root.addWidget(left_widget)
             left_layout.setContentsMargins(11, 11, 11, 11)
 
-        self.btn_close.clicked.connect(self.accept)
         self._btn_set_action.clicked.connect(self._emit_set_action)
         # E5: reset only makes sense when the splitter exists (there's
-        # nothing else resizable on the flat-layout branch). Hide the
-        # button there to avoid offering a no-op. Ctrl+0 shortcut is
-        # also splitter-only for the same reason.
+        # nothing else resizable on the flat-layout branch). On flat
+        # layout the button is parented to ``self`` (for test fixture
+        # lookup) but explicitly hidden so the contract pinned by
+        # ``TestResetGeometry.test_reset_button_hidden_without_match_fn``
+        # holds. Ctrl+0 shortcut is also splitter-only.
         if self._splitter is not None:
             self.btn_reset_geometry.clicked.connect(self._reset_geometry)
             self._reset_geometry_shortcut = QShortcut(
@@ -1672,7 +1674,17 @@ class ActionDialog(QDialog):
         test_row.addWidget(self._test_against_result_label)
         right_layout.addWidget(self._test_against_widget)
 
-        right_layout.addWidget(QLabel(t("action_dialog.preview_label")))
+        # #391: preview-header row carries the preview label on the left
+        # and the Reset window-size button on the right, replacing the
+        # old close-row layout. Reset is visually associated with the
+        # resizable surface (the preview pane itself) — the action it
+        # performs (wipe geometry+splitter blobs) only affects this side.
+        preview_header_row = QHBoxLayout()
+        preview_header_row.setContentsMargins(0, 0, 0, 0)
+        preview_header_row.addWidget(QLabel(t("action_dialog.preview_label")))
+        preview_header_row.addStretch(1)
+        preview_header_row.addWidget(self.btn_reset_geometry)
+        right_layout.addLayout(preview_header_row)
 
         self._preview_list = QListWidget()
         self._preview_list.setObjectName("regexPreviewList")

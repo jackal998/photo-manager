@@ -219,15 +219,16 @@ def _open_action(win):
 
 
 def _close_action(dlg):
-    """Click ``Close`` on ActionDialog. ``_find_dialog_button`` picks
-    the bottom-most match so we don't fight the title-bar Close button
-    (which shares the accessible name on en-US Windows)."""
-    btn = _uia._find_dialog_button(dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
-    try:
-        btn.invoke()
-    except Exception:
-        btn.click_input()
-    time.sleep(0.5)
+    """Dismiss ActionDialog. #391 dropped the explicit Close button —
+    dismissal goes via Esc-key (Qt routes to ``reject()``) through
+    the shared ``_uia.close_action_dialog`` helper, which also adds
+    a short post-key sleep to let the close animation settle before
+    the next geometry-readback step."""
+    _uia.close_action_dialog(dlg)
+    # Geometry round-trip needs an extra beat beyond the helper's own
+    # 0.3s sleep — the geometry blobs are written on the closeEvent
+    # path, which runs slightly after the Esc-driven reject().
+    time.sleep(0.2)
 
 
 def main() -> int:

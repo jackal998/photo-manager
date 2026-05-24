@@ -204,11 +204,12 @@ action_dialog:
   # action applies to EVERY matched row, not to one row or the group.
   set_action_label: "Action for each match:"
   # D10 from #350 (Wave 9a): keyboard mnemonics via "&X" — Alt+X fires the
-  # button. Allocations: A=Apply, C=Close, R=Recent, S=Switch to Regex,
-  # W=Reset (W)indow size. No internal collisions; main-menu mnemonics
-  # are blocked while the dialog is ApplicationModal so no external risk.
+  # button. Allocations: A=Apply, R=Recent, S=Switch to Regex,
+  # W=Reset (W)indow size. (#391 dropped C=Close — button removed,
+  # dismissal goes via Esc / title-bar X.) No internal collisions;
+  # main-menu mnemonics are blocked while the dialog is
+  # ApplicationModal so no external risk.
   apply_button: "&Apply"
-  close_button: "&Close"
   # E5 from #351 (Wave 8): clears persisted window+splitter geometry so
   # the dialog reopens at default size. Mode/field/op preferences are
   # NOT touched — they live under settings.json, not window_state.ini.

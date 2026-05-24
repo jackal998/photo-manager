@@ -170,7 +170,6 @@ action_dialog:
   regex_placeholder: "例如:^IMG_\\d+\\.HEIC$"
   set_action_label: "對每筆相符列的動作:"
   apply_button: "套用(&A)"
-  close_button: "關閉(&C)"
   reset_window_size_button: "重設視窗大小(&W)"
   reset_window_size_tooltip: "重設對話框大小與面板分割為預設值 (Ctrl+0)。不會影響模式、欄位或最近使用的規則。"
   # D4 (Wave 10): 測試字串

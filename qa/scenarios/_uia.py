@@ -110,7 +110,9 @@ EXECUTE_CONFIRM_TITLE = "All Files Will Be Deleted"
 # Set Action by Field dialog (inner — opened from Execute dialog)
 ACTION_DIALOG_TITLE = "Set Action by Field"
 ACTION_DIALOG_BTN_APPLY = "Apply"
-ACTION_DIALOG_BTN_CLOSE = "Close"
+# Close button removed in #391 — dismissal goes via Esc-key
+# (Qt routes to reject()) or the title-bar X. Use
+# ``close_action_dialog(action_dlg)`` to dismiss.
 
 # LockedRowsConfirmDialog (photo-manager#182) — surfaced whenever an
 # action would touch a locked row. The three button labels match the
@@ -701,13 +703,18 @@ def open_action_by_regex_dialog(
 
 
 def close_action_dialog(action_dlg: UIAWrapper) -> None:
-    """Click the Set-Action-by-Field/Regex dialog's Close button.
+    """Dismiss the Set-Action-by-Field/Regex dialog via Esc-key.
+
+    #391 dropped the explicit Close button — dismissal goes through
+    the OS-level paths (Esc routes to ``QDialog.reject()`` by default
+    Qt behaviour; title-bar X fires the same path). Esc-key is the
+    simpler and more reliable of the two from pywinauto's UIA layer.
 
     Counterpart to :func:`open_action_by_regex_dialog` — leaves the
     main window focused so subsequent probes can continue.
     """
-    close_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_CLOSE)
-    close_btn.click_input()
+    _focus(action_dlg)
+    action_dlg.type_keys("{ESC}")
     time.sleep(0.3)
 
 
@@ -1879,9 +1886,7 @@ def _drive_action_dialog_form(
     except Exception:
         counter_text = None
 
-    close_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_CLOSE)
-    close_btn.click_input()
-    time.sleep(0.3)
+    close_action_dialog(action_dlg)
 
     return counter_text
 
