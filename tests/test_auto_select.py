@@ -1,4 +1,4 @@
-"""Tests for core/services/auto_select.py (photo-manager#212).
+"""Tests for core/services/auto_select.py (photo-manager#212, #393).
 
 Each test catches a real user-visible bug — see the docstring on every
 case below for the failure mode it pins. No defensive-branch padding.
@@ -6,12 +6,17 @@ case below for the failure mode it pins. No defensive-branch padding.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import pytest
 
-from core.services.auto_select import top_score_path_per_group
+from core.services.auto_select import (
+    apply_auto_select_decisions,
+    top_score_path_per_group,
+)
 
 
 @dataclass
@@ -172,3 +177,200 @@ class TestWorkerIntegrationShape:
             ),
         ]
         assert top_score_path_per_group(rows) == {"/grp/b.jpg"}
+
+
+# ---------------------------------------------------------------------------
+# apply_auto_select_decisions (#393)
+# ---------------------------------------------------------------------------
+
+
+def _make_manifest(tmp_path: Path, paths: list[str]) -> Path:
+    """Build a minimal SQLite manifest with one row per path.
+
+    Uses the full schema from infrastructure.manifest_repository so
+    the auto-migrate ALTER TABLE path in ``ManifestRepository.load``
+    is a no-op against this DB — every column is already present.
+    """
+    from infrastructure.manifest_repository import _MIGRATIONS
+
+    manifest = tmp_path / "manifest.sqlite"
+    conn = sqlite3.connect(str(manifest))
+    try:
+        cols_sql = ",\n  ".join(f"{col} {ddl}" for col, ddl in _MIGRATIONS)
+        conn.execute(
+            "CREATE TABLE migration_manifest (\n"
+            "  source_path TEXT PRIMARY KEY,\n"
+            f"  {cols_sql}\n"
+            ")"
+        )
+        for p in paths:
+            conn.execute(
+                "INSERT INTO migration_manifest (source_path) VALUES (?)",
+                (p,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return manifest
+
+
+def _read_decisions_and_locks(manifest: Path) -> dict[str, tuple[str, int]]:
+    """Return ``{source_path: (user_decision, is_locked)}`` for the manifest."""
+    conn = sqlite3.connect(str(manifest))
+    try:
+        rows = conn.execute(
+            "SELECT source_path, user_decision, is_locked "
+            "FROM migration_manifest"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {p: (d or "", lk) for p, d, lk in rows}
+
+
+class TestApplyAutoSelectDecisions:
+    """The helper writes ``user_decision='keep'`` + ``is_locked=1`` on
+    every keeper. The original ``action`` column is not touched — that
+    remains the classifier's job, set during the scan pipeline before
+    this helper runs."""
+
+    def test_keepers_get_keep_decision_and_lock(self, tmp_path):
+        """Catches: helper writes user_decision but forgets the lock
+        (or vice versa). The whole point of #393 is the lock badge —
+        if it doesn't get written, the feature has shipped invisibly
+        again. Two keepers + one untouched non-keeper proves both
+        writes hit the right rows AND don't bleed onto unrelated rows."""
+        manifest = _make_manifest(
+            tmp_path,
+            ["/grp1/keeper.jpg", "/grp1/dup.jpg", "/grp2/keeper.jpg"],
+        )
+        apply_auto_select_decisions(
+            str(manifest),
+            keepers={"/grp1/keeper.jpg", "/grp2/keeper.jpg"},
+        )
+        state = _read_decisions_and_locks(manifest)
+        assert state["/grp1/keeper.jpg"] == ("keep", 1)
+        assert state["/grp2/keeper.jpg"] == ("keep", 1)
+        # Non-keeper stays at the schema defaults; the helper must not
+        # touch rows whose path wasn't in keepers.
+        assert state["/grp1/dup.jpg"] == ("", 0)
+
+    def test_aggressive_marks_non_keepers_delete_without_locking(self, tmp_path):
+        """Catches: aggressive path writes is_locked=1 on non-keepers
+        too, OR forgets the delete write. Non-keepers receive the
+        delete decision but NOT the lock — locking them would make the
+        decision uneditable in the standard flow, defeating the
+        'pre-populated triage, user still confirms' contract."""
+        manifest = _make_manifest(
+            tmp_path,
+            ["/g/keeper.jpg", "/g/dup_a.jpg", "/g/dup_b.jpg"],
+        )
+        apply_auto_select_decisions(
+            str(manifest),
+            keepers={"/g/keeper.jpg"},
+            non_keepers_for_delete={"/g/dup_a.jpg", "/g/dup_b.jpg"},
+        )
+        state = _read_decisions_and_locks(manifest)
+        assert state["/g/keeper.jpg"] == ("keep", 1)
+        # Non-keepers: delete decision, NOT locked.
+        assert state["/g/dup_a.jpg"] == ("delete", 0)
+        assert state["/g/dup_b.jpg"] == ("delete", 0)
+
+    def test_empty_keepers_is_a_noop(self, tmp_path):
+        """Catches: helper crashes on empty input, OR writes to all
+        rows when keepers is empty. A scan that produced zero scored
+        groups (e.g. every group is all-MOV-passengers) must produce a
+        clean no-op so the worker doesn't have to wrap the call in an
+        outer if-guard. Schema defaults stay everywhere."""
+        manifest = _make_manifest(tmp_path, ["/a.jpg", "/b.jpg"])
+        apply_auto_select_decisions(str(manifest), keepers=set())
+        state = _read_decisions_and_locks(manifest)
+        assert state == {"/a.jpg": ("", 0), "/b.jpg": ("", 0)}
+
+    def test_empty_non_keepers_set_is_handled_like_none(self, tmp_path):
+        """Catches: helper treats ``set()`` differently from ``None``.
+        Both must skip the delete writes — passing an empty set is a
+        natural caller idiom (build the set conditionally, pass it
+        through) and shouldn't behave differently from the explicit
+        non-aggressive default."""
+        manifest = _make_manifest(
+            tmp_path, ["/k.jpg", "/d.jpg"]
+        )
+        apply_auto_select_decisions(
+            str(manifest),
+            keepers={"/k.jpg"},
+            non_keepers_for_delete=set(),
+        )
+        state = _read_decisions_and_locks(manifest)
+        assert state["/k.jpg"] == ("keep", 1)
+        # No delete write fired for the empty set.
+        assert state["/d.jpg"] == ("", 0)
+
+    def test_migrates_legacy_manifest_missing_is_locked_column(self, tmp_path):
+        """Catches: helper assumes ``is_locked`` already exists, hitting
+        a sqlite3.OperationalError on a freshly-scanned manifest. This
+        is the production failure mode discovered in s49 local-run:
+        ``scanner.manifest.write_manifest`` writes the original DDL
+        (no ``is_locked``), and the lazy ALTER lives in
+        ``ManifestRepository.load()``. Auto-select fires BEFORE the
+        first load, so without an explicit migrate the column doesn't
+        exist when we try to UPDATE it — silent failure mode is the
+        worker's ``failed`` signal firing instead of ``finished``."""
+        from scanner.manifest import _DDL
+
+        # Build a manifest with ONLY the original schema (one DDL
+        # statement matching what write_manifest creates) — no is_locked
+        # column. Mirrors the on-disk state immediately after a scan.
+        manifest = tmp_path / "legacy.sqlite"
+        conn = sqlite3.connect(str(manifest))
+        try:
+            # _DDL is a multi-statement script (CREATE TABLE + indexes).
+            conn.executescript(_DDL)
+            conn.execute(
+                "INSERT INTO migration_manifest (source_path, source_label, "
+                "action) VALUES (?, ?, ?)",
+                ("/k.jpg", "src", "KEEP"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Verify the precondition the test is pinning: is_locked must
+        # NOT exist before the helper runs.
+        conn = sqlite3.connect(str(manifest))
+        try:
+            cols = {
+                row[1] for row in conn.execute(
+                    "PRAGMA table_info(migration_manifest)"
+                )
+            }
+        finally:
+            conn.close()
+        assert "is_locked" not in cols, (
+            "test precondition broken: write_manifest's schema now "
+            "includes is_locked — update _DDL or this test's premise"
+        )
+
+        # Now the actual contract: helper migrates + writes.
+        apply_auto_select_decisions(str(manifest), keepers={"/k.jpg"})
+        state = _read_decisions_and_locks(manifest)
+        assert state["/k.jpg"] == ("keep", 1)
+
+    def test_writes_are_persistent_across_connection(self, tmp_path):
+        """Catches: helper forgets to commit, or commit is in the
+        wrong scope so the writes vanish on connection close. Open a
+        fresh connection (mimicking what the next manifest load does)
+        and confirm the keep+lock writes survived."""
+        manifest = _make_manifest(tmp_path, ["/k.jpg"])
+        apply_auto_select_decisions(str(manifest), keepers={"/k.jpg"})
+        # Fresh connection — proves the commit hit disk, not just
+        # in-memory state of a still-open writer.
+        conn = sqlite3.connect(str(manifest))
+        try:
+            row = conn.execute(
+                "SELECT user_decision, is_locked FROM migration_manifest "
+                "WHERE source_path=?",
+                ("/k.jpg",),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == ("keep", 1)

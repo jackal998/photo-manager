@@ -37,6 +37,7 @@ class ScanWorker(QThread):
         limit: int | None = None,
         workers: int = 4,
         auto_select_enabled: bool = False,
+        auto_select_aggressive_delete: bool = False,
     ) -> None:
         super().__init__()
         self.sources = {k: Path(v) for k, v in sources.items() if v.strip()}
@@ -52,6 +53,12 @@ class ScanWorker(QThread):
         # dialog persists the corresponding setting; defaults False so
         # callers that don't opt in get the pre-#212 behaviour.
         self.auto_select_enabled = auto_select_enabled
+        # #393 — when True (and auto_select_enabled also True), set
+        # user_decision='delete' on every non-keeper row in scored
+        # groups so the user opens Execute Action with the full triage
+        # pre-populated. Off by default because it's destructive-leaning;
+        # the user still confirms via the standard ExecuteAction flow.
+        self.auto_select_aggressive_delete = auto_select_aggressive_delete
 
     def run(self) -> None:
         try:
@@ -241,13 +248,26 @@ class ScanWorker(QThread):
         # stay unscored — no peers to compete with.
         apply_scoring_to_rows(rows, extracts)
 
-        # --- 4.6: optional auto-select keepers (#212) ---
+        # --- 4.6: optional auto-select keepers (#212, #393) ---
         # When enabled in the scan dialog, the top-scored row in each
         # duplicate group is promoted to action="KEEP" so the manifest
         # loads with keepers already chosen — the user does not have
         # to open the Selection dialog manually. Other duplicates keep
         # their classifier action (REVIEW_DUPLICATE / EXACT / MOVE) so
         # the user still confirms deletions explicitly.
+        #
+        # #393 layered on top: keepers also receive user_decision='keep'
+        # AND is_locked=1 (written post-write_manifest via the
+        # repo's batch_update_* methods, since ManifestRow has neither
+        # field — those live on the DB and PhotoRecord). The lock gives
+        # a visible tree badge; user_decision='keep' composes with #182
+        # LockedRowsConfirmDialog if the user later applies bulk-regex.
+        #
+        # #393 (c) — optional aggressive mode: every non-keeper row in
+        # a scored group gets user_decision='delete'. Off by default
+        # (destructive-leaning); the user still confirms via the
+        # standard ExecuteAction flow before any file moves.
+        keepers: set[str] = set()
         if self.auto_select_enabled:
             from core.services.auto_select import top_score_path_per_group
             keepers = top_score_path_per_group(rows)
@@ -267,5 +287,39 @@ class ScanWorker(QThread):
         # --- 5. Write manifest ---
         self._emit(f"Writing manifest → {self.output_path}")
         write_manifest(rows, self.output_path)
+
+        # --- 5.5: post-write keep+lock (and aggressive delete) (#393) ---
+        # Runs only when auto_select_enabled fired and produced keepers.
+        # The helper composes the repo's batch_update_* primitives — see
+        # core/services/auto_select.py::apply_auto_select_decisions for
+        # the write contract. Both writes are tiny (≤N rows per scan)
+        # so the cost is negligible compared to the scan itself.
+        if keepers:
+            from core.services.auto_select import apply_auto_select_decisions
+            non_keepers: set[str] | None = None
+            if self.auto_select_aggressive_delete:
+                # Non-keepers in scored groups: rows with both
+                # ``group_id`` AND ``score`` (i.e. ranked peers) but
+                # NOT picked as the keeper. ``score=None`` peers (Live
+                # Photo MOV passengers, all-MOV groups) are excluded —
+                # they aren't candidates for an explicit delete.
+                non_keepers = {
+                    row.source_path for row in rows
+                    if row.group_id is not None
+                    and row.score is not None
+                    and row.source_path not in keepers
+                }
+                self._emit(
+                    f"Auto-select aggressive: marked {len(non_keepers):,}"
+                    f" non-keeper(s) for delete."
+                )
+            apply_auto_select_decisions(
+                str(self.output_path), keepers, non_keepers
+            )
+            self._emit(
+                f"Auto-select: locked {len(keepers):,} keeper(s);"
+                f" decisions written."
+            )
+
         self._emit("Done.")
         self.finished.emit(str(self.output_path))

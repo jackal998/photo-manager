@@ -203,6 +203,39 @@ def _photo_record(
 class ManifestRepository:
     """Read all manifest rows; write user decisions back."""
 
+    # ------------------------------------------------------------------ schema
+
+    def ensure_schema(self, manifest_path: str) -> None:
+        """Run the lazy ALTER TABLE migrations on the manifest at
+        ``manifest_path``. Idempotent — every ALTER is wrapped in a
+        try/except that silently skips columns that already exist.
+
+        Callers that write to columns added by the migration list
+        (e.g. ``is_locked``, ``score``, ``user_decision``) MUST call
+        this first when the manifest may have been produced by a
+        scanner that doesn't know about those columns. ``load()`` calls
+        it automatically; post-scan writers (#393's
+        ``apply_auto_select_decisions``) call it explicitly because
+        ``scanner.manifest.write_manifest`` writes only the original
+        DDL and the migrated columns are added on first read.
+        """
+        path = Path(manifest_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Manifest not found: {manifest_path}")
+        conn = _connect(manifest_path)
+        try:
+            for col, ddl in _MIGRATIONS:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE migration_manifest "
+                        f"ADD COLUMN {col} {ddl}"
+                    )
+                    conn.commit()
+                except Exception:
+                    pass  # column already exists
+        finally:
+            conn.close()
+
     # ------------------------------------------------------------------ load
 
     def load(self, manifest_path: str) -> Iterator[PhotoRecord]:
@@ -225,19 +258,12 @@ class ManifestRepository:
         if not path.exists():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
+        # Auto-migrate: add any missing columns. Idempotent — see
+        # ensure_schema() docstring for the contract.
+        self.ensure_schema(manifest_path)
         conn = _connect(manifest_path)
         conn.row_factory = sqlite3.Row
         try:
-            # Auto-migrate: add any missing columns (safe to re-run — silently
-            # ignored if the column already exists).
-            for col, ddl in _MIGRATIONS:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE migration_manifest ADD COLUMN {col} {ddl}"
-                    )
-                    conn.commit()
-                except Exception:
-                    pass  # column already exists
             all_rows = conn.execute(_LOAD_ALL_SQL).fetchall()
         finally:
             conn.close()

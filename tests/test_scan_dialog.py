@@ -570,6 +570,138 @@ class TestAutoSelectCheckbox:
         assert dlg2._auto_select_check.isChecked() is True
 
 
+class TestAutoSelectAggressiveCheckbox:
+    """The aggressive sub-option (#393) sits under the auto-select
+    parent: disabled when the parent is off, opt-in even when parent
+    is on, persists via ``ui.scan_dialog.auto_select_aggressive_delete``.
+    Together they let the user open Execute Action with a fully
+    pre-populated triage (keepers locked, non-keepers marked delete)."""
+
+    def _make_settings_file(self, tmp_path: Path, data: dict) -> Path:
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_default_unchecked_with_no_setting(self, qapp, tmp_path):
+        """Catches: aggressive flag defaults to ON. A user who hasn't
+        opted in must NOT have non-keepers auto-marked for delete —
+        flipping the default would silently tag thousands of rows for
+        deletion across every existing user's next scan."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {"sources": {}})
+        dlg = ScanDialog(JsonSettings(settings_path))
+        assert dlg._auto_select_aggressive_check.isChecked() is False
+
+    def test_aggressive_disabled_when_parent_off(self, qapp, tmp_path):
+        """Catches: gating regression — aggressive remains enabled
+        when its parent (auto-select) is off. The aggressive option is
+        meaningless without auto-select; an enabled-but-orphaned
+        checkbox would confuse users into thinking they can opt into
+        the destructive mode without enabling auto-select first.
+
+        Expands Advanced Settings first so we test our own gating
+        wiring, not Qt's checkable-groupbox auto-disable of children.
+        """
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"advanced_expanded": True}},
+        })
+        dlg = ScanDialog(JsonSettings(settings_path))
+        # Parent defaults off → aggressive is disabled on initial load.
+        assert dlg._auto_select_check.isChecked() is False
+        assert dlg._auto_select_aggressive_check.isEnabled() is False
+
+    def test_aggressive_enables_when_parent_toggled_on(self, qapp, tmp_path):
+        """Catches: gating signal not wired. Toggling the parent on
+        must re-enable the aggressive checkbox so the user can opt in
+        right after enabling auto-select, in the same dialog session
+        without a close/reopen."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"advanced_expanded": True}},
+        })
+        dlg = ScanDialog(JsonSettings(settings_path))
+        dlg._auto_select_check.setChecked(True)
+        assert dlg._auto_select_aggressive_check.isEnabled() is True
+
+    def test_aggressive_disables_when_parent_toggled_off(self, qapp, tmp_path):
+        """Catches: gating only fires one-way (on→enables, off→leaves
+        enabled). Toggling parent off must disable the aggressive
+        sub-option — otherwise a user who toggles parent on, then
+        aggressive on, then parent off, would leave an orphan-enabled
+        widget pointing at a setting whose precondition is unmet."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {
+                "scan_dialog": {
+                    "auto_select_enabled": True,
+                    "advanced_expanded": True,
+                },
+            },
+        })
+        dlg = ScanDialog(JsonSettings(settings_path))
+        # Sanity: starts with parent on so aggressive is enabled.
+        assert dlg._auto_select_aggressive_check.isEnabled() is True
+        dlg._auto_select_check.setChecked(False)
+        assert dlg._auto_select_aggressive_check.isEnabled() is False
+
+    def test_toggle_persists_to_disk_immediately(self, qapp, tmp_path):
+        """Catches: save not wired. Same persistence contract as the
+        parent — toggle must write through on every change so the
+        user's choice survives a close/reopen even if they don't run
+        a scan in this session."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"auto_select_enabled": True}},
+        })
+        settings = JsonSettings(settings_path)
+        dlg = ScanDialog(settings)
+
+        dlg._auto_select_aggressive_check.setChecked(True)
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert (
+            saved["ui"]["scan_dialog"]["auto_select_aggressive_delete"]
+            is True
+        )
+
+        dlg._auto_select_aggressive_check.setChecked(False)
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert (
+            saved["ui"]["scan_dialog"]["auto_select_aggressive_delete"]
+            is False
+        )
+
+    def test_state_round_trips_across_dialog_instances(self, qapp, tmp_path):
+        """Catches: toggle saves but next dialog instance doesn't read
+        back. End-to-end: parent on + aggressive on, close, reopen —
+        both must be on. Pins the read+write wiring together."""
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = self._make_settings_file(tmp_path, {
+            "sources": {},
+            "ui": {"scan_dialog": {"auto_select_enabled": True}},
+        })
+        dlg1 = ScanDialog(JsonSettings(settings_path))
+        dlg1._auto_select_aggressive_check.setChecked(True)
+        dlg2 = ScanDialog(JsonSettings(settings_path))
+        assert dlg2._auto_select_aggressive_check.isChecked() is True
+
+
 # ---------------------------------------------------------------------------
 # _build_sources (label auto-generation)
 # ---------------------------------------------------------------------------

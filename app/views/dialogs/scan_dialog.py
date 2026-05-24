@@ -522,6 +522,26 @@ class ScanDialog(QDialog):
         params_layout.addWidget(self._auto_select_check)
         params_layout.addWidget(auto_select_desc)
 
+        # Aggressive auto-select sub-option (#393).
+        # Opt-in on top of the parent — disabled when the parent is off.
+        # When on, every non-keeper row in a scored group receives
+        # user_decision='delete' so the user opens Execute Action with
+        # the full triage pre-populated. Indented one level to read as
+        # a sub-option of the parent.
+        self._auto_select_aggressive_check = QCheckBox(
+            t("scan_dialog.auto_select_aggressive_label")
+        )
+        auto_select_aggressive_desc = QLabel(
+            t("scan_dialog.auto_select_aggressive_desc")
+        )
+        auto_select_aggressive_desc.setWordWrap(True)
+        auto_select_aggressive_desc.setStyleSheet("color: #555;")
+        self._auto_select_aggressive_check.toggled.connect(
+            self._on_auto_select_aggressive_toggled
+        )
+        params_layout.addWidget(self._auto_select_aggressive_check)
+        params_layout.addWidget(auto_select_aggressive_desc)
+
         right_top_layout.addWidget(self._params_group)
         # Trailing stretch so the params group hugs the top and any extra
         # vertical room in the right-top pane stays empty rather than
@@ -630,6 +650,17 @@ class ScanDialog(QDialog):
         )
         self._auto_select_check.setChecked(auto_select)
 
+        # Aggressive mode (#393). Default = False — destructive-leaning,
+        # must be explicitly opted into. The checkbox is gated on the
+        # parent: disabled when auto-select itself is off.
+        aggressive = bool(
+            self.settings.get(
+                "ui.scan_dialog.auto_select_aggressive_delete", False
+            )
+        )
+        self._auto_select_aggressive_check.setChecked(aggressive)
+        self._auto_select_aggressive_check.setEnabled(auto_select)
+
     def _save_to_settings(self) -> None:
         """Persist the current source list and output path to settings."""
         entries = self._source_list.entries()
@@ -651,8 +682,27 @@ class ScanDialog(QDialog):
         immediately on change so the user's choice survives the next
         dialog open without depending on the scan-start save path
         firing.
+
+        Also gates the aggressive sub-option (#393): the aggressive
+        checkbox is meaningless when the parent is off, so disable it
+        in that state.
         """
         self.settings.set("ui.scan_dialog.auto_select_enabled", enabled)
+        self._auto_select_aggressive_check.setEnabled(enabled)
+        try:
+            self.settings.save()
+        except OSError:
+            pass  # Non-fatal — see _save_to_settings rationale
+
+    def _on_auto_select_aggressive_toggled(self, enabled: bool) -> None:
+        """Persist the aggressive sub-option on every toggle (#393).
+
+        Mirrors ``_on_auto_select_toggled`` — write through on every
+        change so the user's choice survives a close/reopen cycle.
+        """
+        self.settings.set(
+            "ui.scan_dialog.auto_select_aggressive_delete", enabled
+        )
         try:
             self.settings.save()
         except OSError:
@@ -748,6 +798,9 @@ class ScanDialog(QDialog):
             threshold=self._phash_slider.value(),
             mean_color_threshold=self._color_slider.value(),
             auto_select_enabled=self._auto_select_check.isChecked(),
+            auto_select_aggressive_delete=(
+                self._auto_select_aggressive_check.isChecked()
+            ),
         )
         self._worker.progress.connect(self._log)
         self._worker.finished.connect(self._on_finished)

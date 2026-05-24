@@ -60,20 +60,32 @@ ADVANCED_GROUP_TITLE = "Advanced settings"
 EXPECTED_KEEPER = "neardup_00_q95.jpg"
 
 
-def _read_manifest_actions() -> dict[str, str]:
-    """Return ``{basename: action}`` for the near-duplicates rows."""
+def _read_manifest_actions() -> dict[str, tuple[str, str, int]]:
+    """Return ``{basename: (action, user_decision, is_locked)}`` for the
+    near-duplicates rows.
+
+    Three columns matter for s49 post-#393: ``action`` (classifier
+    label — top row promoted to KEEP by auto-select), ``user_decision``
+    (set by the #393 keep+lock write — should be 'keep' on the
+    keeper), and ``is_locked`` (the visible lock badge — 1 on the
+    keeper, 0 elsewhere in non-aggressive mode).
+    """
     if not MANIFEST_PATH.exists():
         raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
     conn = sqlite3.connect(str(MANIFEST_PATH))
     try:
         rows = conn.execute(
-            "SELECT source_path, action FROM migration_manifest "
+            "SELECT source_path, action, user_decision, is_locked "
+            "FROM migration_manifest "
             "WHERE source_path LIKE ?",
             ("%near-duplicates%neardup_%",),
         ).fetchall()
     finally:
         conn.close()
-    return {Path(p).name: action for p, action in rows}
+    return {
+        Path(p).name: (act, ud or "", lk)
+        for p, act, ud, lk in rows
+    }
 
 
 def _click_advanced_group(dlg) -> None:
@@ -162,8 +174,10 @@ def main() -> int:
     _uia.close_and_load_manifest(dlg)
 
     print("step: verify_manifest")
-    actions = _read_manifest_actions()
-    print(f"  manifest_actions={dict(sorted(actions.items()))}")
+    rows = _read_manifest_actions()
+    print(f"  manifest_rows={dict(sorted(rows.items()))}")
+    # Backward-compatible action-only view for the existing assertions.
+    actions = {name: tup[0] for name, tup in rows.items()}
 
     if EXPECTED_KEEPER not in actions:
         failures.append(
@@ -199,6 +213,37 @@ def main() -> int:
             failures.append(
                 f"{name}.action={act!r} unexpected — classifier "
                 f"actions are MOVE / EXACT / REVIEW_DUPLICATE"
+            )
+
+    # #393 — keeper also receives user_decision='keep' AND is_locked=1
+    # so the tree's lock badge gives a visible signal that the keeper
+    # was chosen (vs the pre-#393 silent action='KEEP' which the user
+    # could miss). Non-keepers stay unlocked + un-decided in the
+    # non-aggressive flow.
+    if EXPECTED_KEEPER in rows:
+        _, ud, lk = rows[EXPECTED_KEEPER]
+        if ud != "keep":
+            failures.append(
+                f"{EXPECTED_KEEPER}.user_decision={ud!r}, expected "
+                f"'keep' (#393 keep+lock write missing)"
+            )
+        if lk != 1:
+            failures.append(
+                f"{EXPECTED_KEEPER}.is_locked={lk!r}, expected 1 "
+                f"(#393 keep+lock write missing — no tree badge)"
+            )
+    for name, (_, ud, lk) in rows.items():
+        if name == EXPECTED_KEEPER:
+            continue
+        if ud != "":
+            failures.append(
+                f"non-keeper {name}.user_decision={ud!r}, expected "
+                f"'' (non-aggressive mode must not touch non-keepers)"
+            )
+        if lk != 0:
+            failures.append(
+                f"non-keeper {name}.is_locked={lk!r}, expected 0 "
+                f"(only the keeper should be locked)"
             )
 
     # #239 — auto-select must apply VISUAL selection to the keeper row,
