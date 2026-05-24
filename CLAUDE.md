@@ -298,9 +298,10 @@ Skills live in two homes, split by trust level:
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
   `agentic-engineering/`, `app-security-patterns/`, `conventional-comments/`,
-  `docs-features-drift/`, `github-pr-review-fetch/`,
-  `github-pr-review-pending/`, `github-pr-review-submitted/`,
-  `impact-map/`, `parallel-brief-generator/`, `pr-review/`,
+  `docs-features-drift/`, `github-issue-create/`,
+  `github-pr-review-fetch/`, `github-pr-review-pending/`,
+  `github-pr-review-submitted/`, `impact-map/`,
+  `parallel-brief-generator/`, `pr-review/`,
   `qa-explore/`, `qa-scenario-drift/`, `scanner-perf-patterns/`,
   `skill-pii-audit/`, `sqlite-migration-safety/`,
   `test-padding-patterns/`, `update-docs/`, `work/`. New project skills
@@ -355,6 +356,19 @@ Skills live in two homes, split by trust level:
   together form the agent-to-agent review loop:
   dev → push → review agent (`/pr-review` + `-submitted`) → PR has feedback →
   dev agent (`-fetch` to ingest) → fix + push → loop.
+
+  `github-issue-create/` standardises new GitHub *issue* filing —
+  team-prefixed title (`[QA]` / `[FE]` / `[BE]` / `[CI]` / `[DX]`
+  / `[DOCS]`), mandatory `## What` / `## Why` / `## How` body
+  sections, label allocation from the existing repo set, and an
+  explicit gate per issue. Sibling to the three `github-pr-review-*`
+  skills but distinct surface: those handle PR *reviews*; this one
+  handles issue *creation*. Invoked from `/work`'s "out of scope —
+  file as follow-up" path and from `/pr-review`'s Gate 5 drive-by
+  promotions; also fires on direct trigger phrases like "file an
+  issue for X" / "track this for later". Closes the "deferred
+  work must always be filed" gap captured by the
+  [Capture full design space](#) memory rule.
 - **Personal skills** — `.claude/skills/personal/<name>/` (gitignored)
   or `~/.claude/skills/<name>/` (user-level, never in any repo). For
   ad-hoc skills with machine-specific paths, Synology IPs, NAS
