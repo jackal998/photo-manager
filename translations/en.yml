@@ -245,27 +245,22 @@ action_dialog:
   preview_truncated: "…and {n} more"
   preview_empty: "No matches"
   # Phase B/C — Simple / Regex mode toggle and friends. ("Simple"
-  # was renamed from "Beginner" in Phase C so the label doesn't
-  # carry a tone problem.) The persisted settings value also
-  # changed; the dialog reads the legacy "beginner" string as
-  # an alias for one release for back-compat.
-  mode_label: "Mode:"
-  mode_simple: "Simple"
-  mode_regex: "Regex"
+  # #396 dropped the Simple/Regex mode toggle and the
+  # "complex pattern" affordance built around hiding state:
+  # mode_label, mode_simple, mode_regex, simple_complex_notice,
+  # and switch_to_regex are gone. Both sections are always visible
+  # and share self.regex as the single source of truth.
   simple_prefix: "Find rows where it"
   simple_op_contains: "contains"
   simple_op_starts_with: "starts with"
   simple_op_ends_with: "ends with"
   simple_op_exact: "exactly matches"
   simple_text_placeholder: "type the text to match…"
-  simple_complex_notice: "This pattern is more advanced than Simple can express — switch to Regex to keep editing it."
-  # B2/B4: button shown alongside simple_complex_notice to let the user
-  # switch to Regex mode without losing the complex pattern.
-  # D10 (Wave 9a): Alt+S mnemonic.
-  switch_to_regex: "&Switch to Regex"
-  # C1: tooltip on the Simple radio when match_fn is not provided (no
-  # live-preview data source to back Simple-mode feedback).
-  simple_disabled_no_match_fn: "Simple mode requires a live preview data source"
+  # #396 C1 informational-placeholder note: shown above the disabled
+  # Simple inputs when match_fn is None (no live-preview data source).
+  # Italic + muted-color in the dialog; this text is the only signal
+  # explaining why the inputs aren't interactive.
+  simple_disabled_no_match_fn: "Write-through preview unavailable — Simple inputs are read-only on this entry point."
   cheatsheet_label: "Insert into pattern:"
   cheatsheet_any: ".* — any text"
   cheatsheet_digit: "\\d — digit"

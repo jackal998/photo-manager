@@ -116,16 +116,9 @@ def main() -> int:
     # setEnabled(False) in _validate_regex trips a visible regression.
     print("step: probe_apply_always_enabled")
     probe_dlg, _ = _uia.open_action_by_regex_dialog(win)
-    regex_radio = _uia._find_descendant_by_aid_suffix(
-        probe_dlg, "RadioButton", ".regexModeRegex"
-    )
-    if regex_radio is not None:
-        try:
-            if not regex_radio.is_selected():
-                regex_radio.click_input()
-                time.sleep(0.2)
-        except Exception:
-            pass
+    # #396: regex line edit is always interactive in the dual-section
+    # view — no mode radio to click first. Look up the line edit
+    # directly and type into it.
     probe_apply = _uia._find_dialog_button(probe_dlg, _uia.ACTION_DIALOG_BTN_APPLY)
     probe_regex = _uia._find_descendant_by_aid_suffix(
         probe_dlg, "Edit", ".regexLineEdit"
@@ -169,16 +162,8 @@ def main() -> int:
     # No Apply: the probe doesn't change any decisions.
     print("step: probe_folder_regex_preview_shows_paths")
     probe_dlg2, _ = _uia.open_action_by_regex_dialog(win)
-    _regex_radio2 = _uia._find_descendant_by_aid_suffix(
-        probe_dlg2, "RadioButton", ".regexModeRegex"
-    )
-    if _regex_radio2 is not None:
-        try:
-            if not _regex_radio2.is_selected():
-                _regex_radio2.click_input()
-                time.sleep(0.2)
-        except Exception:
-            pass
+    # #396: regex line edit is always interactive; no mode radio click
+    # needed before typing.
     _field_combo2 = _uia._find_descendant_by_aid_suffix(
         probe_dlg2, "ComboBox", ".regexFieldCombo"
     )

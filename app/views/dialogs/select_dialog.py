@@ -85,15 +85,15 @@ _FIELD_LABEL_KEYS: dict[str, str] = {
 # build_match_fn's sample_cap; matched count is the full total.
 MatchFn = Callable[[str, str], tuple[int, int, list[tuple[str, str]]]]
 
-MODE_SIMPLE = "simple"
-MODE_REGEX = "regex"
-# Phase B persisted "beginner" as the mode value; Phase C renamed the
-# user-facing label to "Simple" and the persisted value to "simple".
-# We accept the legacy spelling on read so a user who upgrades doesn't
-# silently flip back to the default.
-_LEGACY_MODE_VALUES = {"beginner": MODE_SIMPLE, "simple": MODE_SIMPLE, "regex": MODE_REGEX}
+# #396 dropped the Simple/Regex mode toggle. Both sections are always
+# visible in the same view, sharing self.regex as the single source of
+# truth (Simple inputs write through to regex; regex reverse-parses
+# back to Simple when the pattern is Simple-representable). The
+# MODE_SIMPLE / MODE_REGEX constants and _LEGACY_MODE_VALUES migration
+# dict that lived here used to gate widget visibility; they're gone
+# along with the radios.
 
-# Simple-mode operator → (translation_key, regex-builder closure).
+# Simple operator → (translation_key, regex-builder closure).
 # The closure receives the user's plain text and returns the regex
 # pattern that drives the live preview + Apply path. `re.escape` keeps
 # the input literal — e.g. typing "IMG_001.jpg (copy)" works without
@@ -122,12 +122,9 @@ _CHEATSHEET_TOKENS: list[tuple[str, str]] = [
 # Cap chosen so the dropdown stays scannable without scroll on a
 # typical screen.
 _RECENT_KEY = "ui.action_dialog.recent_patterns"
-# A8: mode key is now per-context (see context_id parameter). The
-# legacy key "ui.action_dialog.mode" is read as a fallback so
-# existing user state migrates seamlessly.
-_MODE_KEY_TEMPLATE = "ui.action_dialog.{context_id}.mode"
-_MODE_KEY_LEGACY = "ui.action_dialog.mode"
-# A8: field and simple_op keys are also per-context (E3, E8).
+# A8: field and simple_op keys are per-context (E3, E8).
+# (Mode key dropped in #396 along with the toggle — old values stay in
+# settings.json harmlessly; never read again.)
 _FIELD_KEY_TEMPLATE = "ui.action_dialog.{context_id}.field"
 _SIMPLE_OP_KEY_TEMPLATE = "ui.action_dialog.{context_id}.simple_op"
 _RECENT_CAP = 10
@@ -597,23 +594,33 @@ class ActionDialog(QDialog):
             (field, regex, action_value).
 
     Phase A added a live preview pane / counter / inline validator when
-    a ``match_fn`` is supplied. Phase B layers on top:
-      * Simple / Regex mode toggle. Simple replaces the regex line
-        edit with "Find rows where it [contains | starts with | ends
-        with | exactly matches] [text]" and builds the regex internally
-        so non-regex users never type a ``\\d`` in their lives.
-        (Phase B shipped this as "Beginner" mode; renamed to "Simple"
-        in Phase C for tone — see ``_LEGACY_MODE_VALUES``.)
-      * Cheatsheet chips below the regex row (Regex mode only) — click
-        to insert tokens at the caret.
-      * Recent-patterns dropdown next to the regex line edit, populated
-        on Apply and persisted to settings.json across runs.
+    a ``match_fn`` is supplied. Subsequent waves layered on top:
+      * Simple section: "Find rows where it [contains | starts with |
+        ends with | exactly matches] [text]" with the regex synthesised
+        internally via ``re.escape`` so non-regex users never type a
+        ``\\d`` in their lives. (Originally "Beginner" mode in Phase B,
+        renamed "Simple" in Phase C.)
+      * Regex section: raw regex line edit with cheatsheet chips
+        (``.*``, ``\\d``, ``\\w``, ``^``, ``$``, ``\\.``, ``[abc]``).
+      * #396 dual-section view: both Simple AND Regex sections are
+        always visible, vertically stacked (Simple on top). Simple
+        inputs write through to ``self.regex`` on every change; the
+        regex line edit reverse-parses back to Simple inputs when its
+        pattern is Simple-representable. ``self.regex`` is the single
+        source of truth; the previous Simple/Regex mode toggle, the
+        ``_simple_complex_notice`` Switch-to-Regex affordance, and
+        ``_LEGACY_MODE_VALUES`` migration are all gone.
+      * Recent-patterns dropdown above the Field combo, populated on
+        Apply and persisted to settings.json across runs.
       * Match-span highlight on each preview list row so users can see
         WHY each row matched.
 
-    With ``match_fn=None`` the dialog falls back to the original flat
-    Regex-only layout — keeps existing callers, tests, and QA paths
-    working unchanged.
+    With ``match_fn=None`` the Simple section renders as an
+    informational placeholder (inputs disabled, italic note explaining
+    write-through preview isn't available); the Regex section is
+    fully interactive. Callers, tests, and QA paths see the same
+    widget tree as the match_fn-supplied case — only enabled state
+    differs.
     """
 
     setActionRequested = Signal(str, str, str)  # field, regex, action_value
@@ -662,24 +669,12 @@ class ActionDialog(QDialog):
         self._splitter: QSplitter | None = None
 
         # A8: per-context settings keys so "main" and "execute" entry
-        # points persist independent mode/field/op preferences.
+        # points persist independent field / simple_op preferences.
+        # (Mode key dropped in #396 — both sections are always visible
+        # now, no mode to persist.)
         self._context_id = context_id
-        self._mode_key = _MODE_KEY_TEMPLATE.format(context_id=context_id)
         self._field_key = _FIELD_KEY_TEMPLATE.format(context_id=context_id)
         self._simple_op_key = _SIMPLE_OP_KEY_TEMPLATE.format(context_id=context_id)
-
-        # C1+C4: mode toggle is always created (Simple disabled when
-        # match_fn is None). Default logic: no match_fn → Regex only;
-        # with match_fn → read per-context key, fall back to legacy
-        # global key, then default to Simple.
-        if self._match_fn is None:
-            self._mode = MODE_REGEX
-        else:
-            # A8: per-context key first, legacy global key as fallback.
-            persisted = self._settings_get(self._mode_key, None)
-            if persisted is None:
-                persisted = self._settings_get(_MODE_KEY_LEGACY, MODE_SIMPLE)
-            self._mode = _LEGACY_MODE_VALUES.get(persisted, MODE_SIMPLE)
 
         # A6 + E2-upgrade: _recent_patterns now stores (field, pattern)
         # tuples. The shape-validator accepts: valid tuples, legacy bare
@@ -727,46 +722,22 @@ class ActionDialog(QDialog):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ── Mode toggle (C1: always created; Simple disabled when no match_fn)
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel(t("action_dialog.mode_label")))
-        self._mode_simple_btn = QRadioButton(t("action_dialog.mode_simple"))
-        self._mode_simple_btn.setObjectName("regexModeSimple")
-        self._mode_regex_btn = QRadioButton(t("action_dialog.mode_regex"))
-        self._mode_regex_btn.setObjectName("regexModeRegex")
-        mode_row.addWidget(self._mode_simple_btn)
-        mode_row.addWidget(self._mode_regex_btn)
-        # C2: Recent button lives in the mode row (always visible, not
-        # buried inside _regex_widget where it disappeared in Simple mode).
+        # ── Recent row ──────────────────────────────────────────────────────
+        # #396: the Simple/Regex mode toggle is gone — both sections are
+        # always visible below, so Recent no longer needs to sit next to
+        # mode radios. It keeps the same top-row position (above the
+        # Field combo) so muscle memory survives. C16 standard icon
+        # behaviour preserved from Wave 8.
+        recent_row = QHBoxLayout()
         self._recent_btn = QPushButton(t("action_dialog.recent_button"))
         self._recent_btn.setObjectName("regexRecentButton")
-        # C16 from #349 (Wave 8): use QStyle's standard down-arrow icon
-        # instead of the Unicode "▾" character. Unicode rendering varies
-        # by font/platform (sometimes shows the literal "Recent ▾" with a
-        # tofu glyph); the standard icon follows the system theme.
         self._recent_btn.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
         )
         self._recent_btn.clicked.connect(self._show_recent_menu)
-        mode_row.addWidget(self._recent_btn)
-        mode_row.addStretch(1)
-        left_layout.addLayout(mode_row)
-        mode_group = QButtonGroup(self)
-        mode_group.addButton(self._mode_simple_btn)
-        mode_group.addButton(self._mode_regex_btn)
-        self._mode_button_group = mode_group  # keep ref alive
-        if self._match_fn is None:
-            # C1: Simple is meaningless without a live-preview data source —
-            # disable it with a descriptive tooltip.
-            self._mode_simple_btn.setEnabled(False)
-            self._mode_simple_btn.setToolTip(
-                t("action_dialog.simple_disabled_no_match_fn")
-            )
-            self._mode_regex_btn.setChecked(True)
-        else:
-            (self._mode_simple_btn if self._mode == MODE_SIMPLE
-             else self._mode_regex_btn).setChecked(True)
-        self._mode_simple_btn.toggled.connect(self._on_mode_toggled)
+        recent_row.addWidget(self._recent_btn)
+        recent_row.addStretch(1)
+        left_layout.addLayout(recent_row)
 
         # ── Field row ──────────────────────────────────────────────────────
         row = QHBoxLayout()
@@ -780,12 +751,18 @@ class ActionDialog(QDialog):
         row.addWidget(self.combo)
         left_layout.addLayout(row)
 
-        # ── Simple-mode container ──────────────────────────────────────────
-        # A vertical stack: inputs row (prefix label + op combo + text edit)
-        # plus a complex-pattern notice that appears when the user toggles
-        # to Simple while holding a regex Simple can't reverse-parse. The
-        # notice keeps the regex line edit's value intact — only the Simple
-        # display gives up; toggling back to Regex restores everything.
+        # ── Simple section ──────────────────────────────────────────────────
+        # #396: Simple is the top section in the dual-section layout.
+        # Inputs (prefix label + op combo + text edit) write through to
+        # ``self.regex`` so the regex line edit below always carries the
+        # canonical pattern. When ``match_fn`` is None (C1), the section
+        # is rendered as an **informational placeholder**: inputs visible
+        # but disabled, with a small italic note explaining that
+        # write-through preview isn't available for the current entry
+        # point. Keeps the dual-section visual contract intact on every
+        # code path. The "complex pattern" notice + Switch-to-Regex
+        # button that lived here are gone — both sections being visible
+        # means there's nothing to "switch to".
         self._simple_widget = QWidget()
         self._simple_widget.setObjectName("regexSimpleRow")
         simple_outer = QVBoxLayout(self._simple_widget)
@@ -804,30 +781,29 @@ class ActionDialog(QDialog):
         self._simple_text.setPlaceholderText(t("action_dialog.simple_text_placeholder"))
         simple_inputs_row.addWidget(self._simple_text, stretch=1)
         simple_outer.addLayout(simple_inputs_row)
-        self._simple_complex_notice = QLabel(t("action_dialog.simple_complex_notice"))
-        self._simple_complex_notice.setObjectName("regexSimpleComplexNotice")
-        # C9 from #349 (Wave 8): hex amber stylesheet removed — broke dark
-        # mode. Bold weight conveys emphasis; the notice text itself ("switch
-        # to Regex") supplies the warning semantics. Qt has no canonical
-        # "warning" palette role, so system text color is the right neutral.
-        _notice_font = self._simple_complex_notice.font()
-        _notice_font.setBold(True)
-        self._simple_complex_notice.setFont(_notice_font)
-        self._simple_complex_notice.setWordWrap(True)
-        self._simple_complex_notice.hide()
-        simple_outer.addWidget(self._simple_complex_notice)
-        # B2+B4: "Switch to Regex" button shown alongside the complex-pattern
-        # notice. Created unconditionally at __init__ time (not on notice-show)
-        # to avoid GC issues. Hidden by default; shown/hidden with the notice.
-        # On click, triggers _mode_regex_btn (the regex line edit already holds
-        # the complex pattern — lossless switch).
-        self._switch_to_regex_btn = QPushButton(t("action_dialog.switch_to_regex"))
-        self._switch_to_regex_btn.setObjectName("regexSwitchToRegexBtn")
-        self._switch_to_regex_btn.clicked.connect(
-            lambda: self._mode_regex_btn.setChecked(True)
+        # C1 (#347, redesigned in #396): informational placeholder note.
+        # Visible only when match_fn is None — explains why the Simple
+        # inputs are disabled without losing them entirely from the
+        # layout. Italic + muted color so it reads as informational
+        # rather than an error.
+        self._simple_disabled_note = QLabel(
+            t("action_dialog.simple_disabled_no_match_fn")
         )
-        self._switch_to_regex_btn.hide()
-        simple_outer.addWidget(self._switch_to_regex_btn)
+        self._simple_disabled_note.setObjectName("regexSimpleDisabledNote")
+        _note_font = self._simple_disabled_note.font()
+        _note_font.setItalic(True)
+        self._simple_disabled_note.setFont(_note_font)
+        self._simple_disabled_note.setStyleSheet("color: #777;")
+        self._simple_disabled_note.setWordWrap(True)
+        simple_outer.addWidget(self._simple_disabled_note)
+        if self._match_fn is None:
+            # C1 informational-placeholder posture: inputs disabled,
+            # note visible. Both sections still render — the note tells
+            # the user why Simple isn't interactive here.
+            self._simple_op_combo.setEnabled(False)
+            self._simple_text.setEnabled(False)
+        else:
+            self._simple_disabled_note.hide()
         left_layout.addWidget(self._simple_widget)
 
         # ── Regex-mode container (regex line edit + validation +
@@ -1177,14 +1153,19 @@ class ActionDialog(QDialog):
         # short-circuits in that branch and the icon stays empty.
         self.regex.textChanged.connect(self._validate_regex)
         if self._match_fn is not None:
-            # Phase C: Simple-mode inputs write through to self.regex
+            # Phase C: Simple inputs write through to self.regex
             # immediately so the regex line edit is the single source of
-            # truth across modes. _writeto_regex_from_simple guards
-            # against feedback loops by blocking signals before setText.
-            # The preview timer + validator listen to self.regex only;
-            # the Simple→regex write flows naturally through that.
+            # truth. _writeto_regex_from_simple guards against feedback
+            # loops by blocking signals before setText.
             self._simple_text.textChanged.connect(self._writeto_regex_from_simple)
             self._simple_op_combo.currentIndexChanged.connect(self._writeto_regex_from_simple)
+            # #396 dual-section view: when self.regex changes from a
+            # non-Simple origin (Recent pick, field-default refresh,
+            # direct typing in regex line edit), reverse-parse to keep
+            # Simple inputs in sync. _writeto_regex_from_simple blocks
+            # textChanged around its own setText so this connection
+            # only fires on regex-side mutations.
+            self.regex.textChanged.connect(self._reverse_parse_to_simple)
 
             # Both modes share the same debounce: any user input
             # retriggers the live preview. self.regex.textChanged covers
@@ -1219,7 +1200,12 @@ class ActionDialog(QDialog):
         # (when the regex is empty the reverse-parse reads ("contains", ""),
         # so the restore is the authoritative override).
         _saved_op = self._settings_get(self._simple_op_key, None)
-        if _saved_op is not None and self._mode == MODE_SIMPLE:
+        # #396: no mode gate — Simple inputs are always rendered (whether
+        # interactive or as informational placeholder), so the persisted
+        # op restores unconditionally. Skip the write-through when
+        # match_fn is None (C1 placeholder posture) since the disabled
+        # inputs aren't driving anything.
+        if _saved_op is not None:
             _op_idx = self._simple_op_combo.findData(_saved_op)
             if _op_idx >= 0:
                 self._simple_op_combo.blockSignals(True)
@@ -1227,8 +1213,8 @@ class ActionDialog(QDialog):
                     self._simple_op_combo.setCurrentIndex(_op_idx)
                 finally:
                     self._simple_op_combo.blockSignals(False)
-                # Sync regex after op change (signals were blocked).
-                self._writeto_regex_from_simple()
+                if self._match_fn is not None:
+                    self._writeto_regex_from_simple()
             # If findData returned -1 (stale key), leave combo at index 0.
         self._update_numeric_value_placeholder()
         self._validate_regex()
@@ -1253,9 +1239,12 @@ class ActionDialog(QDialog):
                 self._num_n_spin.setFocus()
             else:
                 self._num_value_edit.setFocus()
-        elif self._mode == MODE_SIMPLE:
+        elif self._match_fn is not None:
+            # #396 (Q3): Simple-on-top → focus Simple text on dialog open.
             self._simple_text.setFocus()
         else:
+            # C1 informational-placeholder posture — Simple inputs are
+            # disabled, so focus the only interactive panel.
             self.regex.setFocus()
 
     # ── Settings helpers ───────────────────────────────────────────────────
@@ -1292,36 +1281,24 @@ class ActionDialog(QDialog):
                 "ActionDialog: settings.set({!r}) failed: {}", key, exc
             )
 
-    # ── Mode toggle ────────────────────────────────────────────────────────
-
-    def _on_mode_toggled(self, checked_simple: bool) -> None:
-        # The radio group fires twice on a switch (one off, one on); we
-        # only need to act on the True side so the apply runs once.
-        if not checked_simple and self._mode_regex_btn.isChecked():
-            self._mode = MODE_REGEX
-        elif checked_simple:
-            self._mode = MODE_SIMPLE
-        else:
-            return
-        # A8: persist under per-context key.
-        self._settings_set(self._mode_key, self._mode)
-        self._apply_mode_visibility()
-        self._validate_regex()
-        if self._match_fn is not None:
-            self._refresh_preview()
+    # ── Section visibility (#396 — dual-section, no mode toggle) ───────────
 
     def _apply_mode_visibility(self) -> None:
-        """Show/hide the mode containers and reverse-parse on entering Simple.
+        """Show/hide the Simple + Regex containers based on numeric-panel state.
 
-        Phase C invariant: ``self.regex.text()`` is the single source of
-        truth across both modes. Switching to Simple tries to populate
-        the Simple inputs from the current regex via ``_try_parse_simple``;
-        on failure we keep the regex intact and show the complex-pattern
-        notice with Simple inputs disabled.
+        #396: both Simple and Regex are always visible to each other when
+        a numeric field isn't active. The Simple inputs are interactive
+        when ``match_fn`` is supplied; otherwise they sit as an
+        informational placeholder (per the C1 redesign — see the
+        ``_simple_disabled_note`` block in __init__).
 
-        #209: when the active field is numeric AND groups were provided,
-        the numeric panel pre-empts both Simple and Regex panels.
-        ``_field_panel_is_numeric`` is the gate.
+        Numeric branch unchanged: when a numeric field is selected AND
+        groups are supplied, the numeric panel pre-empts BOTH sections
+        (#209). ``_field_panel_is_numeric`` is the gate.
+
+        Name retained for callsite stability — every prior caller still
+        wants the same "refresh section visibility now" semantics, just
+        with no mode-toggle branching inside.
         """
         if self._field_panel_is_numeric():
             self._simple_widget.setVisible(False)
@@ -1330,30 +1307,32 @@ class ActionDialog(QDialog):
             self._apply_numeric_sub_visibility()
             return
         self._numeric_widget.setVisible(False)
-        simple_visible = self._mode == MODE_SIMPLE and self._match_fn is not None
-        self._simple_widget.setVisible(simple_visible)
-        self._regex_widget.setVisible(not simple_visible)
+        self._simple_widget.setVisible(True)
+        self._regex_widget.setVisible(True)
 
-        if not simple_visible:
+    def _reverse_parse_to_simple(self) -> None:
+        """Update Simple inputs from ``self.regex`` when the pattern is
+        Simple-representable. Wired to ``self.regex.textChanged`` so
+        external mutations (Recent pick, field-default refresh, direct
+        typing in regex) keep Simple in sync without a feedback loop —
+        ``_writeto_regex_from_simple`` blocks signals around its own
+        ``setText`` so this handler only fires on non-Simple-originated
+        regex changes.
+
+        If the regex isn't Simple-representable, Simple inputs are left
+        as-is. Both sections are visible regardless; the user can see
+        the regex in the Regex section and the (possibly stale) Simple
+        inputs in the Simple section. The next user edit in Simple
+        re-syncs via the write-through.
+        """
+        if self._match_fn is None:
+            # C1 informational-placeholder posture: Simple inputs are
+            # disabled and not interactive — don't mutate them.
             return
-
         parsed = _try_parse_simple(self.regex.text())
         if parsed is None:
-            # Regex too complex to represent in Simple — keep the regex
-            # value verbatim, show the notice + Switch-to-Regex button,
-            # disable Simple inputs so the user can't accidentally clobber
-            # the regex by typing.
-            self._simple_complex_notice.show()
-            self._switch_to_regex_btn.show()
-            self._simple_op_combo.setEnabled(False)
-            self._simple_text.setEnabled(False)
             return
-
         op_key, plain_text = parsed
-        # Populate the Simple inputs with signals blocked so the
-        # populate doesn't trigger a write-through that re-stamps
-        # the regex (which would be a no-op but adds noise on the
-        # text-changed signal chain).
         op_idx = self._simple_op_combo.findData(op_key)
         if op_idx >= 0:
             self._simple_op_combo.blockSignals(True)
@@ -1366,10 +1345,6 @@ class ActionDialog(QDialog):
             self._simple_text.setText(plain_text)
         finally:
             self._simple_text.blockSignals(False)
-        self._simple_complex_notice.hide()
-        self._switch_to_regex_btn.hide()
-        self._simple_op_combo.setEnabled(True)
-        self._simple_text.setEnabled(True)
 
     # ── Numeric panel ──────────────────────────────────────────────────────
 
@@ -1496,8 +1471,15 @@ class ActionDialog(QDialog):
         the validator + preview timer that already listen on regex
         changes — we re-fire the preview timer manually so it sees the
         new value with the right field context.
+
+        #396 dropped the mode guard. With both sections always visible
+        and the Simple inputs disabled when ``match_fn`` is None, the
+        only remaining gate is the ``match_fn`` check — without a
+        preview source there's no point synthesising. Disabled inputs
+        don't emit textChanged through user interaction; this guard is
+        belt-and-braces for programmatic mutations.
         """
-        if self._mode != MODE_SIMPLE or self._match_fn is None:
+        if self._match_fn is None:
             return
         text = self._simple_text.text()
         if not text:
@@ -1583,25 +1565,14 @@ class ActionDialog(QDialog):
         menu.exec(pos)
 
     def _apply_recent_pattern(self, pattern: str) -> None:
-        # A12 from #347: set self.regex FIRST, then flip the mode. If
-        # the order were reversed, the mode flip's reverse-parse would
-        # read the *outgoing* Simple state into self.regex, briefly
-        # making the canonical pattern lie about what Apply will run.
+        # #396: no mode flip — both sections are visible. setText on
+        # self.regex fires textChanged → _reverse_parse_to_simple
+        # auto-syncs Simple inputs when the pattern is
+        # Simple-representable, leaves them alone when it isn't (the
+        # user can still see the pattern in the Regex section). The
+        # validator + preview also wire to textChanged so they refresh
+        # for free.
         self.regex.setText(pattern)
-        # A7: if the picked pattern is Simple-representable, flip to
-        # Simple mode so the user sees the pattern in the familiar UI.
-        # Otherwise land in Regex (as before).
-        if self._match_fn is not None and self._mode_simple_btn.isEnabled():
-            parsed = _try_parse_simple(pattern)
-            if parsed is not None:
-                if self._mode != MODE_SIMPLE:
-                    self._mode_simple_btn.setChecked(True)
-                else:
-                    # Already Simple — re-apply visibility to refresh the inputs.
-                    self._apply_mode_visibility()
-            else:
-                if self._mode != MODE_REGEX:
-                    self._mode_regex_btn.setChecked(True)
 
     def _clear_recent_patterns(self) -> None:
         self._recent_patterns = []
@@ -1670,32 +1641,27 @@ class ActionDialog(QDialog):
     # ── Validation (synchronous) ───────────────────────────────────────────
 
     def _validate_regex(self) -> None:
-        """Update ✓/✗ icon and friendly error label (informational only).
+        """Update ✓/✗ icon and friendly error label on the Regex section.
 
-        In Simple mode the synthesised pattern is always valid (we
-        re.escape the user's input), so the icon stays empty and we
-        hide the error label.
+        Always validates ``self.regex.text()`` — the canonical pattern.
+        Simple-driven writes go through ``_writeto_regex_from_simple``
+        which synthesises via ``re.escape`` (always-valid), so Simple
+        input never trips the ✗ branch. Direct typing in the Regex line
+        edit can produce invalid input, in which case the validator
+        surfaces the error.
 
-        Empty regex → no icon, no error (neutral state). Valid regex →
-        green ✓, error hidden. Invalid regex → red ✗ hidden + error
-        label visible with the `re.error` message. The match counter
-        falls back to an em dash while the regex is invalid.
+        Numeric branch short-circuits to neutral — the validation icon
+        for the numeric threshold lives on its own row.
 
         #397 dropped the Apply-button gating that this method used to
-        perform: empty/invalid patterns no longer disable Apply. The
-        receiver-side guards in
-        ``file_operations.set_decision_by_regex`` surface invalid
-        regex as a ``QMessageBox.warning`` and empty pattern as a
-        ``QMessageBox.information("No matches")`` so the failure mode
-        is visible at click-time rather than hidden behind a disabled
-        button. The icon + error label remain as inline informational
-        feedback while the user types.
+        perform. The receiver-side guards in
+        ``file_operations.set_decision_by_regex`` surface invalid regex
+        as ``QMessageBox.warning`` and empty pattern as
+        ``QMessageBox.information("No matches")``.
         """
-        if self._mode == MODE_SIMPLE or self._field_panel_is_numeric():
+        if self._field_panel_is_numeric():
             self._set_status_icon(self._validation_icon, None)
             self._validation_icon.setAccessibleName("")
-            # B11 (Wave 9a): clear toolTip alongside the icon so a stale
-            # "Regex valid" tooltip from a prior validation doesn't linger.
             self._validation_icon.setToolTip("")
             self._validation_error.hide()
             return
@@ -2007,7 +1973,16 @@ class ActionDialog(QDialog):
                 op=op,
                 value=self._num_value_edit.text(),
             )
-        if self._mode == MODE_SIMPLE:
+        # #396: no mode flag — use the Simple-style summary when the
+        # current regex is Simple-representable (Simple inputs are the
+        # human-readable source for that case), otherwise fall back to
+        # the raw-regex summary. The decision mirrors what the user
+        # sees in the dual-section view: if Simple inputs are
+        # populated, the summary reads "field contains 'text'"; if
+        # they're not (regex is complex), the summary shows the raw
+        # pattern.
+        parsed = _try_parse_simple(self.regex.text())
+        if parsed is not None and self._match_fn is not None:
             op_key = self._simple_op_combo.currentData() or "contains"
             op_label = t(f"action_dialog.simple_op_{op_key}")
             return t(

@@ -1,4 +1,4 @@
-"""Scenario 55 — ActionDialog C1: Simple radio disabled when no match_fn (#347).
+"""Scenario 55 — ActionDialog C1: no-match_fn informational placeholder (#347, #396).
 
 Required source: qa/sandbox/unique (10 truly-unique JPEGs, no SHA256 or
 pHash collisions → scanner produces zero dedup groups).
@@ -9,26 +9,31 @@ can't reach):
   1. Scan over unique-only sources produces a manifest with 10 rows but
      zero duplicate groups.
   2. dialog_handler.SetActionByFieldHandler resolves ``match_fn=None``
-     when ``records_provider`` returns no groups (dialog_handler.py
-     line 91 — ``if groups: match_fn = build_match_fn(groups)``).
-  3. ActionDialog's C1 branch (select_dialog.py line 758) fires:
-     - Simple radio button is disabled
-     - tooltip set to ``action_dialog.simple_disabled_no_match_fn``
-       ("Simple mode requires a live preview data source")
-     - Regex radio is force-checked as fallback
+     when ``records_provider`` returns no groups
+     (``if groups: match_fn = build_match_fn(groups)``).
+  3. ActionDialog's C1 branch fires (#396 redesign): the Simple section
+     stays visible but enters the **informational placeholder** state:
+       - ``regexSimpleOpCombo`` is disabled (UIA-observable)
+       - ``regexSimpleText`` is disabled (UIA-observable)
+       - ``regexSimpleDisabledNote`` Text is visible above with the
+         translated explanation
+     The Regex section stays fully interactive — it's the only path
+     the user has on this entry point.
 
 Layer 1 pins the constructor branch in
-``tests/test_select_dialog.py::TestC1ModeToggleAlwaysVisible``. This
+``tests/test_select_dialog.py::TestDualSectionAlwaysVisible``. This
 driver pins the UIA-observable surface: the disabled state is
-actually visible to the user, the Regex radio is the selected one,
-and the tooltip property reaches the widget. Catches a regression
-where ``setEnabled(False)`` gets dropped or the mode-toggle widgets
-get swapped for controls that ignore setEnabled.
+actually visible to the user, the note text reaches the screen, and
+the Regex line edit is still interactive. Catches a regression where
+``setEnabled(False)`` gets dropped from the Simple inputs, the note
+gets hidden, or the Simple section is accidentally fully hidden
+(which would silently lose the dual-section contract on this branch).
 
 Non-destructive: no decisions are written; no files are deleted.
-Closes #366 C1 sub-item (deferred in Wave 11 / PR #384 because s31
-always loads a manifest with groups post-scan — this scenario fills
-the no-groups gap).
+Closes #366 C1 sub-item — the no-groups gap that s31 (always loads a
+manifest with groups post-scan) can't cover. Rewritten for the #396
+dual-section view; the pre-#396 contract was "Simple radio disabled
++ Regex radio force-checked" which no longer exists.
 """
 from __future__ import annotations
 
@@ -43,9 +48,11 @@ REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
 FIXTURE_DIR = REPO / "qa" / "sandbox" / "unique"
 
-# Expected tooltip text (en). zh_TW fallback included for non-English runners.
-EXPECTED_TOOLTIP_EN = "Simple mode requires a live preview data source"
-EXPECTED_TOOLTIP_ZH = "簡易模式需要即時預覽資料來源"
+# Expected note text (en). zh_TW fallback included for non-English runners.
+# The Simple inputs sit beneath an italic muted-color QLabel; UIA exposes
+# the text via window_text() on the LabelText control.
+EXPECTED_NOTE_EN = "Write-through preview unavailable"
+EXPECTED_NOTE_ZH = "即時預覽不可用"
 
 
 def _manifest_summary() -> tuple[int, int]:
@@ -116,85 +123,122 @@ def main() -> int:
     action_dlg, _ = _uia.open_action_by_regex_dialog(win)
     time.sleep(0.4)
 
-    # ---------- C1 contract: Simple radio disabled, Regex force-checked ----------
-    print("step: probe_c1_simple_radio_disabled")
-    simple_radio = _uia._find_descendant_by_aid_suffix(
-        action_dlg, "RadioButton", ".regexModeSimple"
+    # ---------- C1 contract: Simple inputs disabled, placeholder note visible ----------
+    print("step: probe_c1_simple_inputs_disabled")
+    simple_op = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "ComboBox", ".regexSimpleOpCombo"
     )
-    regex_radio = _uia._find_descendant_by_aid_suffix(
-        action_dlg, "RadioButton", ".regexModeRegex"
+    simple_text = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "Edit", ".regexSimpleText"
     )
-    if simple_radio is None or regex_radio is None:
+    if simple_op is None or simple_text is None:
         print(
-            "probe_status: C1-radios-present FAIL — "
-            "regexModeSimple or regexModeRegex not in UIA tree"
+            "probe_status: C1-simple-inputs-present FAIL — "
+            "regexSimpleOpCombo or regexSimpleText not in UIA tree "
+            "(both sections must always render after #396, even on the "
+            "no-match_fn branch as an informational placeholder)"
         )
         _uia.close_action_dialog(action_dlg)
         return 1
 
-    # Load-bearing: Simple is disabled.
-    _simple_enabled = simple_radio.is_enabled()
-    print(f"  probe_status: C1-simple-is-enabled={_simple_enabled}")
-    if _simple_enabled:
+    # Load-bearing: Simple op-combo is disabled.
+    _op_enabled = simple_op.is_enabled()
+    print(f"  probe_status: C1-simple-op-is-enabled={_op_enabled}")
+    if _op_enabled:
         print(
-            "probe_status: C1-simple-radio-disabled FAIL — "
-            "Simple radio is enabled in no-match_fn dialog; setEnabled(False) "
-            "may have been dropped from select_dialog.py line 761"
+            "probe_status: C1-simple-op-disabled FAIL — "
+            "regexSimpleOpCombo is enabled in no-match_fn dialog; "
+            "setEnabled(False) may have been dropped from the C1 "
+            "placeholder branch of __init__"
         )
         _uia.close_action_dialog(action_dlg)
         return 1
-    print("probe_status: C1-simple-radio-disabled PASS")
+    print("probe_status: C1-simple-op-disabled PASS")
 
-    # Load-bearing: Regex is the active radio (fallback selection).
-    _regex_selected = regex_radio.is_selected()
-    print(f"  probe_status: C1-regex-is-selected={_regex_selected}")
-    if not _regex_selected:
+    # Load-bearing: Simple text-edit is disabled.
+    _text_enabled = simple_text.is_enabled()
+    print(f"  probe_status: C1-simple-text-is-enabled={_text_enabled}")
+    if _text_enabled:
         print(
-            "probe_status: C1-regex-radio-force-checked FAIL — "
-            "Regex radio is not selected; the fallback setChecked(True) at "
-            "select_dialog.py line 765 may have regressed"
+            "probe_status: C1-simple-text-disabled FAIL — "
+            "regexSimpleText is enabled in no-match_fn dialog; "
+            "setEnabled(False) may have been dropped from the C1 "
+            "placeholder branch of __init__"
         )
         _uia.close_action_dialog(action_dlg)
         return 1
-    print("probe_status: C1-regex-radio-force-checked PASS")
+    print("probe_status: C1-simple-text-disabled PASS")
 
-    # Best-effort: tooltip text reaches the widget. UIA exposes Qt's
-    # setToolTip via HelpText (LegacyIAccessible.Help). On QRadioButton
-    # this is reliably populated when the widget is disabled, unlike the
-    # hover-popup path (B11 in #374). Soft-FAIL with diagnostic if the
-    # accessor doesn't surface text — the load-bearing contract is the
-    # disabled state above, not the exact tooltip string (layer-1 pins
-    # that).
-    print("step: probe_c1_tooltip_property_set")
-    _tooltip_text = ""
-    try:
-        # pywinauto's UIAWrapper exposes the underlying IUIAutomationElement
-        # via .element_info.element. CurrentHelpText is the UIA HelpText
-        # property, which Qt populates from setToolTip().
-        _tooltip_text = (
-            simple_radio.element_info.element.CurrentHelpText or ""
-        )
-    except Exception as _exc:
-        print(f"  probe_status: C1-tooltip-read-attempt FAIL — {_exc!r}")
-    print(f"  probe_status: C1-tooltip-text={_tooltip_text!r}")
-    _tooltip_ok = (
-        EXPECTED_TOOLTIP_EN in _tooltip_text
-        or EXPECTED_TOOLTIP_ZH in _tooltip_text
+    # Load-bearing: placeholder note is visible and carries the
+    # translated text. Without the note, disabled inputs would silently
+    # confuse the user — the dual-section contract on the no-match_fn
+    # branch depends on this signal.
+    print("step: probe_c1_placeholder_note_visible")
+    note = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "Text", ".regexSimpleDisabledNote"
     )
-    if _tooltip_ok:
-        print("probe_status: C1-tooltip-property-set PASS")
-    else:
-        # Don't return 1 — the disabled state above is the load-bearing
-        # contract; tooltip text is layer-1's responsibility. Surface the
-        # gap so a future contributor can pick up tooltip-via-UIA work.
+    if note is None:
         print(
-            f"probe_status: C1-tooltip-property-set SKIP — UIA HelpText "
-            f"did not surface the expected tooltip "
-            f"({EXPECTED_TOOLTIP_EN!r} or zh equivalent). "
-            f"Layer-1 TestC1ModeToggleAlwaysVisible pins the exact string; "
-            f"this probe's load-bearing assertions (disabled + force-checked) "
-            f"both PASSed above."
+            "probe_status: C1-placeholder-note-present FAIL — "
+            "regexSimpleDisabledNote not in UIA tree (the explanatory "
+            "note above the disabled Simple inputs is missing — users "
+            "would see disabled inputs with no signal as to why)"
         )
+        _uia.close_action_dialog(action_dlg)
+        return 1
+    _note_visible = note.is_visible()
+    print(f"  probe_status: C1-note-is-visible={_note_visible}")
+    if not _note_visible:
+        print(
+            "probe_status: C1-placeholder-note-visible FAIL — "
+            "regexSimpleDisabledNote is hidden on the no-match_fn branch"
+        )
+        _uia.close_action_dialog(action_dlg)
+        return 1
+    _note_text = (note.window_text() or "").strip()
+    print(f"  probe_status: C1-note-text={_note_text!r}")
+    _note_ok = (
+        EXPECTED_NOTE_EN in _note_text
+        or EXPECTED_NOTE_ZH in _note_text
+    )
+    if not _note_ok:
+        print(
+            f"probe_status: C1-placeholder-note-text FAIL — "
+            f"expected note containing {EXPECTED_NOTE_EN!r} (or zh "
+            f"equivalent); got {_note_text!r}"
+        )
+        _uia.close_action_dialog(action_dlg)
+        return 1
+    print("probe_status: C1-placeholder-note-visible PASS")
+
+    # Load-bearing: Regex line edit IS interactive — it's the only
+    # path the user has on this branch. Verifies the dual-section
+    # contract: Simple is an informational placeholder, Regex is
+    # fully usable.
+    print("step: probe_c1_regex_line_edit_interactive")
+    regex_edit = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "Edit", ".regexLineEdit"
+    )
+    if regex_edit is None:
+        print(
+            "probe_status: C1-regex-edit-present FAIL — "
+            "regexLineEdit not in UIA tree"
+        )
+        _uia.close_action_dialog(action_dlg)
+        return 1
+    _regex_enabled = regex_edit.is_enabled()
+    print(f"  probe_status: C1-regex-edit-is-enabled={_regex_enabled}")
+    if not _regex_enabled:
+        print(
+            "probe_status: C1-regex-edit-interactive FAIL — "
+            "regexLineEdit is disabled on the no-match_fn branch; "
+            "this would leave the user with no interactive section "
+            "at all (Simple disabled per C1 placeholder, Regex "
+            "should remain the escape hatch)"
+        )
+        _uia.close_action_dialog(action_dlg)
+        return 1
+    print("probe_status: C1-regex-edit-interactive PASS")
 
     print("step: close_dialog")
     _uia.close_action_dialog(action_dlg)
