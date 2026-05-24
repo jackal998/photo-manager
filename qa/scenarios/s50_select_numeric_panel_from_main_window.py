@@ -230,9 +230,7 @@ def main() -> int:
 
     # 6. Close the dialog without applying anything.
     print("step: close_dialog_no_apply")
-    close_btn = _uia._find_dialog_button(action_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
-    close_btn.click_input()
-    time.sleep(0.3)
+    _uia.close_action_dialog(action_dlg)
 
     print("scenario: s50_select_numeric_panel_from_main_window DONE")
     return 0

@@ -192,9 +192,7 @@ def _drive_numeric_threshold(
         except Exception:
             counter_text = None
 
-    close_btn = _uia._find_dialog_button(action_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
-    close_btn.click_input()
-    time.sleep(0.3)
+    _uia.close_action_dialog(action_dlg)
     return counter_text
 
 

@@ -2591,8 +2591,8 @@ class TestWave9aPolish:
         # English mnemonic shape: "&X..." prefix.
         # Chinese mnemonic shape: "...(&X)" suffix.
         # Either is valid — we just assert "&" appears in the text.
+        # #391 dropped Close button — no Close mnemonic to assert.
         assert "&" in dlg._btn_set_action.text(), "Apply mnemonic missing"
-        assert "&" in dlg.btn_close.text(), "Close mnemonic missing"
         assert "&" in dlg._recent_btn.text(), "Recent mnemonic missing"
         assert "&" in dlg._switch_to_regex_btn.text(), \
             "Switch to Regex mnemonic missing"

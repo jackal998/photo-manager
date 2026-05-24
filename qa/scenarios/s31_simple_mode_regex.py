@@ -292,9 +292,7 @@ def main() -> int:
     # (close + status-bar invariant) sees the post-apply state. No-op
     # for non-delete actions (short timeout returns False).
     _uia.drive_delete_regex_confirm(action_dlg.process_id(), confirm=True)
-    close_btn = _uia._find_dialog_button(action_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
-    close_btn.click_input()
-    time.sleep(0.3)
+    _uia.close_action_dialog(action_dlg)
 
     print("step: invariant_status_bar")
     _, win = _uia.connect_main()
@@ -373,9 +371,7 @@ def main() -> int:
     # menu's popup + click_input, and subsequent lookups for
     # .regexModeRegex / .regexLineEdit returned None.
     try:
-        _probe_close = _uia._find_dialog_button(probe_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
-        _probe_close.click_input()
-        time.sleep(0.3)
+        _uia.close_action_dialog(probe_dlg)
     except Exception:
         pass
 
