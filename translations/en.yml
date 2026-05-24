@@ -217,14 +217,6 @@ action_dialog:
   # NOT touched — they live under settings.json, not window_state.ini.
   reset_window_size_button: "Reset &window size"
   reset_window_size_tooltip: "Reset dialog window size and pane split to defaults (Ctrl+0). Does not affect Mode, Field, or recent patterns."
-  # D4 from #350 (Wave 10): test-against playground above the preview list.
-  # Lets the user try a single string against the current regex without
-  # adding it to their actual file collection. Hidden when a numeric
-  # field is active (numeric thresholds aren't regex).
-  test_against_label: "Test against:"
-  test_against_placeholder: "type a string to test against the current regex…"
-  test_against_match_at: "match at {start}-{end}"
-  test_against_no_match: "(no match)"
   # D3 from #350 (Wave 10): human-readable pattern summary for the
   # delete-confirm dialog body. Simple mode shows op + text; Regex mode
   # shows the raw pattern; numeric mode shows the comparison expression.

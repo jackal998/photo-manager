@@ -634,66 +634,10 @@ def main() -> int:
                 "in dialog Text descendants"
             )
 
-    # ---------- Probe #379 D4: test-against playground result label ----------
-    # D4 (Wave 10): regexTestAgainstRow is visible in Regex/Simple
-    # modes and hidden when a numeric field is active. The visible
-    # verdict surfaces as TEXT on .regexTestAgainstResult ("match at
-    # {start}-{end}" for match, "(no match)" for miss) — the icon
-    # itself is a QStyle.StandardPixmap (no text). UIA exposes the
-    # accessibleName via window_text() on a QLabel, which the result
-    # label sets via setText(). Read the result label, not the icon
-    # glyph. (Wave 11 local-run caught this — original probe was
-    # checking '✓'/'✗' against an empty-text QLabel.)
-    print("step: probe_d4_test_against_visibility_and_result")
-    _test_edit = _uia._find_descendant_by_aid_suffix(
-        _dlg377, "Edit", ".regexTestAgainstEdit"
-    )
-    _test_result = _uia._find_descendant_by_aid_suffix(
-        _dlg377, "Text", ".regexTestAgainstResult"
-    )
-    print(f"  probe_status: D4-test-against-edit-present={_test_edit is not None}")
-    print(f"  probe_status: D4-test-against-result-present={_test_result is not None}")
-    if _test_edit is None or _test_result is None:
-        print(
-            "probe_status: D4-test-against-visibility FAIL — "
-            "regexTestAgainstEdit or regexTestAgainstResult missing in "
-            "Simple mode (panel should be visible)"
-        )
-    else:
-        # Switch to Regex mode so the test-against playground tests
-        # the user-typed pattern instead of the synthesised Simple one.
-        _regex_radio379 = _uia._find_descendant_by_aid_suffix(
-            _dlg377, "RadioButton", ".regexModeRegex"
-        )
-        if _regex_radio379 is not None:
-            _regex_radio379.click_input()
-            time.sleep(0.3)
-        _regex_edit379 = _uia._find_descendant_by_aid_suffix(
-            _dlg377, "Edit", ".regexLineEdit"
-        )
-        if _regex_edit379 is not None:
-            _regex_edit379.iface_value.SetValue(r"abc\d+")
-            time.sleep(0.3)
-        # Match case: "abc123" → "match at 0-6"
-        _test_edit.iface_value.SetValue("abc123")
-        time.sleep(0.3)
-        _result_match = (_test_result.window_text() or "").strip()
-        print(f"  probe_status: D4-test-result-on-match={_result_match!r}")
-        # No-match case: "xyz" → "(no match)"
-        _test_edit.iface_value.SetValue("xyz")
-        time.sleep(0.3)
-        _result_nomatch = (_test_result.window_text() or "").strip()
-        print(f"  probe_status: D4-test-result-on-nomatch={_result_nomatch!r}")
-        _match_ok = "match at" in _result_match or "相符位置" in _result_match
-        _nomatch_ok = "no match" in _result_nomatch or "無相符" in _result_nomatch
-        if _match_ok and _nomatch_ok:
-            print("probe_status: D4-test-against-result PASS")
-        else:
-            print(
-                f"probe_status: D4-test-against-result FAIL — "
-                f"match_ok={_match_ok} (got {_result_match!r}), "
-                f"nomatch_ok={_nomatch_ok} (got {_result_nomatch!r})"
-            )
+    # D4 probe removed in #395 — "Test against" playground was dropped
+    # because the live-preview pane already shows real matches against
+    # the loaded manifest. Close the B12 dialog before the next probe
+    # opens its own.
     try:
         _uia.close_action_dialog(_dlg377)
     except Exception:
