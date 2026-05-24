@@ -1,0 +1,1 @@
+Fix s31 B2 probe (mode-aware widget lookup) and s43 main-flow counter assertion (post-#378 format) — closes Wave 11 layer-3 test debt (#386, #387).
