@@ -868,6 +868,22 @@ class FileOperationsHandler:
             )
             return
 
+        # #397 empty-pattern receiver guard. Dropped the ActionDialog's
+        # Apply-button gate to let users see at-click failure modes —
+        # but ``re.search("", anything)`` is truthy and would route a
+        # destructive decision to EVERY row. Cheaper to early-reject
+        # here than to surface a downstream regret. Numeric pseudo-
+        # patterns (``__cmp__:...`` / ``__top_n__:...``) never satisfy
+        # ``not pattern`` because they always carry the prefix, so this
+        # guard catches only the actual empty-text case.
+        if not pattern:
+            QMessageBox.information(
+                self.parent,
+                t("file_op.set_action_no_match_title"),
+                t("file_op.set_action_no_match_body"),
+            )
+            return
+
         try:
             matched_paths = self._matched_paths_for_pattern(field, pattern)
         except _re.error as exc:

@@ -1615,6 +1615,16 @@ class ActionDialog(QDialog):
         pattern = pattern.strip()
         if not pattern:
             return
+        # #397: with the pre-Apply gate removed, invalid regexes can
+        # reach this method. Recent should only carry patterns the
+        # user could productively re-pick — filter out anything that
+        # won't compile. Numeric pseudo-patterns aren't recorded
+        # (the caller in _emit_set_action gates on _field_panel_is_numeric)
+        # so we only need to validate as a regex here.
+        try:
+            re.compile(pattern, re.IGNORECASE)
+        except re.error:
+            return
         field = self._current_field()
         entry: tuple[str | None, str] = (field, pattern)
         # Most-recent first, deduped by (field, pattern), capped.
@@ -1659,48 +1669,27 @@ class ActionDialog(QDialog):
 
     # ── Validation (synchronous) ───────────────────────────────────────────
 
-    def _compute_apply_enabled(self) -> bool:
-        """Whether Apply is safe to fire right now. A9 + A10 from #347.
-
-        Empty pattern + Delete decision would otherwise wipe every row
-        (``re.search("", anything)`` is truthy), and an invalid regex
-        would raise at the receiver and still enter Recent. We gate the
-        button here so both the click path AND any programmatic callers
-        of ``_emit_set_action`` see the same rule.
-
-        Numeric panel: empty/invalid threshold yields matched=0 (no
-        destructive Apply), and the Top-N spinbox is Qt-bounded to ≥1.
-        Safe-by-default — return True.
-        """
-        if self._field_panel_is_numeric():
-            return True
-        pattern = self.regex.text()
-        if not pattern:
-            return False
-        # Simple mode synthesises patterns via re.escape so they always
-        # compile; the empty-text path already returned False above.
-        if self._mode == MODE_REGEX:
-            try:
-                re.compile(pattern, re.IGNORECASE)
-            except re.error:
-                return False
-        return True
-
     def _validate_regex(self) -> None:
-        """Update ✓/✗ icon, friendly error label, AND Apply-button state.
+        """Update ✓/✗ icon and friendly error label (informational only).
 
         In Simple mode the synthesised pattern is always valid (we
         re.escape the user's input), so the icon stays empty and we
         hide the error label.
 
         Empty regex → no icon, no error (neutral state). Valid regex →
-        green ✓, error hidden. Invalid regex → red ✗, error shown with
-        the `re.error` message. The match counter falls back to an em
-        dash while the regex is invalid.
+        green ✓, error hidden. Invalid regex → red ✗ hidden + error
+        label visible with the `re.error` message. The match counter
+        falls back to an em dash while the regex is invalid.
 
-        Apply button is gated via ``_compute_apply_enabled`` on every
-        path (A9+A10 from #347) so empty/invalid patterns cannot fire
-        destructive actions.
+        #397 dropped the Apply-button gating that this method used to
+        perform: empty/invalid patterns no longer disable Apply. The
+        receiver-side guards in
+        ``file_operations.set_decision_by_regex`` surface invalid
+        regex as a ``QMessageBox.warning`` and empty pattern as a
+        ``QMessageBox.information("No matches")`` so the failure mode
+        is visible at click-time rather than hidden behind a disabled
+        button. The icon + error label remain as inline informational
+        feedback while the user types.
         """
         if self._mode == MODE_SIMPLE or self._field_panel_is_numeric():
             self._set_status_icon(self._validation_icon, None)
@@ -1709,7 +1698,6 @@ class ActionDialog(QDialog):
             # "Regex valid" tooltip from a prior validation doesn't linger.
             self._validation_icon.setToolTip("")
             self._validation_error.hide()
-            self._btn_set_action.setEnabled(self._compute_apply_enabled())
             return
 
         pattern = self.regex.text()
@@ -1718,7 +1706,6 @@ class ActionDialog(QDialog):
             self._validation_icon.setAccessibleName("")
             self._validation_icon.setToolTip("")
             self._validation_error.hide()
-            self._btn_set_action.setEnabled(False)
             return
 
         try:
@@ -1744,7 +1731,6 @@ class ActionDialog(QDialog):
                 self._match_counter.setText(
                     t("action_dialog.match_counter_invalid")
                 )
-            self._btn_set_action.setEnabled(False)
             return
 
         self._set_status_icon(self._validation_icon, "valid")
@@ -1755,7 +1741,6 @@ class ActionDialog(QDialog):
         # entirely (Wave 8 B3) so a toolTip would never surface.
         self._validation_icon.setToolTip("Regex valid")
         self._validation_error.hide()
-        self._btn_set_action.setEnabled(True)
 
     # ── Preview (debounced) ────────────────────────────────────────────────
 
@@ -1911,14 +1896,12 @@ class ActionDialog(QDialog):
         return str(data) if data is not None else self.combo.currentText()
 
     def _emit_set_action(self) -> None:
-        # A9+A10 from #347: defense-in-depth. The Apply button is also
-        # disabled via _validate_regex when the pattern is empty or
-        # invalid, but tests + programmatic callers can reach this
-        # method directly. Empty patterns would match every row
-        # (re.search("", anything) is truthy) and invalid patterns
-        # would raise at the receiver and still poison Recent.
-        if not self._compute_apply_enabled():
-            return
+        # #397 dropped the dialog-side gate. The receiver
+        # (file_operations.set_decision_by_regex) surfaces invalid
+        # regex as QMessageBox.warning and empty pattern as
+        # QMessageBox.information("No matches"), so the failure mode
+        # is visible at click-time rather than silently no-op'd by a
+        # disabled button.
         field = self._current_field()
         if self._field_panel_is_numeric():
             pattern = self._build_numeric_pattern()

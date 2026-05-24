@@ -1,0 +1,1 @@
+Remove ActionDialog pre-Apply gate; receiver surfaces empty/invalid regex via QMessageBox (#401).
