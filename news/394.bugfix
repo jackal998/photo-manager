@@ -1,0 +1,1 @@
+Fix ActionDialog Apply silently no-op'ing for non-Size numeric fields (Score, Group Count, Similarity, Creation Date, Shot Date) via the main-window menu route — original audit-triggering bug (#392).
