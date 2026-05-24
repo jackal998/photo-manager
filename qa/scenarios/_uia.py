@@ -348,7 +348,9 @@ def _focus(wrapper: UIAWrapper, timeout: float = 1.5) -> None:
 # ---------------------------------------------------------------------------
 
 
-def connect_main(timeout: float = 5) -> tuple[Application, UIAWrapper]:
+def connect_main(timeout: float = 20) -> tuple[Application, UIAWrapper]:
+    # 20s default absorbs GitHub Actions Windows-runner cold-start variance;
+    # local runs finish in <2s and aren't affected by the higher ceiling.
     app = Application(backend="uia").connect(title_re=WINDOW_TITLE_RE, timeout=timeout)
     return app, app.top_window()
 

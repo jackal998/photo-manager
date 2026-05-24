@@ -1,0 +1,1 @@
+Raise the qa-batch UIA connect default timeout from 5s to 20s so the launch-to-UIA-ready window absorbs GitHub Actions Windows-runner cold-start variance, eliminating the intermittent `ElementNotFoundError: '.*Photo Manager.*'` flake that surfaced on random shards (matches the precedent already in qa/probes/_runtime.py; local runs finish in <2s and are unaffected) (#373).
