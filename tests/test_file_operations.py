@@ -1160,6 +1160,205 @@ class TestSetDecisionByRegex:
         assert rec_skip.user_decision == ""
 
 
+# ── set_decision_by_regex numeric-field dispatch (#392) ───────────────────
+
+
+class TestSetDecisionByRegexNumericFields:
+    """Numeric-field Apply via __cmp__: / __top_n__: pseudo-patterns.
+
+    Before #392, set_decision_by_regex had no prefix dispatch — the
+    numeric pseudo-pattern was treated as plain regex and matched as a
+    literal substring against the field VALUE-as-string, which always
+    returned 0 hits. So Apply for field=Score / Group Count / Similarity
+    / Creation Date / Shot Date silently no-op'd via the main-window
+    menu route (the Execute Action route had its own _set_decision_by_regex
+    with proper dispatch, masking the gap). These tests pin the fixed
+    dispatch end-to-end against an in-memory manifest.
+
+    Size (Bytes) is included as a regression pin — it was the only
+    numeric field that worked because s43_numeric_condition exercised
+    it through the Execute route; this test pins the same contract
+    through the main-window route too.
+    """
+
+    def _setup(self, tmp_path, records):
+        """Build vm + db + handler from a list of (path, attrs) tuples
+        where attrs is a dict of PhotoRecord field overrides applied
+        with setattr after _rec construction."""
+        recs = []
+        rows = []
+        for path, attrs in records:
+            r = _rec(path)
+            for k, v in attrs.items():
+                setattr(r, k, v)
+            recs.append(r)
+            rows.append({"source_path": path})
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, rows)
+        handler, _, _ = _make_handler(vm, str(db))
+        return handler, recs, db
+
+    def test_cmp_dispatch_field_size_bytes(self, tmp_path):
+        """Regression: Size (Bytes) via __cmp__: dispatch keeps working."""
+        handler, recs, db = self._setup(tmp_path, [
+            ("/photos/big.jpg", {"file_size_bytes": 100_000}),
+            ("/photos/small.jpg", {"file_size_bytes": 1_000}),
+        ])
+
+        handler.set_decision_by_regex(
+            "Size (Bytes)", "__cmp__:>:50000", "delete"
+        )
+
+        assert recs[0].user_decision == "delete"
+        assert recs[1].user_decision == ""
+        assert _read_decision(db, "/photos/big.jpg") == "delete"
+
+    def test_cmp_dispatch_field_score(self, tmp_path):
+        """#392 primary repro: Score field via __cmp__: dispatch.
+
+        Before the fix this test failed — recs[0].user_decision stayed ''
+        because __cmp__:>:0.5 was regex-compiled and matched as literal
+        substring against str(score) which never hit.
+        """
+        handler, recs, db = self._setup(tmp_path, [
+            ("/photos/high.jpg", {"score": 0.85}),
+            ("/photos/mid.jpg", {"score": 0.50}),
+            ("/photos/low.jpg", {"score": 0.20}),
+        ])
+
+        handler.set_decision_by_regex("Score", "__cmp__:>:0.5", "delete")
+
+        assert recs[0].user_decision == "delete"
+        assert recs[1].user_decision == ""  # not > 0.5
+        assert recs[2].user_decision == ""
+
+    def test_cmp_dispatch_field_group_count(self, tmp_path):
+        """Group Count via __cmp__: dispatch — reads len(group.items)."""
+        # Two groups: one big (3 items), one small (1 item).
+        recs_big = [_rec(f"/big/{i}.jpg") for i in range(3)]
+        rec_small = _rec("/small/a.jpg")
+        vm = SimpleNamespace(groups=[
+            PhotoGroup(group_number=1, items=recs_big),
+            PhotoGroup(group_number=2, items=[rec_small]),
+        ])
+        db = _make_db(tmp_path, [
+            *[{"source_path": r.file_path} for r in recs_big],
+            {"source_path": rec_small.file_path},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_regex(
+            "Group Count", "__cmp__:>=:2", "delete"
+        )
+
+        for r in recs_big:
+            assert r.user_decision == "delete"
+        assert rec_small.user_decision == ""
+
+    def test_cmp_dispatch_field_similarity(self, tmp_path):
+        """Similarity via __cmp__: dispatch — reads hamming_distance."""
+        handler, recs, _ = self._setup(tmp_path, [
+            ("/photos/sim.jpg", {"hamming_distance": 2}),
+            ("/photos/diff.jpg", {"hamming_distance": 12}),
+        ])
+
+        handler.set_decision_by_regex(
+            "Similarity", "__cmp__:<:5", "delete"
+        )
+
+        assert recs[0].user_decision == "delete"
+        assert recs[1].user_decision == ""
+
+    def test_cmp_dispatch_field_creation_date(self, tmp_path):
+        """Creation Date via __cmp__: dispatch — threshold parsed as
+        ISO date, record values converted to POSIX timestamp."""
+        from datetime import datetime as _dt
+        handler, recs, _ = self._setup(tmp_path, [
+            ("/photos/new.jpg", {"creation_date": _dt(2025, 6, 1)}),
+            ("/photos/old.jpg", {"creation_date": _dt(2020, 1, 1)}),
+        ])
+
+        handler.set_decision_by_regex(
+            "Creation Date", "__cmp__:>:2023-01-01", "delete"
+        )
+
+        assert recs[0].user_decision == "delete"
+        assert recs[1].user_decision == ""
+
+    def test_cmp_dispatch_field_shot_date(self, tmp_path):
+        """Shot Date via __cmp__: dispatch — same timestamp-conversion
+        as Creation Date but reads a different attribute."""
+        from datetime import datetime as _dt
+        handler, recs, _ = self._setup(tmp_path, [
+            ("/photos/recent.jpg", {"shot_date": _dt(2024, 6, 1)}),
+            ("/photos/vintage.jpg", {"shot_date": _dt(2010, 1, 1)}),
+        ])
+
+        handler.set_decision_by_regex(
+            "Shot Date", "__cmp__:>:2020-01-01", "delete"
+        )
+
+        assert recs[0].user_decision == "delete"
+        assert recs[1].user_decision == ""
+
+    def test_top_n_dispatch_picks_top_per_group(self, tmp_path):
+        """__top_n__: dispatch — picks the N highest-scoring rec per
+        group. Verifies the second pseudo-pattern shape also wires
+        correctly to select_paths_top_n."""
+        recs = [
+            _rec("/g/a.jpg"), _rec("/g/b.jpg"), _rec("/g/c.jpg"),
+        ]
+        recs[0].score = 0.9
+        recs[1].score = 0.5
+        recs[2].score = 0.1
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
+        db = _make_db(tmp_path, [
+            {"source_path": r.file_path} for r in recs
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_regex(
+            "Score", "__top_n__:1:desc", "keep"
+        )
+
+        # Only the highest-scoring rec (0.9) gets "keep"; the other
+        # two stay at "".
+        assert recs[0].user_decision == "keep"
+        assert recs[1].user_decision == ""
+        assert recs[2].user_decision == ""
+
+    def test_malformed_cmp_pattern_shows_no_match_info(self, tmp_path):
+        """Malformed __cmp__: pattern raises ValueError inside the
+        dispatch — surfaced as "no match" QMessageBox.information,
+        same UX as plain regex with zero hits. Mirrors
+        execute_action_dialog's handling."""
+        handler, _, _ = self._setup(tmp_path, [
+            ("/photos/a.jpg", {"score": 0.5}),
+        ])
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.set_decision_by_regex(
+                "Score", "__cmp__:GARBAGE", "delete"
+            )
+        info.assert_called_once()
+        assert "No files matched" in info.call_args[0][2]
+
+    def test_cmp_dispatch_no_matches_shows_info(self, tmp_path):
+        """Valid pseudo-pattern that matches zero rows surfaces the
+        same "no match" info as plain regex zero-hit — pins the
+        load-bearing #392 contract (silent no-op was the original bug)."""
+        handler, recs, _ = self._setup(tmp_path, [
+            ("/photos/low.jpg", {"score": 0.1}),
+        ])
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.set_decision_by_regex(
+                "Score", "__cmp__:>:0.9", "delete"
+            )
+        info.assert_called_once()
+        assert "No files matched" in info.call_args[0][2]
+        # And critically: no decision was written.
+        assert recs[0].user_decision == ""
+
+
 # ── set_decision_by_regex with REMOVE_FROM_LIST_SENTINEL ──────────────────
 
 

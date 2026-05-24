@@ -216,6 +216,13 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # zero dedup groups end-to-end, which is the prerequisite for the
     # no-match_fn code path. Non-destructive: no decisions written.
     "s55_action_dialog_no_match_fn": ["qa/sandbox/unique"],
+    # s56 (#392) — ActionDialog Apply with field=Score writes decisions.
+    # Pins the fix for the original audit-triggering bug: before #392,
+    # set_decision_by_regex had no __cmp__: prefix dispatch, so Apply
+    # via the main-window menu route silently no-op'd for every
+    # non-Size numeric field. Reuses near-duplicates fixture (scores
+    # 0.48–0.53) — threshold > 0.5 splits cleanly.
+    "s56_action_dialog_apply_by_score": ["qa/sandbox/near-duplicates"],
 }
 
 
