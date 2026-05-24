@@ -218,6 +218,12 @@ ALL_SCENARIOS = [
     # fourth non-regex decision path, which adds a QMessageBox confirm
     # the L1 unit tests can't drive.
     "s54_execute_dialog_remove_from_list",
+    # s55 (#347 C1, closes #366 C1) — ActionDialog C1 contract: opening
+    # via the menu after scanning a no-dedup fixture (unique/) produces
+    # match_fn=None, which must disable the Simple radio and force-check
+    # Regex. Layer-1 pins the constructor branch; this driver pins the
+    # UIA-observable disabled state. Non-destructive.
+    "s55_action_dialog_no_match_fn",
 ]
 
 

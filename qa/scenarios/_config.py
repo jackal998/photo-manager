@@ -209,6 +209,13 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # click. Same fixture as s53; the row removed is non-destructive
     # at the filesystem level (manifest UPDATE, not a file delete).
     "s54_execute_dialog_remove_from_list": ["qa/sandbox/near-duplicates"],
+    # s55 (#347 C1, #366 C1) — ActionDialog opened via the menu after
+    # scanning a no-dedup fixture produces match_fn=None. Verifies the
+    # Simple radio is disabled and Regex is force-checked. Unique
+    # fixture (10 truly-unique JPEGs) is the only source that produces
+    # zero dedup groups end-to-end, which is the prerequisite for the
+    # no-match_fn code path. Non-destructive: no decisions written.
+    "s55_action_dialog_no_match_fn": ["qa/sandbox/unique"],
 }
 
 
