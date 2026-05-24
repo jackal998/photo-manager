@@ -367,45 +367,90 @@ def main() -> int:
                 print(f"probe_status: A7-recent-picks-simple FAIL — {_exc!r}")
     # ---------- end probe A7 ----------
 
+    # Close the A7 probe dialog before opening the B2 probe dialog.
+    # B2 opens its own fresh dialog (#386 fix) — reusing probe_dlg here
+    # left it in a state where the UIA tree was stale after the Recent
+    # menu's popup + click_input, and subsequent lookups for
+    # .regexModeRegex / .regexLineEdit returned None.
+    try:
+        _probe_close = _uia._find_dialog_button(probe_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
+        _probe_close.click_input()
+        time.sleep(0.3)
+    except Exception:
+        pass
+
     # ---------- Probe B2: Switch-to-Regex button appears and works ----------
     # Wave-7 (B2+B4) added _switch_to_regex_btn inside simple_outer —
     # shown alongside _simple_complex_notice when the current regex is not
     # Simple-representable. Clicking it flips to Regex losslessly.
+    #
+    # #386 fix: open a fresh dialog. The previous version reused
+    # probe_dlg from the A7 probe above, but A7's Recent-menu pick
+    # left the wrapper's UIA tree stale (a Recent-menu pick flips to
+    # Simple mode and may close + reopen internal layout widgets),
+    # so .regexModeRegex / .regexLineEdit lookups returned None.
     print("step: probe_b2_switch_to_regex_button")
-    # Type a non-Simple pattern in Regex mode, then toggle back to Simple
-    # to trigger the notice + button. Verify the button is visible, click
-    # it, and assert mode == Regex with pattern preserved.
+    _, win = _uia.connect_main()
+    probe_b2_dlg, _ = _uia.open_action_by_regex_dialog(win)
+    time.sleep(0.5)
+    # The dialog opens in whichever mode the prior probe persisted —
+    # typically Simple after the main-flow Apply. In Simple mode the
+    # regexLineEdit widget is HIDDEN, and UIA doesn't surface hidden
+    # widgets via descendants(). So we walk the radios first, click
+    # Regex (which surfaces regexLineEdit), then walk Edit descendants.
+    # (#386 root cause: original probe looked up both radio + edit
+    # before the mode switch and the edit lookup returned None.)
     probe_regex_radio = _uia._find_descendant_by_aid_suffix(
-        probe_dlg, "RadioButton", ".regexModeRegex"
+        probe_b2_dlg, "RadioButton", ".regexModeRegex"
     )
-    probe_regex_edit2 = _uia._find_descendant_by_aid_suffix(
-        probe_dlg, "Edit", ".regexLineEdit"
+    probe_simple_radio2 = _uia._find_descendant_by_aid_suffix(
+        probe_b2_dlg, "RadioButton", ".regexModeSimple"
     )
     _COMPLEX = r"\d{3}"
-    if probe_regex_radio is None or probe_regex_edit2 is None:
-        print("probe_status: B2-switch-to-regex FAIL — regex radio or line edit not found")
+    probe_regex_edit2 = None
+    if probe_regex_radio is None or probe_simple_radio2 is None:
+        print("probe_status: B2-switch-to-regex FAIL — mode-toggle radios not found")
     else:
         probe_regex_radio.click_input()
-        time.sleep(0.3)
+        time.sleep(0.4)
+        # Now Regex mode is active — regexLineEdit is in the UIA tree.
+        probe_regex_edit2 = _uia._find_descendant_by_aid_suffix(
+            probe_b2_dlg, "Edit", ".regexLineEdit"
+        )
+    if probe_regex_edit2 is None:
+        # Bail out of the B2 probe — without the line edit we can't
+        # set a non-Simple pattern. Other Wave 11 probes still need
+        # to run, so close the dialog and fall through (NOT return).
+        if probe_regex_radio is not None:
+            print(
+                "probe_status: B2-switch-to-regex FAIL — regexLineEdit "
+                "still missing after switching to Regex mode (hidden?)"
+            )
+    else:
         probe_regex_edit2.iface_value.SetValue(_COMPLEX)
         time.sleep(0.2)
-        probe_simple_radio2 = _uia._find_descendant_by_aid_suffix(
-            probe_dlg, "RadioButton", ".regexModeSimple"
-        )
-        if probe_simple_radio2 is not None:
-            probe_simple_radio2.click_input()
-            time.sleep(0.4)
+        probe_simple_radio2.click_input()
+        time.sleep(0.4)
         probe_switch_btn = _uia._find_descendant_by_aid_suffix(
-            probe_dlg, "Button", ".regexSwitchToRegexBtn"
+            probe_b2_dlg, "Button", ".regexSwitchToRegexBtn"
         )
         if probe_switch_btn is None:
             print("probe_status: B2-switch-to-regex FAIL — regexSwitchToRegexBtn not in UIA tree")
         elif probe_switch_btn.is_visible():
             probe_switch_btn.click_input()
             time.sleep(0.3)
-            probe_regex_radio2 = _uia._find_descendant_by_aid_suffix(
-                probe_dlg, "RadioButton", ".regexModeRegex"
-            )
+            # After Switch-to-Regex click, re-resolve the regex radio
+            # — the wrapper for the still-Simple-mode-snapshotted radio
+            # would read its old is_selected() state. Walk fresh.
+            probe_regex_radio2 = None
+            for _r in probe_b2_dlg.descendants(control_type="RadioButton"):
+                try:
+                    _aid = _r.element_info.automation_id or ""
+                except Exception:
+                    _aid = ""
+                if _aid.endswith(".regexModeRegex"):
+                    probe_regex_radio2 = _r
+                    break
             _regex_checked = (
                 probe_regex_radio2 is not None and probe_regex_radio2.is_selected()
             )
@@ -423,15 +468,11 @@ def main() -> int:
                 "regexSwitchToRegexBtn present but not visible after Simple-toggle "
                 "with complex pattern"
             )
-    # ---------- end probe B2 ----------
-
-    # Close the probe dialog before the final DONE print.
     try:
-        _probe_close = _uia._find_dialog_button(probe_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
-        _probe_close.click_input()
-        time.sleep(0.3)
+        _uia.close_action_dialog(probe_b2_dlg)
     except Exception:
         pass
+    # ---------- end probe B2 ----------
 
     # ════════════════════════════════════════════════════════════════════
     # Wave 11 probes — layer-3 coverage push (issues #359 #366 #374 #377 #379)
