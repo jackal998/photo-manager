@@ -1159,6 +1159,42 @@ class TestSetDecisionByRegex:
         assert rec_match.user_decision == "keep"
         assert rec_skip.user_decision == ""
 
+    def test_empty_pattern_does_not_mutate_any_row(self, tmp_path):
+        """#397 receiver-side empty-pattern guard. Dropping the dialog's
+        Apply gate let users see at-click failure modes, but
+        ``re.search("", anything)`` is truthy and would route a
+        destructive ``delete`` decision to EVERY row. The receiver
+        must early-reject empty pattern and surface ``No matches``
+        — same UX as the no-match path — without mutating user_decision.
+
+        The destructive ``delete`` decision is the load-bearing case
+        (an empty pattern with ``delete`` would tag every file for
+        deletion); this test pins that the guard catches it BEFORE
+        any row is touched.
+        """
+        rec1 = _rec("/photos/a.jpg")
+        rec2 = _rec("/photos/b.jpg")
+        vm = SimpleNamespace(groups=[
+            PhotoGroup(group_number=1, items=[rec1, rec2]),
+        ])
+        db = _make_db(tmp_path, [
+            {"source_path": "/photos/a.jpg"},
+            {"source_path": "/photos/b.jpg"},
+        ])
+        handler, _, _ = _make_handler(vm, str(db))
+
+        with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+            handler.set_decision_by_regex("File Name", "", "delete")
+
+        info.assert_called_once()
+        # Same translation as the no-match path — same UX.
+        assert "No files matched" in info.call_args[0][2]
+        # The critical assertion: no row was tagged with the
+        # destructive decision. Without the guard, both rows would
+        # carry user_decision='delete' after this call.
+        assert rec1.user_decision == ""
+        assert rec2.user_decision == ""
+
 
 # ── set_decision_by_regex numeric-field dispatch (#392) ───────────────────
 

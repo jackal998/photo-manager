@@ -107,17 +107,14 @@ def main() -> int:
     print(f"  pre_delete={sum(1 for v in pre.values() if v == 'delete')}")
     print(f"  pre_empty={sum(1 for v in pre.values() if v == '')}")
 
-    # #354 — Apply-button gating probe. Layer-1 tests in
-    # tests/test_select_dialog.py::TestApplyGate pin _validate_regex +
-    # _compute_apply_enabled (no-emit on empty / invalid), but no
-    # layer-3 driver asserts that the *button itself* honors
-    # setEnabled(False). If a future PR rewires _btn_set_action to a
-    # control that ignores setEnabled, or drops the setEnabled(False)
-    # calls in _validate_regex, layer-1 still passes while the UI
-    # silently regresses. The probe opens the dialog, exercises both
-    # gated cases, prints the live enabled state, then closes — the
-    # main flow below reopens the dialog and proceeds unchanged.
-    print("step: probe_apply_gate")
+    # #397 — Apply-button is always enabled. Empty/invalid patterns
+    # no longer gate the button; the receiver-side guards in
+    # file_operations.set_decision_by_regex surface the failure as a
+    # QMessageBox at click-time. This probe inverts the original #354
+    # assertion: it pins the new contract that the button stays
+    # enabled in both gated cases so a future PR re-introducing
+    # setEnabled(False) in _validate_regex trips a visible regression.
+    print("step: probe_apply_always_enabled")
     probe_dlg, _ = _uia.open_action_by_regex_dialog(win)
     regex_radio = _uia._find_descendant_by_aid_suffix(
         probe_dlg, "RadioButton", ".regexModeRegex"
@@ -138,11 +135,27 @@ def main() -> int:
         # Past the 150 ms live-preview debounce so _validate_regex has
         # run before we read the button state.
         time.sleep(0.3)
-    print(f"  probe_status: apply_enabled_empty={probe_apply.is_enabled()}")
+    _empty_enabled = probe_apply.is_enabled()
+    print(f"  probe_status: apply_enabled_empty={_empty_enabled}")
+    if _empty_enabled is not True:
+        print(
+            "FAIL: Apply button is disabled on empty regex — #397 "
+            "contract is that it stays enabled and the receiver "
+            "surfaces 'No matches'"
+        )
+        return 1
     if probe_regex is not None:
         probe_regex.iface_value.SetValue("(unclosed")
         time.sleep(0.3)
-    print(f"  probe_status: apply_enabled_invalid={probe_apply.is_enabled()}")
+    _invalid_enabled = probe_apply.is_enabled()
+    print(f"  probe_status: apply_enabled_invalid={_invalid_enabled}")
+    if _invalid_enabled is not True:
+        print(
+            "FAIL: Apply button is disabled on invalid regex — #397 "
+            "contract is that it stays enabled and the receiver "
+            "surfaces 'Invalid Regex'"
+        )
+        return 1
     _uia.close_action_dialog(probe_dlg)
     _, win = _uia.connect_main()
 

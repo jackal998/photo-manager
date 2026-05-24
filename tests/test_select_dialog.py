@@ -377,15 +377,49 @@ class TestRegexValidation:
         assert dlg._match_counter.text() == "—"
 
 
-class TestApplyGate:
-    """A9 + A10 from #347 — Apply must refuse to fire on empty or
-    invalid patterns. Empty + Delete decision would wipe every row
-    (``re.search("", anything)`` is truthy); invalid patterns would
-    raise at the receiver and still poison Recent because the original
-    code recorded BEFORE emitting.
+class TestApplyAlwaysEnabled:
+    """#397 — Apply button is always enabled. Empty/invalid patterns
+    no longer gate the button; the receiver-side guards in
+    ``file_operations.set_decision_by_regex`` surface the failure as
+    a QMessageBox at click-time (visible to the user) rather than
+    silently no-op'ing via a disabled button.
+
+    These tests pin the new contract: clicking Apply ALWAYS fires the
+    ``setActionRequested`` signal regardless of pattern validity; the
+    downstream handler is responsible for the safety check. The
+    receiver-side empty-pattern guard is covered separately by
+    ``tests/test_file_operations.py``.
     """
 
-    def test_apply_with_invalid_regex_does_not_emit(self, qapp):
+    def test_apply_button_enabled_with_empty_regex(self, qapp):
+        """Catches: gate re-introduced. Empty pattern must leave the
+        Apply button enabled so the user can click and see the
+        receiver-side 'No matches' QMessageBox instead of staring at
+        a greyed-out button wondering why."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._mode_regex_btn.setChecked(True)
+        dlg.regex.setText("")
+        assert dlg._btn_set_action.isEnabled() is True
+
+    def test_apply_button_enabled_with_invalid_regex(self, qapp):
+        """Catches: gate re-introduced on the invalid-regex path. The
+        validation icon + error label still surface the syntax error
+        (informational), but the button stays enabled — the receiver's
+        QMessageBox.warning is the actual error UX."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.regex.setText("(unclosed")
+        assert dlg._btn_set_action.isEnabled() is True
+
+    def test_apply_with_invalid_regex_still_emits(self, qapp):
+        """Catches: defense-in-depth check in _emit_set_action
+        re-introduced. The signal MUST fire even on invalid regex so
+        the receiver's QMessageBox.warning("Invalid Regex", ...) gets a
+        chance to surface."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         dlg = ActionDialog(fields=["File Name"])
@@ -395,23 +429,15 @@ class TestApplyGate:
         dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
         dlg._btn_set_action.click()
 
-        assert received == []
+        assert len(received) == 1
+        # Pattern is the invalid string — receiver will see it and
+        # surface QMessageBox.warning.
+        assert received[0][1] == "(unclosed"
 
-    def test_apply_with_invalid_regex_does_not_record_recent(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        settings = _FakeSettings()
-        match_fn = lambda f, p: (0, 0, [])
-        dlg = ActionDialog(
-            fields=["File Name"], match_fn=match_fn, settings=settings
-        )
-        dlg._mode_regex_btn.setChecked(True)
-        dlg.regex.setText("(unclosed")
-        dlg._btn_set_action.click()
-
-        assert settings.get("ui.action_dialog.recent_patterns", []) == []
-
-    def test_apply_with_empty_regex_mode_does_not_emit(self, qapp):
+    def test_apply_with_empty_regex_still_emits(self, qapp):
+        """Catches: gate re-introduced on the empty-regex path. The
+        signal MUST fire so the receiver's empty-pattern guard runs
+        and the user sees 'No matches' instead of silent no-op."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
@@ -423,13 +449,13 @@ class TestApplyGate:
         dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
         dlg._btn_set_action.click()
 
-        assert received == []
+        assert len(received) == 1
+        assert received[0][1] == ""
 
-    def test_apply_with_empty_simple_mode_does_not_emit(self, qapp):
-        """Simple mode synthesises the regex via re.escape, so an empty
-        Simple text produces an empty pattern — same every-row-match
-        bug as Regex mode's empty input, different code path.
-        """
+    def test_apply_with_empty_simple_mode_still_emits(self, qapp):
+        """Catches: gate re-introduced on the Simple-mode empty-text
+        path. Simple synthesises via ``re.escape("")`` → empty pattern;
+        the receiver handles it via the same empty-pattern guard."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
@@ -441,7 +467,8 @@ class TestApplyGate:
         dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
         dlg._btn_set_action.click()
 
-        assert received == []
+        assert len(received) == 1
+        assert received[0][1] == ""
 
 
 class TestMatchCounter:
