@@ -1191,6 +1191,12 @@ class ActionDialog(QDialog):
             self._preview_timer.setSingleShot(True)
             self._preview_timer.setInterval(150)
             self._preview_timer.timeout.connect(self._refresh_preview)
+            # D4 from #350 (Wave 10): test-against fires on the same
+            # debounce as the preview list. Typing in either the regex
+            # OR the test input triggers a re-evaluation of "does this
+            # pattern match this typed string".
+            self._preview_timer.timeout.connect(self._refresh_test_against)
+            self._test_against_edit.textChanged.connect(self._preview_timer.start)
             self.regex.textChanged.connect(self._preview_timer.start)
             self.combo.currentIndexChanged.connect(self._preview_timer.start)
             # #209 — numeric panel inputs feed the same debounced
@@ -1321,6 +1327,15 @@ class ActionDialog(QDialog):
         the numeric panel pre-empts both Simple and Regex panels.
         ``_field_panel_is_numeric`` is the gate.
         """
+        # D4 from #350 (Wave 10): test-against playground hidden on the
+        # numeric branch (numeric thresholds aren't regex; "test a string
+        # against the current threshold" has no meaningful semantic). The
+        # widget only exists when match_fn was supplied at __init__ time
+        # (lives inside _build_preview_pane).
+        if hasattr(self, "_test_against_widget"):
+            self._test_against_widget.setVisible(
+                not self._field_panel_is_numeric()
+            )
         if self._field_panel_is_numeric():
             self._simple_widget.setVisible(False)
             self._regex_widget.setVisible(False)
@@ -1627,6 +1642,36 @@ class ActionDialog(QDialog):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
+        # D4 from #350 (Wave 10): test-against playground. Lets the user try
+        # a single hand-typed string against the current regex without
+        # adding it to their actual file collection. Hidden when a numeric
+        # field is active (numeric thresholds aren't regex) — visibility
+        # toggled from _apply_mode_visibility. Lives at the top of the
+        # preview pane because semantically the right side is "what this
+        # regex does"; preview list = real records, test-against = a
+        # hypothetical record. Same 150ms debounce as _refresh_preview so
+        # the result updates as user types either regex OR test input.
+        self._test_against_widget = QWidget()
+        self._test_against_widget.setObjectName("regexTestAgainstRow")
+        test_row = QHBoxLayout(self._test_against_widget)
+        test_row.setContentsMargins(0, 0, 0, 0)
+        test_row.addWidget(QLabel(t("action_dialog.test_against_label")))
+        self._test_against_edit = QLineEdit()
+        self._test_against_edit.setObjectName("regexTestAgainstEdit")
+        self._test_against_edit.setPlaceholderText(
+            t("action_dialog.test_against_placeholder")
+        )
+        self._test_against_edit.setClearButtonEnabled(True)
+        test_row.addWidget(self._test_against_edit, stretch=1)
+        self._test_against_icon = QLabel("")
+        self._test_against_icon.setObjectName("regexTestAgainstIcon")
+        self._test_against_icon.setFixedWidth(16)
+        test_row.addWidget(self._test_against_icon)
+        self._test_against_result_label = QLabel("")
+        self._test_against_result_label.setObjectName("regexTestAgainstResult")
+        test_row.addWidget(self._test_against_result_label)
+        right_layout.addWidget(self._test_against_widget)
+
         right_layout.addWidget(QLabel(t("action_dialog.preview_label")))
 
         self._preview_list = QListWidget()
@@ -1811,6 +1856,55 @@ class ActionDialog(QDialog):
         else:
             self._preview_truncated.hide()
 
+    def _refresh_test_against(self) -> None:
+        """D4 from #350 (Wave 10): update the test-against icon + label.
+
+        Runs on the same 150ms debounce as ``_refresh_preview`` so the
+        result updates whether the user types in the regex OR the test
+        input. Neutral state (no icon, no label) when:
+
+          * the test input is empty (user hasn't asked anything yet)
+          * the regex is empty / invalid (the regex validator already
+            shows the error elsewhere — echoing here would be noise)
+          * the active field is numeric (test-against widget is hidden
+            in that branch by ``_apply_mode_visibility``; guard anyway)
+        """
+        if not hasattr(self, "_test_against_widget"):
+            return
+        if self._field_panel_is_numeric():
+            return
+        test_text = self._test_against_edit.text()
+        if not test_text:
+            self._set_status_icon(self._test_against_icon, None)
+            self._test_against_result_label.setText("")
+            return
+        pattern = self._build_pattern()
+        if not pattern:
+            self._set_status_icon(self._test_against_icon, None)
+            self._test_against_result_label.setText("")
+            return
+        try:
+            rx = re.compile(pattern, re.IGNORECASE)
+        except re.error:
+            # Regex validator handles the error display on its own row
+            # — echoing ✗ on test-against would be redundant noise.
+            self._set_status_icon(self._test_against_icon, None)
+            self._test_against_result_label.setText("")
+            return
+        m = rx.search(test_text)
+        if m is None:
+            self._set_status_icon(self._test_against_icon, "invalid")
+            self._test_against_result_label.setText(
+                t("action_dialog.test_against_no_match")
+            )
+        else:
+            self._set_status_icon(self._test_against_icon, "valid")
+            self._test_against_result_label.setText(
+                t("action_dialog.test_against_match_at").format(
+                    start=m.start(), end=m.end()
+                )
+            )
+
     def _refresh_numeric_preview(self) -> None:
         """Populate the preview pane + counter from the numeric panel.
 
@@ -1911,6 +2005,37 @@ class ActionDialog(QDialog):
             pattern = self._build_pattern()
         idx = self._action_combo.currentIndex()
         _label, value = self._decisions[idx]
+        # D3 from #350 (Wave 10): bulk-delete confirm gate. The "delete"
+        # action moves files to the Recycle Bin via send2trash — it is
+        # the only irreversible action in this dialog (keep / remove
+        # from list / lock / unlock are all metadata-only or recoverable
+        # via re-scan). Insert a confirmation modal before the emit so a
+        # misfired click on a large batch lands on the safe path. Scope:
+        # only "delete" + only when a live preview count exists
+        # (match_fn supplied AND _last_matched_count populated). The
+        # flat-layout branch (no preview, no count) skips the confirm —
+        # there is no count to confirm against, and the downstream
+        # receiver still emits its "Decision set to ..." status-bar
+        # message. Known limitation (existing from A9/A10): the numeric
+        # panel does not gate Apply on matched > 0, so the confirm could
+        # surface "Delete 0 files" on a numeric-delete with no matches.
+        # Document but don't fix in this wave — that's a pre-existing
+        # gap, not a D3 regression.
+        if (
+            value == "delete"
+            and self._match_fn is not None
+            and self._last_matched_count is not None
+        ):
+            from app.views.dialogs.delete_regex_confirm_dialog import (
+                DeleteRegexConfirmDialog,
+            )
+            confirmed = DeleteRegexConfirmDialog.ask(
+                parent=self,
+                matched=self._last_matched_count,
+                pattern_summary=self._build_pattern_summary(),
+            )
+            if not confirmed:
+                return  # User cancelled — no emit, no flash, no Recent.
         self.setActionRequested.emit(field, pattern, value)
         # B9 from #348 (Wave 9b-trim): flash "Applied to N rows" in the
         # match counter so the user gets in-dialog confirmation that the
@@ -1945,6 +2070,53 @@ class ActionDialog(QDialog):
         op = self._num_cmp_combo.currentData() or ">"
         value_text = self._num_value_edit.text()
         return encode_cmp_pattern(str(op), value_text)
+
+    def _build_pattern_summary(self) -> str:
+        """Human-readable description of the current pattern for D3's confirm.
+
+        D3 from #350 (Wave 10): the delete-confirm modal needs a pattern
+        description the user actually wrote — not the synthesised regex
+        the Simple panel hides. For Simple mode, surface the op + text;
+        for Regex mode, the raw pattern; for numeric, the comparison
+        expression. Uses the same translation keys both locales share.
+        """
+        field_display = _field_display(self._current_field())
+        if self._field_panel_is_numeric():
+            if self._numeric_mode == NUMERIC_MODE_TOPN:
+                n = int(self._num_n_spin.value())
+                order_key = str(self._num_order_combo.currentData() or "desc")
+                order_label = t(
+                    "action_dialog.numeric_order_top"
+                    if order_key == "desc"
+                    else "action_dialog.numeric_order_bottom"
+                )
+                return t(
+                    "action_dialog.pattern_summary_numeric_topn",
+                    order=order_label,
+                    n=n,
+                    field=field_display,
+                )
+            op = str(self._num_cmp_combo.currentData() or ">")
+            return t(
+                "action_dialog.pattern_summary_numeric_threshold",
+                field=field_display,
+                op=op,
+                value=self._num_value_edit.text(),
+            )
+        if self._mode == MODE_SIMPLE:
+            op_key = self._simple_op_combo.currentData() or "contains"
+            op_label = t(f"action_dialog.simple_op_{op_key}")
+            return t(
+                "action_dialog.pattern_summary_simple",
+                field=field_display,
+                op=op_label,
+                text=self._simple_text.text(),
+            )
+        return t(
+            "action_dialog.pattern_summary_regex",
+            field=field_display,
+            pattern=self.regex.text(),
+        )
 
     def _set_default_field(self, field_name: str) -> None:
         try:

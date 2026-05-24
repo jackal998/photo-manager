@@ -173,6 +173,12 @@ def _drive_numeric_threshold(
     apply_btn = _uia._find_dialog_button(action_dlg, _uia.ACTION_DIALOG_BTN_APPLY)
     apply_btn.click_input()
     time.sleep(0.5)
+    # D3 from #350 (Wave 10): numeric panel + delete action triggers
+    # the new DeleteRegexConfirmDialog (B9's _last_matched_count is
+    # populated by _refresh_numeric_preview too). Auto-dismiss with
+    # Confirm so the rest of this scenario (counter read + close)
+    # sees the post-apply state. No-op for non-delete numeric actions.
+    _uia.drive_delete_regex_confirm(action_dlg.process_id(), confirm=True)
 
     # Read the live counter AFTER Apply (same reason as regex flow —
     # Apply doesn't dismiss).

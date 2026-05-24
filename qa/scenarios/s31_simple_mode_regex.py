@@ -286,6 +286,12 @@ def main() -> int:
     apply_btn = _uia._find_dialog_button(action_dlg, _uia.ACTION_DIALOG_BTN_APPLY)
     apply_btn.click_input()
     time.sleep(0.3)
+    # D3 from #350 (Wave 10): if ACTION_LABEL is "delete", the new
+    # DeleteRegexConfirmDialog appears between Apply and the post-emit
+    # state. Auto-dismiss with Confirm so the rest of this scenario
+    # (close + status-bar invariant) sees the post-apply state. No-op
+    # for non-delete actions (short timeout returns False).
+    _uia.drive_delete_regex_confirm(action_dlg.process_id(), confirm=True)
     close_btn = _uia._find_dialog_button(action_dlg, _uia.ACTION_DIALOG_BTN_CLOSE)
     close_btn.click_input()
     time.sleep(0.3)

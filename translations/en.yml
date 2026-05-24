@@ -184,6 +184,15 @@ locked_confirm:
   btn_unlocked_only: "Apply to Unlocked Only"
   btn_cancel: "Cancel"
 
+# DeleteRegexConfirmDialog — D3 from #350 (Wave 10). Confirm gate
+# inserted before regex-driven bulk delete only; other actions emit
+# immediately. Cancel is the default focus + Esc target.
+delete_regex_confirm:
+  title: "Confirm bulk delete"
+  body: "This will move {matched} files to the Recycle Bin via {pattern_summary}.\n\nThis action sends the files to the Recycle Bin and cannot be easily undone."
+  confirm_button: "Delete {matched} files"
+  cancel: "Cancel"
+
 # ActionDialog (Set Action by Field).
 action_dialog:
   title: "Set Action by Field"
@@ -205,6 +214,21 @@ action_dialog:
   # NOT touched — they live under settings.json, not window_state.ini.
   reset_window_size_button: "Reset &window size"
   reset_window_size_tooltip: "Reset dialog window size and pane split to defaults (Ctrl+0). Does not affect Mode, Field, or recent patterns."
+  # D4 from #350 (Wave 10): test-against playground above the preview list.
+  # Lets the user try a single string against the current regex without
+  # adding it to their actual file collection. Hidden when a numeric
+  # field is active (numeric thresholds aren't regex).
+  test_against_label: "Test against:"
+  test_against_placeholder: "type a string to test against the current regex…"
+  test_against_match_at: "match at {start}-{end}"
+  test_against_no_match: "(no match)"
+  # D3 from #350 (Wave 10): human-readable pattern summary for the
+  # delete-confirm dialog body. Simple mode shows op + text; Regex mode
+  # shows the raw pattern; numeric mode shows the comparison expression.
+  pattern_summary_simple: "{field} {op} '{text}'"
+  pattern_summary_regex: "{field} regex '{pattern}'"
+  pattern_summary_numeric_threshold: "{field} {op} {value}"
+  pattern_summary_numeric_topn: "{order} {n} per group by {field}"
   preview_label: "Preview"
   match_counter: "{matched} of {total} match"
   # B6 from #348 (Wave 5): Top-N mode counter — "{matched} matched"

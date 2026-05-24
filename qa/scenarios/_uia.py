@@ -131,6 +131,22 @@ LOCK_CONFIRM_APPLY_ALL_UNLOCKED = LOCK_CONFIRM_BTN_UNLOCK_APPLY
 LOCK_CONFIRM_APPLY_UNLOCKED_ONLY = LOCK_CONFIRM_BTN_UNLOCKED_ONLY
 LOCK_CONFIRM_CANCEL = LOCK_CONFIRM_BTN_CANCEL
 
+# DeleteRegexConfirmDialog (D3 from #350, Wave 10) — surfaced whenever
+# ActionDialog's Apply fires with action="delete" and a live preview
+# count is available. en.yml `delete_regex_confirm.*` keys; helpers
+# below dismiss it (default: confirm) so scenarios that exercise the
+# regex+delete flow don't get blocked. Scenarios that want to test
+# the cancel path explicitly call ``drive_delete_regex_confirm(pid,
+# confirm=False)``.
+DELETE_CONFIRM_TITLE = "Confirm bulk delete"
+DELETE_CONFIRM_BTN_CANCEL = "Cancel"
+# Confirm button label is "Delete {matched} files" — variable N forces
+# a prefix match in the lookup helper rather than an exact string.
+# Private (leading underscore) so it's filtered out by the test_uia_
+# label_coupling probe: "Delete " on its own is not a user-facing label
+# that should be drift-checked against app source.
+_DELETE_CONFIRM_BTN_CONFIRM_PREFIX = "Delete "
+
 
 # ---------------------------------------------------------------------------
 # Win32 plumbing — needed because Qt menu popups are top-level windows but
@@ -1630,6 +1646,50 @@ def drive_lock_confirm(
     return True
 
 
+def drive_delete_regex_confirm(
+    pid: int, confirm: bool = True, timeout: float = 1.5
+) -> bool:
+    """Wait for the DeleteRegexConfirmDialog (D3 from #350, Wave 10) and
+    click Confirm (default) or Cancel.
+
+    Returns True if the dialog was found and dismissed, False if no
+    dialog appeared within ``timeout`` — short timeout (1.5s) because
+    most callers call this unconditionally after Apply and the dialog
+    only appears on the delete action path. A missing dialog is the
+    common case (non-delete action), not an error.
+
+    The confirm button label is "Delete {matched} files" with a
+    variable count, so we walk dialog descendants and match on the
+    "Delete " prefix rather than a literal title. Cancel button uses
+    the exact label.
+    """
+    try:
+        hwnd = wait_for_dialog(pid, DELETE_CONFIRM_TITLE, timeout=timeout)
+    except TimeoutError:
+        return False
+    dlg = connect_by_handle(hwnd)
+    if confirm:
+        # Find the "Delete N files" button by walking descendants and
+        # matching the prefix — variable count rules out literal label.
+        target = None
+        for btn in dlg.descendants(control_type="Button"):
+            text = (btn.window_text() or "").strip()
+            if text.startswith(_DELETE_CONFIRM_BTN_CONFIRM_PREFIX):
+                target = btn
+                break
+        if target is None:
+            raise RuntimeError(
+                f"DeleteRegexConfirmDialog: confirm button (prefix "
+                f"{_DELETE_CONFIRM_BTN_CONFIRM_PREFIX!r}) not found"
+            )
+        target.click_input()
+    else:
+        btn = _find_dialog_button(dlg, DELETE_CONFIRM_BTN_CANCEL)
+        btn.click_input()
+    time.sleep(0.3)
+    return True
+
+
 def _drive_action_dialog_form(
     action_dlg: UIAWrapper,
     field: str,
@@ -1753,6 +1813,18 @@ def _drive_action_dialog_form(
     apply_btn = _find_dialog_button(action_dlg, ACTION_DIALOG_BTN_APPLY)
     apply_btn.click_input()
     time.sleep(0.3)
+
+    # Delete-confirm interstitial — D3 from #350 (Wave 10). The Apply
+    # handler opens DeleteRegexConfirmDialog modally when the chosen
+    # action is "delete" and a live-preview count is available; auto-
+    # dismiss with Confirm so existing scenarios that exercise the
+    # regex+delete flow stay green. The short timeout (1.5s) means
+    # this is effectively a no-op for non-delete actions where the
+    # modal never appears. Scenarios that want to test the cancel path
+    # explicitly call drive_delete_regex_confirm(pid, confirm=False)
+    # BEFORE this helper runs (rare — that case is fully covered by
+    # tests/test_select_dialog.py::TestD3DeleteConfirm).
+    drive_delete_regex_confirm(action_dlg.process_id(), confirm=True)
 
     # Lock-confirm interstitial — photo-manager#182. The Apply handler
     # opens LockedRowsConfirmDialog modally when any matched row is
