@@ -224,6 +224,12 @@ ALL_SCENARIOS = [
     # Regex. Layer-1 pins the constructor branch; this driver pins the
     # UIA-observable disabled state. Non-destructive.
     "s55_action_dialog_no_match_fn",
+    # s56 (#392) — ActionDialog Apply with field=Score writes decisions
+    # via __cmp__: dispatch in file_operations.set_decision_by_regex.
+    # Pins the fix for the original audit-triggering bug — before the
+    # fix the dispatch was missing entirely and Apply silently no-op'd
+    # for every non-Size numeric field via the main-window route.
+    "s56_action_dialog_apply_by_score",
 ]
 
 

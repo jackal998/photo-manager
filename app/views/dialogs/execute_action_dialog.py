@@ -592,11 +592,20 @@ class ExecuteActionDialog(QDialog):
 
     def _show_select_dialog(self) -> None:
         from app.views.dialogs.select_dialog import ActionDialog
+        from app.views.handlers.dialog_handler_helpers import (
+            default_action_dialog_fields,
+        )
         from app.views.handlers.file_operations import build_match_fn
 
-        # Internal English keys; ActionDialog displays localized labels but
+        # Canonical field list — same source the main-window route uses
+        # (dialog_handler.py:86). #392: the hard-coded list previously
+        # omitted Score / Group Count / Similarity / Resolution, leaving
+        # them silently unreachable from the Execute route. The downstream
+        # _set_decision_by_regex already dispatched the __cmp__: /
+        # __top_n__: pseudo-patterns correctly, so the only barrier was
+        # this field list. ActionDialog displays localized labels but
         # emits the English name back via setActionRequested.
-        fields = ["Action", "Lock", "File Name", "Folder", "Size (Bytes)", "Creation Date", "Shot Date"]
+        fields = list(default_action_dialog_fields())
         # Build the live-preview match_fn from this dialog's groups —
         # which alias the main window's vm.groups (see _remove_from_list_paths
         # docstring), so both surfaces preview against the same data.

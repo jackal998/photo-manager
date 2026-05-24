@@ -830,11 +830,22 @@ class FileOperationsHandler:
             )
 
     def set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
-        """Find all file rows where field matches regex and route by action.
+        """Find all file rows where field matches pattern and route by action.
 
         Args:
-            field: Field name (e.g. "File Name", "Folder", "Action").
-            pattern: Regex pattern (case-insensitive).
+            field: Field name (e.g. "File Name", "Folder", "Score").
+            pattern: Regex pattern (case-insensitive) OR a numeric
+                pseudo-pattern emitted by the Set Action dialog's
+                numeric panel — ``__cmp__:OP:VALUE`` (#209 threshold
+                comparison) or ``__top_n__:N:asc|desc`` (#209 top/bottom
+                N per group). Pseudo-patterns are dispatched to
+                :func:`select_paths_by_threshold` /
+                :func:`select_paths_top_n` so the numeric Apply path
+                works for every field the dialog dropdown exposes
+                (Score / Group Count / Similarity / Size / Creation
+                Date / Shot Date). Before #392 only the text regex
+                branch existed here, so numeric Apply via the
+                main-window route silently no-op'd.
             new_decision: ``"delete"`` / ``""`` set the corresponding
                 user_decision; :data:`REMOVE_FROM_LIST_SENTINEL`
                 attaches the deferred remove decision; the
@@ -858,17 +869,25 @@ class FileOperationsHandler:
             return
 
         try:
-            rx = _re.compile(pattern, _re.IGNORECASE)
+            matched_paths = self._matched_paths_for_pattern(field, pattern)
         except _re.error as exc:
             QMessageBox.warning(self.parent, t("file_op.invalid_regex_title"), str(exc))
             return
+        except ValueError:
+            # Malformed numeric pseudo-pattern — surface as "no match"
+            # rather than a hard error. Dialog validation prevents most
+            # invalid input; a stray malformed pattern shouldn't crash
+            # the apply flow. Mirrors execute_action_dialog's UX.
+            QMessageBox.information(
+                self.parent,
+                t("file_op.set_action_no_match_title"),
+                t("file_op.set_action_no_match_body"),
+            )
+            return
 
-        matching: list[dict] = []
-        for group in self.vm.groups:
-            for rec in group.items:
-                value = _get_record_field(rec, field)
-                if value is not None and rx.search(value):
-                    matching.append({"type": "file", "path": rec.file_path})
+        matching: list[dict] = [
+            {"type": "file", "path": p} for p in matched_paths
+        ]
 
         if not matching:
             QMessageBox.information(
@@ -882,6 +901,62 @@ class FileOperationsHandler:
         # shared entry point so the dialog flow is identical to
         # single-row right-click and bulk multi-select.
         self.set_decision_with_lock_check(matching, new_decision)
+
+    def _matched_paths_for_pattern(
+        self, field: str, pattern: str
+    ) -> list[str]:
+        """Resolve ``pattern`` against ``self.vm.groups`` and return
+        matched file_paths, preserving tree order (group-then-record).
+
+        Handles three pattern shapes (mirrors
+        :meth:`ExecuteActionDialog._matched_paths_for_pattern` so both
+        ActionDialog open-routes — main-window and Execute — share
+        identical match semantics):
+
+          * ``__cmp__:OP:VALUE`` — threshold comparison (#209)
+          * ``__top_n__:N:asc|desc`` — top/bottom N within group (#209)
+          * anything else — case-insensitive regex against the field
+            value from :func:`_get_record_field`.
+
+        Raises :class:`re.error` on an invalid regex; raises
+        :class:`ValueError` on a malformed numeric pattern. Caller
+        catches and surfaces a localized message.
+        """
+        import re as _re
+        # Lazy imports: select_dialog is a view module; importing it
+        # at module top would pull Qt widgets into the handler import
+        # graph. Same pattern as ExecuteActionDialog uses.
+        from app.views.dialogs.select_dialog import (
+            PATTERN_CMP_PREFIX,
+            PATTERN_TOP_N_PREFIX,
+            decode_cmp_pattern,
+            decode_top_n_pattern,
+            select_paths_by_threshold,
+            select_paths_top_n,
+        )
+
+        if pattern.startswith(PATTERN_CMP_PREFIX):
+            decoded = decode_cmp_pattern(pattern)
+            if decoded is None:
+                raise ValueError(pattern)
+            op, value_text = decoded
+            return select_paths_by_threshold(
+                self.vm.groups, field, op, value_text
+            )
+        if pattern.startswith(PATTERN_TOP_N_PREFIX):
+            decoded = decode_top_n_pattern(pattern)
+            if decoded is None:
+                raise ValueError(pattern)
+            n, order = decoded
+            return select_paths_top_n(self.vm.groups, field, n, order)
+        rx = _re.compile(pattern, _re.IGNORECASE)
+        out: list[str] = []
+        for group in self.vm.groups:
+            for rec in group.items:
+                value = _get_record_field(rec, field)
+                if value is not None and rx.search(value):
+                    out.append(rec.file_path)
+        return out
 
     def execute_action(self) -> None:
         """Open the Execute Action review dialog and run planned operations."""
