@@ -15,14 +15,15 @@ are version-controlled, deterministic, and print structured `step:` /
 `.venv/Scripts/python.exe -m qa.scenarios.<module>` while the app is
 running.
 
-The canonical list of scenarios is
+For the canonical, always-current list of scenarios see
 [`qa.scenarios._batch.ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)
-— that's the source of truth used by the batch runner and CI shards.
-For an ad-hoc directory view use `Glob("qa/scenarios/s*.py")`. Slot
-numbers go `sNN_<short_slug>.py`; slots are append-only (gaps from
-retired scenarios stay gaps so re-numbering doesn't churn git history
-and external issue references). Each driver's module docstring
-states which user-facing flow or issue it exercises.
+or `Glob("qa/scenarios/s*.py")`. The directory is the source of
+truth — this doc no longer enumerates scenarios inline, because
+the table drifted twice and the maintenance cost outweighed the
+value (#323). Slot numbers go `sNN_<short_slug>.py`; slots are
+append-only (gaps from retired scenarios stay gaps so re-numbering
+doesn't churn git history and external issue references). Each
+driver's module docstring describes what it covers.
 
 Several drivers also call cross-scenario invariant probes from
 `qa/scenarios/_invariants.py` — they assert that the status bar matches
@@ -43,9 +44,9 @@ This is allowlisted in `.claude/settings.json` so it doesn't prompt.
 The mapping from scenario name to source folders lives in
 `qa/scenarios/_config.py`.
 
-When you build a NEW scenario driver, register it in `ALL_SCENARIOS`
-in `qa/scenarios/_batch.py` (the canonical list used by the batch
-runner and CI) AND in `SCENARIO_SOURCES` in `qa/scenarios/_config.py`
+When you build a NEW scenario driver, add it to `ALL_SCENARIOS` in
+`qa/scenarios/_batch.py` (the canonical list used by the batch
+runner and CI) AND to `SCENARIO_SOURCES` in `qa/scenarios/_config.py`
 (folder mapping). Keep drivers short — they should encode the
 canonical happy path, nothing more. Open-ended exploration is the
 LLM's job, on top of the driver's output.
