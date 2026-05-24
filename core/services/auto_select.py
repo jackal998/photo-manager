@@ -31,6 +31,62 @@ from collections import defaultdict
 from typing import Iterable
 
 
+def apply_auto_select_decisions(
+    manifest_path: str,
+    keepers: set[str],
+    non_keepers_for_delete: set[str] | None = None,
+) -> None:
+    """Write ``user_decision='keep'`` + ``is_locked=1`` on every keeper,
+    and optionally ``user_decision='delete'`` on every non-keeper in
+    ``non_keepers_for_delete`` (the aggressive #393 path).
+
+    Composes ``ManifestRepository.batch_update_decisions`` and
+    ``batch_update_lock_state`` so the post-scan auto-select state is
+    durable on disk and visible in the tree via the lock badge. Both
+    sets refer to ``source_path`` strings; non-keeper rows that aren't
+    in a scored group (Live Photo MOV passengers, isolated files) are
+    NOT included by callers — the caller filters before passing in.
+
+    Args:
+        manifest_path: Absolute path to the SQLite manifest just
+            written by ``write_manifest``.
+        keepers: Paths of the per-group top-scored rows from
+            :func:`top_score_path_per_group`. Each receives
+            ``user_decision='keep'`` AND ``is_locked=1``.
+        non_keepers_for_delete: Paths to receive
+            ``user_decision='delete'``. ``None`` (the default) leaves
+            non-keepers' decision untouched — that's the non-aggressive
+            behaviour. Pass an empty set or ``None`` interchangeably;
+            both skip the delete writes.
+
+    Returns:
+        None. Writes are persisted by the time this returns. Caller's
+        own ``progress`` / log emission is its responsibility.
+    """
+    from infrastructure.manifest_repository import ManifestRepository
+
+    if not keepers:
+        # No keepers → no writes. Empty input is a benign no-op so the
+        # caller can invoke unconditionally without an outer guard.
+        return
+
+    decisions: dict[str, str] = {p: "keep" for p in keepers}
+    if non_keepers_for_delete:
+        decisions.update({p: "delete" for p in non_keepers_for_delete})
+
+    repo = ManifestRepository()
+    # Lazy-migrate the schema before writing — ``write_manifest`` uses
+    # the original DDL, so post-scan / pre-first-load runs hit a
+    # manifest without ``is_locked``. ``ensure_schema`` is idempotent
+    # so the cost on already-migrated DBs is a couple of failed
+    # ALTERs (caught and ignored).
+    repo.ensure_schema(manifest_path)
+    repo.batch_update_decisions(manifest_path, decisions)
+    repo.batch_update_lock_state(
+        manifest_path, {p: True for p in keepers}
+    )
+
+
 def top_score_path_per_group(rows: Iterable) -> set[str]:
     """Return source_paths of the top-scoring row in each duplicate group.
 

@@ -230,6 +230,11 @@ ALL_SCENARIOS = [
     # fix the dispatch was missing entirely and Apply silently no-op'd
     # for every non-Size numeric field via the main-window route.
     "s56_action_dialog_apply_by_score",
+    # s57 (#393) — auto-select aggressive mode. Same near-duplicates
+    # fixture as s49; aggressive flag tags the 4 non-keepers in the
+    # scored group user_decision='delete'. Non-destructive (manifest
+    # writes only).
+    "s57_scan_auto_select_aggressive",
 ]
 
 

@@ -223,6 +223,11 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # non-Size numeric field. Reuses near-duplicates fixture (scores
     # 0.48–0.53) — threshold > 0.5 splits cleanly.
     "s56_action_dialog_apply_by_score": ["qa/sandbox/near-duplicates"],
+    # s57 (#393) — auto-select aggressive mode. Same fixture as s49 —
+    # 5 q-quality near-duplicates in one group; aggressive flag tags
+    # the four non-keepers user_decision='delete'. Non-destructive
+    # (writes manifest decisions only — no file moves).
+    "s57_scan_auto_select_aggressive": ["qa/sandbox/near-duplicates"],
 }
 
 
