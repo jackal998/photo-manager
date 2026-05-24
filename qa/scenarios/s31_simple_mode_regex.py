@@ -132,60 +132,62 @@ def main() -> int:
     _uia._focus(action_dlg)
     time.sleep(0.3)
 
-    print("step: assert_simple_mode_is_default")
-    simple_radio = _uia._find_descendant_by_aid_suffix(
-        action_dlg, "RadioButton", ".regexModeSimple"
+    print("step: assert_both_sections_visible")
+    # #396: dual-section view. The Simple/Regex mode radios are gone;
+    # both sections render side-by-side. Verify all three input widgets
+    # are present and interactive (the dialog was opened with groups so
+    # match_fn is supplied — Simple is fully enabled, not in C1
+    # placeholder posture).
+    op_combo_probe = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "ComboBox", ".regexSimpleOpCombo"
     )
-    regex_radio = _uia._find_descendant_by_aid_suffix(
-        action_dlg, "RadioButton", ".regexModeRegex"
+    simple_text_probe = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "Edit", ".regexSimpleText"
     )
-    if simple_radio is None or regex_radio is None:
-        print("FAIL: mode-toggle radios not found")
+    regex_edit_probe = _uia._find_descendant_by_aid_suffix(
+        action_dlg, "Edit", ".regexLineEdit"
+    )
+    if op_combo_probe is None or simple_text_probe is None or regex_edit_probe is None:
+        print(
+            f"FAIL: dual-section widgets missing — op_combo={op_combo_probe is not None}, "
+            f"simple_text={simple_text_probe is not None}, "
+            f"regex_edit={regex_edit_probe is not None}"
+        )
         return 1
-    try:
-        is_simple_default = simple_radio.is_selected()
-    except Exception:
-        is_simple_default = False
-    print(f"  simple_is_default={is_simple_default}")
-    if not is_simple_default:
-        print("FAIL: Simple mode is not the default")
+    if not (op_combo_probe.is_enabled() and simple_text_probe.is_enabled() and regex_edit_probe.is_enabled()):
+        print(
+            f"FAIL: dual-section widgets not interactive (match_fn supplied) — "
+            f"op_enabled={op_combo_probe.is_enabled()} "
+            f"simple_text_enabled={simple_text_probe.is_enabled()} "
+            f"regex_edit_enabled={regex_edit_probe.is_enabled()}"
+        )
         return 1
+    print("  both_sections_visible_and_enabled=True")
 
-    # #397 — Apply-button is always enabled (Simple-mode variant).
-    # The pre-Apply gate was dropped in favour of receiver-side
-    # QMessageBox surfacing. This probe inverts the original #354
-    # assertion: it pins the new contract that the button stays
-    # enabled even on empty Simple text and on an invalid Regex-mode
-    # line edit. A future PR re-introducing setEnabled(False) in
-    # _validate_regex would trip this check.
+    # #397 — Apply-button is always enabled. Empty/invalid patterns
+    # no longer gate the button; the receiver-side guards in
+    # file_operations.set_decision_by_regex surface the failure as a
+    # QMessageBox at click-time. After #396 there's no mode toggle —
+    # type directly into the Regex line edit to exercise the invalid
+    # case (Simple synthesises via re.escape so it can't produce
+    # invalid input).
     print("step: probe_apply_always_enabled")
     probe_apply = _uia._find_dialog_button(
         action_dlg, _uia.ACTION_DIALOG_BTN_APPLY
     )
-    # Empty-text case — Simple text is empty by default on dialog open.
-    # The 150 ms live-preview debounce has already elapsed by the time
-    # we get here (the assert_simple_mode_is_default block above takes
-    # well over 150 ms).
+    # Empty-text case — both sections are empty on dialog open.
     _empty_enabled = probe_apply.is_enabled()
     print(f"  probe_status: apply_enabled_empty={_empty_enabled}")
     if _empty_enabled is not True:
         print(
-            "FAIL: Apply button is disabled on empty Simple text — "
+            "FAIL: Apply button is disabled on empty input — "
             "#397 contract is that it stays enabled and the receiver "
             "surfaces 'No matches'"
         )
         return 1
-    # Invalid-pattern case — toggle into Regex mode to set an
-    # unparseable pattern via the line edit, then restore Simple state
-    # so the existing happy-path flow runs unchanged.
-    regex_radio.click_input()
+    # Invalid-pattern case — type directly into the regex line edit.
+    regex_edit_probe.iface_value.SetValue("(unclosed")
     time.sleep(0.3)
-    probe_regex_edit = _uia._find_descendant_by_aid_suffix(
-        action_dlg, "Edit", ".regexLineEdit"
-    )
-    if probe_regex_edit is not None:
-        probe_regex_edit.iface_value.SetValue("(unclosed")
-        time.sleep(0.3)
     _invalid_enabled = probe_apply.is_enabled()
     print(f"  probe_status: apply_enabled_invalid={_invalid_enabled}")
     if _invalid_enabled is not True:
@@ -195,13 +197,9 @@ def main() -> int:
             "surfaces 'Invalid Regex'"
         )
         return 1
-    # Clear the line edit before toggling back so Simple's reverse-parse
-    # doesn't see the malformed "(unclosed" pattern.
-    if probe_regex_edit is not None:
-        probe_regex_edit.iface_value.SetValue("")
-        time.sleep(0.2)
-    simple_radio.click_input()
-    time.sleep(0.3)
+    # Clear the line edit before continuing the happy-path flow.
+    regex_edit_probe.iface_value.SetValue("")
+    time.sleep(0.2)
 
     print("step: select_field")
     field_combo = _uia._find_descendant_by_aid_suffix(
@@ -245,45 +243,55 @@ def main() -> int:
         print(f"FAIL: counter {counter_text!r} did not contain expected '1'")
         return 1
 
-    # ── Phase C invariant: regex syncs across modes ─────────────────────
-    print("step: toggle_to_regex_and_assert_synthesised_pattern")
-    regex_radio.click_input()
-    time.sleep(0.3)
+    # ── Phase C invariant: self.regex is the single source of truth ─────
+    # #396 dual-section view: both sections are always visible. The
+    # write-through (Simple → Regex) fires on every Simple input change
+    # without a mode toggle. Verify the regex line edit holds the
+    # synthesised pattern from the Simple text typed above.
+    print("step: assert_simple_writethrough_to_regex_line_edit")
     regex_edit = _uia._find_descendant_by_aid_suffix(
         action_dlg, "Edit", ".regexLineEdit"
     )
     if regex_edit is None:
-        print("FAIL: regexLineEdit not found after toggle to Regex")
+        print("FAIL: regexLineEdit not found")
         return 1
     regex_value = regex_edit.window_text() if regex_edit else ""
     print(f"  regex_line_edit_value={regex_value!r}")
     if regex_value != EXPECTED_SYNTHESISED_REGEX:
         print(
             f"FAIL: regex line edit shows {regex_value!r}, expected "
-            f"{EXPECTED_SYNTHESISED_REGEX!r} (Phase C write-through invariant)"
+            f"{EXPECTED_SYNTHESISED_REGEX!r} (#396 write-through invariant)"
         )
         return 1
 
-    print("step: toggle_back_to_simple_and_assert_reverse_parse")
-    simple_radio.click_input()
-    time.sleep(0.3)
+    # Verify the reverse-parse direction: typing directly into the
+    # regex line edit must update Simple inputs via the textChanged →
+    # _reverse_parse_to_simple wiring. After we clear and reset the
+    # regex, the Simple text-edit should reflect the parsed plain text.
+    # (Op combo state via UIA is unreliable on collapsed QComboBox per
+    # the prior comment — layer-1 TestRegexSyncAcrossSections covers
+    # the combo branch.)
+    print("step: assert_regex_reverseparse_to_simple")
     text_edit2 = _uia._find_descendant_by_aid_suffix(
         action_dlg, "Edit", ".regexSimpleText"
     )
-    # We only assert the text-input value here. The op combo's
-    # currentIndex isn't exposed via UIA on a collapsed Qt QComboBox
-    # (window_text returns '' and selected_index raises ValueError on
-    # the COM pointer) — that branch is covered by unit tests in
-    # tests/test_select_dialog.py::TestRegexSyncAcrossModes which have
-    # full access to Qt state.
+    # Set a different Simple-representable pattern directly on the
+    # regex line edit and confirm the Simple text reflects it.
+    regex_edit.iface_value.SetValue("alt9")
+    time.sleep(0.3)
     text_value = text_edit2.window_text() if text_edit2 else ""
-    print(f"  text_edit_value={text_value!r}")
-    if text_value != SIMPLE_TEXT:
+    print(f"  simple_text_after_reverseparse={text_value!r}")
+    if text_value != "alt9":
         print(
-            f"FAIL: Simple text after Regex→Simple round-trip = "
-            f"{text_value!r}; expected {SIMPLE_TEXT!r}"
+            f"FAIL: Simple text after regex→Simple reverse-parse = "
+            f"{text_value!r}; expected 'alt9' "
+            f"(#396 reverse-parse wiring may have regressed)"
         )
         return 1
+    # Restore the Simple text → regex line edit state for the
+    # apply-action step below.
+    text_edit2.iface_value.SetValue(SIMPLE_TEXT)
+    time.sleep(0.3)
 
     print("step: apply_action")
     print(f"  action={ACTION_LABEL!r}")
@@ -327,33 +335,40 @@ def main() -> int:
         return 1
 
 
-    # ---------- Probe A7: recent-pattern pick flips to Simple mode ----------
-    # Wave-7 (A7) added _apply_recent_pattern logic so that picking a
-    # Simple-representable pattern from the Recent menu flips the mode to
-    # Simple. This probe verifies the UIA-observable side: after clicking
-    # the recent "q9" entry (recorded during the Apply step above), the
-    # Simple radio must be checked.
-    # Promote when regression detected: swap print -> failures.append.
-    print("step: probe_a7_recent_picks_simple")
+    # ---------- Probe #396: Recent-pick reverse-parses to Simple ----------
+    # #396 dropped the Simple/Regex mode toggle along with the A7/B2
+    # probes that exercised it. The surviving "Recent picks update
+    # Simple" semantics now go through the textChanged →
+    # _reverse_parse_to_simple wiring: picking a Simple-representable
+    # pattern from Recent calls regex.setText() which fires textChanged,
+    # which auto-syncs the Simple inputs. This probe verifies that
+    # surface in the dual-section view.
+    print("step: probe_396_recent_reverseparses_to_simple")
     _, win = _uia.connect_main()
     _uia.menu_path(win, _uia.MENU_ACTION, _uia.ACTION_BY_REGEX)
     probe_dlg_hwnd = _uia.wait_for_dialog(pid, _uia.ACTION_DIALOG_TITLE, timeout=5)
     probe_dlg = _uia.connect_by_handle(probe_dlg_hwnd)
     _uia._focus(probe_dlg)
     time.sleep(0.4)
-    # Apply above recorded ("File Name", "q9") in Recent. Click the Recent
-    # button to open the popup, then click the "q9" menu entry.
+    # Apply above recorded ("File Name", "q9") in Recent. Click the
+    # Recent button to open the popup, then click the "q9" menu entry.
     probe_recent_btn = _uia._find_descendant_by_aid_suffix(
         probe_dlg, "Button", ".regexRecentButton"
     )
     if probe_recent_btn is None:
-        print("probe_status: A7-recent-picks-simple FAIL — regexRecentButton not found")
+        print(
+            "probe_status: 396-recent-reverseparse FAIL — "
+            "regexRecentButton not found"
+        )
     else:
         probe_recent_btn.click_input()
         time.sleep(0.4)
         probe_popup_hwnd = _uia.find_popup(pid)
         if probe_popup_hwnd is None:
-            print("probe_status: A7-recent-picks-simple FAIL — Recent menu popup did not appear")
+            print(
+                "probe_status: 396-recent-reverseparse FAIL — "
+                "Recent menu popup did not appear"
+            )
         else:
             probe_popup = _uia.connect_by_handle(probe_popup_hwnd)
             try:
@@ -361,125 +376,35 @@ def main() -> int:
                     title=SIMPLE_TEXT, control_type="MenuItem"
                 ).click_input()
                 time.sleep(0.4)
-                probe_simple_radio = _uia._find_descendant_by_aid_suffix(
-                    probe_dlg, "RadioButton", ".regexModeSimple"
+                # After the pick, both the Regex line edit AND the Simple
+                # text edit must hold "q9" (the pattern itself + its
+                # parsed plain-text decomposition).
+                _probe_regex = _uia._find_descendant_by_aid_suffix(
+                    probe_dlg, "Edit", ".regexLineEdit"
                 )
-                if probe_simple_radio is not None and probe_simple_radio.is_selected():
-                    print("probe_status: A7-recent-picks-simple PASS")
+                _probe_simple_text = _uia._find_descendant_by_aid_suffix(
+                    probe_dlg, "Edit", ".regexSimpleText"
+                )
+                _regex_value = _probe_regex.window_text() if _probe_regex else ""
+                _simple_value = _probe_simple_text.window_text() if _probe_simple_text else ""
+                if _regex_value == SIMPLE_TEXT and _simple_value == SIMPLE_TEXT:
+                    print("probe_status: 396-recent-reverseparse PASS")
                 else:
-                    _selected = probe_simple_radio.is_selected() if probe_simple_radio else None
                     print(
-                        f"probe_status: A7-recent-picks-simple FAIL — "
-                        f"simple_radio.is_selected()={_selected!r}"
+                        f"probe_status: 396-recent-reverseparse FAIL — "
+                        f"regex_value={_regex_value!r} "
+                        f"simple_value={_simple_value!r} "
+                        f"(both should be {SIMPLE_TEXT!r})"
                     )
             except Exception as _exc:
-                print(f"probe_status: A7-recent-picks-simple FAIL — {_exc!r}")
-    # ---------- end probe A7 ----------
-
-    # Close the A7 probe dialog before opening the B2 probe dialog.
-    # B2 opens its own fresh dialog (#386 fix) — reusing probe_dlg here
-    # left it in a state where the UIA tree was stale after the Recent
-    # menu's popup + click_input, and subsequent lookups for
-    # .regexModeRegex / .regexLineEdit returned None.
+                print(
+                    f"probe_status: 396-recent-reverseparse FAIL — {_exc!r}"
+                )
     try:
         _uia.close_action_dialog(probe_dlg)
     except Exception:
         pass
-
-    # ---------- Probe B2: Switch-to-Regex button appears and works ----------
-    # Wave-7 (B2+B4) added _switch_to_regex_btn inside simple_outer —
-    # shown alongside _simple_complex_notice when the current regex is not
-    # Simple-representable. Clicking it flips to Regex losslessly.
-    #
-    # #386 fix: open a fresh dialog. The previous version reused
-    # probe_dlg from the A7 probe above, but A7's Recent-menu pick
-    # left the wrapper's UIA tree stale (a Recent-menu pick flips to
-    # Simple mode and may close + reopen internal layout widgets),
-    # so .regexModeRegex / .regexLineEdit lookups returned None.
-    print("step: probe_b2_switch_to_regex_button")
-    _, win = _uia.connect_main()
-    probe_b2_dlg, _ = _uia.open_action_by_regex_dialog(win)
-    time.sleep(0.5)
-    # The dialog opens in whichever mode the prior probe persisted —
-    # typically Simple after the main-flow Apply. In Simple mode the
-    # regexLineEdit widget is HIDDEN, and UIA doesn't surface hidden
-    # widgets via descendants(). So we walk the radios first, click
-    # Regex (which surfaces regexLineEdit), then walk Edit descendants.
-    # (#386 root cause: original probe looked up both radio + edit
-    # before the mode switch and the edit lookup returned None.)
-    probe_regex_radio = _uia._find_descendant_by_aid_suffix(
-        probe_b2_dlg, "RadioButton", ".regexModeRegex"
-    )
-    probe_simple_radio2 = _uia._find_descendant_by_aid_suffix(
-        probe_b2_dlg, "RadioButton", ".regexModeSimple"
-    )
-    _COMPLEX = r"\d{3}"
-    probe_regex_edit2 = None
-    if probe_regex_radio is None or probe_simple_radio2 is None:
-        print("probe_status: B2-switch-to-regex FAIL — mode-toggle radios not found")
-    else:
-        probe_regex_radio.click_input()
-        time.sleep(0.4)
-        # Now Regex mode is active — regexLineEdit is in the UIA tree.
-        probe_regex_edit2 = _uia._find_descendant_by_aid_suffix(
-            probe_b2_dlg, "Edit", ".regexLineEdit"
-        )
-    if probe_regex_edit2 is None:
-        # Bail out of the B2 probe — without the line edit we can't
-        # set a non-Simple pattern. Other Wave 11 probes still need
-        # to run, so close the dialog and fall through (NOT return).
-        if probe_regex_radio is not None:
-            print(
-                "probe_status: B2-switch-to-regex FAIL — regexLineEdit "
-                "still missing after switching to Regex mode (hidden?)"
-            )
-    else:
-        probe_regex_edit2.iface_value.SetValue(_COMPLEX)
-        time.sleep(0.2)
-        probe_simple_radio2.click_input()
-        time.sleep(0.4)
-        probe_switch_btn = _uia._find_descendant_by_aid_suffix(
-            probe_b2_dlg, "Button", ".regexSwitchToRegexBtn"
-        )
-        if probe_switch_btn is None:
-            print("probe_status: B2-switch-to-regex FAIL — regexSwitchToRegexBtn not in UIA tree")
-        elif probe_switch_btn.is_visible():
-            probe_switch_btn.click_input()
-            time.sleep(0.3)
-            # After Switch-to-Regex click, re-resolve the regex radio
-            # — the wrapper for the still-Simple-mode-snapshotted radio
-            # would read its old is_selected() state. Walk fresh.
-            probe_regex_radio2 = None
-            for _r in probe_b2_dlg.descendants(control_type="RadioButton"):
-                try:
-                    _aid = _r.element_info.automation_id or ""
-                except Exception:
-                    _aid = ""
-                if _aid.endswith(".regexModeRegex"):
-                    probe_regex_radio2 = _r
-                    break
-            _regex_checked = (
-                probe_regex_radio2 is not None and probe_regex_radio2.is_selected()
-            )
-            _pattern_ok = probe_regex_edit2.window_text() == _COMPLEX
-            if _regex_checked and _pattern_ok:
-                print("probe_status: B2-switch-to-regex PASS")
-            else:
-                print(
-                    f"probe_status: B2-switch-to-regex FAIL — "
-                    f"regex_checked={_regex_checked} pattern_preserved={_pattern_ok}"
-                )
-        else:
-            print(
-                "probe_status: B2-switch-to-regex FAIL — "
-                "regexSwitchToRegexBtn present but not visible after Simple-toggle "
-                "with complex pattern"
-            )
-    try:
-        _uia.close_action_dialog(probe_b2_dlg)
-    except Exception:
-        pass
-    # ---------- end probe B2 ----------
+    # ---------- end probe #396 reverse-parse ----------
 
     # ════════════════════════════════════════════════════════════════════
     # Wave 11 probes — layer-3 coverage push (issues #359 #366 #374 #377 #379)
@@ -664,12 +589,8 @@ def main() -> int:
     print("step: probe_b9_d3_apply_flash_and_cancel")
     _, win = _uia.connect_main()
     _dlg_b9, _ = _uia.open_action_by_regex_dialog(win)
-    _regex_radio_b9 = _uia._find_descendant_by_aid_suffix(
-        _dlg_b9, "RadioButton", ".regexModeRegex"
-    )
-    if _regex_radio_b9 is not None:
-        _regex_radio_b9.click_input()
-        time.sleep(0.3)
+    # #396: regex line edit is always interactive; no mode radio
+    # click needed before typing.
     _field_combo_b9 = _uia._find_descendant_by_aid_suffix(
         _dlg_b9, "ComboBox", ".regexFieldCombo"
     )
@@ -762,12 +683,8 @@ def main() -> int:
     print("step: probe_d9_d10_keyboard_shortcuts")
     _, win = _uia.connect_main()
     _dlg_kb, _ = _uia.open_action_by_regex_dialog(win)
-    _regex_radio_kb = _uia._find_descendant_by_aid_suffix(
-        _dlg_kb, "RadioButton", ".regexModeRegex"
-    )
-    if _regex_radio_kb is not None:
-        _regex_radio_kb.click_input()
-        time.sleep(0.3)
+    # #396: regex line edit is always interactive; no mode radio
+    # click needed before typing.
     _field_combo_kb = _uia._find_descendant_by_aid_suffix(
         _dlg_kb, "ComboBox", ".regexFieldCombo"
     )

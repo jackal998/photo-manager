@@ -203,7 +203,6 @@ class TestPreviewPane:
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         # Phase B introduced Simple-mode default — switch to Regex
         # mode so dlg.regex is the active pattern source.
-        dlg._mode_regex_btn.setChecked(True)
 
         match_fn.reset_mock()
         dlg.regex.setText("IMG")
@@ -364,7 +363,6 @@ class TestRegexValidation:
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         # Phase B: Regex-mode-specific test — switch into Regex mode so
         # dlg.regex.setText drives the pattern.
-        dlg._mode_regex_btn.setChecked(True)
         match_fn.reset_mock()
 
         dlg.regex.setText("(")
@@ -400,7 +398,6 @@ class TestApplyAlwaysEnabled:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("")
         assert dlg._btn_set_action.isEnabled() is True
 
@@ -442,7 +439,6 @@ class TestApplyAlwaysEnabled:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("")
 
         received = []
@@ -546,55 +542,100 @@ class _FakeSettings:
         self.save_count += 1
 
 
-class TestModeToggle:
-    def test_default_mode_is_simple_when_match_fn_supplied(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
+class TestDualSectionAlwaysVisible:
+    """#396: both Simple and Regex sections are always visible.
+    The mode-toggle radios are gone; ``self.regex`` is the single source
+    of truth and Simple inputs write through to it.
+    """
+
+    def test_both_sections_visible_with_match_fn(self, qapp):
+        """Catches: regression that hides one section. With a match_fn
+        supplied, Simple is interactive and Regex line edit is right
+        below it — both must always render."""
+        from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        assert dlg._mode == MODE_SIMPLE
-        # Simple widgets visible, regex widgets hidden.
-        assert not dlg._simple_widget.isHidden()
-        assert dlg._regex_widget.isHidden()
+        dlg.show()
+        qapp.processEvents()
+        try:
+            assert dlg._simple_widget.isVisible()
+            assert dlg._regex_widget.isVisible()
+        finally:
+            dlg.close()
 
-    def test_no_match_fn_pins_regex_mode(self, qapp):
-        """Without a preview to back it, Simple is meaningless — the
-        dialog pins to Regex mode with the Simple radio disabled.
-        C1: mode toggle is always created; Simple is disabled (not absent)
-        when match_fn is None."""
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
-
-        dlg = ActionDialog(fields=["File Name"])
-        assert dlg._mode == MODE_REGEX
-        # C1: toggle always created; Simple disabled without match_fn.
-        assert hasattr(dlg, "_mode_simple_btn")
-        assert not dlg._mode_simple_btn.isEnabled()
-        assert dlg._mode_regex_btn.isChecked()
-
-    def test_persisted_mode_overrides_default(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
-
-        settings = _FakeSettings({"ui": {"action_dialog": {"mode": "regex"}}})
-        match_fn = lambda f, p: (0, 0, [])
-        dlg = ActionDialog(
-            fields=["File Name"], match_fn=match_fn, settings=settings
-        )
-        assert dlg._mode == MODE_REGEX
-        assert dlg._mode_regex_btn.isChecked()
-
-    def test_toggle_persists_to_settings(self, qapp):
+    def test_both_sections_visible_without_match_fn(self, qapp):
+        """Catches: C1 placeholder regression. Even without a match_fn,
+        Simple section renders (as an informational placeholder per
+        #396 Q2) — both sections always render in non-numeric branches."""
         from app.views.dialogs.select_dialog import ActionDialog
 
-        settings = _FakeSettings()
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.show()
+        qapp.processEvents()
+        try:
+            assert dlg._simple_widget.isVisible()
+            assert dlg._regex_widget.isVisible()
+        finally:
+            dlg.close()
+
+    def test_c1_informational_placeholder_when_no_match_fn(self, qapp):
+        """Catches: regression where C1 disables inputs but doesn't show
+        the explanatory note (silent disabled UX) OR hides Simple
+        entirely. The note must be visible and the inputs disabled —
+        that's the dual-section contract on the no-match_fn branch."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        dlg = ActionDialog(fields=["File Name"])
+        dlg.show()
+        qapp.processEvents()
+        try:
+            assert dlg._simple_disabled_note.isVisible()
+            assert not dlg._simple_op_combo.isEnabled()
+            assert not dlg._simple_text.isEnabled()
+        finally:
+            dlg.close()
+
+    def test_simple_note_hidden_when_match_fn_supplied(self, qapp):
+        """Catches: note shown when it shouldn't be. With match_fn the
+        Simple inputs are fully interactive — the placeholder note is
+        meaningless and must stay hidden."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
         match_fn = lambda f, p: (0, 0, [])
-        dlg = ActionDialog(
-            fields=["File Name"], match_fn=match_fn, settings=settings
-        )
-        # Default Simple — toggle to Regex.
-        dlg._mode_regex_btn.setChecked(True)
-        # A8: persisted under per-context key, not the legacy global key.
-        assert settings.get("ui.action_dialog.main.mode") == "regex"
-        assert settings.save_count >= 1
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg.show()
+        qapp.processEvents()
+        try:
+            assert not dlg._simple_disabled_note.isVisible()
+            assert dlg._simple_op_combo.isEnabled()
+            assert dlg._simple_text.isEnabled()
+        finally:
+            dlg.close()
+
+    def test_no_mode_attributes_exist(self, qapp):
+        """Catches: incomplete removal. After #396, none of the
+        mode-toggle infrastructure should exist as attributes —
+        callers that grep for these symbols would silently no-op
+        otherwise."""
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        for attr in (
+            "_mode",
+            "_mode_simple_btn",
+            "_mode_regex_btn",
+            "_mode_button_group",
+            "_mode_key",
+            "_simple_complex_notice",
+            "_switch_to_regex_btn",
+            "_on_mode_toggled",
+        ):
+            assert not hasattr(dlg, attr), (
+                f"Mode-toggle attribute {attr!r} still present after "
+                f"#396 — incomplete removal"
+            )
 
 
 class TestSimpleMode:
@@ -674,7 +715,6 @@ class TestCheatsheet:
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("foo bar")
         dlg.regex.setCursorPosition(3)  # between 'foo' and ' bar'
         dlg._insert_token(r"\d")
@@ -714,7 +754,6 @@ class TestRecentPatterns:
         dlg = ActionDialog(
             fields=["File Name"], match_fn=match_fn, settings=settings
         )
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText(r"^IMG_\d+$")
         dlg._btn_set_action.click()
 
@@ -734,7 +773,6 @@ class TestRecentPatterns:
         dlg = ActionDialog(
             fields=["File Name"], match_fn=match_fn, settings=settings
         )
-        dlg._mode_regex_btn.setChecked(True)
         # Reapply pattern_5 — must move to the front, drop the duplicate
         # at its old position, and stay capped at 10.
         dlg.regex.setText("pattern_5")
@@ -787,7 +825,6 @@ class TestRecentPatterns:
         dlg = ActionDialog(
             fields=["File Name"], match_fn=match_fn, settings=settings
         )
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("(unclosed")
         dlg._btn_set_action.click()
         assert settings.get("ui.action_dialog.recent_patterns", []) == []
@@ -896,47 +933,41 @@ class TestFieldChangeStateCorrectness:
         assert dlg._simple_op_combo.currentData() == "contains"
         assert dlg._simple_text.text() == "IMG_001.jpg"
 
-    def test_apply_recent_complex_pattern_lands_in_regex(self, qapp):
-        """A12 — picking a complex (non-Simple) pattern from Recent must:
-        (1) land the literal recent pattern in dlg.regex first (set BEFORE
-        mode flip so reverse-parse sees the right pattern), and
-        (2) end up in Regex mode. Pre-Wave-3 order was mode-flip → setText,
-        racing with the mode toggle's reverse-parse.
-        """
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
+    def test_apply_recent_complex_pattern_sets_regex(self, qapp):
+        """#396: picking a complex (non-Simple-representable) pattern
+        from Recent must land the literal pattern in dlg.regex. With
+        dual-section view there's no mode flip — both sections are
+        always visible — and the Regex section displays the pattern
+        truthfully while Simple stays at its prior state (the next
+        Simple edit re-syncs via write-through)."""
+        from app.views.dialogs.select_dialog import ActionDialog
 
         dlg = ActionDialog(
             fields=["File Name"],
             match_fn=lambda f, p: (0, 0, []),
         )
-        # Confirm we start in Simple mode (default with match_fn).
-        assert dlg._mode_simple_btn.isChecked()
-        # A complex pattern Simple can't represent → lands in Regex.
         dlg._apply_recent_pattern(r"\d{3}-\w+")
 
         assert dlg.regex.text() == r"\d{3}-\w+"
-        assert dlg._mode == MODE_REGEX
 
-    def test_apply_recent_simple_pattern_stays_in_simple(self, qapp):
-        """A7 — picking a Simple-representable pattern from Recent must
-        flip to Simple mode (not force Regex as it did before A7).
-        Pattern ``^IMG`` is starts_with Simple, so it's representable.
-        """
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
+    def test_apply_recent_simple_pattern_reverse_parses_to_simple(self, qapp):
+        """#396: picking a Simple-representable pattern from Recent
+        must (a) land it in dlg.regex and (b) fire reverse-parse so
+        Simple inputs reflect the (op, plain text) decomposition. The
+        textChanged → _reverse_parse_to_simple wiring is what
+        delivers (b) — without a mode toggle this is the only path
+        keeping Simple in sync with regex-side mutations."""
+        from app.views.dialogs.select_dialog import ActionDialog
 
         dlg = ActionDialog(
             fields=["File Name"],
             match_fn=lambda f, p: (0, 0, []),
         )
-        # Start in Regex mode so we can verify the flip to Simple.
-        dlg._mode_regex_btn.setChecked(True)
-        assert dlg._mode != MODE_SIMPLE
 
         dlg._apply_recent_pattern("^IMG")
 
         assert dlg.regex.text() == "^IMG"
-        assert dlg._mode == MODE_SIMPLE
-        # Simple inputs must show the parsed (starts_with, IMG) state.
+        # Reverse-parse populated Simple inputs.
         assert dlg._simple_op_combo.currentData() == "starts_with"
         assert dlg._simple_text.text() == "IMG"
 
@@ -954,7 +985,6 @@ class TestMatchHighlightDelegate:
             [("IMG_001.jpg", "IMG_001.jpg"), ("before_IMG_after.jpg", "before_IMG_after.jpg")],
         )
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("IMG")
         dlg._refresh_preview()
 
@@ -993,7 +1023,6 @@ class TestPreviewAccuracy:
             [("vacation.jpg", "/photos/2023/summer")],
         )
         dlg = ActionDialog(fields=["Folder"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText(r"2023")
         dlg._refresh_preview()
 
@@ -1012,7 +1041,6 @@ class TestPreviewAccuracy:
             [("IMG_001.jpg", "IMG_001.jpg")],
         )
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText(r"IMG")
         dlg._refresh_preview()
 
@@ -1033,7 +1061,6 @@ class TestPreviewAccuracy:
             [("vacation.jpg", "/photos/2023/summer")],
         )
         dlg = ActionDialog(fields=["Folder"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText(r"2023")
         dlg._refresh_preview()
 
@@ -1165,22 +1192,30 @@ class TestTryParseSimple:
         assert _try_parse_simple(r"foo\$") == ("contains", "foo$")
 
 
-class TestRegexSyncAcrossModes:
-    """Phase C invariant: self.regex is the single source of truth for
-    both modes. Switching modes is a display change, not a state reset."""
+class TestRegexSyncAcrossSections:
+    """#396: ``self.regex`` is the single source of truth for both
+    sections. Simple inputs write through to it; the regex line edit
+    reverse-parses back to Simple when the pattern is
+    Simple-representable. Both happen without a mode flip — both
+    sections are always visible."""
 
     def test_simple_writes_through_to_regex_line_edit(self, qapp):
+        """Catches: write-through regression. Typing in Simple must
+        update self.regex synchronously — Apply reads self.regex and
+        without write-through the user's Simple choice silently
+        wouldn't apply."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        # Default mode is Simple. Type into Simple's text input —
-        # self.regex.text() must update synchronously.
         dlg._simple_op_combo.setCurrentIndex(0)  # contains
         dlg._simple_text.setText("near")
         assert dlg.regex.text() == "near"
 
-    def test_simple_to_regex_toggle_preserves_synthesised_pattern(self, qapp):
+    def test_simple_anchored_synthesis(self, qapp):
+        """Catches: SIMPLE_OPS regex builder regression. Each op (contains
+        / starts_with / ends_with / exact) builds a specific anchored
+        pattern from the user's plain text via re.escape."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
@@ -1189,27 +1224,24 @@ class TestRegexSyncAcrossModes:
         dlg._simple_text.setText(".jpg")
         assert dlg.regex.text() == r"\.jpg$"
 
-        # Toggle to Regex — the regex line edit's value must persist.
-        dlg._mode_regex_btn.setChecked(True)
-        assert dlg.regex.text() == r"\.jpg$"
-
-    def test_regex_to_simple_toggle_parses_plain_pattern(self, qapp):
+    def test_regex_textchange_reverse_parses_to_simple(self, qapp):
+        """Catches: reverse-parse not wired or feedback-loops. Setting
+        a Simple-representable pattern directly on self.regex must
+        flow back into the Simple inputs via the textChanged →
+        _reverse_parse_to_simple wiring (#396)."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("q9")
-        # Toggle back to Simple — should populate "contains" + "q9".
-        dlg._mode_simple_btn.setChecked(True)
+        # Reverse-parse fires synchronously on textChanged.
         assert dlg._simple_op_combo.currentData() == "contains"
         assert dlg._simple_text.text() == "q9"
-        assert not dlg._simple_complex_notice.isHidden() is False  # notice hidden
-        # Both Simple inputs are enabled (parseable, no notice).
-        assert dlg._simple_op_combo.isEnabled()
-        assert dlg._simple_text.isEnabled()
 
-    def test_regex_to_simple_toggle_parses_anchored_patterns(self, qapp):
+    def test_regex_textchange_reverse_parses_anchored_patterns(self, qapp):
+        """Catches: regression where reverse-parse loses anchor
+        recognition. Each canonical anchored shape must map back to
+        its op key + plain text."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
@@ -1219,54 +1251,38 @@ class TestRegexSyncAcrossModes:
             ("^abc$", "exact", "abc"),
         ]:
             dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-            dlg._mode_regex_btn.setChecked(True)
             dlg.regex.setText(pattern)
-            dlg._mode_simple_btn.setChecked(True)
             assert dlg._simple_op_combo.currentData() == expected_op, pattern
             assert dlg._simple_text.text() == expected_text, pattern
 
-    def test_regex_to_simple_complex_pattern_shows_notice(self, qapp):
+    def test_complex_regex_leaves_simple_alone(self, qapp):
+        """Catches: regression that mutates Simple on un-parseable
+        regex. When the regex isn't Simple-representable, Simple inputs
+        should NOT be modified (the user can still see the raw regex
+        in the Regex section; their previous Simple state is preserved
+        for the next edit cycle). No notice / no Switch-to-Regex
+        button — both sections are always visible."""
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
+        # Seed Simple with a known state.
+        dlg._simple_op_combo.setCurrentIndex(0)  # contains
+        dlg._simple_text.setText("seed")
+        # Now set a complex regex directly.
         dlg.regex.setText(r"\d{3}")
-        dlg._mode_simple_btn.setChecked(True)
-        # Notice shown, Simple inputs disabled, regex preserved verbatim.
-        assert not dlg._simple_complex_notice.isHidden()
-        assert not dlg._simple_op_combo.isEnabled()
-        assert not dlg._simple_text.isEnabled()
+        # Regex section holds the truth; Simple preserved from the seed.
         assert dlg.regex.text() == r"\d{3}"
-        # Toggling back to Regex must restore everything intact.
-        dlg._mode_regex_btn.setChecked(True)
-        assert dlg.regex.text() == r"\d{3}"
+        assert dlg._simple_text.text() == "seed"
+        assert dlg._simple_op_combo.currentData() == "contains"
+        # Both sections remain enabled — no "complex pattern" disable.
+        assert dlg._simple_op_combo.isEnabled()
+        assert dlg._simple_text.isEnabled()
 
 
-class TestLegacyModeKeyAlias:
-    """Phase B persisted ``"beginner"``; Phase C reads it as Simple so
-    upgraded users don't silently flip back to the default."""
-
-    def test_legacy_beginner_value_loads_as_simple(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
-
-        settings = _FakeSettings({"ui": {"action_dialog": {"mode": "beginner"}}})
-        match_fn = lambda f, p: (0, 0, [])
-        dlg = ActionDialog(
-            fields=["File Name"], match_fn=match_fn, settings=settings
-        )
-        assert dlg._mode == MODE_SIMPLE
-        assert dlg._mode_simple_btn.isChecked()
-
-    def test_unknown_value_falls_back_to_simple(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
-
-        settings = _FakeSettings({"ui": {"action_dialog": {"mode": "garbage"}}})
-        dlg = ActionDialog(
-            fields=["File Name"], match_fn=lambda f, p: (0, 0, []),
-            settings=settings,
-        )
-        assert dlg._mode == MODE_SIMPLE
+# #396 dropped TestLegacyModeKeyAlias: the mode key is gone entirely
+# (silent-drop migration per Q5), so the Phase B "beginner"/"simple"
+# alias migration has no value to translate.
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1841,7 +1857,6 @@ class TestRecentPatternsTupleShape:
             match_fn=lambda f, p: (0, 0, []),
             settings=settings,
         )
-        dlg._mode_regex_btn.setChecked(True)
         dlg.combo.setCurrentText("Folder")
         dlg.regex.setText("Photos")
         dlg._btn_set_action.click()
@@ -1904,7 +1919,6 @@ class TestRecentPatternsTupleShape:
             match_fn=lambda f, p: (0, 0, []),
             settings=settings,
         )
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("IMG")   # File Name is current field
         dlg._btn_set_action.click()
 
@@ -1927,7 +1941,6 @@ class TestA13StripBeforeDedup:
             match_fn=lambda f, p: (0, 0, []),
             settings=settings,
         )
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("  IMG  ")
         dlg._btn_set_action.click()
 
@@ -1947,149 +1960,6 @@ class TestA13StripBeforeDedup:
         )
         dlg._record_recent_pattern("   ")
         assert settings.get("ui.action_dialog.recent_patterns", []) == []
-
-
-class TestC1ModeToggleAlwaysVisible:
-    """C1: mode toggle row created unconditionally; Simple disabled (not absent)
-    when match_fn is None."""
-
-    def test_simple_radio_disabled_without_match_fn(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        dlg = ActionDialog(fields=["File Name"])
-        assert hasattr(dlg, "_mode_simple_btn")
-        assert not dlg._mode_simple_btn.isEnabled()
-        assert dlg._mode_regex_btn.isEnabled()
-        assert dlg._mode_regex_btn.isChecked()
-
-    def test_simple_radio_enabled_with_match_fn(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
-        assert dlg._mode_simple_btn.isEnabled()
-
-    def test_simple_tooltip_set_without_match_fn(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        dlg = ActionDialog(fields=["File Name"])
-        assert dlg._mode_simple_btn.toolTip() != ""
-
-
-class TestC4DefaultModeLogic:
-    """C4: default mode is Regex when match_fn is None, Simple otherwise."""
-
-    def test_default_regex_when_no_match_fn(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
-
-        dlg = ActionDialog(fields=["File Name"])
-        assert dlg._mode == MODE_REGEX
-
-    def test_default_simple_when_match_fn(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
-
-        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
-        assert dlg._mode == MODE_SIMPLE
-
-
-class TestA8ContextIsolation:
-    """A8: per-context mode key isolates main and execute preferences."""
-
-    def test_per_context_mode_key_used(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        settings = _FakeSettings()
-        dlg = ActionDialog(
-            fields=["File Name"],
-            match_fn=lambda f, p: (0, 0, []),
-            settings=settings,
-            context_id="execute",
-        )
-        dlg._mode_regex_btn.setChecked(True)
-        # Must save to execute context, not main or legacy key.
-        assert settings.get("ui.action_dialog.execute.mode") == "regex"
-        assert settings.get("ui.action_dialog.main.mode") is None
-        assert settings.get("ui.action_dialog.mode") is None
-
-    def test_legacy_key_read_as_fallback(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
-
-        settings = _FakeSettings({
-            "ui": {"action_dialog": {"mode": "regex"}}
-        })
-        dlg = ActionDialog(
-            fields=["File Name"],
-            match_fn=lambda f, p: (0, 0, []),
-            settings=settings,
-            context_id="main",
-        )
-        # Per-context key absent → reads legacy key → regex.
-        assert dlg._mode == MODE_REGEX
-
-    def test_per_context_key_beats_legacy(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_SIMPLE
-
-        settings = _FakeSettings({
-            "ui": {"action_dialog": {
-                "mode": "regex",                   # legacy — would give Regex
-                "main": {"mode": "simple"},        # per-context — must win
-            }}
-        })
-        dlg = ActionDialog(
-            fields=["File Name"],
-            match_fn=lambda f, p: (0, 0, []),
-            settings=settings,
-            context_id="main",
-        )
-        assert dlg._mode == MODE_SIMPLE
-
-
-class TestB2SwitchToRegexButton:
-    """B2+B4: "Switch to Regex" button in simple_outer; visible with notice."""
-
-    def test_button_exists_hidden_by_default(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
-        assert hasattr(dlg, "_switch_to_regex_btn")
-        assert dlg._switch_to_regex_btn.isHidden()
-
-    def test_button_shown_with_complex_notice(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
-        dlg._mode_regex_btn.setChecked(True)
-        dlg.regex.setText(r"\d{3}")
-        # Switch to Simple — complex pattern triggers notice + button.
-        dlg._mode_simple_btn.setChecked(True)
-
-        assert not dlg._simple_complex_notice.isHidden()
-        assert not dlg._switch_to_regex_btn.isHidden()
-
-    def test_button_hidden_when_pattern_is_simple(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog
-
-        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
-        dlg._mode_regex_btn.setChecked(True)
-        dlg.regex.setText("img")
-        # Simple-representable — notice+button must stay hidden.
-        dlg._mode_simple_btn.setChecked(True)
-
-        assert dlg._simple_complex_notice.isHidden()
-        assert dlg._switch_to_regex_btn.isHidden()
-
-    def test_button_click_flips_to_regex_mode(self, qapp):
-        from app.views.dialogs.select_dialog import ActionDialog, MODE_REGEX
-
-        dlg = ActionDialog(fields=["File Name"], match_fn=lambda f, p: (0, 0, []))
-        dlg._mode_regex_btn.setChecked(True)
-        dlg.regex.setText(r"\d{3}")
-        dlg._mode_simple_btn.setChecked(True)
-        assert dlg._mode != MODE_REGEX
-
-        # Click the switch button — must flip to Regex without losing pattern.
-        dlg._switch_to_regex_btn.click()
-        assert dlg._mode == MODE_REGEX
-        assert dlg.regex.text() == r"\d{3}"
 
 
 class TestE3SimpleOpPersistence:
@@ -2542,7 +2412,9 @@ class TestWave9aPolish:
     def test_b14_focus_lands_on_regex_in_regex_mode(self, qapp):
         from app.views.dialogs.select_dialog import ActionDialog
 
-        # No match_fn → C1 pins MODE_REGEX → focus self.regex.
+        # No match_fn → #396 C1 placeholder posture → Simple inputs
+        # disabled, focus lands on self.regex (the only interactive
+        # panel on this branch).
         dlg = ActionDialog(fields=["File Name"])
         assert dlg.focusWidget() is dlg.regex
 
@@ -2618,11 +2490,10 @@ class TestWave9aPolish:
         # English mnemonic shape: "&X..." prefix.
         # Chinese mnemonic shape: "...(&X)" suffix.
         # Either is valid — we just assert "&" appears in the text.
-        # #391 dropped Close button — no Close mnemonic to assert.
+        # #391 dropped Close button mnemonic; #396 dropped Switch-to-Regex
+        # button mnemonic (the button is gone entirely now).
         assert "&" in dlg._btn_set_action.text(), "Apply mnemonic missing"
         assert "&" in dlg._recent_btn.text(), "Recent mnemonic missing"
-        assert "&" in dlg._switch_to_regex_btn.text(), \
-            "Switch to Regex mnemonic missing"
         assert "&" in dlg.btn_reset_geometry.text(), \
             "Reset window size mnemonic missing"
 
@@ -2648,7 +2519,6 @@ class TestB9PostApplyFlash:
         # match_fn returns 3 matched of 5 total.
         match_fn = lambda f, p: (3, 5, [("a.jpg", "a.jpg")] * 3)
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("a")
         # Force the preview to run synchronously so _last_matched_count is
         # populated (debounce timer would otherwise leave it None at this
@@ -2676,7 +2546,6 @@ class TestB9PostApplyFlash:
         from app.views.dialogs.select_dialog import ActionDialog
 
         dlg = ActionDialog(fields=["File Name"])
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("a")
         # No preview was ever run (no match_fn) — _last_matched_count is None.
         assert dlg._last_matched_count is None
@@ -2693,7 +2562,6 @@ class TestB9PostApplyFlash:
 
         match_fn = lambda f, p: (3, 5, [("a.jpg", "a.jpg")] * 3)
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("a")
         # Note: we explicitly do NOT call _refresh_preview here.
         # _last_matched_count is whatever __init__'s _refresh_preview call
@@ -2768,7 +2636,6 @@ class TestD3DeleteConfirm:
 
         match_fn = lambda f, p: (5, 10, [("a.jpg", "a.jpg")] * 5)
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("a")
         dlg._refresh_preview()
         # Pick "keep (remove action)" — value is "" not "delete".
@@ -2801,7 +2668,6 @@ class TestD3DeleteConfirm:
 
         match_fn = lambda f, p: (5, 10, [("a.jpg", "a.jpg")] * 5)
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("a")
         dlg._refresh_preview()
         dlg._action_combo.setCurrentIndex(0)  # delete
@@ -2836,7 +2702,6 @@ class TestD3DeleteConfirm:
 
         match_fn = lambda f, p: (5, 10, [("a.jpg", "a.jpg")] * 5)
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("a")
         dlg._refresh_preview()
         dlg._action_combo.setCurrentIndex(0)  # delete
@@ -2870,7 +2735,6 @@ class TestD3DeleteConfirm:
 
         match_fn = lambda f, p: (7, 10, [("a.jpg", "a.jpg")] * 7)
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
-        dlg._mode_regex_btn.setChecked(True)
         dlg.regex.setText("a")
         dlg._refresh_preview()
         dlg._action_combo.setCurrentIndex(0)  # delete

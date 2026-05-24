@@ -188,18 +188,18 @@ action_dialog:
   invalid_threshold: "無法解析「{input}」為此欄位的數值"
   preview_truncated: "…還有 {n} 筆"
   preview_empty: "無相符項目"
-  mode_label: "模式:"
-  mode_simple: "簡易"
-  mode_regex: "正規式"
+  # #396 移除 Simple/Regex 模式切換,因此 mode_label / mode_simple /
+  # mode_regex / simple_complex_notice / switch_to_regex 五個鍵已不再使用,
+  # 簡易和正規式區塊永遠同時顯示。
   simple_prefix: "找出符合條件的列:"
   simple_op_contains: "包含"
   simple_op_starts_with: "開頭為"
   simple_op_ends_with: "結尾為"
   simple_op_exact: "完全等於"
   simple_text_placeholder: "輸入要比對的文字…"
-  simple_complex_notice: "此規則比簡易模式可表達的更進階,切回正規式以繼續編輯。"
-  switch_to_regex: "切換至正規式(&S)"
-  simple_disabled_no_match_fn: "簡易模式需要即時預覽資料來源"
+  # #396 C1 占位提示:當 match_fn 為 None 時顯示於停用的簡易輸入框上方,
+  # 說明此入口無法即時預覽,簡易輸入為唯讀。
+  simple_disabled_no_match_fn: "即時預覽不可用 — 此入口的簡易輸入為唯讀。"
   cheatsheet_label: "插入到規則:"
   cheatsheet_any: ".* — 任意文字"
   cheatsheet_digit: "\\d — 數字"
