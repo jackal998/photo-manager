@@ -342,10 +342,15 @@ def main() -> int:
         time.sleep(0.3)
 
     # ---------- Probe #363 A4: threshold validation icon states ----------
-    # A4 (Wave 5): _validate_threshold sets _num_threshold_icon to ✓
-    # when the typed value parses, ✗ when it doesn't, and "" when the
-    # field is empty (neutral). Layer-1 covers the parse logic; this
-    # probe asserts the icon widget actually surfaces the glyph.
+    # A4 (Wave 5): _validate_threshold sets _num_threshold_icon's
+    # accessibleName + tooltip to "Threshold valid" / "Threshold
+    # invalid: <reason>" / "" (neutral). The pixmap itself is a theme
+    # QStyle.StandardPixmap (no text). UIA exposes accessibleName via
+    # the widget's Name property, which is what window_text() reads on
+    # a QLabel — so the testable contract is the accessibleName string,
+    # NOT a glyph. (Wave 11 local-run caught the original glyph-based
+    # assertion was reading the right widget but expecting the wrong
+    # surface — fixed during local validation.)
     print("step: probe_a4_threshold_icon_states")
     _icon = _uia._find_descendant_by_aid_suffix(
         probe_action, "Text", ".numericThresholdIcon"
@@ -359,29 +364,32 @@ def main() -> int:
             "numericThresholdIcon or numericValueEdit not found"
         )
     else:
-        # Invalid: junk text
+        # Invalid: junk text — accessibleName starts with "Threshold invalid"
         _value_edit.iface_value.SetValue("not-a-number")
         time.sleep(0.3)
-        _glyph_invalid = (_icon.window_text() or "").strip()
-        print(f"  probe_status: A4-threshold-icon-invalid={_glyph_invalid!r}")
-        # Empty: neutral state
+        _name_invalid = (_icon.window_text() or "").strip()
+        print(f"  probe_status: A4-threshold-icon-invalid={_name_invalid!r}")
+        # Empty: neutral — accessibleName cleared
         _value_edit.iface_value.SetValue("")
         time.sleep(0.3)
-        _glyph_empty = (_icon.window_text() or "").strip()
-        print(f"  probe_status: A4-threshold-icon-empty={_glyph_empty!r}")
-        # Valid: numeric
+        _name_empty = (_icon.window_text() or "").strip()
+        print(f"  probe_status: A4-threshold-icon-empty={_name_empty!r}")
+        # Valid: numeric — accessibleName == "Threshold valid"
         _value_edit.iface_value.SetValue("1000")
         time.sleep(0.3)
-        _glyph_valid = (_icon.window_text() or "").strip()
-        print(f"  probe_status: A4-threshold-icon-valid={_glyph_valid!r}")
-        if _glyph_invalid != "✗" or _glyph_valid != "✓":
+        _name_valid = (_icon.window_text() or "").strip()
+        print(f"  probe_status: A4-threshold-icon-valid={_name_valid!r}")
+        _invalid_ok = _name_invalid.startswith("Threshold invalid")
+        _valid_ok = _name_valid == "Threshold valid"
+        _empty_ok = _name_empty == ""
+        if _invalid_ok and _valid_ok and _empty_ok:
+            print("probe_status: A4-threshold-icon PASS")
+        else:
             print(
                 f"probe_status: A4-threshold-icon FAIL — "
-                f"invalid={_glyph_invalid!r} (expected '✗'), "
-                f"valid={_glyph_valid!r} (expected '✓')"
+                f"invalid_ok={_invalid_ok}, valid_ok={_valid_ok}, "
+                f"empty_ok={_empty_ok}"
             )
-        else:
-            print("probe_status: A4-threshold-icon PASS")
 
     # ---------- Probe #363 B6: Top-N mode counter format ----------
     # B6 (Wave 5): Top-N counter format is "{matched} matched (≤{n}
