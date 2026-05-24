@@ -308,6 +308,143 @@ def main() -> int:
             f"({ini_path} not found — Round 3 above may have already failed)"
         )
 
+    # ── Wave 11 probes — #371 E5 Reset window size affordance ────────
+    # E5 (Wave 8) added a "Reset window size" button + Ctrl+0 shortcut
+    # in ActionDialog's close row. The button is hidden when the dialog
+    # opens in flat layout (no match_fn) and visible in the splitter
+    # layout. Clicking it removes the geometry/splitter INI keys, so
+    # the next open snaps back to setMinimumSize defaults. Layer-1
+    # pins the slot wiring; this probe asserts the UIA-observable
+    # surface — button visibility, INI key removal on click,
+    # equivalent Ctrl+0 shortcut behavior. Round 3 above has already
+    # written geometry/action_dialog* keys to the INI so the reset
+    # actually has something to remove.
+    print("step: probe_e5_reset_button_visible_in_splitter_layout")
+    from PySide6.QtCore import QSettings
+    _ini_path = REPO / "qa" / "window_state.ini"
+
+    _, win = _uia.connect_main()
+    _probe_dlg, _probe_hwnd = _open_action(win)
+    _probe_reset_btn = _uia._find_descendant_by_aid_suffix(
+        _probe_dlg, "Button", ".regexResetGeometryButton"
+    )
+    if _probe_reset_btn is None:
+        print("probe_status: E5-reset-button-visible FAIL — regexResetGeometryButton not in UIA tree")
+        failures.append("E5: regexResetGeometryButton missing in splitter layout")
+    elif not _probe_reset_btn.is_visible():
+        print("probe_status: E5-reset-button-visible FAIL — button present but hidden in splitter layout")
+        failures.append("E5: Reset window size button hidden when splitter layout active")
+    else:
+        print("probe_status: E5-reset-button-visible PASS")
+
+    # ---------- Probe E5 button click clears INI ----------
+    # Click the button; the INI keys must be removed before the next
+    # save (which fires on dialog close).
+    print("step: probe_e5_button_click_clears_ini")
+    if _probe_reset_btn is not None and _probe_reset_btn.is_visible():
+        try:
+            _probe_reset_btn.click_input()
+            time.sleep(0.4)
+            # The reset slot removes the keys directly via QSettings.
+            # Read the INI live so we observe the immediate post-click
+            # state (close-then-reopen would re-write the keys).
+            if _ini_path.exists():
+                _store = QSettings(str(_ini_path), QSettings.IniFormat)
+                _geom_after_click = _store.value("geometry/action_dialog")
+                _split_after_click = _store.value(
+                    "geometry/action_dialog_splitter"
+                )
+                if _geom_after_click is None and _split_after_click is None:
+                    print("probe_status: E5-button-click-clears-ini PASS")
+                else:
+                    print(
+                        f"probe_status: E5-button-click-clears-ini FAIL — "
+                        f"geom={_geom_after_click!r} "
+                        f"splitter={_split_after_click!r} "
+                        f"(both should be None after reset)"
+                    )
+                    failures.append(
+                        "E5: INI keys not removed after reset-button click"
+                    )
+            else:
+                print(
+                    f"probe_status: E5-button-click-clears-ini SKIP — "
+                    f"{_ini_path} does not exist"
+                )
+        except Exception as _exc:
+            print(f"probe_status: E5-button-click-clears-ini FAIL — {_exc!r}")
+            failures.append(f"E5: click_input on reset button raised: {_exc!r}")
+    # Close the probe dialog before the Ctrl+0 round so the next reopen
+    # is a fresh instance with restored geometry to clear.
+    try:
+        _close_action(_probe_dlg)
+    except Exception:
+        pass
+
+    # ---------- Probe E5 Ctrl+0 shortcut equivalence ----------
+    # Reopen the dialog → MoveWindow it to a non-default size → close
+    # (the close writes new geometry keys) → reopen → press Ctrl+0 →
+    # assert the INI keys were removed again. Mirrors the button-click
+    # probe but exercises the QShortcut wiring instead of the Button
+    # clicked signal.
+    print("step: probe_e5_ctrl_zero_shortcut")
+    _, win = _uia.connect_main()
+    _probe_dlg2, _probe_hwnd2 = _open_action(win)
+    _initial2 = _get_window_rect(_probe_hwnd2)
+    _move_window(
+        _probe_hwnd2,
+        _initial2[0],
+        _initial2[1],
+        _initial2[2] + RESIZE_DELTA_PX,
+        _initial2[3] + RESIZE_DELTA_PX,
+    )
+    time.sleep(0.3)
+    try:
+        _close_action(_probe_dlg2)
+    except Exception:
+        pass
+    # Fresh open — geometry keys should now be present in INI; Ctrl+0
+    # should wipe them. We focus the dialog and send the shortcut.
+    _, win = _uia.connect_main()
+    _probe_dlg3, _probe_hwnd3 = _open_action(win)
+    try:
+        _uia._focus(_probe_dlg3)
+        time.sleep(0.2)
+        _probe_dlg3.type_keys("^0")
+        time.sleep(0.5)
+        if _ini_path.exists():
+            _store = QSettings(str(_ini_path), QSettings.IniFormat)
+            _geom_after_ctrl0 = _store.value("geometry/action_dialog")
+            _split_after_ctrl0 = _store.value(
+                "geometry/action_dialog_splitter"
+            )
+            if _geom_after_ctrl0 is None and _split_after_ctrl0 is None:
+                print("probe_status: E5-ctrl-zero-clears-ini PASS")
+            else:
+                # The Ctrl+0 shortcut shares the slot with the button so
+                # this should match the button-click behavior. A FAIL
+                # here means the QShortcut isn't wired to _reset_geometry.
+                print(
+                    f"probe_status: E5-ctrl-zero-clears-ini FAIL — "
+                    f"geom={_geom_after_ctrl0!r} "
+                    f"splitter={_split_after_ctrl0!r} "
+                    f"(both should be None after Ctrl+0)"
+                )
+                failures.append(
+                    "E5: Ctrl+0 shortcut did not clear INI keys — "
+                    "QShortcut wiring regressed"
+                )
+        else:
+            print(f"probe_status: E5-ctrl-zero-clears-ini SKIP — {_ini_path} missing")
+    except Exception as _exc:
+        print(f"probe_status: E5-ctrl-zero-clears-ini FAIL — {_exc!r}")
+        failures.append(f"E5: Ctrl+0 send_keys raised: {_exc!r}")
+    finally:
+        try:
+            _close_action(_probe_dlg3)
+        except Exception:
+            pass
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}")

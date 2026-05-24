@@ -711,6 +711,31 @@ def close_action_dialog(action_dlg: UIAWrapper) -> None:
     time.sleep(0.3)
 
 
+def read_preview_items(action_dlg: UIAWrapper) -> list[str]:
+    """Return the visible row texts of the ``.regexPreviewList`` ListView.
+
+    Used by Wave 11 probes (#361) to verify what the preview pane
+    actually renders — distinct from the live-preview counter which
+    only carries the match count. The list is a QListWidget whose
+    ListItem descendants carry the displayed strings (basename for
+    File Name fields, folder path for Folder, "Group N — basename
+    (value)" rows for Top-N). Returns an empty list if the list
+    isn't found or no items are present.
+    """
+    lst = _find_descendant_by_aid_suffix(action_dlg, "List", ".regexPreviewList")
+    if lst is None:
+        return []
+    items: list[str] = []
+    for it in lst.descendants(control_type="ListItem"):
+        try:
+            text = (it.window_text() or "").strip()
+        except Exception:
+            text = ""
+        if text:
+            items.append(text)
+    return items
+
+
 # ---------------------------------------------------------------------------
 # Main-window state probes (first-run hint #42, status bar #58, menu #52)
 # ---------------------------------------------------------------------------
