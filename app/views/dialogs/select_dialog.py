@@ -1193,12 +1193,6 @@ class ActionDialog(QDialog):
             self._preview_timer.setSingleShot(True)
             self._preview_timer.setInterval(150)
             self._preview_timer.timeout.connect(self._refresh_preview)
-            # D4 from #350 (Wave 10): test-against fires on the same
-            # debounce as the preview list. Typing in either the regex
-            # OR the test input triggers a re-evaluation of "does this
-            # pattern match this typed string".
-            self._preview_timer.timeout.connect(self._refresh_test_against)
-            self._test_against_edit.textChanged.connect(self._preview_timer.start)
             self.regex.textChanged.connect(self._preview_timer.start)
             self.combo.currentIndexChanged.connect(self._preview_timer.start)
             # #209 — numeric panel inputs feed the same debounced
@@ -1329,15 +1323,6 @@ class ActionDialog(QDialog):
         the numeric panel pre-empts both Simple and Regex panels.
         ``_field_panel_is_numeric`` is the gate.
         """
-        # D4 from #350 (Wave 10): test-against playground hidden on the
-        # numeric branch (numeric thresholds aren't regex; "test a string
-        # against the current threshold" has no meaningful semantic). The
-        # widget only exists when match_fn was supplied at __init__ time
-        # (lives inside _build_preview_pane).
-        if hasattr(self, "_test_against_widget"):
-            self._test_against_widget.setVisible(
-                not self._field_panel_is_numeric()
-            )
         if self._field_panel_is_numeric():
             self._simple_widget.setVisible(False)
             self._regex_widget.setVisible(False)
@@ -1644,41 +1629,14 @@ class ActionDialog(QDialog):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        # D4 from #350 (Wave 10): test-against playground. Lets the user try
-        # a single hand-typed string against the current regex without
-        # adding it to their actual file collection. Hidden when a numeric
-        # field is active (numeric thresholds aren't regex) — visibility
-        # toggled from _apply_mode_visibility. Lives at the top of the
-        # preview pane because semantically the right side is "what this
-        # regex does"; preview list = real records, test-against = a
-        # hypothetical record. Same 150ms debounce as _refresh_preview so
-        # the result updates as user types either regex OR test input.
-        self._test_against_widget = QWidget()
-        self._test_against_widget.setObjectName("regexTestAgainstRow")
-        test_row = QHBoxLayout(self._test_against_widget)
-        test_row.setContentsMargins(0, 0, 0, 0)
-        test_row.addWidget(QLabel(t("action_dialog.test_against_label")))
-        self._test_against_edit = QLineEdit()
-        self._test_against_edit.setObjectName("regexTestAgainstEdit")
-        self._test_against_edit.setPlaceholderText(
-            t("action_dialog.test_against_placeholder")
-        )
-        self._test_against_edit.setClearButtonEnabled(True)
-        test_row.addWidget(self._test_against_edit, stretch=1)
-        self._test_against_icon = QLabel("")
-        self._test_against_icon.setObjectName("regexTestAgainstIcon")
-        self._test_against_icon.setFixedWidth(16)
-        test_row.addWidget(self._test_against_icon)
-        self._test_against_result_label = QLabel("")
-        self._test_against_result_label.setObjectName("regexTestAgainstResult")
-        test_row.addWidget(self._test_against_result_label)
-        right_layout.addWidget(self._test_against_widget)
-
         # #391: preview-header row carries the preview label on the left
         # and the Reset window-size button on the right, replacing the
         # old close-row layout. Reset is visually associated with the
         # resizable surface (the preview pane itself) — the action it
         # performs (wipe geometry+splitter blobs) only affects this side.
+        # #395 removed the test-against playground that used to live
+        # above this header — live preview against real manifest data
+        # covers the same iterative-tuning need.
         preview_header_row = QHBoxLayout()
         preview_header_row.setContentsMargins(0, 0, 0, 0)
         preview_header_row.addWidget(QLabel(t("action_dialog.preview_label")))
@@ -1867,55 +1825,6 @@ class ActionDialog(QDialog):
             self._preview_truncated.show()
         else:
             self._preview_truncated.hide()
-
-    def _refresh_test_against(self) -> None:
-        """D4 from #350 (Wave 10): update the test-against icon + label.
-
-        Runs on the same 150ms debounce as ``_refresh_preview`` so the
-        result updates whether the user types in the regex OR the test
-        input. Neutral state (no icon, no label) when:
-
-          * the test input is empty (user hasn't asked anything yet)
-          * the regex is empty / invalid (the regex validator already
-            shows the error elsewhere — echoing here would be noise)
-          * the active field is numeric (test-against widget is hidden
-            in that branch by ``_apply_mode_visibility``; guard anyway)
-        """
-        if not hasattr(self, "_test_against_widget"):
-            return
-        if self._field_panel_is_numeric():
-            return
-        test_text = self._test_against_edit.text()
-        if not test_text:
-            self._set_status_icon(self._test_against_icon, None)
-            self._test_against_result_label.setText("")
-            return
-        pattern = self._build_pattern()
-        if not pattern:
-            self._set_status_icon(self._test_against_icon, None)
-            self._test_against_result_label.setText("")
-            return
-        try:
-            rx = re.compile(pattern, re.IGNORECASE)
-        except re.error:
-            # Regex validator handles the error display on its own row
-            # — echoing ✗ on test-against would be redundant noise.
-            self._set_status_icon(self._test_against_icon, None)
-            self._test_against_result_label.setText("")
-            return
-        m = rx.search(test_text)
-        if m is None:
-            self._set_status_icon(self._test_against_icon, "invalid")
-            self._test_against_result_label.setText(
-                t("action_dialog.test_against_no_match")
-            )
-        else:
-            self._set_status_icon(self._test_against_icon, "valid")
-            self._test_against_result_label.setText(
-                t("action_dialog.test_against_match_at").format(
-                    start=m.start(), end=m.end()
-                )
-            )
 
     def _refresh_numeric_preview(self) -> None:
         """Populate the preview pane + counter from the numeric panel.
