@@ -433,6 +433,441 @@ def main() -> int:
     except Exception:
         pass
 
+    # ════════════════════════════════════════════════════════════════════
+    # Wave 11 probes — layer-3 coverage push (issues #359 #366 #374 #377 #379)
+    # Each probe opens its own ActionDialog so prior probe state cannot
+    # bleed into the next. Probes don't change manifest decisions —
+    # the load-bearing decision-write was already verified in the main
+    # flow above. Failures here surface UI-wiring regressions that
+    # layer-1 (which mocks Qt) cannot observe.
+    # ════════════════════════════════════════════════════════════════════
+
+    # ---------- Probe #359 (Wave 3 A1): regex survives field change ----------
+    # SKIP-soft. A1's preservation logic in _on_field_changed compares
+    # current_text against re.escape(prev_field_row_value) and only
+    # preserves when they differ — driving this through pywinauto turned
+    # out fragile (Simple-panel reverse-parse + Mode-toggle order can
+    # re-stamp a trailing \. on the user's regex depending on what
+    # row_values[prev_field] is at probe-time). The contract is fully
+    # covered at layer 1 in tests/test_select_dialog.py::
+    # TestFieldChangeStateCorrectness which has direct access to
+    # _previous_field and _row_values. Tracking on #359.
+    print("step: probe_a1_regex_survives_field_change")
+    print(
+        "probe_status: A1-regex-survives-field-change SKIP — "
+        "preservation contract reproducible only with direct access to "
+        "_previous_field / _row_values; layer-1 "
+        "TestFieldChangeStateCorrectness is the contract. Tracking on #359."
+    )
+
+    # ---------- Probe #366 (Wave 7 E3+E8): mode/field round-trip ----------
+    # E3+E8 (Wave 7): mode, field, and simple_op preferences persist
+    # per context across close-and-reopen. We set a non-default Field
+    # ("Folder") in Simple mode, close, then read the persisted value
+    # from qa/settings.json directly — collapsed Qt QComboBox does NOT
+    # expose its current item via UIA Name property, so reading from
+    # the persistence layer is the load-bearing assertion. The
+    # persisted key is ui.action_dialog.main.field (context_id="main"
+    # is the menu-route context the s31 dialog uses). C1 + A8 + A6
+    # require setups s31 can't drive cleanly; SKIP-soft and document
+    # on the issue.
+    print("step: probe_e3e8_field_persists_across_reopen")
+    _, win = _uia.connect_main()
+    _dlg366a, _ = _uia.open_action_by_regex_dialog(win)
+    _field_combo366a = _uia._find_descendant_by_aid_suffix(
+        _dlg366a, "ComboBox", ".regexFieldCombo"
+    )
+    if _field_combo366a is not None:
+        try:
+            _field_combo366a.select("Folder")
+            time.sleep(0.3)
+        except Exception as _e:
+            print(f"  probe_status: E3E8-set-field-attempt FAIL — {_e!r}")
+    try:
+        _uia.close_action_dialog(_dlg366a)
+    except Exception:
+        pass
+    # Read the persisted field from settings.json — the contract is
+    # "persists across close-and-reopen"; the persistence layer IS the
+    # contract. Reopening the dialog is downstream of this (and the
+    # combo's current-item is unreliable through UIA — see above).
+    import json as _json
+    _settings_path = REPO / "qa" / "settings.json"
+    _persisted_field = None
+    try:
+        with open(_settings_path, encoding="utf-8") as _sf:
+            _persisted_field = (
+                _json.load(_sf)
+                .get("ui", {})
+                .get("action_dialog", {})
+                .get("main", {})
+                .get("field")
+            )
+    except Exception as _e:
+        print(f"  probe_status: E3E8-settings-read FAIL — {_e!r}")
+    print(f"  probe_status: E3E8-persisted-field={_persisted_field!r}")
+    if _persisted_field == "Folder":
+        print("probe_status: E3E8-field-persists PASS")
+    else:
+        print(
+            f"probe_status: E3E8-field-persists FAIL — "
+            f"persisted {_persisted_field!r}, expected 'Folder' — "
+            f"ui.action_dialog.main.field persistence regressed"
+        )
+    # Restore default field so the next probe starts clean. Reopen the
+    # dialog ONCE to flip the persisted field back via the normal flow.
+    _, win = _uia.connect_main()
+    _dlg366b, _ = _uia.open_action_by_regex_dialog(win)
+    _field_combo366b = _uia._find_descendant_by_aid_suffix(
+        _dlg366b, "ComboBox", ".regexFieldCombo"
+    )
+    if _field_combo366b is not None:
+        try:
+            _field_combo366b.select(FIELD)
+            time.sleep(0.2)
+        except Exception:
+            pass
+    try:
+        _uia.close_action_dialog(_dlg366b)
+    except Exception:
+        pass
+    print(
+        "probe_status: C1-disabled-when-no-match-fn SKIP — "
+        "s31's post-scan session always has match_fn; no-manifest "
+        "open path needs a dedicated scenario. Tracking on #366."
+    )
+    print(
+        "probe_status: A8-context-isolation SKIP — cross-context "
+        "verification needs both menu (context_id='main') and Execute "
+        "(context_id='execute') open with divergent settings; the "
+        "settings-divergence setup needs more scaffolding than s31 "
+        "warrants. Tracking on #366."
+    )
+    print(
+        "probe_status: A6-cross-field-filtering SKIP — needs "
+        "pre-existing Recent menu entries for one field that should "
+        "NOT show under another; Recent state is wiped between batch "
+        "runs. Tracking on #366."
+    )
+
+    # ---------- Probe #377 B12: action label text ----------
+    # B12 (Wave 9b-trim): label above the action combo rewords from
+    # "Set Action:" to "Action for each match:" to make per-row scope
+    # explicit. No objectName on the QLabel (line 1038 of
+    # select_dialog.py) — walk Text descendants and match by text.
+    print("step: probe_b12_action_label_text")
+    _, win = _uia.connect_main()
+    _dlg377, _ = _uia.open_action_by_regex_dialog(win)
+    _found_label = False
+    try:
+        for _t in _dlg377.descendants(control_type="Text"):
+            try:
+                _txt = (_t.window_text() or "").strip()
+            except Exception:
+                _txt = ""
+            if _txt == "Action for each match:":
+                _found_label = True
+                break
+    except Exception as _e:
+        print(f"  probe_status: B12-action-label-walk FAIL — {_e!r}")
+    print(f"  probe_status: B12-action-label-present={_found_label}")
+    if _found_label:
+        print("probe_status: B12-action-label-text PASS")
+    else:
+        # Locale fallback — match the zh_TW translation too in case
+        # the runner is non-English.
+        _found_zh = False
+        try:
+            for _t in _dlg377.descendants(control_type="Text"):
+                try:
+                    _txt = (_t.window_text() or "").strip()
+                except Exception:
+                    _txt = ""
+                if "每組相符" in _txt or "對每筆相符" in _txt:
+                    _found_zh = True
+                    break
+        except Exception:
+            pass
+        if _found_zh:
+            print("probe_status: B12-action-label-text PASS (zh)")
+        else:
+            print(
+                "probe_status: B12-action-label-text FAIL — neither "
+                "en 'Action for each match:' nor zh equivalents found "
+                "in dialog Text descendants"
+            )
+
+    # ---------- Probe #379 D4: test-against playground result label ----------
+    # D4 (Wave 10): regexTestAgainstRow is visible in Regex/Simple
+    # modes and hidden when a numeric field is active. The visible
+    # verdict surfaces as TEXT on .regexTestAgainstResult ("match at
+    # {start}-{end}" for match, "(no match)" for miss) — the icon
+    # itself is a QStyle.StandardPixmap (no text). UIA exposes the
+    # accessibleName via window_text() on a QLabel, which the result
+    # label sets via setText(). Read the result label, not the icon
+    # glyph. (Wave 11 local-run caught this — original probe was
+    # checking '✓'/'✗' against an empty-text QLabel.)
+    print("step: probe_d4_test_against_visibility_and_result")
+    _test_edit = _uia._find_descendant_by_aid_suffix(
+        _dlg377, "Edit", ".regexTestAgainstEdit"
+    )
+    _test_result = _uia._find_descendant_by_aid_suffix(
+        _dlg377, "Text", ".regexTestAgainstResult"
+    )
+    print(f"  probe_status: D4-test-against-edit-present={_test_edit is not None}")
+    print(f"  probe_status: D4-test-against-result-present={_test_result is not None}")
+    if _test_edit is None or _test_result is None:
+        print(
+            "probe_status: D4-test-against-visibility FAIL — "
+            "regexTestAgainstEdit or regexTestAgainstResult missing in "
+            "Simple mode (panel should be visible)"
+        )
+    else:
+        # Switch to Regex mode so the test-against playground tests
+        # the user-typed pattern instead of the synthesised Simple one.
+        _regex_radio379 = _uia._find_descendant_by_aid_suffix(
+            _dlg377, "RadioButton", ".regexModeRegex"
+        )
+        if _regex_radio379 is not None:
+            _regex_radio379.click_input()
+            time.sleep(0.3)
+        _regex_edit379 = _uia._find_descendant_by_aid_suffix(
+            _dlg377, "Edit", ".regexLineEdit"
+        )
+        if _regex_edit379 is not None:
+            _regex_edit379.iface_value.SetValue(r"abc\d+")
+            time.sleep(0.3)
+        # Match case: "abc123" → "match at 0-6"
+        _test_edit.iface_value.SetValue("abc123")
+        time.sleep(0.3)
+        _result_match = (_test_result.window_text() or "").strip()
+        print(f"  probe_status: D4-test-result-on-match={_result_match!r}")
+        # No-match case: "xyz" → "(no match)"
+        _test_edit.iface_value.SetValue("xyz")
+        time.sleep(0.3)
+        _result_nomatch = (_test_result.window_text() or "").strip()
+        print(f"  probe_status: D4-test-result-on-nomatch={_result_nomatch!r}")
+        _match_ok = "match at" in _result_match or "相符位置" in _result_match
+        _nomatch_ok = "no match" in _result_nomatch or "無相符" in _result_nomatch
+        if _match_ok and _nomatch_ok:
+            print("probe_status: D4-test-against-result PASS")
+        else:
+            print(
+                f"probe_status: D4-test-against-result FAIL — "
+                f"match_ok={_match_ok} (got {_result_match!r}), "
+                f"nomatch_ok={_nomatch_ok} (got {_result_nomatch!r})"
+            )
+    try:
+        _uia.close_action_dialog(_dlg377)
+    except Exception:
+        pass
+
+    # ---------- Probe #377 B9 + #379 D3 cancel ----------
+    # B9 (Wave 9b-trim): post-Apply, counter briefly shows
+    # "Applied to N rows" before reverting on next debounce.
+    # D3 (Wave 10): delete action triggers DeleteRegexConfirmDialog;
+    # clicking Cancel must NOT emit setActionRequested (no manifest
+    # write). The two probes share a dialog session because both
+    # involve Apply on the delete action.
+    print("step: probe_b9_d3_apply_flash_and_cancel")
+    _, win = _uia.connect_main()
+    _dlg_b9, _ = _uia.open_action_by_regex_dialog(win)
+    _regex_radio_b9 = _uia._find_descendant_by_aid_suffix(
+        _dlg_b9, "RadioButton", ".regexModeRegex"
+    )
+    if _regex_radio_b9 is not None:
+        _regex_radio_b9.click_input()
+        time.sleep(0.3)
+    _field_combo_b9 = _uia._find_descendant_by_aid_suffix(
+        _dlg_b9, "ComboBox", ".regexFieldCombo"
+    )
+    if _field_combo_b9 is not None:
+        try:
+            _field_combo_b9.select(FIELD)
+            time.sleep(0.2)
+        except Exception:
+            pass
+    _regex_edit_b9 = _uia._find_descendant_by_aid_suffix(
+        _dlg_b9, "Edit", ".regexLineEdit"
+    )
+    # Pick a pattern with at least one match so the flash text has a
+    # non-zero count — the main flow already set neardup_00_q95 to
+    # delete, so we pick a different fixture row to keep the
+    # decision-state isolated. q88 is still in 'pre' state.
+    if _regex_edit_b9 is not None:
+        _regex_edit_b9.iface_value.SetValue("q88")
+        time.sleep(0.3)
+    _action_combo_b9 = _uia._find_descendant_by_aid_suffix(
+        _dlg_b9, "ComboBox", ".regexActionCombo"
+    )
+    if _action_combo_b9 is not None:
+        _select_action_with_retry(_action_combo_b9, "keep")
+    # First Apply: action=keep (no D3 confirm modal — only delete
+    # triggers it). Verify the B9 "Applied to" flash text surfaces.
+    _apply_btn_b9 = _uia._find_dialog_button(_dlg_b9, _uia.ACTION_DIALOG_BTN_APPLY)
+    _apply_btn_b9.click_input()
+    time.sleep(0.3)
+    # No confirm modal for 'keep' — but call drive in case something
+    # changes; short timeout returns False harmlessly.
+    _uia.drive_delete_regex_confirm(_dlg_b9.process_id(), confirm=True)
+    _counter_b9 = _uia._find_descendant_by_aid_suffix(
+        _dlg_b9, "Text", ".regexMatchCounter"
+    )
+    _counter_text_b9 = (_counter_b9.window_text() if _counter_b9 else "") or ""
+    print(f"  probe_status: B9-counter-after-apply={_counter_text_b9!r}")
+    if "Applied to" in _counter_text_b9 or "已套用" in _counter_text_b9:
+        print("probe_status: B9-post-apply-flash PASS")
+    else:
+        print(
+            f"probe_status: B9-post-apply-flash FAIL — counter "
+            f"{_counter_text_b9!r} missing 'Applied to'/'已套用' marker; "
+            f"match_counter_applied template may have regressed"
+        )
+
+    # Now exercise D3 cancel: switch action to delete, Apply, hit
+    # Cancel on the confirm modal, assert no new decisions written.
+    print("step: probe_d3_cancel_does_not_emit")
+    _pre_d3 = _read_decisions()
+    if _action_combo_b9 is not None:
+        _select_action_with_retry(_action_combo_b9, "delete")
+    _apply_btn_b9.click_input()
+    time.sleep(0.3)
+    _cancelled = _uia.drive_delete_regex_confirm(
+        _dlg_b9.process_id(), confirm=False, timeout=3.0
+    )
+    print(f"  probe_status: D3-cancel-modal-dismissed={_cancelled}")
+    time.sleep(0.5)
+    _post_d3 = _read_decisions()
+    # Decisions table should be byte-for-byte identical — no row
+    # tagged 'delete' as a result of the cancelled Apply.
+    if _cancelled and _post_d3 == _pre_d3:
+        print("probe_status: D3-cancel-does-not-emit PASS")
+    else:
+        _diff = {
+            name: (_pre_d3.get(name), _post_d3.get(name))
+            for name in set(_pre_d3) | set(_post_d3)
+            if _pre_d3.get(name) != _post_d3.get(name)
+        }
+        print(
+            f"probe_status: D3-cancel-does-not-emit FAIL — "
+            f"cancelled={_cancelled}, decision_diff={_diff!r}; "
+            f"setActionRequested should NOT fire when D3 modal is "
+            f"cancelled (#350 D3 contract)"
+        )
+    try:
+        _uia.close_action_dialog(_dlg_b9)
+    except Exception:
+        pass
+
+    # ---------- Probe #374 D9 Ctrl+Enter + D10 Alt mnemonics ----------
+    # D9 (Wave 9a): Ctrl+Return triggers Apply same as the button.
+    # D10 (Wave 9a): Alt+A=Apply, Alt+C=Close, Alt+R=Recent, Alt+S=
+    # Switch to Regex, Alt+W=Reset window size. Verify Alt+A fires
+    # Apply (counter changes to "Applied to" flash) and Alt+R opens
+    # the Recent menu popup. B11 (tooltip hover) is SKIP-soft because
+    # Qt tooltip surfacing via UIA on Windows 10 is unreliable —
+    # layer-1 toolTip() getter pins the contract.
+    print("step: probe_d9_d10_keyboard_shortcuts")
+    _, win = _uia.connect_main()
+    _dlg_kb, _ = _uia.open_action_by_regex_dialog(win)
+    _regex_radio_kb = _uia._find_descendant_by_aid_suffix(
+        _dlg_kb, "RadioButton", ".regexModeRegex"
+    )
+    if _regex_radio_kb is not None:
+        _regex_radio_kb.click_input()
+        time.sleep(0.3)
+    _field_combo_kb = _uia._find_descendant_by_aid_suffix(
+        _dlg_kb, "ComboBox", ".regexFieldCombo"
+    )
+    if _field_combo_kb is not None:
+        try:
+            _field_combo_kb.select(FIELD)
+            time.sleep(0.2)
+        except Exception:
+            pass
+    _regex_edit_kb = _uia._find_descendant_by_aid_suffix(
+        _dlg_kb, "Edit", ".regexLineEdit"
+    )
+    if _regex_edit_kb is not None:
+        _regex_edit_kb.iface_value.SetValue("q65")
+        time.sleep(0.3)
+    _action_combo_kb = _uia._find_descendant_by_aid_suffix(
+        _dlg_kb, "ComboBox", ".regexActionCombo"
+    )
+    if _action_combo_kb is not None:
+        _select_action_with_retry(_action_combo_kb, "keep")
+    # D9 Ctrl+Return → Apply should fire (counter flashes "Applied to").
+    try:
+        _uia._focus(_dlg_kb)
+        # Re-focus the regex edit so Ctrl+Return fires the dialog's
+        # shortcut, not the action combo's default-button equivalent.
+        if _regex_edit_kb is not None:
+            _regex_edit_kb.set_focus()
+            time.sleep(0.1)
+        _dlg_kb.type_keys("^{ENTER}")
+        time.sleep(0.5)
+        _uia.drive_delete_regex_confirm(_dlg_kb.process_id(), confirm=True)
+        _counter_d9 = _uia._find_descendant_by_aid_suffix(
+            _dlg_kb, "Text", ".regexMatchCounter"
+        )
+        _counter_text_d9 = (
+            _counter_d9.window_text() if _counter_d9 else ""
+        ) or ""
+        print(f"  probe_status: D9-counter-after-ctrl-enter={_counter_text_d9!r}")
+        if "Applied to" in _counter_text_d9 or "已套用" in _counter_text_d9:
+            print("probe_status: D9-ctrl-enter-triggers-apply PASS")
+        else:
+            print(
+                f"probe_status: D9-ctrl-enter-triggers-apply FAIL — "
+                f"counter {_counter_text_d9!r} did not flash 'Applied to'; "
+                f"QShortcut(Ctrl+Return) wiring may have regressed"
+            )
+    except Exception as _exc:
+        print(f"probe_status: D9-ctrl-enter-triggers-apply FAIL — {_exc!r}")
+
+    # D10 Alt+R should open the Recent menu popup. Verify by polling
+    # for a new popup hwnd. (Alt+A would fire Apply again; we already
+    # tested that via D9. Alt+R is the most distinctive — it opens a
+    # popup rather than firing a button.)
+    print("step: probe_d10_alt_r_opens_recent")
+    try:
+        _uia._focus(_dlg_kb)
+        time.sleep(0.2)
+        _dlg_kb.type_keys("%r")
+        time.sleep(0.4)
+        _popup_hwnd = _uia.find_popup(_dlg_kb.process_id())
+        if _popup_hwnd is not None:
+            print("probe_status: D10-alt-r-opens-recent PASS")
+            # Dismiss the popup so it doesn't interfere with the Close.
+            try:
+                _uia._user32.keybd_event(0x1B, 0, 0, 0)
+                _uia._user32.keybd_event(0x1B, 0, 2, 0)
+                time.sleep(0.2)
+            except Exception:
+                pass
+        else:
+            print(
+                "probe_status: D10-alt-r-opens-recent FAIL — no popup "
+                "appeared after Alt+R; mnemonic wiring on Recent button "
+                "may have regressed (label should be '&Recent')"
+            )
+    except Exception as _exc:
+        print(f"probe_status: D10-alt-r-opens-recent FAIL — {_exc!r}")
+    print(
+        "probe_status: B11-tooltip-hover SKIP — Qt tooltip text "
+        "surfacing via UIA on Windows 10 needs WM_MOUSEMOVE + popup "
+        "polling that's known fragile; layer-1 toolTip() getter "
+        "pins the contract. Tracking on #374."
+    )
+    try:
+        _uia.close_action_dialog(_dlg_kb)
+    except Exception:
+        pass
+
+    # ════════════════════════════════════════════════════════════════════
+    # End Wave 11 probes
+    # ════════════════════════════════════════════════════════════════════
+
     print("scenario: s31_simple_mode_regex DONE")
     return 0
 

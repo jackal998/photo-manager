@@ -316,6 +316,198 @@ def main() -> int:
     print("step: cleanup_reset_decisions")
     _reset_fixture_decisions()
 
+    # ── Wave 11 probes — numeric panel polish surfaces ───────────────
+    # #361b + #363 (A4 threshold icon, B6 Top-N counter, A14 spinbox 5000)
+    # all need the numeric panel reachable. Reopen Execute → Select by
+    # Regex → ActionDialog so the panel is in scope; probes don't Apply
+    # (no decision changes), then Cancel out of Execute so no deletes.
+    print("step: probe_open_execute_for_numeric_polish")
+    _, win = _uia.connect_main()
+    probe_exec, _ = _uia.open_execute_action_dialog(win)
+    _select_btn = probe_exec.child_window(
+        title=_uia.EXECUTE_BTN_SELECT_BY_REGEX, control_type="Button"
+    )
+    _probe_action_hwnd = _uia._click_btn_and_wait_for_dialog(
+        _select_btn, probe_exec, pid, _uia.ACTION_DIALOG_TITLE,
+    )
+    probe_action = _uia.connect_by_handle(_probe_action_hwnd)
+    _uia._focus(probe_action)
+    time.sleep(0.3)
+    # Surface the numeric panel by picking the numeric field.
+    _probe_field_combo = _uia._find_descendant_by_aid_suffix(
+        probe_action, "ComboBox", ".regexFieldCombo"
+    )
+    if _probe_field_combo is not None:
+        _probe_field_combo.select(SIZE_FIELD)
+        time.sleep(0.3)
+
+    # ---------- Probe #363 A4: threshold validation icon states ----------
+    # A4 (Wave 5): _validate_threshold sets _num_threshold_icon's
+    # accessibleName + tooltip to "Threshold valid" / "Threshold
+    # invalid: <reason>" / "" (neutral). The pixmap itself is a theme
+    # QStyle.StandardPixmap (no text). UIA exposes accessibleName via
+    # the widget's Name property, which is what window_text() reads on
+    # a QLabel — so the testable contract is the accessibleName string,
+    # NOT a glyph. (Wave 11 local-run caught the original glyph-based
+    # assertion was reading the right widget but expecting the wrong
+    # surface — fixed during local validation.)
+    print("step: probe_a4_threshold_icon_states")
+    _icon = _uia._find_descendant_by_aid_suffix(
+        probe_action, "Text", ".numericThresholdIcon"
+    )
+    _value_edit = _uia._find_descendant_by_aid_suffix(
+        probe_action, "Edit", ".numericValueEdit"
+    )
+    if _icon is None or _value_edit is None:
+        print(
+            "probe_status: A4-threshold-icon FAIL — "
+            "numericThresholdIcon or numericValueEdit not found"
+        )
+    else:
+        # Invalid: junk text — accessibleName starts with "Threshold invalid"
+        _value_edit.iface_value.SetValue("not-a-number")
+        time.sleep(0.3)
+        _name_invalid = (_icon.window_text() or "").strip()
+        print(f"  probe_status: A4-threshold-icon-invalid={_name_invalid!r}")
+        # Empty: neutral — accessibleName cleared
+        _value_edit.iface_value.SetValue("")
+        time.sleep(0.3)
+        _name_empty = (_icon.window_text() or "").strip()
+        print(f"  probe_status: A4-threshold-icon-empty={_name_empty!r}")
+        # Valid: numeric — accessibleName == "Threshold valid"
+        _value_edit.iface_value.SetValue("1000")
+        time.sleep(0.3)
+        _name_valid = (_icon.window_text() or "").strip()
+        print(f"  probe_status: A4-threshold-icon-valid={_name_valid!r}")
+        _invalid_ok = _name_invalid.startswith("Threshold invalid")
+        _valid_ok = _name_valid == "Threshold valid"
+        _empty_ok = _name_empty == ""
+        if _invalid_ok and _valid_ok and _empty_ok:
+            print("probe_status: A4-threshold-icon PASS")
+        else:
+            print(
+                f"probe_status: A4-threshold-icon FAIL — "
+                f"invalid_ok={_invalid_ok}, valid_ok={_valid_ok}, "
+                f"empty_ok={_empty_ok}"
+            )
+
+    # ---------- Probe #363 B6: Top-N mode counter format ----------
+    # B6 (Wave 5): Top-N counter format is "{matched} matched (≤{n}
+    # per group × {group_count} groups)" — distinct from the simple
+    # "{matched} of {total} match" used by Regex and Threshold modes.
+    # The substring "per group" (en) is the load-bearing marker.
+    print("step: probe_b6_topn_counter_format")
+    _topn_radio = _uia._find_descendant_by_aid_suffix(
+        probe_action, "RadioButton", ".numericModeTopN"
+    )
+    if _topn_radio is None:
+        print("probe_status: B6-topn-counter FAIL — numericModeTopN not found")
+    else:
+        _topn_radio.click_input()
+        time.sleep(0.4)
+        _counter = _uia._find_descendant_by_aid_suffix(
+            probe_action, "Text", ".regexMatchCounter"
+        )
+        _counter_text = (_counter.window_text() if _counter else "") or ""
+        print(f"  probe_status: B6-topn-counter-text={_counter_text!r}")
+        # "per group" (en) or "每組" (zh_TW) are the per-locale markers.
+        if "per group" in _counter_text or "每組" in _counter_text:
+            print("probe_status: B6-topn-counter PASS")
+        else:
+            print(
+                f"probe_status: B6-topn-counter FAIL — counter "
+                f"{_counter_text!r} missing 'per group'/'每組' marker"
+            )
+
+    # ---------- Probe #363 A14: spinbox accepts values past 999 ----------
+    # A14 (Wave 5): Top-N spinbox cap raised from 999 to 10_000. The
+    # check uses iface_value.SetValue + CurrentValue to read back —
+    # pywinauto's Qt Spinner interface exposes RangeValue. Falls back
+    # to keyboard-typing the value if SetValue isn't supported on this
+    # Qt build, which is the realistic user path anyway.
+    print("step: probe_a14_spinbox_above_999")
+    _spin = _uia._find_descendant_by_aid_suffix(
+        probe_action, "Spinner", ".numericNSpinBox"
+    )
+    if _spin is None:
+        print("probe_status: A14-spinbox-5000 FAIL — numericNSpinBox not found")
+    else:
+        _set_ok = False
+        try:
+            _spin.iface_value.SetValue("5000")
+            time.sleep(0.2)
+            _set_ok = True
+        except Exception:
+            try:
+                _spin.set_focus()
+                _spin.type_keys("^a{DEL}5000", with_spaces=True)
+                time.sleep(0.2)
+                _set_ok = True
+            except Exception as _e:
+                print(f"  probe_status: A14-spinbox-set-attempt FAIL — {_e!r}")
+        if _set_ok:
+            _readback: str | int = ""
+            try:
+                _readback = _spin.iface_value.CurrentValue
+            except Exception:
+                try:
+                    _readback = (_spin.window_text() or "").strip()
+                except Exception:
+                    _readback = ""
+            print(f"  probe_status: A14-spinbox-readback={_readback!r}")
+            # Compare loosely — the value may come back as "5000",
+            # "5,000", or integer 5000 depending on the Qt build.
+            _readback_str = str(_readback).replace(",", "").strip()
+            if _readback_str == "5000":
+                print("probe_status: A14-spinbox-5000 PASS")
+            else:
+                print(
+                    f"probe_status: A14-spinbox-5000 FAIL — readback "
+                    f"{_readback!r} did not parse as 5000 (range cap "
+                    f"may have clamped to 999 — A14 regression)"
+                )
+
+    # ---------- Probe #361b: Top-N preview rows are grouped ----------
+    # D5/D8 (Wave 4): Top-N preview rows render as
+    # "Group N — basename (value)" so the group context and the
+    # ranking value are visible. We're already in Top-N mode from
+    # the B6 probe above. Just read the preview list and verify any
+    # row carries the "Group " prefix marker.
+    print("step: probe_d5d8_topn_preview_grouped")
+    _items = _uia.read_preview_items(probe_action)
+    print(f"  probe_status: D5D8-topn-preview-count={len(_items)}")
+    if _items:
+        # Show the first few so future drift is visible in batch logs.
+        for _i, _t in enumerate(_items[:3]):
+            print(f"  probe_status: D5D8-topn-preview-row[{_i}]={_t!r}")
+        if any("Group " in _t or "群組" in _t for _t in _items):
+            print("probe_status: D5D8-topn-preview-grouped PASS")
+        else:
+            print(
+                "probe_status: D5D8-topn-preview-grouped FAIL — no row "
+                "carries 'Group ' / '群組' prefix; rendering may have "
+                "regressed to plain basenames"
+            )
+    else:
+        print(
+            "probe_status: D5D8-topn-preview-grouped SKIP — preview "
+            "list empty (Top-N may not have populated)"
+        )
+
+    # Close ActionDialog (Cancel out of Execute too — no Apply, no
+    # decision changes, no deletions).
+    print("step: probe_close_action_then_execute")
+    try:
+        _uia.close_action_dialog(probe_action)
+    except Exception:
+        pass
+    try:
+        _exec_close = _uia._find_dialog_button(probe_exec, "Close")
+        _exec_close.click_input()
+        time.sleep(0.3)
+    except Exception:
+        pass
+
     print("scenario: s43_numeric_condition DONE")
     return 0
 

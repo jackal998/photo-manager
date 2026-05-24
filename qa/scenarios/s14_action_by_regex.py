@@ -146,6 +146,68 @@ def main() -> int:
     _uia.close_action_dialog(probe_dlg)
     _, win = _uia.connect_main()
 
+    # ---------- Probe #361a (Wave 4 A2): Folder-regex preview rows ----------
+    # A2 (Wave 4) changed _refresh_preview to render the MATCHED-FIELD
+    # string for non-File-Name regexes. Before A2 the preview always
+    # showed the basename even when matching against Folder, masking
+    # which folder fragment actually drove the match. This probe opens
+    # a Folder-regex flow and reads .regexPreviewList — the rows MUST
+    # carry a path separator (folder path) and NOT just the basename.
+    # No Apply: the probe doesn't change any decisions.
+    print("step: probe_folder_regex_preview_shows_paths")
+    probe_dlg2, _ = _uia.open_action_by_regex_dialog(win)
+    _regex_radio2 = _uia._find_descendant_by_aid_suffix(
+        probe_dlg2, "RadioButton", ".regexModeRegex"
+    )
+    if _regex_radio2 is not None:
+        try:
+            if not _regex_radio2.is_selected():
+                _regex_radio2.click_input()
+                time.sleep(0.2)
+        except Exception:
+            pass
+    _field_combo2 = _uia._find_descendant_by_aid_suffix(
+        probe_dlg2, "ComboBox", ".regexFieldCombo"
+    )
+    if _field_combo2 is not None:
+        _field_combo2.select("Folder")
+        time.sleep(0.2)
+    _regex_edit2 = _uia._find_descendant_by_aid_suffix(
+        probe_dlg2, "Edit", ".regexLineEdit"
+    )
+    if _regex_edit2 is not None:
+        # "sandbox" is in the folder path of every fixture row but in
+        # NO basename — so any preview-row text containing "sandbox"
+        # came from the folder field, proving A2's matched-field path.
+        _regex_edit2.iface_value.SetValue("sandbox")
+        time.sleep(0.4)  # past the 150 ms preview debounce
+    _items = _uia.read_preview_items(probe_dlg2)
+    print(f"  probe_status: A2-folder-preview-count={len(_items)}")
+    if _items:
+        for _i, _t in enumerate(_items[:3]):
+            print(f"  probe_status: A2-folder-preview-row[{_i}]={_t!r}")
+        # A row is folder-shaped if it contains a path separator AND
+        # is not just a bare basename. The Wave 4 contract is that the
+        # preview shows the matched FIELD value, not the basename.
+        _looks_like_path = any(
+            ("/" in _t or "\\" in _t) and "sandbox" in _t for _t in _items
+        )
+        if _looks_like_path:
+            print("probe_status: A2-folder-preview-shows-paths PASS")
+        else:
+            print(
+                "probe_status: A2-folder-preview-shows-paths FAIL — no "
+                "row contains 'sandbox' with a path separator; preview "
+                "may have regressed to bare basenames"
+            )
+    else:
+        print(
+            "probe_status: A2-folder-preview-shows-paths SKIP — preview "
+            "list empty (regex 'sandbox' should have matched 5 rows)"
+        )
+    _uia.close_action_dialog(probe_dlg2)
+    _, win = _uia.connect_main()
+
     print("step: apply_regex_via_menu")
     rx = re.compile(REGEX, re.IGNORECASE)
     expected_match = sorted(name for name in pre if rx.search(name))
