@@ -267,12 +267,20 @@ def main() -> int:
     if counter_text is None:
         print("FAIL: live-preview counter not found — preview pane missing?")
         return 1
-    # Counter should mention 3 matches and 5 total (digit presence is enough —
-    # exact format is locale-dependent).
-    if "3" not in counter_text or "5" not in counter_text:
+    # #387 fix: counter_text is read AFTER Apply, so it reflects B9's
+    # match_counter_applied template ('Applied to {matched} rows' /
+    # '已套用至 {matched} 列') — not the pre-Apply 'X of Y match' shape.
+    # Wave 9b-trim (#378) introduced the flash; the prior assertion
+    # expected both '3' (matched) and '5' (total) and was always
+    # FAIL-printing because the flash doesn't carry total. Verify the
+    # matched count and the 'Applied to' / '已套用' marker instead.
+    _has_matched_count = "3" in counter_text
+    _has_applied_marker = "Applied to" in counter_text or "已套用" in counter_text
+    if not (_has_matched_count and _has_applied_marker):
         print(
-            f"FAIL: counter text {counter_text!r} should mention "
-            f"3 matched and 5 total"
+            f"FAIL: counter text {counter_text!r} missing matched "
+            f"count '3' or 'Applied to'/'已套用' flash marker — "
+            f"#378 match_counter_applied template may have regressed"
         )
         # Don't return immediately — manifest check below is the
         # load-bearing assertion.
