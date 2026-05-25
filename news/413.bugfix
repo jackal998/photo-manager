@@ -1,0 +1,1 @@
+Fix Execute Action dialog preview pane staying blank on row selection — wire the shared `ImageTaskRunner`'s `imageLoaded` signal to the dialog's own `PreviewPane` (#409).
