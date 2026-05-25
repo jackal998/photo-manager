@@ -186,6 +186,16 @@ class ExecuteActionDialog(QDialog):
         # exactly as it was — no splitter, no preview.
         if self._task_runner is not None:
             self._preview = PreviewPane(self, self._task_runner)
+            # #409 — the shared ImageTaskRunner emits its completion
+            # signal on the receiver it was constructed with (the
+            # MainWindow), which forwards only to the main window's
+            # own PreviewPane. Without this connect, background-loaded
+            # images never reach the dialog's preview and the pane
+            # stays blank. Qt auto-disconnects when the dialog's
+            # _preview child is destroyed on dialog close.
+            self._task_runner._receiver.imageLoaded.connect(
+                self._preview.on_image_loaded
+            )
             self._splitter = QSplitter(Qt.Horizontal, self)
             self._splitter.addWidget(self._tree)
             self._splitter.addWidget(self._preview)

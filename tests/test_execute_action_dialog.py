@@ -1851,6 +1851,31 @@ class TestExecuteDialogPreviewPane:
         if ini.exists():
             ini.unlink()
 
+    def test_runner_image_loaded_signal_forwards_to_dialog_preview(self, qapp):
+        """#409 — the shared ImageTaskRunner emits ``imageLoaded`` on the
+        receiver passed at construction (the MainWindow), whose handler
+        forwards only to the main-window PreviewPane. Without an explicit
+        connect from the runner's receiver to the dialog's own preview,
+        background-loaded images never reach the splitter pane and the
+        preview stays blank — the bug the issue reports."""
+        from unittest.mock import MagicMock, patch
+        from PySide6.QtCore import QObject, Signal
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        class _FakeReceiver(QObject):
+            imageLoaded = Signal(str, str, object)
+
+        receiver = _FakeReceiver()
+        runner = MagicMock()
+        runner._receiver = receiver
+
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None, task_runner=runner)
+
+        with patch.object(dlg._preview, "on_image_loaded") as mock_handler:
+            receiver.imageLoaded.emit("token-x", "/a.jpg", None)
+            mock_handler.assert_called_once_with("token-x", "/a.jpg", None)
+
 
 # ── #318 — status-bar parity across all decision-changing paths ────────────
 
