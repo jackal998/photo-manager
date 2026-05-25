@@ -129,6 +129,20 @@ _FIELD_KEY_TEMPLATE = "ui.action_dialog.{context_id}.field"
 _SIMPLE_OP_KEY_TEMPLATE = "ui.action_dialog.{context_id}.simple_op"
 _RECENT_CAP = 10
 
+# #382: opt-in cross-window modality. When unset (or set to anything
+# other than "window"), the dialog stays at ApplicationModal — the
+# documented Windows-correct default since #139/#151. Setting to
+# "window" switches to WindowModal so the user can interact with
+# OTHER top-level windows (e.g. another viewer they have open) while
+# the dialog is up. Risk: PR #151 documented that WindowModal does
+# NOT set WS_DISABLED on the parent on Windows the way
+# ApplicationModal does, so users who opt in may still be able to
+# click the main window's menu bar — this is exactly the cross-window
+# unblock they're asking for, but it surfaces clicks the
+# ApplicationModal default suppresses. Stays opt-in so the default
+# behaviour is unchanged.
+_WINDOW_MODALITY_KEY = "ui.action_dialog.window_modality"
+
 # Fields whose underlying record attribute is numeric (or a datetime
 # that maps cleanly to a sortable timestamp). For these fields the
 # dialog swaps the regex/simple panel for a numeric-condition panel
@@ -659,15 +673,22 @@ class ActionDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("action_dialog.title"))
-        # #139 — explicit ApplicationModal so OS-level click events on
-        # the parent (e.g. main window menu bar) are blocked while this
-        # dialog is up. QDialog.exec() alone doesn't do this; see the
-        # ExecuteActionDialog comment for the full reasoning.
-        self.setWindowModality(Qt.ApplicationModal)
         self._fields = list(fields)
         self._row_values = dict(row_values or {})
         self._match_fn = match_fn
         self._settings = settings
+        # #139 — explicit ApplicationModal so OS-level click events on
+        # the parent (e.g. main window menu bar) are blocked while this
+        # dialog is up. QDialog.exec() alone doesn't do this; see the
+        # ExecuteActionDialog comment for the full reasoning.
+        # #382 — opt-in cross-window unblock via _WINDOW_MODALITY_KEY.
+        # Anything other than the literal "window" string keeps the
+        # ApplicationModal default (fail-safe; unrecognised values do
+        # NOT silently downgrade modality).
+        modality_pref = self._settings_get(_WINDOW_MODALITY_KEY, "application")
+        self.setWindowModality(
+            Qt.WindowModal if modality_pref == "window" else Qt.ApplicationModal
+        )
         self._sample_cap = 50  # mirrors build_match_fn default
         # ``groups`` is the raw list of PhotoGroups whose rows the
         # dialog would affect — passed in by ExecuteActionDialog so
