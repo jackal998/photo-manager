@@ -195,9 +195,9 @@ locked_confirm:
 # inserted before regex-driven bulk delete only; other actions emit
 # immediately. Cancel is the default focus + Esc target.
 delete_regex_confirm:
-  title: "Confirm bulk delete"
-  body: "This will move {matched} files to the Recycle Bin via {pattern_summary}.\n\nThis action sends the files to the Recycle Bin and cannot be easily undone."
-  confirm_button: "Delete {matched} files"
+  title: "Confirm bulk-delete decision"
+  body: "This will mark {matched} files for deletion via {pattern_summary}.\n\nFiles will be sent to the Recycle Bin when you run Execute Action — this cannot be easily undone."
+  confirm_button: "Mark {matched} files for deletion"
   cancel: "Cancel"
 
 # ActionDialog (Set Action by Field).

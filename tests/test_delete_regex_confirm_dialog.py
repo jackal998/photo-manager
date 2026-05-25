@@ -66,8 +66,8 @@ class TestButtonStates:
         )
 
     def test_confirm_button_label_echoes_count(self, qapp):
-        """Final visual confirmation: 'Delete 47 files' — the count
-        re-appears in the primary action label, not just the body."""
+        """Final visual confirmation: 'Mark 47 files for deletion' — the
+        count re-appears in the primary action label, not just the body."""
         dlg = _make_dialog(qapp, matched=47)
         assert "47" in dlg._btn_confirm.text(), (
             f"Confirm button must echo the matched count for one last "

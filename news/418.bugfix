@@ -1,0 +1,1 @@
+Reword DeleteRegexConfirmDialog so it stops promising immediate file deletion on the deferred Set-Action path — confirmation now reads "Mark N files for deletion" with explicit "files will be sent to the Recycle Bin when you run Execute Action" body (#415).

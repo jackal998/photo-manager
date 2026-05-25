@@ -160,9 +160,9 @@ locked_confirm:
 
 # DeleteRegexConfirmDialog — D3 from #350 (Wave 10).
 delete_regex_confirm:
-  title: "確認批次刪除"
-  body: "將透過 {pattern_summary} 把 {matched} 個檔案移至資源回收筒。\n\n此動作會將檔案送至資源回收筒,難以輕易復原。"
-  confirm_button: "刪除 {matched} 個檔案"
+  title: "確認批次刪除決策"
+  body: "將透過 {pattern_summary} 把 {matched} 個檔案標記為待刪除。\n\n執行「執行動作」時，檔案才會被送進資源回收筒，此操作難以輕易復原。"
+  confirm_button: "標記 {matched} 個檔案為待刪除"
   cancel: "取消"
 
 action_dialog:
