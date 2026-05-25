@@ -66,6 +66,41 @@ class TestModality:
         dlg = ActionDialog(fields=["Similarity", "File Name", "Folder"])
         assert dlg.windowModality() == Qt.ApplicationModal
 
+    def test_window_modality_opt_in_to_window_modal(self, qapp):
+        """#382 — setting ``ui.action_dialog.window_modality`` to
+        ``"window"`` switches the dialog to ``Qt.WindowModal`` so the
+        user can interact with OTHER top-level windows while it's open.
+        Default behaviour (no setting) stays at ApplicationModal —
+        verified by ``test_window_modality_is_application_modal`` above.
+        """
+        from PySide6.QtCore import Qt
+        from app.views.dialogs.select_dialog import ActionDialog
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"window_modality": "window"}}
+        })
+        dlg = ActionDialog(
+            fields=["Similarity", "File Name", "Folder"], settings=settings
+        )
+        assert dlg.windowModality() == Qt.WindowModal
+
+    def test_window_modality_unrecognised_value_falls_back_to_application(
+        self, qapp
+    ):
+        """#382 — fail-safe: an unrecognised value (typo, future key the
+        user copied from somewhere) must NOT silently downgrade modality
+        to NonModal or WindowModal. Default to the
+        ApplicationModal-on-Windows-correct behaviour from #139/#151.
+        """
+        from PySide6.QtCore import Qt
+        from app.views.dialogs.select_dialog import ActionDialog
+        settings = _FakeSettings({
+            "ui": {"action_dialog": {"window_modality": "non-existent-mode"}}
+        })
+        dlg = ActionDialog(
+            fields=["Similarity", "File Name", "Folder"], settings=settings
+        )
+        assert dlg.windowModality() == Qt.ApplicationModal
+
 
 class TestRecentMenuClamp:
     """#381 — the Recent ▾ menu position must stay inside the dialog's

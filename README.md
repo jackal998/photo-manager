@@ -510,8 +510,8 @@ photo-manager/
   "ui": {
     "locale": "en",
     "action_dialog": {
-      "mode": "simple",
-      "recent_patterns": []
+      "recent_patterns": [],
+      "window_modality": "application"
     }
   }
 }
@@ -519,8 +519,14 @@ photo-manager/
 
 Source paths and recursive flags set via **File › Scan Sources…** are saved here
 automatically. List order determines dedup priority (index 0 = highest priority).
-The regex dialog persists its mode (`"simple"` or `"regex"`) and a capped list
-of recently-used regex patterns under `ui.action_dialog`.
+The regex dialog persists a capped list of recently-used regex patterns under
+`ui.action_dialog.recent_patterns`. The optional
+`ui.action_dialog.window_modality` key (default `"application"`) accepts
+`"window"` to switch the Set Action dialog to `Qt.WindowModal` so the user can
+interact with other top-level windows while it's open — note that on Windows
+this does NOT set `WS_DISABLED` on the parent the way `ApplicationModal` does
+(PR #151), so the main window's menu bar stays clickable when this opt-in is
+on. Any unrecognised value falls back to the `ApplicationModal` default.
 
 The main window's position, size, and splitter ratio are persisted across
 launches (#141) in a separate `window_state.ini` (Qt `QSettings` INI format)
