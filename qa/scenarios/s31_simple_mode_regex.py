@@ -538,7 +538,7 @@ def main() -> int:
                 _txt = (_t.window_text() or "").strip()
             except Exception:
                 _txt = ""
-            if _txt == "Action for each match:":
+            if _txt == "Set status for each match:":
                 _found_label = True
                 break
     except Exception as _e:

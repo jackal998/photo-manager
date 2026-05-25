@@ -73,7 +73,7 @@ tree:
 
 decision:
   delete: "刪除"
-  keep: "保留 (取消動作)"
+  keep: "保留"
   remove_from_list: "從清單移除"
   lock: "鎖定"
   unlock: "解除鎖定"
@@ -170,7 +170,7 @@ action_dialog:
   field_label: "欄位:"
   regex_label: "正規式:"
   regex_placeholder: "例如:^IMG_\\d+\\.HEIC$"
-  set_action_label: "對每筆相符列的動作:"
+  set_action_label: "對每筆相符列設定狀態:"
   apply_button: "套用(&A)"
   reset_window_size_button: "重設視窗大小(&W)"
   reset_window_size_tooltip: "重設對話框大小與面板分割為預設值 (Ctrl+0)。不會影響模式、欄位或最近使用的規則。"
