@@ -301,6 +301,15 @@ class FileOperationsHandler:
     def _set_manifest_actions_enabled(self, enabled: bool) -> None:
         try:
             self.parent.menu_controller.set_manifest_actions(enabled)
+            # #410: execute_action_selected_only carries an additional
+            # selection-gate beyond MANIFEST_ACTIONS. Refresh after the
+            # bulk toggle so the entry reflects (manifest_loaded AND has
+            # selection), not just the manifest state.
+            refresh = getattr(
+                self.parent, "_refresh_execute_selected_only_enabled", None
+            )
+            if callable(refresh):
+                refresh()
         except AttributeError:
             pass
 
@@ -974,8 +983,16 @@ class FileOperationsHandler:
                     out.append(rec.file_path)
         return out
 
-    def execute_action(self) -> None:
-        """Open the Execute Action review dialog and run planned operations."""
+    def execute_action(self, selected_only: bool = False) -> None:
+        """Open the Execute Action review dialog and run planned operations.
+
+        #410: ``selected_only=True`` pre-filters the dialog's groups to
+        only those containing currently-highlighted file rows in the
+        main tree. Scope is a kwarg, NOT global state on the handler;
+        the dialog itself is unaware of the filter (groups arrive
+        already reduced). This replaces the older in-dialog
+        selection-then-execute scoping path.
+        """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             QMessageBox.information(
@@ -984,9 +1001,39 @@ class FileOperationsHandler:
                 t("file_op.execute_no_manifest_body"),
             )
             return
+        groups = self.vm.groups
+        if selected_only:
+            tree_controller = getattr(self.parent, "tree_controller", None)
+            selected_paths: set[str] = set()
+            if tree_controller is not None:
+                for item in tree_controller.get_selected_items():
+                    if item.get("type") == "file":
+                        path = item.get("path")
+                        if path:
+                            selected_paths.add(path)
+            # #410: row-level filter — build synthetic groups whose
+            # items contain ONLY the selected file rows. Matches the
+            # original #211 scope semantic the menu entry replaces:
+            # "Execute Action (only selected)" means exactly those
+            # rows, not "the groups they belong to". Empty groups
+            # are dropped.
+            from core.models import PhotoGroup
+            filtered: list = []
+            for g in groups:
+                items_in_scope = [
+                    r for r in getattr(g, "items", [])
+                    if getattr(r, "file_path", None) in selected_paths
+                ]
+                if items_in_scope:
+                    filtered.append(PhotoGroup(
+                        group_number=getattr(g, "group_number", 0),
+                        items=items_in_scope,
+                        is_expanded=getattr(g, "is_expanded", False),
+                    ))
+            groups = filtered
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         dlg = ExecuteActionDialog(
-            self.vm.groups, manifest_path, self.parent,
+            groups, manifest_path, self.parent,
             settings=self.settings,
             task_runner=self.task_runner,
             status_reporter=self.status_reporter,

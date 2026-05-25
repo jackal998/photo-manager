@@ -330,39 +330,33 @@ class ExecuteActionDialog(QDialog):
         return paths
 
     def _on_selection_changed(self, *_args) -> None:
-        """Re-label the Execute button based on tree selection state (#211).
+        """Drive the embedded preview pane on tree selection changes.
 
-        When ≥1 file row is highlighted, the button reads
-        ``execute_button_highlighted`` so the user sees that Execute is
-        scoped to the highlight. Empty selection reverts to the default
-        ``execute_button`` label.
+        #165 — exactly one file row selected → show_single, anything
+        else → clear. Multi-select intentionally clears rather than
+        showing the first row, so the user isn't misled into thinking
+        the preview reflects "the" selection.
 
-        #165 — also drives the embedded preview pane: exactly one file
-        row selected → show_single, anything else → clear. Multi-select
-        intentionally clears rather than showing the first row, so the
-        user isn't misled into thinking the preview reflects "the"
-        selection.
+        #410: removed the Execute-button relabel branch — selection
+        scope is now lifted to the Action menu ("Execute Action (only
+        selected)") and pre-filters the dialog's groups at construction
+        time. The dialog acts on whatever it was given; the Execute
+        button label stays static.
         """
-        btn = self._btn_box.button(QDialogButtonBox.Ok)
-        if btn is None:
+        if self._preview is None:
             return
         selected = self._selected_file_paths()
-        if selected:
-            btn.setText(t("execute_dialog.execute_button_highlighted"))
+        if len(selected) == 1:
+            path = next(iter(selected))
+            self._preview.show_single(
+                path,
+                {
+                    "name": os.path.basename(path),
+                    "folder": os.path.dirname(path),
+                },
+            )
         else:
-            btn.setText(t("execute_dialog.execute_button"))
-        if self._preview is not None:
-            if len(selected) == 1:
-                path = next(iter(selected))
-                self._preview.show_single(
-                    path,
-                    {
-                        "name": os.path.basename(path),
-                        "folder": os.path.dirname(path),
-                    },
-                )
-            else:
-                self._preview.clear()
+            self._preview.clear()
 
     def _on_jump_to_group(self, href: str) -> None:
         """Scroll the dialog tree to the group identified by ``href``.
@@ -870,7 +864,7 @@ class ExecuteActionDialog(QDialog):
             try:
                 from infrastructure.manifest_repository import ManifestRepository
                 ManifestRepository().batch_update_lock_state(
-                    self._manifest_path, {p: locked for p in paths}
+                    self._manifest_path, dict.fromkeys(paths, locked)
                 )
             except Exception as exc:
                 logger.warning("Failed to persist batch lock state: {}", exc)
@@ -880,33 +874,22 @@ class ExecuteActionDialog(QDialog):
     def _on_execute_requested(self) -> None:
         from PySide6.QtWidgets import QMessageBox
 
-        # #211 — when the tree has a non-empty selection, scope this
-        # Execute pass to only the highlighted file rows. The lock
-        # guard, complete-group confirm, and downstream _on_execute
-        # iteration all narrow to this set. Empty selection keeps the
-        # pre-#211 "act on every decided row" behaviour.
-        selected = self._selected_file_paths()
-        scope: set[str] | None = selected if selected else None
-        # Stash on self so _on_execute (separate method) can read it
-        # without changing its signature.
-        self._execute_scope = scope
-
-        def _in_scope(path: str) -> bool:
-            return scope is None or path in scope
+        # #410 — scope narrowing is no longer the dialog's concern.
+        # The "(only selected)" Action-menu entry pre-filters
+        # ``self._groups`` at the handler boundary, so this method
+        # treats every group it was given as in-scope. The dialog
+        # has no awareness of how its groups were filtered.
 
         # Pre-execute scan for locked rows with decision='delete'.
         # These can exist if the user set the decision FIRST and then
         # locked the row — under the new model (#182) the user must
         # explicitly choose to unlock-and-delete or skip-locked before
-        # any destructive action runs. This replaces the silent
-        # filter at delete_service:50 (which never fired in the GUI
-        # path anyway — _on_execute deletes directly, see below).
+        # any destructive action runs.
         total_delete_count = sum(
             1
             for group in self._groups
             for rec in getattr(group, "items", [])
             if getattr(rec, "user_decision", "") == "delete"
-            and _in_scope(rec.file_path)
         )
         locked_delete_paths = [
             rec.file_path
@@ -914,7 +897,6 @@ class ExecuteActionDialog(QDialog):
             for rec in getattr(group, "items", [])
             if getattr(rec, "user_decision", "") == "delete"
             and getattr(rec, "is_locked", False)
-            and _in_scope(rec.file_path)
         ]
         if locked_delete_paths:
             verdict = self._ask_lock_confirm(
@@ -935,13 +917,10 @@ class ExecuteActionDialog(QDialog):
                 self._clear_decision_on(locked_delete_paths)
             self._refresh_ui_after_decision_change()
 
-        # Complete-group confirm: under scoping, a group is only
-        # "fully deleted by this click" when every delete-decision row
-        # of that group is in scope. Otherwise the confirm wording
-        # ("EVERY file deleted") would misrepresent what this click
-        # does. The amber banner is unrelated — it reflects the user's
-        # stored decision state, not this click's effect.
-        complete = self._complete_delete_groups_in_scope(scope)
+        # Complete-group confirm: groups arrive already filtered, so a
+        # group with every delete-decision row present really will be
+        # fully deleted on Execute.
+        complete = self._complete_delete_groups()
         if complete:
             group_list = ", ".join(str(g) for g in complete)
             reply = QMessageBox.question(
@@ -954,31 +933,6 @@ class ExecuteActionDialog(QDialog):
             if reply != QMessageBox.Yes:
                 return
         self._on_execute()
-
-    def _complete_delete_groups_in_scope(
-        self, scope: set[str] | None
-    ) -> list[int]:
-        """Like :meth:`_complete_delete_groups`, but restricted to groups
-        whose every member is in ``scope``. With ``scope=None`` this is
-        the original behaviour. With a non-empty scope, only groups
-        whose delete set lies entirely inside the highlighted subset
-        are returned — those are the groups this Execute click will
-        actually empty on disk.
-        """
-        if scope is None:
-            return self._complete_delete_groups()
-        result = []
-        for group in self._groups:
-            items = getattr(group, "items", [])
-            if not items:
-                continue
-            if not all(
-                getattr(rec, "user_decision", "") == "delete" for rec in items
-            ):
-                continue
-            if all(rec.file_path in scope for rec in items):
-                result.append(group.group_number)
-        return sorted(result)
 
     def _clear_decision_on(self, paths: list[str]) -> None:
         """Reset ``user_decision`` to '' for ``paths``. Used by the
@@ -1004,14 +958,10 @@ class ExecuteActionDialog(QDialog):
                 logger.warning("Failed to persist cleared decisions: {}", exc)
 
     def _on_execute(self) -> None:
-        # #211 — _on_execute_requested stashes the selection scope on
-        # self before delegating here. None means "no scoping" (execute
-        # every decided row, pre-#211 behaviour); a non-empty set means
-        # "only act on these file paths".
-        scope: set[str] | None = getattr(self, "_execute_scope", None)
-
-        def _in_scope(path: str) -> bool:
-            return scope is None or path in scope
+        # #410 — no in-dialog scope narrowing. Groups arrive
+        # pre-filtered from the handler (the "(only selected)"
+        # Action-menu entry's path); this method acts on every
+        # decided row it was given.
 
         # Batch-persist all current decisions before executing
         if self._manifest_path:
@@ -1020,7 +970,6 @@ class ExecuteActionDialog(QDialog):
                 for group in self._groups
                 for rec in getattr(group, "items", [])
                 if getattr(rec, "user_decision", "")
-                and _in_scope(rec.file_path)
             }
             if batch:
                 try:
@@ -1036,8 +985,6 @@ class ExecuteActionDialog(QDialog):
         deferred_remove_paths: list[str] = []
         for group in self._groups:
             for rec in getattr(group, "items", []):
-                if not _in_scope(rec.file_path):
-                    continue
                 decision = getattr(rec, "user_decision", "") or ""
                 if decision == "delete":
                     self._delete_file(rec.file_path)

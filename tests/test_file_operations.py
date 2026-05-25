@@ -11,7 +11,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from core.models import PhotoGroup, PhotoRecord
 
@@ -1544,6 +1543,69 @@ class TestEntryPointGuards:
             handler.execute_action()
 
         assert DlgCls.call_args.kwargs["task_runner"] is runner
+
+    def test_execute_action_selected_only_filters_to_selected_rows(self):
+        """#410 — when ``selected_only=True``, the handler builds
+        synthetic groups whose ``items`` contain ONLY the file rows
+        currently highlighted in the main tree. Group rows in the
+        selection set are ignored (type != "file"). Default
+        ``selected_only=False`` passes ``vm.groups`` unchanged.
+
+        Row-level filter (not group-level) is the original #211
+        semantic the menu entry replaces — picking 2 rows in a
+        5-row near-duplicate group must surface only those 2 rows
+        in the dialog, not the whole group."""
+        from core.models import PhotoGroup
+        from app.views.handlers.file_operations import FileOperationsHandler
+
+        rec_a = _rec("/a.jpg", group=1, decision="delete")
+        rec_b = _rec("/b.jpg", group=1, decision="delete")
+        rec_c = _rec("/c.jpg", group=2, decision="delete")
+        g_partial = PhotoGroup(group_number=1, items=[rec_a, rec_b])
+        g_drop = PhotoGroup(group_number=2, items=[rec_c])
+        vm = SimpleNamespace(
+            groups=[g_partial, g_drop],
+            remove_deleted_and_prune=MagicMock(),
+            remove_from_list=MagicMock(),
+        )
+        # Selection picks /a.jpg only — g_partial keeps just rec_a; g_drop drops.
+        tree_controller = MagicMock()
+        tree_controller.get_selected_items.return_value = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "group", "path": ""},  # filtered out
+        ]
+        parent = MagicMock()
+        parent.tree_controller = tree_controller
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(), parent_widget=parent,
+            ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+        handler._manifest_path = "/tmp/fake.sqlite"
+
+        with patch(
+            "app.views.dialogs.execute_action_dialog.ExecuteActionDialog"
+        ) as DlgCls:
+            DlgCls.return_value.exec.return_value = 0
+            DlgCls.return_value.removed_from_list_paths = []
+            DlgCls.return_value.deleted_paths = []
+            DlgCls.return_value.executed_paths = []
+            handler.execute_action(selected_only=True)
+
+        passed_groups = DlgCls.call_args.args[0]
+        assert len(passed_groups) == 1
+        assert passed_groups[0].group_number == 1
+        assert [r.file_path for r in passed_groups[0].items] == ["/a.jpg"]
+
+        # Sanity: default selected_only=False passes the full list unchanged.
+        with patch(
+            "app.views.dialogs.execute_action_dialog.ExecuteActionDialog"
+        ) as DlgCls2:
+            DlgCls2.return_value.exec.return_value = 0
+            DlgCls2.return_value.removed_from_list_paths = []
+            DlgCls2.return_value.deleted_paths = []
+            DlgCls2.return_value.executed_paths = []
+            handler.execute_action()
+        assert DlgCls2.call_args.args[0] == [g_partial, g_drop]
 
 
 # ── Item 2 — dirty-tracking flag + silent save ─────────────────────────────

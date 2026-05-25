@@ -19,6 +19,7 @@ menu:
     title: "動作(&A)"
     by_regex: "依欄位設定動作…"
     execute: "執行動作…"
+    execute_selected_only: "執行動作 (僅選取項目)…"
   list:
     title: "清單(&L)"
     remove: "從清單移除"
@@ -130,7 +131,6 @@ execute_dialog:
   select_button: "依欄位/正規式選擇…"
   set_action_menu: "設定動作"
   execute_button: "執行"
-  execute_button_highlighted: "執行 (僅選取項目)"
   close_button: "關閉"
   summary_decided: "<b>{count}</b> 個檔案已設定動作:刪除 {n_delete} 個。在檔案列上按右鍵可變更其決策。"
   summary_none: "尚未設定任何決策 — 請使用「設定動作」標記要刪除的檔案。"
