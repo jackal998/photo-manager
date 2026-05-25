@@ -67,6 +67,63 @@ class TestModality:
         assert dlg.windowModality() == Qt.ApplicationModal
 
 
+class TestRecentMenuClamp:
+    """#381 — the Recent ▾ menu position must stay inside the dialog's
+    current screen even if the dialog itself sits on stale coordinates
+    after a multi-monitor disconnect.
+
+    Tests target ``_clamp_point_to_rect`` (pure geometry, no Qt screen
+    lookup) so they run headlessly. The thin wrapper
+    ``_clamp_menu_position`` is verified indirectly: any breakage in
+    the wrapper's screen-resolution branch surfaces immediately the
+    first time a user clicks Recent on a real desktop.
+    """
+
+    def test_position_inside_bounds_is_unchanged(self):
+        from PySide6.QtCore import QPoint, QRect
+        from app.views.dialogs.select_dialog import _clamp_point_to_rect
+
+        bounds = QRect(0, 0, 1920, 1080)
+        clamped = _clamp_point_to_rect(QPoint(500, 500), 200, 300, bounds)
+        assert clamped == QPoint(500, 500)
+
+    def test_position_off_bottom_right_shifts_to_fit(self):
+        from PySide6.QtCore import QPoint, QRect
+        from app.views.dialogs.select_dialog import _clamp_point_to_rect
+
+        # Menu would land at (1900, 1070) on a 1920x1080 screen — both
+        # x+width and y+height exceed the available area. Expect a
+        # shift up-left so the 200x300 menu fits flush against the
+        # bottom-right corner.
+        bounds = QRect(0, 0, 1920, 1080)
+        clamped = _clamp_point_to_rect(QPoint(1900, 1070), 200, 300, bounds)
+        assert clamped == QPoint(1720, 780)
+
+    def test_negative_position_pulled_to_bounds_origin(self):
+        from PySide6.QtCore import QPoint, QRect
+        from app.views.dialogs.select_dialog import _clamp_point_to_rect
+
+        # Dead-zone coordinates from a disconnected monitor — Qt's
+        # screenAt() would return None here. The wrapper would then
+        # fall back to primaryScreen and clamp brings the menu back
+        # onto the visible area.
+        bounds = QRect(0, 0, 1920, 1080)
+        clamped = _clamp_point_to_rect(QPoint(-500, -200), 200, 300, bounds)
+        assert clamped == QPoint(0, 0)
+
+    def test_bounds_not_at_origin_offsets_correctly(self):
+        from PySide6.QtCore import QPoint, QRect
+        from app.views.dialogs.select_dialog import _clamp_point_to_rect
+
+        # Secondary monitor laid out to the right of primary — its
+        # availableGeometry has a non-zero origin. The clamp must
+        # respect bounds.x()/y(), not assume (0, 0).
+        bounds = QRect(1920, 0, 1920, 1080)
+        # Position would land left of the secondary monitor's left edge.
+        clamped = _clamp_point_to_rect(QPoint(1800, 100), 200, 300, bounds)
+        assert clamped == QPoint(1920, 100)
+
+
 class TestSetActionSignal:
     def test_set_action_emits_signal_with_delete(self, qapp):
         from app.views.dialogs.select_dialog import ActionDialog
