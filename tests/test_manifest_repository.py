@@ -525,6 +525,79 @@ class TestBatchUpdateDecisions:
         assert row[0] == "keep"  # unchanged
 
 
+class TestBatchUpdateDecisionsAndLock:
+    """Combined batch method — used by the auto-select post-scan write
+    path (#393) to land both writes in a single transaction.
+    """
+
+    def test_writes_both_decision_and_lock_in_one_call(self, tmp_path):
+        """Catches: the combined method drops one side (e.g. forgets
+        the lock executemany, or commits before the second statement).
+        Mixing keepers (keep+lock=1) with non-keepers (delete only,
+        lock untouched) exercises both columns and confirms they
+        don't bleed onto each other.
+        """
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/k.jpg", "group_id": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/d.jpg", "group_id": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/untouched.jpg", "group_id": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+        ])
+        # Add is_locked column for parity with the production schema
+        # path (auto-select migrates lazily before this call).
+        ManifestRepository().ensure_schema(str(db))
+
+        ManifestRepository().batch_update_decisions_and_lock(
+            str(db),
+            decisions={"/k.jpg": "keep", "/d.jpg": "delete"},
+            lock_states={"/k.jpg": True},
+        )
+
+        conn = sqlite3.connect(db)
+        try:
+            rows = {
+                r[0]: (r[1], r[2]) for r in conn.execute(
+                    "SELECT source_path, user_decision, is_locked "
+                    "FROM migration_manifest"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+        assert rows["/k.jpg"] == ("keep", 1)
+        assert rows["/d.jpg"] == ("delete", 0)
+        assert rows["/untouched.jpg"] == ("", 0)
+
+    def test_both_empty_short_circuits_without_opening_connection(
+        self, tmp_path, monkeypatch
+    ):
+        """Catches: the short-circuit guard regresses and we open a
+        connection (+ optionally commit an empty transaction) when
+        there's literally nothing to write. The auto-select caller
+        invokes unconditionally on empty-keepers scans; this must
+        stay free.
+        """
+        from infrastructure import manifest_repository as repo_mod
+
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "group_id": None,
+                  "hamming_distance": None, "action": "MOVE"}),
+        ])
+        opens: list[str] = []
+        real_connect = repo_mod._connect
+
+        def _spy(path):
+            opens.append(path)
+            return real_connect(path)
+
+        monkeypatch.setattr(repo_mod, "_connect", _spy)
+        ManifestRepository().batch_update_decisions_and_lock(
+            str(db), decisions={}, lock_states={}
+        )
+        assert opens == []
+
+
 class TestRemoveFromReview:
     """remove_from_review() and the load() filter for user_decision='removed'."""
 

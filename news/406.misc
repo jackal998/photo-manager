@@ -1,0 +1,1 @@
+Combine auto-select's post-scan decision + lock writes into a single SQLite transaction; saves one connection-open and one fsync per scan.
