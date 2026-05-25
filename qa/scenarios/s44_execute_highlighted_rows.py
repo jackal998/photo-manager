@@ -268,19 +268,19 @@ def main() -> int:
 
     print("step: assert_button_label_is_static")
     # #410: the button MUST read the static "Execute" label, never the
-    # removed "Execute Action (highlighted)" string.
-    btn = _uia._find_dialog_button(exec_dlg, _uia.ACTION_DIALOG_BTN_APPLY)  # type: ignore[arg-type]
-    # If the apply-button helper doesn't match, fall back to literal label.
-    if btn is None:
-        try:
-            btn = exec_dlg.child_window(title=EXECUTE_BTN_STATIC, control_type="Button")
-            btn.wait("visible", timeout=2.0)
-        except Exception as exc:
-            print(
-                f"FAIL: Execute button with static label {EXECUTE_BTN_STATIC!r} "
-                f"not found: {exc!r}"
-            )
-            return 1
+    # removed "Execute Action (highlighted)" string. The Execute dialog
+    # uses a QDialogButtonBox so the OK button surfaces with the
+    # translated execute-button text as its accessible title.
+    try:
+        exec_dlg.child_window(
+            title=EXECUTE_BTN_STATIC, control_type="Button"
+        ).wait("visible", timeout=2.0)
+    except Exception as exc:
+        print(
+            f"FAIL: Execute button with static label {EXECUTE_BTN_STATIC!r} "
+            f"not found: {exc!r}"
+        )
+        return 1
     print(f"  button_label={EXECUTE_BTN_STATIC!r}")
 
     print("step: snapshot_pre_disk_state")
