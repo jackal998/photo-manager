@@ -8,8 +8,8 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QKeySequence, QShortcut
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -416,6 +416,27 @@ def _field_display(name: str) -> str:
     """Return the localized label for an internal field name."""
     key = _FIELD_LABEL_KEYS.get(name)
     return t(key) if key else name
+
+
+def _clamp_point_to_rect(
+    pos: QPoint, width: int, height: int, bounds: QRect
+) -> QPoint:
+    """Shift ``pos`` so a ``width``×``height`` rectangle starting there
+    fits within ``bounds`` (#381).
+
+    Pure geometry — no Qt screen lookups so unit tests run headlessly.
+    Used by :meth:`ActionDialog._clamp_menu_position` after Qt resolves
+    the dialog's current screen geometry. If the rectangle is larger
+    than ``bounds`` along either axis, the result is flush against the
+    bounds' top-left corner along that axis.
+    """
+    avail_right = bounds.x() + bounds.width()
+    avail_bottom = bounds.y() + bounds.height()
+    x = min(pos.x(), avail_right - width)
+    y = min(pos.y(), avail_bottom - height)
+    x = max(x, bounds.x())
+    y = max(y, bounds.y())
+    return QPoint(x, y)
 
 
 def _is_plain_or_escaped(text: str) -> bool:
@@ -1560,9 +1581,36 @@ class ActionDialog(QDialog):
             menu.addSeparator()
             clear_act = menu.addAction(t("action_dialog.recent_clear"))
             clear_act.triggered.connect(self._clear_recent_patterns)
-        # Position the menu just below the Recent button.
+        # Position the menu just below the Recent button. #381: clamp
+        # against the dialog's current screen so a stale Recent click
+        # after a multi-monitor disconnect (dialog still living on a
+        # now-dead coordinate range) doesn't open the menu off-screen.
         pos = self._recent_btn.mapToGlobal(QPoint(0, self._recent_btn.height()))
-        menu.exec(pos)
+        menu.exec(self._clamp_menu_position(pos, menu))
+
+    def _clamp_menu_position(self, pos: QPoint, menu: QMenu) -> QPoint:
+        """Return ``pos`` clamped so ``menu`` opens fully on-screen (#381).
+
+        ``QMenu.exec(pos)`` usually clamps off-screen popups via Qt's
+        internal repositioning, but the behaviour is best-effort:
+        ``QGuiApplication.screenAt(pos)`` returns ``None`` for dead-zone
+        coordinates (positions that were on a now-disconnected monitor),
+        and Qt's clamp can silently clip or fall back to the primary
+        screen at non-obvious offsets. This helper anchors against the
+        DIALOG's current screen — by definition reachable since the user
+        just clicked Recent on it — rather than the menu's target
+        position which may carry stale coords.
+        """
+        anchor = self.mapToGlobal(self.rect().center())
+        screen = QGuiApplication.screenAt(anchor)
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return pos
+        sh = menu.sizeHint()
+        return _clamp_point_to_rect(
+            pos, sh.width(), sh.height(), screen.availableGeometry()
+        )
 
     def _apply_recent_pattern(self, pattern: str) -> None:
         # #396: no mode flip — both sections are visible. setText on
