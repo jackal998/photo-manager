@@ -1,0 +1,1 @@
+Cap the Execute Action dialog's top section so the tree absorbs vertical growth on resize instead of competing with the summary label and "Select by Field/Regex…" button (#408).

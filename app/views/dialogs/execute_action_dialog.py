@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTreeView,
     QVBoxLayout,
@@ -164,10 +165,16 @@ class ExecuteActionDialog(QDialog):
 
         self._summary_label = QLabel()
         self._update_summary()
+        # #408 — cap the top section's vertical appetite so the tree
+        # absorbs growth. Maximum policy uses the widget's sizeHint as
+        # the ceiling, so multi-line summaries / large fonts still fit
+        # without clipping (safer than a hard pixel cap).
+        self._summary_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(self._summary_label)
 
         select_btn = QPushButton(t("execute_dialog.select_button"))
         select_btn.clicked.connect(self._show_select_dialog)
+        select_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(select_btn)
 
         self._tree = QTreeView()
@@ -193,9 +200,12 @@ class ExecuteActionDialog(QDialog):
             # state takes over once the user resizes the divider once.
             self._splitter.setStretchFactor(0, 3)
             self._splitter.setStretchFactor(1, 2)
-            layout.addWidget(self._splitter)
+            # #408 — explicit stretch=1 makes the tree/splitter the
+            # primary growth absorber when the dialog is resized
+            # vertically; top section stays compact.
+            layout.addWidget(self._splitter, 1)
         else:
-            layout.addWidget(self._tree)
+            layout.addWidget(self._tree, 1)
 
         # Warning banner for complete-group deletions
         self._warning_banner = QFrame()
