@@ -9,8 +9,9 @@ This dialog inserts a confirm step ONLY for the "delete" action — every other
 choice (keep, remove from list, lock, unlock) emits immediately, unchanged.
 The Cancel button is the default focus + Esc target so a misfired Enter or
 window-close gesture lands on the safe path. The confirm button echoes the
-matched count back to the user ("Delete 47 files") for one last visual
-double-check before the irreversible op.
+matched count back to the user ("Mark 47 files for deletion") for one last
+visual double-check before the (deferred) destructive op — actual files
+move on Execute Action; this dialog only confirms the decision write.
 
 Trigger sites: ``ActionDialog._emit_set_action`` when the chosen action is
 "delete" and a live preview count is available (``match_fn`` supplied,
@@ -38,7 +39,7 @@ from infrastructure.i18n import t
 
 
 class DeleteRegexConfirmDialog(QDialog):
-    """Two-button confirm: Delete N files / Cancel."""
+    """Two-button confirm: Mark N files for deletion / Cancel."""
 
     CONFIRMED = 1
     CANCELLED = 2
@@ -95,7 +96,8 @@ class DeleteRegexConfirmDialog(QDialog):
 
         self._btn_box = QDialogButtonBox()
         # Confirm button label echoes the count for one last visual
-        # double-check ("Delete 47 files") before the irreversible op.
+        # double-check ("Mark 47 files for deletion") before the
+        # decision write — actual delete happens later on Execute Action.
         self._btn_confirm = QPushButton(
             t("delete_regex_confirm.confirm_button", matched=self._matched)
         )

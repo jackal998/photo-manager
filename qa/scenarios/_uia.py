@@ -143,14 +143,14 @@ LOCK_CONFIRM_CANCEL = LOCK_CONFIRM_BTN_CANCEL
 # regex+delete flow don't get blocked. Scenarios that want to test
 # the cancel path explicitly call ``drive_delete_regex_confirm(pid,
 # confirm=False)``.
-DELETE_CONFIRM_TITLE = "Confirm bulk delete"
+DELETE_CONFIRM_TITLE = "Confirm bulk-delete decision"
 DELETE_CONFIRM_BTN_CANCEL = "Cancel"
-# Confirm button label is "Delete {matched} files" — variable N forces
-# a prefix match in the lookup helper rather than an exact string.
-# Private (leading underscore) so it's filtered out by the test_uia_
-# label_coupling probe: "Delete " on its own is not a user-facing label
-# that should be drift-checked against app source.
-_DELETE_CONFIRM_BTN_CONFIRM_PREFIX = "Delete "
+# Confirm button label is "Mark {matched} files for deletion" — variable
+# N forces a prefix match in the lookup helper rather than an exact
+# string. Private (leading underscore) so it's filtered out by the
+# test_uia_label_coupling probe: "Mark " on its own is not a user-facing
+# label that should be drift-checked against app source.
+_DELETE_CONFIRM_BTN_CONFIRM_PREFIX = "Mark "
 
 
 # ---------------------------------------------------------------------------
@@ -1695,9 +1695,9 @@ def drive_delete_regex_confirm(
     only appears on the delete action path. A missing dialog is the
     common case (non-delete action), not an error.
 
-    The confirm button label is "Delete {matched} files" with a
-    variable count, so we walk dialog descendants and match on the
-    "Delete " prefix rather than a literal title. Cancel button uses
+    The confirm button label is "Mark {matched} files for deletion"
+    with a variable count, so we walk dialog descendants and match on
+    the "Mark " prefix rather than a literal title. Cancel button uses
     the exact label.
     """
     try:
