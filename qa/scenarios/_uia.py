@@ -23,7 +23,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 from pywinauto import Application
 from pywinauto.controls.uiawrapper import UIAWrapper
@@ -2139,7 +2139,7 @@ def cancel_scan_dialog(dlg: UIAWrapper) -> None:
 # app/views/constants.SETTABLE_DECISIONS. English-only; no Qt translations.
 CTX_SET_ACTION = "Set Action"
 CTX_DELETE = "delete"
-CTX_KEEP = "keep (remove action)"
+CTX_KEEP = "keep"
 CTX_OPEN_FOLDER = "Open Folder"
 # Lock / Unlock items sit at the top level of the file-row context
 # menu (not under the Set Action submenu) — see

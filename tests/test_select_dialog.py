@@ -178,12 +178,12 @@ class TestSetActionSignal:
         assert value == "delete"
 
     def test_set_action_emits_empty_string_for_keep_remove_action(self, qapp):
-        """'keep (remove action)' must emit '' as the action value."""
+        """'keep' must emit '' as the action value."""
         from app.views.dialogs.select_dialog import ActionDialog
         dlg = ActionDialog(fields=["File Name", "Folder"])
         dlg.combo.setCurrentText("Folder")
         dlg.regex.setText("^D:\\\\Photos")
-        dlg._action_combo.setCurrentIndex(1)  # keep (remove action)
+        dlg._action_combo.setCurrentIndex(1)  # keep
 
         received = []
         dlg.setActionRequested.connect(lambda f, p, v: received.append((f, p, v)))
@@ -2730,7 +2730,7 @@ class TestD3DeleteConfirm:
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
         dlg.regex.setText("a")
         dlg._refresh_preview()
-        # Pick "keep (remove action)" — value is "" not "delete".
+        # Pick "keep" — value is "" not "delete".
         dlg._action_combo.setCurrentIndex(1)
         received = []
         dlg.setActionRequested.connect(

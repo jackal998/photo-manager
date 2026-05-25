@@ -5,14 +5,14 @@ Covers:
   - ActionHandlers protocol has set_decision + show_action_dialog(clicked_col)
   - set_decision callback is wired for single-file right-click
   - Multi-selection menu DOES expose "Set Action"
-  - "keep (remove action)" passes "" as the decision value
+  - "keep" passes "" as the decision value
   - Clicked column is forwarded to show_action_dialog
   - Direct-delete actions ("Delete File", "Delete Files") are absent
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 
 # ── constants & protocol ───────────────────────────────────────────────────
@@ -33,7 +33,7 @@ class TestSettableDecisions:
         assert "delete" in values
 
     def test_keep_remove_action_clears_decision(self):
-        """'keep (remove action)' must set user_decision to empty string, not 'keep'."""
+        """'keep' must set user_decision to empty string, not 'keep'."""
         from app.views.constants import settable_decisions
         _SETTABLE_DECISIONS = settable_decisions()
         keep_entry = next((t for t in _SETTABLE_DECISIONS if "keep" in t[0].lower()), None)
@@ -194,7 +194,6 @@ class TestContextMenuSetDecisionRouting:
         return ContextMenuHandler(tree, provider, handlers, MagicMock()), handlers
 
     def test_set_decision_called_with_delete(self, qapp):
-        from app.views.handlers.context_menu import ContextMenuHandler
 
         handler, mock_handlers = self._make_handler(qapp)
         item = {"type": "file", "path": "/a.jpg"}
@@ -220,8 +219,7 @@ class TestContextMenuSetDecisionRouting:
         mock_handlers.set_decision_with_lock_check.assert_called_once_with([item], "delete")
 
     def test_set_decision_called_with_keep_remove_action_passes_empty_string(self, qapp):
-        """'keep (remove action)' in the Set Action submenu must call set_decision with ''."""
-        from app.views.handlers.context_menu import ContextMenuHandler
+        """'keep' in the Set Action submenu must call set_decision with ''."""
 
         handler, mock_handlers = self._make_handler(qapp)
         item = {"type": "file", "path": "/a.jpg"}
@@ -256,8 +254,7 @@ class TestMultiSelectSetAction:
         return ContextMenuHandler(QTreeView(), MagicMock(), handlers, MagicMock()), handlers
 
     def test_multi_selection_menu_has_set_action_submenu(self, qapp):
-        from app.views.handlers.context_menu import ContextMenuHandler
-        from PySide6.QtWidgets import QMenu, QTreeView
+        from PySide6.QtWidgets import QMenu
 
         handler, _ = self._make_handler(qapp)
         items = [{"type": "file", "path": "/a.jpg"}, {"type": "file", "path": "/b.jpg"}]
