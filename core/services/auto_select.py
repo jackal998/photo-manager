@@ -81,9 +81,11 @@ def apply_auto_select_decisions(
     # so the cost on already-migrated DBs is a couple of failed
     # ALTERs (caught and ignored).
     repo.ensure_schema(manifest_path)
-    repo.batch_update_decisions(manifest_path, decisions)
-    repo.batch_update_lock_state(
-        manifest_path, {p: True for p in keepers}
+    # Single-transaction write — saves one connection-open + one fsync
+    # vs the original split call pair. Microsecond gain on local SSD,
+    # measurable over SMB/NAS.
+    repo.batch_update_decisions_and_lock(
+        manifest_path, decisions, {p: True for p in keepers}
     )
 
 

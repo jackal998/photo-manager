@@ -370,6 +370,40 @@ class ManifestRepository:
         finally:
             conn.close()
 
+    def batch_update_decisions_and_lock(
+        self,
+        manifest_path: str,
+        decisions: dict[str, str],
+        lock_states: dict[str, bool],
+    ) -> None:
+        """Combined batch — both updates under one connection + commit.
+
+        Same semantics as calling :meth:`batch_update_decisions` followed
+        by :meth:`batch_update_lock_state`, but issues one ``COMMIT`` (one
+        fsync) instead of two. Used by the post-scan auto-select write
+        path (:func:`core.services.auto_select.apply_auto_select_decisions`,
+        #393): negligible on local SSD, meaningful over SMB/NAS where the
+        per-commit round-trip dominates. Empty dicts on either side are
+        skipped; both empty short-circuits before opening the connection.
+        """
+        if not decisions and not lock_states:
+            return
+        conn = _connect(manifest_path)
+        try:
+            if decisions:
+                conn.executemany(
+                    _UPDATE_DECISION_SQL,
+                    [(v, k) for k, v in decisions.items()],
+                )
+            if lock_states:
+                conn.executemany(
+                    _UPDATE_LOCK_SQL,
+                    [(1 if v else 0, k) for k, v in lock_states.items()],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     def rescore(
         self,
         manifest_path: str,
