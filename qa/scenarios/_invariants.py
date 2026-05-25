@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Iterable
 
 from pywinauto.controls.uiawrapper import UIAWrapper
 
@@ -32,9 +31,13 @@ from qa.scenarios import _uia
 # app.views.components.menu_controller.MANIFEST_ACTIONS — kept here as
 # UI-visible labels (what UIA exposes) rather than action keys.
 MANIFEST_GATED_MENU_ITEMS: tuple[tuple[str, str], ...] = (
-    (_uia.MENU_FILE, _uia.FILE_SAVE_MANIFEST),       # save_manifest
-    (_uia.MENU_ACTION, _uia.ACTION_EXECUTE),         # execute_action
-    (_uia.MENU_LIST, "Remove from List"),            # remove_from_list
+    (_uia.MENU_FILE, _uia.FILE_SAVE_MANIFEST),                # save_manifest
+    (_uia.MENU_ACTION, _uia.ACTION_EXECUTE),                  # execute_action
+    # #410: execute_action_selected_only is also manifest-gated AND
+    # selection-gated; the invariant check below verifies manifest
+    # gating only (the selection gate fires on top in MainWindow).
+    (_uia.MENU_ACTION, _uia.ACTION_EXECUTE_SELECTED_ONLY),    # execute_action_selected_only
+    (_uia.MENU_LIST, "Remove from List"),                     # remove_from_list
 )
 
 

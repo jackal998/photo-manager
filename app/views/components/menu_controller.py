@@ -17,6 +17,10 @@ from infrastructure.i18n import get_translator, t
 MANIFEST_ACTIONS: tuple[str, ...] = (
     "save_manifest",
     "execute_action",
+    # #410: sibling of execute_action that pre-filters the dialog to
+    # selected tree rows. Gated on manifest-loaded here AND on tree
+    # selection in MainWindow.on_tree_selection_changed (and-ed).
+    "execute_action_selected_only",
     "remove_from_list",
     "action_by_regex",
 )
@@ -63,6 +67,15 @@ class MenuController:
         action_menu.addSeparator()
         self.actions["execute_action"] = action_menu.addAction(t("menu.action.execute"))
         self.actions["execute_action"].setEnabled(False)
+        # #410: opens the Execute Action dialog pre-filtered to groups
+        # containing currently-selected tree rows, replacing the older
+        # in-dialog selection-then-execute scoping. Gated on BOTH
+        # manifest-loaded (MANIFEST_ACTIONS) and a non-empty tree
+        # selection (MainWindow.on_tree_selection_changed and-s the two).
+        self.actions["execute_action_selected_only"] = action_menu.addAction(
+            t("menu.action.execute_selected_only")
+        )
+        self.actions["execute_action_selected_only"].setEnabled(False)
 
         # List Menu — Alt+L
         list_menu = menubar.addMenu(t("menu.list.title"))

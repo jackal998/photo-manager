@@ -39,7 +39,6 @@ from app.views.window_state import (
     QSETTINGS_KEY_MAIN_SPLITTER_STATE,
     QSETTINGS_KEY_MAIN_WINDOW_GEOM,
     qsettings_path,
-    save_widget_geometry,
     window_state_qsettings,
 )
 from infrastructure.i18n import t
@@ -331,6 +330,7 @@ class MainWindow(QMainWindow):
             "open_manifest": self.on_open_manifest,
             "save_manifest": self.on_save_manifest,
             "execute_action": self.on_execute_action,
+            "execute_action_selected_only": self.on_execute_action_selected_only,
             "action_by_regex": self.on_open_action_dialog,
             "remove_from_list": self._remove_from_list_toolbar,
             "exit": self.close,
@@ -495,6 +495,10 @@ class MainWindow(QMainWindow):
             self.refresh_tree(self._vm.groups)
             try:
                 self.menu_controller.set_manifest_actions(True)
+                # #410: set_manifest_actions enables the (only selected)
+                # entry too, but it should stay disabled until a file row
+                # is selected. Refresh applies the additional gate.
+                self._refresh_execute_selected_only_enabled()
             except AttributeError:
                 pass
             n = self._vm.group_count
@@ -586,6 +590,33 @@ class MainWindow(QMainWindow):
         """Handle Execute Action — open review dialog and run planned operations."""
         self.file_operations.execute_action()
 
+    def on_execute_action_selected_only(self) -> None:
+        """#410: Execute Action — selected only.
+
+        Opens the review dialog pre-filtered to groups containing
+        the currently-selected file rows in the main tree. Replaces
+        the older in-dialog selection-then-execute scoping path
+        (`_on_selection_changed`'s button relabel + `_on_execute_requested`'s
+        `_selected_file_paths()` branch, both removed in #410). Scope is
+        a kwarg through the handler — not stored as global state — so the
+        dialog is unaware of how its groups were filtered.
+        """
+        self.file_operations.execute_action(selected_only=True)
+
+    def _refresh_execute_selected_only_enabled(self) -> None:
+        """#410: gate execute_action_selected_only on (manifest_loaded AND
+        ≥1 file row selected). Manifest-loaded is read off the sibling
+        execute_action entry (MANIFEST_ACTIONS already toggles it); the
+        file-row selection check uses tree_controller.get_selected_items()
+        which already filters by type for callers throughout the codebase."""
+        execute_action = self.menu_controller.actions.get("execute_action")
+        manifest_loaded = bool(execute_action and execute_action.isEnabled())
+        items = self.tree_controller.get_selected_items() if manifest_loaded else []
+        has_file_selection = any(item.get("type") == "file" for item in items)
+        selected_only = self.menu_controller.actions.get("execute_action_selected_only")
+        if selected_only is not None:
+            selected_only.setEnabled(manifest_loaded and has_file_selection)
+
     def on_open_action_dialog(self) -> None:
         """Handle open Set Action by Field dialog."""
         self.dialog_handler.show_action_dialog()
@@ -598,6 +629,16 @@ class MainWindow(QMainWindow):
         Args:
             *_: Selection change arguments (ignored)
         """
+        # #410: re-gate the "(only selected)" menu entry on every
+        # selection change. Runs BEFORE the early-return so the
+        # entry also flips back to disabled on a full deselect.
+        # Defensive getattr: fake_self test stubs that exercise only
+        # the preview-pane branch don't always inject this helper —
+        # see tests/test_main_window.py's on_tree_selection_changed
+        # suite. On a real MainWindow it's always present.
+        refresh = getattr(self, "_refresh_execute_selected_only_enabled", None)
+        if callable(refresh):
+            refresh()
         # Delegate to existing preview logic using tree controller
         indexes = self.tree.selectionModel().selectedRows()
         if not indexes:

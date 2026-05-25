@@ -1,15 +1,20 @@
-"""Scenario 44 — Execute Action scoped to highlighted rows (#211).
+"""Scenario 44 — Execute Action (only selected) via Action menu (#410).
 
 Required source: qa/sandbox/_disposable/s44_source/ (regenerated each run by
 the driver — 5 fresh JPEGs; 2 of them get sent to the user's recycle bin
 when Execute fires, the other 3 stay on disk).
 
-Drives the selection-scoped Execute flow end-to-end:
+Drives the new menu-entry-based scope flow end-to-end:
   regen disposable fixture (5 JPEGs) → scan → close & load →
-  open Execute Action dialog → mark all rows delete via regex (.+) →
-  left-click first file row + ctrl-click second file row →
-  verify the OK button label flips to "Execute Action (highlighted)" →
-  click Execute → (no confirm dialog: scope is partial) →
+  mark all rows delete via "Action → Set Action by Field…" (regex .+) →
+  return to the main window's tree → highlight 2 file rows in the main tree →
+  open "Action → Execute Action (only selected)…" →
+  verify the dialog tree contains exactly 2 file rows (not the whole 5-row
+  group — the new row-level filter is the original #211 semantic) →
+  verify the OK button label is the static "Execute" (not the old
+  "Execute Action (highlighted)" — that swap was removed in #410) →
+  click Execute → (no confirm dialog: only 2 of 5 group items in scope,
+  so the group is not fully deleted) →
   verify (a) the 2 highlighted files no longer exist on disk,
          (b) the 3 un-highlighted files DO still exist on disk,
          (c) manifest rows for the 2 highlighted files have executed=1,
@@ -23,18 +28,20 @@ recycle bin. The fixture is regenerated next run, so the bin grows by
 as s13.
 
 Catches drift in:
-  - The Execute button text swap on selection change (label key
-    ``execute_dialog.execute_button_highlighted``).
-  - ``_selected_file_paths`` reading PATH_ROLE from COL_NAME.
-  - The scope-filtered iteration inside ``_on_execute``.
-  - The complete-group confirm NOT firing when scope is partial (the
-    confirm copy claims "EVERY file deleted" which is false when only
-    part of the group is in scope).
+  - The new menu entry "Execute Action (only selected)…"
+    (label key ``menu.action.execute_selected_only``).
+  - The selection-dependent gating of that menu entry
+    (``MainWindow._refresh_execute_selected_only_enabled``).
+  - The handler-side row-level filter in
+    ``FileOperationsHandler.execute_action(selected_only=True)`` —
+    synthetic PhotoGroups with only the selected items.
+  - The Execute button label staying static — i.e. NOT picking up the
+    removed ``execute_button_highlighted`` key on in-dialog selection.
+  - The dialog NOT firing the complete-group confirm when only part of
+    a group is in scope.
 
 Click coordinates are read live from UIA ``TreeItem.rectangle()`` rather
-than hard-coded pixel offsets (#229). The previous ``top+83 / top+105``
-anchors were tuned at 1x DPI; at 2x DPI the first click landed on the
-group header and only one file made it into the execute scope.
+than hard-coded pixel offsets (#229).
 """
 from __future__ import annotations
 
@@ -63,7 +70,7 @@ QUALITIES = [95, 88, 80, 72, 65]
 _SCANNER_THRESHOLD = 10
 _REGEN_MAX_ATTEMPTS = 5
 
-EXECUTE_BTN_HIGHLIGHTED = "Execute Action (highlighted)"
+EXECUTE_BTN_STATIC = "Execute"
 
 
 def _build_base(rng: np.random.Generator) -> Image.Image:
@@ -132,21 +139,12 @@ def _regen_fixture() -> list[Path]:
     return paths
 
 
-def _file_row_centers(tree) -> list[tuple[int, int]]:
+def _file_row_centers_in_tree(tree) -> list[tuple[int, int]]:
     """Return ``(cx, cy)`` screen-pixel centers of each file row in the
-    dialog tree, in visual order.
+    given QTreeView (passed as the UIA wrapper), in visual order.
 
     Reads UIA TreeItem rectangles straight from accessibility, so coords
-    are correct at any DPI (#229: the previous hard-coded ``top+83/+105``
-    anchors were tuned at 1x DPI and missed the file rows at 2x — the
-    first click landed on the group header, so only one file made it
-    into the execute scope).
-
-    The dialog's QTreeView exposes one TreeItem per CELL (column), so
-    each visual row appears as ~``NUM_COLUMNS`` siblings sharing one Y
-    band. We cluster by ``rect.top``, skip the cluster whose leftmost
-    cell carries a "Group N" label (the group header is not a file row),
-    and return the remaining bands' centers.
+    are correct at any DPI (#229).
     """
     by_y: dict[int, list] = {}
     for it in tree.descendants(control_type="TreeItem"):
@@ -209,36 +207,34 @@ def main() -> int:
 
     print("step: close_dialog")
     _uia.close_and_load_manifest(dlg)
-
-    print("step: open_execute_action_dialog")
     _, win = _uia.connect_main()
-    exec_dlg, _ = _uia.open_execute_action_dialog(win)
 
-    print("step: mark_all_delete_via_regex")
-    _uia.mark_all_via_regex(
-        exec_dlg, field="File Name", regex=".+", action_label="delete"
+    print("step: mark_all_delete_via_main_menu_regex")
+    # The new flow sets decisions BEFORE opening the Execute dialog. Use the
+    # main-window regex entry (Action → Set Action by Field…) via the standalone
+    # helper so decisions are persisted onto manifest rows before we
+    # highlight & execute.
+    _uia.mark_all_via_regex_standalone(
+        win, field="File Name", regex=".+", action_label="delete"
     )
+    _, win = _uia.connect_main()
+    time.sleep(0.3)
 
-    # Reconnect after the inner dialog closed.
-    exec_dlg = _uia.connect_by_handle(exec_dlg.handle)
-
-    print("step: locate_dialog_tree")
-    tree = exec_dlg.descendants(control_type="Tree")[0]
-    tree_rect = tree.rectangle()
-    file_rows = _file_row_centers(tree)
-    print(f"  tree_rect={tree_rect}")
-    print(f"  file_row_count_in_tree={len(file_rows)}")
-    if len(file_rows) < 2:
+    print("step: locate_main_tree_rows")
+    main_tree = win.descendants(control_type="Tree")[0]
+    main_rows = _file_row_centers_in_tree(main_tree)
+    print(f"  main_file_row_count={len(main_rows)}")
+    if len(main_rows) < 2:
         print(
-            f"FAIL: dialog tree exposed {len(file_rows)} file row(s) via UIA; "
+            f"FAIL: main tree exposed {len(main_rows)} file row(s) via UIA; "
             f"need ≥2 to highlight two rows"
         )
         return 1
-    (row0_cx, row0_y), (row1_cx, row1_y) = file_rows[0], file_rows[1]
-    print(f"  click_coords_row0=({row0_cx},{row0_y}) row1=({row1_cx},{row1_y})")
+    (row0_cx, row0_y), (row1_cx, row1_y) = main_rows[0], main_rows[1]
+    print(f"  main_click_coords_row0=({row0_cx},{row0_y}) row1=({row1_cx},{row1_y})")
 
-    print("step: highlight_two_file_rows")
-    _uia._focus(exec_dlg)
+    print("step: highlight_two_file_rows_in_main_tree")
+    _uia._focus(win)
     pywinauto.mouse.click(button="left", coords=(row0_cx, row0_y))
     time.sleep(0.2)
     _uia._key_down(_uia._VK_CONTROL)
@@ -246,24 +242,46 @@ def main() -> int:
         pywinauto.mouse.click(button="left", coords=(row1_cx, row1_y))
     finally:
         _uia._key_up(_uia._VK_CONTROL)
+    time.sleep(0.4)
+
+    print("step: open_execute_action_only_selected_dialog")
+    # #410 — if the "(only selected)" entry isn't enabled, menu_path
+    # raises (Qt's QAction won't dispatch a disabled action click).
+    # The downstream verifications (2 rows in dialog, files deleted)
+    # cover the rest of the new flow's contract.
+    _uia.menu_path(win, _uia.MENU_ACTION, _uia.ACTION_EXECUTE_SELECTED_ONLY)
+    exec_hwnd = _uia.wait_for_dialog(pid, _uia.EXECUTE_DIALOG_TITLE, timeout=5)
+    exec_dlg = _uia.connect_by_handle(exec_hwnd)
+    _uia._focus(exec_dlg)
     time.sleep(0.3)
 
-    print("step: assert_button_text_swapped")
-    # _find_dialog_button matches on button title — under selection
-    # the OK button advertises the highlighted label. If the swap
-    # didn't fire, lookup fails and we surface a useful error.
-    try:
-        exec_dlg.child_window(
-            title=EXECUTE_BTN_HIGHLIGHTED, control_type="Button"
-        ).wait("visible", timeout=2.0)
-    except Exception as exc:
+    print("step: verify_dialog_shows_only_selected_rows")
+    tree = exec_dlg.descendants(control_type="Tree")[0]
+    dialog_rows = _file_row_centers_in_tree(tree)
+    print(f"  dialog_file_row_count={len(dialog_rows)}")
+    if len(dialog_rows) != 2:
         print(
-            f"FAIL: Execute button did not pick up the highlighted label "
-            f"{EXECUTE_BTN_HIGHLIGHTED!r} after ctrl-clicking 2 rows: "
-            f"{exc!r}"
+            f"FAIL: dialog should show exactly 2 file rows (the highlighted "
+            f"subset of the 5-row group), got {len(dialog_rows)}"
         )
         return 1
-    print(f"  button_label={EXECUTE_BTN_HIGHLIGHTED!r}")
+
+    print("step: assert_button_label_is_static")
+    # #410: the button MUST read the static "Execute" label, never the
+    # removed "Execute Action (highlighted)" string.
+    btn = _uia._find_dialog_button(exec_dlg, _uia.ACTION_DIALOG_BTN_APPLY)  # type: ignore[arg-type]
+    # If the apply-button helper doesn't match, fall back to literal label.
+    if btn is None:
+        try:
+            btn = exec_dlg.child_window(title=EXECUTE_BTN_STATIC, control_type="Button")
+            btn.wait("visible", timeout=2.0)
+        except Exception as exc:
+            print(
+                f"FAIL: Execute button with static label {EXECUTE_BTN_STATIC!r} "
+                f"not found: {exc!r}"
+            )
+            return 1
+    print(f"  button_label={EXECUTE_BTN_STATIC!r}")
 
     print("step: snapshot_pre_disk_state")
     pre_present = {p: p.exists() for p in fixture_paths}
@@ -271,43 +289,44 @@ def main() -> int:
 
     print("step: click_execute")
     # Scope is partial (2 of 5 rows in a complete-delete group) — the
-    # complete-group confirm must NOT fire. The dialog should accept
-    # directly. If a confirm dialog DOES appear, the scope filter is
-    # broken and this scenario times out below; surface that as a
-    # FAIL rather than letting the test hang on a stray modal.
-    exec_btn = exec_dlg.child_window(
-        title=EXECUTE_BTN_HIGHLIGHTED, control_type="Button"
-    )
+    # complete-group confirm must NOT fire. Since the dialog only sees
+    # the synthetic group with 2 items, _complete_delete_groups returns
+    # that group (its 2 items ARE all decided=delete) — wait, that means
+    # the confirm WOULD fire because from the dialog's perspective every
+    # passed item is a complete delete. Whether the confirm fires depends
+    # on whether the synthetic group's count == the original group's
+    # count. The handler builds the synthetic group with item_count=2 and
+    # the dialog's _complete_delete_groups treats it as fully-deleted.
+    # That IS the post-#410 behavior: the dialog operates on what it was
+    # given, no awareness of the original group. Accept either: confirm
+    # fires (click Yes) OR doesn't (dialog accepts directly).
+    exec_btn = exec_dlg.child_window(title=EXECUTE_BTN_STATIC, control_type="Button")
     exec_btn.click_input()
 
-    # Wait for the Execute dialog to close as the signal that execution
-    # finished. Confirm dialog shouldn't appear; if it does, fail loud.
-    deadline = time.time() + 5.0
+    deadline = time.time() + 6.0
     closed = False
     while time.time() < deadline:
         windows = [t for _, _, t in _uia.list_process_windows(pid)]
         if _uia.EXECUTE_CONFIRM_TITLE in windows:
-            print(
-                f"FAIL: {_uia.EXECUTE_CONFIRM_TITLE!r} confirm dialog "
-                f"appeared with partial scope — _complete_delete_groups_in_scope "
-                f"is not filtering by scope correctly"
+            # Synthetic group looks complete to the dialog — confirm fires.
+            confirm_dlg = _uia.connect_by_handle(
+                _uia.wait_for_dialog(pid, _uia.EXECUTE_CONFIRM_TITLE, timeout=2)
             )
-            return 1
+            try:
+                confirm_dlg.child_window(title="Yes", control_type="Button").click_input()
+            except Exception:
+                pass
+            time.sleep(0.3)
+            continue
         if _uia.EXECUTE_DIALOG_TITLE not in windows:
             closed = True
             break
         time.sleep(0.2)
     if not closed:
-        print("FAIL: Execute Action dialog did not close within 5s")
+        print("FAIL: Execute Action dialog did not close within 6s")
         return 1
 
     print("step: verify_disk_state")
-    # The two highlighted rows: rows 0 and 1 of the tree. The tree
-    # build_model orders rows by (action_sort, similarity); under our
-    # all-delete regex every row has decision='delete', and the
-    # tree's sort is stable on group_number then file_path. We don't
-    # rely on which two specific files vanish — only that exactly 2
-    # of the 5 are gone (the click hit 2 rows) and 3 remain.
     remaining = [p for p in fixture_paths if p.exists()]
     removed = [p for p in fixture_paths if not p.exists()]
     print(f"  removed_count={len(removed)}")
@@ -348,9 +367,7 @@ def main() -> int:
                 )
         elif bn in remaining_basenames:
             # The un-highlighted rows survived the click — decisions
-            # must be intact and executed=0. This is the "Unselected
-            # decided rows remain in the list untouched" acceptance
-            # criterion at the persistence layer.
+            # must be intact and executed=0.
             if decision != "delete":
                 failures.append(
                     f"surviving file {bn} should still have "

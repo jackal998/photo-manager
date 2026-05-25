@@ -23,7 +23,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 from pywinauto import Application
 from pywinauto.controls.uiawrapper import UIAWrapper
@@ -77,6 +77,9 @@ LOG_TITLE_DELETE_LOG_DIR_NOT_FOUND = "Delete Log Directory Not Found"
 # Action menu items
 ACTION_BY_REGEX = "Set Action by Field…"
 ACTION_EXECUTE = "Execute Action…"
+# #410: sibling of ACTION_EXECUTE that pre-filters the Execute dialog to
+# groups containing the currently-selected file rows in the main tree.
+ACTION_EXECUTE_SELECTED_ONLY = "Execute Action (only selected)…"
 
 # Scan dialog
 SCAN_DIALOG_TITLE = "Scan Sources"

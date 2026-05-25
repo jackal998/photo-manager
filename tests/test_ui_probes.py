@@ -29,7 +29,6 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
 import yaml
 
 from app.viewmodels.main_vm import PhotoGroup, PhotoRecord
@@ -301,6 +300,8 @@ def test_probe_manifest_dependent_menu_actions_are_gated():
     _MANIFEST_DEPENDENT = {
         "save_manifest",
         "execute_action",
+        # #410: gated on manifest-loaded AND non-empty tree selection.
+        "execute_action_selected_only",
         "remove_from_list",
         "action_by_regex",
     }
@@ -517,7 +518,7 @@ def _menu_bar_handler_bindings() -> dict[str, str]:
                         and isinstance(node.value, ast.Dict)):
                     continue
                 bindings: dict[str, str] = {}
-                for key_node, val_node in zip(node.value.keys, node.value.values):
+                for key_node, val_node in zip(node.value.keys, node.value.values, strict=False):
                     if not (isinstance(key_node, ast.Constant)
                             and isinstance(key_node.value, str)):
                         continue
@@ -612,7 +613,7 @@ def test_probe_destructive_surface_inventory():
 
     assert not unauthorized, (
         "Destructive handlers reachable from 2+ surfaces without an "
-        f"_INTENTIONAL_DUPLICATE_SURFACES entry:\n  " +
+        "_INTENTIONAL_DUPLICATE_SURFACES entry:\n  " +
         "\n  ".join(
             f"{h!r} reachable from {len(surfaces)}: {surfaces!r}"
             for h, surfaces in sorted(unauthorized.items())

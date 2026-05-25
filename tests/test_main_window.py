@@ -61,7 +61,7 @@ import pytest
 
 from app.viewmodels.main_vm import MainVM
 from app.views.main_window import MainWindow
-from core.models import PhotoGroup, PhotoRecord
+from core.models import PhotoRecord
 
 
 def _rec(path: str, group: int = 1, action: str = "") -> PhotoRecord:
@@ -142,6 +142,59 @@ def test_menu_action_delegates_to_handler(method_name, target_attr, target_metho
     getattr(MainWindow, method_name)(fake_self)
 
     getattr(fake_handler, target_method).assert_called_once_with()
+
+
+def test_on_execute_action_selected_only_delegates_with_kwarg():
+    """#410 — ``on_execute_action_selected_only`` must call
+    ``file_operations.execute_action(selected_only=True)``. The kwarg
+    is the explicit scope signal; passing positional would break the
+    sibling ``on_execute_action`` (which calls with no args).
+    Bridge-pattern silent-no-op risk: a refactor that drops the kwarg
+    surfaces as the new menu entry behaving identically to the old
+    one — no visible error.
+    """
+    fake_ops = MagicMock()
+    fake_self = SimpleNamespace(file_operations=fake_ops)
+
+    MainWindow.on_execute_action_selected_only(fake_self)
+
+    fake_ops.execute_action.assert_called_once_with(selected_only=True)
+
+
+def test_refresh_execute_selected_only_enabled_requires_manifest_and_selection():
+    """#410 — the (only selected) menu entry must be enabled only when
+    BOTH (a) a manifest is loaded (sibling ``execute_action`` entry is
+    enabled) AND (b) at least one file row is selected in the tree.
+    Either condition false → disabled. Catches a regression where the
+    AND becomes an OR (would enable the entry pre-manifest if a stale
+    selection survived, or post-manifest with no selection)."""
+    matrix = [
+        # (manifest_loaded, has_file_selection, expected_enabled)
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ]
+    for manifest_loaded, has_file_selection, expected in matrix:
+        execute_action = MagicMock()
+        execute_action.isEnabled.return_value = manifest_loaded
+        selected_only = MagicMock()
+        actions = {
+            "execute_action": execute_action,
+            "execute_action_selected_only": selected_only,
+        }
+        menu_controller = SimpleNamespace(actions=actions)
+        items = [{"type": "file", "path": "/a.jpg"}] if has_file_selection else []
+        tree_controller = MagicMock()
+        tree_controller.get_selected_items.return_value = items
+        fake_self = SimpleNamespace(
+            menu_controller=menu_controller,
+            tree_controller=tree_controller,
+        )
+
+        MainWindow._refresh_execute_selected_only_enabled(fake_self)
+
+        selected_only.setEnabled.assert_called_with(expected)
 
 
 def test_apply_action_by_regex_delegates_to_file_operations():
