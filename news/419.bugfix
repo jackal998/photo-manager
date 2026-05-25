@@ -1,0 +1,1 @@
+Revert the Set Action dialog combo label from "Set status for each match:" back to "Set action for each match:" — keeps the per-row scope phrasing from Wave 9b-trim B12 while restoring "action" as the canonical user-facing noun, parallel with sibling labels (Set Action by Field title, Set Action context menu) (#416).

@@ -209,10 +209,12 @@ action_dialog:
   # B12 from #348 (Wave 9b-trim): label rewords from the generic
   # "Set Action:" to make the per-row scope explicit — the chosen
   # action applies to EVERY matched row, not to one row or the group.
-  # #407: relabel to "Set status for each match:" — all five combo
-  # items are status-setting operations (user_decision / is_locked),
-  # not actions in the broader sense.
-  set_action_label: "Set status for each match:"
+  # #416: reverts #407's "Set status…" rename — "action" is the
+  # canonical user-facing noun (decision/status are internal).
+  # Three sibling labels (action_dialog.title,
+  # execute_dialog.set_action_menu, context_menu.set_action) always
+  # said "Set Action…"; this realigns the combo label with them.
+  set_action_label: "Set action for each match:"
   # D10 from #350 (Wave 9a): keyboard mnemonics via "&X" — Alt+X fires the
   # button. Allocations: A=Apply, R=Recent, S=Switch to Regex,
   # W=Reset (W)indow size. (#391 dropped C=Close — button removed,

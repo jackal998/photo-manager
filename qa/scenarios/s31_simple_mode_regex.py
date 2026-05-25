@@ -538,7 +538,7 @@ def main() -> int:
                 _txt = (_t.window_text() or "").strip()
             except Exception:
                 _txt = ""
-            if _txt == "Set status for each match:":
+            if _txt == "Set action for each match:":
                 _found_label = True
                 break
     except Exception as _e:
@@ -566,8 +566,8 @@ def main() -> int:
         else:
             print(
                 "probe_status: B12-action-label-text FAIL — neither "
-                "en 'Action for each match:' nor zh equivalents found "
-                "in dialog Text descendants"
+                "en 'Set action for each match:' nor zh equivalents "
+                "found in dialog Text descendants"
             )
 
     # D4 probe removed in #395 — "Test against" playground was dropped
