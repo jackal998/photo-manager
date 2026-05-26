@@ -233,10 +233,10 @@ for the chore plan.
 
 - **Entry point:** Main window menu → **View > Language** submenu — built by `menu_controller.py` via `QActionGroup(exclusive=True)`.
 - **Trigger:** User picks a locale from the Language submenu.
-- **Behaviour:** A Yes/No confirm prompt appears. On Yes the `MainWindow` rebuilds in place via the same factory used at startup — no app restart needed. State preserved best-effort: window geometry, splitter sizes, selected row's path. The chosen locale persists to `settings.json` under `ui.locale`.
+- **Behaviour:** A Yes/No confirm prompt appears. On Yes the `MainWindow` rebuilds in place via the same factory used at startup — no app restart needed. State preserved best-effort: window geometry, splitter sizes, selected row's path. If a manifest was loaded pre-switch, it is re-loaded into the new window so the result tree stays populated — any pending decisions are silent-saved to the manifest's SQLite before the swap so the reload sees the user's latest state ([#428](https://github.com/jackal998/photo-manager/issues/428)). The chosen locale persists to `settings.json` under `ui.locale`.
 - **Conditions / variants:** Available locales are discovered from `translations/<code>.yml` files. Each new YAML file appearing alongside `en.yml` shows up automatically in the picker on the next launch (no enum to update). Adding a new locale: copy `en.yml` → `<code>.yml`, translate values, restart once. Picking the already-active locale is a no-op (no confirm fires).
-- **Related:** [PR #157](https://github.com/jackal998/photo-manager/pull/157); QA scenario [`qa/scenarios/s22_language_switch.py`](../qa/scenarios/s22_language_switch.py); translator workflow in [`docs/i18n.md`](i18n.md).
-- **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+- **Related:** [PR #157](https://github.com/jackal998/photo-manager/pull/157), [#428](https://github.com/jackal998/photo-manager/issues/428); QA scenarios [`qa/scenarios/s22_language_switch.py`](../qa/scenarios/s22_language_switch.py) and [`qa/scenarios/s58_language_switch_preserves_manifest.py`](../qa/scenarios/s58_language_switch_preserves_manifest.py); translator workflow in [`docs/i18n.md`](i18n.md).
+- **Last verified:** 2026-05-27 (manifest-preservation behaviour landed via [#428](https://github.com/jackal998/photo-manager/issues/428))
 
 ---
 

@@ -228,6 +228,12 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # the four non-keepers user_decision='delete'. Non-destructive
     # (writes manifest decisions only — no file moves).
     "s57_scan_auto_select_aggressive": ["qa/sandbox/near-duplicates"],
+    # s58 (#428) — language switch must preserve the loaded manifest
+    # across the live-relocalize rebuild. Same near-duplicates fixture
+    # so the post-switch row count is non-zero (5 files in 1 group);
+    # zero rows would be ambiguous with "manifest never loaded".
+    # Driver MUST restore ui.locale=en before exiting (see s22).
+    "s58_language_switch_preserves_manifest": ["qa/sandbox/near-duplicates"],
 }
 
 
