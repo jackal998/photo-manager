@@ -1,0 +1,1 @@
+Suppress visible exiftool console window during scans in PyInstaller windowed builds. (#427)
