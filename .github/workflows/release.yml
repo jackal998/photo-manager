@@ -1,0 +1,171 @@
+name: release
+
+# Tag-push trigger only — pushing v*.*.* (incl. -rc1 etc) builds the
+# standalone Windows bundle and publishes it as a GitHub Release.
+# Manual / PR runs are intentionally absent: a release is a deliberate
+# act, and the gate is "did you push a version tag".
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# A failed build must NOT clobber an in-flight successful one. Tags
+# are immutable in practice, so each tag-ref gets its own concurrency
+# group.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # gh release create needs write on the repo
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source at the tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # CHANGELOG section extraction may walk history
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "asset_name=photo-manager-$version-windows-x64.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "tag=$tag version=$version"
+
+      # Clean venv with ONLY requirements.txt + build-requirements.txt
+      # — dev-requirements (pytest/ruff/etc) intentionally absent so
+      # the bundle reflects production deps, not dev tooling.
+      - name: Create clean build venv
+        shell: pwsh
+        run: |
+          python -m venv .venv-build
+          .venv-build\Scripts\python -m pip install --upgrade pip
+          .venv-build\Scripts\python -m pip install -r requirements.txt -r build-requirements.txt
+
+      - name: Build with PyInstaller (--onedir)
+        shell: pwsh
+        run: |
+          .venv-build\Scripts\python -m PyInstaller pyinstaller.spec --clean --noconfirm
+          if (-not (Test-Path "dist\photo-manager\photo-manager.exe")) {
+            Write-Error "PyInstaller did not produce dist\photo-manager\photo-manager.exe"
+            exit 1
+          }
+          $size = (Get-ChildItem -Recurse "dist\photo-manager" | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("Bundle size: {0:N1} MB" -f $size)
+
+      # Headless smoke: launch under the Qt offscreen platform plugin
+      # so no display is required. Watchdog kills the process after a
+      # short window — we're asserting "starts without crashing", not
+      # "completes some task". A non-zero exit before the watchdog
+      # fires = crash = workflow fails.
+      - name: Headless smoke test
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_LOGGING_RULES: '*.debug=false'
+        run: |
+          $exe = "dist\photo-manager\photo-manager.exe"
+          $stderrFile = "$env:RUNNER_TEMP\smoke-stderr.log"
+          $stdoutFile = "$env:RUNNER_TEMP\smoke-stdout.log"
+          $p = Start-Process -FilePath $exe `
+                             -RedirectStandardError $stderrFile `
+                             -RedirectStandardOutput $stdoutFile `
+                             -PassThru -NoNewWindow
+          Start-Sleep -Seconds 5
+          if ($p.HasExited) {
+            Write-Host "--- exe exited prematurely (exit=$($p.ExitCode)) ---"
+            Write-Host "--- stdout ---"
+            if (Test-Path $stdoutFile) { Get-Content $stdoutFile }
+            Write-Host "--- stderr ---"
+            if (Test-Path $stderrFile) { Get-Content $stderrFile }
+            exit 1
+          }
+          Write-Host "Process still running after 5s — no immediate crash. Stopping."
+          Stop-Process -Id $p.Id -Force
+          # Print stderr regardless so missing-module warnings surface
+          # in the workflow log even when the smoke passes.
+          Write-Host "--- stderr (post-kill) ---"
+          if (Test-Path $stderrFile) { Get-Content $stderrFile }
+
+      - name: Zip bundle
+        shell: pwsh
+        run: |
+          $asset = "${{ steps.version.outputs.asset_name }}"
+          Compress-Archive -Path "dist\photo-manager\*" -DestinationPath $asset -Force
+          Write-Host "Built $asset"
+          Get-Item $asset | Select-Object Name, Length
+
+      # CHANGELOG.md is produced by towncrier ahead of the tag push;
+      # we extract the section for THIS version. If the section is
+      # missing (towncrier wasn't run for this tag), fall back to a
+      # generic body — Release still ships but the maintainer is
+      # nudged via the body content to backfill notes.
+      - name: Build release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $body = "release-body.md"
+          python - <<PY > $body
+          import re, sys
+          version = "$version"
+          try:
+              text = open("CHANGELOG.md", encoding="utf-8").read()
+          except OSError:
+              text = ""
+          # Match `## [<version>] - <date>` through to the next `## [`
+          # or EOF. Escaped via re.escape so rc1 / pre-release segments
+          # work without surprises.
+          pat = re.compile(
+              r"^## \[" + re.escape(version) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              re.DOTALL | re.MULTILINE,
+          )
+          m = pat.search(text)
+          if m:
+              print(m.group(1).strip())
+          else:
+              print(f"_No towncrier section found for {version} in CHANGELOG.md. See [`news/`](news/) for fragments._")
+          print()
+          print("---")
+          print()
+          print("### Installing on Windows")
+          print()
+          print("1. Download `${{ steps.version.outputs.asset_name }}` from the Assets section below.")
+          print("2. Extract the zip anywhere — the bundle is self-contained, no installer.")
+          print("3. Run `photo-manager.exe`.")
+          print()
+          print("**SmartScreen note:** the binary is unsigned, so Windows SmartScreen will show \"Windows protected your PC\" on first launch. Click **More info** → **Run anyway**. This will go away once we publish a signed release.")
+          PY
+          Write-Host "--- release-body.md ---"
+          Get-Content $body
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $asset = "${{ steps.version.outputs.asset_name }}"
+          # --verify-tag ensures we're creating the release against
+          # the tag that actually triggered this run, not a moved ref.
+          $isPrerelease = if ($tag -match '-(rc|alpha|beta)') { "--prerelease" } else { "" }
+          gh release create $tag $asset `
+            --title $tag `
+            --notes-file release-body.md `
+            --verify-tag `
+            $isPrerelease.Split() | Out-Null
+          Write-Host "Release $tag created with asset $asset"
