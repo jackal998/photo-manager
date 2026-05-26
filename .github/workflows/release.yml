@@ -121,40 +121,31 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           RELEASE_ASSET: ${{ steps.version.outputs.asset_name }}
         run: |
-          # PowerShell here-string (@' ... '@) piped to `python -`.
-          # Bash-style `python - <<PY` heredoc isn't valid pwsh — pwsh
-          # parses `<` as a redirection operator. Variables flow in via
-          # env vars so the script body has no ${{ }} interpolation
-          # that could collide with Python's f-string braces.
-          $py = @'
-          import os, re
-          version = os.environ["RELEASE_VERSION"]
-          asset = os.environ["RELEASE_ASSET"]
-          try:
-              text = open("CHANGELOG.md", encoding="utf-8").read()
-          except OSError:
-              text = ""
-          pat = re.compile(
-              r"^## \[" + re.escape(version) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)",
-              re.DOTALL | re.MULTILINE,
+          $version = $env:RELEASE_VERSION
+          $asset = $env:RELEASE_ASSET
+          $changelog = if (Test-Path CHANGELOG.md) { Get-Content -Raw CHANGELOG.md } else { "" }
+          $escaped = [regex]::Escape($version)
+          $pattern = '(?ms)^## \[' + $escaped + '\][^\n]*\n(.*?)(?=^## \[|\z)'
+          $m = [regex]::Match($changelog, $pattern)
+          if ($m.Success) {
+            $section = $m.Groups[1].Value.Trim()
+          } else {
+            $section = "_No towncrier section found for $version in CHANGELOG.md. See news/ for fragments._"
+          }
+          $lines = @(
+            $section,
+            "",
+            "---",
+            "",
+            "### Installing on Windows",
+            "",
+            "1. Download ``$asset`` from the Assets section below.",
+            "2. Extract the zip anywhere - the bundle is self-contained, no installer.",
+            "3. Run ``photo-manager.exe``.",
+            "",
+            "**SmartScreen note:** the binary is unsigned, so Windows SmartScreen will show ""Windows protected your PC"" on first launch. Click **More info** -> **Run anyway**. This will go away once we publish a signed release."
           )
-          m = pat.search(text)
-          if m:
-              print(m.group(1).strip())
-          else:
-              print(f"_No towncrier section found for {version} in CHANGELOG.md. See [`news/`](news/) for fragments._")
-          print()
-          print("---")
-          print()
-          print("### Installing on Windows")
-          print()
-          print(f"1. Download `{asset}` from the Assets section below.")
-          print("2. Extract the zip anywhere — the bundle is self-contained, no installer.")
-          print("3. Run `photo-manager.exe`.")
-          print()
-          print("**SmartScreen note:** the binary is unsigned, so Windows SmartScreen will show \"Windows protected your PC\" on first launch. Click **More info** -> **Run anyway**. This will go away once we publish a signed release.")
-          '@
-          $py | python - | Out-File -FilePath release-body.md -Encoding utf8
+          $lines -join "`n" | Out-File -FilePath release-body.md -Encoding utf8
           Write-Host "--- release-body.md ---"
           Get-Content release-body.md
 
