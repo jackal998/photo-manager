@@ -117,19 +117,23 @@ jobs:
       - name: Build release notes
         id: notes
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_ASSET: ${{ steps.version.outputs.asset_name }}
         run: |
-          $version = "${{ steps.version.outputs.version }}"
-          $body = "release-body.md"
-          python - <<PY > $body
-          import re, sys
-          version = "$version"
+          # PowerShell here-string (@' ... '@) piped to `python -`.
+          # Bash-style `python - <<PY` heredoc isn't valid pwsh — pwsh
+          # parses `<` as a redirection operator. Variables flow in via
+          # env vars so the script body has no ${{ }} interpolation
+          # that could collide with Python's f-string braces.
+          $py = @'
+          import os, re
+          version = os.environ["RELEASE_VERSION"]
+          asset = os.environ["RELEASE_ASSET"]
           try:
               text = open("CHANGELOG.md", encoding="utf-8").read()
           except OSError:
               text = ""
-          # Match `## [<version>] - <date>` through to the next `## [`
-          # or EOF. Escaped via re.escape so rc1 / pre-release segments
-          # work without surprises.
           pat = re.compile(
               r"^## \[" + re.escape(version) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)",
               re.DOTALL | re.MULTILINE,
@@ -144,14 +148,15 @@ jobs:
           print()
           print("### Installing on Windows")
           print()
-          print("1. Download `${{ steps.version.outputs.asset_name }}` from the Assets section below.")
+          print(f"1. Download `{asset}` from the Assets section below.")
           print("2. Extract the zip anywhere — the bundle is self-contained, no installer.")
           print("3. Run `photo-manager.exe`.")
           print()
-          print("**SmartScreen note:** the binary is unsigned, so Windows SmartScreen will show \"Windows protected your PC\" on first launch. Click **More info** → **Run anyway**. This will go away once we publish a signed release.")
-          PY
+          print("**SmartScreen note:** the binary is unsigned, so Windows SmartScreen will show \"Windows protected your PC\" on first launch. Click **More info** -> **Run anyway**. This will go away once we publish a signed release.")
+          '@
+          $py | python - | Out-File -FilePath release-body.md -Encoding utf8
           Write-Host "--- release-body.md ---"
-          Get-Content $body
+          Get-Content release-body.md
 
       - name: Create GitHub Release
         env:
