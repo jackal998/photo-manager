@@ -518,9 +518,11 @@ class ExecuteActionDialog(QDialog):
                     break
         self._refresh_ui_after_decision_change()
         # #318 — match the main-window route's confirmation.
+        # #425 — interpolate the localised label, not the raw value.
+        from app.views.handlers.file_operations import _decision_display_label
         if self._status_reporter is not None:
             self._status_reporter.show_status(
-                t("file_op.decision_set_status", decision=decision)
+                t("file_op.decision_set_status", decision=_decision_display_label(decision))
             )
 
     def _row_is_locked(self, path: str) -> bool:
@@ -834,9 +836,11 @@ class ExecuteActionDialog(QDialog):
         # Without this, the main window's status bar still shows the
         # initial "Loaded manifest" baseline after the user applies a
         # regex here — see #316.
+        # #425 — interpolate the localised label, not the raw value.
         if batch and self._status_reporter is not None:
+            from app.views.handlers.file_operations import _decision_display_label
             self._status_reporter.show_status(
-                t("file_op.decision_set_status", decision=new_decision)
+                t("file_op.decision_set_status", decision=_decision_display_label(new_decision))
             )
         if locked_paths and len(apply_paths) < len(matched_paths):
             logger.info(

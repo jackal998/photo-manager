@@ -88,7 +88,10 @@ class ScanWorker(QThread):
         import io
         from contextlib import redirect_stdout
 
-        self._emit("Read-only scan — no files will be moved or deleted.")
+        # #425 — was "no files will be moved or deleted"; reworded to
+        # match scan_dialog.notice and stop implying a file operation
+        # the read-only scan never performs.
+        self._emit("Read-only scan — no files on disk are changed.")
         self._emit("")
 
         # --- 1. Walk sources ---
@@ -256,12 +259,18 @@ class ScanWorker(QThread):
         # their classifier action (REVIEW_DUPLICATE / EXACT / MOVE) so
         # the user still confirms deletions explicitly.
         #
-        # #393 layered on top: keepers also receive user_decision='keep'
+        # #393 layered on top: keepers also receive user_decision=""
+        # (canonical "keep" state — empty string, NOT the literal "keep")
         # AND is_locked=1 (written post-write_manifest via the
         # repo's batch_update_* methods, since ManifestRow has neither
         # field — those live on the DB and PhotoRecord). The lock gives
-        # a visible tree badge; user_decision='keep' composes with #182
+        # a visible tree badge; user_decision="" composes with #182
         # LockedRowsConfirmDialog if the user later applies bulk-regex.
+        # #425 — Previously this wrote the literal "keep" string, which
+        # then leaked into the tree's Action column as raw "keep" text
+        # instead of an empty cell. Canonical convention everywhere else
+        # in the codebase (settable_decisions, set_decision via right-
+        # click) is empty string for keep; auto-select now matches.
         #
         # #393 (c) — optional aggressive mode: every non-keeper row in
         # a scored group gets user_decision='delete'. Off by default

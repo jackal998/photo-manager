@@ -91,12 +91,19 @@ def _get_record_field(rec: Any, field: str) -> str | None:
 
 def _decision_display_label(decision: str) -> str:
     """Return a human-friendly label for ``decision`` for confirm-dialog
-    bodies. Mirrors the labels offered by :func:`settable_decisions` so
-    the confirm body reads the same as the menu item that triggered it.
+    bodies AND status-bar messages. Mirrors the labels offered by
+    :func:`settable_decisions` so the confirm body reads the same as
+    the menu item that triggered it.
+
+    Both ``""`` (canonical keep) and ``"keep"`` (legacy literal from
+    pre-#425 auto-select writes) map to ``t("decision.keep")`` so the
+    label is consistent regardless of which value got persisted.
     """
     if decision == "delete":
         return t("decision.delete")
-    if decision == "":
+    if decision == "" or decision == "keep":
+        # "" is the canonical keep state; "keep" is the legacy literal
+        # back-compat path (#425 — older manifests may carry it).
         return t("decision.keep")
     if decision == REMOVE_FROM_LIST_DECISION:
         return t("decision.remove_from_list")
@@ -640,8 +647,12 @@ class FileOperationsHandler:
             ManifestRepository().batch_update_decisions(manifest_path, batch)
             self._mark_dirty()
         self.ui_updater.refresh_tree(self.vm.groups)
+        # #425 — pass the localised label, not the raw internal value:
+        # the {decision} placeholder was previously interpolated with
+        # "delete" / "" / "keep" verbatim, so zh_TW status reads showed
+        # English "delete" inside an otherwise Mandarin sentence.
         self.status_reporter.show_status(
-            t("file_op.decision_set_status", decision=new_decision)
+            t("file_op.decision_set_status", decision=_decision_display_label(new_decision))
         )
 
     def set_locked_state(self, items: list[dict], locked: bool) -> None:
@@ -832,7 +843,8 @@ class FileOperationsHandler:
             self.status_reporter.show_status(
                 t(
                     "file_op.decision_set_with_skipped_status",
-                    decision=resolved_decision,
+                    # #425 — pass localised label, not raw internal value.
+                    decision=_decision_display_label(resolved_decision),
                     set_count=len(unlocked_items),
                     skipped=len(locked_set),
                 )

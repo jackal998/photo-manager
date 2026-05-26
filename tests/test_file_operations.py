@@ -120,25 +120,30 @@ class TestSetDecision:
         assert rec.user_decision == "delete"
 
     def test_sets_decision_in_sqlite(self, tmp_path):
+        # #425 — used to set "keep" and assert "keep"; "" is the canonical
+        # keep state but indistinguishable from the schema default, so use
+        # "delete" here to prove the persistence path actually wrote.
         rec = _rec("/a.jpg")
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
 
-        handler.set_decision([{"type": "file", "path": "/a.jpg"}], "keep")
+        handler.set_decision([{"type": "file", "path": "/a.jpg"}], "delete")
 
-        assert _read_decision(db, "/a.jpg") == "keep"
+        assert _read_decision(db, "/a.jpg") == "delete"
 
     def test_overwrites_existing_decision(self, tmp_path):
+        # #425 — flip from "delete" → "" (canonical keep), proving the
+        # overwrite path can clear a prior non-default decision.
         rec = _rec("/a.jpg", decision="delete")
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
 
-        handler.set_decision([{"type": "file", "path": "/a.jpg"}], "keep")
+        handler.set_decision([{"type": "file", "path": "/a.jpg"}], "")
 
-        assert rec.user_decision == "keep"
-        assert _read_decision(db, "/a.jpg") == "keep"
+        assert rec.user_decision == ""
+        assert _read_decision(db, "/a.jpg") == ""
 
     def test_skips_non_file_items(self, tmp_path):
         rec = _rec("/a.jpg")
@@ -188,15 +193,17 @@ class TestSetDecision:
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
 
+        # #425 — was "keep"; use "delete" so the post-state is distinct
+        # from the default and the persistence assertion is meaningful.
         handler.set_decision(
             [{"type": "file", "path": "/a.jpg"}, {"type": "file", "path": "/b.jpg"}],
-            "keep",
+            "delete",
         )
 
-        assert recs[0].user_decision == "keep"
-        assert recs[1].user_decision == "keep"
-        assert _read_decision(db, "/a.jpg") == "keep"
-        assert _read_decision(db, "/b.jpg") == "keep"
+        assert recs[0].user_decision == "delete"
+        assert recs[1].user_decision == "delete"
+        assert _read_decision(db, "/a.jpg") == "delete"
+        assert _read_decision(db, "/b.jpg") == "delete"
 
 
 
@@ -423,9 +430,12 @@ class TestSetDecisionToHighlighted:
         hl_provider = lambda: [{"type": "file", "path": "/a.jpg"}]
         handler, _, _ = _make_handler(vm, str(db), highlighted_items=hl_provider)
 
-        handler.set_decision_to_highlighted("keep")
+        # #425 — was "keep" / "keep"; canonical keep is "" but
+        # indistinguishable from the default unselected state. Use
+        # "delete" so the selective-application semantic is testable.
+        handler.set_decision_to_highlighted("delete")
 
-        assert recs[0].user_decision == "keep"
+        assert recs[0].user_decision == "delete"
         assert recs[1].user_decision == ""
 
     def test_updates_sqlite_for_highlighted_files(self, tmp_path):
@@ -546,9 +556,10 @@ class TestGetRecordFieldActionMapping:
         provider = SimpleNamespace(get_selected_items=lambda: [{"type": "file", "path": "/a.jpg"}])
         handler, _, _ = _make_handler(vm, str(db), highlighted_items=provider)
 
-        handler.set_decision_to_highlighted("keep")
+        # #425 — was "keep"; flip to "delete" so persistence is testable.
+        handler.set_decision_to_highlighted("delete")
 
-        assert recs[0].user_decision == "keep"
+        assert recs[0].user_decision == "delete"
 
 
 # ── save_manifest_decisions ───────────────────────────────────────────────────
@@ -603,7 +614,10 @@ class TestSaveManifestDecisions:
     @patch("PySide6.QtWidgets.QMessageBox.information")
     def test_saves_to_same_path_in_place(self, _mock, tmp_path):
         """Saving to the same file writes decisions without copying."""
-        recs = [_rec("/a.jpg", decision="keep")]
+        # #425 — was decision="keep" / asserts "keep"; the canonical
+        # keep state is "" but is the schema default. Flip to "delete"
+        # so the save-roundtrip is observable.
+        recs = [_rec("/a.jpg", decision="delete")]
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, _, _ = _make_handler(vm, str(db))
@@ -611,7 +625,7 @@ class TestSaveManifestDecisions:
         with _mock_save_dialog(accept_path=str(db)):
             handler.save_manifest_decisions()
 
-        assert _read_decision(db, "/a.jpg") == "keep"
+        assert _read_decision(db, "/a.jpg") == "delete"
         assert handler._manifest_path == str(db)
 
     @patch("PySide6.QtWidgets.QMessageBox.information")
@@ -804,7 +818,11 @@ class TestSaveManifestLoadRoundTrip:
         cand_rec = next(r for r in records if r.file_path.endswith("cand.jpg"))
         ref_rec = next(r for r in records if r.file_path.endswith("ref.jpg"))
         cand_rec.user_decision = "delete"
-        ref_rec.user_decision = "keep"
+        # #425 — was "keep"; canonical keep state is "" (the default).
+        # Leave ref_rec at the default and use REMOVE_FROM_LIST_DECISION
+        # to mark a distinct non-delete decision for round-trip proof.
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        ref_rec.user_decision = REMOVE_FROM_LIST_DECISION
 
         # Save to a NEW path via the real handler (dialog mocked).
         new_path = str(tmp_path / "exported.sqlite")
@@ -815,7 +833,7 @@ class TestSaveManifestLoadRoundTrip:
 
         # Verify the loaded -> decided -> saved chain preserved decisions.
         assert _read_decision(Path(new_path), cand_rec.file_path) == "delete"
-        assert _read_decision(Path(new_path), ref_rec.file_path) == "keep"
+        assert _read_decision(Path(new_path), ref_rec.file_path) == REMOVE_FROM_LIST_DECISION
         assert handler._manifest_path == new_path
 
 
@@ -1153,9 +1171,11 @@ class TestSetDecisionByRegex:
         ])
         handler, _, _ = _make_handler(vm, str(db))
 
-        handler.set_decision_by_regex("File Name", r"IMG_keep", "keep")
+        # #425 — was "keep"; flip to "delete" so the regex-match path's
+        # write is observable (post-state distinct from the default).
+        handler.set_decision_by_regex("File Name", r"IMG_keep", "delete")
 
-        assert rec_match.user_decision == "keep"
+        assert rec_match.user_decision == "delete"
         assert rec_skip.user_decision == ""
 
     def test_empty_pattern_does_not_mutate_any_row(self, tmp_path):
@@ -1352,13 +1372,15 @@ class TestSetDecisionByRegexNumericFields:
         ])
         handler, _, _ = _make_handler(vm, str(db))
 
+        # #425 — was "keep"; flip to "delete" so the top-N path's
+        # write is observable (canonical keep "" matches the default).
         handler.set_decision_by_regex(
-            "Score", "__top_n__:1:desc", "keep"
+            "Score", "__top_n__:1:desc", "delete"
         )
 
-        # Only the highest-scoring rec (0.9) gets "keep"; the other
+        # Only the highest-scoring rec (0.9) gets "delete"; the other
         # two stay at "".
-        assert recs[0].user_decision == "keep"
+        assert recs[0].user_decision == "delete"
         assert recs[1].user_decision == ""
         assert recs[2].user_decision == ""
 

@@ -1,0 +1,1 @@
+Purge residual "to be moved" / "搬移" wording from translations + scan log, and canonicalise auto-select keeper writes to `user_decision=""` so the tree's Action column renders empty + locked (matching right-click Set Action → keep). (#425)

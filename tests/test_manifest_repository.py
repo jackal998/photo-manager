@@ -389,7 +389,12 @@ class TestManifestRepositorySave:
         conn.close()
         assert row[0] == "delete"
 
-    def test_user_decision_keep_written(self, tmp_path):
+    def test_legacy_user_decision_keep_round_trips(self, tmp_path):
+        """#425 — back-compat: the repository must still accept the
+        legacy literal "keep" string on save and round-trip it back
+        from disk unchanged. Canonical write paths use "" but old
+        manifests on disk may still carry the literal value, and
+        operations that re-save them must preserve the data."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "action": "MOVE",
                   "group_id": None, "hamming_distance": None}),
@@ -448,8 +453,9 @@ class TestManifestRepositorySave:
             _row({"source_path": "/source/b.jpg", "group_id": None,
                   "hamming_distance": None, "action": "MOVE"}),
         ])
+        # #425 — first record canonical empty keep; second deletes.
         group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "MOVE", "keep"),
+            self._make_record("/source/a.jpg", "MOVE", ""),
             self._make_record("/source/b.jpg", "MOVE", "delete"),
         ])
         count = ManifestRepository().save(str(db), [group])
@@ -478,18 +484,21 @@ class TestManifestRepositoryUpdateDecision:
         assert rows["/source/b.jpg"] == ""  # untouched
 
     def test_update_decision_overwrites_existing(self, tmp_path):
+        # #425 — flipped "keep" → "" (canonical keep). The test proves
+        # that an existing "delete" decision can be overwritten back to
+        # the canonical undecided/keep state.
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "user_decision": "delete",
                   "group_id": None, "hamming_distance": None, "action": "MOVE"}),
         ])
-        ManifestRepository().update_decision(str(db), "/source/a.jpg", "keep")
+        ManifestRepository().update_decision(str(db), "/source/a.jpg", "")
 
         conn = sqlite3.connect(db)
         row = conn.execute(
             "SELECT user_decision FROM migration_manifest WHERE source_path = '/source/a.jpg'"
         ).fetchone()
         conn.close()
-        assert row[0] == "keep"
+        assert row[0] == ""
 
 
 class TestBatchUpdateDecisions:
@@ -499,7 +508,12 @@ class TestBatchUpdateDecisions:
             _row({"source_path": "/b.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
             _row({"source_path": "/c.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
         ])
-        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": "keep"})
+        # #425 — second value flipped "keep" → REMOVE_FROM_LIST_DECISION
+        # so the batch test still verifies two distinct non-default
+        # writes (canonical keep "" would be indistinguishable from
+        # the untouched /c.jpg row).
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": REMOVE_FROM_LIST_DECISION})
 
         conn = sqlite3.connect(db)
         rows = {r[0]: r[1] for r in conn.execute(
@@ -507,12 +521,14 @@ class TestBatchUpdateDecisions:
         ).fetchall()}
         conn.close()
         assert rows["/a.jpg"] == "delete"
-        assert rows["/b.jpg"] == "keep"
+        assert rows["/b.jpg"] == REMOVE_FROM_LIST_DECISION
         assert rows["/c.jpg"] == ""  # untouched
 
     def test_noop_on_empty_dict(self, tmp_path):
+        # #425 — flipped "keep" → "delete" so the unchanged-state
+        # assertion is distinguishable from the schema default.
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "user_decision": "keep",
+            _row({"source_path": "/a.jpg", "user_decision": "delete",
                   "group_id": None, "hamming_distance": None, "action": "MOVE"}),
         ])
         ManifestRepository().batch_update_decisions(str(db), {})
@@ -522,7 +538,7 @@ class TestBatchUpdateDecisions:
             "SELECT user_decision FROM migration_manifest WHERE source_path = '/a.jpg'"
         ).fetchone()
         conn.close()
-        assert row[0] == "keep"  # unchanged
+        assert row[0] == "delete"  # unchanged
 
 
 class TestBatchUpdateDecisionsAndLock:
@@ -549,9 +565,11 @@ class TestBatchUpdateDecisionsAndLock:
         # path (auto-select migrates lazily before this call).
         ManifestRepository().ensure_schema(str(db))
 
+        # #425 — canonical empty-keep write matches the auto-select
+        # production path post-canonicalisation.
         ManifestRepository().batch_update_decisions_and_lock(
             str(db),
-            decisions={"/k.jpg": "keep", "/d.jpg": "delete"},
+            decisions={"/k.jpg": "", "/d.jpg": "delete"},
             lock_states={"/k.jpg": True},
         )
 
@@ -565,7 +583,8 @@ class TestBatchUpdateDecisionsAndLock:
             }
         finally:
             conn.close()
-        assert rows["/k.jpg"] == ("keep", 1)
+        # Keeper: empty decision + lock badge.
+        assert rows["/k.jpg"] == ("", 1)
         assert rows["/d.jpg"] == ("delete", 0)
         assert rows["/untouched.jpg"] == ("", 0)
 
@@ -944,7 +963,10 @@ class TestConnectionPragmas:
             _row({"source_path": "/a.jpg", "action": "MOVE",
                   "group_id": None, "hamming_distance": None}),
         ])
-        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "keep"})
+        # #425 — flipped "keep" → "delete" (canonical keep "" would be
+        # the schema default — this proves WAL is set even for a write
+        # that changes a row to a distinct non-default value).
+        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete"})
         assert self._journal_mode(db) == "wal"
 
     def test_wal_enabled_after_save(self, tmp_path):
@@ -957,7 +979,7 @@ class TestConnectionPragmas:
                 group_number=1, is_mark=False, is_locked=False,
                 folder_path="", file_path="/a.jpg",
                 capture_date=None, modified_date=None, file_size_bytes=0,
-                action="MOVE", user_decision="keep",
+                action="MOVE", user_decision="",  # #425 — canonical keep
             )
         ])
         ManifestRepository().save(str(db), [group])
@@ -1005,7 +1027,7 @@ class TestSaveUsesExecutemany:
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,
                         folder_path="", file_path=p,
                         capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="MOVE", user_decision="keep")
+                        action="MOVE", user_decision="")  # #425 canonical keep
             for p in ("/a.jpg", "/b.jpg", "/c.jpg")
         ])]
         count = ManifestRepository().save(str(db), groups)
@@ -1028,7 +1050,7 @@ class TestSaveUsesExecutemany:
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,
                         folder_path="", file_path="/a.jpg",
                         capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="MOVE", user_decision="keep"),
+                        action="MOVE", user_decision=""),  # #425 canonical keep
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,
                         folder_path="", file_path="/b.jpg",
                         capture_date=None, modified_date=None, file_size_bytes=0,
@@ -1041,7 +1063,7 @@ class TestSaveUsesExecutemany:
             rows = {r[0]: r[1] for r in conn.execute(
                 "SELECT source_path, user_decision FROM migration_manifest"
             ).fetchall()}
-        assert rows["/a.jpg"] == "keep"
+        assert rows["/a.jpg"] == ""  # #425 canonical keep
         assert rows["/b.jpg"] == "delete"
 
 

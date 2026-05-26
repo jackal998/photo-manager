@@ -228,17 +228,27 @@ def _read_decisions_and_locks(manifest: Path) -> dict[str, tuple[str, int]]:
 
 
 class TestApplyAutoSelectDecisions:
-    """The helper writes ``user_decision='keep'`` + ``is_locked=1`` on
-    every keeper. The original ``action`` column is not touched — that
-    remains the classifier's job, set during the scan pipeline before
-    this helper runs."""
+    """The helper writes ``user_decision=""`` (canonical keep — empty
+    string, NOT the literal "keep") + ``is_locked=1`` on every keeper.
+    The original ``action`` column is not touched — that remains the
+    classifier's job, set during the scan pipeline before this helper
+    runs.
 
-    def test_keepers_get_keep_decision_and_lock(self, tmp_path):
+    #425: pre-canonicalisation this wrote the literal "keep" string,
+    which leaked into the tree Action column as raw text. The expected
+    state for keepers is now ("", 1) — empty decision + locked.
+    """
+
+    def test_keepers_get_canonical_empty_decision_and_lock(self, tmp_path):
         """Catches: helper writes user_decision but forgets the lock
         (or vice versa). The whole point of #393 is the lock badge —
         if it doesn't get written, the feature has shipped invisibly
         again. Two keepers + one untouched non-keeper proves both
-        writes hit the right rows AND don't bleed onto unrelated rows."""
+        writes hit the right rows AND don't bleed onto unrelated rows.
+
+        #425: also catches regression where this helper would write
+        the literal "keep" string instead of the canonical "".
+        """
         manifest = _make_manifest(
             tmp_path,
             ["/grp1/keeper.jpg", "/grp1/dup.jpg", "/grp2/keeper.jpg"],
@@ -248,8 +258,11 @@ class TestApplyAutoSelectDecisions:
             keepers={"/grp1/keeper.jpg", "/grp2/keeper.jpg"},
         )
         state = _read_decisions_and_locks(manifest)
-        assert state["/grp1/keeper.jpg"] == ("keep", 1)
-        assert state["/grp2/keeper.jpg"] == ("keep", 1)
+        # #425 — keepers get user_decision="" (canonical) + is_locked=1.
+        # The literal "keep" string MUST NOT be persisted; that's the
+        # leak this fix is closing.
+        assert state["/grp1/keeper.jpg"] == ("", 1)
+        assert state["/grp2/keeper.jpg"] == ("", 1)
         # Non-keeper stays at the schema defaults; the helper must not
         # touch rows whose path wasn't in keepers.
         assert state["/grp1/dup.jpg"] == ("", 0)
@@ -270,7 +283,8 @@ class TestApplyAutoSelectDecisions:
             non_keepers_for_delete={"/g/dup_a.jpg", "/g/dup_b.jpg"},
         )
         state = _read_decisions_and_locks(manifest)
-        assert state["/g/keeper.jpg"] == ("keep", 1)
+        # #425 — canonical empty keep (was the literal "keep" string).
+        assert state["/g/keeper.jpg"] == ("", 1)
         # Non-keepers: delete decision, NOT locked.
         assert state["/g/dup_a.jpg"] == ("delete", 0)
         assert state["/g/dup_b.jpg"] == ("delete", 0)
@@ -301,7 +315,8 @@ class TestApplyAutoSelectDecisions:
             non_keepers_for_delete=set(),
         )
         state = _read_decisions_and_locks(manifest)
-        assert state["/k.jpg"] == ("keep", 1)
+        # #425 — canonical empty keep.
+        assert state["/k.jpg"] == ("", 1)
         # No delete write fired for the empty set.
         assert state["/d.jpg"] == ("", 0)
 
@@ -353,7 +368,8 @@ class TestApplyAutoSelectDecisions:
         # Now the actual contract: helper migrates + writes.
         apply_auto_select_decisions(str(manifest), keepers={"/k.jpg"})
         state = _read_decisions_and_locks(manifest)
-        assert state["/k.jpg"] == ("keep", 1)
+        # #425 — canonical empty keep.
+        assert state["/k.jpg"] == ("", 1)
 
     def test_writes_are_persistent_across_connection(self, tmp_path):
         """Catches: helper forgets to commit, or commit is in the
@@ -373,4 +389,5 @@ class TestApplyAutoSelectDecisions:
             ).fetchone()
         finally:
             conn.close()
-        assert row == ("keep", 1)
+        # #425 — canonical empty keep.
+        assert row == ("", 1)

@@ -81,7 +81,9 @@ decision:
 
 manifest_summary:
   keep: "已保留 (無動作)"
-  move: "待搬移"
+  # #425 — was "待搬移";內部 MOVE 動作類別代表「有日期、可進入日期化資料夾結構」
+  # 的獨立檔案,並非實際搬移操作。描述檔案的身分,而非未來操作。
+  move: "已標註日期"
   exact: "完全重複"
   review_duplicate: "近似重複 (待檢閱)"
   undated: "無拍攝日期"
@@ -89,7 +91,8 @@ manifest_summary:
 
 scan_dialog:
   title: "掃描來源"
-  notice: "唯讀掃描 — 不會搬移或刪除任何檔案。"
+  # #425 — 原本是「不會搬移或刪除任何檔案」;改為描述硬碟狀態而非操作。
+  notice: "唯讀掃描 — 不會異動硬碟上的任何檔案。"
   browse_group: "瀏覽來源資料夾:"
   path_label: "路徑:"
   path_placeholder: "貼上或輸入絕對資料夾路徑…"
