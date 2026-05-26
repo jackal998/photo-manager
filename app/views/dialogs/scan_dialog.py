@@ -483,6 +483,11 @@ class ScanDialog(QDialog):
         phash_row.addWidget(self._phash_spin)
         params_layout.addWidget(phash_label)
         params_layout.addWidget(phash_desc)
+        # photo-manager#423 — descriptive QLabel sits flush against the
+        # slider's frame on narrow widths; the desc's last glyph row gets
+        # overdrawn (zh_TW is worst). Pad before the slider row so the
+        # text always clears the frame even when wrapped to 3 lines.
+        params_layout.addSpacing(6)
         params_layout.addLayout(phash_row)
 
         # Mean-color threshold
@@ -504,6 +509,9 @@ class ScanDialog(QDialog):
         color_row.addWidget(self._color_spin)
         params_layout.addWidget(color_label)
         params_layout.addWidget(color_desc)
+        # photo-manager#423 — mirror the phash row fix above so the
+        # mean-color desc clears its slider frame on narrow widths.
+        params_layout.addSpacing(6)
         params_layout.addLayout(color_row)
 
         # Auto-select after scan (#212).
