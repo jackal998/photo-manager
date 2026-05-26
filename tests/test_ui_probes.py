@@ -842,3 +842,121 @@ def test_probe_production_code_does_not_write_literal_keep_to_user_decision():
         "Leaks: "
         + "\n".join(f"  {f}:{n}: {s}" for f, n, s in leaks)
     )
+
+
+# ── #427 — Popen creationflags probe ──────────────────────────────────────
+#
+# Context: PR #420 introduced a PyInstaller ``--noconsole`` (windowed)
+# Windows build. When a windowed-subsystem parent spawns a
+# console-subsystem child (e.g. ``exiftool.exe``) WITHOUT a
+# ``creationflags`` value that suppresses console allocation, Windows
+# allocates a fresh visible console window for the child. Users see
+# that console as spam, close it, and inadvertently kill the child
+# process mid-batch.
+#
+# Issue #427 was the concrete bite: ``scanner/exif.py`` spawned
+# exiftool with no ``creationflags`` and a visible console popped up
+# during scans. The fix passes ``creationflags=_CREATE_NO_WINDOW``
+# (== ``subprocess.CREATE_NO_WINDOW`` on Windows; 0 on POSIX).
+#
+# This probe walks every ``subprocess.Popen(...)`` call site in
+# ``scanner/`` and ``infrastructure/`` — the two trees that get
+# bundled into the windowed .exe — and asserts each call passes a
+# ``creationflags=`` kwarg of any value. The value doesn't matter at
+# probe time; what matters is that the developer made a CONSCIOUS
+# decision about creationflags rather than accepting the default
+# (which causes #427 on a windowed build).
+#
+# Out of scope: ``app/views/handlers/file_opener.py`` uses
+# ``subprocess.Popen(["explorer.exe", ...])`` — explorer is a Windows
+# GUI-subsystem app and never allocates a console regardless of
+# creationflags; auditing that callsite would be a false positive.
+# ``qa/``, ``scripts/``, and ``run_all_linters.py`` are dev tooling
+# that never ships inside the windowed .exe.
+
+# Allowlist for Popen call sites in scanner/ + infrastructure/ that
+# legitimately do NOT need a creationflags kwarg. Maps relative path
+# to a one-line reason. Currently empty — every Popen in those trees
+# spawns a child that COULD open a console on a windowed-build parent.
+# If a future Popen call legitimately needs to be exempt (e.g. spawns
+# a GUI-subsystem child like explorer.exe), add it here with the
+# reason so the probe stays honest.
+_POPEN_CREATIONFLAGS_ALLOWLIST: dict[str, str] = {}
+
+
+def _find_popen_calls_missing_creationflags(py_path: Path) -> list[tuple[int, str]]:
+    """Walk ``py_path``'s AST and return (line_no, snippet) tuples for
+    every ``subprocess.Popen(...)`` call that does NOT declare a
+    ``creationflags=`` keyword argument.
+
+    Detects calls of the form ``subprocess.Popen(...)`` (attribute call
+    on the imported ``subprocess`` module). Bare ``Popen(...)`` calls
+    (from ``from subprocess import Popen``) are also detected.
+    """
+    findings: list[tuple[int, str]] = []
+    tree = ast.parse(py_path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_popen = False
+        if isinstance(func, ast.Attribute) and func.attr == "Popen":
+            # subprocess.Popen(...) — the canonical shape
+            is_popen = True
+        elif isinstance(func, ast.Name) and func.id == "Popen":
+            # bare Popen(...) — from `from subprocess import Popen`
+            is_popen = True
+        if not is_popen:
+            continue
+        has_creationflags = any(
+            kw.arg == "creationflags" for kw in node.keywords
+        )
+        if not has_creationflags:
+            findings.append((node.lineno, "subprocess.Popen(...) without creationflags="))
+    return findings
+
+
+def test_probe_scanner_and_infrastructure_popen_declare_creationflags():
+    """#427 forward-defensive: every ``subprocess.Popen`` callsite in
+    ``scanner/`` and ``infrastructure/`` must declare a ``creationflags=``
+    keyword argument.
+
+    Why both trees: the PyInstaller ``--noconsole`` build (PR #420)
+    bundles ``scanner/`` (EXIF + scoring + scan loop) and
+    ``infrastructure/`` (logging, manifest repository, etc.) into the
+    windowed .exe. Any Popen in those trees that spawns a
+    console-subsystem child without ``creationflags`` will allocate a
+    visible console under Windows — the bite that produced #427.
+
+    The probe doesn't care WHAT value is passed (it can be 0 on POSIX,
+    ``CREATE_NO_WINDOW`` on Windows, or a more elaborate flags
+    expression) — only that the developer made a conscious choice.
+
+    Exempt: paths in ``_POPEN_CREATIONFLAGS_ALLOWLIST`` (e.g. a future
+    Popen that spawns a GUI-subsystem child like ``explorer.exe``,
+    which never allocates a console).
+    """
+    scan_roots = [REPO / "scanner", REPO / "infrastructure"]
+    leaks: list[tuple[str, int, str]] = []
+    for root in scan_roots:
+        if not root.exists():
+            continue
+        for py_path in root.rglob("*.py"):
+            rel = py_path.relative_to(REPO).as_posix()
+            if rel in _POPEN_CREATIONFLAGS_ALLOWLIST:
+                continue
+            for lineno, snippet in _find_popen_calls_missing_creationflags(py_path):
+                leaks.append((rel, lineno, snippet))
+
+    assert not leaks, (
+        "subprocess.Popen callsites in scanner/ or infrastructure/ are "
+        "missing a creationflags= keyword. On a PyInstaller --noconsole "
+        "(windowed) build, a console-subsystem child spawned without "
+        "creationflags=CREATE_NO_WINDOW allocates a visible console "
+        "window — the bug class fixed by #427. Pass "
+        "creationflags=_CREATE_NO_WINDOW (with the existing module-level "
+        "constant pattern from scanner/exif.py) or add the path to "
+        "_POPEN_CREATIONFLAGS_ALLOWLIST with a one-line reason if the "
+        "child is legitimately a GUI-subsystem process. Leaks: "
+        + "\n".join(f"  {f}:{n}: {s}" for f, n, s in leaks)
+    )

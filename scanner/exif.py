@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Suppress the fresh-console window Windows allocates for a console-subsystem
+# child (exiftool) spawned by a windowed-subsystem parent (PyInstaller
+# ``--noconsole`` build, PR #420). On POSIX the constant is undefined, so we
+# fall back to 0 — a no-op ``creationflags`` value on every platform.
+_CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 class ExiftoolProcess:
@@ -47,6 +54,7 @@ class ExiftoolProcess:
             stderr=subprocess.PIPE,
             encoding="utf-8",
             errors="replace",
+            creationflags=_CREATE_NO_WINDOW,
         )
         self._stderr_buf: list[str] = []
         self._stderr_lock = threading.Lock()

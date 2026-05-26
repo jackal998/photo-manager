@@ -444,6 +444,55 @@ class TestExiftoolProcess:
         assert captured_kwargs[0]["stderr"] is exif.subprocess.PIPE
         assert captured_kwargs[0]["stderr"] is not exif.subprocess.STDOUT
 
+    def test_init_passes_create_no_window_on_windows(self, monkeypatch):
+        """Regression for #427: PyInstaller ``--noconsole`` build (PR #420)
+        spawned a visible exiftool console window because Popen was called
+        without ``creationflags``. The fix is to pass
+        ``creationflags=_CREATE_NO_WINDOW`` (== Win32 ``CREATE_NO_WINDOW``
+        == 0x08000000 on Windows; 0 on POSIX).
+
+        Use the literal hex (0x08000000) rather than
+        ``subprocess.CREATE_NO_WINDOW`` so this test runs on POSIX CI
+        runners where the constant is undefined.
+        """
+        from scanner import exif
+
+        captured_kwargs: list[dict] = []
+
+        def fake_popen(args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return self._make_mock_proc([])
+
+        monkeypatch.setattr(exif.subprocess, "Popen", fake_popen)
+        # Pin _CREATE_NO_WINDOW to the literal Win32 value so the assertion
+        # is platform-independent (the module-level constant resolves to 0
+        # on POSIX at import time).
+        monkeypatch.setattr(exif, "_CREATE_NO_WINDOW", 0x08000000)
+        exif.ExiftoolProcess()
+
+        assert captured_kwargs[0]["creationflags"] == 0x08000000
+
+    def test_init_creationflags_zero_on_non_windows(self, monkeypatch):
+        """Pins the cross-platform contract: on POSIX the constant
+        resolves to 0, which Popen accepts as a no-op ``creationflags``
+        value. Asserts the kwarg is explicitly forwarded — not omitted —
+        so the call shape stays uniform across platforms.
+        """
+        from scanner import exif
+
+        captured_kwargs: list[dict] = []
+
+        def fake_popen(args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return self._make_mock_proc([])
+
+        monkeypatch.setattr(exif.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(exif, "_CREATE_NO_WINDOW", 0)
+        exif.ExiftoolProcess()
+
+        assert "creationflags" in captured_kwargs[0]
+        assert captured_kwargs[0]["creationflags"] == 0
+
     def test_execute_returns_lines_until_ready_sentinel(self, monkeypatch):
         """execute() collects readline output until '{ready}' is hit."""
         from scanner import exif
