@@ -807,18 +807,23 @@ class MainWindow(QMainWindow):
 
     def _capture_relocalize_state(self) -> dict:
         """Snapshot the bits of UI state worth carrying across a live
-        language switch — window geometry, splitter sizes, and the
-        selected file row's path. Tree expansion isn't preserved
+        language switch — window geometry, splitter sizes, the
+        selected file row's path, and the loaded manifest path so the
+        new window can re-load it. Tree expansion isn't preserved
         because ``TreeController.refresh_model`` always expands all
         groups by default; preview doesn't need preservation because
-        re-selecting the same row triggers it. vm-side state
-        (manifest, decisions) survives automatically because vm
-        outlives the window."""
+        re-selecting the same row triggers it. vm holds the in-memory
+        groups but the freshly-constructed MainWindow never calls
+        ``refresh_tree`` on its own, so without ``manifest_path`` the
+        user would land on the empty-state hint despite
+        ``language.confirm_body`` promising the manifest stays intact
+        (#428)."""
         state: dict = {
             "geometry": bytes(self.saveGeometry()),
             "splitter_state": None,
             "selected_path": None,
             "thumb_size": self._thumb_size,
+            "manifest_path": getattr(self.file_operations, "_manifest_path", None),
         }
         try:
             splitter = self.layout_manager.get_splitter()
@@ -853,8 +858,40 @@ class MainWindow(QMainWindow):
                 splitter.restoreState(sp_state)
         except Exception:
             pass
+        # #428 — restore the manifest BEFORE re-selecting. The freshly
+        # built MainWindow has no tree rows of its own; vm still holds
+        # the groups in memory but the new window never auto-renders
+        # them. Calling _load_manifest_from_path re-reads from the
+        # SQLite path, repopulates the tree, refreshes status-bar +
+        # menu-action gates, and makes _reselect_by_path's walk find
+        # anything. Done unconditionally when a path was captured —
+        # the vm-in-memory state and on-disk state are kept in sync
+        # by file_operations.save_manifest_decisions_silent() being
+        # called in relocalize() before the swap.
+        manifest_path = state.get("manifest_path")
+        if manifest_path:
+            try:
+                self._load_manifest_from_path(manifest_path)
+            except Exception:
+                pass
+            # refresh_tree's "hide empty-state widget" branch is gated
+            # on ``self._empty_state_widget.isVisible()``, which Qt
+            # returns False for during the relocalize swap because the
+            # new MainWindow hasn't been show()'n yet. Without the
+            # explicit flip below the guard misses, leaving the tree
+            # hidden and the empty-state hint visible after show() —
+            # the user-visible half of the #428 regression. The
+            # initial-load flow doesn't hit this because the user
+            # discovers the menu on an already-shown window.
+            try:
+                self._empty_state_widget.setVisible(False)
+                self.tree.setVisible(True)
+            except Exception:
+                pass
         # Re-select the previously-selected row by file_path. The tree
-        # is already populated by refresh_tree at construction time.
+        # is now populated either by refresh_tree at construction time
+        # (no manifest case) or by the _load_manifest_from_path call
+        # above (#428).
         target = state.get("selected_path")
         if target:
             try:
@@ -891,6 +928,22 @@ class MainWindow(QMainWindow):
         # Local import avoids a module-level cycle (main imports
         # MainWindow at module level; this is a runtime call).
         from main import install_locale_translators, make_main_window
+
+        # #428 — flush pending decisions to disk BEFORE the swap. The
+        # new MainWindow re-loads the manifest from SQLite (see
+        # _apply_relocalize_state), so any in-memory decisions the
+        # user set after the last save would otherwise be silently
+        # discarded by the reload. The save is a no-op when nothing
+        # is dirty, and the silent helper returns False on
+        # save-failure rather than raising — we proceed with the swap
+        # either way because dropping the language switch entirely
+        # after the user already clicked "Yes" on the confirm prompt
+        # is the worse UX failure mode.
+        try:
+            if self.file_operations.is_dirty():
+                self.file_operations.save_manifest_decisions_silent()
+        except Exception:
+            pass
 
         saved = self._capture_relocalize_state()
 

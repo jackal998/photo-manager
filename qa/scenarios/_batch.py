@@ -235,6 +235,12 @@ ALL_SCENARIOS = [
     # scored group user_decision='delete'. Non-destructive (manifest
     # writes only).
     "s57_scan_auto_select_aggressive",
+    # s58 (#428) — language switch preserves the loaded manifest.
+    # Scan + load the near-duplicates fixture, then trigger View →
+    # Language → 繁體中文; the post-switch result tree MUST still
+    # show the 5 file rows the user had pre-switch. Driver restores
+    # ui.locale=en on exit (mirrors s22).
+    "s58_language_switch_preserves_manifest",
 ]
 
 

@@ -1131,6 +1131,10 @@ def test_capture_relocalize_state_captures_first_selected_file_path():
         layout_manager=fake_layout,
         tree_controller=fake_tc,
         _thumb_size=512,
+        # #428 — capture now reads file_operations._manifest_path too.
+        # An unloaded handler (no _manifest_path attr) is the
+        # relevant baseline for the selected-path contract.
+        file_operations=SimpleNamespace(),
     )
 
     state = MainWindow._capture_relocalize_state(fake_self)
@@ -1181,6 +1185,138 @@ def test_apply_relocalize_state_skips_reselect_when_no_path():
     )
 
     fake_self._reselect_by_path.assert_not_called()
+
+
+# ── relocalize manifest_path round-trip (#428) ───────────────────────────
+
+
+def test_capture_relocalize_state_captures_manifest_path():
+    """``_capture_relocalize_state`` must include the loaded manifest
+    path so the post-switch MainWindow can re-load it (#428).
+
+    Failure mode (the original #428 bug, restated as a test): without
+    this key the new MainWindow shows the empty-state hint after a
+    language switch even though ``language.confirm_body`` told the
+    user "your loaded manifest and decisions stay intact". A
+    regression would silently strip the key from the snapshot — the
+    new window would have nothing to call ``_load_manifest_from_path``
+    on and the tree would render empty.
+    """
+    fake_layout = MagicMock()
+    fake_layout.get_splitter.return_value = None
+    fake_tc = MagicMock()
+    fake_tc.get_selected_items.return_value = []
+    fake_self = SimpleNamespace(
+        saveGeometry=lambda: b"",
+        layout_manager=fake_layout,
+        tree_controller=fake_tc,
+        _thumb_size=256,
+        file_operations=SimpleNamespace(_manifest_path="/tmp/m.sqlite"),
+    )
+
+    state = MainWindow._capture_relocalize_state(fake_self)
+
+    assert state["manifest_path"] == "/tmp/m.sqlite"
+
+
+def test_capture_relocalize_state_manifest_path_none_when_unloaded():
+    """When no manifest is loaded, ``_manifest_path`` may be unset on
+    file_operations. The capture must fall back to ``None`` rather
+    than raising — relocalize is reachable from the menu before any
+    scan / open has populated the handler attr."""
+    fake_layout = MagicMock()
+    fake_layout.get_splitter.return_value = None
+    fake_tc = MagicMock()
+    fake_tc.get_selected_items.return_value = []
+    fake_self = SimpleNamespace(
+        saveGeometry=lambda: b"",
+        layout_manager=fake_layout,
+        tree_controller=fake_tc,
+        _thumb_size=256,
+        # Handler with no _manifest_path attribute at all — mirrors the
+        # pre-first-scan state of the real FileOperationsHandler.
+        file_operations=SimpleNamespace(),
+    )
+
+    state = MainWindow._capture_relocalize_state(fake_self)
+
+    assert state["manifest_path"] is None
+
+
+def test_apply_relocalize_state_reloads_manifest_when_path_in_state():
+    """``_apply_relocalize_state`` with a non-None ``manifest_path``
+    must call ``_load_manifest_from_path``. This is the user-visible
+    half of the #428 fix — the freshly-built MainWindow has no tree
+    rows until something repopulates them, and the SQLite re-load
+    rebuilds tree + status bar + menu-action gating in one call.
+    Reload happens BEFORE the reselect call so the row walk has
+    something to find.
+    """
+    call_order: list[str] = []
+    fake_empty = MagicMock()
+    fake_tree = MagicMock()
+    fake_self = SimpleNamespace(
+        restoreGeometry=lambda b: None,
+        layout_manager=MagicMock(),
+        _load_manifest_from_path=MagicMock(
+            side_effect=lambda _p: call_order.append("load")
+        ),
+        _reselect_by_path=MagicMock(
+            side_effect=lambda _p: call_order.append("select")
+        ),
+        _empty_state_widget=fake_empty,
+        tree=fake_tree,
+    )
+    fake_self.layout_manager.get_splitter.return_value = None
+
+    MainWindow._apply_relocalize_state(
+        fake_self,
+        {
+            "geometry": None,
+            "splitter_state": None,
+            "selected_path": "/photos/sel.jpg",
+            "thumb_size": 256,
+            "manifest_path": "/tmp/m.sqlite",
+        },
+    )
+
+    fake_self._load_manifest_from_path.assert_called_once_with("/tmp/m.sqlite")
+    # Reload must precede reselect — without rows the reselect walk
+    # finds nothing and the previous-row recovery silently no-ops.
+    assert call_order == ["load", "select"]
+    # Pin the explicit visibility flip — refresh_tree's isVisible()
+    # guard misses pre-show, so without this flip the empty-state
+    # widget stays visible and the tree stays hidden after show()
+    # even though the model has rows.
+    fake_empty.setVisible.assert_called_once_with(False)
+    fake_tree.setVisible.assert_called_once_with(True)
+
+
+def test_apply_relocalize_state_skips_reload_when_no_manifest_path():
+    """A relocalize with no manifest in flight (user switched language
+    on the empty-state window) must not call _load_manifest_from_path
+    — there's nothing to load, and the existing tree-empty state is
+    already the desired post-switch state."""
+    fake_self = SimpleNamespace(
+        restoreGeometry=lambda b: None,
+        layout_manager=MagicMock(),
+        _load_manifest_from_path=MagicMock(),
+        _reselect_by_path=MagicMock(),
+    )
+    fake_self.layout_manager.get_splitter.return_value = None
+
+    MainWindow._apply_relocalize_state(
+        fake_self,
+        {
+            "geometry": None,
+            "splitter_state": None,
+            "selected_path": None,
+            "thumb_size": 0,
+            "manifest_path": None,
+        },
+    )
+
+    fake_self._load_manifest_from_path.assert_not_called()
 
 
 def test_window_state_qsettings_shim_delegates_to_module():
