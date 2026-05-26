@@ -1,0 +1,1 @@
+release.yml release-notes step rewritten as pure PowerShell — drops Python+here-string interaction that GitHub Actions YAML parser rejected.
