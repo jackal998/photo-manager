@@ -1,0 +1,1 @@
+Fix release.yml "Build release notes" step — bash heredoc syntax replaced with PowerShell here-string piped to `python -`.
