@@ -666,3 +666,179 @@ def test_probe_destructive_surface_inventory_finds_known_handlers():
             f"Context menu no longer reaches {expected!r} — "
             f"current calls: {sorted(context_calls)!r}"
         )
+
+
+# ── #425 — "move" wording + "keep" literal write probes ───────────────────
+
+# Translation values are user-visible strings (.yml `key: "value"`).
+# We grep these for banned wording. The keys themselves are internal
+# identifiers (e.g. `manifest_summary.move`) and are EXEMPT from the
+# probe — the key name is not shown to the user; only the value is.
+_BANNED_MOVE_PATTERNS = (
+    # English: "moved", "to be moved", "will be moved", etc. The
+    # plain verb "move" is exempt: e.g. "move to recycle bin" (the
+    # send2trash semantic) is accurate physical-file language; the
+    # banned shape is the past/passive form implying the OLD MOVE
+    # action class.
+    re.compile(r"\bmoved\b", re.IGNORECASE),
+    re.compile(r"to be moved", re.IGNORECASE),
+    # zh_TW: 搬移 / 搬到 / 搬走 (all imply "move to a destination")
+    re.compile(r"搬[移到走]"),
+)
+
+# Translation-value allowlist — keys whose value legitimately contains
+# the banned wording for a reason unrelated to the legacy MOVE action.
+# e.g. send2trash flavor language ("file will be moved to recycle bin").
+# Currently empty; add via "key": "reason" if a real one shows up.
+_TRANSLATION_MOVE_ALLOWLIST: dict[str, str] = {}
+
+
+def _yaml_values_with_path(node, path: tuple[str, ...] = ()):
+    """Recursively yield (dotted_path, value) tuples for every leaf
+    string in a parsed YAML document. Lists are unrolled with index in
+    the path; non-string leaves are skipped (the probe only inspects
+    user-visible strings)."""
+    if isinstance(node, dict):
+        for key, child in node.items():
+            yield from _yaml_values_with_path(child, path + (str(key),))
+    elif isinstance(node, list):
+        for i, child in enumerate(node):
+            yield from _yaml_values_with_path(child, path + (str(i),))
+    elif isinstance(node, str):
+        yield (".".join(path), node)
+
+
+def test_probe_no_legacy_move_wording_in_user_facing_translations():
+    """#425 forward-defensive: translation VALUES must not contain
+    "moved" / "搬移" wording that implies the legacy MOVE action class
+    (which photo-manager no longer surfaces to users — files are never
+    physically moved by this app).
+
+    Catches the recurrence pattern that motivated #425: previous
+    cleanups (#242, PR #310) updated some translation values but missed
+    others (the dialog notice, the summary table label). This probe
+    walks every leaf string in en.yml and zh_TW.yml and asserts none
+    match the banned patterns.
+
+    Exempt: translation KEYS (only values are shown to users), the
+    explicit allowlist for unrelated meanings of "moved".
+    """
+    leaks: list[tuple[Path, str, str]] = []
+    for yml_path in (EN_YAML, ZH_TW_YAML):
+        doc = yaml.safe_load(yml_path.read_text(encoding="utf-8"))
+        for dotted_key, value in _yaml_values_with_path(doc):
+            if dotted_key in _TRANSLATION_MOVE_ALLOWLIST:
+                continue
+            for rx in _BANNED_MOVE_PATTERNS:
+                if rx.search(value):
+                    leaks.append((yml_path.name, dotted_key, value))
+                    break
+
+    assert not leaks, (
+        "Translation values still contain legacy MOVE-action wording. "
+        "photo-manager no longer moves files; the verb implies a "
+        "feature that doesn't exist. Reword or add to the allowlist "
+        "with a one-line reason. Leaks: "
+        + "\n".join(f"  {f}: {k} = {v!r}" for f, k, v in leaks)
+    )
+
+
+# Files allowed to contain the literal user_decision="keep" or
+# equivalent dict-literal write. The execute-dialog read path
+# (decision == "keep" at line 991) is a READ for back-compat with
+# legacy manifests — not a write — but the AST walker can't easily
+# distinguish a Compare from an Assign of the same literal. So the
+# allowlist is path-based for files that legitimately reference
+# "keep" as a CONSUMED legacy value, never as a NEW write.
+_KEEP_LITERAL_WRITE_ALLOWLIST = {
+    # Read-side comparisons / display-time handling. These files
+    # contain the literal "keep" string but only to RECOGNISE legacy
+    # manifest data, never to emit new writes. New writes use "".
+    "app/views/dialogs/execute_action_dialog.py",
+    "app/views/tree_model_builder.py",        # _DECISION_SORT sort priority + _action_display back-compat
+    "app/views/handlers/file_operations.py",  # _decision_display_label back-compat branch
+    "app/views/constants.py",                 # docstring reference
+}
+
+
+def _ast_finds_keep_literal_writes(py_path: Path) -> list[tuple[int, str]]:
+    """Walk ``py_path``'s AST and return (line_no, snippet) tuples for
+    every ``user_decision = "keep"``-shaped Assign / keyword-arg
+    AND every dict-literal expression containing the string ``"keep"``
+    as a value paired with a path-like key.
+
+    Conservative: catches Assign targets named ``user_decision``,
+    keyword arguments named ``user_decision``, and dict literals where
+    a string value is the literal ``"keep"`` AND a sibling key is also
+    a string (the auto_select.py:73 shape was ``{p: "keep" for p in
+    keepers}`` — a DictComp, also caught).
+
+    Returns an empty list if no writes found.
+    """
+    findings: list[tuple[int, str]] = []
+    tree = ast.parse(py_path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        # user_decision = "keep" or rec.user_decision = "keep"
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if (isinstance(tgt, ast.Name) and tgt.id == "user_decision") or \
+                   (isinstance(tgt, ast.Attribute) and tgt.attr == "user_decision"):
+                    if (isinstance(node.value, ast.Constant)
+                            and node.value.value == "keep"):
+                        findings.append(
+                            (node.lineno, f"user_decision = \"keep\"")
+                        )
+        # Keyword args: user_decision="keep"
+        if isinstance(node, ast.keyword):
+            if node.arg == "user_decision" and isinstance(node.value, ast.Constant):
+                if node.value.value == "keep":
+                    findings.append(
+                        (node.lineno, f"user_decision=\"keep\" keyword")
+                    )
+        # Dict comp: {p: "keep" for p in keepers}
+        if isinstance(node, ast.DictComp):
+            if (isinstance(node.value, ast.Constant)
+                    and node.value.value == "keep"):
+                findings.append(
+                    (node.lineno, f"{{...: \"keep\" for ...}} dict comprehension")
+                )
+    return findings
+
+
+def test_probe_production_code_does_not_write_literal_keep_to_user_decision():
+    """#425 forward-defensive: no production source file may emit the
+    literal string ``"keep"`` as a value for ``user_decision`` — the
+    canonical keep state is the empty string ``""`` (per
+    ``settable_decisions()`` in ``app.views.constants``).
+
+    Pre-#425 ``core/services/auto_select.py:73`` wrote the literal
+    ``{p: "keep" for p in keepers}``, which then leaked into the tree's
+    Action column as raw "keep" text in zh_TW (and as confusing
+    redundancy in en — the user "set keep" via right-click writes ""
+    but auto-select writes "keep", two different stored values for the
+    same semantic).
+
+    Scope: only production source under ``core/``, ``scanner/``, and
+    ``app/`` (excluding the back-compat read-side allowlist). Tests
+    and qa scenarios are exempt — they exercise back-compat semantics
+    and consciously construct legacy fixture data.
+    """
+    scan_roots = [REPO / "core", REPO / "scanner", REPO / "app"]
+    leaks: list[tuple[str, int, str]] = []
+    for root in scan_roots:
+        for py_path in root.rglob("*.py"):
+            rel = py_path.relative_to(REPO).as_posix()
+            if rel in _KEEP_LITERAL_WRITE_ALLOWLIST:
+                continue
+            for lineno, snippet in _ast_finds_keep_literal_writes(py_path):
+                leaks.append((rel, lineno, snippet))
+
+    assert not leaks, (
+        "Production source files write the literal \"keep\" string to "
+        "user_decision. Use the canonical empty string \"\" instead "
+        "(matches settable_decisions() and right-click Set Action → keep). "
+        "If a file is legitimately a back-compat reader (not writer), "
+        "add it to _KEEP_LITERAL_WRITE_ALLOWLIST with a one-line reason. "
+        "Leaks: "
+        + "\n".join(f"  {f}:{n}: {s}" for f, n, s in leaks)
+    )

@@ -9,7 +9,8 @@ sub-option:
   2. Enabling the parent enables the sub; toggling the sub on persists
      ``ui.scan_dialog.auto_select_aggressive_delete=True`` and passes
      the flag through to ScanWorker.
-  3. On scan completion the keeper row gets ``user_decision='keep'``
+  3. On scan completion the keeper row gets ``user_decision=""``
+     (canonical empty keep — #425; was the literal ``"keep"`` before)
      AND ``is_locked=1`` (the s49 contract); ADDITIONALLY every
      non-keeper row in a scored group receives
      ``user_decision='delete'`` so the user opens Execute Action with
@@ -165,10 +166,12 @@ def main() -> int:
         )
     else:
         ud, lk = state[EXPECTED_KEEPER]
-        if ud != "keep":
+        # #425 — canonical empty keep; was "keep" literal pre-fix.
+        if ud != "":
             failures.append(
                 f"{EXPECTED_KEEPER}.user_decision={ud!r}, expected "
-                f"'keep' (#393 keep+lock write missing)"
+                f"'' (canonical keep state — #425; #393 keep+lock "
+                f"write missing or non-canonical)"
             )
         if lk != 1:
             failures.append(

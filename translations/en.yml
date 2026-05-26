@@ -111,7 +111,12 @@ decision:
 # user only sees these labels.
 manifest_summary:
   keep: "kept (no action)"
-  move: "to be moved"
+  # #425 — was "to be moved" pre-cleanup; the verb implied a physical
+  # file operation that the read-only scan never performs. The MOVE
+  # action class internally means "unique file with a date, will land
+  # in the dated folder structure if you run migrate.py" — describe
+  # the file's identity, not a future operation on it.
+  move: "dated files"
   exact: "exact duplicates"
   review_duplicate: "near-duplicates (review)"
   undated: "no shot date"
@@ -120,7 +125,10 @@ manifest_summary:
 # ScanDialog and its inner panels.
 scan_dialog:
   title: "Scan Sources"
-  notice: "Read-only scan — no files are moved or deleted."
+  # #425 — was "no files are moved or deleted"; the verbs implied a
+  # physical operation the read-only scan never performs. Reword to
+  # describe disk state, not actions on files.
+  notice: "Read-only scan — no files on disk are changed."
   browse_group: "Browse source folders:"
   path_label: "Path:"
   path_placeholder: "Paste or type an absolute folder path…"

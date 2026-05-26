@@ -215,17 +215,20 @@ def main() -> int:
                 f"actions are MOVE / EXACT / REVIEW_DUPLICATE"
             )
 
-    # #393 — keeper also receives user_decision='keep' AND is_locked=1
-    # so the tree's lock badge gives a visible signal that the keeper
-    # was chosen (vs the pre-#393 silent action='KEEP' which the user
-    # could miss). Non-keepers stay unlocked + un-decided in the
-    # non-aggressive flow.
+    # #393 — keeper also receives user_decision (canonical empty after
+    # #425 — was the literal "keep" before canonicalisation) AND
+    # is_locked=1 so the tree's lock badge gives a visible signal that
+    # the keeper was chosen (vs the pre-#393 silent action='KEEP'
+    # which the user could miss). Non-keepers stay unlocked +
+    # un-decided in the non-aggressive flow.
     if EXPECTED_KEEPER in rows:
         _, ud, lk = rows[EXPECTED_KEEPER]
-        if ud != "keep":
+        # #425 — canonical empty keep state; was "keep" literal pre-fix.
+        if ud != "":
             failures.append(
                 f"{EXPECTED_KEEPER}.user_decision={ud!r}, expected "
-                f"'keep' (#393 keep+lock write missing)"
+                f"'' (canonical keep state — #425; #393 keep+lock "
+                f"write missing or non-canonical)"
             )
         if lk != 1:
             failures.append(

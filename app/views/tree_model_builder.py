@@ -34,9 +34,18 @@ _LOCK_GLYPH = "\U0001F512"  # 🔒
 def _action_display(decision: str, is_locked: bool = False) -> str:
     """Map an internal user_decision value to its localized label.
 
-    Currently only the deferred remove-from-list value gets a
-    translated label; ``"delete"`` and ``"keep"`` are passed through
-    as-is.
+    Three explicit branches so every locale sees a translated label,
+    and the canonical empty-keep state stays empty:
+
+    * ``REMOVE_FROM_LIST_DECISION`` → ``t("decision.remove_from_list")``
+    * ``"delete"``                  → ``t("decision.delete")`` (#425 — was raw passthrough,
+      invisible on en but rendered as English "delete" on zh_TW)
+    * ``"keep"``                    → ``""`` (back-compat: legacy manifests
+      that pre-date #425's canonicalisation of auto-select's keeper write
+      still carry the literal "keep" — render as the canonical empty
+      cell so the leak doesn't surface)
+    * ``""`` and any other value    → returned as-is (the canonical
+      keep state is the empty string)
 
     ``is_locked`` is accepted for backward compatibility but no longer
     affects the returned text — the lock indicator moved to its own
@@ -44,6 +53,14 @@ def _action_display(decision: str, is_locked: bool = False) -> str:
     """
     if decision == REMOVE_FROM_LIST_DECISION:
         return t("decision.remove_from_list")
+    if decision == "delete":
+        return t("decision.delete")
+    if decision == "keep":
+        # Back-compat for legacy manifests written before #425 — auto-
+        # select used to store the literal "keep" string. Display as
+        # the canonical empty cell so older manifests don't show the
+        # leak. New manifests use "" directly.
+        return ""
     return decision
 
 

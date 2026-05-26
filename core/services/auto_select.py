@@ -36,9 +36,9 @@ def apply_auto_select_decisions(
     keepers: set[str],
     non_keepers_for_delete: set[str] | None = None,
 ) -> None:
-    """Write ``user_decision='keep'`` + ``is_locked=1`` on every keeper,
-    and optionally ``user_decision='delete'`` on every non-keeper in
-    ``non_keepers_for_delete`` (the aggressive #393 path).
+    """Write ``user_decision=""`` (canonical keep state) + ``is_locked=1``
+    on every keeper, and optionally ``user_decision='delete'`` on every
+    non-keeper in ``non_keepers_for_delete`` (the aggressive #393 path).
 
     Composes ``ManifestRepository.batch_update_decisions`` and
     ``batch_update_lock_state`` so the post-scan auto-select state is
@@ -47,12 +47,20 @@ def apply_auto_select_decisions(
     in a scored group (Live Photo MOV passengers, isolated files) are
     NOT included by callers — the caller filters before passing in.
 
+    The canonical stored value for "keep" is the **empty string** —
+    matches what ``settable_decisions()`` returns and what the right-
+    click "Set Action → keep" path writes. Earlier versions of this
+    helper wrote the literal ``"keep"`` string which then leaked into
+    the tree's Action column as raw text instead of an empty cell
+    (#425). The lock badge in COL_LOCK is what signals the user that
+    a row was auto-selected as the keeper.
+
     Args:
         manifest_path: Absolute path to the SQLite manifest just
             written by ``write_manifest``.
         keepers: Paths of the per-group top-scored rows from
             :func:`top_score_path_per_group`. Each receives
-            ``user_decision='keep'`` AND ``is_locked=1``.
+            ``user_decision=""`` AND ``is_locked=1``.
         non_keepers_for_delete: Paths to receive
             ``user_decision='delete'``. ``None`` (the default) leaves
             non-keepers' decision untouched — that's the non-aggressive
@@ -70,7 +78,11 @@ def apply_auto_select_decisions(
         # caller can invoke unconditionally without an outer guard.
         return
 
-    decisions: dict[str, str] = {p: "keep" for p in keepers}
+    # #425 — was {p: "keep" ...} which leaked as raw "keep" text in the
+    # tree's Action column. "" is the canonical keep state per
+    # settable_decisions(); the lock badge in COL_LOCK is the user-
+    # visible signal that the row was auto-selected.
+    decisions: dict[str, str] = {p: "" for p in keepers}
     if non_keepers_for_delete:
         decisions.update({p: "delete" for p in non_keepers_for_delete})
 

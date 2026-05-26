@@ -382,25 +382,44 @@ class TestActionDisplayUnaffectedByLock:
     the lock indicator moved to its own COL_LOCK column in #182. The
     ``is_locked`` parameter is still accepted for backward compatibility
     but no longer affects the returned text.
+
+    Post-#425: returns ``t()`` lookups for "delete" / "remove_from_list",
+    empty string for "" (canonical keep) AND for legacy "keep" (back-
+    compat with auto-select writes pre-canonicalisation).
     """
 
     def test_unlocked_decision_unchanged(self):
-        assert _action_display("delete", is_locked=False) == "delete"
+        # #425 — was raw "delete"; now goes through t() so the zh_TW
+        # locale sees "刪除" instead of leaked English "delete".
+        from infrastructure.i18n import t
+        assert _action_display("delete", is_locked=False) == t("decision.delete")
 
     def test_locked_no_longer_prefixes_glyph(self):
         """Pre-#182 this returned ``"🔒 delete"``; post-#182 the glyph
         moved to COL_LOCK and Action shows the bare decision."""
+        from infrastructure.i18n import t
         out = _action_display("delete", is_locked=True)
         assert "\U0001F512" not in out
-        assert out == "delete"
+        assert out == t("decision.delete")
 
     def test_locked_empty_decision_returns_empty(self):
         """Lock-but-undecided no longer renders a glyph in Action;
         COL_LOCK carries the visual signal instead."""
         assert _action_display("", is_locked=True) == ""
 
-    def test_default_is_unlocked(self):
-        assert _action_display("keep") == "keep"
+    def test_legacy_keep_renders_as_empty(self):
+        """#425 back-compat: manifests written before auto-select was
+        canonicalised to "" still carry the literal "keep" string.
+        Render those as the canonical empty cell so the leak doesn't
+        surface to the user."""
+        assert _action_display("keep") == ""
+        assert _action_display("keep", is_locked=True) == ""
+
+    def test_canonical_empty_keep_renders_as_empty(self):
+        """The canonical keep state is the empty string. Confirm
+        both the canonical and the legacy literal path render
+        identically (empty cell)."""
+        assert _action_display("") == ""
 
 
 class TestLockDisplay:

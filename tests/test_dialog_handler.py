@@ -466,9 +466,14 @@ class TestGetHighlightedRowValues:
         refactor that read from the proxy model directly would see
         post-sort indices and pull the wrong row's values."""
         src_idx = _make_child_idx(child_row=2, parent_row=5)
+        # #425 — COL_ACTION cell renders via _action_display, which now
+        # maps "keep" (legacy) and "" (canonical) both to empty cell.
+        # Use "delete" here as a non-empty Action value so the test
+        # proves the proxy-mapped value pass-through (the test's actual
+        # contract).
         src_model = _FakeModel({
             ("child", 2, COL_NAME, 5):     "kept_photo.jpg",
-            ("child", 2, COL_ACTION, 5):   "keep",
+            ("child", 2, COL_ACTION, 5):   "delete",
             ("child", 2, COL_FOLDER, 5):   "C:/photos",
             ("child", 2, COL_SIZE_BYTES, 5):   "12345",
             ("child", 2, COL_CREATION_DATE, 5): "2026-01-01",
@@ -494,7 +499,7 @@ class TestGetHighlightedRowValues:
 
         proxy.mapToSource.assert_called_once_with(proxy_idx)
         assert result["File Name"] == "kept_photo.jpg"
-        assert result["Action"] == "keep"
+        assert result["Action"] == "delete"  # #425 — see fixture comment
         assert result["Similarity"] == "98%"
         assert result["Group Count"] == "3"
 

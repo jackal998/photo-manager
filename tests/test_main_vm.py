@@ -173,9 +173,12 @@ class TestUserDecisionPreserved:
         assert vm.groups[0].items[0].user_decision == ""
 
     def test_multiple_user_decisions_preserved(self):
+        # #425 — second rec uses legacy "keep" literal to prove the vm
+        # round-trips back-compat manifest data unchanged (new manifests
+        # use "" canonical; old ones may still carry "keep").
         recs = [
             _rec("/a.jpg", group=1, user_decision="delete"),
-            _rec("/b.jpg", group=1, user_decision="keep"),
+            _rec("/b.jpg", group=1, user_decision="keep"),  # back-compat
             _rec("/c.jpg", group=2, user_decision=""),
         ]
         repo = _mock_repo(*recs)
@@ -230,17 +233,26 @@ class TestPendingDecisionCount:
         )
         assert vm.pending_decision_count == 1
 
-    def test_counts_keep_decisions(self):
+    def test_counts_legacy_keep_literal_as_pending(self):
+        """#425 — back-compat: legacy "keep" literal counts as pending
+        (any non-empty user_decision = "user has acted"). New manifests
+        use "" canonical for keep, which correctly DOES NOT count as
+        pending (an auto-selected or right-click-keep'd row is undecided
+        from the manifest-replacement POV — there's nothing to lose).
+        """
         vm = _load(
-            _rec("/a.jpg", 1, user_decision="keep"),
+            _rec("/a.jpg", 1, user_decision="keep"),  # legacy literal
             _rec("/b.jpg", 1, user_decision=""),
         )
         assert vm.pending_decision_count == 1
 
     def test_counts_mixed_decision_kinds(self):
+        # #425 — second rec uses the legacy "keep" literal (back-compat).
+        # Canonical "" is intentionally excluded from the pending count
+        # because empty = undecided/keep state has nothing to lose.
         vm = _load(
             _rec("/a.jpg", 1, user_decision="delete"),
-            _rec("/b.jpg", 1, user_decision="keep"),
+            _rec("/b.jpg", 1, user_decision="keep"),  # back-compat
             _rec("/c.jpg", 2, user_decision=""),
             _rec("/d.jpg", 2, user_decision="delete"),
         )

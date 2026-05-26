@@ -156,12 +156,18 @@ class TestPrintSummary:
         # Friendly labels render instead of raw internal action names
         # (#242 — internal MOVE/EXACT/REVIEW_DUPLICATE must not leak
         # into the user-visible scan-dialog log).
-        assert "to be moved" in out
+        # #425 — was "to be moved"; reworded to "dated files" so the
+        # verb no longer implies a physical file operation that the
+        # read-only scan never performs.
+        assert "dated files" in out
         assert "exact duplicates" in out
         assert "near-duplicates (review)" in out
         assert "MOVE" not in out
         assert "EXACT" not in out
         assert "REVIEW_DUPLICATE" not in out
+        # #425 negative grep — the old wording must not reappear.
+        assert "to be moved" not in out
+        assert "moved" not in out
 
     def test_empty_rows_no_crash(self, capsys):
         print_summary([])

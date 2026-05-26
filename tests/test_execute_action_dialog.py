@@ -52,7 +52,11 @@ class TestDialogState:
     def test_decisions_enable_execute_button(self, qapp):
         from PySide6.QtWidgets import QDialogButtonBox
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        # #425 — was "keep"; the canonical keep state is "" but that's
+        # also undecided. Use REMOVE_FROM_LIST_DECISION as a distinct
+        # decided-but-not-delete value.
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", REMOVE_FROM_LIST_DECISION))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         btn = dlg._btn_box.button(QDialogButtonBox.Ok)
         assert btn.isEnabled()
@@ -94,7 +98,10 @@ class TestDialogState:
 class TestDecidedRecords:
     def test_counts_decided_records(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"), _rec("/c.jpg", ""))]
+        # #425 — was "keep"; "" is canonical keep but also undecided.
+        # Use REMOVE_FROM_LIST_DECISION as the second decided state.
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", REMOVE_FROM_LIST_DECISION), _rec("/c.jpg", ""))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         assert len(dlg._decided_records()) == 2
 
@@ -113,8 +120,10 @@ class TestSetDecision:
         rec = _rec("/a.jpg", "delete")
         groups = [_group(rec)]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
-        dlg._set_decision("/a.jpg", "keep")
-        assert rec.user_decision == "keep"
+        # #425 — was "keep"; "" is canonical keep. This still proves the
+        # delete → "" overwrite (rec started at "delete").
+        dlg._set_decision("/a.jpg", "")
+        assert rec.user_decision == ""
 
     def test_refreshes_warning_banner(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
@@ -123,8 +132,8 @@ class TestSetDecision:
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         # Initially banner is visible (complete delete group)
         assert dlg._warning_banner.isVisibleTo(dlg)
-        # After setting to keep, no longer complete delete
-        dlg._set_decision("/a.jpg", "keep")
+        # After setting to keep ("" canonical), no longer complete delete (#425).
+        dlg._set_decision("/a.jpg", "")
         assert not dlg._warning_banner.isVisibleTo(dlg)
 
 
@@ -351,9 +360,15 @@ class TestOnExecute:
 
         mock_del.assert_called_once_with("/a.jpg")
 
-    def test_keep_decision_adds_to_executed_paths(self, qapp):
+    def test_legacy_keep_literal_adds_to_executed_paths(self, qapp):
+        """#425 back-compat — manifests written before auto-select was
+        canonicalised to ``""`` still carry the literal ``"keep"``
+        string. The execute path treats that as decided-keep and adds
+        to executed_paths (the elif branch at execute_action_dialog.py:991).
+        New manifests use ``""`` and are correctly excluded from the
+        executed-paths sweep — only delete actions fire on Execute."""
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(_rec("/a.jpg", "keep"))]
+        groups = [_group(_rec("/a.jpg", "keep"))]  # legacy literal
         dlg = ExecuteActionDialog(groups, manifest_path=None)
 
         with patch.object(dlg, "_delete_file") as mock_del:
@@ -362,24 +377,32 @@ class TestOnExecute:
         mock_del.assert_not_called()
         assert "/a.jpg" in dlg.executed_paths
 
-    def test_undecided_records_skipped(self, qapp):
+    def test_undecided_and_canonical_keep_skipped(self, qapp):
+        """#425 — canonical empty-keep ``""`` rows are NOT marked executed
+        (they're undecided semantically; nothing to execute). Only the
+        legacy literal ``"keep"`` triggers the executed-paths append.
+        """
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         groups = [_group(
             _rec("/del.jpg", "delete"),
-            _rec("/keep.jpg", "keep"),
-            _rec("/undecided.jpg", ""),
+            _rec("/legacy_keep.jpg", "keep"),  # legacy literal — adds
+            _rec("/canonical_keep.jpg", ""),   # canonical — skipped
         )]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
 
         with patch.object(dlg, "_delete_file"):
             dlg._on_execute()
 
-        assert "/keep.jpg" in dlg.executed_paths
-        assert "/undecided.jpg" not in dlg.executed_paths
+        assert "/legacy_keep.jpg" in dlg.executed_paths
+        assert "/canonical_keep.jpg" not in dlg.executed_paths
 
     def test_batch_update_decisions_called_before_execute(self, qapp, tmp_path):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        # #425 — second rec uses REMOVE_FROM_LIST_DECISION as a non-default
+        # decided state distinct from delete (canonical keep "" would be
+        # filtered by _decided_records).
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", REMOVE_FROM_LIST_DECISION))]
         dlg = ExecuteActionDialog(groups, manifest_path="/fake/manifest.sqlite")
 
         def fake_delete(path):
@@ -401,6 +424,9 @@ class TestOnExecute:
 
     def test_mark_executed_called_with_all_done(self, qapp, tmp_path):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        # #425 — legacy "keep" string (back-compat path that fires
+        # mark_executed via execute_action_dialog.py:991). Canonical ""
+        # rows would not appear in executed_paths.
         groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
         dlg = ExecuteActionDialog(groups, manifest_path="/fake/manifest.sqlite")
 
@@ -423,6 +449,7 @@ class TestOnExecute:
 
     def test_mark_executed_not_called_when_no_manifest(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        # #425 — legacy "keep" exercises the back-compat executed path.
         groups = [_group(_rec("/a.jpg", "keep"))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
 
@@ -480,10 +507,11 @@ class TestDeleteFile:
 
 class TestGroupDeletionCheck:
     def test_complete_delete_groups_detects_full_group(self, qapp):
+        # #425 — flipped "keep" → "" (canonical non-delete state).
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         groups = [
             _group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "delete"), number=1),
-            _group(_rec("/c.jpg", "delete"), _rec("/d.jpg", "keep"), number=2),
+            _group(_rec("/c.jpg", "delete"), _rec("/d.jpg", ""), number=2),
         ]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         complete = dlg._complete_delete_groups()
@@ -492,16 +520,18 @@ class TestGroupDeletionCheck:
 
     def test_complete_delete_groups_empty_when_none(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"), number=1)]
+        # #425 — flipped "keep" → "" (canonical non-delete state).
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", ""), number=1)]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         assert dlg._complete_delete_groups() == []
 
     def test_complete_delete_groups_multiple(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        # #425 — flipped "keep" → "" (canonical non-delete state).
         groups = [
             _group(_rec("/a.jpg", "delete"), number=1),
             _group(_rec("/b.jpg", "delete"), number=2),
-            _group(_rec("/c.jpg", "keep"), number=3),
+            _group(_rec("/c.jpg", ""), number=3),
         ]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         complete = dlg._complete_delete_groups()
@@ -515,7 +545,8 @@ class TestGroupDeletionCheck:
 
     def test_warning_banner_hidden_when_no_complete_group(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"), number=1)]
+        # #425 — flipped "keep" → "" (canonical non-delete state).
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", ""), number=1)]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         assert not dlg._warning_banner.isVisibleTo(dlg)
 
@@ -695,6 +726,9 @@ class TestOnExecuteFailureWarnings:
     def test_no_warning_when_both_buckets_empty(self, qapp):
         """A clean execute must NOT pop spurious warnings."""
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        # #425 — legacy "keep" string exercises the back-compat
+        # executed-paths branch (canonical "" would be undecided
+        # and not trigger any execute work).
         dlg = ExecuteActionDialog([_group(_rec("/a.jpg", "keep"))], manifest_path=None)
 
         with patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
@@ -879,9 +913,10 @@ class TestOnExecuteRequestedConfirmation:
     def test_no_complete_delete_groups_calls_through(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
-        # Group with one delete + one keep — not "complete delete"
+        # Group with one delete + one non-delete — not "complete delete"
+        # #425 — flipped "keep" → "" (canonical non-delete state).
         rec_d = _rec("/a.jpg", "delete")
-        rec_k = _rec("/b.jpg", "keep")
+        rec_k = _rec("/b.jpg", "")
         g = _group(rec_d, rec_k)
         dlg = ExecuteActionDialog([g], manifest_path=None)
         try:
@@ -954,7 +989,8 @@ class TestExecuteRequestedLockConfirm:
         from app.views.dialogs.locked_rows_confirm_dialog import (
             LockedRowsConfirmDialog,
         )
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        # #425 — flipped "keep" → "" (canonical non-delete state).
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", ""))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         try:
             with (
@@ -1428,9 +1464,12 @@ class TestExecuteDialogStaticScope:
         from unittest.mock import patch
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
+        # #425 — third row uses legacy "keep" so executed_paths gets a
+        # back-compat marker; canonical "" rows are undecided and would
+        # be filtered before this point.
         groups = [_group(
             _rec("/del1.jpg", "delete"),
-            _rec("/keep.jpg", "keep"),
+            _rec("/legacy_keep.jpg", "keep"),
             _rec("/del2.jpg", "delete"),
         )]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
@@ -1442,7 +1481,7 @@ class TestExecuteDialogStaticScope:
 
         # Both delete rows execute — in-dialog selection no longer scopes.
         assert sorted(deleted) == ["/del1.jpg", "/del2.jpg"]
-        assert "/keep.jpg" in dlg.executed_paths
+        assert "/legacy_keep.jpg" in dlg.executed_paths
 
     def test_lock_guard_fires_for_every_locked_delete_row(self, qapp):
         """The lock-confirm scan no longer narrows to highlighted rows —
