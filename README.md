@@ -39,7 +39,23 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 
 ---
 
-## Getting started
+## Download (Windows)
+
+A pre-built standalone bundle is published on every release tag — no Python install required.
+
+1. Grab the latest zip from **[Releases → latest](https://github.com/jackal998/photo-manager/releases/latest)**: look for `photo-manager-<version>-windows-x64.zip`.
+2. Extract anywhere — the folder is self-contained.
+3. Run `photo-manager.exe`.
+
+You still need [exiftool](https://exiftool.org/) on `PATH` for EXIF date extraction (same prerequisite as the source install).
+
+> **SmartScreen note:** the binary is unsigned, so on first launch Windows shows *"Windows protected your PC"*. Click **More info → Run anyway**. The warning is expected and will disappear once we publish a signed release.
+
+Settings (`settings.json`, `window_state.ini`) are written next to `photo-manager.exe`, so the extracted folder is portable — copy it to a USB stick and your config travels with it.
+
+---
+
+## Getting started (from source)
 
 ### Prerequisites
 

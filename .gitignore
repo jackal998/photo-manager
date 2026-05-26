@@ -28,6 +28,7 @@ MANIFEST
 
 # Virtual environments
 .venv/
+.venv-build/
 venv/
 ENV/
 env/
@@ -36,6 +37,10 @@ env/
 # PyInstaller
 *.manifest
 *.spec
+# Exception: the canonical release spec lives at repo root and is
+# the single source of truth for the standalone Windows bundle —
+# tracked so the release workflow can checkout + invoke it.
+!pyinstaller.spec
 
 # Installer logs
 pip-log.txt

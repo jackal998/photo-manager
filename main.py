@@ -16,13 +16,21 @@ from infrastructure.image_service import ImageService
 from infrastructure.logging import init_logging
 from infrastructure.settings import JsonSettings
 
-BASE_DIR = Path(__file__).parent
-# QA / test runs may point at an alternative config root by setting
-# PHOTO_MANAGER_HOME. When unset, we keep the historical behavior of
-# reading settings.json from the repo root. Relative paths are
-# resolved against the repo root so the env var is robust to cwd.
-_home_env = os.environ.get("PHOTO_MANAGER_HOME")
-CONFIG_HOME = (BASE_DIR / _home_env).resolve() if _home_env else BASE_DIR
+if getattr(sys, "frozen", False):
+    # PyInstaller --onedir: bundled read-only assets (translations/) live
+    # under sys._MEIPASS, but writable user state (settings.json,
+    # window_state.ini) must sit next to the executable so it survives
+    # process exit and is discoverable / portable.
+    BASE_DIR = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    CONFIG_HOME = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).parent
+    # QA / test runs may point at an alternative config root by setting
+    # PHOTO_MANAGER_HOME. When unset, we keep the historical behavior of
+    # reading settings.json from the repo root. Relative paths are
+    # resolved against the repo root so the env var is robust to cwd.
+    _home_env = os.environ.get("PHOTO_MANAGER_HOME")
+    CONFIG_HOME = (BASE_DIR / _home_env).resolve() if _home_env else BASE_DIR
 
 
 def _parse_default_sort(settings: JsonSettings) -> list[tuple[str, bool]]:

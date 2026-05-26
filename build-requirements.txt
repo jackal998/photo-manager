@@ -1,0 +1,7 @@
+# Build-time-only deps for the standalone Windows release.
+# Kept separate from requirements.txt so the runtime dep set stays
+# clean (CI / dev install only what the running app needs).
+#
+# Installed alongside requirements.txt by .github/workflows/release.yml
+# and by local-build smoke testing — see CLAUDE.md release section.
+pyinstaller==6.11.1
