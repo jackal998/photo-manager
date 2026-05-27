@@ -1,0 +1,1 @@
+Stream the 12-byte magic-bytes header during scan instead of fully reading every HEIC/RAW/PNG/GIF/WEBP file — halves NAS scan I/O for iPhone-photo libraries (#446).
