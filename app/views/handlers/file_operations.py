@@ -187,6 +187,17 @@ class UIUpdateCallback(Protocol):
         """Show groups summary (legacy compatibility)."""
         ...
 
+    def clear_preview(self) -> None:
+        """Drop any preview-pane content (#431).
+
+        Called from ``_on_manifest_loaded`` so a fresh manifest doesn't
+        leave the previous manifest's last-selected file rendered in
+        the preview pane. The dialog-scope ``ExecuteActionDialog``
+        already does this on close — this is the matching cleanup for
+        the main-window-scope path.
+        """
+        ...
+
 
 class StatusReporter(Protocol):
     """Protocol for status reporting callback."""
@@ -293,6 +304,13 @@ class FileOperationsHandler:
         self.status_reporter.set_baseline(
             t("status.manifest_loaded_pairs", pairs=pairs, files=files)
         )
+        # #431: drop the previous manifest's preview content. Runs
+        # AFTER set_baseline so any cost (Qt widget cleanup) can't
+        # delay the status update that callers / qa scenarios poll
+        # for. Side effect is visual-only — the stale image lingers
+        # for the time clear takes to run, which is still much faster
+        # than refresh_tree.
+        self.ui_updater.clear_preview()
 
     def _on_manifest_failed(self, error: str) -> None:
         logger.error("Open manifest failed: {}", error)
