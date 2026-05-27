@@ -1,0 +1,1 @@
+Scope Execute Action dialog's "Select by Field/Regex…" to the rendered group subset, and refresh the main tree when Close is clicked after decision changes (#443, #444).

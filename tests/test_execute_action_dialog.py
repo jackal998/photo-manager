@@ -1818,3 +1818,177 @@ class TestExecuteDialogStatusEmission:
         dlg._set_decision("/decide.jpg", "delete")
         dlg._remove_from_list_paths(["/remove.jpg"])
         dlg._set_decision_by_regex("File Name", r"bulk", LOCK_SENTINEL)
+
+
+# ── #443 — Select-by scope narrowing ───────────────────────────────────────
+
+
+class TestSelectByScope:
+    """The Execute dialog renders only groups with ≥1 decided record
+    (`_groups_with_decisions`). When the user opens **Select by Field/
+    Regex…** from inside the dialog, the inner ``ActionDialog`` must
+    receive the same rendered-subset — not the full ``self._groups``.
+    Otherwise the user can match / preview / dispatch against rows that
+    are not visible in the Execute dialog's tree (the #443 bug).
+    """
+
+    def test_show_select_dialog_passes_only_decided_groups(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        decided = _group(_rec("/a.jpg", "delete"), number=1)
+        undecided = _group(_rec("/b.jpg", ""), number=2)
+        dlg = ExecuteActionDialog([decided, undecided], manifest_path=None)
+
+        with patch(
+            "app.views.dialogs.select_dialog.ActionDialog"
+        ) as ActionDialogCls:
+            ActionDialogCls.return_value.exec.return_value = 0
+            dlg._show_select_dialog()
+
+        kwargs = ActionDialogCls.call_args.kwargs
+        passed = kwargs["groups"]
+        assert passed == [decided], (
+            "Select-by must receive only groups with decided records, "
+            f"got {[g.group_number for g in passed]}"
+        )
+        # Identity, not just equality — the filtered list must reuse
+        # the original PhotoGroup reference so writes inside ActionDialog
+        # reach vm.groups through the existing aliasing contract.
+        assert passed[0] is decided
+
+    def test_show_select_dialog_match_fn_built_from_scoped_groups(self, qapp):
+        """Live preview's match_fn must score only against decided-group
+        rows. Without this, the Select-by preview count includes hits in
+        groups the user can't see in the Execute dialog's tree.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        decided = _group(_rec("/a.jpg", "delete"), number=1)
+        undecided = _group(_rec("/b.jpg", ""), number=2)
+        dlg = ExecuteActionDialog([decided, undecided], manifest_path=None)
+
+        with patch(
+            "app.views.handlers.file_operations.build_match_fn"
+        ) as build_match_fn_mock, patch(
+            "app.views.dialogs.select_dialog.ActionDialog"
+        ) as ActionDialogCls:
+            build_match_fn_mock.return_value = lambda *a, **k: 0
+            ActionDialogCls.return_value.exec.return_value = 0
+            dlg._show_select_dialog()
+
+        # build_match_fn must be invoked with the scoped list, not the
+        # full self._groups (which would include the undecided group).
+        scoped_arg = build_match_fn_mock.call_args.args[0]
+        assert scoped_arg == [decided]
+        assert scoped_arg[0] is decided
+
+    def test_show_select_dialog_empty_decisions_falls_back_to_full_groups(
+        self, qapp
+    ):
+        """When no groups have decisions yet, the rendered subset is
+        empty — but the Select-by sub-dialog still needs records to
+        inspect for numeric-field detection (s43's "Size (Bytes)"
+        threshold flow seeds initial decisions via Select-by on the
+        empty-decision state). Fall back to self._groups so the
+        user can use Select-by as a bulk-seed entry point.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        # Construct with a decided group so the dialog instantiates,
+        # then strip the decision so _groups_with_decisions() is empty.
+        g1 = _group(_rec("/a.jpg", "delete"), number=1)
+        g2 = _group(_rec("/b.jpg", ""), number=2)
+        dlg = ExecuteActionDialog([g1, g2], manifest_path=None)
+        dlg._groups[0].items[0].user_decision = ""
+
+        with patch(
+            "app.views.handlers.file_operations.build_match_fn"
+        ) as build_match_fn_mock, patch(
+            "app.views.dialogs.select_dialog.ActionDialog"
+        ) as ActionDialogCls:
+            build_match_fn_mock.return_value = lambda *a, **k: 0
+            ActionDialogCls.return_value.exec.return_value = 0
+            dlg._show_select_dialog()
+
+        # Falls back to self._groups so ActionDialog can detect numeric
+        # fields and Select-by can seed initial decisions.
+        passed = ActionDialogCls.call_args.kwargs["groups"]
+        assert passed == [g1, g2]
+        build_match_fn_mock.assert_called_once_with([g1, g2])
+
+
+# ── #444 — decisions-changed sync flag ─────────────────────────────────────
+
+
+class TestDecisionsChangedFlag:
+    """``_decisions_changed`` is the sync signal between the dialog's
+    in-place mutation of ``vm.groups`` and the main tree's render. It
+    starts False and flips True on any in-dialog mutation path that
+    doesn't already fire a main-tree refresh. The parent reads it on
+    reject to decide whether to call ``refresh_tree``.
+    """
+
+    def test_initial_state_is_false(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(
+            [_group(_rec("/a.jpg", "delete"))], manifest_path=None
+        )
+        assert dlg._decisions_changed is False
+
+    def test_set_decision_by_regex_flips_flag(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/a.jpg", ""),
+            _rec("/b.jpg", ""),
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert dlg._decisions_changed is False
+
+        dlg._set_decision_by_regex("File Name", r"^a\.jpg$", "delete")
+
+        assert dlg._decisions_changed is True
+
+    def test_no_match_does_not_flip_flag(self, qapp):
+        """A regex that matches nothing must NOT flip the flag — the
+        parent would issue a spurious refresh_tree on every plain
+        Close otherwise.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        with patch("PySide6.QtWidgets.QMessageBox.information"):
+            dlg = ExecuteActionDialog(
+                [_group(_rec("/a.jpg", "delete"))], manifest_path=None
+            )
+            dlg._set_decision_by_regex("File Name", r"^nomatch$", "delete")
+        assert dlg._decisions_changed is False
+
+    def test_regex_lock_branch_flips_flag(self, qapp):
+        from app.views.constants import LOCK_SENTINEL
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        dlg._set_decision_by_regex("File Name", r"^a\.jpg$", LOCK_SENTINEL)
+
+        assert dlg._decisions_changed is True
+
+    def test_set_decision_single_row_flips_flag(self, qapp):
+        """Right-click → Set Action → "Delete" on one row in the
+        Execute dialog has the same sync-gap shape as Select-by: the
+        record mutates in place but the main tree doesn't observe it.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        dlg._set_decision("/a.jpg", "")
+
+        assert dlg._decisions_changed is True
+
+    def test_set_lock_single_row_flips_flag(self, qapp):
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        dlg._set_lock("/a.jpg", True)
+
+        assert dlg._decisions_changed is True

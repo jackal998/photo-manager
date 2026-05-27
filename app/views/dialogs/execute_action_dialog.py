@@ -107,6 +107,14 @@ class ExecuteActionDialog(QDialog):
         # this after exec() so it can refresh the main tree — vm.groups
         # is already updated in place because self._groups aliases it.
         self.removed_from_list_paths: list[str] = []
+        # #444 — set when _set_decision_by_regex (or its lock/unlock
+        # branch) writes a non-empty batch. Decisions/locks are mutated
+        # in place on self._groups (== vm.groups), but the main tree's
+        # rendered cells don't observe that mutation. The parent reads
+        # this flag after exec() to fire refresh_tree on the
+        # reject-after-changes path that otherwise falls through with
+        # stale cell text.
+        self._decisions_changed: bool = False
         self._missing_paths: list[str] = []
         # (path, reason) pairs for files whose delete raised an exception
         # — kept separate from `_missing_paths` so the post-execute UI
@@ -450,6 +458,9 @@ class ExecuteActionDialog(QDialog):
                 )
             except Exception as exc:
                 logger.warning("Failed to persist lock state: {}", exc)
+        # #444 — single-row lock/unlock mutates rec.is_locked in place
+        # on vm.groups; main tree must re-render the lock glyph on close.
+        self._decisions_changed = True
         self._refresh_ui_after_decision_change()
         # #318 — match the main-window route's confirmation. Without
         # this emit, single-row Lock/Unlock from the Execute Action
@@ -516,6 +527,9 @@ class ExecuteActionDialog(QDialog):
                 if rec.file_path == path:
                     rec.user_decision = decision
                     break
+        # #444 — single-row decision change mutates vm.groups in place;
+        # main tree must re-render the Action cell on close.
+        self._decisions_changed = True
         self._refresh_ui_after_decision_change()
         # #318 — match the main-window route's confirmation.
         # #425 — interpolate the localised label, not the raw value.
@@ -622,17 +636,30 @@ class ExecuteActionDialog(QDialog):
         # this field list. ActionDialog displays localized labels but
         # emits the English name back via setActionRequested.
         fields = list(default_action_dialog_fields())
-        # Build the live-preview match_fn from this dialog's groups —
-        # which alias the main window's vm.groups (see _remove_from_list_paths
-        # docstring), so both surfaces preview against the same data.
-        match_fn = build_match_fn(self._groups) if self._groups else None
+        # #443 — scope Select-by to the rendered subset. The dialog
+        # only shows _groups_with_decisions(); the sub-dialog must
+        # match/preview/dispatch against the same rows the user is
+        # looking at, not the full manifest. Filtered list keeps the
+        # original record references (no copy) so writes inside the
+        # sub-dialog still reach vm.groups through the existing
+        # aliasing contract.
+        #
+        # Fallback: when no decisions exist yet, the dialog tree is
+        # empty and there's no rendered scope to narrow to — fall
+        # back to self._groups so the user can seed initial decisions
+        # via Select-by (the s43 numeric-threshold scenario depends on
+        # this — ActionDialog inspects records to detect numeric
+        # fields and an empty groups list would prevent the numeric
+        # panel from surfacing).
+        scoped_groups = self._groups_with_decisions() or self._groups
+        match_fn = build_match_fn(scoped_groups) if scoped_groups else None
         dlg = ActionDialog(
             fields=fields, parent=self, match_fn=match_fn,
             settings=self._settings,
             # #209 — pass the raw groups so the dialog can rank
             # records for Top-N within group and run threshold
             # comparisons against numeric/date fields.
-            groups=self._groups,
+            groups=scoped_groups,
             context_id="execute",  # A8: isolate from main-window preference
         )
         dlg.setActionRequested.connect(self._set_decision_by_regex)
@@ -752,6 +779,9 @@ class ExecuteActionDialog(QDialog):
                     )
                 except Exception as exc:
                     logger.warning("Failed to persist lock state: {}", exc)
+            # #444 — bulk lock/unlock counts as a row-state mutation
+            # the main tree needs to re-render on close.
+            self._decisions_changed = True
             self._refresh_ui_after_decision_change()
             # #318 — match the main-window route's bulk-lock
             # confirmation. The bulk path is higher-friction than the
@@ -829,6 +859,12 @@ class ExecuteActionDialog(QDialog):
                 ManifestRepository().batch_update_decisions(self._manifest_path, batch)
             except Exception as exc:
                 logger.warning("Failed to persist batch decisions: {}", exc)
+
+        # #444 — flip the sync flag whenever any decision actually
+        # changed in this dialog's session. The parent uses this on
+        # close to decide whether to refresh the main tree.
+        if batch:
+            self._decisions_changed = True
 
         self._refresh_ui_after_decision_change()
         # Mirror the s14 main-menu regex flow's status confirmation
