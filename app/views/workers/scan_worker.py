@@ -2,10 +2,88 @@
 
 from __future__ import annotations
 
+import time
+from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 from loguru import logger
+
+# #424 — rolling throughput sampling window used to compute files/sec.
+# 5s matches the issue's acceptance criterion ("ETA appears once ≥ 5s of
+# throughput samples are available"). Wide enough that an SMB blip
+# doesn't crash the rate to zero, narrow enough that a real stall
+# surfaces within ~5s instead of getting smoothed out over a minute.
+_THROUGHPUT_WINDOW_SECONDS = 5.0
+
+# Minimum interval between two stage_progress emits inside a streaming
+# loop. Per-second cadence keeps the UI feeling live without burning
+# Qt event loop on every single file in a 100k-file scan.
+_STAGE_EMIT_INTERVAL_SECONDS = 1.0
+
+# Canonical stage names (#424). Receiver localises for display via
+# translations[scan_dialog.stage_<name_lower>]; raw string passes
+# through the Qt signal so the worker stays UI-agnostic.
+STAGE_WALK = "WALK"
+STAGE_HASH = "HASH"
+STAGE_EXIFTOOL = "EXIFTOOL"
+STAGE_CLASSIFY = "CLASSIFY"
+STAGE_SCORE = "SCORE"
+STAGE_WRITE = "WRITE"
+
+
+class _StageTracker:
+    """Worker-side throughput accumulator + per-second emit throttle.
+
+    One instance per stage. Records `(timestamp, completed_count)`
+    samples in a deque trimmed to the last :data:`_THROUGHPUT_WINDOW_SECONDS`
+    on every update, then reports throughput as
+    `(latest_completed - oldest_completed) / (latest_ts - oldest_ts)` —
+    zero when the deque collapses to a single sample or the dt is
+    too small for a stable rate.
+
+    The throttle prevents per-file emits in the hot HASH / EXIFTOOL
+    loops; ``should_emit()`` returns True only on (a) the first call
+    for a stage, (b) the boundary (completed == total), or (c) when
+    ≥ ``_STAGE_EMIT_INTERVAL_SECONDS`` has elapsed since the last emit.
+    """
+
+    def __init__(self, stage_name: str) -> None:
+        self.stage_name = stage_name
+        self._samples: deque[tuple[float, int]] = deque()
+        self._last_emit_at: float = 0.0
+        self._first_emit_done = False
+
+    def record(self, completed: int) -> None:
+        now = time.monotonic()
+        self._samples.append((now, completed))
+        cutoff = now - _THROUGHPUT_WINDOW_SECONDS
+        while len(self._samples) > 1 and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+    def throughput(self) -> float:
+        if len(self._samples) < 2:
+            return 0.0
+        t0, c0 = self._samples[0]
+        t1, c1 = self._samples[-1]
+        dt = t1 - t0
+        if dt < 0.1:
+            return 0.0
+        return max(0.0, (c1 - c0) / dt)
+
+    def should_emit(self, completed: int, total: int) -> bool:
+        now = time.monotonic()
+        if not self._first_emit_done:
+            self._first_emit_done = True
+            self._last_emit_at = now
+            return True
+        if total > 0 and completed >= total:
+            self._last_emit_at = now
+            return True
+        if now - self._last_emit_at >= _STAGE_EMIT_INTERVAL_SECONDS:
+            self._last_emit_at = now
+            return True
+        return False
 
 
 class ScanWorker(QThread):
@@ -13,6 +91,16 @@ class ScanWorker(QThread):
 
     Signals:
         progress(str)        — one-line status update for the UI log
+        stage_progress(str, int, int, float)
+                              — #424 typed per-stage progress: stage
+                                name, completed-in-stage, total-in-stage,
+                                files-per-second over the last
+                                :data:`_THROUGHPUT_WINDOW_SECONDS`.
+                                ``total == 0`` marks an atomic stage
+                                (receiver should render indeterminate).
+                                ``files_per_sec == 0`` indicates either
+                                a stall or insufficient samples — ETA
+                                hides until the rate stabilises.
         finished(str)        — emitted with manifest_path on success
         failed(str)          — emitted with error message on real failure
         completed_empty()    — scan ran cleanly but found 0 media files
@@ -22,6 +110,7 @@ class ScanWorker(QThread):
     """
 
     progress = Signal(str)
+    stage_progress = Signal(str, int, int, float)
     finished = Signal(str)
     failed = Signal(str)
     completed_empty = Signal()
@@ -76,6 +165,29 @@ class ScanWorker(QThread):
         logger.info("scan: {}", msg)
         self.progress.emit(msg)
 
+    def _emit_stage(
+        self,
+        tracker: _StageTracker,
+        completed: int,
+        total: int,
+        *,
+        force: bool = False,
+    ) -> None:
+        """#424 — emit a stage_progress signal with throttling.
+
+        ``force`` bypasses the per-second throttle for stage boundaries
+        (start / end) where the receiver must update the label even if
+        the throttle hasn't elapsed. The throughput value rides on the
+        tracker's rolling deque; samples are recorded unconditionally
+        so a slow loop's rate stays accurate even when emits are
+        throttled away.
+        """
+        tracker.record(completed)
+        if force or tracker.should_emit(completed, total):
+            self.stage_progress.emit(
+                tracker.stage_name, completed, total, tracker.throughput()
+            )
+
     def _run_pipeline(self) -> None:
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -97,7 +209,10 @@ class ScanWorker(QThread):
         # --- 1. Walk sources ---
         self._emit(f"Scanning {len(self.sources)} source(s)…")
         records = []
-        for label, root in self.sources.items():
+        walk_tracker = _StageTracker(STAGE_WALK)
+        total_sources = len(self.sources)
+        self._emit_stage(walk_tracker, 0, total_sources, force=True)
+        for idx, (label, root) in enumerate(self.sources.items()):
             mode = "flat" if self.recursive_map.get(label) is False else "recursive"
             self._emit(f"  Walking {label} ({mode}): {root} …")
             partial = scan_sources(
@@ -107,6 +222,12 @@ class ScanWorker(QThread):
             )
             self._emit(f"  → {len(partial):,} files")
             records.extend(partial)
+            # #424 — WALK reports folder-count progress (not per-file)
+            # because scan_sources is synchronous per source and we
+            # don't know the per-source total until it returns. Force
+            # emit on each source-boundary so the bar advances visibly
+            # even on a single-source scan that completes in <1s.
+            self._emit_stage(walk_tracker, idx + 1, total_sources, force=True)
         self._emit(f"  Total: {len(records):,} media files")
 
         if not records:
@@ -143,6 +264,8 @@ class ScanWorker(QThread):
         self._emit(f"Hashing {len(records):,} files (workers={self.workers})…")
         hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
         done = 0
+        hash_tracker = _StageTracker(STAGE_HASH)
+        self._emit_stage(hash_tracker, 0, len(records), force=True)
 
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futures = {pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)}
@@ -159,6 +282,11 @@ class ScanWorker(QThread):
                 done += 1
                 if done % 100 == 0 or done == len(records):
                     self._emit(f"  Hashed {done:,}/{len(records):,}")
+                # #424 — per-second-throttled stage_progress emit
+                # alongside the existing per-100 log line. The tracker
+                # records every iteration so throughput stays accurate
+                # even when the emit is throttled away.
+                self._emit_stage(hash_tracker, done, len(records))
 
         # Remove any None slots (cancelled futures that didn't run, or skipped files)
         hash_results = [r for r in hash_results if r is not None]
@@ -212,6 +340,8 @@ class ScanWorker(QThread):
                 f"EXIF + scoring signals via exiftool for {len(et_paths):,} files"
                 f" ({n_chunks} chunk(s))…"
             )
+            exif_tracker = _StageTracker(STAGE_EXIFTOOL)
+            self._emit_stage(exif_tracker, 0, len(et_paths), force=True)
             try:
                 with ExiftoolProcess() as et:
                     for i in range(0, len(et_paths), chunk_size):
@@ -219,6 +349,11 @@ class ScanWorker(QThread):
                         extracts.update(batch_read_extracts(chunk, et, chunk_size=chunk_size))
                         done_et = min(i + chunk_size, len(et_paths))
                         self._emit(f"  EXIF {done_et:,}/{len(et_paths):,}")
+                        # #424 — per-chunk stage_progress emit; the
+                        # throttle in _emit_stage drops sub-second
+                        # repeats so a fast local SSD scan doesn't
+                        # spam the dialog.
+                        self._emit_stage(exif_tracker, done_et, len(et_paths))
                 found_dates = sum(1 for e in extracts.values() if e.exif_date is not None)
                 with_gps = sum(1 for e in extracts.values() if e.gps_present)
                 self._emit(f"  EXIF done — {found_dates:,} dates, {with_gps:,} with GPS")
@@ -236,20 +371,31 @@ class ScanWorker(QThread):
                 )
 
         # --- 4. Classify ---
+        # #424: classify() is opaque from the worker's view (single
+        # call into scanner/dedup.py). Surface start + end emits with
+        # total=0 so the receiver renders the bar as indeterminate
+        # ("CLASSIFY — working…") instead of stuck at 0%. Pattern
+        # repeats for SCORE and WRITE below.
         self._emit("Classifying…")
+        classify_tracker = _StageTracker(STAGE_CLASSIFY)
+        self._emit_stage(classify_tracker, 0, 0, force=True)
         rows = classify(
             hash_results,
             threshold=self.threshold,
             mean_color_threshold=self.mean_color_threshold,
             source_priority=self.source_priority,
         )
+        self._emit_stage(classify_tracker, 1, 1, force=True)
 
         # --- 4.5: score within each duplicate group (#187) ---
         # Mutates rows in place: copies exif_tag_count / gps_present /
         # xmp_derived from extracts into ManifestRow, then assigns
         # compute_score(...) per group. Isolated rows (group_id is None)
         # stay unscored — no peers to compete with.
+        score_tracker = _StageTracker(STAGE_SCORE)
+        self._emit_stage(score_tracker, 0, 0, force=True)
         apply_scoring_to_rows(rows, extracts)
+        self._emit_stage(score_tracker, 1, 1, force=True)
 
         # --- 4.6: optional auto-select keepers (#212, #393) ---
         # When enabled in the scan dialog, the top-scored row in each
@@ -295,7 +441,10 @@ class ScanWorker(QThread):
 
         # --- 5. Write manifest ---
         self._emit(f"Writing manifest → {self.output_path}")
+        write_tracker = _StageTracker(STAGE_WRITE)
+        self._emit_stage(write_tracker, 0, 0, force=True)
         write_manifest(rows, self.output_path)
+        self._emit_stage(write_tracker, 1, 1, force=True)
 
         # --- 5.5: post-write keep+lock (and aggressive delete) (#393) ---
         # Runs only when auto_select_enabled fired and produced keepers.

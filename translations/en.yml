@@ -154,6 +154,13 @@ scan_dialog:
   auto_select_aggressive_label: "Also mark all other files for delete"
   auto_select_aggressive_desc: "<b>Destructive-leaning, opt-in.</b> When enabled together with Auto select, every non-keeper row in a scored group is marked for <b>delete</b>. The Execute Action dialog opens with the full triage pre-populated — one click ships the sweep. You still confirm the actual deletion through the standard execute flow."
   log_placeholder: "Scan progress will appear here…"
+  # #424 — stage names shown in the stage label above the log.
+  stage_walk: "Walking sources"
+  stage_hash: "Hashing files"
+  stage_exiftool: "Reading EXIF + scoring signals"
+  stage_classify: "Classifying duplicates"
+  stage_score: "Scoring keepers"
+  stage_write: "Writing manifest"
   start_button: "Start Scan"
   close_button: "Close"
   close_load_button: "Close && Load"
