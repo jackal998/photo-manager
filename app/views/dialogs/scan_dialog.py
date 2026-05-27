@@ -609,19 +609,10 @@ class ScanDialog(QDialog):
 
         right_splitter.addWidget(right_top)
 
-        # #424 — Stage / throughput / ETA frame goes INSIDE a wrapper
-        # widget alongside the log box, then the wrapper is added as a
-        # single splitter widget. Keeping the splitter at 2 widgets
-        # preserves the original setSizes([340, 260]) contract — a
-        # 3-widget splitter with one hidden widget caused qa(2):s02 to
-        # time out on CI cold-launch even with a 10s grace, suggesting
-        # the splitter's initial layout pass with one invisible child
-        # is fragile under Windows runner load.
-        log_wrapper = QWidget()
-        log_wrapper_layout = QVBoxLayout(log_wrapper)
-        log_wrapper_layout.setContentsMargins(0, 0, 0, 0)
-        log_wrapper_layout.setSpacing(4)
-
+        # #424 — Stage / throughput / ETA frame above the log box.
+        # Initially hidden; revealed on the first stage_progress emit
+        # and stays visible until the next Start Scan (a fresh scan
+        # resets the frame to the new stage's first emit).
         self._progress_frame = QFrame()
         self._progress_frame.setFrameShape(QFrame.StyledPanel)
         self._progress_frame.setVisible(False)
@@ -648,11 +639,11 @@ class ScanDialog(QDialog):
         self._log_widget.setReadOnly(True)
         self._log_widget.setMinimumHeight(150)
         self._log_widget.setPlaceholderText(t("scan_dialog.log_placeholder"))
-
-        log_wrapper_layout.addWidget(self._progress_frame)
-        log_wrapper_layout.addWidget(self._log_widget, stretch=1)
-        right_splitter.addWidget(log_wrapper)
-        right_splitter.setSizes([340, 260])
+        # Frame goes ABOVE the log inside the right splitter so the
+        # user sees stage info first, log second.
+        right_splitter.addWidget(self._progress_frame)
+        right_splitter.addWidget(self._log_widget)
+        right_splitter.setSizes([340, 80, 200])
 
         outer_splitter.addWidget(right_splitter)
         # Left column slightly wider — paths and the source-list table
