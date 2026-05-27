@@ -125,6 +125,7 @@ class ScanWorker(QThread):
         mean_color_threshold: int = 30,
         limit: int | None = None,
         workers: int = 4,
+        exif_workers: int = 2,
         auto_select_enabled: bool = False,
         auto_select_aggressive_delete: bool = False,
     ) -> None:
@@ -137,6 +138,17 @@ class ScanWorker(QThread):
         self.mean_color_threshold = mean_color_threshold
         self.limit = limit
         self.workers = workers
+        # #451 — number of parallel ExiftoolProcess instances spawned
+        # by the exif consumer thread pool. Clamped at construction to
+        # ``min(4, os.cpu_count() // 2)`` (with a floor of 1) so a
+        # 100-core machine doesn't peg the box on exiftool spawn cost.
+        # exiftool itself is single-threaded within one ``-stay_open``
+        # instance; running N instances in parallel scales near-linearly
+        # up to ~4 instances on a modern CPU.
+        import os as _os
+        cpu = _os.cpu_count() or 4
+        cap = max(1, min(4, cpu // 2))
+        self.exif_workers = max(1, min(exif_workers, cap))
         # #212 — when True, promote the top-scored row in each duplicate
         # group to action="KEEP" before writing the manifest. The scan
         # dialog persists the corresponding setting; defaults False so
@@ -330,9 +342,17 @@ class ScanWorker(QThread):
         exif_tracker = _StageTracker(STAGE_EXIFTOOL)
         exif_done = [0]
         exif_total = [0]  # grows as hash threads enqueue eligible records
-        # Latched flag — ``True`` if the consumer thread aborted because
+        # #451 — locks guard the shared counters under N parallel
+        # consumer threads. CPython's GIL makes int ``+=`` atomic on
+        # named bindings, but ``list[0] += k`` is __getitem__ then
+        # __setitem__ — a tight race window with N consumers. The
+        # extracts dict's ``.update`` is GIL-atomic per the CPython
+        # dict implementation, so we don't lock around it.
+        exif_done_lock = threading.Lock()
+        exif_total_lock = threading.Lock()
+        # Latched flag — ``True`` if any consumer thread aborted because
         # exiftool isn't installed. Surfaced as a one-line warning AFTER
-        # the consumer joins so the message stays adjacent to the EXIF
+        # all consumers join so the message stays adjacent to the EXIF
         # block in the log.
         exiftool_missing = [False]
 
@@ -366,7 +386,8 @@ class ScanWorker(QThread):
             # exiftool pass excludes "skip" anyway pre-#450).
             if record.file_type != "skip":
                 exif_queue.put(result)
-                exif_total[0] += 1
+                with exif_total_lock:
+                    exif_total[0] += 1
             return idx, result
 
         def _exif_consumer() -> None:
@@ -423,22 +444,38 @@ class ScanWorker(QThread):
             paths = [r.record.path for r in batch]
             chunk_extracts = batch_read_extracts(paths, et, chunk_size=chunk_size)
             extracts.update(chunk_extracts)
-            exif_done[0] += len(batch)
-            # exif_total[0] is still growing while hashing runs; the
-            # dialog renders this as (done / total) with the total
-            # ticking up. Once hashing finishes the totals settle.
-            self._emit_stage(exif_tracker, exif_done[0], exif_total[0])
+            with exif_done_lock:
+                exif_done[0] += len(batch)
+                done_snapshot = exif_done[0]
+            with exif_total_lock:
+                total_snapshot = exif_total[0]
+            # exif_total is still growing while hashing runs; the dialog
+            # renders this as (done / total) with the total ticking up.
+            # Once hashing finishes the totals settle.
+            self._emit_stage(exif_tracker, done_snapshot, total_snapshot)
 
         self._emit(f"Hashing {len(records):,} files (workers={self.workers})…")
-        self._emit("EXIF + scoring signals via exiftool — pipelined (overlaps with hashing)…")
+        self._emit(
+            f"EXIF + scoring signals via exiftool — pipelined,"
+            f" {self.exif_workers} parallel process(es)…"
+        )
         hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
         done = 0
         hash_tracker = _StageTracker(STAGE_HASH)
         self._emit_stage(hash_tracker, 0, len(records), force=True)
         self._emit_stage(exif_tracker, 0, 0, force=True)
 
-        consumer_thread = threading.Thread(target=_exif_consumer, name="exif-consumer")
-        consumer_thread.start()
+        # #451 — N consumer threads, each owning its own ExiftoolProcess.
+        # All consumers pull from the same queue (Queue is thread-safe);
+        # exiftool itself is single-threaded within one ``-stay_open``
+        # instance, but N independent instances scale near-linearly up
+        # to the CPU cap baked into self.exif_workers.
+        consumer_threads = [
+            threading.Thread(target=_exif_consumer, name=f"exif-consumer-{i}")
+            for i in range(self.exif_workers)
+        ]
+        for t in consumer_threads:
+            t.start()
 
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futures = {pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)}
@@ -446,11 +483,15 @@ class ScanWorker(QThread):
                 if self.isInterruptionRequested():
                     cancel_flag.set()
                     pool.shutdown(wait=False, cancel_futures=True)
-                    # Tell the consumer to stop AFTER the cancel_flag
-                    # check picks it up — the sentinel ensures it
-                    # doesn't sit blocked on an empty queue.
-                    exif_queue.put(None)
-                    consumer_thread.join(timeout=5)
+                    # Tell each consumer to stop — one sentinel per
+                    # consumer so each gets exactly one ``None`` off
+                    # the queue. The 0.5s ``get(timeout)`` inside the
+                    # consumer guarantees cancel_flag is picked up
+                    # within ~½s even before the sentinel arrives.
+                    for _ in consumer_threads:
+                        exif_queue.put(None)
+                    for t in consumer_threads:
+                        t.join(timeout=5)
                     logger.warning("Scan cancelled by user during hashing pass")
                     self.failed.emit("Scan cancelled.")
                     return
@@ -466,13 +507,15 @@ class ScanWorker(QThread):
                 # even when the emit is throttled away.
                 self._emit_stage(hash_tracker, done, len(records))
 
-        # Signal the consumer that no more items are coming and wait
-        # for it to drain whatever's still queued. The hash threads
-        # may have produced records that the consumer hasn't yet
+        # Signal each consumer that no more items are coming and wait
+        # for them to drain whatever's still queued. The hash threads
+        # may have produced records that the consumers haven't yet
         # batched — joining ensures extracts is fully populated before
-        # the classify step reads it.
-        exif_queue.put(None)
-        consumer_thread.join()
+        # the classify step reads it. One sentinel per consumer.
+        for _ in consumer_threads:
+            exif_queue.put(None)
+        for t in consumer_threads:
+            t.join()
 
         # Remove any None slots (cancelled futures that didn't run, or skipped files)
         hash_results = [r for r in hash_results if r is not None]
