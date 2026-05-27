@@ -241,6 +241,14 @@ ALL_SCENARIOS = [
     # show the 5 file rows the user had pre-switch. Driver restores
     # ui.locale=en on exit (mirrors s22).
     "s58_language_switch_preserves_manifest",
+    # s59 (#444) — Execute Action dialog Select-by → main tree sync.
+    # Sister to s30: same scan + seed + open Execute + Select-by +
+    # regex apply, but verifies the MAIN WINDOW tree's rendered Action
+    # cells after Close (not Execute). Pre-#444 fix the handler only
+    # called refresh_tree on accept or remove-from-list, so the reject-
+    # after-decision-change path left the main tree's rendered cells
+    # stale relative to vm.groups + SQLite.
+    "s59_execute_dialog_select_by_main_tree_sync",
 ]
 
 

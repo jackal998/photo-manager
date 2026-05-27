@@ -234,6 +234,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # zero rows would be ambiguous with "manifest never loaded".
     # Driver MUST restore ui.locale=en before exiting (see s22).
     "s58_language_switch_preserves_manifest": ["qa/sandbox/near-duplicates"],
+    # s59 (#444) — Execute dialog Select-by → main-tree sync. Same
+    # near-duplicates fixture as s30 (1 group, 5 JPEGs basenamed
+    # neardup_NN_qXX.jpg) so the regex partition q[89]\d hits 3 of 5.
+    "s59_execute_dialog_select_by_main_tree_sync": ["qa/sandbox/near-duplicates"],
 }
 
 

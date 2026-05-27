@@ -1154,7 +1154,12 @@ class FileOperationsHandler:
         # dialog was rejected. The deferred-remove path is committed
         # only via Execute (accepted=True branch below), so it doesn't
         # affect this path.
-        if dlg.removed_from_list_paths and not accepted:
+        # #444 — the same mutate-in-place + reject path applies when
+        # decisions / lock state were changed via Select-by or the
+        # right-click set-decision menu: the dialog persists to SQLite
+        # and updates vm.groups, but the main tree never observes the
+        # mutation without an explicit refresh.
+        if not accepted and (dlg.removed_from_list_paths or dlg._decisions_changed):
             self.ui_updater.refresh_tree(self.vm.groups)
         if accepted:
             if dlg.deleted_paths:

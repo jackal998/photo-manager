@@ -1712,6 +1712,75 @@ class TestEntryPointGuards:
         assert DlgCls2.call_args.args[0] == [g1, g2, g3]
 
 
+# ── #444 — refresh main tree when dialog rejects after decision changes ────
+
+
+class TestExecuteActionRefreshOnReject:
+    """``ExecuteActionDialog`` mutates ``vm.groups`` in place when the
+    user changes decisions / lock state via Select-by or the right-click
+    Set Action menu. If the user then clicks **Close** (reject), the
+    handler must still call ``refresh_tree`` — otherwise the main tree
+    renders stale cell text for records that already changed on disk
+    and in vm.groups. #444.
+    """
+
+    def _make_vm_handler(self):
+        vm = SimpleNamespace(
+            groups=[],
+            remove_deleted_and_prune=MagicMock(),
+            remove_from_list=MagicMock(),
+        )
+        handler, ui_updater, _ = _make_handler(vm, manifest_path="/tmp/fake.sqlite")
+        return vm, handler, ui_updater
+
+    def test_refresh_fires_on_reject_when_decisions_changed(self):
+        vm, handler, ui_updater = self._make_vm_handler()
+        with patch(
+            "app.views.dialogs.execute_action_dialog.ExecuteActionDialog"
+        ) as DlgCls:
+            DlgCls.return_value.exec.return_value = 0  # reject
+            DlgCls.return_value.removed_from_list_paths = []
+            DlgCls.return_value.deleted_paths = []
+            DlgCls.return_value.executed_paths = []
+            DlgCls.return_value._decisions_changed = True
+            handler.execute_action()
+        ui_updater.refresh_tree.assert_called_once_with(vm.groups)
+
+    def test_no_refresh_on_reject_when_nothing_changed(self):
+        """Plain Close without any mutation must NOT refresh — that's
+        the regression guard against firing a spurious model rebuild
+        on every dialog dismissal.
+        """
+        vm, handler, ui_updater = self._make_vm_handler()
+        with patch(
+            "app.views.dialogs.execute_action_dialog.ExecuteActionDialog"
+        ) as DlgCls:
+            DlgCls.return_value.exec.return_value = 0  # reject
+            DlgCls.return_value.removed_from_list_paths = []
+            DlgCls.return_value.deleted_paths = []
+            DlgCls.return_value.executed_paths = []
+            DlgCls.return_value._decisions_changed = False
+            handler.execute_action()
+        ui_updater.refresh_tree.assert_not_called()
+
+    def test_refresh_fires_on_reject_when_immediate_remove_only(self):
+        """Regression guard for the pre-existing
+        ``removed_from_list_paths`` branch — must keep firing even
+        with ``_decisions_changed=False``.
+        """
+        vm, handler, ui_updater = self._make_vm_handler()
+        with patch(
+            "app.views.dialogs.execute_action_dialog.ExecuteActionDialog"
+        ) as DlgCls:
+            DlgCls.return_value.exec.return_value = 0  # reject
+            DlgCls.return_value.removed_from_list_paths = ["/a.jpg"]
+            DlgCls.return_value.deleted_paths = []
+            DlgCls.return_value.executed_paths = []
+            DlgCls.return_value._decisions_changed = False
+            handler.execute_action()
+        ui_updater.refresh_tree.assert_called_once_with(vm.groups)
+
+
 # ── Item 2 — dirty-tracking flag + silent save ─────────────────────────────
 
 
