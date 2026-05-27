@@ -41,6 +41,7 @@ from app.views.window_state import (
 )
 from app.views.workers.scan_worker import ScanWorker
 from infrastructure.i18n import t
+from scanner.workers import default_hash_workers
 
 
 @dataclass
@@ -422,6 +423,8 @@ class ScanDialog(QDialog):
         self._phash_spin: QSpinBox
         self._color_slider: QSlider
         self._color_spin: QSpinBox
+        self._workers_spin: QSpinBox
+        self._workers_user_set: bool = False  # #449 — once True, source-list changes no longer auto-update the spinner
         self._auto_select_check: QCheckBox
 
         self._build_ui()
@@ -462,6 +465,10 @@ class ScanDialog(QDialog):
         left_splitter.addWidget(tree_group)
 
         self._source_list = _SourceListWidget(self)
+        # #449 — refresh the hash-workers default whenever sources
+        # change so a freshly-added NAS path bumps the spinner to 8
+        # (until the user explicitly overrides the spinner).
+        self._source_list.changed.connect(self._refresh_workers_default)
         left_splitter.addWidget(self._source_list)
         # Roughly 50/50 — both lists are equally valuable and the user can
         # drag if their workflow favours one.
@@ -564,6 +571,29 @@ class ScanDialog(QDialog):
         # mean-color desc clears its slider frame on narrow widths.
         params_layout.addSpacing(6)
         params_layout.addLayout(color_row)
+
+        # Hash workers count (#449).
+        # Parallel reads during the Hash stage. Default is the NAS-aware
+        # picker (8 if any source is remote, else min(4, cpu_count())),
+        # but the user override sticks in scan.workers once they touch
+        # the spinner — we don't second-guess them on later source
+        # changes.
+        workers_label = QLabel(t("scan_dialog.workers_label"))
+        workers_desc = QLabel(t("scan_dialog.workers_desc"))
+        workers_desc.setWordWrap(True)
+        workers_desc.setStyleSheet("color: #555;")
+        workers_row = QHBoxLayout()
+        self._workers_spin = QSpinBox()
+        self._workers_spin.setRange(1, 32)
+        self._workers_spin.setValue(8)
+        self._workers_spin.setFixedWidth(80)
+        self._workers_spin.valueChanged.connect(self._on_workers_changed)
+        workers_row.addWidget(self._workers_spin)
+        workers_row.addStretch(1)
+        params_layout.addWidget(workers_label)
+        params_layout.addWidget(workers_desc)
+        params_layout.addSpacing(6)
+        params_layout.addLayout(workers_row)
 
         # Auto-select after scan (#212).
         # Opt-in: when on, the scan worker promotes the top-scored row in
@@ -750,6 +780,24 @@ class ScanDialog(QDialog):
         self._auto_select_aggressive_check.setChecked(aggressive)
         self._auto_select_aggressive_check.setEnabled(auto_select)
 
+        # Hash workers (#449). When the user has explicitly saved a value
+        # (scan.workers present), restore it. Otherwise pick a default
+        # from the current source paths so a NAS user gets 8 and a
+        # local-SSD user gets 4 without ever opening the panel. The
+        # valueChanged handler flips _workers_user_set the first time
+        # the user moves the spinner, so subsequent source-list changes
+        # don't override their choice.
+        saved_workers = self.settings.get("scan.workers", None)
+        if isinstance(saved_workers, int) and 1 <= saved_workers <= 32:
+            # Block valueChanged during restore so the "user-set" flag
+            # stays false — restored value isn't a fresh user choice.
+            self._workers_user_set = True
+            self._workers_spin.blockSignals(True)
+            self._workers_spin.setValue(saved_workers)
+            self._workers_spin.blockSignals(False)
+        else:
+            self._refresh_workers_default()
+
     def _save_to_settings(self) -> None:
         """Persist the current source list and output path to settings."""
         entries = self._source_list.entries()
@@ -763,6 +811,38 @@ class ScanDialog(QDialog):
             self.settings.save()
         except OSError:
             pass  # Non-fatal — settings-save failure should not interrupt the UI
+
+    def _on_workers_changed(self, value: int) -> None:
+        """Persist user's hash-worker choice (#449).
+
+        First user interaction with the spinner pins their override —
+        we stop auto-refreshing the default from source-list changes
+        thereafter. Saving on every tick is cheap (one int write) and
+        survives a dialog dismiss without depending on _start_scan.
+        """
+        self._workers_user_set = True
+        self.settings.set("scan.workers", int(value))
+        try:
+            self.settings.save()
+        except OSError:
+            pass  # Non-fatal — see _save_to_settings rationale
+
+    def _refresh_workers_default(self) -> None:
+        """Recompute the NAS-aware default and put it in the spinner.
+
+        Called at dialog open (when no saved value exists) and after
+        each source-list change while the user has not yet overridden
+        the spinner. blockSignals keeps _on_workers_changed from being
+        triggered by our own programmatic update — that would falsely
+        latch _workers_user_set.
+        """
+        if self._workers_user_set:
+            return
+        paths = [entry.path for entry in self._source_list.entries()]
+        recommended = default_hash_workers(paths)
+        self._workers_spin.blockSignals(True)
+        self._workers_spin.setValue(recommended)
+        self._workers_spin.blockSignals(False)
 
     def _on_auto_select_toggled(self, enabled: bool) -> None:
         """Persist the auto-select checkbox on every toggle (#212).
@@ -886,6 +966,7 @@ class ScanDialog(QDialog):
             recursive_map=recursive_map,
             threshold=self._phash_slider.value(),
             mean_color_threshold=self._color_slider.value(),
+            workers=self._workers_spin.value(),
             auto_select_enabled=self._auto_select_check.isChecked(),
             auto_select_aggressive_delete=(
                 self._auto_select_aggressive_check.isChecked()
