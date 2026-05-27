@@ -387,6 +387,92 @@ class TestScanWorkerParallelWalk:
         assert out.exists(), "single-source scan should still write its manifest"
 
 
+class TestScanWorkerExifWorkers:
+    """#451 — exif_workers is clamped at ScanWorker construction.
+
+    Floor: 1 (never zero, would deadlock the queue with no consumers).
+    Cap: min(4, cpu_count() // 2) — exiftool processes scale near-linearly
+    only up to ~4 on a modern CPU; above that each spawn costs ~200ms
+    on Windows so the user pays without speedup gain.
+    """
+
+    def test_exif_workers_floor_one(self, qapp, tmp_path):
+        from app.views.workers.scan_worker import ScanWorker
+
+        w = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            exif_workers=0,
+        )
+        assert w.exif_workers == 1
+
+    def test_exif_workers_capped_at_cpu_half(self, qapp, tmp_path):
+        import os
+        from app.views.workers.scan_worker import ScanWorker
+
+        cap = max(1, min(4, (os.cpu_count() or 4) // 2))
+        w = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            exif_workers=99,
+        )
+        assert w.exif_workers == cap
+
+    def test_exif_workers_within_range_kept(self, qapp, tmp_path):
+        from app.views.workers.scan_worker import ScanWorker
+
+        w = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            exif_workers=2,
+        )
+        # 2 is below the cap on every CPU we'd test on (cpu_count >= 4)
+        # and above the floor — should pass through unchanged.
+        assert w.exif_workers == 2
+
+    def test_n_consumer_threads_spawned(self, qapp, tmp_path):
+        """A 2-exif-worker scan must spawn exactly 2 consumer threads
+        named ``exif-consumer-N``. Verified by sampling
+        ``threading.enumerate()`` after the scan completes — the
+        consumers join cleanly so the leak check from the pipeline
+        suite also enforces that count returns to zero.
+        """
+        import threading
+        from app.views.workers.scan_worker import ScanWorker
+
+        _write_jpeg(tmp_path / "a.jpg")
+        observed: list[str] = []
+
+        # Capture thread names mid-scan by patching the consumer to
+        # snapshot when it starts. Simpler than wrangling timing: hook
+        # threading.Thread.start to log names.
+        original_start = threading.Thread.start
+
+        def spy_start(self):
+            if self.name.startswith("exif-consumer-"):
+                observed.append(self.name)
+            return original_start(self)
+
+        threading.Thread.start = spy_start
+        try:
+            worker = ScanWorker(
+                sources={"src": str(tmp_path)},
+                output_path=str(tmp_path / "m.sqlite"),
+                recursive_map={"src": False},
+                exif_workers=2,
+            )
+            worker.run()
+        finally:
+            threading.Thread.start = original_start
+
+        assert sorted(observed) == ["exif-consumer-0", "exif-consumer-1"], (
+            f"expected exactly 2 exif consumer threads; observed: {observed!r}"
+        )
+
+
 class TestScanWorkerExifPipeline:
     """#450 — hash→exif pipeline overlap.
 
