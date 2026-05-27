@@ -43,9 +43,17 @@ COMPANION_PHOTO_EXTS = [".HEIC", ".heic", ".JPG", ".jpg", ".JPEG", ".jpeg", ".PN
 # ---------------------------------------------------------------------------
 
 def _magic_type(path: Path) -> Optional[str]:
-    """Detect actual file type from magic bytes (first 12 bytes)."""
+    """Detect actual file type from magic bytes (first 12 bytes).
+
+    Stream-reads only the 12 header bytes — earlier versions used
+    ``path.read_bytes()[:12]`` which pulled the entire file over the
+    pipe before slicing. On NAS-stored HEIC libraries that doubled
+    scan I/O because the subsequent ``compute_hashes`` pass reads
+    the file again for the SHA / pHash single-pass (#446).
+    """
     try:
-        header = path.read_bytes()[:12]
+        with open(path, "rb") as fh:
+            header = fh.read(12)
     except OSError:
         return None
     if header[:2] == b"\xff\xd8":

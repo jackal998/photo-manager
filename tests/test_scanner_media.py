@@ -148,6 +148,50 @@ class TestGetFileType:
             assert kind == "heic", f"brand {brand!r}"
             assert mismatch is False
 
+    def test_magic_check_reads_only_12_bytes(self, tmp_path):
+        """#446 — _magic_type must stream the 12-byte header, not pull
+        the whole file. The pre-fix implementation used
+        ``path.read_bytes()[:12]`` which on NAS-stored HEIC libraries
+        doubled scan I/O (full read during Walking, then again during
+        Hashing for the SHA / pHash single-pass).
+
+        Assertion: writing a 1 MB HEIC and calling get_file_type
+        results in a file-handle read() that requested no more than
+        12 bytes. Patches ``builtins.open`` inside scanner.media to
+        capture the read call args without disturbing PIL / other
+        readers in the same process.
+        """
+        from unittest.mock import patch, mock_open, MagicMock
+
+        big_heic = _write(tmp_path, "big.heic", HEIC_MAGIC + b"\x00" * (1024 * 1024))
+
+        real_open = open
+        captured_read_sizes: list[int] = []
+
+        def tracking_open(file, mode="r", *args, **kwargs):
+            fh = real_open(file, mode, *args, **kwargs)
+            if "b" in mode and str(file) == str(big_heic):
+                original_read = fh.read
+
+                def tracking_read(size=-1):
+                    captured_read_sizes.append(size)
+                    return original_read(size)
+
+                fh.read = tracking_read
+            return fh
+
+        with patch("scanner.media.open", side_effect=tracking_open, create=True):
+            kind, _ = get_file_type(big_heic)
+
+        assert kind == "heic"
+        assert captured_read_sizes, "magic-byte read() was never called"
+        # Every read must be bounded — no read(-1) / read() / read(huge) calls.
+        for size in captured_read_sizes:
+            assert 0 < size <= 12, (
+                f"_magic_type read {size} bytes — expected ≤ 12. "
+                "Regression to read_bytes()[:12]?"
+            )
+
 
 # ---------------------------------------------------------------------------
 # parse_media_filename
