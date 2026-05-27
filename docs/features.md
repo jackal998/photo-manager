@@ -51,6 +51,7 @@ for the chore plan.
 | [Scan dialog — auto-select aggressive ("delete all others")](#scan-dialog--auto-select-aggressive-delete-all-others) | Scan |
 | [Scan dialog — collapse Advanced Settings](#scan-dialog--collapse-advanced-settings) | Scan |
 | [Scan dialog — folder list (no priority arrows)](#scan-dialog--folder-list-no-priority-arrows) | Scan |
+| [Scan dialog — hash workers (NAS-aware default)](#scan-dialog--hash-workers-nas-aware-default) | Scan |
 | [Scan dialog — multi-source scan](#scan-dialog--multi-source-scan) | Scan |
 | [Scan flow — manifest summary in progress log](#scan-flow--manifest-summary-in-progress-log) | Scan |
 | [Scan flow — rescan confirm](#scan-flow--rescan-confirm) | Scan |
@@ -415,6 +416,17 @@ for the chore plan.
 - **Conditions / variants:** Replaces the pre-#213 5-column table that had ↑/↓ priority arrows. Per-row callbacks receive the entries-index (not the display row) so clicking row 0 after the alphabetical sort still targets the alphabetically-first entry. ⚠ The README's Step 1 wording still mentions the removed arrows — tracked in [#264](https://github.com/jackal998/photo-manager/issues/264).
 - **Related:** [PR #223](https://github.com/jackal998/photo-manager/pull/223) (closes [#213](https://github.com/jackal998/photo-manager/issues/213)); QA scenario [`qa/scenarios/s17_scan_dialog_widgets.py`](../qa/scenarios/s17_scan_dialog_widgets.py).
 - **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+
+---
+
+### Scan dialog — hash workers (NAS-aware default)
+
+- **Entry point:** **Hash workers** spinbox under the Advanced settings panel in the Scan dialog — [app/views/dialogs/scan_dialog.py](../app/views/dialogs/scan_dialog.py); default value comes from [`scanner/workers.py`](../scanner/workers.py) `default_hash_workers`.
+- **Trigger:** Always present; the spinner value is passed to [`ScanWorker`](../app/views/workers/scan_worker.py) on every Start Scan.
+- **Behaviour:** Sets the parallel read count for the Hash stage's `ThreadPoolExecutor`. Range 1–32. Default is auto-picked from the configured sources on dialog open: 8 if any source root resolves to a Windows network drive (SMB / mapped), otherwise `min(4, os.cpu_count())` — preserves the pre-#449 local-SSD behaviour. User overrides persist to `scan.workers` and stick; once the user touches the spinner the auto-default no longer overwrites their choice on later source-list changes.
+- **Conditions / variants:** NAS detection uses Windows `GetDriveTypeW`; non-Windows always returns the local default. The auto-default only fires when no `scan.workers` value has been saved before — restored values win.
+- **Related:** [#449](https://github.com/jackal998/photo-manager/issues/449); helper tests in [`tests/test_scanner_workers.py`](../tests/test_scanner_workers.py).
+- **Last verified:** 2026-05-28 (#449)
 
 ---
 
