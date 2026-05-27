@@ -58,17 +58,13 @@
       "Bash(pnpm add*)",
       "Bash(pnpm install*)",
       "Bash(git clone*)",
-      "Bash(git push*)",
-      "Bash(git push)",
       "Bash(git reset --hard*)",
       "Bash(git reset --hard)",
       "Bash(git rebase*)",
       "Bash(git rebase)",
       "Bash(git commit --amend*)",
-      "Bash(gh pr create*)",
       "Bash(gh pr merge*)",
       "Bash(gh pr close*)",
-      "Bash(gh issue create*)",
       "Bash(gh issue close*)"
     ],
     "deny": [

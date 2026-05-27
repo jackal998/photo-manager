@@ -23,7 +23,8 @@ even mid-task, even in long autonomous runs. Never self-approve.
   for memory and plan files — those are fine)
 - Shell commands that modify system state (anything beyond read-only)
 - Disabling or bypassing the sandbox / permission mode
-- Opening PRs (`gh pr create`) or pushing branches (`git push`) to a remote
+- Closing or merging PRs / issues (`gh pr merge`, `gh pr close`,
+  `gh issue close`)
 - `git` commands that rewrite history or discard work
 - Submitting / publishing a GitHub PR review (`gh pr review --comment/--approve/--request-changes`,
   or `gh api .../reviews/{id}/events`, or `gh api .../pulls/{N}/reviews` with a non-null `event`).
@@ -40,7 +41,7 @@ When classification is ambiguous, treat as gated, not as ungated.
 
 **Per gated action, not per pipeline.** One outline + one "yes" approves
 only the actions named in that outline. If you discover a follow-up
-gated step mid-task (push → PR → news fragment → comment), each one
+gated step mid-task (e.g. install → repo-create → rebase), each one
 needs its own surface + "yes" before acting. "Let's go" / "ship it" /
 "looks good" approve the next gated action *only*, not the rest of
 the pipeline.
@@ -65,8 +66,11 @@ So the gates aren't either too tight or too loose:
   `git log`, `git diff`, `git show`, `git blame`, `git branch`,
   `git branch --show-current`, `git remote show`
 - `pip install`, `npm install`, `git clone <url>` ARE gated
-- `git push`, `git reset --hard`, `git rebase`, `git checkout --`,
-  `git pull` ARE gated
+- `git reset --hard`, `git rebase`, `git checkout --`, `git pull` ARE
+  gated
+- `git commit`, `git push`, `gh pr create`, `gh issue create` are NOT
+  policy-gated — they fall through to the harness's auto permission
+  mode (which may still prompt for `git push` depending on settings)
 - **Posting a pending or submitted PR review via the project skills
   `github-pr-review-pending` / `github-pr-review-submitted` is
   auto-approved.** Those skills already encode the gate decision in
@@ -111,8 +115,9 @@ The discipline below applies whenever team mode is active.
 A teammate's recommendation does **not** satisfy the per-action "yes"
 gate. The Security gates list above applies unchanged: even if all
 three teammates report CLEAN, LEAD must still surface and get
-explicit "yes" before `git push`, `gh pr *`, `gh issue create`, or
-any install. Teammates are evidence-producers, not decision-makers.
+explicit "yes" before any install, history-rewriting `git` op, or
+PR/issue close/merge. Teammates are evidence-producers, not
+decision-makers.
 
 ### Only LEAD writes to remotes
 
