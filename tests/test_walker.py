@@ -344,6 +344,45 @@ class TestLivePhotoPairing:
         ]
 
 
+class TestProgressCallback:
+    """#448 — scan_sources fires progress_callback once per accepted media file.
+
+    Lets a worker render a live "Walking sources — N files…" indicator
+    on a long NAS scan where the synchronous rglob would otherwise sit
+    silent for minutes.
+    """
+
+    def test_callback_fires_once_per_media_file(self, tmp_path):
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "a.jpg")
+        _write_jpeg(tmp_path / "b.jpg")
+        _write_jpeg(tmp_path / "c.jpg")
+        ticks = []
+        scan_sources({"test": tmp_path}, progress_callback=lambda: ticks.append(1))
+        assert len(ticks) == 3
+
+    def test_callback_not_fired_for_filtered_paths(self, tmp_path):
+        """``Thumbs.db`` / json sidecars / non-media extensions must not
+        tick — they never reach the result set, so a counter built from
+        ticks must match the eventual records length.
+        """
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "photo.jpg")
+        (tmp_path / "Thumbs.db").write_bytes(b"x")
+        (tmp_path / "photo.jpg.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "notes.txt").write_text("readme", encoding="utf-8")
+        ticks = []
+        records = scan_sources({"t": tmp_path}, progress_callback=lambda: ticks.append(1))
+        assert len(ticks) == len(records) == 1
+
+    def test_callback_omitted_default_keeps_existing_behaviour(self, tmp_path):
+        """Existing callers passing no callback must still work."""
+        from scanner.walker import scan_sources
+        _write_jpeg(tmp_path / "a.jpg")
+        records = scan_sources({"test": tmp_path})
+        assert len(records) == 1
+
+
 class TestFlatScan:
     def test_flat_scan_finds_top_level_file(self, tmp_path):
         from scanner.walker import scan_sources

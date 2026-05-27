@@ -1023,9 +1023,15 @@ class ScanDialog(QDialog):
             self._stage_progress_bar.setValue(completed)
             self._stage_progress_bar.setFormat("%p%")
         else:
-            # Atomic stage — render indeterminate so the user sees
-            # activity without a misleading 0% / 100% reading.
-            self._stage_label.setText(f"{stage_display}  …")
+            # Indeterminate stage — render a moving stripe. #448 added a
+            # live counter via ``completed`` for the WALK stage (no
+            # known total, but a running file count); show it when
+            # non-zero so the user sees the walker is making progress
+            # rather than staring at a bare "…" for minutes.
+            if completed > 0:
+                self._stage_label.setText(f"{stage_display}  ({completed:,})")
+            else:
+                self._stage_label.setText(f"{stage_display}  …")
             self._stage_progress_bar.setRange(0, 0)
         # Throughput + ETA row.
         rate_txt = _format_throughput(files_per_sec)
