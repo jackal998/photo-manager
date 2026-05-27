@@ -50,6 +50,7 @@ for the chore plan.
 | [Scan dialog — auto-select after scan](#scan-dialog--auto-select-after-scan) | Scan |
 | [Scan dialog — auto-select aggressive ("delete all others")](#scan-dialog--auto-select-aggressive-delete-all-others) | Scan |
 | [Scan dialog — collapse Advanced Settings](#scan-dialog--collapse-advanced-settings) | Scan |
+| [Scan dialog — exiftool workers (setting-only)](#scan-dialog--exiftool-workers-setting-only) | Scan |
 | [Scan dialog — folder list (no priority arrows)](#scan-dialog--folder-list-no-priority-arrows) | Scan |
 | [Scan dialog — hash workers (NAS-aware default)](#scan-dialog--hash-workers-nas-aware-default) | Scan |
 | [Scan dialog — multi-source scan](#scan-dialog--multi-source-scan) | Scan |
@@ -416,6 +417,17 @@ for the chore plan.
 - **Conditions / variants:** Replaces the pre-#213 5-column table that had ↑/↓ priority arrows. Per-row callbacks receive the entries-index (not the display row) so clicking row 0 after the alphabetical sort still targets the alphabetically-first entry. ⚠ The README's Step 1 wording still mentions the removed arrows — tracked in [#264](https://github.com/jackal998/photo-manager/issues/264).
 - **Related:** [PR #223](https://github.com/jackal998/photo-manager/pull/223) (closes [#213](https://github.com/jackal998/photo-manager/issues/213)); QA scenario [`qa/scenarios/s17_scan_dialog_widgets.py`](../qa/scenarios/s17_scan_dialog_widgets.py).
 - **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+
+---
+
+### Scan dialog — exiftool workers (setting-only)
+
+- **Entry point:** ``scan.exif_workers`` key in ``settings.json`` — read in [app/views/dialogs/scan_dialog.py](../app/views/dialogs/scan_dialog.py) at scan start and passed to ``ScanWorker``.
+- **Trigger:** Always — value is consumed on every Start Scan.
+- **Behaviour:** Sets how many parallel ``ExiftoolProcess`` instances the EXIF stage spawns. Default 2; clamped to ``[1, min(4, cpu_count() // 2)]`` at ``ScanWorker`` construction. exiftool itself is single-threaded within one ``-stay_open`` instance; running N instances in parallel scales near-linearly up to ~4 on a modern CPU. The N consumer threads all pull from the same producer-consumer queue established in [#450](https://github.com/jackal998/photo-manager/issues/450).
+- **Conditions / variants:** No UI — operators raise the value via ``settings.json`` only. This is intentionally a *safe rollout knob* per the issue body, not a power-user control. Cancel posts one sentinel per consumer + joins all with a 5s timeout — no zombie exiftool processes.
+- **Related:** [#451](https://github.com/jackal998/photo-manager/issues/451); worker contract pinned by ``tests/test_scan_worker.py::TestScanWorkerExifWorkers``.
+- **Last verified:** 2026-05-28 (#451)
 
 ---
 
