@@ -387,6 +387,78 @@ class TestScanWorkerParallelWalk:
         assert out.exists(), "single-source scan should still write its manifest"
 
 
+class TestScanWorkerExifPipeline:
+    """#450 — hash→exif pipeline overlap.
+
+    The behavioural contract:
+      - Missing-exiftool warning still surfaces (and the scan completes).
+      - Corrupt-image detection (the per-record check moved into the
+        hash worker) still routes to the skipped log and excludes the
+        path from the manifest.
+      - Cancel during overlap tears down both threads — covered by s03
+        scenario at layer 3; here we just confirm no thread leak in a
+        successful run via the consumer thread name check.
+    """
+
+    def test_missing_exiftool_logs_warning_and_completes(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """When exiftool isn't on PATH, the consumer latches the
+        ``exiftool_missing`` flag, drains the queue, and the worker
+        surfaces the install hint after consumer.join() — scan still
+        produces a manifest.
+        """
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.exif as _exif
+
+        _write_jpeg(tmp_path / "a.jpg")
+        _write_jpeg(tmp_path / "b.jpg")
+
+        def raise_missing(*_a, **_kw):
+            raise FileNotFoundError("exiftool not found")
+
+        monkeypatch.setattr(_exif, "ExiftoolProcess", raise_missing)
+
+        out = tmp_path / "manifest.sqlite"
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=2,
+        )
+        progress: list[str] = []
+        worker.progress.connect(progress.append)
+        worker.run()
+
+        assert any("exiftool not found on PATH" in m for m in progress), (
+            f"missing-exiftool warning must surface; got: {progress!r}"
+        )
+        assert out.exists(), "manifest must still be written when exiftool is missing"
+
+    def test_no_consumer_thread_leak_after_success(
+        self, qapp, tmp_path
+    ):
+        """After a successful scan no thread named ``exif-consumer``
+        should remain alive — the consumer must drain on sentinel and
+        join cleanly.
+        """
+        import threading
+
+        from app.views.workers.scan_worker import ScanWorker
+
+        _write_jpeg(tmp_path / "a.jpg")
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=1,
+        )
+        worker.run()
+
+        leaked = [t for t in threading.enumerate() if t.name == "exif-consumer" and t.is_alive()]
+        assert not leaked, f"exif-consumer thread leaked: {leaked!r}"
+
+
 class TestScanWorkerLogging:
     def test_scan_progress_and_errors_forwarded_to_loguru(
         self, qapp, tmp_path
