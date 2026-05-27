@@ -287,58 +287,28 @@ class ScanWorker(QThread):
             self.completed_empty.emit()
             return
 
-        # --- 2. Hash + PIL EXIF (parallel) ---
+        # --- 2 + 3. Hash + EXIF (pipelined / overlapping) ---
         # One file read per image: SHA-256, pHash, and EXIF date for JPEG/PNG
         # are extracted from the same in-memory buffer.
+        #
+        # #450 — hash and exif stages now overlap via a producer-consumer
+        # queue: each hash worker pushes its HashResult onto ``exif_queue``
+        # as soon as it finishes, and a single dedicated consumer thread
+        # batches them into 500-path chunks fed to one ExiftoolProcess.
+        # The previous strict-serial flow (all hashes done → all exif done)
+        # left the CPU idle during whichever stage wasn't running; under
+        # the new flow total wall time drops by ≈ min(hash_time, exif_time)
+        # because exif fully overlaps the tail of hashing.
+        #
+        # Corrupt-image detection moved from a post-hash sweep INTO the
+        # hash worker so we don't enqueue corrupt files to exiftool; the
+        # skipped[] accumulator + the post-loop emit summary preserve the
+        # pre-#450 user-visible behaviour.
+        import queue as _queue
+
         chunk_size = 500
         cancel_flag = threading.Event()
         skipped: list[tuple[Path, str, str]] = []  # (path, exc type, exc msg)
-
-        def _hash_one(idx_record: tuple) -> tuple:
-            idx, record = idx_record
-            if cancel_flag.is_set():
-                return idx, None
-            try:
-                sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                # One bad file must never abort the whole scan — log + skip.
-                skipped.append((record.path, type(exc).__name__, str(exc)))
-                return idx, None
-            pil_date = parse_exif_date(raw_date) if raw_date else None
-            return idx, HashResult(
-                record=record, sha256=sha256, phash=phash, mean_color=mean_color,
-                exif_date=pil_date, pixel_width=px_w, pixel_height=px_h,
-            )
-
-        self._emit(f"Hashing {len(records):,} files (workers={self.workers})…")
-        hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
-        done = 0
-        hash_tracker = _StageTracker(STAGE_HASH)
-        self._emit_stage(hash_tracker, 0, len(records), force=True)
-
-        with ThreadPoolExecutor(max_workers=self.workers) as pool:
-            futures = {pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)}
-            for future in as_completed(futures):
-                if self.isInterruptionRequested():
-                    cancel_flag.set()
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    logger.warning("Scan cancelled by user during hashing pass")
-                    self.failed.emit("Scan cancelled.")
-                    return
-                idx, result = future.result()
-                if result is not None:
-                    hash_results[idx] = result
-                done += 1
-                if done % 100 == 0 or done == len(records):
-                    self._emit(f"  Hashed {done:,}/{len(records):,}")
-                # #424 — per-second-throttled stage_progress emit
-                # alongside the existing per-100 log line. The tracker
-                # records every iteration so throughput stays accurate
-                # even when the emit is throttled away.
-                self._emit_stage(hash_tracker, done, len(records))
-
-        # Remove any None slots (cancelled futures that didn't run, or skipped files)
-        hash_results = [r for r in hash_results if r is not None]
 
         # Detect silent image-decode failures: compute_hashes returned without
         # raising but PIL couldn't produce a pHash — the file is truncated or
@@ -354,17 +324,158 @@ class ScanWorker(QThread):
         #     non-camera-RAW TIFFs (Photoshop / scanner output) — flagging
         #     those as corrupt drops real user files from the manifest (#75).
         _IMAGE_TYPES = frozenset(("jpeg", "heic", "png", "webp"))
-        corrupt_paths: set[Path] = set()
-        for r in hash_results:
-            if r.record.file_type in _IMAGE_TYPES and r.phash is None:
+
+        exif_queue: _queue.Queue = _queue.Queue()
+        extracts: dict = {}
+        exif_tracker = _StageTracker(STAGE_EXIFTOOL)
+        exif_done = [0]
+        exif_total = [0]  # grows as hash threads enqueue eligible records
+        # Latched flag — ``True`` if the consumer thread aborted because
+        # exiftool isn't installed. Surfaced as a one-line warning AFTER
+        # the consumer joins so the message stays adjacent to the EXIF
+        # block in the log.
+        exiftool_missing = [False]
+
+        def _hash_one(idx_record: tuple) -> tuple:
+            idx, record = idx_record
+            if cancel_flag.is_set():
+                return idx, None
+            try:
+                sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # One bad file must never abort the whole scan — log + skip.
+                skipped.append((record.path, type(exc).__name__, str(exc)))
+                return idx, None
+            pil_date = parse_exif_date(raw_date) if raw_date else None
+            result = HashResult(
+                record=record, sha256=sha256, phash=phash, mean_color=mean_color,
+                exif_date=pil_date, pixel_width=px_w, pixel_height=px_h,
+            )
+            # #450 — corrupt-image detection lives here now so the
+            # exif queue never receives a truncated/corrupt file. Mirrors
+            # the pre-#450 post-hash sweep exactly, including the
+            # GIF / RAW exclusions documented above.
+            if record.file_type in _IMAGE_TYPES and phash is None:
                 skipped.append((
-                    r.record.path,
+                    record.path,
                     "ImageDecodeError",
                     "image file could not be decoded (truncated or corrupt)",
                 ))
-                corrupt_paths.add(r.record.path)
-        if corrupt_paths:
-            hash_results = [r for r in hash_results if r.record.path not in corrupt_paths]
+                return idx, None
+            # Queue for exif unless this is a skip-type record (the
+            # exiftool pass excludes "skip" anyway pre-#450).
+            if record.file_type != "skip":
+                exif_queue.put(result)
+                exif_total[0] += 1
+            return idx, result
+
+        def _exif_consumer() -> None:
+            """Drain ``exif_queue`` into 500-batches fed to one
+            ExiftoolProcess. Sentinel = ``None``.
+
+            Exits early on ``cancel_flag`` (between blocking gets via a
+            short ``get(timeout=...)``) so a user-cancel during hashing
+            tears down the exiftool process within ~0.5s. If exiftool
+            isn't on PATH we drain the queue without processing and
+            latch ``exiftool_missing[0]`` so the worker surfaces the
+            "install exiftool" warning post-join.
+            """
+            try:
+                proc = ExiftoolProcess()
+            except FileNotFoundError:
+                exiftool_missing[0] = True
+                # Drain until sentinel/cancel so the producer's put()
+                # calls don't pile up in memory for a 100k-file scan.
+                while True:
+                    try:
+                        item = exif_queue.get(timeout=0.5)
+                    except _queue.Empty:
+                        if cancel_flag.is_set():
+                            return
+                        continue
+                    if item is None:
+                        return
+                return
+            try:
+                with proc as et:
+                    batch: list = []
+                    while True:
+                        try:
+                            item = exif_queue.get(timeout=0.5)
+                        except _queue.Empty:
+                            if cancel_flag.is_set():
+                                return
+                            continue
+                        if item is None:
+                            if batch:
+                                _flush_exif_batch(batch, et)
+                            return
+                        batch.append(item)
+                        if len(batch) >= chunk_size:
+                            _flush_exif_batch(batch, et)
+                            batch = []
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # Don't let an exiftool failure abort the scan — log and
+                # carry on with whatever extracts we already collected.
+                logger.exception("exiftool consumer crashed: {}", exc)
+
+        def _flush_exif_batch(batch: list, et: "ExiftoolProcess") -> None:
+            paths = [r.record.path for r in batch]
+            chunk_extracts = batch_read_extracts(paths, et, chunk_size=chunk_size)
+            extracts.update(chunk_extracts)
+            exif_done[0] += len(batch)
+            # exif_total[0] is still growing while hashing runs; the
+            # dialog renders this as (done / total) with the total
+            # ticking up. Once hashing finishes the totals settle.
+            self._emit_stage(exif_tracker, exif_done[0], exif_total[0])
+
+        self._emit(f"Hashing {len(records):,} files (workers={self.workers})…")
+        self._emit("EXIF + scoring signals via exiftool — pipelined (overlaps with hashing)…")
+        hash_results: list[HashResult] = [None] * len(records)  # type: ignore[list-item]
+        done = 0
+        hash_tracker = _StageTracker(STAGE_HASH)
+        self._emit_stage(hash_tracker, 0, len(records), force=True)
+        self._emit_stage(exif_tracker, 0, 0, force=True)
+
+        consumer_thread = threading.Thread(target=_exif_consumer, name="exif-consumer")
+        consumer_thread.start()
+
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            futures = {pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)}
+            for future in as_completed(futures):
+                if self.isInterruptionRequested():
+                    cancel_flag.set()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    # Tell the consumer to stop AFTER the cancel_flag
+                    # check picks it up — the sentinel ensures it
+                    # doesn't sit blocked on an empty queue.
+                    exif_queue.put(None)
+                    consumer_thread.join(timeout=5)
+                    logger.warning("Scan cancelled by user during hashing pass")
+                    self.failed.emit("Scan cancelled.")
+                    return
+                idx, result = future.result()
+                if result is not None:
+                    hash_results[idx] = result
+                done += 1
+                if done % 100 == 0 or done == len(records):
+                    self._emit(f"  Hashed {done:,}/{len(records):,}")
+                # #424 — per-second-throttled stage_progress emit
+                # alongside the existing per-100 log line. The tracker
+                # records every iteration so throughput stays accurate
+                # even when the emit is throttled away.
+                self._emit_stage(hash_tracker, done, len(records))
+
+        # Signal the consumer that no more items are coming and wait
+        # for it to drain whatever's still queued. The hash threads
+        # may have produced records that the consumer hasn't yet
+        # batched — joining ensures extracts is fully populated before
+        # the classify step reads it.
+        exif_queue.put(None)
+        consumer_thread.join()
+
+        # Remove any None slots (cancelled futures that didn't run, or skipped files)
+        hash_results = [r for r in hash_results if r is not None]
 
         if skipped:
             self._emit(f"  Skipped {len(skipped):,} unreadable file(s):")
@@ -373,51 +484,33 @@ class ScanWorker(QThread):
             if len(skipped) > 10:
                 self._emit(f"    … and {len(skipped) - 10:,} more")
 
-        # --- 3. exiftool for ALL non-skip files ---
-        # Previously this ran only for HEIC/RAW/MOV/MP4 (formats whose dates
-        # PIL cannot extract). For the #187 scoring system every file needs
-        # a full census tag count + GPS / xmpMM:DerivedFrom presence, so
-        # the exiftool pass now covers everything (except file_type="skip").
-        # PIL dates from the hash pass are preserved — exiftool dates only
-        # fill in when PIL didn't find one.
+        # --- 3 (continued). EXIF post-processing ---
+        # The consumer thread already populated ``extracts``. Now finalise
+        # the stage: surface the missing-exiftool warning if it fired,
+        # emit summary stats, and backfill exif_date onto records.
         et_records = [r for r in hash_results if r.record.file_type != "skip"]
-        extracts: dict = {}
-        if et_records:
-            et_paths = [r.record.path for r in et_records]
-            n_chunks = (len(et_paths) + chunk_size - 1) // chunk_size
+        if exiftool_missing[0]:
             self._emit(
-                f"EXIF + scoring signals via exiftool for {len(et_paths):,} files"
-                f" ({n_chunks} chunk(s))…"
+                "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
+                " and scoring signals (GPS, EXIF census, XMP provenance) unavailable.\n"
+                "Install from https://exiftool.org/ and add to PATH."
             )
-            exif_tracker = _StageTracker(STAGE_EXIFTOOL)
-            self._emit_stage(exif_tracker, 0, len(et_paths), force=True)
-            try:
-                with ExiftoolProcess() as et:
-                    for i in range(0, len(et_paths), chunk_size):
-                        chunk = et_paths[i: i + chunk_size]
-                        extracts.update(batch_read_extracts(chunk, et, chunk_size=chunk_size))
-                        done_et = min(i + chunk_size, len(et_paths))
-                        self._emit(f"  EXIF {done_et:,}/{len(et_paths):,}")
-                        # #424 — per-chunk stage_progress emit; the
-                        # throttle in _emit_stage drops sub-second
-                        # repeats so a fast local SSD scan doesn't
-                        # spam the dialog.
-                        self._emit_stage(exif_tracker, done_et, len(et_paths))
-                found_dates = sum(1 for e in extracts.values() if e.exif_date is not None)
-                with_gps = sum(1 for e in extracts.values() if e.gps_present)
-                self._emit(f"  EXIF done — {found_dates:,} dates, {with_gps:,} with GPS")
-                # Backfill exif_date for records where PIL didn't find one.
-                for r in et_records:
-                    if r.exif_date is None:
-                        extract = extracts.get(r.record.path)
-                        if extract is not None:
-                            r.exif_date = extract.exif_date
-            except FileNotFoundError:
-                self._emit(
-                    "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
-                    " and scoring signals (GPS, EXIF census, XMP provenance) unavailable.\n"
-                    "Install from https://exiftool.org/ and add to PATH."
-                )
+        elif et_records:
+            # Force a final exif emit so the bar settles at 100% even if
+            # the last batch finished within the 1Hz throttle window.
+            self._emit_stage(exif_tracker, exif_done[0], exif_total[0], force=True)
+            found_dates = sum(1 for e in extracts.values() if e.exif_date is not None)
+            with_gps = sum(1 for e in extracts.values() if e.gps_present)
+            self._emit(
+                f"  EXIF done — {len(extracts):,} files,"
+                f" {found_dates:,} dates, {with_gps:,} with GPS"
+            )
+            # Backfill exif_date for records where PIL didn't find one.
+            for r in et_records:
+                if r.exif_date is None:
+                    extract = extracts.get(r.record.path)
+                    if extract is not None:
+                        r.exif_date = extract.exif_date
 
         # --- 4. Classify ---
         # #424: classify() is opaque from the worker's view (single
