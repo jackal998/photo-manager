@@ -1,0 +1,1 @@
+Document the mmap-RAW audit decision in scanner/hasher.py — no code change warranted because rawpy needs a bytes buffer and video SHA already streams in 64 KB chunks (#453).

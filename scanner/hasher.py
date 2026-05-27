@@ -1,4 +1,33 @@
-"""SHA-256 and perceptual hash computation for all media formats."""
+"""SHA-256 and perceptual hash computation for all media formats.
+
+Memory-footprint audit (#453)
+-----------------------------
+
+The hashing path holds the entire file in Python heap for image
+formats (JPEG / PNG / HEIC / WebP / RAW) because all three downstream
+operations — ``hashlib.sha256``, ``PIL.Image.open`` and
+``rawpy.open_buffer`` — want a ``bytes`` buffer. This is intentional:
+the single ``path.read_bytes()`` in ``compute_hashes`` was the #446
+fix that eliminated a double-read of every image and roughly halved
+NAS scan time. Backing it out for RAW (e.g. mmap the SHA pass,
+re-read for decode) would regress #446's gain — verified during the
+#453 audit: ``rawpy`` has no zero-copy decode path and a fresh
+``bytes(mm)`` materialisation costs the same RAM as ``read_bytes()``.
+
+The video path (``mp4`` / ``mov``) already streams via 64 KB chunks
+in ``compute_sha256`` — peak heap is ~64 KB regardless of file size.
+No code change needed for videos; mmap would not reduce the working
+set further (both rely on the kernel page cache for the actual I/O).
+
+Net memory ceiling per hash worker:
+  - video:   ~64 KB (chunked)
+  - image:   one full read (the file, plus a PIL decode buffer)
+
+If the scan.workers spinner (#449) is pushed past 8 on a low-RAM box
+with a RAW-heavy library, peak RAM during hashing scales linearly.
+That headroom concern lives with #449's spinner cap (1-32), not with
+the hasher implementation. See #453 closure note.
+"""
 
 from __future__ import annotations
 
