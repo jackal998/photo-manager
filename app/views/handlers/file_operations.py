@@ -289,10 +289,6 @@ class FileOperationsHandler:
     def _on_manifest_loaded(self, groups: list, path: str) -> None:
         self.vm.groups = groups
         self._manifest_path = path
-        # #431: clear stale preview content before the tree rebuild
-        # so a row that no longer exists in the new manifest can't
-        # leave its image/video rendered.
-        self.ui_updater.clear_preview()
         self.ui_updater.refresh_tree(groups)
         self.ui_updater.show_group_counts(self.vm.group_count)
         self.ui_updater.show_groups_summary(groups)
@@ -308,6 +304,13 @@ class FileOperationsHandler:
         self.status_reporter.set_baseline(
             t("status.manifest_loaded_pairs", pairs=pairs, files=files)
         )
+        # #431: drop the previous manifest's preview content. Runs
+        # AFTER set_baseline so any cost (Qt widget cleanup) can't
+        # delay the status update that callers / qa scenarios poll
+        # for. Side effect is visual-only — the stale image lingers
+        # for the time clear takes to run, which is still much faster
+        # than refresh_tree.
+        self.ui_updater.clear_preview()
 
     def _on_manifest_failed(self, error: str) -> None:
         logger.error("Open manifest failed: {}", error)
