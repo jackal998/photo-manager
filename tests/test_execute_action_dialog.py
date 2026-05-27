@@ -1882,21 +1882,23 @@ class TestSelectByScope:
         assert scoped_arg == [decided]
         assert scoped_arg[0] is decided
 
-    def test_show_select_dialog_empty_scope_skips_match_fn(self, qapp):
-        """When no groups have decisions yet (degenerate but reachable
-        when the button is reached via right-click from an empty-tree
-        state), match_fn falls back to None — matching the existing
-        empty-self._groups guard.
+    def test_show_select_dialog_empty_decisions_falls_back_to_full_groups(
+        self, qapp
+    ):
+        """When no groups have decisions yet, the rendered subset is
+        empty — but the Select-by sub-dialog still needs records to
+        inspect for numeric-field detection (s43's "Size (Bytes)"
+        threshold flow seeds initial decisions via Select-by on the
+        empty-decision state). Fall back to self._groups so the
+        user can use Select-by as a bulk-seed entry point.
         """
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
-        only_undecided = _group(_rec("/b.jpg", ""), number=2)
         # Construct with a decided group so the dialog instantiates,
         # then strip the decision so _groups_with_decisions() is empty.
-        dlg = ExecuteActionDialog(
-            [_group(_rec("/a.jpg", "delete"), number=1), only_undecided],
-            manifest_path=None,
-        )
+        g1 = _group(_rec("/a.jpg", "delete"), number=1)
+        g2 = _group(_rec("/b.jpg", ""), number=2)
+        dlg = ExecuteActionDialog([g1, g2], manifest_path=None)
         dlg._groups[0].items[0].user_decision = ""
 
         with patch(
@@ -1904,12 +1906,15 @@ class TestSelectByScope:
         ) as build_match_fn_mock, patch(
             "app.views.dialogs.select_dialog.ActionDialog"
         ) as ActionDialogCls:
+            build_match_fn_mock.return_value = lambda *a, **k: 0
             ActionDialogCls.return_value.exec.return_value = 0
             dlg._show_select_dialog()
 
-        # No call — empty scope short-circuits to match_fn=None.
-        build_match_fn_mock.assert_not_called()
-        assert ActionDialogCls.call_args.kwargs["match_fn"] is None
+        # Falls back to self._groups so ActionDialog can detect numeric
+        # fields and Select-by can seed initial decisions.
+        passed = ActionDialogCls.call_args.kwargs["groups"]
+        assert passed == [g1, g2]
+        build_match_fn_mock.assert_called_once_with([g1, g2])
 
 
 # ── #444 — decisions-changed sync flag ─────────────────────────────────────

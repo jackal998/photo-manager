@@ -86,33 +86,36 @@ def _read_decisions() -> dict[str, str]:
     return {Path(p).name: (d or "") for p, d in rows}
 
 
-def _read_main_tree_actions(win) -> dict[str, str]:
-    """Map basename → Action-column text from the main window tree.
+def _count_action_cells_in_tree(win, action_text: str = "delete") -> int:
+    """Count TreeItem descendants whose visible text is exactly
+    ``action_text`` (case-insensitive).
 
-    Re-uses ``read_result_rows``: each row's cells are screen-clustered
-    by y-coord and the Action column appears alongside the File Name
-    cell when the row has ``user_decision`` set. Rows whose action is
-    "" (the keep / undecided default) don't surface an action cell, so
-    a missing entry here means "shown as empty action" in the tree —
-    which is what an un-refreshed main tree would still show pre-#444.
+    ``read_result_rows`` (the natural choice) clusters TreeItems by
+    ``r.top`` and filters by ``r.top >= y_min`` — both behaviours
+    fail on CI's windows-latest runner, which renders the main
+    window smaller (rows ~15-16 px tall, top values < 600). See
+    ``read_tree_row_order`` for the CI-render gotcha and the
+    workaround pattern this helper follows: walk raw TreeItems, no
+    y-filter, no bucketing.
 
-    Caller is expected to grep for the localised action label
-    ("delete") inside each row's cells tuple. The basename is found
-    by matching the cell text against the fixture's basename glob.
+    Counting "delete" cells suffices for the #444 assertion: the
+    pre-fix tree shows N pre-existing 'delete' rows (the seeded
+    decision only), the post-fix tree shows N + len(matched) rows
+    once refresh_tree fires. Direct count over a per-row mapping
+    avoids needing to associate Action cells with their basename
+    cells — which is the part that pulls in the y-clustering
+    quirks.
     """
-    rows = _uia.read_result_rows(win)
-    result: dict[str, str] = {}
-    for row in rows:
-        basename = None
-        action = ""
-        for cell in row.cells:
-            if FIXTURE_NAME_GLOB in cell and cell.endswith(".jpg"):
-                basename = cell
-            elif cell.lower() in ("delete", "keep"):
-                action = cell.lower()
-        if basename is not None:
-            result[basename] = action
-    return result
+    items = win.descendants(control_type="TreeItem")
+    count = 0
+    for it in items:
+        try:
+            txt = (it.window_text() or "").strip()
+            if txt.lower() == action_text.lower():
+                count += 1
+        except Exception:
+            continue
+    return count
 
 
 def main() -> int:
@@ -223,16 +226,24 @@ def main() -> int:
     # was the failing assertion: refresh_tree was never called on the
     # reject-after-Select-by path, so the tree still showed the
     # pre-change Action cells.
+    #
+    # Count-based oracle: pre-fix the tree shows 1 'delete' cell
+    # (the seeded row only); post-fix it shows 1 + len(expected_match)
+    # = 4 because refresh_tree rebuilt the model from vm.groups (which
+    # was mutated in place by _set_decision_by_regex). Direct count
+    # over TreeItems avoids the y-clustering quirks of read_result_rows
+    # on the smaller CI render.
     print("step: verify_main_tree_after_close")
-    tree_actions = _read_main_tree_actions(win)
-    print(f"  tree_actions={tree_actions}")
-    for name in expected_match:
-        if tree_actions.get(name) != "delete":
-            failures.append(
-                f"main tree {name}: expected rendered 'delete' after "
-                f"Select-by + Close, got {tree_actions.get(name)!r} — "
-                f"refresh_tree did not fire on reject (#444 regression)"
-            )
+    delete_count = _count_action_cells_in_tree(win, "delete")
+    expected_count = 1 + len(expected_match)  # seed + regex hits
+    print(f"  delete_count={delete_count} expected={expected_count}")
+    if delete_count != expected_count:
+        failures.append(
+            f"main tree: expected {expected_count} 'delete' cells "
+            f"(1 seed + {len(expected_match)} regex hits), got "
+            f"{delete_count} — refresh_tree did not fire on reject "
+            f"(#444 regression)"
+        )
 
     if failures:
         for f in failures:

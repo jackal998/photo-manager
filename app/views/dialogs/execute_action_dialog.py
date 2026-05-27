@@ -643,7 +643,15 @@ class ExecuteActionDialog(QDialog):
         # original record references (no copy) so writes inside the
         # sub-dialog still reach vm.groups through the existing
         # aliasing contract.
-        scoped_groups = self._groups_with_decisions()
+        #
+        # Fallback: when no decisions exist yet, the dialog tree is
+        # empty and there's no rendered scope to narrow to — fall
+        # back to self._groups so the user can seed initial decisions
+        # via Select-by (the s43 numeric-threshold scenario depends on
+        # this — ActionDialog inspects records to detect numeric
+        # fields and an empty groups list would prevent the numeric
+        # panel from surfacing).
+        scoped_groups = self._groups_with_decisions() or self._groups
         match_fn = build_match_fn(scoped_groups) if scoped_groups else None
         dlg = ActionDialog(
             fields=fields, parent=self, match_fn=match_fn,
