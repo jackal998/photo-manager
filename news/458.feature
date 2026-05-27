@@ -1,0 +1,1 @@
+Run N exiftool processes in parallel during the EXIF stage (default 2, configurable via scan.exif_workers, capped at min(4, cpu//2)) — typical 10k-file scans drop from 30-90s to 10-25s on the EXIF pass (#451).
