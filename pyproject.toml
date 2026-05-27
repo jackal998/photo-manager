@@ -105,6 +105,7 @@ omit = [
   # padding discipline that landed us at "extract what's pure, keep
   # the rest at L3."
   "app/views/preview_pane.py",                       # Heavy Qt widget assembly; testable surface extracted to preview_pane_helpers.py (99%); rest is QGridLayout/QLabel construction covered by L3 (s01/s05/s11/s48)
+  "app/views/dialogs/singleton_prune_confirm_dialog.py",  # Two-button Qt confirm + checkbox (#426); decision contract layer-1 tested via TestSingletonPruneOffer with the dialog's `.ask` classmethod patched (same pattern locked_rows / execute_action dialogs use). The widget assembly itself needs a real QApplication; L3 coverage is the s13/s44 destructive-flow tail.
 ]
 
 [tool.towncrier]

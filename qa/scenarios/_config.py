@@ -255,6 +255,14 @@ def build_settings(scenario_name: str) -> dict | None:
         "thumbnail_mem_cache": 128,
         "thumbnail_disk_cache_dir": "qa/.thumb-cache",
         "sorting": {"defaults": [{"field": "file_size_bytes", "asc": False}]},
+        # #426: opt qa scenarios OUT of the singleton-prune dialog by
+        # default. Destructive flows in s13/s20/s29/etc. that happen
+        # to leave a single-item group would otherwise block on the
+        # confirm dialog and break the menu/UIA invariants. Scenarios
+        # that specifically exercise the prune flow (a future
+        # `[QA:s60]` follow-up) can override this key from their
+        # scenario-side configure step.
+        "ui": {"prune_singletons": "never"},
         "sources": {
             "list": [{"path": p, "recursive": True} for p in sources],
             "output": "qa/run-manifest.sqlite",
