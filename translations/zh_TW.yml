@@ -151,6 +151,15 @@ execute_dialog:
   files_failed_body: "下列檔案無法刪除(權限不足、檔案鎖定或路徑過長):\n\n{failed}{suffix}"
   files_failed_more: "\n…以及其餘 {n} 個"
 
+# SingletonPruneConfirmDialog — photo-manager#426. 破壞性動作之後,
+# 提示是否清除只剩單一檔案的群組(它們不再具有重複審查價值)。
+singleton_prune_confirm:
+  title: "清除單一檔案群組?"
+  body: "上次操作之後,有 {count} 個群組只剩下一個檔案。這些群組已不再是重複審查的候選項。\n\n要從清單移除這 {count} 個單一檔案群組嗎?"
+  checkbox_dont_ask: "記住我的選擇,不要再詢問"
+  btn_remove: "移除 {count} 個"
+  btn_keep: "全部保留"
+
 # LockedRowsConfirmDialog — photo-manager#182(取代 #175 的混合語意)。
 locked_confirm:
   title: "受影響的鎖定列"

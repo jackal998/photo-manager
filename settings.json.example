@@ -9,6 +9,7 @@
     ]
   },
   "ui": {
-    "locale": "en"
+    "locale": "en",
+    "prune_singletons": "ask"
   }
 }

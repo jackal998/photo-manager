@@ -516,6 +516,9 @@ class FileOperationsHandler:
                     t("status.noun_item_from_list_singular"),
                     plural=t("status.noun_item_from_list_plural"),
                 )
+                # #426: offer to prune any groups that collapsed to a
+                # single item after this bulk remove.
+                self._maybe_offer_singleton_prune()
                 return
 
             QMessageBox.information(
@@ -565,6 +568,9 @@ class FileOperationsHandler:
                             t("status.noun_item_from_list_singular"),
                             plural=t("status.noun_item_from_list_plural"),
                         )
+                        # #426: offer to prune singletons created by
+                        # this partial remove too.
+                        self._maybe_offer_singleton_prune()
                     return
                 # APPLY_ALL_UNLOCKED: unlock the locked subset in memory
                 # and in SQLite, then fall through to remove everything.
@@ -617,6 +623,10 @@ class FileOperationsHandler:
                 t("status.noun_item_from_list_singular"),
                 plural=t("status.noun_item_from_list_plural"),
             )
+            # #426: offer to prune any groups that collapsed to a
+            # single item after this remove. Covers context-menu single
+            # + bulk + regex-driven flows that all funnel through here.
+            self._maybe_offer_singleton_prune()
 
         except Exception as e:
             logger.error("Remove items from list failed: {}", e)
@@ -636,6 +646,71 @@ class FileOperationsHandler:
             ManifestRepository().remove_from_review(manifest_path, file_paths)
         except Exception as exc:
             logger.warning("Failed to sync removed paths to manifest: {}", exc)
+
+    def _maybe_offer_singleton_prune(self) -> None:
+        """#426 — after a destructive op, if any group is now down to a
+        single item, offer to remove those singletons in one batch.
+
+        Honors ``settings.get("ui.prune_singletons", "ask")``:
+          * ``"ask"`` (default)  — fire the confirm dialog.
+          * ``"always"`` — silently prune; never ask again.
+          * ``"never"``  — silently keep; never ask again.
+
+        Batched: one dialog per destructive op covering ALL singletons it
+        produced, ONE ``vm.remove_from_list`` call + ONE
+        ``_sync_removed_to_db`` call (perf-aware per the issue's
+        ≤5000-singletons acceptance criterion). On a clean state with
+        no singletons present, this is a fast O(N) no-op.
+        """
+        # Collect singletons from the current vm state.
+        singleton_paths: list[str] = []
+        for g in self.vm.groups:
+            items = getattr(g, "items", [])
+            if len(items) == 1:
+                fp = getattr(items[0], "file_path", None)
+                if fp:
+                    singleton_paths.append(fp)
+        if not singleton_paths:
+            return
+
+        pref = "ask"
+        try:
+            pref = self.settings.get("ui.prune_singletons", "ask") or "ask"
+        except Exception:
+            pref = "ask"
+        if pref == "never":
+            return
+        if pref == "always":
+            self._apply_singleton_prune(singleton_paths)
+            return
+
+        # pref == "ask" — show the dialog.
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+        )
+        verdict, remember = SingletonPruneConfirmDialog.ask(
+            self.parent, count=len(singleton_paths)
+        )
+        if remember:
+            new_pref = "always" if verdict == SingletonPruneConfirmDialog.REMOVE else "never"
+            try:
+                self.settings.set("ui.prune_singletons", new_pref)
+                if hasattr(self.settings, "save"):
+                    self.settings.save()
+            except Exception as exc:
+                logger.warning("Failed to persist ui.prune_singletons: {}", exc)
+        if verdict == SingletonPruneConfirmDialog.REMOVE:
+            self._apply_singleton_prune(singleton_paths)
+
+    def _apply_singleton_prune(self, paths: list[str]) -> None:
+        """Run the batched prune — one vm call, one DB sync, one refresh."""
+        if not paths:
+            return
+        logger.info("Pruning {} singleton groups (#426)", len(paths))
+        self.vm.remove_from_list(paths)
+        self._sync_removed_to_db(paths)
+        self._mark_dirty()
+        self.ui_updater.refresh_tree(self.vm.groups)
 
     def set_decision(self, items: list[dict], new_decision: str) -> None:
         """Set user_decision for the given file items in memory and in SQLite.
@@ -1104,3 +1179,7 @@ class FileOperationsHandler:
             # applied to disk (or to the review list); no need to nag
             # the user about saving on the way out.
             self._mark_clean()
+            # #426: offer to prune any groups that just collapsed to a
+            # single item. Runs LAST so the report_count / refresh sequence
+            # above is unaffected — the prune itself does its own refresh.
+            self._maybe_offer_singleton_prune()

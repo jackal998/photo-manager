@@ -73,10 +73,19 @@ def _make_handler(vm, manifest_path: str | None, checked_paths=None, highlighted
     status_reporter = MagicMock()
     parent = MagicMock()
     parent.menu_controller = MagicMock()
+    # #426: opt unrelated tests OUT of the singleton-prune offer so a
+    # remove/execute path that happens to leave a single-item group
+    # doesn't try to open a real QDialog with a MagicMock parent.
+    # Tests that DO want to exercise the prune helper override this
+    # explicitly via their own settings mock (TestSingletonPruneOffer).
+    settings = MagicMock()
+    settings.get.side_effect = lambda key, default=None: (
+        "never" if key == "ui.prune_singletons" else (default if default is not None else MagicMock())
+    )
 
     handler = FileOperationsHandler(
         vm=vm,
-        settings=MagicMock(),
+        settings=settings,
         parent_widget=parent,
         ui_updater=ui_updater,
         status_reporter=status_reporter,
@@ -2212,3 +2221,161 @@ class TestSetDecisionByRegexLockConfirm:
         assert b.is_locked is False
         assert _read_locked(db, "/a.jpg") is False
         assert _read_locked(db, "/b.jpg") is False
+
+
+# ── #426: singleton-prune offer ────────────────────────────────────────────
+
+
+class TestSingletonPruneOffer:
+    """``_maybe_offer_singleton_prune`` is fired at the end of every
+    destructive op (Execute Action delete, Remove from List). It honors
+    the ``ui.prune_singletons`` setting and batches the prune into one
+    ``vm.remove_from_list`` + one ``_sync_removed_to_db`` call.
+
+    Guards three real failure modes:
+      - "never" preference is ignored → user sees the dialog every time
+        despite explicit opt-out.
+      - "always" preference forgets to skip the dialog → autonomous flow
+        breaks on a hidden modal.
+      - Batched prune fires per-group (N modals) instead of once → s44-
+        scale fixtures grind the UI thread.
+    """
+
+    def _build(self, group_layouts, *, pref="ask"):
+        """Build a handler whose vm.groups match group_layouts (a list
+        of group sizes — e.g. [1, 1, 3] = two singletons + a 3-row
+        group). ``pref`` seeds the settings reply."""
+        groups: list[PhotoGroup] = []
+        for gn, size in enumerate(group_layouts, start=1):
+            items = [_rec(f"/g{gn}_i{i}.jpg") for i in range(size)]
+            groups.append(PhotoGroup(group_number=gn, items=items))
+        vm = SimpleNamespace(
+            groups=groups,
+            remove_from_list=MagicMock(),
+        )
+        settings = MagicMock()
+        settings.get.return_value = pref
+        ui_updater = MagicMock()
+        from app.views.handlers.file_operations import FileOperationsHandler
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=settings, parent_widget=parent,
+            ui_updater=ui_updater, status_reporter=MagicMock(),
+        )
+        return handler, vm, settings, ui_updater
+
+    def test_no_singletons_is_silent_noop(self):
+        """If no group has len==1, the helper must NOT open the dialog,
+        NOT touch settings, NOT call vm.remove_from_list. Guards
+        against an over-eager "prune everything" hammer."""
+        handler, vm, settings, ui = self._build([2, 3, 4])
+        with patch(
+            "app.views.dialogs.singleton_prune_confirm_dialog.SingletonPruneConfirmDialog.ask"
+        ) as ask:
+            handler._maybe_offer_singleton_prune()
+        ask.assert_not_called()
+        vm.remove_from_list.assert_not_called()
+
+    def test_never_preference_short_circuits(self):
+        """``pref="never"`` must NOT show the dialog even with
+        singletons present. Without this short-circuit the user's
+        explicit opt-out is meaningless."""
+        handler, vm, settings, ui = self._build([1, 1, 3], pref="never")
+        with patch(
+            "app.views.dialogs.singleton_prune_confirm_dialog.SingletonPruneConfirmDialog.ask"
+        ) as ask:
+            handler._maybe_offer_singleton_prune()
+        ask.assert_not_called()
+        vm.remove_from_list.assert_not_called()
+
+    def test_always_preference_prunes_silently(self):
+        """``pref="always"`` runs ONE batched prune and does NOT open
+        the dialog. Both singleton paths land in the single
+        ``vm.remove_from_list`` call."""
+        handler, vm, settings, ui = self._build([1, 1, 3], pref="always")
+        with patch(
+            "app.views.dialogs.singleton_prune_confirm_dialog.SingletonPruneConfirmDialog.ask"
+        ) as ask:
+            handler._maybe_offer_singleton_prune()
+        ask.assert_not_called()
+        vm.remove_from_list.assert_called_once()
+        passed = vm.remove_from_list.call_args[0][0]
+        # The two singletons (groups 1 and 2) get pruned together.
+        assert sorted(passed) == ["/g1_i0.jpg", "/g2_i0.jpg"]
+        ui.refresh_tree.assert_called_once()
+
+    def test_ask_remove_with_remember_persists_always(self):
+        """User picks Remove + checks "don't ask again" → settings
+        flip to ``"always"`` AND the prune fires."""
+        handler, vm, settings, ui = self._build([1, 1], pref="ask")
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+        )
+        with patch.object(
+            SingletonPruneConfirmDialog, "ask",
+            return_value=(SingletonPruneConfirmDialog.REMOVE, True),
+        ):
+            handler._maybe_offer_singleton_prune()
+        settings.set.assert_called_once_with("ui.prune_singletons", "always")
+        settings.save.assert_called_once()
+        vm.remove_from_list.assert_called_once()
+
+    def test_ask_keep_with_remember_persists_never(self):
+        """User picks Keep + checks "don't ask again" → settings
+        flip to ``"never"`` AND no prune fires."""
+        handler, vm, settings, ui = self._build([1, 1], pref="ask")
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+        )
+        with patch.object(
+            SingletonPruneConfirmDialog, "ask",
+            return_value=(SingletonPruneConfirmDialog.KEEP, True),
+        ):
+            handler._maybe_offer_singleton_prune()
+        settings.set.assert_called_once_with("ui.prune_singletons", "never")
+        settings.save.assert_called_once()
+        vm.remove_from_list.assert_not_called()
+
+    def test_ask_remove_without_remember_does_not_persist(self):
+        """Remove with the checkbox UNCHECKED → prune fires but the
+        next destructive op will prompt again (settings unchanged)."""
+        handler, vm, settings, ui = self._build([1], pref="ask")
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+        )
+        with patch.object(
+            SingletonPruneConfirmDialog, "ask",
+            return_value=(SingletonPruneConfirmDialog.REMOVE, False),
+        ):
+            handler._maybe_offer_singleton_prune()
+        settings.set.assert_not_called()
+        vm.remove_from_list.assert_called_once()
+
+    def test_ask_keep_without_remember_does_not_persist(self):
+        """Keep with the checkbox UNCHECKED → no prune, settings
+        unchanged."""
+        handler, vm, settings, ui = self._build([1], pref="ask")
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+        )
+        with patch.object(
+            SingletonPruneConfirmDialog, "ask",
+            return_value=(SingletonPruneConfirmDialog.KEEP, False),
+        ):
+            handler._maybe_offer_singleton_prune()
+        settings.set.assert_not_called()
+        vm.remove_from_list.assert_not_called()
+
+    def test_batched_single_remove_call_not_per_group(self):
+        """Perf-aware acceptance criterion: 50 singletons → exactly
+        ONE ``vm.remove_from_list`` call (not 50). Catches a regression
+        where someone refactors the helper to loop per group."""
+        handler, vm, settings, ui = self._build([1] * 50, pref="always")
+        with patch(
+            "app.views.dialogs.singleton_prune_confirm_dialog.SingletonPruneConfirmDialog.ask"
+        ):
+            handler._maybe_offer_singleton_prune()
+        assert vm.remove_from_list.call_count == 1
+        passed = vm.remove_from_list.call_args[0][0]
+        assert len(passed) == 50

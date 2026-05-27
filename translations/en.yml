@@ -190,6 +190,13 @@ execute_dialog:
 
 # LockedRowsConfirmDialog — unified confirm when an action would touch
 # locked rows. See photo-manager#182 (supersedes #175's hybrid).
+singleton_prune_confirm:
+  title: "Prune singleton groups?"
+  body: "{count} group(s) now have only one file remaining after the last action. They're no longer duplicate-review items.\n\nRemove these {count} singletons from the review list?"
+  checkbox_dont_ask: "Remember my choice — don't ask again"
+  btn_remove: "Remove {count}"
+  btn_keep: "Keep all"
+
 locked_confirm:
   title: "Locked Rows Affected"
   body: "Action '{action}' would affect {total} row(s); {locked} locked:\n\n{list}\n\nUnlock and apply to all {total}, apply to unlocked only ({unlocked}), or cancel?"
