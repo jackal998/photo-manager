@@ -947,10 +947,19 @@ def wait_for_text_in(
 
 
 def open_scan_dialog(win: UIAWrapper) -> tuple[UIAWrapper, int]:
-    """Open File > Scan Sources… and return (dialog_wrapper, dialog_hwnd)."""
+    """Open File > Scan Sources… and return (dialog_wrapper, dialog_hwnd).
+
+    #424 — bumped 5s → 10s to absorb the dialog's slightly heavier
+    construction now that ScanDialog has the stage / throughput / ETA
+    progress frame (QFrame + QProgressBar + 2 QLabels + 3-pane splitter
+    re-layout). On a warm local machine the dialog still appears in
+    <1s; the bump only matters for CI cold-launch on Windows runners
+    where the 5s window was a tight fit even before #424.
+    Other dialog waiters in this module already use 10s — this aligns.
+    """
     pid = win.process_id()
     menu_path(win, MENU_FILE, FILE_SCAN_SOURCES)
-    hwnd = wait_for_dialog(pid, SCAN_DIALOG_TITLE, timeout=5)
+    hwnd = wait_for_dialog(pid, SCAN_DIALOG_TITLE, timeout=10)
     return connect_by_handle(hwnd), hwnd
 
 
