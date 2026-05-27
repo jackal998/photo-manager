@@ -387,6 +387,17 @@ class MainWindow(QMainWindow):
 
     # PRESERVED: All public methods with exact signatures
 
+    def clear_preview(self) -> None:
+        """#431 — drop preview-pane content (called from
+        FileOperationsHandler._on_manifest_loaded before refresh_tree
+        so a fresh manifest can't keep showing the previous manifest's
+        last-selected row). Defensive: ``clear()`` is a no-op when the
+        pane is already empty, and the attribute is guarded so an
+        early teardown sequence doesn't crash."""
+        preview = getattr(self, "_preview", None)
+        if preview is not None and hasattr(preview, "clear"):
+            preview.clear()
+
     def refresh_tree(self, groups: list) -> None:
         """Refresh tree view with new groups data.
 

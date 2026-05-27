@@ -927,6 +927,48 @@ class TestManifestLoadCallbacks:
         status_msg = status.set_baseline.call_args[0][0]
         assert "2" in status_msg and "3" in status_msg
 
+    def test_on_manifest_loaded_clears_preview_before_refresh(self, tmp_path):
+        """#431 — preview pane carries the previous manifest's last
+        selected file across an Open Manifest…/re-scan call. The dialog
+        already does this on close (execute_action_dialog.py); pin the
+        symmetric main-window path so a future refactor can't drop the
+        clear and silently regress the bug.
+
+        Ordering matters: clear_preview must run BEFORE refresh_tree,
+        not after. A clear-after-refresh would briefly render the
+        stale preview against a new tree, and a Qt repaint between
+        the two could surface the wrong image even if the final state
+        is correct."""
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[], group_count=1)
+        ui = MagicMock()
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=ui, status_reporter=MagicMock(),
+        )
+
+        groups = [PhotoGroup(group_number=1, items=[_rec("/a.jpg")])]
+        handler._on_manifest_loaded(groups, str(tmp_path / "m.sqlite"))
+
+        ui.clear_preview.assert_called_once_with()
+        # Ordering — clear_preview must precede refresh_tree.
+        method_call_order = [c[0] for c in ui.method_calls]
+        assert method_call_order.index("clear_preview") < method_call_order.index(
+            "refresh_tree"
+        )
+
+    def test_ui_update_callback_protocol_has_clear_preview(self):
+        """#431 — pin the Protocol entry. Same drift-prevention rule
+        as the ActionHandlers protocol pins: an impl class can satisfy
+        the runtime call by accident, but a Protocol drop hides
+        intent."""
+        from app.views.handlers.file_operations import UIUpdateCallback
+        assert "clear_preview" in dir(UIUpdateCallback)
+
     def test_on_manifest_failed_logs_and_disables_actions(self):
         """No prior manifest loaded → failure disables actions (first-load case)."""
         from app.views.handlers.file_operations import FileOperationsHandler

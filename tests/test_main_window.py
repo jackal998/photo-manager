@@ -144,6 +144,28 @@ def test_menu_action_delegates_to_handler(method_name, target_attr, target_metho
     getattr(fake_handler, target_method).assert_called_once_with()
 
 
+def test_clear_preview_calls_preview_pane_clear():
+    """#431 — MainWindow.clear_preview is the UIUpdateCallback
+    impl that FileOperationsHandler._on_manifest_loaded calls before
+    refresh_tree. Catches the regression where preview content from
+    a prior manifest survives an Open Manifest… call."""
+    fake_preview = MagicMock()
+    fake_self = SimpleNamespace(_preview=fake_preview)
+
+    MainWindow.clear_preview(fake_self)
+
+    fake_preview.clear.assert_called_once_with()
+
+
+def test_clear_preview_safe_when_preview_unset():
+    """Defensive — during early teardown the _preview attribute can
+    be detached. clear_preview must no-op without raising."""
+    fake_self = SimpleNamespace()
+
+    # Should not raise.
+    MainWindow.clear_preview(fake_self)
+
+
 def test_on_execute_action_selected_only_delegates_with_kwarg():
     """#410 — ``on_execute_action_selected_only`` must call
     ``file_operations.execute_action(selected_only=True)``. The kwarg

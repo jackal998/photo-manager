@@ -187,6 +187,17 @@ class UIUpdateCallback(Protocol):
         """Show groups summary (legacy compatibility)."""
         ...
 
+    def clear_preview(self) -> None:
+        """Drop any preview-pane content (#431).
+
+        Called from ``_on_manifest_loaded`` so a fresh manifest doesn't
+        leave the previous manifest's last-selected file rendered in
+        the preview pane. The dialog-scope ``ExecuteActionDialog``
+        already does this on close — this is the matching cleanup for
+        the main-window-scope path.
+        """
+        ...
+
 
 class StatusReporter(Protocol):
     """Protocol for status reporting callback."""
@@ -278,6 +289,10 @@ class FileOperationsHandler:
     def _on_manifest_loaded(self, groups: list, path: str) -> None:
         self.vm.groups = groups
         self._manifest_path = path
+        # #431: clear stale preview content before the tree rebuild
+        # so a row that no longer exists in the new manifest can't
+        # leave its image/video rendered.
+        self.ui_updater.clear_preview()
         self.ui_updater.refresh_tree(groups)
         self.ui_updater.show_group_counts(self.vm.group_count)
         self.ui_updater.show_groups_summary(groups)

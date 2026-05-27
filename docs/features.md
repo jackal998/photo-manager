@@ -334,10 +334,10 @@ for the chore plan.
 
 - **Entry point:** Main window menu → **File > Open Manifest…** ([translations/en.yml:26](../translations/en.yml#L26)). Also reachable from the empty-state primary button (see [Empty-state action buttons](#empty-state-action-buttons)).
 - **Trigger:** User picks **File > Open Manifest…** or clicks the empty-state **Open Manifest…** button.
-- **Behaviour:** Opens the native file picker filtered to `*.sqlite`. On accept, loads the chosen manifest via `ManifestLoadWorker` (a background `QThread` so the UI stays responsive), then refreshes the tree. Status bar updates to "Loaded manifest: <name>".
+- **Behaviour:** Opens the native file picker filtered to `*.sqlite`. On accept, loads the chosen manifest via `ManifestLoadWorker` (a background `QThread` so the UI stays responsive), then refreshes the tree. Status bar updates to "Loaded manifest: <name>". The preview pane is cleared before the tree rebuild ([#431](https://github.com/jackal998/photo-manager/issues/431)) so a row that no longer exists in the new manifest can't leave its image/video rendered — `FileOperationsHandler._on_manifest_loaded` calls `UIUpdateCallback.clear_preview()` (implemented on `MainWindow.clear_preview`) before `refresh_tree`, symmetric to the dialog-scope clear in `ExecuteActionDialog`.
 - **Conditions / variants:** When the currently loaded manifest has unsaved decisions, a "Discard pending decisions?" confirm fires before the new manifest replaces it. Old manifests without the cached columns (`file_size_bytes`, `shot_date`, `creation_date`, `mtime`) auto-migrate and fall back to per-row filesystem reads transparently — re-scan once for the load-time speed benefit.
-- **Related:** Foundation in [PR #12](https://github.com/jackal998/photo-manager/pull/12); QA scenario [`qa/scenarios/s16_open_manifest.py`](../qa/scenarios/s16_open_manifest.py); stale-path handling exercised in [`qa/scenarios/s24_stale_manifest_paths.py`](../qa/scenarios/s24_stale_manifest_paths.py).
-- **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+- **Related:** Foundation in [PR #12](https://github.com/jackal998/photo-manager/pull/12); preview-pane clear via [#431](https://github.com/jackal998/photo-manager/issues/431); QA scenario [`qa/scenarios/s16_open_manifest.py`](../qa/scenarios/s16_open_manifest.py); stale-path handling exercised in [`qa/scenarios/s24_stale_manifest_paths.py`](../qa/scenarios/s24_stale_manifest_paths.py).
+- **Last verified:** 2026-05-27 (#431)
 
 ---
 
