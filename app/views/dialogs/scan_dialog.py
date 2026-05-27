@@ -609,10 +609,34 @@ class ScanDialog(QDialog):
 
         right_splitter.addWidget(right_top)
 
-        # #424 — Stage / throughput / ETA frame above the log box.
-        # Initially hidden; revealed on the first stage_progress emit
-        # and stays visible until the next Start Scan (a fresh scan
-        # resets the frame to the new stage's first emit).
+        # #424 — receiver-side bookkeeping for the ≥5s-samples ETA gate.
+        # Reset on every stage change so a freshly-started stage hides
+        # the ETA until it accumulates enough samples — without this
+        # the prior stage's settled throughput would leak into the new
+        # stage's first emit and produce a misleading ETA.
+        self._current_stage: str | None = None
+        self._stage_started_at_monotonic: float = 0.0
+
+        self._log_widget = QPlainTextEdit()
+        self._log_widget.setReadOnly(True)
+        self._log_widget.setMinimumHeight(150)
+        self._log_widget.setPlaceholderText(t("scan_dialog.log_placeholder"))
+        right_splitter.addWidget(self._log_widget)
+        right_splitter.setSizes([340, 260])
+
+        outer_splitter.addWidget(right_splitter)
+        # Left column slightly wider — paths and the source-list table
+        # benefit more from horizontal room than the slider rows do.
+        outer_splitter.setSizes([550, 450])
+
+        root.addWidget(outer_splitter, stretch=1)
+
+        # #424 — Stage / throughput / ETA frame as a top-level row
+        # under the outer_splitter, ABOVE the action buttons. Kept
+        # outside the splitter so the right_splitter stays at its
+        # original 2-widget configuration — the 3-widget variant
+        # broke qa(2):s02 (cold-launch dialog show event blocked).
+        # Initially hidden; revealed on the first stage_progress emit.
         self._progress_frame = QFrame()
         self._progress_frame.setFrameShape(QFrame.StyledPanel)
         self._progress_frame.setVisible(False)
@@ -627,30 +651,7 @@ class ScanDialog(QDialog):
         self._stage_rate_label = QLabel("")
         self._stage_rate_label.setStyleSheet("color: #555; font-family: monospace;")
         pf_layout.addWidget(self._stage_rate_label)
-        # Receiver-side bookkeeping for the ≥5s-samples ETA gate.
-        # Reset on every stage change so a freshly-started stage hides
-        # the ETA until it accumulates enough samples — without this
-        # the prior stage's settled throughput would leak into the new
-        # stage's first emit and produce a misleading ETA.
-        self._current_stage: str | None = None
-        self._stage_started_at_monotonic: float = 0.0
-
-        self._log_widget = QPlainTextEdit()
-        self._log_widget.setReadOnly(True)
-        self._log_widget.setMinimumHeight(150)
-        self._log_widget.setPlaceholderText(t("scan_dialog.log_placeholder"))
-        # Frame goes ABOVE the log inside the right splitter so the
-        # user sees stage info first, log second.
-        right_splitter.addWidget(self._progress_frame)
-        right_splitter.addWidget(self._log_widget)
-        right_splitter.setSizes([340, 80, 200])
-
-        outer_splitter.addWidget(right_splitter)
-        # Left column slightly wider — paths and the source-list table
-        # benefit more from horizontal room than the slider rows do.
-        outer_splitter.setSizes([550, 450])
-
-        root.addWidget(outer_splitter, stretch=1)
+        root.addWidget(self._progress_frame)
 
         self._btn_scan = QPushButton(t("scan_dialog.start_button"))
         self._btn_scan.setDefault(True)
