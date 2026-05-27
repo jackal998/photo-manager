@@ -220,6 +220,17 @@ for the chore plan.
 
 ---
 
+### Singleton-prune offer after destructive ops (#426)
+
+- **Entry point:** Fired automatically at the tail of every destructive op that may collapse a group to one item — `FileOperationsHandler._maybe_offer_singleton_prune` is called from the Execute Action accept branch, `remove_from_list_toolbar`, `remove_items_from_list`, and the lock-confirm "apply unlocked only" sub-branches that also remove rows. Single helper, single call site per flow.
+- **Trigger:** Helper scans `vm.groups` after the destructive op completes and short-circuits when no group has exactly one item left. If at least one singleton is present, behaviour branches on `JsonSettings.get("ui.prune_singletons", "ask")`.
+- **Behaviour:** Three preference states: `"ask"` (default) opens `SingletonPruneConfirmDialog` ([app/views/dialogs/singleton_prune_confirm_dialog.py](../app/views/dialogs/singleton_prune_confirm_dialog.py)) with [Remove N] / [Keep all] buttons and a "Remember my choice — don't ask again" checkbox; `"always"` silently prunes; `"never"` silently keeps. When the user checks the box, Remove flips the setting to `"always"` and Keep to `"never"`, persisted via `JsonSettings.set` + `.save()`. The prune itself is **batched** — ONE `vm.remove_from_list(paths)` call, ONE `_sync_removed_to_db(paths)` write, ONE `ui_updater.refresh_tree`, regardless of how many singletons were collected (perf-aware for the s44-scale ≤5000-singletons acceptance criterion). Esc / window close on the dialog yields Keep (the safe default).
+- **Conditions / variants:** The helper is a tail-call hook — every destructive method that lands rows in the prune-candidate state calls it as the LAST step (after refresh + status report + dirty flag). Skipping a destructive op (no rows actually removed) → no singletons appear → helper short-circuits without UI. Singleton state is read fresh from `vm.groups` each call, so deferred removals (Execute Action's `removed_from_list_paths`) are detected after the dialog accepts and dropping them happens before the offer fires.
+- **Related:** [#426](https://github.com/jackal998/photo-manager/issues/426); precedent for batched-confirm pattern is [#417](https://github.com/jackal998/photo-manager/issues/417) (LockedRowsConfirmDialog); the existing `vm.remove_deleted_and_prune(prune_singles=True)` was the alternative considered but rejected as too implicit — see issue body. The setting key `ui.prune_singletons` is gitignored via `settings.json`; an example default goes in `settings.json.example`.
+- **Last verified:** 2026-05-27 (#426)
+
+---
+
 ### Keep-worthiness scoring
 
 - **Entry point:** Score column (COL_SCORE at index 2) in the main result tree — [app/views/constants.py:22](../app/views/constants.py#L22). Within-group rows sort by score descending so the best copy lands at the top of every group.
