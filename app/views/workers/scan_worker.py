@@ -207,11 +207,27 @@ class ScanWorker(QThread):
         self._emit("")
 
         # --- 1. Walk sources ---
+        # #448 — WALK reports the running per-file count via an
+        # indeterminate progress bar (``total=0``). The per-source
+        # ``scan_sources`` call is still synchronous so we can't know
+        # the per-source total up front; the file counter advances
+        # live via the ``progress_callback`` hook on the walker.
+        # This replaces the pre-#448 per-source-boundary jumps that
+        # left a single-source NAS scan apparently frozen until the
+        # walk returned.
         self._emit(f"Scanning {len(self.sources)} source(s)…")
         records = []
         walk_tracker = _StageTracker(STAGE_WALK)
-        total_sources = len(self.sources)
-        self._emit_stage(walk_tracker, 0, total_sources, force=True)
+        walk_files_seen = 0
+        self._emit_stage(walk_tracker, 0, 0, force=True)
+
+        def _on_walk_file_seen() -> None:
+            nonlocal walk_files_seen
+            walk_files_seen += 1
+            # The tracker's should_emit throttles to 1Hz so a million
+            # rglob hits on a fast SSD don't spam the Qt event loop.
+            self._emit_stage(walk_tracker, walk_files_seen, 0)
+
         for idx, (label, root) in enumerate(self.sources.items()):
             mode = "flat" if self.recursive_map.get(label) is False else "recursive"
             self._emit(f"  Walking {label} ({mode}): {root} …")
@@ -219,15 +235,13 @@ class ScanWorker(QThread):
                 {label: root},
                 limit=self.limit,
                 recursive_map={label: self.recursive_map.get(label, True)},
+                progress_callback=_on_walk_file_seen,
             )
             self._emit(f"  → {len(partial):,} files")
             records.extend(partial)
-            # #424 — WALK reports folder-count progress (not per-file)
-            # because scan_sources is synchronous per source and we
-            # don't know the per-source total until it returns. Force
-            # emit on each source-boundary so the bar advances visibly
-            # even on a single-source scan that completes in <1s.
-            self._emit_stage(walk_tracker, idx + 1, total_sources, force=True)
+        # Force a final emit so the stage bar reflects the true count
+        # when scan_sources finishes faster than the 1Hz throttle.
+        self._emit_stage(walk_tracker, walk_files_seen, 0, force=True)
         self._emit(f"  Total: {len(records):,} media files")
 
         if not records:

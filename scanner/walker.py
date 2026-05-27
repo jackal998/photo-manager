@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from loguru import logger
 
@@ -45,6 +45,7 @@ def scan_sources(
     sources: dict[str, Path],
     limit: int | None = None,
     recursive_map: dict[str, bool] | None = None,
+    progress_callback: Callable[[], None] | None = None,
 ) -> list[FileRecord]:
     """Walk each source directory and return all discovered FileRecords.
 
@@ -54,13 +55,22 @@ def scan_sources(
         recursive_map: Optional per-label recursive flag.  ``True`` (or absent)
             means walk all subdirectories; ``False`` means top-level files only.
             When ``None`` all sources are scanned recursively (original behaviour).
+        progress_callback: Optional zero-arg hook fired once each time a
+            media file is accepted into the result set (after the
+            media-extension + skip-name + symlink filters). Lets the
+            caller render a live "Walking sources — N files…" indicator
+            on long NAS scans where the synchronous ``rglob`` would
+            otherwise sit silent for minutes. See #448.
     """
     records: list[FileRecord] = []
     for label, root in sources.items():
         if not root.exists():
             raise FileNotFoundError(f"Source directory not found: {root}")
         recursive = True if recursive_map is None else recursive_map.get(label, True)
-        records.extend(_scan_dir(root, label, limit=limit, recursive=recursive))
+        records.extend(_scan_dir(
+            root, label, limit=limit, recursive=recursive,
+            progress_callback=progress_callback,
+        ))
     return records
 
 
@@ -84,6 +94,7 @@ def _scan_dir(
     label: str,
     limit: int | None = None,
     recursive: bool = True,
+    progress_callback: Callable[[], None] | None = None,
 ) -> list[FileRecord]:
     """Walk root and return FileRecords with Live Photo pairs resolved.
 
@@ -127,6 +138,11 @@ def _scan_dir(
             continue
         by_dir.setdefault(str(path.parent), []).append(path)
         total += 1
+        # #448 — fire the progress hook for each accepted media file so
+        # the worker can emit a live walking-stage counter on long NAS
+        # scans where ``rglob`` would otherwise sit silent.
+        if progress_callback is not None:
+            progress_callback()
         if limit and total >= limit:
             break
 
