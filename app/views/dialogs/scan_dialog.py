@@ -960,6 +960,17 @@ class ScanDialog(QDialog):
         self._log(t("scan_dialog.log_starting"))
         self._btn_scan.setEnabled(False)
 
+        # #451 — exif_workers is a setting-only knob today (no UI). Default
+        # 2 keeps the rollout conservative; raise via settings.json
+        # ``scan.exif_workers`` if EXIF dominates after enabling
+        # parallel hash workers. The worker clamps the value at
+        # construction so user-supplied 99 doesn't blow up the box.
+        exif_workers = self.settings.get("scan.exif_workers", 2)
+        try:
+            exif_workers = int(exif_workers)
+        except (TypeError, ValueError):
+            exif_workers = 2
+
         self._worker = ScanWorker(
             sources=sources,
             output_path=output,
@@ -967,6 +978,7 @@ class ScanDialog(QDialog):
             threshold=self._phash_slider.value(),
             mean_color_threshold=self._color_slider.value(),
             workers=self._workers_spin.value(),
+            exif_workers=exif_workers,
             auto_select_enabled=self._auto_select_check.isChecked(),
             auto_select_aggressive_delete=(
                 self._auto_select_aggressive_check.isChecked()
