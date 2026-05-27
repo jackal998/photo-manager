@@ -99,6 +99,13 @@ class TestActionHandlersProtocol:
         from app.views.handlers.context_menu import ActionHandlers
         assert "set_locked_state" in dir(ActionHandlers)
 
+    def test_protocol_has_execute_action_selected_only(self):
+        """#429 — the new (only selected) context-menu entry calls
+        execute_action_selected_only on the protocol; pin the contract
+        so a future refactor doesn't drop it from the bridge."""
+        from app.views.handlers.context_menu import ActionHandlers
+        assert "execute_action_selected_only" in dir(ActionHandlers)
+
     def test_protocol_does_not_have_delete_files(self):
         """delete_files is removed — direct delete is no longer in the context menu."""
         from app.views.handlers.context_menu import ActionHandlers
@@ -177,6 +184,24 @@ class TestActionHandlersImplBridge:
         items = [{"type": "file", "path": "/a.jpg"}]
         impl.remove_items_from_list(items)
         file_ops.remove_items_from_list.assert_called_once_with(items)
+
+    def test_impl_has_execute_action_selected_only(self):
+        """#429 — the new context-menu entry's proxy. Same class of
+        failure mode as #175 / #185: forgetting to add the proxy
+        silently no-ops the menu item with zero crash."""
+        impl, _ = self._make_impl()
+        assert callable(getattr(impl, "execute_action_selected_only", None))
+
+    def test_execute_action_selected_only_delegates_to_file_ops(self):
+        """#429 — must call ``file_ops.execute_action(selected_only=True)``.
+        Selection is re-read inside ``execute_action`` from the tree
+        controller (#430 group-membership semantic), so the ``items``
+        argument carried by the menu-handler protocol is not forwarded —
+        but the bridge MUST still pass ``selected_only=True``."""
+        impl, file_ops = self._make_impl()
+        items = [{"type": "file", "path": "/a.jpg"}]
+        impl.execute_action_selected_only(items)
+        file_ops.execute_action.assert_called_once_with(selected_only=True)
 
 
 # ── handler routing ────────────────────────────────────────────────────────
@@ -311,6 +336,115 @@ class TestMultiSelectSetAction:
         mock_handlers.set_decision_with_lock_check.assert_called_once()
         _items_arg, decision_arg = mock_handlers.set_decision_with_lock_check.call_args[0]
         assert decision_arg == "", f"Expected '' but got {decision_arg!r}"
+
+
+class TestExecuteActionSelectedOnlyMenu:
+    """#429 — verify the (only selected) entry appears on file-row
+    right-click and is gated off when the selection is group-only.
+
+    Two failure modes this guards against:
+      - The entry never appearing because the translation key, the
+        protocol method, or the bridge proxy was forgotten — silent
+        no-op (ActionHandlersImpl bridge pattern).
+      - The entry appearing on a pure group-row right-click, which
+        would feed an empty file set into execute_action and surface
+        an empty Execute dialog with no actionable rows.
+    """
+
+    EXECUTE_SELECTED_LABEL = "Execute Action (only selected)…"
+
+    def _make_handler(self, qapp):
+        from PySide6.QtWidgets import QTreeView
+        from app.views.handlers.context_menu import ContextMenuHandler
+        handlers = MagicMock()
+        return ContextMenuHandler(QTreeView(), MagicMock(), handlers, MagicMock()), handlers
+
+    def test_single_file_row_shows_entry(self, qapp):
+        from PySide6.QtWidgets import QMenu
+        handler, _ = self._make_handler(qapp)
+        menu = QMenu()
+        handler._create_single_selection_menu(menu, {"type": "file", "path": "/a.jpg"})
+
+        labels = [a.text() for a in menu.actions()]
+        assert self.EXECUTE_SELECTED_LABEL in labels
+
+    def test_single_group_row_hides_entry(self, qapp):
+        from PySide6.QtWidgets import QMenu
+        handler, _ = self._make_handler(qapp)
+        menu = QMenu()
+        handler._create_single_selection_menu(menu, {"type": "group", "group_number": 7})
+
+        labels = [a.text() for a in menu.actions()]
+        assert self.EXECUTE_SELECTED_LABEL not in labels
+
+    def test_multi_selection_with_file_rows_shows_entry(self, qapp):
+        from PySide6.QtWidgets import QMenu
+        handler, _ = self._make_handler(qapp)
+        items = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "file", "path": "/b.jpg"},
+        ]
+        menu = QMenu()
+        handler._create_multi_selection_menu(menu, items)
+
+        labels = [a.text() for a in menu.actions()]
+        assert self.EXECUTE_SELECTED_LABEL in labels
+
+    def test_multi_selection_group_only_hides_entry(self, qapp):
+        """If the multi-selection has only group headers (no file
+        rows), the (only selected) entry is gated off — same rule as
+        the single-selection branch."""
+        from PySide6.QtWidgets import QMenu
+        handler, _ = self._make_handler(qapp)
+        items = [
+            {"type": "group", "group_number": 1},
+            {"type": "group", "group_number": 2},
+        ]
+        menu = QMenu()
+        handler._create_multi_selection_menu(menu, items)
+
+        labels = [a.text() for a in menu.actions()]
+        assert self.EXECUTE_SELECTED_LABEL not in labels
+
+    def test_single_file_row_triggers_handler_with_item(self, qapp):
+        from PySide6.QtWidgets import QMenu
+        handler, mock_handlers = self._make_handler(qapp)
+        item = {"type": "file", "path": "/a.jpg"}
+        menu = QMenu()
+        handler._create_single_selection_menu(menu, item)
+
+        exec_action = next(
+            (a for a in menu.actions() if a.text() == self.EXECUTE_SELECTED_LABEL),
+            None,
+        )
+        assert exec_action is not None
+        exec_action.trigger()
+
+        mock_handlers.execute_action_selected_only.assert_called_once_with([item])
+
+    def test_multi_file_rows_triggers_handler_with_full_selection(self, qapp):
+        """When the multi-selection mixes file rows and a group row,
+        the full selection list goes to the handler — the handler
+        re-resolves group membership upstream, so the menu side has
+        no business filtering."""
+        from PySide6.QtWidgets import QMenu
+        handler, mock_handlers = self._make_handler(qapp)
+        items = [
+            {"type": "file", "path": "/a.jpg"},
+            {"type": "group", "group_number": 2},
+            {"type": "file", "path": "/b.jpg"},
+        ]
+        menu = QMenu()
+        handler._create_multi_selection_menu(menu, items)
+
+        exec_action = next(
+            (a for a in menu.actions() if a.text() == self.EXECUTE_SELECTED_LABEL),
+            None,
+        )
+        assert exec_action is not None
+        exec_action.trigger()
+
+        mock_handlers.execute_action_selected_only.assert_called_once_with(items)
 
 
 class TestClickedColumnPassthrough:

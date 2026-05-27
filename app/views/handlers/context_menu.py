@@ -44,6 +44,12 @@ class ActionHandlers(Protocol):
         """Lock or unlock file items (#164)."""
         ...
 
+    def execute_action_selected_only(self, items: list[dict]) -> None:
+        """Open the Execute Action dialog scoped by group membership
+        (#429, #430). Inherits the menu-bar entry's semantic: any
+        selected file row pulls its parent group whole."""
+        ...
+
 
 class TreeItemProvider(Protocol):
     """Protocol for tree item provider."""
@@ -140,6 +146,20 @@ class ContextMenuHandler:
             lambda: self.handlers.show_action_dialog(clicked_col=clicked_col)
         )
 
+        # #429: Execute Action (only selected) — only on file rows.
+        # Group-row single-selection skips this entry (the group's
+        # peer file rows aren't part of the selection set, which
+        # would surprise the user who right-clicked only a group
+        # header). The menu-bar entry remains the path for that case.
+        if item["type"] == "file":
+            execute_selected_action = menu.addAction(
+                t("context_menu.execute_selected_only")
+            )
+            execute_selected_action.triggered.connect(
+                lambda checked=False, _item=item:
+                    self.handlers.execute_action_selected_only([_item])
+            )
+
         remove_action = menu.addAction(t("context_menu.remove_from_list"))
         remove_action.triggered.connect(lambda: self.handlers.remove_items_from_list([item]))
 
@@ -178,6 +198,18 @@ class ContextMenuHandler:
         action_dialog_action.triggered.connect(
             lambda: self.handlers.show_action_dialog(clicked_col=None)
         )
+
+        # #429: Execute Action (only selected) — gated on ≥1 file
+        # row in the multi-selection. Group-only multi-selection
+        # skips this entry, matching the single-selection branch.
+        if file_items:
+            execute_selected_action = menu.addAction(
+                t("context_menu.execute_selected_only")
+            )
+            execute_selected_action.triggered.connect(
+                lambda checked=False, _items=selected_items:
+                    self.handlers.execute_action_selected_only(_items)
+            )
 
         remove_action = menu.addAction(t("context_menu.remove_from_list"))
         remove_action.triggered.connect(

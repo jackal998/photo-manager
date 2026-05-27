@@ -81,3 +81,19 @@ class ActionHandlersImpl:
         the bug that escaped #175's coverage.
         """
         self.file_ops.set_locked_state(items, locked)
+
+    def execute_action_selected_only(self, items: list[dict]) -> None:
+        """Open the Execute Action dialog scoped by group membership
+        (#429, #430).
+
+        Inherits the menu-bar entry's semantic — calls into
+        ``FileOperationsHandler.execute_action(selected_only=True)``
+        which re-reads the current selection via the tree controller
+        and pulls the parent group of each selected file row whole.
+        The ``items`` argument is accepted for protocol uniformity
+        with the other handler methods; selection is sourced from
+        the tree controller at execute time so a stale ``items`` list
+        cannot put the dialog out of sync with the visible selection.
+        """
+        del items  # selection re-read inside execute_action
+        self.file_ops.execute_action(selected_only=True)

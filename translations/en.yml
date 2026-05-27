@@ -318,6 +318,7 @@ context_menu:
   set_action: "Set Action"
   open_folder: "Open Folder"
   set_action_by_regex: "Set Action by Field…"
+  execute_selected_only: "Execute Action (only selected)…"
   remove_from_list: "Remove from List"
   lock: "Lock"
   unlock: "Unlock"

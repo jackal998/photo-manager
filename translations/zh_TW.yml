@@ -234,6 +234,7 @@ context_menu:
   set_action: "設定動作"
   open_folder: "開啟資料夾"
   set_action_by_regex: "依欄位設定動作…"
+  execute_selected_only: "執行動作（僅限所選）…"
   remove_from_list: "從清單移除"
   lock: "鎖定"
   unlock: "解除鎖定"
