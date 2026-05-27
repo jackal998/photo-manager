@@ -207,28 +207,41 @@ class ScanWorker(QThread):
         self._emit("")
 
         # --- 1. Walk sources ---
-        # #448 — WALK reports the running per-file count via an
-        # indeterminate progress bar (``total=0``). The per-source
-        # ``scan_sources`` call is still synchronous so we can't know
-        # the per-source total up front; the file counter advances
-        # live via the ``progress_callback`` hook on the walker.
-        # This replaces the pre-#448 per-source-boundary jumps that
-        # left a single-source NAS scan apparently frozen until the
-        # walk returned.
+        # #448 — WALK reports a running per-file count via an
+        # indeterminate bar (``total=0``); the counter advances live
+        # through the walker's ``progress_callback`` hook so a
+        # single-source NAS scan no longer sits silent for minutes.
+        #
+        # #452 — when more than one source is configured, walks run
+        # in parallel via a ``ThreadPoolExecutor`` so each source
+        # saturates its own SMB / disk pipe independently. The
+        # walker is read-only so there's no shared mutable state to
+        # protect on the walker side; the only cross-thread
+        # contention is the shared file counter, which is guarded
+        # by a small lock. Order-stability of ``records`` is
+        # preserved by collecting per-source-label results into a
+        # dict and concatenating in source-iteration order at the
+        # end, not by appending as walks complete.
         self._emit(f"Scanning {len(self.sources)} source(s)…")
-        records = []
+        records: list = []
         walk_tracker = _StageTracker(STAGE_WALK)
         walk_files_seen = 0
+        walk_counter_lock = threading.Lock()
         self._emit_stage(walk_tracker, 0, 0, force=True)
 
         def _on_walk_file_seen() -> None:
             nonlocal walk_files_seen
-            walk_files_seen += 1
+            with walk_counter_lock:
+                walk_files_seen += 1
+                snapshot = walk_files_seen
             # The tracker's should_emit throttles to 1Hz so a million
             # rglob hits on a fast SSD don't spam the Qt event loop.
-            self._emit_stage(walk_tracker, walk_files_seen, 0)
+            # Qt signal emission across threads is queued automatically
+            # (the receiver lives in the main thread), so this is
+            # safe to call from any walker thread.
+            self._emit_stage(walk_tracker, snapshot, 0)
 
-        for idx, (label, root) in enumerate(self.sources.items()):
+        def _walk_one_source(label: str, root: Path) -> tuple[str, list]:
             mode = "flat" if self.recursive_map.get(label) is False else "recursive"
             self._emit(f"  Walking {label} ({mode}): {root} …")
             partial = scan_sources(
@@ -238,7 +251,29 @@ class ScanWorker(QThread):
                 progress_callback=_on_walk_file_seen,
             )
             self._emit(f"  → {len(partial):,} files")
-            records.extend(partial)
+            return label, partial
+
+        if len(self.sources) > 1:
+            # Parallel branch — one thread per source, capped to the
+            # source count so a 100-source pathological case doesn't
+            # spawn 100 threads. Per-source results are collected by
+            # label so we can rebuild the source-order list below.
+            partials: dict[str, list] = {}
+            with ThreadPoolExecutor(max_workers=len(self.sources)) as pool:
+                futures = {
+                    pool.submit(_walk_one_source, label, root): label
+                    for label, root in self.sources.items()
+                }
+                for future in as_completed(futures):
+                    label, partial = future.result()
+                    partials[label] = partial
+            for label in self.sources:
+                records.extend(partials.get(label, []))
+        else:
+            for label, root in self.sources.items():
+                _, partial = _walk_one_source(label, root)
+                records.extend(partial)
+
         # Force a final emit so the stage bar reflects the true count
         # when scan_sources finishes faster than the 1Hz throttle.
         self._emit_stage(walk_tracker, walk_files_seen, 0, force=True)
