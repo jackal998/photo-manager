@@ -118,6 +118,13 @@ scan_dialog:
   auto_select_aggressive_label: "同時將其他檔案標記為刪除"
   auto_select_aggressive_desc: "<b>偏向破壞性,需明確選用。</b> 與自動選取一同啟用時,每個有分數的群組中,所有非保留者皆會被標記為 <b>刪除</b>。執行動作對話框會以完整的整理結果開啟 — 一鍵即可送出整批處理。實際刪除動作仍須透過標準的執行流程確認。"
   log_placeholder: "掃描進度將顯示於此…"
+  # #424 — 顯示於進度面板的階段名稱。
+  stage_walk: "正在掃描來源"
+  stage_hash: "正在計算雜湊"
+  stage_exiftool: "正在讀取 EXIF 與評分訊號"
+  stage_classify: "正在分類重複項"
+  stage_score: "正在評分候選"
+  stage_write: "正在寫入清單"
   start_button: "開始掃描"
   close_button: "關閉"
   close_load_button: "關閉並載入"

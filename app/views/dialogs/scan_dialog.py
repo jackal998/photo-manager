@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFileSystemModel,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -47,6 +49,55 @@ class _SourceEntry:
 
     path: str
     recursive: bool = True
+
+
+# #424 — scan progress UI: stage label, files-per-sec, ETA helpers.
+# Pure functions kept module-private so unit tests can pin the
+# formatting contract without instantiating QDialog.
+
+# Receiver-side rolling window for ETA stability — matches the worker
+# tracker's window so "ETA appears once ≥ 5s of throughput samples are
+# available" lines up on both sides.
+_ETA_MIN_SAMPLES_SECONDS = 5.0
+
+
+def _format_throughput(files_per_sec: float) -> str:
+    """Render files/sec for the dialog's third progress row.
+
+    Returns ``"—"`` when the rate is zero or negative (stall, or
+    sub-1s into a stage where the worker's deque only has one
+    sample). Above 10 files/sec we drop the decimal — the precision
+    isn't useful and a wobbling tenths digit on a 200/s rate looks
+    busier than the underlying scan."""
+    if files_per_sec <= 0.0:
+        return "—"
+    if files_per_sec >= 10.0:
+        return f"{files_per_sec:.0f} files/sec"
+    return f"{files_per_sec:.1f} files/sec"
+
+
+def _format_eta(remaining: int, files_per_sec: float) -> str:
+    """Render an ETA string from remaining-count and throughput.
+
+    Returns ``"—"`` when (a) throughput is zero / negative (stall),
+    (b) remaining is non-positive (stage already complete). The ≥5s-
+    samples gate is enforced by the caller via the receiver's own
+    stage-elapsed timer — the worker already drops sub-window
+    throughput to 0, so this function trusts what it gets."""
+    if files_per_sec <= 0.0 or remaining <= 0:
+        return "—"
+    seconds = remaining / files_per_sec
+    if seconds < 1.0:
+        return "<1s"
+    if seconds < 60.0:
+        return f"~{int(seconds)}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"~{minutes}m {secs:02d}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"~{hours}h {mins:02d}m"
 
 
 def _auto_label(name: str, existing: set[str]) -> str:
@@ -558,6 +609,14 @@ class ScanDialog(QDialog):
 
         right_splitter.addWidget(right_top)
 
+        # #424 — receiver-side bookkeeping for the ≥5s-samples ETA gate.
+        # Reset on every stage change so a freshly-started stage hides
+        # the ETA until it accumulates enough samples — without this
+        # the prior stage's settled throughput would leak into the new
+        # stage's first emit and produce a misleading ETA.
+        self._current_stage: str | None = None
+        self._stage_started_at_monotonic: float = 0.0
+
         self._log_widget = QPlainTextEdit()
         self._log_widget.setReadOnly(True)
         self._log_widget.setMinimumHeight(150)
@@ -571,6 +630,28 @@ class ScanDialog(QDialog):
         outer_splitter.setSizes([550, 450])
 
         root.addWidget(outer_splitter, stretch=1)
+
+        # #424 — Stage / throughput / ETA frame as a top-level row
+        # under the outer_splitter, ABOVE the action buttons. Kept
+        # outside the splitter so the right_splitter stays at its
+        # original 2-widget configuration — the 3-widget variant
+        # broke qa(2):s02 (cold-launch dialog show event blocked).
+        # Initially hidden; revealed on the first stage_progress emit.
+        self._progress_frame = QFrame()
+        self._progress_frame.setFrameShape(QFrame.StyledPanel)
+        self._progress_frame.setVisible(False)
+        pf_layout = QVBoxLayout(self._progress_frame)
+        pf_layout.setContentsMargins(8, 6, 8, 6)
+        self._stage_label = QLabel("")
+        self._stage_label.setStyleSheet("font-weight: bold;")
+        pf_layout.addWidget(self._stage_label)
+        self._stage_progress_bar = QProgressBar()
+        self._stage_progress_bar.setTextVisible(True)
+        pf_layout.addWidget(self._stage_progress_bar)
+        self._stage_rate_label = QLabel("")
+        self._stage_rate_label.setStyleSheet("color: #555; font-family: monospace;")
+        pf_layout.addWidget(self._stage_rate_label)
+        root.addWidget(self._progress_frame)
 
         self._btn_scan = QPushButton(t("scan_dialog.start_button"))
         self._btn_scan.setDefault(True)
@@ -811,10 +892,69 @@ class ScanDialog(QDialog):
             ),
         )
         self._worker.progress.connect(self._log)
+        self._worker.stage_progress.connect(self._on_stage_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.completed_empty.connect(self._on_completed_empty)
+        # Reset the stage frame for the new scan: hide until the
+        # first stage_progress fires, clear residual labels so the
+        # frame can't briefly show prior-scan numbers.
+        self._progress_frame.setVisible(False)
+        self._current_stage = None
+        self._stage_label.setText("")
+        self._stage_rate_label.setText("")
         self._worker.start()
+
+    def _on_stage_progress(
+        self, stage_name: str, completed: int, total: int, files_per_sec: float
+    ) -> None:
+        """#424 — receiver for ScanWorker.stage_progress.
+
+        Renders the stage label, progress bar (determinate when
+        ``total > 0``; indeterminate when ``total == 0`` — atomic
+        stages CLASSIFY/SCORE/WRITE), and the throughput/ETA line.
+        ETA is suppressed (``"—"``) until ≥5s have elapsed since the
+        current stage started, matching the issue's acceptance
+        criterion. Stage transitions reset that timer.
+        """
+        import time
+        # Reveal the frame on the first signal of any scan; cheap and
+        # idempotent so repeated emits don't churn the layout.
+        if not self._progress_frame.isVisible():
+            self._progress_frame.setVisible(True)
+        # Stage change → reset the elapsed-time gate so ETA on a
+        # fresh stage isn't seeded by the prior stage's throughput.
+        if stage_name != self._current_stage:
+            self._current_stage = stage_name
+            self._stage_started_at_monotonic = time.monotonic()
+        # Stage label — receivers translate canonical names via the
+        # translations table (falls back to the raw name if a
+        # locale didn't ship a mapping yet).
+        label_key = f"scan_dialog.stage_{stage_name.lower()}"
+        translated = t(label_key)
+        # Fallback: t() returns the key unchanged when missing — use
+        # the canonical name to avoid showing "scan_dialog.stage_walk"
+        # in the UI for a locale that hasn't been updated.
+        stage_display = translated if translated != label_key else stage_name
+        if total > 0:
+            self._stage_label.setText(f"{stage_display}  ({completed:,}/{total:,})")
+            self._stage_progress_bar.setRange(0, total)
+            self._stage_progress_bar.setValue(completed)
+            self._stage_progress_bar.setFormat("%p%")
+        else:
+            # Atomic stage — render indeterminate so the user sees
+            # activity without a misleading 0% / 100% reading.
+            self._stage_label.setText(f"{stage_display}  …")
+            self._stage_progress_bar.setRange(0, 0)
+        # Throughput + ETA row.
+        rate_txt = _format_throughput(files_per_sec)
+        elapsed = time.monotonic() - self._stage_started_at_monotonic
+        if elapsed < _ETA_MIN_SAMPLES_SECONDS or total <= 0:
+            eta_txt = "—"
+        else:
+            remaining = max(0, total - completed)
+            eta_txt = _format_eta(remaining, files_per_sec)
+        self._stage_rate_label.setText(f"{rate_txt}  —  ETA {eta_txt}")
 
     def _log(self, msg: str) -> None:
         """Append ``msg`` to the progress log and scroll to the bottom."""

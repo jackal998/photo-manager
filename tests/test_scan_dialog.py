@@ -910,6 +910,9 @@ class TestStartScanShouldProceed:
                 self._args = (a, kw)
                 # Provide the signal attributes _start_scan connects to.
                 self.progress = MagicMock()
+                # #424 — stage_progress is the new typed signal the
+                # dialog connects in _start_scan.
+                self.stage_progress = MagicMock()
                 self.failed = MagicMock()
                 self.finished = MagicMock()
                 self.completed_empty = MagicMock()
