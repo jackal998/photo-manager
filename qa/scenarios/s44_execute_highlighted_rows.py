@@ -1,30 +1,27 @@
-"""Scenario 44 — Execute Action (only selected) via Action menu (#410).
+"""Scenario 44 — Execute Action (only selected) via Action menu (#410, #430).
 
 Required source: qa/sandbox/_disposable/s44_source/ (regenerated each run by
-the driver — 5 fresh JPEGs; 2 of them get sent to the user's recycle bin
-when Execute fires, the other 3 stay on disk).
+the driver — 5 fresh JPEGs; ALL 5 get sent to the user's recycle bin
+when Execute fires under the #430 group-level scope).
 
-Drives the new menu-entry-based scope flow end-to-end:
+Drives the menu-entry-based scope flow end-to-end:
   regen disposable fixture (5 JPEGs) → scan → close & load →
   mark all rows delete via "Action → Set Action by Field…" (regex .+) →
   return to the main window's tree → highlight 2 file rows in the main tree →
   open "Action → Execute Action (only selected)…" →
-  verify the dialog tree contains exactly 2 file rows (not the whole 5-row
-  group — the new row-level filter is the original #211 semantic) →
+  verify the dialog tree contains all 5 file rows of the parent group
+  (#430: highlighting any row pulls the group whole so peer ref-row,
+  near-dup tags, and score comparisons stay visible while triaging) →
   verify the OK button label is the static "Execute" (not the old
   "Execute Action (highlighted)" — that swap was removed in #410) →
-  click Execute → (no confirm dialog: only 2 of 5 group items in scope,
-  so the group is not fully deleted) →
-  verify (a) the 2 highlighted files no longer exist on disk,
-         (b) the 3 un-highlighted files DO still exist on disk,
-         (c) manifest rows for the 2 highlighted files have executed=1,
-         (d) manifest rows for the 3 un-highlighted files still have
-             user_decision='delete' AND executed=0 (their decisions
-             survived the click intact).
+  click Execute → dismiss the complete-group confirm (all 5 rows in
+  the group are decided=delete) →
+  verify (a) all 5 files no longer exist on disk,
+         (b) manifest rows for all 5 files have executed=1.
 
-⚠ HEADS-UP: every run sends 2 files to the operator's real Windows
+⚠ HEADS-UP: every run sends 5 files to the operator's real Windows
 recycle bin. The fixture is regenerated next run, so the bin grows by
-2 each run until manually emptied. Same destructive-scenario contract
+5 each run until manually emptied. Same destructive-scenario contract
 as s13.
 
 Catches drift in:
@@ -32,13 +29,14 @@ Catches drift in:
     (label key ``menu.action.execute_selected_only``).
   - The selection-dependent gating of that menu entry
     (``MainWindow._refresh_execute_selected_only_enabled``).
-  - The handler-side row-level filter in
-    ``FileOperationsHandler.execute_action(selected_only=True)`` —
-    synthetic PhotoGroups with only the selected items.
+  - The handler-side group-membership filter in
+    ``FileOperationsHandler.execute_action(selected_only=True)``
+    (#430) — original PhotoGroups pass through whole.
   - The Execute button label staying static — i.e. NOT picking up the
     removed ``execute_button_highlighted`` key on in-dialog selection.
-  - The dialog NOT firing the complete-group confirm when only part of
-    a group is in scope.
+  - The complete-group confirm firing once the dialog sees a fully
+    decided group (#430: full group, not the per-row synthetic the
+    #410 filter built).
 
 Click coordinates are read live from UIA ``TreeItem.rectangle()`` rather
 than hard-coded pixel offsets (#229).
@@ -255,14 +253,15 @@ def main() -> int:
     _uia._focus(exec_dlg)
     time.sleep(0.3)
 
-    print("step: verify_dialog_shows_only_selected_rows")
+    print("step: verify_dialog_shows_full_group")
     tree = exec_dlg.descendants(control_type="Tree")[0]
     dialog_rows = _file_row_centers_in_tree(tree)
     print(f"  dialog_file_row_count={len(dialog_rows)}")
-    if len(dialog_rows) != 2:
+    if len(dialog_rows) != NUM_FILES:
         print(
-            f"FAIL: dialog should show exactly 2 file rows (the highlighted "
-            f"subset of the 5-row group), got {len(dialog_rows)}"
+            f"FAIL: #430 — dialog should show all {NUM_FILES} file rows "
+            f"of the parent group (highlighting any row pulls the group "
+            f"whole), got {len(dialog_rows)}"
         )
         return 1
 
@@ -288,18 +287,10 @@ def main() -> int:
     print(f"  pre_present_count={sum(pre_present.values())}")
 
     print("step: click_execute")
-    # Scope is partial (2 of 5 rows in a complete-delete group) — the
-    # complete-group confirm must NOT fire. Since the dialog only sees
-    # the synthetic group with 2 items, _complete_delete_groups returns
-    # that group (its 2 items ARE all decided=delete) — wait, that means
-    # the confirm WOULD fire because from the dialog's perspective every
-    # passed item is a complete delete. Whether the confirm fires depends
-    # on whether the synthetic group's count == the original group's
-    # count. The handler builds the synthetic group with item_count=2 and
-    # the dialog's _complete_delete_groups treats it as fully-deleted.
-    # That IS the post-#410 behavior: the dialog operates on what it was
-    # given, no awareness of the original group. Accept either: confirm
-    # fires (click Yes) OR doesn't (dialog accepts directly).
+    # #430: the dialog now sees the FULL 5-row group (group-membership
+    # filter, not the old per-row #410 filter). All 5 are decided=delete
+    # via the regex-mark step, so the complete-group confirm WILL fire.
+    # The polling loop below dismisses it with Yes.
     exec_btn = exec_dlg.child_window(title=EXECUTE_BTN_STATIC, control_type="Button")
     exec_btn.click_input()
 
@@ -331,16 +322,19 @@ def main() -> int:
     removed = [p for p in fixture_paths if not p.exists()]
     print(f"  removed_count={len(removed)}")
     print(f"  remaining_count={len(remaining)}")
-    if len(removed) != 2:
+    # #430: highlighting any row pulls the whole group, so all 5 rows
+    # (already decided=delete via the regex-mark step) get executed.
+    if len(removed) != NUM_FILES:
         print(
-            f"FAIL: expected exactly 2 files removed (matching the 2 "
-            f"highlighted rows), got {len(removed)}: "
+            f"FAIL: #430 — expected all {NUM_FILES} files removed "
+            f"(group-membership scope pulls the full group in, all "
+            f"decided=delete), got {len(removed)}: "
             f"removed={[p.name for p in removed]}"
         )
         return 1
-    if len(remaining) != 3:
+    if remaining:
         print(
-            f"FAIL: expected 3 files remaining on disk, got "
+            f"FAIL: expected 0 files remaining on disk, got "
             f"{len(remaining)}: remaining={[p.name for p in remaining]}"
         )
         return 1
@@ -354,32 +348,13 @@ def main() -> int:
         )
         return 1
 
-    removed_basenames = {p.name for p in removed}
-    remaining_basenames = {p.name for p in remaining}
-
     failures: list[str] = []
     for src, decision, executed in rows:
         bn = Path(src).name
-        if bn in removed_basenames:
-            if executed != 1:
-                failures.append(
-                    f"removed file {bn} should have executed=1, got {executed}"
-                )
-        elif bn in remaining_basenames:
-            # The un-highlighted rows survived the click — decisions
-            # must be intact and executed=0.
-            if decision != "delete":
-                failures.append(
-                    f"surviving file {bn} should still have "
-                    f"user_decision='delete', got {decision!r}"
-                )
-            if executed != 0:
-                failures.append(
-                    f"surviving file {bn} should have executed=0, got "
-                    f"{executed}"
-                )
-        else:
-            failures.append(f"manifest row {bn!r} not in either fixture set")
+        if executed != 1:
+            failures.append(
+                f"file {bn} should have executed=1, got {executed}"
+            )
 
     for src, decision, executed in rows:
         print(

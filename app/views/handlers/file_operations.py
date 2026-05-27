@@ -998,12 +998,15 @@ class FileOperationsHandler:
     def execute_action(self, selected_only: bool = False) -> None:
         """Open the Execute Action review dialog and run planned operations.
 
-        #410: ``selected_only=True`` pre-filters the dialog's groups to
-        only those containing currently-highlighted file rows in the
-        main tree. Scope is a kwarg, NOT global state on the handler;
-        the dialog itself is unaware of the filter (groups arrive
-        already reduced). This replaces the older in-dialog
-        selection-then-execute scoping path.
+        #430: ``selected_only=True`` pre-filters the dialog's groups
+        by **group membership**: selecting any row inside group G
+        pulls ALL of G's items into the dialog so the user keeps the
+        ref-row, near-dup tags, and score comparisons visible while
+        triaging. Selecting a group header counts as selecting the
+        whole group. Supersedes the earlier per-row filter (#410)
+        which stripped peer context. Scope is a kwarg, NOT global
+        state on the handler; the dialog itself is unaware of the
+        filter (groups arrive already reduced).
         """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
@@ -1016,33 +1019,34 @@ class FileOperationsHandler:
         groups = self.vm.groups
         if selected_only:
             tree_controller = getattr(self.parent, "tree_controller", None)
-            selected_paths: set[str] = set()
+            selected_group_numbers: set[int] = set()
             if tree_controller is not None:
+                # Build a path → group_number index once, so a multi-
+                # row selection doesn't re-scan the full group list per
+                # item (O(N) instead of O(N·M)).
+                path_to_group: dict[str, int] = {}
+                for g in groups:
+                    gn = getattr(g, "group_number", 0)
+                    for r in getattr(g, "items", []):
+                        fp = getattr(r, "file_path", None)
+                        if fp:
+                            path_to_group[fp] = gn
                 for item in tree_controller.get_selected_items():
                     if item.get("type") == "file":
                         path = item.get("path")
-                        if path:
-                            selected_paths.add(path)
-            # #410: row-level filter — build synthetic groups whose
-            # items contain ONLY the selected file rows. Matches the
-            # original #211 scope semantic the menu entry replaces:
-            # "Execute Action (only selected)" means exactly those
-            # rows, not "the groups they belong to". Empty groups
-            # are dropped.
-            from core.models import PhotoGroup
-            filtered: list = []
-            for g in groups:
-                items_in_scope = [
-                    r for r in getattr(g, "items", [])
-                    if getattr(r, "file_path", None) in selected_paths
-                ]
-                if items_in_scope:
-                    filtered.append(PhotoGroup(
-                        group_number=getattr(g, "group_number", 0),
-                        items=items_in_scope,
-                        is_expanded=getattr(g, "is_expanded", False),
-                    ))
-            groups = filtered
+                        if path is None:
+                            continue
+                        gn = path_to_group.get(path)
+                        if gn is not None:
+                            selected_group_numbers.add(gn)
+                    elif item.get("type") == "group":
+                        gn = item.get("group_number")
+                        if gn is not None:
+                            selected_group_numbers.add(gn)
+            groups = [
+                g for g in groups
+                if getattr(g, "group_number", 0) in selected_group_numbers
+            ]
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         dlg = ExecuteActionDialog(
             groups, manifest_path, self.parent,

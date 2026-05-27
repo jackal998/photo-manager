@@ -1566,35 +1566,43 @@ class TestEntryPointGuards:
 
         assert DlgCls.call_args.kwargs["task_runner"] is runner
 
-    def test_execute_action_selected_only_filters_to_selected_rows(self):
-        """#410 — when ``selected_only=True``, the handler builds
-        synthetic groups whose ``items`` contain ONLY the file rows
-        currently highlighted in the main tree. Group rows in the
-        selection set are ignored (type != "file"). Default
-        ``selected_only=False`` passes ``vm.groups`` unchanged.
+    def test_execute_action_selected_only_filters_to_selected_groups(self):
+        """#430 — when ``selected_only=True``, the handler narrows to
+        groups by **membership**: any selected file row pulls in its
+        whole parent group (peer rows survive), and a selected group
+        row pulls in that group too. Default ``selected_only=False``
+        passes ``vm.groups`` unchanged.
 
-        Row-level filter (not group-level) is the original #211
-        semantic the menu entry replaces — picking 2 rows in a
-        5-row near-duplicate group must surface only those 2 rows
-        in the dialog, not the whole group."""
+        Group-level scope (supersedes the per-row #410 filter) so the
+        user keeps ref-row + near-dup tags + score comparisons visible
+        in the dialog. Picking 1 row in a 3-row group must surface
+        all 3 rows; picking rows across 2 groups must surface both
+        groups whole; picking a group header without any file row
+        still pulls that group in.
+        """
         from core.models import PhotoGroup
         from app.views.handlers.file_operations import FileOperationsHandler
 
         rec_a = _rec("/a.jpg", group=1, decision="delete")
         rec_b = _rec("/b.jpg", group=1, decision="delete")
-        rec_c = _rec("/c.jpg", group=2, decision="delete")
-        g_partial = PhotoGroup(group_number=1, items=[rec_a, rec_b])
-        g_drop = PhotoGroup(group_number=2, items=[rec_c])
+        rec_c = _rec("/c.jpg", group=1, decision=None)
+        rec_d = _rec("/d.jpg", group=2, decision="delete")
+        rec_e = _rec("/e.jpg", group=2, decision=None)
+        rec_f = _rec("/f.jpg", group=3, decision="delete")
+        g1 = PhotoGroup(group_number=1, items=[rec_a, rec_b, rec_c])
+        g2 = PhotoGroup(group_number=2, items=[rec_d, rec_e])
+        g3 = PhotoGroup(group_number=3, items=[rec_f])
         vm = SimpleNamespace(
-            groups=[g_partial, g_drop],
+            groups=[g1, g2, g3],
             remove_deleted_and_prune=MagicMock(),
             remove_from_list=MagicMock(),
         )
-        # Selection picks /a.jpg only — g_partial keeps just rec_a; g_drop drops.
+        # Selection: /a.jpg (pulls g1 whole, including rec_b and rec_c),
+        # group-2 header (pulls g2 whole). g3 absent → dropped.
         tree_controller = MagicMock()
         tree_controller.get_selected_items.return_value = [
             {"type": "file", "path": "/a.jpg"},
-            {"type": "group", "path": ""},  # filtered out
+            {"type": "group", "group_number": 2},
         ]
         parent = MagicMock()
         parent.tree_controller = tree_controller
@@ -1614,9 +1622,20 @@ class TestEntryPointGuards:
             handler.execute_action(selected_only=True)
 
         passed_groups = DlgCls.call_args.args[0]
-        assert len(passed_groups) == 1
-        assert passed_groups[0].group_number == 1
-        assert [r.file_path for r in passed_groups[0].items] == ["/a.jpg"]
+        assert [g.group_number for g in passed_groups] == [1, 2]
+        # g1 arrived whole (peer rec_b + rec_c kept, not just the
+        # /a.jpg row that was actually highlighted) — this is the
+        # #430 regression guard against the old per-row filter.
+        assert [r.file_path for r in passed_groups[0].items] == [
+            "/a.jpg", "/b.jpg", "/c.jpg",
+        ]
+        assert [r.file_path for r in passed_groups[1].items] == [
+            "/d.jpg", "/e.jpg",
+        ]
+        # Identity, not just equality: groups arrive un-cloned so the
+        # dialog observes the same PhotoGroup instances as vm.groups.
+        assert passed_groups[0] is g1
+        assert passed_groups[1] is g2
 
         # Sanity: default selected_only=False passes the full list unchanged.
         with patch(
@@ -1627,7 +1646,7 @@ class TestEntryPointGuards:
             DlgCls2.return_value.deleted_paths = []
             DlgCls2.return_value.executed_paths = []
             handler.execute_action()
-        assert DlgCls2.call_args.args[0] == [g_partial, g_drop]
+        assert DlgCls2.call_args.args[0] == [g1, g2, g3]
 
 
 # ── Item 2 — dirty-tracking flag + silent save ─────────────────────────────
