@@ -39,6 +39,7 @@ for the chore plan.
 | [Language switch](#language-switch) | i18n |
 | [List menu — Remove from List](#list-menu--remove-from-list) | Menus |
 | [Log menu](#log-menu) | Menus |
+| [Main window — close-during-scan confirm](#main-window--close-during-scan-confirm) | Main window |
 | [Main window — column order/width persistence](#main-window--column-orderwidth-persistence) | Main window |
 | [Main window — geometry + splitter persistence](#main-window--geometry--splitter-persistence) | Main window |
 | [Main window — keyboard navigation](#main-window--keyboard-navigation) | Main window |
@@ -274,6 +275,17 @@ for the chore plan.
 - **Conditions / variants:** Log directory path comes from `infrastructure/logging.py` configuration. If no log file has been written yet (first run before any logging fires) the "Open Latest" entries open the directory instead.
 - **Related:** QA scenario [`qa/scenarios/s18_log_menu.py`](../qa/scenarios/s18_log_menu.py).
 - **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+
+---
+
+### Main window — close-during-scan confirm
+
+- **Entry point:** Main window title-bar X / Alt+F4 / File > Exit while a scan is running (the `ScanDialog` is open and its `_worker` is alive).
+- **Trigger:** User attempts to close the main window while a `ScanWorker` is running. `MainWindow.scan_running` is kept in sync via `ScanDialog.scan_started` / `scan_finished` signals connected in `on_scan_sources`.
+- **Behaviour:** A `QMessageBox.question` confirms before the close proceeds — translated title `exit.scan_running_title` ("Scan in progress" / "掃描進行中") and body `exit.scan_running_body` explaining the scan will be cancelled. Default button is **No** (keeps the user in the app), matching the existing exit-dirty-prompt's accidental-Esc protection. **Yes** accepts the close, the modal cascade runs `ScanDialog.closeEvent` → `worker.requestInterruption()` + `wait(3000)` → `super().closeEvent()`, and Qt's `aboutToQuit` then fires `_cleanup_on_quit` in `main.py` for loguru flush + any belt-and-braces worker drain.
+- **Conditions / variants:** Today the Scan dialog is modal so Qt's natural cascade also handles the close; the guard is defense-in-depth for a future non-modal scan dialog or a refactor that moves worker ownership up to `MainWindow`. Independent of the unsaved-decisions prompt — both can fire in the same close attempt, but the scan-running guard runs first (a scan is more disruptive to interrupt than an unsaved decision).
+- **Related:** issue [#468](https://github.com/jackal998/photo-manager/issues/468); paired with graceful shutdown hook [#473](https://github.com/jackal998/photo-manager/issues/473) and the Windows Job Object work in [#460](https://github.com/jackal998/photo-manager/issues/460) (pending) which covers the hard-exit path.
+- **Last verified:** 2026-05-30
 
 ---
 
