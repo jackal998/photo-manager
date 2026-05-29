@@ -18,6 +18,60 @@ from typing import Optional
 _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
+# #460 — Windows Job Object: when the parent process dies for ANY reason
+# (graceful exit, crash, Task Manager force-kill, Explorer-freeze followed
+# by user force-quit), the kernel closes the last handle to the job and
+# terminates every process assigned to it. Without this, an ungraceful
+# parent exit orphans the ``exiftool`` children — and on Windows, orphan
+# exiftool processes holding file handles into a scanned tree are what
+# triggers the user-reported Explorer freeze (the root cause of #460).
+#
+# Lazy + import-safe: the job handle is created once per Python process on
+# first use. On POSIX or when pywin32 is unavailable (development checkout
+# without optional deps installed), ``_get_kill_on_close_job()`` returns
+# ``None`` and child-assignment becomes a no-op — preserving the pre-#460
+# Popen behaviour exactly.
+_KILL_ON_CLOSE_JOB = None  # type: ignore[var-annotated]
+
+
+def _get_kill_on_close_job():
+    """Return a process-wide Job Object with ``KILL_ON_JOB_CLOSE`` set, or
+    ``None`` on non-Windows / when pywin32 is unavailable. The handle is
+    intentionally leaked for the lifetime of the Python process — closing
+    it would kill all assigned children prematurely.
+    """
+    global _KILL_ON_CLOSE_JOB
+    if _KILL_ON_CLOSE_JOB is not None:
+        return _KILL_ON_CLOSE_JOB
+    if sys.platform != "win32":
+        return None
+    try:
+        import win32job  # type: ignore[import-not-found]
+    except ImportError:
+        # pywin32 not installed in this checkout — fall back to the
+        # legacy orphan-on-parent-death behaviour rather than refusing
+        # to scan.
+        return None
+    try:
+        job = win32job.CreateJobObject(None, "")
+        info = win32job.QueryInformationJobObject(
+            job, win32job.JobObjectExtendedLimitInformation
+        )
+        info["BasicLimitInformation"]["LimitFlags"] |= (
+            win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        win32job.SetInformationJobObject(
+            job, win32job.JobObjectExtendedLimitInformation, info
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        # Any Win32 failure (rare — sandboxed CI, denied
+        # SeAssignPrimaryToken, etc.) degrades to legacy behaviour
+        # rather than failing the scan.
+        return None
+    _KILL_ON_CLOSE_JOB = job
+    return job
+
+
 class ExiftoolProcess:
     """Persistent exiftool process for batch EXIF reads.
 
@@ -56,6 +110,30 @@ class ExiftoolProcess:
             errors="replace",
             creationflags=_CREATE_NO_WINDOW,
         )
+        # #460 — assign the child to a Win32 Job Object with
+        # ``KILL_ON_JOB_CLOSE`` so an ungraceful parent exit (crash,
+        # Task Manager kill, Explorer freeze → user force-quits)
+        # terminates exiftool too. Without this, orphan exiftool
+        # processes holding file handles into the scanned tree are
+        # the root cause of the user-reported Explorer freeze. On
+        # POSIX or when pywin32 isn't installed, this block is a no-op
+        # and the legacy Popen lifetime applies.
+        _job = _get_kill_on_close_job()
+        if _job is not None:
+            try:
+                import win32api  # type: ignore[import-not-found]
+                import win32job  # type: ignore[import-not-found]
+                # PROCESS_ALL_ACCESS = 0x001F0FFF (documented Win32
+                # constant). Needed for AssignProcessToJobObject to
+                # transfer the child to the job.
+                _handle = int(win32api.OpenProcess(0x001F0FFF, False, self.proc.pid))
+                win32job.AssignProcessToJobObject(_job, _handle)
+            except Exception:  # pylint: disable=broad-exception-caught
+                # AssignProcessToJobObject can fail if the child is
+                # already in another job and nesting is disabled
+                # (pre-Win8) — leave the child unjailed rather than
+                # abort the scan.
+                pass
         self._stderr_buf: list[str] = []
         self._stderr_lock = threading.Lock()
         self._stderr_thread = threading.Thread(
