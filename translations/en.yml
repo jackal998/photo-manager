@@ -381,6 +381,9 @@ exit:
   button_save_leave: "Save && leave"
   button_leave: "Leave"
   button_back: "Back"
+  # #468 — defense-in-depth guard when closing the main window while a scan worker is alive.
+  scan_running_title: "Scan in progress"
+  scan_running_body: "A scan is still running.\n\nIf you exit now, the scan will be cancelled and any partial results will be discarded."
 
 # Language switch confirmation — fires before the live window rebuild.
 language:

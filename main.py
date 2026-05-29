@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTranslator
+from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QThread, QTranslator
 from PySide6.QtGui import QImageReader
 from PySide6.QtWidgets import QApplication
 from loguru import logger
@@ -77,6 +77,54 @@ def install_locale_translators(app: QApplication, settings: JsonSettings) -> Non
         app.installTranslator(qt_translator)
 
 
+def _cleanup_on_quit(app: QApplication) -> None:
+    """#473 — Graceful shutdown hook wired to ``QApplication.aboutToQuit``.
+
+    Fires on every Qt-detected quit path (main window close cascade,
+    Qt-detected OS logoff, ``QApplication.quit()``) — NOT on hard
+    SIGKILL / Job Object termination, which #460 handles separately.
+
+    Responsibilities:
+      1. Signal any in-flight ``ScanWorker`` to stop. The worker is
+         owned by ``ScanDialog._worker`` rather than the app or vm,
+         so we discover it by walking top-level widgets and looking
+         for an attribute named ``_worker`` that's a running
+         ``QThread``. Stays import-cycle-free (no ScanDialog import)
+         and naturally extends to any future dialog owning a QThread
+         under the same attribute name.
+      2. Flush loguru. The file sink runs with ``enqueue=True`` (see
+         ``infrastructure/logging.init_logging``), so pending records
+         sit in a background queue; ``logger.complete()`` waits for
+         the queue to drain and ``logger.remove()`` closes the sink
+         so the rotating ``app_<date>.log`` is fully written before
+         the process exits.
+
+    Best-effort throughout — any exception is logged but never raised,
+    because Qt swallows exceptions from ``aboutToQuit`` slots and a
+    half-failed cleanup must not block shutdown.
+    """
+    try:
+        for widget in app.topLevelWidgets():
+            worker = getattr(widget, "_worker", None)
+            if isinstance(worker, QThread) and worker.isRunning():
+                logger.info("aboutToQuit: signalling running ScanWorker to stop")
+                worker.requestInterruption()
+                # Match scan_dialog.closeEvent's 3s budget — long enough
+                # for the worker to tear down exiftool + consumer threads,
+                # short enough that quit doesn't visibly hang.
+                worker.wait(3000)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("aboutToQuit worker cleanup failed: {}", exc)
+
+    try:
+        # complete() drains the enqueue=True background queue; remove()
+        # then closes every sink so the log file handle is released.
+        logger.complete()
+        logger.remove()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 def make_main_window(
     vm: MainVM,
     image_service: ImageService,
@@ -109,6 +157,12 @@ def main() -> int:
 
     app = QApplication(sys.argv)
 
+    # #473 — graceful-shutdown hook. Pairs with #460 (Job Object kills
+    # exiftool on hard exit) and #468 (main-window scan guard): this
+    # covers the Qt-detected quit path. Lambda captures ``app`` so the
+    # cleanup function gets the right QApplication instance.
+    app.aboutToQuit.connect(lambda: _cleanup_on_quit(app))
+
     # Initialize translation catalogs (YAML + Qt's bundled qtbase_*.qm)
     # for the persisted ui.locale. Same helper used by the live
     # language switch.
@@ -118,79 +172,86 @@ def main() -> int:
     default_sort = _parse_default_sort(settings)
     vm = MainVM(default_sort=default_sort)
 
-    # HEIC diagnostics: log supported formats and try WIC 512/1024 on the first HEIC
-    try:
-        fmts = sorted(
-            {
-                bytes(f).decode("ascii", errors="ignore").lower()
-                for f in QImageReader.supportedImageFormats()
-            }
-        )
-        logger.info("Qt supported formats: {}", ", ".join(fmts))
-        heic_path: str | None = None
-        for g in getattr(vm, "groups", []) or []:
-            for rec in getattr(g, "items", []) or []:
-                p = getattr(rec, "file_path", "")
-                if isinstance(p, str) and p.lower().endswith((".heic", ".heif")):
-                    heic_path = p
+    # #469 — HEIC diagnostics: log supported formats and try WIC 512/1024 on
+    # the first HEIC. Gated on PHOTO_MANAGER_HEIC_DIAG so normal startups
+    # stay quiet — the block is a developer probe (not user telemetry), and
+    # on NAS-backed first-HEIC paths the synchronous WIC + COM init on the
+    # main thread before app.exec() can make the app appear to "not launch"
+    # for several seconds. Keep the probe available by env var; off by
+    # default.
+    if os.environ.get("PHOTO_MANAGER_HEIC_DIAG"):
+        try:
+            fmts = sorted(
+                {
+                    bytes(f).decode("ascii", errors="ignore").lower()
+                    for f in QImageReader.supportedImageFormats()
+                }
+            )
+            logger.info("Qt supported formats: {}", ", ".join(fmts))
+            heic_path: str | None = None
+            for g in getattr(vm, "groups", []) or []:
+                for rec in getattr(g, "items", []) or []:
+                    p = getattr(rec, "file_path", "")
+                    if isinstance(p, str) and p.lower().endswith((".heic", ".heif")):
+                        heic_path = p
+                        break
+                if heic_path:
                     break
             if heic_path:
-                break
-        if heic_path:
-            try:
-                exists = os.path.exists(heic_path)
-                logger.info("HEIC probe path: {} | exists={}", heic_path, exists)
-                if exists:
-                    try:
-                        r = QImageReader(heic_path)
-                        r.setAutoTransform(True)
-                        _img = r.read()
-                        if _img is None or _img.isNull():
-                            logger.info(
-                                "Qt read (orig) failed: {}", r.errorString() or "null image"
-                            )
-                        else:
-                            logger.info("Qt read (orig) ok: {}x{}", _img.width(), _img.height())
-                    except Exception as ex:
-                        logger.info("Qt read (orig) exception: {}", ex)
-
-                    for side in (512, 1024):
+                try:
+                    exists = os.path.exists(heic_path)
+                    logger.info("HEIC probe path: {} | exists={}", heic_path, exists)
+                    if exists:
                         try:
-                            wic = img._load_via_shell_thumbnail(heic_path, side)  # type: ignore[attr-defined]
-                            if wic is None or wic.isNull():
-                                logger.info("WIC {} failed", side)
+                            r = QImageReader(heic_path)
+                            r.setAutoTransform(True)
+                            _img = r.read()
+                            if _img is None or _img.isNull():
+                                logger.info(
+                                    "Qt read (orig) failed: {}", r.errorString() or "null image"
+                                )
                             else:
-                                logger.info("WIC {} ok: {}x{}", side, wic.width(), wic.height())
+                                logger.info("Qt read (orig) ok: {}x{}", _img.width(), _img.height())
                         except Exception as ex:
-                            logger.info("WIC {} exception: {}", side, ex)
+                            logger.info("Qt read (orig) exception: {}", ex)
 
-                    try:
-                        pub512 = img.get_thumbnail(heic_path, 512)
-                        if pub512 is None or pub512.isNull():
-                            logger.info("Public thumbnail 512 failed")
-                        else:
-                            logger.info(
-                                "Public thumbnail 512 ok: {}x{}", pub512.width(), pub512.height()
-                            )
-                    except Exception as ex:
-                        logger.info("Public thumbnail 512 exception: {}", ex)
+                        for side in (512, 1024):
+                            try:
+                                wic = img._load_via_shell_thumbnail(heic_path, side)  # type: ignore[attr-defined]
+                                if wic is None or wic.isNull():
+                                    logger.info("WIC {} failed", side)
+                                else:
+                                    logger.info("WIC {} ok: {}x{}", side, wic.width(), wic.height())
+                            except Exception as ex:
+                                logger.info("WIC {} exception: {}", side, ex)
 
-                    try:
-                        pub1024 = img.get_preview(heic_path, 1024)
-                        if pub1024 is None or pub1024.isNull():
-                            logger.info("Public preview 1024 failed")
-                        else:
-                            logger.info(
-                                "Public preview 1024 ok: {}x{}", pub1024.width(), pub1024.height()
-                            )
-                    except Exception as ex:
-                        logger.info("Public preview 1024 exception: {}", ex)
-            except Exception as ex:
-                logger.info("HEIC probe outer exception: {}", ex)
-        else:
-            logger.info("No HEIC path found in loaded data for diagnostics.")
-    except Exception as ex:
-        logger.info("HEIC diagnostics skipped due to exception: {}", ex)
+                        try:
+                            pub512 = img.get_thumbnail(heic_path, 512)
+                            if pub512 is None or pub512.isNull():
+                                logger.info("Public thumbnail 512 failed")
+                            else:
+                                logger.info(
+                                    "Public thumbnail 512 ok: {}x{}", pub512.width(), pub512.height()
+                                )
+                        except Exception as ex:
+                            logger.info("Public thumbnail 512 exception: {}", ex)
+
+                        try:
+                            pub1024 = img.get_preview(heic_path, 1024)
+                            if pub1024 is None or pub1024.isNull():
+                                logger.info("Public preview 1024 failed")
+                            else:
+                                logger.info(
+                                    "Public preview 1024 ok: {}x{}", pub1024.width(), pub1024.height()
+                                )
+                        except Exception as ex:
+                            logger.info("Public preview 1024 exception: {}", ex)
+                except Exception as ex:
+                    logger.info("HEIC probe outer exception: {}", ex)
+            else:
+                logger.info("No HEIC path found in loaded data for diagnostics.")
+        except Exception as ex:
+            logger.info("HEIC diagnostics skipped due to exception: {}", ex)
 
     win = make_main_window(vm, img, settings)
     win.show()

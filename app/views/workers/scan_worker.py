@@ -471,7 +471,16 @@ class ScanWorker(QThread):
         # instance, but N independent instances scale near-linearly up
         # to the CPU cap baked into self.exif_workers.
         consumer_threads = [
-            threading.Thread(target=_exif_consumer, name=f"exif-consumer-{i}")
+            # #472 — daemon=True so interpreter shutdown can't block on a
+            # consumer thread that, due to a future bug, didn't receive its
+            # sentinel. Normal cancel + happy paths still drain via the
+            # sentinel-then-join contract below; daemon flag is the
+            # emergency-only fallback.
+            threading.Thread(
+                target=_exif_consumer,
+                name=f"exif-consumer-{i}",
+                daemon=True,
+            )
             for i in range(self.exif_workers)
         ]
         for t in consumer_threads:
@@ -561,6 +570,15 @@ class ScanWorker(QThread):
         # total=0 so the receiver renders the bar as indeterminate
         # ("CLASSIFY — working…") instead of stuck at 0%. Pattern
         # repeats for SCORE and WRITE below.
+        # #463 — opaque stages (CLASSIFY/SCORE/AUTO-SELECT/WRITE) each
+        # check isInterruptionRequested() at entry so a user-cancel
+        # during the final 10-15s of a scan actually stops the pipeline
+        # before write_manifest overwrites the output path. Mirrors the
+        # HASH-loop cancel pattern above.
+        if self.isInterruptionRequested():
+            logger.warning("Scan cancelled by user before classify pass")
+            self.failed.emit("Scan cancelled.")
+            return
         self._emit("Classifying…")
         classify_tracker = _StageTracker(STAGE_CLASSIFY)
         self._emit_stage(classify_tracker, 0, 0, force=True)
@@ -577,6 +595,10 @@ class ScanWorker(QThread):
         # xmp_derived from extracts into ManifestRow, then assigns
         # compute_score(...) per group. Isolated rows (group_id is None)
         # stay unscored — no peers to compete with.
+        if self.isInterruptionRequested():
+            logger.warning("Scan cancelled by user before scoring pass")
+            self.failed.emit("Scan cancelled.")
+            return
         score_tracker = _StageTracker(STAGE_SCORE)
         self._emit_stage(score_tracker, 0, 0, force=True)
         apply_scoring_to_rows(rows, extracts)
@@ -607,6 +629,10 @@ class ScanWorker(QThread):
         # a scored group gets user_decision='delete'. Off by default
         # (destructive-leaning); the user still confirms via the
         # standard ExecuteAction flow before any file moves.
+        if self.isInterruptionRequested():
+            logger.warning("Scan cancelled by user before auto-select pass")
+            self.failed.emit("Scan cancelled.")
+            return
         keepers: set[str] = set()
         if self.auto_select_enabled:
             from core.services.auto_select import top_score_path_per_group
@@ -625,6 +651,13 @@ class ScanWorker(QThread):
             self._emit(line)
 
         # --- 5. Write manifest ---
+        # #463 — refuse to write the manifest on cancel; write_manifest
+        # overwrites whatever sits at output_path so a late cancel would
+        # otherwise destroy the previous scan's manifest with a partial.
+        if self.isInterruptionRequested():
+            logger.warning("Scan cancelled by user before manifest write")
+            self.failed.emit("Scan cancelled.")
+            return
         self._emit(f"Writing manifest → {self.output_path}")
         write_tracker = _StageTracker(STAGE_WRITE)
         self._emit_stage(write_tracker, 0, 0, force=True)

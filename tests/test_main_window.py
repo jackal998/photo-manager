@@ -797,6 +797,11 @@ def test_on_scan_sources_opens_scan_dialog_with_callbacks(monkeypatch):
     class FakeScanDialog:
         def __init__(self, **kwargs):
             captured.update(kwargs)
+            # #468 — MainWindow.on_scan_sources connects to these signals;
+            # MagicMock supplies a .connect() that no-ops cleanly so the
+            # test doesn't have to care about Qt signal mechanics.
+            self.scan_started = MagicMock()
+            self.scan_finished = MagicMock()
 
         def exec(self):
             captured["exec_called"] = True

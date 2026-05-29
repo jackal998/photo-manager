@@ -297,6 +297,9 @@ exit:
   button_save_leave: "儲存並離開(&S)"
   button_leave: "離開"
   button_back: "返回"
+  # #468 — defense-in-depth guard when closing the main window while a scan worker is alive.
+  scan_running_title: "掃描進行中"
+  scan_running_body: "目前仍有掃描正在執行。\n\n如果現在離開,掃描會被取消,任何尚未完成的部分結果都會被丟棄。"
 
 language:
   confirm_title: "要切換語言嗎?"

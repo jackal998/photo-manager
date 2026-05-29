@@ -130,7 +130,11 @@ def compute_hashes(
         mc = tiny.getpixel((0, 0))[:3]
         return sha, str(imagehash.phash(img)), f"{mc[0]},{mc[1]},{mc[2]}", raw_date, px_w, px_h
     except (ValueError, TypeError):
-        return sha, None, None, raw_date, None, None
+        # #470 — preserve px_w / px_h measured before the phash compute attempt.
+        # Wiping them to None would force scoring._score_resolution to 0.0 even
+        # though the dimensions are known and valid; phash failure shouldn't
+        # cascade into a fake resolution-zero penalty.
+        return sha, None, None, raw_date, px_w, px_h
 
 
 def _raw_exif_date(img: "Image.Image") -> Optional[str]:
