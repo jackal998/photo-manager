@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -50,12 +51,47 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)
 
 
 def write_manifest(rows: list[ManifestRow], output: Path) -> None:
-    """Create (or overwrite) the SQLite manifest at output."""
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists():
-        output.unlink()
+    """Create (or overwrite) the SQLite manifest at ``output``.
 
-    with sqlite3.connect(output) as conn:
+    #464 — writes to a sibling ``<output>.tmp.sqlite`` first, then
+    ``os.replace()`` over the destination once the connection is closed.
+    Guarantees:
+
+      * Orphan ``-wal`` / ``-shm`` sidecars from a previous writer (or a
+        mid-write cancel — see #463) never bleed into the new manifest;
+        the temp DB owns its own sidecars, which are checkpointed away
+        when the connection closes.
+      * A partial write (process killed mid-INSERT, see #460) never
+        reaches the destination — the temp file may be left behind for
+        cleanup on the next call, but the live manifest stays consistent.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output.with_name(output.name + ".tmp.sqlite")
+    # Sweep both:
+    #   1. Stale TEMP from a previously-killed run — would block sqlite3.connect
+    #      on Windows (file lock) and corrupt the new write otherwise.
+    #   2. Orphan DESTINATION -wal/-shm — os.replace below only renames the
+    #      .sqlite itself; if a prior writer crashed pre-checkpoint and left
+    #      sidecars next to the destination, they'd survive the replace.
+    #      SQLite invalidates them via salt mismatch on the next open, so they
+    #      don't corrupt the manifest — but they leave junk on disk and
+    #      compound debugging when "the manifest looks empty/old."
+    for stale in (
+        tmp_path,
+        tmp_path.with_name(tmp_path.name + "-wal"),
+        tmp_path.with_name(tmp_path.name + "-shm"),
+        output.with_name(output.name + "-wal"),
+        output.with_name(output.name + "-shm"),
+    ):
+        if stale.exists():
+            stale.unlink()
+
+    # ``with sqlite3.connect(...)`` only commits/rolls back on exit — it
+    # does NOT close the connection. On Windows the connection keeps a
+    # file lock that would fail ``os.replace`` below, so we use explicit
+    # try/finally with ``conn.close()`` to release the handle.
+    conn = sqlite3.connect(tmp_path)
+    try:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.executescript(_DDL)
@@ -87,6 +123,15 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
             ],
         )
         conn.commit()
+        # Force WAL checkpoint so the temp DB has no live sidecars when
+        # the connection closes — keeps the rename single-file atomic.
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+
+    # Connection is fully closed here. ``os.replace`` is atomic on POSIX
+    # and on Windows (Python 3.3+) when the destination exists.
+    os.replace(tmp_path, output)
 
 
 def print_summary(rows: list[ManifestRow], skipped: int = 0) -> None:
