@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import subprocess
 import sys
 import threading
@@ -10,6 +11,24 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+
+# #465 — default timeout for individual stdout-line reads inside
+# ``ExiftoolProcess.execute()``. 60s is generous — even a 500-file
+# batch on NAS produces lines well before that window — but a wedged
+# exiftool (corrupt input, dropped SMB session, kernel pipe stall)
+# would otherwise block ``readline()`` indefinitely and hang the
+# consumer thread for the rest of the scan. Caller catches
+# ``ExiftoolTimeout`` and rotates to a fresh process.
+_EXIFTOOL_READ_TIMEOUT_SECONDS = 60.0
+
+
+class ExiftoolTimeout(Exception):
+    """Raised by :meth:`ExiftoolProcess.execute` when the stdout reader
+    thread doesn't produce a line within the timeout window. Signals a
+    wedged exiftool — caller should ``close()`` the process (force-kill
+    path) and rotate to a fresh instance.
+    """
 
 # Suppress the fresh-console window Windows allocates for a console-subsystem
 # child (exiftool) spawned by a windowed-subsystem parent (PyInstaller
@@ -140,6 +159,16 @@ class ExiftoolProcess:
             target=self._drain_stderr, daemon=True
         )
         self._stderr_thread.start()
+        # #465 — stdout reader thread mirrors the stderr drain pattern.
+        # ``queue.Queue`` is thread-safe; the ``execute()`` consumer uses
+        # ``get(timeout=...)`` to detect wedges instead of blocking on
+        # ``readline()`` indefinitely. A ``None`` enqueued by the reader
+        # signals EOF / read error so ``execute()`` can exit cleanly.
+        self._stdout_queue: queue.Queue[Optional[str]] = queue.Queue()
+        self._stdout_thread = threading.Thread(
+            target=self._drain_stdout, daemon=True
+        )
+        self._stdout_thread.start()
 
     def _drain_stderr(self) -> None:
         """Continuously pull lines off the stderr pipe so exiftool never
@@ -157,17 +186,51 @@ class ExiftoolProcess:
             with self._stderr_lock:
                 self._stderr_buf.append(line)
 
-    def execute(self, args: list) -> str:
+    def _drain_stdout(self) -> None:
+        """Continuously pull lines off the stdout pipe and queue them for
+        :meth:`execute`. A ``None`` sentinel is enqueued on EOF / read
+        error so ``execute()`` can detect process death without polling.
+        """
+        while True:
+            try:
+                line = self.proc.stdout.readline()
+            except Exception:  # pylint: disable=broad-exception-caught
+                # The proc may have closed; signal EOF and exit.
+                self._stdout_queue.put(None)
+                break
+            if not line:
+                self._stdout_queue.put(None)
+                break
+            self._stdout_queue.put(line)
+
+    def execute(
+        self, args: list, read_timeout: float = _EXIFTOOL_READ_TIMEOUT_SECONDS,
+    ) -> str:
         """Send args to exiftool, return stdout (with any stderr appended)
         up to the ``{ready}`` sentinel.
+
+        Raises :class:`ExiftoolTimeout` if the stdout reader thread
+        doesn't yield a line within ``read_timeout`` seconds. Indicates
+        a wedged exiftool process — the caller should ``close()`` it
+        (force-kill path) and rotate to a fresh instance.
         """
         cmd = "\n".join(str(a) for a in args) + "\n-execute\n"
         self.proc.stdin.write(cmd)
         self.proc.stdin.flush()
         lines = []
         while True:
-            line = self.proc.stdout.readline()
-            if not line:
+            try:
+                line = self._stdout_queue.get(timeout=read_timeout)
+            except queue.Empty:
+                raise ExiftoolTimeout(
+                    f"exiftool stdout idle for {read_timeout}s — process "
+                    "appears wedged (corrupt input, dropped NAS, kernel "
+                    "pipe stall, or stay_open deadlock). Caller should "
+                    "close + rotate to a fresh ExiftoolProcess."
+                )
+            if line is None:
+                # EOF / read error — process is dead. Break and return
+                # whatever stdout we accumulated; stderr appended below.
                 break
             stripped = line.rstrip("\n")
             if stripped == "{ready}":

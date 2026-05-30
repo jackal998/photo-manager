@@ -589,6 +589,71 @@ class TestExiftoolProcess:
         all_writes = [c[0][0] for c in proc.stdin.write.call_args_list]
         assert any("-stay_open" in w and "False" in w for w in all_writes)
 
+    def test_execute_raises_timeout_when_stdout_idle(self, monkeypatch):
+        """#465 — when exiftool's stdout produces no line within the
+        ``read_timeout`` window, ``execute()`` must raise
+        ``ExiftoolTimeout`` instead of blocking ``readline()`` forever.
+
+        This is the regression that pre-#465 wedged the entire scan
+        worker: a corrupt input / dropped NAS / kernel pipe stall would
+        leave the consumer thread stuck inside ``readline()`` and the
+        wider scan would deadlock until process exit. With the timeout
+        the wedge surfaces as a clean exception the caller can act on
+        (close + rotate to a fresh ExiftoolProcess).
+        """
+        import threading as _threading
+        from scanner import exif
+
+        # Block stdout.readline forever — simulates a wedged exiftool.
+        # The drain thread will sit inside readline; the queue stays
+        # empty; execute()'s queue.get(timeout=...) must give up.
+        blocker = _threading.Event()  # never set → wait blocks forever
+
+        def blocking_readline():
+            blocker.wait()
+            return ""
+
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdout = MagicMock()
+        proc.stdout.readline.side_effect = blocking_readline
+        proc.stderr = MagicMock()
+        proc.stderr.readline.side_effect = lambda: ""   # immediate EOF
+
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+        et = exif.ExiftoolProcess()
+
+        # Short timeout so the test completes quickly; production
+        # default is 60s (constant in scanner/exif.py).
+        with pytest.raises(exif.ExiftoolTimeout) as exc_info:
+            et.execute(["-DateTimeOriginal"], read_timeout=0.1)
+
+        # Error message names the timeout window so triage from a log
+        # snippet alone doesn't require reading the source.
+        assert "0.1" in str(exc_info.value)
+        assert "wedged" in str(exc_info.value).lower()
+
+        # Unblock the drain thread so it can exit (it's a daemon so it
+        # would die with the test process anyway, but cleaning up
+        # explicitly keeps subsequent tests' state clean).
+        blocker.set()
+
+    def test_execute_normal_path_unaffected_by_timeout_default(self, monkeypatch):
+        """Regression guard: the queue+timeout refactor must not change
+        the happy-path return value. Same input → same output as the
+        pre-#465 implementation."""
+        from scanner import exif
+
+        proc = self._make_mock_proc(
+            ["[{\"SourceFile\":\"/a.jpg\",\"EXIF:DateTimeOriginal\":\"2024:01:01 12:00:00\"}]\n"],
+        )
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+        et = exif.ExiftoolProcess()
+        out = et.execute(["-j", "-G", "-DateTimeOriginal", "/a.jpg"])
+
+        assert "2024:01:01 12:00:00" in out
+        assert "/a.jpg" in out
+
 
 # ── _read_chunk: JSON structural guarantees (the photo-manager#145 fixes) ─
 
