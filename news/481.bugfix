@@ -1,0 +1,1 @@
+Add stdout-read timeout to ExiftoolProcess.execute so a wedged exiftool surfaces as a clean ExiftoolTimeout exception instead of blocking readline() and hanging the scan consumer thread (#465).
