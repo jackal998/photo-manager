@@ -276,6 +276,18 @@ def _score_date_provenance(row: "ManifestRow") -> float:
     shot_date because no real EXIF DateTimeOriginal exists. Without
     storing the source tag separately in the DB, this comparison is the
     best heuristic available.
+
+    Tz-mismatch pragmatic fallback (#467): ``shot_date`` is camera-local
+    with tz info stripped (scanner/exif.py), while ``mtime`` is
+    scanner-local (scanner/dedup.py uses ``fromtimestamp``). When
+    camera and scanner are in different zones, a real EXIF date can be
+    off from mtime by a whole-hour multiple. The 2s gate doesn't trip
+    on the resulting large diff (the score happens to be 1.0 already),
+    but the explicit hour-multiple check makes the invariant
+    load-bearing — if the gate ever widened, the tz-mismatch case
+    would otherwise be wrongly demoted. Strict tz-aware handling via
+    OffsetTimeOriginal is deferred until scanner/exif.py is unlocked
+    by #460's PR merge.
     """
     if row.shot_date is None:
         return 0.0
@@ -283,8 +295,19 @@ def _score_date_provenance(row: "ManifestRow") -> float:
         try:
             shot = datetime.fromisoformat(row.shot_date)
             mt = datetime.fromisoformat(row.mtime)
-            if abs((shot - mt).total_seconds()) < 2.0:
+            diff = abs((shot - mt).total_seconds())
+            # Same-tz mtime-derived: very small diff. Check FIRST because
+            # the tz-mismatch test below would also match diff < 2.0
+            # (remainder == diff in that range), which would wrongly
+            # promote a suspicious row.
+            if diff < 2.0:
                 return 0.3   # suspicious: shot_date == mtime, likely derived
+            # Cross-tz tz-strip artefact: diff is close to a whole-hour
+            # multiple — likely a real EXIF date that just looks far
+            # from mtime because of the camera↔scanner tz delta.
+            remainder = diff % 3600.0
+            if remainder < 2.0 or remainder > 3598.0:
+                return 1.0
         except (ValueError, TypeError):
             # Malformed date string — fall through to the default below.
             pass
@@ -314,13 +337,17 @@ def _score_path(row: "ManifestRow") -> float:
     """Penalty score from directory path. Each path segment matching a
     'bad' substring (Downloads, WhatsApp, Screenshots, temp, …)
     subtracts 0.25 from a 1.0 base; floor 0.0.
+
+    Only directory segments are inspected — the basename is scored
+    by ``_score_filename`` and excluding it here avoids double-counting
+    (#466). Each segment contributes at most one −0.25, even if it
+    matches multiple bad-keyword keys (e.g. a folder named
+    "screenshots" hits both ``screenshots`` and ``screenshot``).
     """
-    parts_lower = [p.lower() for p in Path(row.source_path).parts]
+    parts_lower = [p.lower() for p in Path(row.source_path).parent.parts]
     hits = sum(
-        1
-        for seg in parts_lower
-        for bad in _BAD_PATH_SEGMENTS
-        if bad in seg
+        1 for seg in parts_lower
+        if any(bad in seg for bad in _BAD_PATH_SEGMENTS)
     )
     return max(0.0, 1.0 - 0.25 * hits)
 

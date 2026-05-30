@@ -1,0 +1,1 @@
+Fix scoring path penalty to exclude the basename (no double-count vs filename score) and de-duplicate per-segment hits when one folder matches multiple bad keywords; add forward-defensive tz-mismatch fallback to date-provenance heuristic (#466, #467).

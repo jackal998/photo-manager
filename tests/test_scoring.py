@@ -250,6 +250,30 @@ class TestDateProvenanceScore:
         )
         assert _score_date_provenance(row) == 1.0
 
+    def test_whole_hour_tz_offset_treated_as_real_exif(self):
+        """#467 — when shot_date and mtime differ by a whole-hour
+        multiple (camera-local-tz-stripped vs scanner-local-tz),
+        treat the diff as a tz-mismatch artefact and score 1.0.
+        Forward-defensive: today the result is 1.0 anyway via the
+        diff > 2 fall-through, but the explicit hour-multiple check
+        guards against future widening of the 2s gate."""
+        # Camera-JST shot scanned on a UTC box: shot_date is naive
+        # camera-local (12:00:00), mtime is naive scanner-local
+        # (03:00:00 — same instant in UTC, 9-hour delta).
+        row = _row(
+            "/x/a.jpg",
+            shot_date="2024-06-15T12:00:00",
+            mtime="2024-06-15T03:00:00",
+        )
+        assert _score_date_provenance(row) == 1.0
+        # Edge: diff just below an hour-multiple boundary (within ±2s).
+        row2 = _row(
+            "/x/a.jpg",
+            shot_date="2024-06-15T11:59:58",
+            mtime="2024-06-15T03:00:00",
+        )
+        assert _score_date_provenance(row2) == 1.0
+
 
 # ── Tier 2 dimension 5: GPS ────────────────────────────────────────────────
 
@@ -329,6 +353,22 @@ class TestPathScore:
         """Filesystems vary on case sensitivity — match must work
         regardless of how the OS rendered the path."""
         row = _row("/Users/me/DOWNLOADS/photo.jpg")
+        assert _score_path(row) == pytest.approx(0.75)
+
+    def test_basename_matching_bad_keyword_not_counted_by_path(self):
+        """#466 — `_score_path` inspects only directory parts, not the
+        basename. A file named 'screenshot.jpg' in an otherwise clean
+        directory scores 1.0 from path; the filename penalty is
+        `_score_filename`'s job — counting it here would double-count."""
+        row = _row("/Users/me/Photos/2024/screenshot.jpg")
+        assert _score_path(row) == 1.0
+
+    def test_segment_matching_multiple_keys_counts_once(self):
+        """#466 — a single folder segment that matches multiple
+        bad-keyword keys (e.g. 'screenshots' matches both
+        ``screenshots`` and ``screenshot`` via substring) should only
+        contribute one -0.25, not -0.50."""
+        row = _row("/Users/me/screenshots/2024/photo.jpg")
         assert _score_path(row) == pytest.approx(0.75)
 
 
