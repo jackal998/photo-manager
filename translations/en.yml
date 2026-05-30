@@ -180,6 +180,7 @@ execute_dialog:
   select_button: "Select by Field/Regex…"
   set_action_menu: "Set Action"
   execute_button: "Execute"
+  execute_selected_button: "Execute selected"
   close_button: "Close"
   summary_decided: "<b>{count}</b> file(s) with decisions: {n_delete} delete. Right-click a file row to change its decision."
   summary_none: "No decisions set — use 'Set Action' to mark files for deletion."
@@ -202,6 +203,9 @@ execute_dialog:
 singleton_prune_confirm:
   title: "Prune singleton groups?"
   body: "{count} group(s) now have only one file remaining after the last action. They're no longer duplicate-review items.\n\nRemove these {count} singletons from the review list?"
+  body_mixed: "{count_plain} singleton group(s) now have only one file remaining after the last action. Additionally, {count_actioned} singleton(s) still carry a pending action that was NOT executed.\n\nRemove the {count_plain} plain singletons from the review list?"
+  body_actioned_only: "{count_actioned} singleton(s) still carry a pending action (delete / remove from list) that was NOT executed by the last operation.\n\nRemove these {count_actioned} items from the review list anyway?"
+  checkbox_include_actioned: "Also remove {count} singleton(s) with pending non-executed actions"
   checkbox_dont_ask: "Remember my choice — don't ask again"
   btn_remove: "Remove {count}"
   btn_keep: "Keep all"

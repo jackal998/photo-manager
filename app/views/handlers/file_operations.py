@@ -648,29 +648,54 @@ class FileOperationsHandler:
             logger.warning("Failed to sync removed paths to manifest: {}", exc)
 
     def _maybe_offer_singleton_prune(self) -> None:
-        """#426 — after a destructive op, if any group is now down to a
-        single item, offer to remove those singletons in one batch.
+        """#426 + Improvement 2 in the partial-execute bundle — after a
+        destructive op, if any group is now down to a single item, offer
+        to remove those singletons in one batch.
 
         Honors ``settings.get("ui.prune_singletons", "ask")``:
           * ``"ask"`` (default)  — fire the confirm dialog.
           * ``"always"`` — silently prune; never ask again.
           * ``"never"``  — silently keep; never ask again.
 
-        Batched: one dialog per destructive op covering ALL singletons it
-        produced, ONE ``vm.remove_from_list`` call + ONE
-        ``_sync_removed_to_db`` call (perf-aware per the issue's
-        ≤5000-singletons acceptance criterion). On a clean state with
-        no singletons present, this is a fast O(N) no-op.
+        Singletons are classified into two buckets:
+          * **plain** — the remaining item has no pending decision
+            (``user_decision == ""`` per the auto-select / #393
+            canonical-keep convention).
+          * **actioned** — the remaining item has a pending non-keep-able
+            decision (``delete`` / ``remove_from_list``) that was NOT
+            executed. Common after the partial-execute flow (Improvement
+            1): only some decisions were executed, the executed peers
+            vanish, the not-yet-executed singleton remains.
+
+        The ``"always"`` preference path sweeps BOTH buckets — the
+        user's standing instruction is "don't ask, just prune
+        singletons" regardless of action state. ``"ask"`` defers to the
+        dialog's per-bucket verdict (actioned bucket is opt-in,
+        default unchecked).
+
+        Batched: one dialog per destructive op, one
+        ``_apply_singleton_prune`` call per opted-in bucket — perf-aware
+        per the original issue's ≤5000-singletons acceptance criterion.
         """
-        # Collect singletons from the current vm state.
-        singleton_paths: list[str] = []
+        # Collect singletons from the current vm state, classified by
+        # whether the remaining item has a pending non-keep-able decision.
+        plain_paths: list[str] = []
+        actioned_paths: list[str] = []
+        non_keepable_decisions = {"delete", REMOVE_FROM_LIST_DECISION}
         for g in self.vm.groups:
             items = getattr(g, "items", [])
-            if len(items) == 1:
-                fp = getattr(items[0], "file_path", None)
-                if fp:
-                    singleton_paths.append(fp)
-        if not singleton_paths:
+            if len(items) != 1:
+                continue
+            rec = items[0]
+            fp = getattr(rec, "file_path", None)
+            if not fp:
+                continue
+            decision = getattr(rec, "user_decision", "") or ""
+            if decision in non_keepable_decisions:
+                actioned_paths.append(fp)
+            else:
+                plain_paths.append(fp)
+        if not plain_paths and not actioned_paths:
             return
 
         pref = "ask"
@@ -681,26 +706,43 @@ class FileOperationsHandler:
         if pref == "never":
             return
         if pref == "always":
-            self._apply_singleton_prune(singleton_paths)
+            # Standing instruction is "prune singletons" — sweep both
+            # buckets in the single batched call.
+            self._apply_singleton_prune(plain_paths + actioned_paths)
             return
 
         # pref == "ask" — show the dialog.
         from app.views.dialogs.singleton_prune_confirm_dialog import (
             SingletonPruneConfirmDialog,
         )
-        verdict, remember = SingletonPruneConfirmDialog.ask(
-            self.parent, count=len(singleton_paths)
+        prune_verdict = SingletonPruneConfirmDialog.ask(
+            self.parent,
+            count_plain=len(plain_paths),
+            count_actioned=len(actioned_paths),
         )
-        if remember:
-            new_pref = "always" if verdict == SingletonPruneConfirmDialog.REMOVE else "never"
+        if prune_verdict.remember:
+            # "Remember my choice" flips the standing preference. A
+            # remembered Remove implies "prune both buckets next time"
+            # (the user's standing intent is sweep-singletons); a
+            # remembered Keep-all implies "never ask again". The
+            # actioned-bucket opt-in is per-event, not remembered —
+            # baking it into the standing pref would silently start
+            # removing actioned singletons on every future run.
+            new_pref = (
+                "always"
+                if (prune_verdict.prune_plain or prune_verdict.prune_actioned)
+                else "never"
+            )
             try:
                 self.settings.set("ui.prune_singletons", new_pref)
                 if hasattr(self.settings, "save"):
                     self.settings.save()
             except Exception as exc:
                 logger.warning("Failed to persist ui.prune_singletons: {}", exc)
-        if verdict == SingletonPruneConfirmDialog.REMOVE:
-            self._apply_singleton_prune(singleton_paths)
+        if prune_verdict.prune_plain and plain_paths:
+            self._apply_singleton_prune(plain_paths)
+        if prune_verdict.prune_actioned and actioned_paths:
+            self._apply_singleton_prune(actioned_paths)
 
     def _apply_singleton_prune(self, paths: list[str]) -> None:
         """Run the batched prune — one vm call, one DB sync, one refresh."""

@@ -2310,13 +2310,23 @@ class TestSingletonPruneOffer:
         scale fixtures grind the UI thread.
     """
 
-    def _build(self, group_layouts, *, pref="ask"):
+    def _build(self, group_layouts, *, pref="ask", actioned_groups=None):
         """Build a handler whose vm.groups match group_layouts (a list
         of group sizes — e.g. [1, 1, 3] = two singletons + a 3-row
-        group). ``pref`` seeds the settings reply."""
+        group). ``pref`` seeds the settings reply.
+
+        ``actioned_groups`` (optional) — set of group_number values
+        whose SINGLE item should carry ``user_decision='delete'``
+        (a non-keep-able decision). Only meaningful for groups of
+        size 1; lets a test produce mixed plain/actioned singleton
+        buckets to drive Improvement 2's classifier.
+        """
+        actioned_groups = actioned_groups or set()
         groups: list[PhotoGroup] = []
         for gn, size in enumerate(group_layouts, start=1):
             items = [_rec(f"/g{gn}_i{i}.jpg") for i in range(size)]
+            if size == 1 and gn in actioned_groups:
+                items[0].user_decision = "delete"
             groups.append(PhotoGroup(group_number=gn, items=items))
         vm = SimpleNamespace(
             groups=groups,
@@ -2380,10 +2390,13 @@ class TestSingletonPruneOffer:
         handler, vm, settings, ui = self._build([1, 1], pref="ask")
         from app.views.dialogs.singleton_prune_confirm_dialog import (
             SingletonPruneConfirmDialog,
+            PruneVerdict,
         )
         with patch.object(
             SingletonPruneConfirmDialog, "ask",
-            return_value=(SingletonPruneConfirmDialog.REMOVE, True),
+            return_value=PruneVerdict(
+                prune_plain=True, prune_actioned=False, remember=True
+            ),
         ):
             handler._maybe_offer_singleton_prune()
         settings.set.assert_called_once_with("ui.prune_singletons", "always")
@@ -2396,10 +2409,11 @@ class TestSingletonPruneOffer:
         handler, vm, settings, ui = self._build([1, 1], pref="ask")
         from app.views.dialogs.singleton_prune_confirm_dialog import (
             SingletonPruneConfirmDialog,
+            PruneVerdict,
         )
         with patch.object(
             SingletonPruneConfirmDialog, "ask",
-            return_value=(SingletonPruneConfirmDialog.KEEP, True),
+            return_value=PruneVerdict.keep_all(remember=True),
         ):
             handler._maybe_offer_singleton_prune()
         settings.set.assert_called_once_with("ui.prune_singletons", "never")
@@ -2412,10 +2426,13 @@ class TestSingletonPruneOffer:
         handler, vm, settings, ui = self._build([1], pref="ask")
         from app.views.dialogs.singleton_prune_confirm_dialog import (
             SingletonPruneConfirmDialog,
+            PruneVerdict,
         )
         with patch.object(
             SingletonPruneConfirmDialog, "ask",
-            return_value=(SingletonPruneConfirmDialog.REMOVE, False),
+            return_value=PruneVerdict(
+                prune_plain=True, prune_actioned=False, remember=False
+            ),
         ):
             handler._maybe_offer_singleton_prune()
         settings.set.assert_not_called()
@@ -2427,14 +2444,113 @@ class TestSingletonPruneOffer:
         handler, vm, settings, ui = self._build([1], pref="ask")
         from app.views.dialogs.singleton_prune_confirm_dialog import (
             SingletonPruneConfirmDialog,
+            PruneVerdict,
         )
         with patch.object(
             SingletonPruneConfirmDialog, "ask",
-            return_value=(SingletonPruneConfirmDialog.KEEP, False),
+            return_value=PruneVerdict.keep_all(remember=False),
         ):
             handler._maybe_offer_singleton_prune()
         settings.set.assert_not_called()
         vm.remove_from_list.assert_not_called()
+
+    # ── Improvement 2: actioned-singleton classification ──────────────
+
+    def test_actioned_singleton_classified_separately(self):
+        """When a singleton's remaining item has ``user_decision='delete'``
+        (a non-keep-able pending decision that the last Execute Action
+        did NOT run — e.g. partial-execute via Improvement 1 left it
+        behind), the handler routes it into the ``count_actioned``
+        bucket, not the plain bucket."""
+        handler, vm, settings, ui = self._build(
+            [1, 1], pref="ask", actioned_groups={2}
+        )
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+            PruneVerdict,
+        )
+        captured: dict = {}
+
+        def capture_ask(parent, **kwargs):
+            captured.update(kwargs)
+            return PruneVerdict.keep_all()
+
+        with patch.object(SingletonPruneConfirmDialog, "ask", side_effect=capture_ask):
+            handler._maybe_offer_singleton_prune()
+        # Plain bucket gets group 1's singleton; actioned bucket gets
+        # group 2's (the one with user_decision='delete').
+        assert captured["count_plain"] == 1
+        assert captured["count_actioned"] == 1
+
+    def test_actioned_singleton_remove_opt_in_via_verdict(self):
+        """When the user explicitly opts into removing actioned
+        singletons (``prune_actioned=True`` in the verdict), the
+        actioned paths are applied via their own ``_apply_singleton_prune``
+        call — separate from the plain bucket so the caller can audit
+        per-bucket counts."""
+        handler, vm, settings, ui = self._build(
+            [1, 1], pref="ask", actioned_groups={2}
+        )
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+            PruneVerdict,
+        )
+        with patch.object(
+            SingletonPruneConfirmDialog, "ask",
+            return_value=PruneVerdict(
+                prune_plain=True, prune_actioned=True, remember=False
+            ),
+        ):
+            handler._maybe_offer_singleton_prune()
+        # Two separate _apply_singleton_prune calls — one per bucket —
+        # which translate into two vm.remove_from_list invocations.
+        assert vm.remove_from_list.call_count == 2
+        all_paths = sorted(
+            p for call in vm.remove_from_list.call_args_list for p in call[0][0]
+        )
+        assert all_paths == ["/g1_i0.jpg", "/g2_i0.jpg"]
+
+    def test_actioned_singleton_opt_out_keeps_actioned(self):
+        """Default behaviour (``prune_actioned=False`` — opt-in
+        checkbox unchecked): only the plain bucket gets pruned; the
+        actioned singleton stays in the list with its decision intact
+        for the user's next pass."""
+        handler, vm, settings, ui = self._build(
+            [1, 1], pref="ask", actioned_groups={2}
+        )
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+            PruneVerdict,
+        )
+        with patch.object(
+            SingletonPruneConfirmDialog, "ask",
+            return_value=PruneVerdict(
+                prune_plain=True, prune_actioned=False, remember=False
+            ),
+        ):
+            handler._maybe_offer_singleton_prune()
+        vm.remove_from_list.assert_called_once()
+        passed = vm.remove_from_list.call_args[0][0]
+        assert passed == ["/g1_i0.jpg"]   # plain only, actioned preserved
+
+    def test_always_pref_prunes_both_buckets(self):
+        """``pref="always"`` is the user's standing "don't ask, just
+        prune singletons" instruction — it must sweep BOTH buckets in
+        the one batched call regardless of action state."""
+        handler, vm, settings, ui = self._build(
+            [1, 1, 1], pref="always", actioned_groups={2, 3}
+        )
+        from app.views.dialogs.singleton_prune_confirm_dialog import (
+            SingletonPruneConfirmDialog,
+        )
+        with patch.object(
+            SingletonPruneConfirmDialog, "ask"
+        ) as ask:
+            handler._maybe_offer_singleton_prune()
+        ask.assert_not_called()
+        vm.remove_from_list.assert_called_once()
+        passed = sorted(vm.remove_from_list.call_args[0][0])
+        assert passed == ["/g1_i0.jpg", "/g2_i0.jpg", "/g3_i0.jpg"]
 
     def test_batched_single_remove_call_not_per_group(self):
         """Perf-aware acceptance criterion: 50 singletons → exactly

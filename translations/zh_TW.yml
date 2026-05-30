@@ -143,6 +143,7 @@ execute_dialog:
   select_button: "依欄位/正規式選擇…"
   set_action_menu: "設定動作"
   execute_button: "執行"
+  execute_selected_button: "執行所選"
   close_button: "關閉"
   summary_decided: "<b>{count}</b> 個檔案已設定動作:刪除 {n_delete} 個。在檔案列上按右鍵可變更其決策。"
   summary_none: "尚未設定任何決策 — 請使用「設定動作」標記要刪除的檔案。"
@@ -165,6 +166,9 @@ execute_dialog:
 singleton_prune_confirm:
   title: "清除單一檔案群組?"
   body: "上次操作之後,有 {count} 個群組只剩下一個檔案。這些群組已不再是重複審查的候選項。\n\n要從清單移除這 {count} 個單一檔案群組嗎?"
+  body_mixed: "上次操作之後,有 {count_plain} 個群組只剩下一個檔案。另有 {count_actioned} 個單一檔案仍帶有「尚未執行」的動作。\n\n要從清單移除這 {count_plain} 個「無待處理動作」的單一檔案嗎?"
+  body_actioned_only: "有 {count_actioned} 個單一檔案仍帶有「尚未執行」的動作(刪除 / 從清單移除)。\n\n仍要把這 {count_actioned} 個從清單移除嗎?"
+  checkbox_include_actioned: "一併移除 {count} 個帶有「尚未執行」動作的單一檔案"
   checkbox_dont_ask: "記住我的選擇,不要再詢問"
   btn_remove: "移除 {count} 個"
   btn_keep: "全部保留"
