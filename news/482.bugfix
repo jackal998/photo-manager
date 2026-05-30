@@ -1,0 +1,1 @@
+Skip Windows $RECYCLE.BIN and System Volume Information during scans so deleted-by-other-means files no longer leak into the manifest and trip send2trash's "can't recycle a recycle-bin file" error (#482).

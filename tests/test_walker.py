@@ -456,6 +456,124 @@ class TestWalkerExclusionsFixture:
 
 
 # ---------------------------------------------------------------------------
+# SKIP_DIRECTORIES — system / OS-managed folders never walked into
+# ---------------------------------------------------------------------------
+
+class TestWalkerSkipDirectories:
+    """Pin the SKIP_DIRECTORIES filter — system folders like
+    ``$RECYCLE.BIN`` and ``System Volume Information`` must never be
+    walked into.
+
+    Real-world regression: a user's scan against ``J:\\圖片`` walked
+    into ``J:\\圖片\\$RECYCLE.BIN`` and pulled the recycle bin's
+    ``$Rxxxxxx.jpg`` files into the manifest. The later Execute Action
+    delete then failed with ``WinError -2147024809`` (E_INVALIDARG)
+    on every recycle-bin row, because ``send2trash`` correctly refuses
+    to send a recycle-bin file back to the recycle bin.
+    """
+
+    def test_skips_recycle_bin_directory(self, tmp_path):
+        """Files inside ``$RECYCLE.BIN/`` must not appear in the
+        walker's output. Mirrors a real-world Windows scan layout."""
+        from scanner.walker import scan_sources
+
+        recycle = tmp_path / "$RECYCLE.BIN"
+        recycle.mkdir()
+        _write_jpeg(recycle / "$R0KXSFA.jpg")
+        _write_jpeg(tmp_path / "real_photo.jpg")
+
+        records = scan_sources({"src": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["real_photo.jpg"], (
+            f"walker pulled in recycle-bin file: {names}"
+        )
+
+    def test_skips_system_volume_information(self, tmp_path):
+        """Windows ``System Volume Information`` is restore-point /
+        shadow-copy store — never user-meaningful media."""
+        from scanner.walker import scan_sources
+
+        sysvol = tmp_path / "System Volume Information"
+        sysvol.mkdir()
+        _write_jpeg(sysvol / "shadow.jpg")
+        _write_jpeg(tmp_path / "real_photo.jpg")
+
+        records = scan_sources({"src": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["real_photo.jpg"]
+
+    def test_skip_directories_case_insensitive(self, tmp_path):
+        """The filter is case-insensitive — ``$Recycle.Bin``,
+        ``$RECYCLE.BIN``, ``$recycle.bin`` all match. Windows
+        preserves case but the recycle-bin folder name varies across
+        machines / locales."""
+        from scanner.walker import scan_sources
+
+        # Mixed-case variant — same semantics as the all-uppercase form.
+        recycle = tmp_path / "$Recycle.Bin"
+        recycle.mkdir()
+        _write_jpeg(recycle / "$R0U4AEF.jpg")
+        _write_jpeg(tmp_path / "real_photo.jpg")
+
+        records = scan_sources({"src": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["real_photo.jpg"]
+
+    def test_skips_nested_recycle_bin_subfolder(self, tmp_path):
+        """Recycle bin can contain its own subdirectory tree (e.g.
+        ``$R6M1QOM\\Photos from 2016\\...``). Every descendant of a
+        skip-directory ancestor must be excluded, not just direct
+        children."""
+        from scanner.walker import scan_sources
+
+        recycle = tmp_path / "$RECYCLE.BIN" / "$R6M1QOM" / "Photos from 2016"
+        recycle.mkdir(parents=True)
+        _write_jpeg(recycle / "IMAG0059.jpg")
+        _write_jpeg(tmp_path / "real_photo.jpg")
+
+        records = scan_sources({"src": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["real_photo.jpg"]
+
+    def test_does_not_skip_normal_files_alongside_recycle_bin(self, tmp_path):
+        """A sibling ``$RECYCLE.BIN`` folder must not suppress real
+        media files at the same depth — only descendants of
+        ``$RECYCLE.BIN`` are filtered, not the scan root itself."""
+        from scanner.walker import scan_sources
+
+        recycle = tmp_path / "$RECYCLE.BIN"
+        recycle.mkdir()
+        _write_jpeg(recycle / "$R0KXSFA.jpg")
+        # Normal media folder alongside the recycle bin.
+        normal = tmp_path / "DCIM"
+        normal.mkdir()
+        _write_jpeg(normal / "IMG_0001.jpg")
+        _write_jpeg(normal / "IMG_0002.jpg")
+
+        records = scan_sources({"src": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["IMG_0001.jpg", "IMG_0002.jpg"]
+
+    def test_scan_root_named_recycle_bin_is_still_scanned(self, tmp_path):
+        """Edge: if the user explicitly points the scan at a path NAMED
+        ``$RECYCLE.BIN`` (unlikely but possible), the root itself is
+        the scan scope — only its DESCENDANTS get the skip-directory
+        filter. Documents the intent of the ``_is_in_skip_directory``
+        walk-up-to-root pattern."""
+        from scanner.walker import scan_sources
+
+        # Treat the user's chosen root as scope, even if it happens
+        # to be named like a skip directory.
+        root = tmp_path / "$RECYCLE.BIN"
+        root.mkdir()
+        _write_jpeg(root / "real_photo.jpg")
+
+        records = scan_sources({"src": root})
+        names = sorted(r.path.name for r in records)
+        assert names == ["real_photo.jpg"]
+
+
+# ---------------------------------------------------------------------------
 # Win32-unsafe filename detection (photo-manager#169)
 # ---------------------------------------------------------------------------
 
