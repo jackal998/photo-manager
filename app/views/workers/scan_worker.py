@@ -204,8 +204,8 @@ class ScanWorker(QThread):
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from scanner.walker import scan_sources
-        from scanner.hasher import compute_hashes
-        from scanner.exif import ExiftoolProcess, batch_read_extracts, parse_exif_date
+        from scanner.hasher import HashFailure, run_hash_for_record
+        from scanner.exif import ExiftoolProcess, batch_read_extracts
         from scanner.dedup import HashResult, classify
         from scanner.manifest import write_manifest, print_summary
         from scanner.scoring import apply_scoring_to_rows
@@ -322,20 +322,12 @@ class ScanWorker(QThread):
         cancel_flag = threading.Event()
         skipped: list[tuple[Path, str, str]] = []  # (path, exc type, exc msg)
 
-        # Detect silent image-decode failures: compute_hashes returned without
-        # raising but PIL couldn't produce a pHash — the file is truncated or
-        # corrupt. Route to the same skip channel as exception failures so the
-        # user sees them in the log instead of getting a misleading UNDATED row.
-        #
-        # Restricted to formats where PIL is the primary decoder and a missing
-        # pHash unambiguously means decode-failure:
-        #   - GIF excluded: compute_hashes always returns phash=None for GIF
-        #     (intentional early-return at scanner/hasher.py:53), so flagging
-        #     phash=None as corruption false-positives 100% of the time (#75).
-        #   - RAW excluded: rawpy is the decoder, and rawpy fails on legitimate
-        #     non-camera-RAW TIFFs (Photoshop / scanner output) — flagging
-        #     those as corrupt drops real user files from the manifest (#75).
-        _IMAGE_TYPES = frozenset(("jpeg", "heic", "png", "webp"))
+        # Silent image-decode-failure detection lives in
+        # scanner.hasher.run_hash_for_record now (#486 refactor). The
+        # closure below only routes the HashFailure / HashResult outcomes
+        # into ``skipped`` and ``exif_queue``; the compute and the
+        # corrupt-image gate are inside run_hash_for_record so the same
+        # pure function can be reused by a future ProcessPoolExecutor path.
 
         exif_queue: _queue.Queue = _queue.Queue()
         extracts: dict = {}
@@ -357,38 +349,29 @@ class ScanWorker(QThread):
         exiftool_missing = [False]
 
         def _hash_one(idx_record: tuple) -> tuple:
+            """Dispatch-only closure: call the pure compute path, route
+            the outcome into ``skipped`` / ``exif_queue`` based on
+            type. Cancellation short-circuits before any compute.
+            """
             idx, record = idx_record
             if cancel_flag.is_set():
                 return idx, None
-            try:
-                sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(record.path, record.file_type)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                # One bad file must never abort the whole scan — log + skip.
-                skipped.append((record.path, type(exc).__name__, str(exc)))
+            _, outcome = run_hash_for_record(idx, record)
+            if isinstance(outcome, HashFailure):
+                # Both raised exceptions and silent decode failures
+                # land here — the HashFailure carries a distinct
+                # exc_type so the user-visible log line stays
+                # distinguishable.
+                skipped.append((record.path, outcome.exc_type, outcome.exc_msg))
                 return idx, None
-            pil_date = parse_exif_date(raw_date) if raw_date else None
-            result = HashResult(
-                record=record, sha256=sha256, phash=phash, mean_color=mean_color,
-                exif_date=pil_date, pixel_width=px_w, pixel_height=px_h,
-            )
-            # #450 — corrupt-image detection lives here now so the
-            # exif queue never receives a truncated/corrupt file. Mirrors
-            # the pre-#450 post-hash sweep exactly, including the
-            # GIF / RAW exclusions documented above.
-            if record.file_type in _IMAGE_TYPES and phash is None:
-                skipped.append((
-                    record.path,
-                    "ImageDecodeError",
-                    "image file could not be decoded (truncated or corrupt)",
-                ))
-                return idx, None
-            # Queue for exif unless this is a skip-type record (the
-            # exiftool pass excludes "skip" anyway pre-#450).
+            # outcome is a HashResult — queue for exif unless this is
+            # a skip-type record (the exiftool pass excludes "skip"
+            # anyway pre-#450).
             if record.file_type != "skip":
-                exif_queue.put(result)
+                exif_queue.put(outcome)
                 with exif_total_lock:
                     exif_total[0] += 1
-            return idx, result
+            return idx, outcome
 
         def _exif_consumer() -> None:
             """Drain ``exif_queue`` into 500-batches fed to one
