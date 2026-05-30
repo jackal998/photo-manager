@@ -40,3 +40,6 @@ comment, bumping a transitive dep with no behaviour change) can skip
 the fragment by including the literal token `[skip-news: <reason>]`
 in the PR title or body. CI enforces this; reviewers see the reason
 inline.
+
+<!-- ci-probe: A/B test for #487 — confirms test_select_dialog flake on master HEAD. Revert after diagnosis. -->
+
