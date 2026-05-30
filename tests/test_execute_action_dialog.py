@@ -503,6 +503,158 @@ class TestDeleteFile:
         assert str(f) in dlg.deleted_paths
 
 
+# ── Improvement 1: partial-execute via paths_filter ────────────────────────
+
+
+class TestOnExecutePartialFilter:
+    """Improvement 1 in the partial-execute bundle:
+    ``_on_execute(paths_filter=...)`` narrows execution to a subset of
+    decided rows. Wired in production by the "Execute selected" button
+    which passes ``_selected_file_paths()``.
+
+    Catches the regression that would happen if partial execute either
+    (a) leaked outside the filter (un-selected rows get deleted too) or
+    (b) failed to clear in-memory decisions on executed rows (next
+    Execute click would re-process them, hitting "file not found" on
+    already-deleted files).
+    """
+
+    def test_paths_filter_excludes_unselected_delete(self, qapp):
+        """A delete decision OUTSIDE the filter must NOT be acted on."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [
+            _group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "delete"), number=1),
+        ]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        with patch.object(dlg, "_delete_file") as mock_del:
+            dlg._on_execute(paths_filter={"/a.jpg"})
+
+        # Only /a.jpg was in the filter — /b.jpg's delete decision
+        # must NOT fire.
+        mock_del.assert_called_once_with("/a.jpg")
+
+    def test_paths_filter_clears_executed_user_decision(self, qapp):
+        """After partial execute, in-memory ``user_decision`` on
+        executed rows must be cleared — otherwise a subsequent Execute
+        click re-processes them and ``_delete_file`` hits an
+        already-deleted path."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        rec_a = _rec("/a.jpg", "delete")
+        rec_b = _rec("/b.jpg", "delete")
+        groups = [_group(rec_a, rec_b, number=1)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        with patch.object(dlg, "_delete_file"):
+            dlg._on_execute(paths_filter={"/a.jpg"})
+
+        assert rec_a.user_decision == ""   # cleared (was in filter)
+        assert rec_b.user_decision == "delete"   # preserved (not in filter)
+
+    def test_paths_filter_does_not_accept_dialog(self, qapp):
+        """Partial execute keeps the dialog open so the user can
+        continue reviewing — only full execute closes the dialog via
+        ``accept()``."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"), number=1)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        with patch.object(dlg, "_delete_file"):
+            with patch.object(dlg, "accept") as mock_accept:
+                dlg._on_execute(paths_filter={"/a.jpg"})
+
+        mock_accept.assert_not_called()
+
+    def test_full_execute_still_accepts_dialog(self, qapp):
+        """Regression guard: ``paths_filter=None`` is the existing
+        full-execute path and must still call ``accept()`` to close
+        the dialog when done."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"), number=1)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        with patch.object(dlg, "_delete_file"):
+            with patch.object(dlg, "accept") as mock_accept:
+                dlg._on_execute()   # no filter → full execute
+
+        mock_accept.assert_called_once()
+
+    def test_execute_selected_requested_empty_selection_noop(self, qapp):
+        """When the user clicks "Execute selected" with an empty
+        selection (race between selection-cleared and button-clicked),
+        the dispatch is a no-op — ``_on_execute_requested`` must NOT
+        run with an empty filter (that would degenerate to "execute
+        nothing" silently)."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(_rec("/a.jpg", "delete"), number=1)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        with patch.object(dlg, "_selected_file_paths", return_value=set()):
+            with patch.object(dlg, "_on_execute_requested") as mock_req:
+                dlg._on_execute_selected_requested()
+
+        mock_req.assert_not_called()
+
+
+class TestCompleteDeleteGroupsPathsFilter:
+    """Improvement 1: ``_complete_delete_groups(paths_filter=...)``
+    narrows the "is this group complete-delete" check to in-scope
+    records only.
+
+    Without this narrowing, partial-execute would fire the
+    complete-group confirm on groups where un-selected rows are kept
+    (false positive) or never fire on groups where only the selected
+    rows are delete (false negative)."""
+
+    def test_filter_narrows_to_in_scope_records(self, qapp):
+        """Group has 2 deletes + 1 keep. Filter selects ONLY the 2
+        deletes — within scope every record is delete → should report
+        as complete."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/a.jpg", "delete"),
+            _rec("/b.jpg", "delete"),
+            _rec("/c.jpg", ""),   # kept
+            number=1,
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        # Without filter: NOT complete (one row is kept).
+        assert dlg._complete_delete_groups() == []
+        # With filter selecting only the 2 deletes: complete.
+        assert dlg._complete_delete_groups(
+            paths_filter={"/a.jpg", "/b.jpg"}
+        ) == [1]
+
+    def test_filter_excludes_group_when_in_scope_has_non_delete(self, qapp):
+        """Group has 2 deletes + 1 keep. Filter selects 1 delete + the
+        keep → within scope NOT all delete → not complete."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/a.jpg", "delete"),
+            _rec("/b.jpg", "delete"),
+            _rec("/c.jpg", ""),
+            number=1,
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert dlg._complete_delete_groups(
+            paths_filter={"/a.jpg", "/c.jpg"}
+        ) == []
+
+    def test_filter_with_no_in_scope_records_excludes_group(self, qapp):
+        """A group whose filter intersection is empty cannot be
+        'complete' — there are no in-scope records to check."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = [_group(
+            _rec("/a.jpg", "delete"),
+            _rec("/b.jpg", "delete"),
+            number=1,
+        )]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        assert dlg._complete_delete_groups(
+            paths_filter={"/z.jpg"}   # not in group
+        ) == []
+
+
 # ── _complete_delete_groups ────────────────────────────────────────────────
 
 class TestGroupDeletionCheck:

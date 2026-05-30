@@ -155,15 +155,43 @@ class ExecuteActionDialog(QDialog):
             if getattr(rec, "user_decision", "")
         ]
 
-    def _complete_delete_groups(self) -> list[int]:
-        """Return group_numbers where every record has user_decision='delete'."""
+    def _complete_delete_groups(
+        self, paths_filter: set[str] | None = None,
+    ) -> list[int]:
+        """Return group_numbers where every record has
+        ``user_decision='delete'``.
+
+        When ``paths_filter`` is set (partial-execute path), the
+        check is narrowed: a group qualifies if every record WHOSE
+        PATH IS IN THE FILTER has ``user_decision='delete'``, AND at
+        least one such record exists. Records outside the filter
+        are ignored — they're not part of this execution scope, so
+        their decisions don't count for or against "complete".
+        Without this narrowing, partial-execute would fire the
+        complete-group confirm on groups where the unselected rows
+        are kept (false positive) or never fire on groups where
+        only the selected rows are delete (false negative).
+        """
         result = []
         for group in self._groups:
             items = getattr(group, "items", [])
             if not items:
                 continue
-            if all(getattr(rec, "user_decision", "") == "delete" for rec in items):
-                result.append(group.group_number)
+            if paths_filter is None:
+                if all(
+                    getattr(rec, "user_decision", "") == "delete" for rec in items
+                ):
+                    result.append(group.group_number)
+            else:
+                in_scope = [
+                    rec for rec in items
+                    if getattr(rec, "file_path", "") in paths_filter
+                ]
+                if in_scope and all(
+                    getattr(rec, "user_decision", "") == "delete"
+                    for rec in in_scope
+                ):
+                    result.append(group.group_number)
         return sorted(result)
 
     # ------------------------------------------------------------------ build
@@ -259,6 +287,21 @@ class ExecuteActionDialog(QDialog):
         self._btn_box.button(QDialogButtonBox.Cancel).setText(t("execute_dialog.close_button"))
         self._btn_box.button(QDialogButtonBox.Ok).setEnabled(has_decisions)
         self._btn_box.accepted.connect(self._on_execute_requested)
+        # Improvement 1 in the partial-execute bundle: separate "Execute
+        # selected" button that scopes execution to the rows currently
+        # highlighted in the tree. Disabled until the selection contains
+        # at least one decided file row. Driven by _on_selection_changed
+        # below + _refresh_ui_after_decision_change. The button is a
+        # SECOND action (not a relabel of Execute) — #410 explicitly
+        # rejected the relabel pattern as ambiguous.
+        self._btn_execute_selected = QPushButton(
+            t("execute_dialog.execute_selected_button"), self,
+        )
+        self._btn_execute_selected.setEnabled(False)
+        self._btn_execute_selected.clicked.connect(self._on_execute_selected_requested)
+        self._btn_box.addButton(
+            self._btn_execute_selected, QDialogButtonBox.ActionRole,
+        )
         self._btn_box.rejected.connect(self.reject)
         layout.addWidget(self._btn_box)
 
@@ -297,7 +340,27 @@ class ExecuteActionDialog(QDialog):
         self._rebuild_tree_model()
         self._update_summary()
         self._btn_box.button(QDialogButtonBox.Ok).setEnabled(bool(self._decided_records()))
+        self._refresh_execute_selected_state()
         self._refresh_warning_banner()
+
+    def _refresh_execute_selected_state(self) -> None:
+        """Sync the "Execute selected" button's enabled state. Enabled
+        only when ≥1 currently-highlighted file row has a decision set;
+        otherwise the button would no-op confusingly. Called from
+        ``_on_selection_changed`` (selection delta) and
+        ``_refresh_ui_after_decision_change`` (decision delta).
+        """
+        selected = self._selected_file_paths()
+        if not selected:
+            self._btn_execute_selected.setEnabled(False)
+            return
+        any_with_decision = any(
+            getattr(rec, "user_decision", "")
+            for group in self._groups
+            for rec in getattr(group, "items", [])
+            if getattr(rec, "file_path", "") in selected
+        )
+        self._btn_execute_selected.setEnabled(any_with_decision)
 
     def _refresh_warning_banner(self) -> None:
         complete = self._complete_delete_groups()
@@ -338,19 +401,25 @@ class ExecuteActionDialog(QDialog):
         return paths
 
     def _on_selection_changed(self, *_args) -> None:
-        """Drive the embedded preview pane on tree selection changes.
+        """Drive the embedded preview pane AND the "Execute selected"
+        enabled state on tree selection changes.
 
         #165 — exactly one file row selected → show_single, anything
         else → clear. Multi-select intentionally clears rather than
         showing the first row, so the user isn't misled into thinking
         the preview reflects "the" selection.
 
-        #410: removed the Execute-button relabel branch — selection
-        scope is now lifted to the Action menu ("Execute Action (only
-        selected)") and pre-filters the dialog's groups at construction
-        time. The dialog acts on whatever it was given; the Execute
-        button label stays static.
+        #410 history: the OLD Execute-button-relabel-on-selection
+        branch was removed in favour of pre-dialog scope filtering at
+        the Action menu. The current bundle's "Execute selected" is a
+        SECOND button (not a relabel) — see ``_build_ui`` button box
+        setup — so the relabel rejection still stands.
         """
+        # Improvement 1: enabled-state of "Execute selected" tracks
+        # both the selection set AND the decided-records of those
+        # selected paths. Calling the dedicated helper keeps the
+        # selection logic in one place.
+        self._refresh_execute_selected_state()
         if self._preview is None:
             return
         selected = self._selected_file_paths()
@@ -911,14 +980,37 @@ class ExecuteActionDialog(QDialog):
 
     # ------------------------------------------------------------------ execute
 
-    def _on_execute_requested(self) -> None:
+    def _on_execute_selected_requested(self) -> None:
+        """Improvement 1 — "Execute selected" button entry point.
+
+        Resolves the currently-highlighted file paths and dispatches to
+        the standard execute pipeline with ``paths_filter`` set. Empty
+        selection short-circuits (the button is normally disabled in
+        that state, but a race between selection-cleared and
+        clicked-signal can land here harmlessly).
+        """
+        selected = self._selected_file_paths()
+        if not selected:
+            return
+        self._on_execute_requested(paths_filter=selected)
+
+    def _on_execute_requested(
+        self, paths_filter: set[str] | None = None,
+    ) -> None:
         from PySide6.QtWidgets import QMessageBox
 
-        # #410 — scope narrowing is no longer the dialog's concern.
-        # The "(only selected)" Action-menu entry pre-filters
-        # ``self._groups`` at the handler boundary, so this method
-        # treats every group it was given as in-scope. The dialog
-        # has no awareness of how its groups were filtered.
+        # #410 — scope narrowing for the FULL-execute path is the
+        # handler's concern (pre-dialog "(only selected)" Action-menu
+        # entry pre-filters ``self._groups``). The PARTIAL-execute
+        # path (``paths_filter is not None``) is in-dialog scoping
+        # added by Improvement 1: the dialog still sees every group
+        # it was constructed with, but only acts on records whose
+        # path is in the filter.
+
+        def in_scope(rec) -> bool:
+            if paths_filter is None:
+                return True
+            return getattr(rec, "file_path", "") in paths_filter
 
         # Pre-execute scan for locked rows with decision='delete'.
         # These can exist if the user set the decision FIRST and then
@@ -929,7 +1021,7 @@ class ExecuteActionDialog(QDialog):
             1
             for group in self._groups
             for rec in getattr(group, "items", [])
-            if getattr(rec, "user_decision", "") == "delete"
+            if getattr(rec, "user_decision", "") == "delete" and in_scope(rec)
         )
         locked_delete_paths = [
             rec.file_path
@@ -937,6 +1029,7 @@ class ExecuteActionDialog(QDialog):
             for rec in getattr(group, "items", [])
             if getattr(rec, "user_decision", "") == "delete"
             and getattr(rec, "is_locked", False)
+            and in_scope(rec)
         ]
         if locked_delete_paths:
             verdict = self._ask_lock_confirm(
@@ -957,10 +1050,11 @@ class ExecuteActionDialog(QDialog):
                 self._clear_decision_on(locked_delete_paths)
             self._refresh_ui_after_decision_change()
 
-        # Complete-group confirm: groups arrive already filtered, so a
-        # group with every delete-decision row present really will be
-        # fully deleted on Execute.
-        complete = self._complete_delete_groups()
+        # Complete-group confirm: for full execute, groups already
+        # filtered to the action's scope by the handler. For partial
+        # execute, the check is narrowed to in-scope records only —
+        # see ``_complete_delete_groups``'s paths_filter parameter.
+        complete = self._complete_delete_groups(paths_filter=paths_filter)
         if complete:
             group_list = ", ".join(str(g) for g in complete)
             reply = QMessageBox.question(
@@ -972,7 +1066,7 @@ class ExecuteActionDialog(QDialog):
             )
             if reply != QMessageBox.Yes:
                 return
-        self._on_execute()
+        self._on_execute(paths_filter=paths_filter)
 
     def _clear_decision_on(self, paths: list[str]) -> None:
         """Reset ``user_decision`` to '' for ``paths``. Used by the
@@ -997,13 +1091,25 @@ class ExecuteActionDialog(QDialog):
             except Exception as exc:
                 logger.warning("Failed to persist cleared decisions: {}", exc)
 
-    def _on_execute(self) -> None:
-        # #410 — no in-dialog scope narrowing. Groups arrive
-        # pre-filtered from the handler (the "(only selected)"
-        # Action-menu entry's path); this method acts on every
+    def _on_execute(self, paths_filter: set[str] | None = None) -> None:
+        # #410 baseline: for the full-execute path, groups arrive
+        # pre-filtered from the handler — this method acts on every
         # decided row it was given.
+        # Improvement 1: when ``paths_filter`` is set (partial-execute
+        # via the "Execute selected" button), the iteration narrows to
+        # records whose path is in the filter. Records outside the
+        # filter retain their decisions for a future Execute click.
 
-        # Batch-persist all current decisions before executing
+        def in_scope(rec) -> bool:
+            if paths_filter is None:
+                return True
+            return getattr(rec, "file_path", "") in paths_filter
+
+        # Batch-persist current decisions before executing. For partial
+        # execute the persist set is still the full decision picture —
+        # rows outside the filter retain their decisions in the manifest
+        # so a subsequent execute pass sees them. The filter only
+        # narrows the ACTION pass below, not the manifest sync.
         if self._manifest_path:
             batch = {
                 rec.file_path: rec.user_decision
@@ -1023,15 +1129,26 @@ class ExecuteActionDialog(QDialog):
         # immediate single-row right-click path already calls
         # remove_from_review at click time.
         deferred_remove_paths: list[str] = []
+        # Track in-scope records we executed so we can clear their
+        # decision in-memory below. Without this, a subsequent
+        # "Execute selected" or "Execute" click would re-process them
+        # (and _delete_file would hit "file not found" on the now-
+        # deleted files).
+        executed_in_scope: list[tuple] = []
         for group in self._groups:
             for rec in getattr(group, "items", []):
+                if not in_scope(rec):
+                    continue
                 decision = getattr(rec, "user_decision", "") or ""
                 if decision == "delete":
                     self._delete_file(rec.file_path)
+                    executed_in_scope.append((group, rec))
                 elif decision == "keep":
                     self.executed_paths.append(rec.file_path)
+                    executed_in_scope.append((group, rec))
                 elif decision == REMOVE_FROM_LIST_DECISION:
                     deferred_remove_paths.append(rec.file_path)
+                    executed_in_scope.append((group, rec))
 
         if self._manifest_path:
             all_done = self.deleted_paths + self.executed_paths
@@ -1086,7 +1203,27 @@ class ExecuteActionDialog(QDialog):
                 t("execute_dialog.files_failed_body", failed=failed_list, suffix=suffix),
             )
 
-        self.accept()
+        # Full execute → close the dialog (existing behaviour).
+        # Partial execute → keep the dialog open so the user can
+        # continue reviewing the remaining un-executed rows. Clear the
+        # in-memory user_decision on the records we just executed so a
+        # subsequent click doesn't reprocess them (the deletion already
+        # ran for delete-decision rows; running it again would hit
+        # "file not found").
+        if paths_filter is None:
+            self.accept()
+            return
+        for _group, rec in executed_in_scope:
+            try:
+                rec.user_decision = ""
+            except Exception:
+                # Pydantic-frozen or read-only record — extremely
+                # defensive; PhotoRecord is a mutable dataclass today.
+                logger.warning(
+                    "Could not clear user_decision on executed rec {}", rec
+                )
+        self._decisions_changed = True
+        self._refresh_ui_after_decision_change()
 
     def _delete_file(self, path: str) -> None:
         if not os.path.exists(path):
