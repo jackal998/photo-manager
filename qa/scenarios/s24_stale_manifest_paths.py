@@ -67,25 +67,47 @@ NUM_FILES = 3
 
 
 def _setup_fixture() -> list[Path]:
-    """Wipe FIXTURE_DIR and write NUM_FILES fresh JPEGs.
+    """Wipe FIXTURE_DIR and write NUM_FILES copies of one gradient JPEG.
 
-    Files are deliberately distinct (different solid colours + EXIF
-    dates) so the scanner classifies them as MOVE (isolated single-
-    item groups), not REVIEW_DUPLICATE — keeps the manifest shape
-    simple. We don't need pHash clustering for this scenario; just
-    rows in the manifest that we can later orphan.
+    All NUM_FILES files have identical bytes (same image, same EXIF),
+    so they share a sha256 and group as EXACT duplicates via Pass 1's
+    fast-path SHA-based classification — the manifest carries multiple
+    rows pointing at the same bytes and the duplicate-group tree
+    renders them. That gives us rows to later orphan when the source
+    files are deleted.
+
+    Pre-#462 this fixture used distinct solid-colour JPEGs that
+    happened to share pHash ``8000000000000000`` and were grouped as
+    EXACT via the buggy format-duplicate path (flat-image pHash
+    collision). #462 fixed that bug with a mean-color gate, exposing
+    that this scenario depended on the bug to populate the tree. The
+    gradient + sha256-match approach decouples the test from the
+    dedup correctness state — rows render regardless of whether the
+    pHash collision path is gated or not.
     """
     if FIXTURE_DIR.exists():
         shutil.rmtree(FIXTURE_DIR)
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Build ONE gradient image whose pHash is non-flat — avoids any
+    # accidental dependency on a future bug at the flat-image path.
+    arr = np.zeros((100, 100, 3), dtype=np.uint8)
+    for y in range(100):
+        for x in range(100):
+            arr[y, x] = [
+                (x * 3) % 256,
+                (y * 3) % 256,
+                ((x ^ y) * 2) % 256,
+            ]
+    img = Image.fromarray(arr)
+    exif = img.getexif()
+    exif[36867] = "2024:08:01 12:00:00"   # DateTimeOriginal — same for all copies
+
     paths: list[Path] = []
     for i in range(NUM_FILES):
-        # Solid distinct colour per file → unique pHash → distinct rows.
-        arr = np.full((100, 100, 3), [(i * 80) % 256, 100, 200], dtype=np.uint8)
-        img = Image.fromarray(arr)
-        exif = img.getexif()
-        exif[36867] = f"2024:08:01 1{i}:00:00"  # DateTimeOriginal
+        # Identical bytes — Pass 1 sha-256 EXACT classification groups
+        # them together; per-file path differs so the manifest has
+        # NUM_FILES distinct rows (not one row).
         out = FIXTURE_DIR / f"s24_photo_{i:02d}.jpg"
         img.save(str(out), "JPEG", quality=85, exif=exif.tobytes())
         paths.append(out)

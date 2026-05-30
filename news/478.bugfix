@@ -1,0 +1,1 @@
+Gate exact-pHash format-duplicate path on mean_color so flat images (solid colour / near-empty composition) no longer collide as EXACT duplicates on pHash 8000000000000000 (#462).
