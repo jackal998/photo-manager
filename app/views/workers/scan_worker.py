@@ -256,11 +256,17 @@ class ScanWorker(QThread):
         def _walk_one_source(label: str, root: Path) -> tuple[str, list]:
             mode = "flat" if self.recursive_map.get(label) is False else "recursive"
             self._emit(f"  Walking {label} ({mode}): {root} …")
+            # #491 — pass the QThread's interruption flag straight through
+            # as the walker's cancel-check. A title-bar X / Cancel during
+            # the WALK stage now lands within one rglob tick instead of
+            # waiting for ``rglob`` to exhaust. For the multi-source
+            # branch each parallel walker observes the same flag.
             partial = scan_sources(
                 {label: root},
                 limit=self.limit,
                 recursive_map={label: self.recursive_map.get(label, True)},
                 progress_callback=_on_walk_file_seen,
+                cancel_check=self.isInterruptionRequested,
             )
             self._emit(f"  → {len(partial):,} files")
             return label, partial
@@ -290,6 +296,19 @@ class ScanWorker(QThread):
         # when scan_sources finishes faster than the 1Hz throttle.
         self._emit_stage(walk_tracker, walk_files_seen, 0, force=True)
         self._emit(f"  Total: {len(records):,} media files")
+
+        # #491 — gate-out after WALK if the user cancelled. The walker's
+        # cooperative check returns partial results without raising, so
+        # the only way to distinguish "walked everything" from
+        # "cancelled mid-walk with partial" is to re-check the QThread
+        # interruption flag here. Symmetric with the HASH / CLASSIFY /
+        # SCORE / WRITE stage gates further down — same ``"Scan
+        # cancelled."`` failed-signal payload so scan_dialog distinguishes
+        # the clean cancel from a red-modal error string.
+        if self.isInterruptionRequested():
+            logger.warning("Scan cancelled by user during walk")
+            self.failed.emit("Scan cancelled.")
+            return
 
         if not records:
             # Empty input is a benign success, not a failure: the user picked
