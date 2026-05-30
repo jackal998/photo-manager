@@ -1,0 +1,1 @@
+Atomically replace the manifest sqlite via temp + os.replace so orphan -wal/-shm sidecars no longer survive a write and partial-writes never reach the destination (#464).

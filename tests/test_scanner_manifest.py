@@ -135,6 +135,113 @@ class TestWriteManifest:
             val = conn.execute("SELECT group_id FROM migration_manifest").fetchone()[0]
         assert val == "/a.jpg"
 
+    def test_orphan_wal_shm_sidecars_removed_on_overwrite(self, tmp_path):
+        """#464 — destination's orphan -wal/-shm sidecars from a prior
+        writer must not survive a new write_manifest call."""
+        import gc
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([_row("/old.jpg", "MOVE", dest_path="/d/old.jpg")], out)
+        gc.collect()
+        (tmp_path / "manifest.sqlite-wal").write_bytes(b"orphan-wal-bytes")
+        (tmp_path / "manifest.sqlite-shm").write_bytes(b"orphan-shm-bytes")
+        write_manifest([_row("/new.jpg", "MOVE", dest_path="/d/new.jpg")], out)
+        gc.collect()
+        with sqlite3.connect(out) as conn:
+            paths = [r[0] for r in conn.execute(
+                "SELECT source_path FROM migration_manifest"
+            ).fetchall()]
+        assert paths == ["/new.jpg"]
+        # SQLite may legitimately create fresh sidecars on the next open,
+        # but the orphan bytes must be gone (replaced by the temp DB's
+        # state, which os.replace transferred to the destination).
+        wal = tmp_path / "manifest.sqlite-wal"
+        shm = tmp_path / "manifest.sqlite-shm"
+        if wal.exists():
+            assert wal.read_bytes() != b"orphan-wal-bytes"
+        if shm.exists():
+            assert shm.read_bytes() != b"orphan-shm-bytes"
+
+    def test_temp_file_not_left_behind_on_success(self, tmp_path):
+        """#464 — after a clean write, no <output>.tmp.sqlite (or its own
+        sidecars) should remain in output.parent — os.replace moved the
+        temp file to the destination."""
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], out)
+        leftovers = [p.name for p in tmp_path.iterdir() if "tmp.sqlite" in p.name]
+        assert leftovers == [], f"temp-write artifacts left behind: {leftovers}"
+
+    def test_destination_unchanged_when_write_fails_midflight(
+        self, tmp_path, monkeypatch
+    ):
+        """#464 — atomic-temp guarantee: if executemany raises mid-write,
+        the destination .sqlite is untouched (still has the prior write's
+        row), because os.replace only runs after the connection
+        successfully commits + closes."""
+        import gc
+        from scanner import manifest as manifest_mod
+        out = tmp_path / "manifest.sqlite"
+        write_manifest([_row("/orig.jpg", "MOVE", dest_path="/d/orig.jpg")], out)
+        gc.collect()
+
+        real_connect = sqlite3.connect
+
+        class _FailingConn:
+            """Proxy that forwards everything except executemany, which
+            raises. sqlite3.Connection's bound methods are read-only on
+            CPython, so a wrapper is the cleanest way to inject failure."""
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, *a, **kw):
+                return self._conn.execute(*a, **kw)
+
+            def executescript(self, *a, **kw):
+                return self._conn.executescript(*a, **kw)
+
+            def executemany(self, *a, **kw):
+                raise RuntimeError("simulated mid-write crash")
+
+            def commit(self):
+                return self._conn.commit()
+
+            def close(self):
+                return self._conn.close()
+
+        def _failing_connect(path, *args, **kwargs):
+            return _FailingConn(real_connect(path, *args, **kwargs))
+
+        # Patch sqlite3.connect in manifest module's namespace so only
+        # write_manifest sees the failing connect — verification below
+        # uses sqlite3.connect from THIS module unchanged.
+        monkeypatch.setattr(manifest_mod.sqlite3, "connect", _failing_connect)
+        with pytest.raises(RuntimeError, match="simulated mid-write crash"):
+            write_manifest(
+                [_row("/new.jpg", "MOVE", dest_path="/d/new.jpg")], out
+            )
+        gc.collect()
+        monkeypatch.undo()
+        with sqlite3.connect(out) as conn:
+            paths = [r[0] for r in conn.execute(
+                "SELECT source_path FROM migration_manifest"
+            ).fetchall()]
+        assert paths == ["/orig.jpg"]
+
+    def test_stale_tmp_sqlite_from_prior_crash_is_replaced(self, tmp_path):
+        """#464 — a stale <output>.tmp.sqlite (and its -wal/-shm) from a
+        previously-killed run must be removed at the start of the next
+        write_manifest call; otherwise sqlite3.connect would lock or
+        corrupt the new write on Windows."""
+        out = tmp_path / "manifest.sqlite"
+        (tmp_path / "manifest.sqlite.tmp.sqlite").write_bytes(b"junk")
+        (tmp_path / "manifest.sqlite.tmp.sqlite-wal").write_bytes(b"junk-wal")
+        (tmp_path / "manifest.sqlite.tmp.sqlite-shm").write_bytes(b"junk-shm")
+        write_manifest([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], out)
+        with sqlite3.connect(out) as conn:
+            paths = [r[0] for r in conn.execute(
+                "SELECT source_path FROM migration_manifest"
+            ).fetchall()]
+        assert paths == ["/a.jpg"]
+
 
 # ── print_summary ──────────────────────────────────────────────────────────
 
