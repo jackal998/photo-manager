@@ -248,7 +248,7 @@ def _classify_phash(
     for group in by_phash.values():
         if len(group) < 2:
             continue
-        _classify_format_group(group, rows, source_priority)
+        _classify_format_group(group, rows, source_priority, mean_color_threshold)
 
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold
     _classify_near_duplicates(candidates, rows, threshold, source_priority, mean_color_threshold)
@@ -258,6 +258,7 @@ def _classify_format_group(
     group: list[HashResult],
     rows: dict[str, ManifestRow],
     source_priority: dict[str, int],
+    mean_color_threshold: int = 30,
 ) -> None:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority."""
     has_raw = any(hr.record.file_type == "raw" for hr in group)
@@ -280,6 +281,17 @@ def _classify_format_group(
         key = str(duplicate.record.path)
         if key in rows:
             continue
+        # #462 — mean-color gate on the exact-pHash path. Catches the
+        # catalogued domain pattern where flat images (solid color or
+        # near-empty composition) all collide on pHash 8000000000000000
+        # — without this guard, an arbitrary set of black / white / blank
+        # PNGs would be silently marked as EXACT duplicates of each other.
+        # Mirrors the gate already in _classify_near_duplicates (line 319);
+        # skipped when either side lacks mean_color (RAW thumbnail, hash
+        # failure) — matches the near-duplicate path's None-handling.
+        if mean_color_threshold > 0 and keeper.mean_color and duplicate.mean_color:
+            if _mean_color_distance(keeper.mean_color, duplicate.mean_color) > mean_color_threshold:
+                continue
         rows[key] = _make_row(
             duplicate,
             "EXACT",

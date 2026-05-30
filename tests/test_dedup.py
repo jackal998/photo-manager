@@ -145,6 +145,59 @@ class TestFormatDuplicate:
         assert rows["/a.arw"].action == "MOVE"
         assert rows["/a.jpg"].action == "MOVE"
 
+    def test_flat_image_phash_collision_rejected_by_mean_color(self):
+        """#462 — flat images (black/white/grey) sharing pHash 8000000000000000
+        must NOT be marked EXACT of each other; the format-duplicate path now
+        gates on mean_color the same way the near-duplicate path does."""
+        flat_hash = "8000000000000000"
+        black = _hr("/a.jpg", sha256="b1", phash=flat_hash, file_type="jpeg",
+                    mean_color="0,0,0", source_label="takeout", exif_date=_dt())
+        white = _hr("/b.jpg", sha256="w1", phash=flat_hash, file_type="jpeg",
+                    mean_color="255,255,255", source_label="takeout", exif_date=_dt())
+        grey = _hr("/c.jpg", sha256="g1", phash=flat_hash, file_type="jpeg",
+                   mean_color="128,128,128", source_label="takeout", exif_date=_dt())
+        rows = _rows(classify([black, white, grey]))
+        # None should be EXACT of another — mean_color differs >> threshold 30.
+        for path in ("/a.jpg", "/b.jpg", "/c.jpg"):
+            assert rows[path].action != "EXACT", (
+                f"{path}: expected non-EXACT, got {rows[path].action} — "
+                f"flat-image pHash collision gate didn't fire"
+            )
+
+    def test_format_duplicate_similar_mean_color_still_marked_exact(self):
+        """#462 regression guard — HEIC + JPEG with same pHash AND similar
+        mean_color must still be marked EXACT (the gate doesn't over-reject
+        genuine format duplicates)."""
+        heic = _hr("/a.heic", sha256="h1", phash="0" * 16, file_type="heic",
+                   mean_color="120,130,140", source_label="jdrive", exif_date=_dt())
+        jpeg = _hr("/a.jpg", sha256="h2", phash="0" * 16, file_type="jpeg",
+                   mean_color="118,132,138", source_label="jdrive", exif_date=_dt())
+        rows = _rows(classify([heic, jpeg]))
+        assert rows["/a.jpg"].action == "EXACT"
+
+    def test_format_duplicate_missing_mean_color_falls_back_to_phash_only(self):
+        """#462 — if either side lacks mean_color (RAW thumbnail, hash
+        failure), the format-duplicate path still marks EXACT; gate skips on
+        missing data, matching _classify_near_duplicates' behavior."""
+        heic = _hr("/a.heic", sha256="h1", phash="0" * 16, file_type="heic",
+                   mean_color=None, source_label="jdrive", exif_date=_dt())
+        jpeg = _hr("/a.jpg", sha256="h2", phash="0" * 16, file_type="jpeg",
+                   mean_color="118,132,138", source_label="jdrive", exif_date=_dt())
+        rows = _rows(classify([heic, jpeg]))
+        assert rows["/a.jpg"].action == "EXACT"
+
+    def test_raw_plus_lossy_with_color_mismatch_still_complementary(self):
+        """#462 — RAW + lossy with mismatched mean_color must still return
+        early (both MOVE); the gate must not affect the RAW+lossy
+        complementary branch."""
+        raw = _hr("/a.arw", sha256="r1", phash="0" * 16, file_type="raw",
+                  mean_color="10,20,30", source_label="jdrive", exif_date=_dt())
+        jpeg = _hr("/a.jpg", sha256="j1", phash="0" * 16, file_type="jpeg",
+                   mean_color="200,180,160", source_label="jdrive", exif_date=_dt())
+        rows = _rows(classify([raw, jpeg]))
+        assert rows["/a.arw"].action == "MOVE"
+        assert rows["/a.jpg"].action == "MOVE"
+
 
 # ---------------------------------------------------------------------------
 # REVIEW_DUPLICATE (near-duplicate)
