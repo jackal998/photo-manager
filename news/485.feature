@@ -1,0 +1,1 @@
+Add "Execute selected" partial-execute affordance to the Execute Action dialog, and classify singletons-with-pending-actions as a separate opt-in bucket in the post-destructive prune confirm so users explicitly see and choose for non-executed rows (#485).
