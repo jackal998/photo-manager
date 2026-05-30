@@ -1,0 +1,1 @@
+Kill orphan exiftool subprocesses on Windows by assigning them to a Job Object with KILL_ON_JOB_CLOSE, eliminating the user-reported Explorer freeze after killing the app mid-scan (#460).
