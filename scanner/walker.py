@@ -72,6 +72,7 @@ def scan_sources(
     limit: int | None = None,
     recursive_map: dict[str, bool] | None = None,
     progress_callback: Callable[[], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[FileRecord]:
     """Walk each source directory and return all discovered FileRecords.
 
@@ -87,15 +88,25 @@ def scan_sources(
             caller render a live "Walking sources — N files…" indicator
             on long NAS scans where the synchronous ``rglob`` would
             otherwise sit silent for minutes. See #448.
+        cancel_check: Optional zero-arg predicate polled at the top of
+            the per-file ``rglob`` loop and between source iterations.
+            When it returns ``True`` the walker breaks out and returns
+            whatever has been collected so far — partial results, not
+            an exception. Lets a UI thread (typically the ScanWorker
+            QThread polling its own ``isInterruptionRequested``) stop
+            a long NAS walk within one file-tick instead of waiting
+            for ``rglob`` to exhaust. See #491.
     """
     records: list[FileRecord] = []
     for label, root in sources.items():
+        if cancel_check is not None and cancel_check():
+            break
         if not root.exists():
             raise FileNotFoundError(f"Source directory not found: {root}")
         recursive = True if recursive_map is None else recursive_map.get(label, True)
         records.extend(_scan_dir(
             root, label, limit=limit, recursive=recursive,
-            progress_callback=progress_callback,
+            progress_callback=progress_callback, cancel_check=cancel_check,
         ))
     return records
 
@@ -121,6 +132,7 @@ def _scan_dir(
     limit: int | None = None,
     recursive: bool = True,
     progress_callback: Callable[[], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[FileRecord]:
     """Walk root and return FileRecords with Live Photo pairs resolved.
 
@@ -130,6 +142,8 @@ def _scan_dir(
         limit: Stop after this many files (for debug/dry-run).
         recursive: When ``True`` walk all subdirectories (default); when
             ``False`` scan only the immediate files in ``root``.
+        cancel_check: See :func:`scan_sources`. Polled at the top of the
+            per-file loop so a cancel lands within one ``rglob`` tick.
     """
     # Collect all media files grouped by directory for efficient pairing.
     # Keys are str(parent), not Path. On Windows pathlib equality is
@@ -141,6 +155,14 @@ def _scan_dir(
     warned_unsafe: set[str] = set()
     glob_fn = root.rglob if recursive else root.glob
     for path in glob_fn("*"):
+        # #491 — cooperative cancel. Polled here (before any per-path
+        # work) so the next ``rglob`` tick after a UI-side
+        # ``requestInterruption`` breaks out with the partial result
+        # already collected. The check is a single Python-level call
+        # (typically an attribute read on the QThread), cheap enough
+        # to run on every rglob hit including non-media ones.
+        if cancel_check is not None and cancel_check():
+            break
         # photo-manager#169: warn ONCE per trailing-dot/whitespace name.
         # rglob enumerates such paths but pathlib operations on them fail —
         # any contents inside are silently invisible to this walk.
