@@ -318,3 +318,88 @@ class TestRealDecodeFailures:
         bad.write_bytes(full.read_bytes()[:512])
         full.unlink()
         assert compute_phash(bad, "jpeg") is None
+
+
+# ── ci-probe — mimics the import + test-method footprint of PR1's
+# proposed TestRunHashForRecord (PR #487) WITHOUT depending on any
+# new symbols. Same number of methods (4), same imports
+# (scanner.dedup.HashResult, scanner.walker.FileRecord,
+# scanner.exif.parse_exif_date, scanner.hasher.compute_hashes),
+# same shape of helper. Lets the CI A/B test isolate whether the
+# class addition itself (test ordering / collection / Qt session
+# state) is what triggers the Windows-CI Qt access violation in
+# tests/test_select_dialog.py::test_both_sections_visible_with_match_fn,
+# or whether it's PR1's source diff. DO NOT MERGE.
+
+
+class TestRunHashForRecord_Probe:
+    """ci-probe: same import + test-count footprint as PR1's
+    TestRunHashForRecord, using only master-resident symbols."""
+
+    def _make_record(self, path, file_type, source_label="test"):
+        from scanner.walker import FileRecord
+        return FileRecord(
+            path=path,
+            source_label=source_label,
+            file_type=file_type,
+        )
+
+    def test_probe_happy_path(self, tmp_path):
+        from scanner.dedup import HashResult
+        from scanner.hasher import compute_hashes
+        from scanner.exif import parse_exif_date
+
+        f = tmp_path / "ok.jpg"
+        _write_jpeg(f)
+        rec = self._make_record(f, "jpeg")
+        sha, ph, mc, raw_date, w, h = compute_hashes(rec.path, rec.file_type)
+        pil_date = parse_exif_date(raw_date) if raw_date else None
+        outcome = HashResult(
+            record=rec, sha256=sha, phash=ph, mean_color=mc,
+            exif_date=pil_date, pixel_width=w, pixel_height=h,
+        )
+        assert isinstance(outcome, HashResult)
+        assert outcome.sha256
+
+    def test_probe_oserror_path(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        missing = tmp_path / "does_not_exist.jpg"
+        rec = self._make_record(missing, "jpeg")
+        try:
+            compute_hashes(rec.path, rec.file_type)
+            raised = None
+        except Exception as exc:
+            raised = exc
+        assert raised is not None
+        assert type(raised).__name__ == "FileNotFoundError"
+
+    def test_probe_truncated_jpeg(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        full = tmp_path / "_full.jpg"
+        Image.new("RGB", (200, 150), (10, 20, 30)).save(full, "JPEG")
+        bad = tmp_path / "bad.jpg"
+        bad.write_bytes(full.read_bytes()[:512])
+        full.unlink()
+        rec = self._make_record(bad, "jpeg")
+        sha, ph, *_ = compute_hashes(rec.path, rec.file_type)
+        # Truncated JPEG → compute_hashes returns phash=None
+        assert sha
+        assert ph is None
+
+    def test_probe_gif_null_phash_ok(self, tmp_path):
+        from scanner.dedup import HashResult
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "anim.gif"
+        Image.new("RGB", (32, 32), (255, 0, 0)).save(f, "GIF")
+        rec = self._make_record(f, "gif")
+        sha, ph, mc, raw_date, w, h = compute_hashes(rec.path, rec.file_type)
+        outcome = HashResult(
+            record=rec, sha256=sha, phash=ph, mean_color=mc,
+            exif_date=None, pixel_width=w, pixel_height=h,
+        )
+        assert isinstance(outcome, HashResult)
+        assert outcome.phash is None
+        assert outcome.sha256
