@@ -1133,7 +1133,23 @@ class ScanDialog(QDialog):
         was_running = bool(self._worker and self._worker.isRunning())
         if was_running:
             self._worker.requestInterruption()
-            self._worker.wait(3000)
+            # #491 — capture wait()'s bool return so a timeout is visible
+            # in the log. False here means the QThread didn't tear down
+            # within 3 s and is now orphaned: it keeps running with its
+            # ExiftoolProcess subprocess(es) alive until the parent
+            # Python process itself exits (which is why the
+            # KILL_ON_JOB_CLOSE Job Object from #460 doesn't catch it —
+            # parent is still alive). Pre-#491 this was a silent path:
+            # the dialog dismissed and the "must close CMD window"
+            # symptom appeared with no log signal to diagnose with.
+            finished = self._worker.wait(3000)
+            if not finished:
+                from loguru import logger
+                logger.warning(
+                    "scan_dialog: worker.wait(3000) timed out on close — "
+                    "QThread may be orphaned (was probably stuck in a "
+                    "stage without a cancel checkpoint)"
+                )
         if was_running:
             # #468 — the worker started but never hit its own terminal
             # signals; clear the receiver-side flag here instead.

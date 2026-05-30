@@ -112,7 +112,18 @@ def _cleanup_on_quit(app: QApplication) -> None:
                 # Match scan_dialog.closeEvent's 3s budget — long enough
                 # for the worker to tear down exiftool + consumer threads,
                 # short enough that quit doesn't visibly hang.
-                worker.wait(3000)
+                # #491 — capture wait()'s return so a timeout on the
+                # graceful-shutdown path is visible in the log (mirrors
+                # scan_dialog's hook). Without this we have no signal
+                # for diagnosing whether shutdown was clean or
+                # orphaned-by-timeout.
+                finished = worker.wait(3000)
+                if not finished:
+                    logger.warning(
+                        "aboutToQuit: worker.wait(3000) timed out — "
+                        "QThread orphaned at process exit (relies on "
+                        "#460 KILL_ON_JOB_CLOSE to reap exiftool)"
+                    )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("aboutToQuit worker cleanup failed: {}", exc)
 
