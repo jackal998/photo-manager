@@ -34,9 +34,6 @@ DUPE_RE = re.compile(r"^(.*)\((\d+)\)$")
 # Edited-photo suffixes to strip when matching Live Photo pairs
 EDITED_SUFFIXES = ["-已編輯", "(已編輯)", "-edited", "-Edit", "_edited", " edited"]
 
-# Order to try when finding a video's companion image JSON (Live Photo)
-COMPANION_PHOTO_EXTS = [".HEIC", ".heic", ".JPG", ".jpg", ".JPEG", ".jpeg", ".PNG", ".png"]
-
 
 # ---------------------------------------------------------------------------
 # File type detection

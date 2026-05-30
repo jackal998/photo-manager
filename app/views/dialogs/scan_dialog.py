@@ -386,6 +386,18 @@ class ScanDialog(QDialog):
     Pass ``on_scan_complete`` to receive a callback when the user clicks Close & Load.
     """
 
+    # #468 — defense-in-depth signals so MainWindow can track whether a
+    # scan worker is alive without poking at ``self._worker`` from
+    # outside the dialog. ``scan_started`` fires immediately before
+    # ``self._worker.start()`` in :meth:`_start_scan`; ``scan_finished``
+    # fires from every worker-exit path (success / failure /
+    # completed-empty) and from :meth:`closeEvent` after the worker has
+    # been interrupted + waited. The receiver-side "is the worker
+    # running" state is the strict XOR of these two — no third terminal
+    # state to wire.
+    scan_started = Signal()
+    scan_finished = Signal()
+
     def __init__(
         self,
         settings,                          # JsonSettings instance
@@ -996,6 +1008,10 @@ class ScanDialog(QDialog):
         self._current_stage = None
         self._stage_label.setText("")
         self._stage_rate_label.setText("")
+        # #468 — emit BEFORE start() so a connected slot that flips a
+        # "scan_running" flag is set by the time the worker thread is
+        # alive. Emit-after would race the worker's first signals.
+        self.scan_started.emit()
         self._worker.start()
 
     def _on_stage_progress(
@@ -1072,6 +1088,8 @@ class ScanDialog(QDialog):
         self._btn_close.setText(t("scan_dialog.close_load_button"))
         self._btn_close.clicked.disconnect()
         self._btn_close.clicked.connect(self._load_and_close)
+        # #468 — worker thread has exited; clear the receiver-side flag.
+        self.scan_finished.emit()
 
     def _on_failed(self, error: str) -> None:
         """Handle scan failure: log the error and re-enable the scan button."""
@@ -1082,6 +1100,8 @@ class ScanDialog(QDialog):
         # there so the user has an obvious next action (focus ring + Enter
         # dismisses) instead of a UI that looks identical to pre-scan (#86).
         self._btn_close.setFocus()
+        # #468 — worker thread has exited; clear the receiver-side flag.
+        self.scan_finished.emit()
 
     def _on_completed_empty(self) -> None:
         """Empty input is benign — re-enable Start Scan, no modal."""
@@ -1091,6 +1111,8 @@ class ScanDialog(QDialog):
         # ended. Start Scan stays enabled so the user can fix sources and
         # retry without dismissing the dialog.
         self._btn_close.setFocus()
+        # #468 — worker thread has exited; clear the receiver-side flag.
+        self.scan_finished.emit()
 
     def _load_and_close(self) -> None:
         """Call the completion callback and close the dialog."""
@@ -1108,9 +1130,14 @@ class ScanDialog(QDialog):
         detached thread until the process exits — that's the partial-state
         leak s03_cancel_scan was written to catch.
         """
-        if self._worker and self._worker.isRunning():
+        was_running = bool(self._worker and self._worker.isRunning())
+        if was_running:
             self._worker.requestInterruption()
             self._worker.wait(3000)
+        if was_running:
+            # #468 — the worker started but never hit its own terminal
+            # signals; clear the receiver-side flag here instead.
+            self.scan_finished.emit()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:

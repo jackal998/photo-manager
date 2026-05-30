@@ -194,6 +194,12 @@ class MainWindow(QMainWindow):
         self._img = image_service
         self._settings = settings
 
+        # #468 — defense-in-depth flag for closeEvent. Set/cleared by
+        # ScanDialog.scan_started / scan_finished signals wired up in
+        # :meth:`on_scan_sources`. Stays False whenever no scan dialog
+        # is open; the closeEvent guard short-circuits on True.
+        self.scan_running: bool = False
+
         # Initialize thumbnail size from settings
         self._thumb_size: int = 512
         if self._settings is not None:
@@ -462,6 +468,13 @@ class MainWindow(QMainWindow):
             parent=self,
             should_proceed=self._confirm_no_pending_decisions,
         )
+        # #468 — track worker liveness on the receiver side so
+        # closeEvent can guard against a force-quit mid-scan. Lambdas
+        # (rather than method refs) so the flag value is bound at emit
+        # time and the slots stay anonymous — no teardown wiring needed
+        # since the dialog is owned by ``dlg.exec()``'s scope.
+        dlg.scan_started.connect(lambda: setattr(self, "scan_running", True))
+        dlg.scan_finished.connect(lambda: setattr(self, "scan_running", False))
         dlg.exec()
 
     def _confirm_no_pending_decisions(self) -> bool:
@@ -774,6 +787,29 @@ class MainWindow(QMainWindow):
         # there's nothing to undo; if the user resizes after Back, the
         # next close-attempt re-saves.
         self._save_geometry()
+        # #468 — defense-in-depth guard against closing the main
+        # window while a scan worker is alive. Today the ScanDialog is
+        # modal and Qt cascades the close, so ``ScanDialog.closeEvent``
+        # always runs first and interrupts the worker. If the dialog
+        # were ever changed to non-modal / detached, or worker
+        # ownership moved up here, that cascade would silently break
+        # and the worker would survive the main-window close. When the
+        # flag is True we prompt before letting the close through —
+        # Yes accepts (existing cascade interrupts the worker), No
+        # (or Esc / window-X) keeps the user in the app.
+        if self.scan_running:
+            reply = QMessageBox.question(
+                self,
+                t("exit.scan_running_title"),
+                t("exit.scan_running_body"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+            event.accept()
+            return
         if not self.file_operations.is_dirty():
             super().closeEvent(event)
             return

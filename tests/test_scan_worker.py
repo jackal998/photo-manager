@@ -595,3 +595,203 @@ class TestScanWorkerLogging:
             f"corrupt file path should land in loguru for forensics: {joined!r}"
         assert "ImageDecodeError" in joined, \
             f"synthetic exception type should land in loguru: {joined!r}"
+
+
+class TestScanWorkerLateCancel:
+    """#463 — cancel checks at the entry of every opaque post-HASH stage
+    (CLASSIFY/SCORE/AUTO-SELECT/WRITE) so a late user-cancel actually
+    stops the pipeline.
+
+    Pre-#463, the worker only polled ``isInterruptionRequested`` inside
+    the HASH ``as_completed`` loop. Cancel during the long CLASSIFY pass
+    or right before ``write_manifest`` was silently ignored — the
+    pipeline ran to completion AND overwrote any prior manifest at
+    ``output_path`` with the just-computed (now unwanted) data. That's
+    the regression these tests pin.
+    """
+
+    def test_cancel_after_hash_skips_classify_through_write(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Set ``isInterruptionRequested = True`` immediately after the
+        HASH worker finishes the only file. By the time the pipeline
+        exits the HASH ``as_completed`` loop, drains consumer threads,
+        and reaches the CLASSIFY entry-check, interruption is True.
+        That check must short-circuit the rest of the pipeline:
+
+          - ``scanner.dedup.classify`` MUST NOT be called.
+          - ``scanner.scoring.apply_scoring_to_rows`` MUST NOT be called.
+          - ``scanner.manifest.write_manifest`` MUST NOT be called —
+            so any pre-existing manifest at ``output_path`` survives
+            the cancel intact.
+          - ``failed`` emits exactly ``"Scan cancelled."`` (the
+            string ``scan_dialog`` distinguishes as a clean cancel,
+            not a red error modal).
+        """
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.hasher as _hasher
+        import scanner.dedup as _dedup
+        import scanner.scoring as _scoring
+        import scanner.manifest as _manifest
+
+        # Single source file — HASH loop polls once, then completes.
+        a = tmp_path / "a.jpg"
+        _write_jpeg(a)
+        out = tmp_path / "manifest.sqlite"
+        # Sentinel that proves the OLD manifest at output_path is NOT
+        # overwritten when cancel fires before WRITE. Realistic shape
+        # for the regression: user finishes a scan, opens the manifest,
+        # later starts a re-scan, cancels mid-way — must NOT lose the
+        # original.
+        out.write_bytes(b"PRIOR-MANIFEST-SENTINEL")
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=1,
+        )
+
+        # ``worker.requestInterruption()`` doesn't actually set the flag
+        # when ``run()`` is called synchronously instead of via
+        # ``start()`` (no actual QThread thread exists yet). Patch
+        # ``isInterruptionRequested`` on the instance directly via a
+        # state-flag closure so tests don't depend on Qt thread state.
+        cancel_state = {"flag": False}
+
+        def fake_is_interrupt():
+            return cancel_state["flag"]
+
+        monkeypatch.setattr(worker, "isInterruptionRequested", fake_is_interrupt)
+
+        real_compute_hashes = _hasher.compute_hashes
+
+        def cancel_during_hash(path, file_type):
+            """Run the real hash, then flip the cancel flag. The HASH
+            ``as_completed`` loop has already passed its own cancel
+            check for this iteration; with only one record, there's no
+            next iteration. So the next check the pipeline hits is at
+            CLASSIFY entry — exactly the new #463 check this test pins.
+            """
+            result = real_compute_hashes(path, file_type)
+            cancel_state["flag"] = True
+            return result
+
+        def must_not_run_classify(*args, **kwargs):
+            raise AssertionError(
+                "scanner.dedup.classify called after cancel — the "
+                "CLASSIFY-stage check at scan_worker.py did not fire"
+            )
+
+        def must_not_run_score(*args, **kwargs):
+            raise AssertionError(
+                "apply_scoring_to_rows called after cancel — the "
+                "SCORE-stage check did not fire"
+            )
+
+        def must_not_run_write(*args, **kwargs):
+            raise AssertionError(
+                "write_manifest called after cancel — the WRITE-stage "
+                "check did not fire; pre-existing manifest at "
+                "output_path would be overwritten"
+            )
+
+        monkeypatch.setattr(_hasher, "compute_hashes", cancel_during_hash)
+        monkeypatch.setattr(_dedup, "classify", must_not_run_classify)
+        monkeypatch.setattr(_scoring, "apply_scoring_to_rows", must_not_run_score)
+        monkeypatch.setattr(_manifest, "write_manifest", must_not_run_write)
+
+        failed: list[str] = []
+        finished: list[str] = []
+        worker.failed.connect(failed.append)
+        worker.finished.connect(finished.append)
+        worker.run()
+
+        # Cancel-emit shape: exactly one "Scan cancelled." — scan_dialog
+        # distinguishes this from an error string and avoids the red
+        # modal. (#463 test_plan acceptance.)
+        assert failed == ["Scan cancelled."], (
+            f"expected exactly ['Scan cancelled.'] but got {failed!r}"
+        )
+        assert finished == [], (
+            f"finished signal must NOT fire on cancel; got {finished!r}"
+        )
+        # The destination manifest is byte-for-byte the prior sentinel
+        # — the WRITE check short-circuited before write_manifest.
+        assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
+            "destination manifest was overwritten despite cancel — "
+            "the WRITE-stage check failed to fire"
+        )
+
+    def test_cancel_before_write_only_preserves_existing_manifest(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Defense-in-depth complement to the test above: even if every
+        earlier cancel check somehow failed, the WRITE-stage check
+        alone must still prevent overwriting the existing manifest.
+
+        Triggers interruption from inside the patched ``print_summary``
+        (which runs after AUTO-SELECT, immediately before the WRITE
+        check). Confirms the WRITE check fires in isolation, not just
+        as a downstream consequence of an earlier check.
+        """
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.manifest as _manifest
+
+        a = tmp_path / "a.jpg"
+        _write_jpeg(a)
+        out = tmp_path / "manifest.sqlite"
+        out.write_bytes(b"PRIOR-MANIFEST-SENTINEL")
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=1,
+        )
+
+        # See the sibling test for why ``isInterruptionRequested`` is
+        # patched on the instance rather than going through
+        # ``requestInterruption()`` — synchronous ``run()`` doesn't
+        # propagate the real Qt interruption flag.
+        cancel_state = {"flag": False}
+
+        def fake_is_interrupt():
+            return cancel_state["flag"]
+
+        monkeypatch.setattr(worker, "isInterruptionRequested", fake_is_interrupt)
+
+        real_print_summary = _manifest.print_summary
+        write_calls: list[tuple] = []
+
+        def hooked_print_summary(*args, **kwargs):
+            """Run the real summary, then flip the cancel flag. The
+            WRITE check fires on the very next statement after
+            print_summary's output is re-emitted to the log."""
+            real_print_summary(*args, **kwargs)
+            cancel_state["flag"] = True
+
+        def boom_write_manifest(*args, **kwargs):
+            write_calls.append(args)
+            raise AssertionError(
+                "write_manifest called after cancel — the WRITE-stage "
+                "check failed in isolation"
+            )
+
+        monkeypatch.setattr(_manifest, "print_summary", hooked_print_summary)
+        monkeypatch.setattr(_manifest, "write_manifest", boom_write_manifest)
+
+        failed: list[str] = []
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert write_calls == [], (
+            f"write_manifest must not be called on late cancel; "
+            f"call args were {write_calls!r}"
+        )
+        assert failed == ["Scan cancelled."], (
+            f"expected exactly ['Scan cancelled.'] but got {failed!r}"
+        )
+        assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
+            "destination manifest must be preserved on WRITE-stage cancel"
+        )

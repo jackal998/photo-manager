@@ -41,6 +41,7 @@ MENU_CONTROLLER_PATH = REPO / "app" / "views" / "components" / "menu_controller.
 ACTION_HANDLERS_PATH = REPO / "app" / "views" / "handlers" / "action_handlers.py"
 CONTEXT_MENU_PATH = REPO / "app" / "views" / "handlers" / "context_menu.py"
 MAIN_WINDOW_PATH = REPO / "app" / "views" / "main_window.py"
+SCANNER_DEDUP_PATH = REPO / "scanner" / "dedup.py"
 EN_YAML = REPO / "translations" / "en.yml"
 ZH_TW_YAML = REPO / "translations" / "zh_TW.yml"
 
@@ -959,4 +960,87 @@ def test_probe_scanner_and_infrastructure_popen_declare_creationflags():
         "_POPEN_CREATIONFLAGS_ALLOWLIST with a one-line reason if the "
         "child is legitimately a GUI-subsystem process. Leaks: "
         + "\n".join(f"  {f}:{n}: {s}" for f, n, s in leaks)
+    )
+
+
+# ── #474 — per-row stat budget in scanner/dedup.py::_make_row ─────────────
+#
+# Context: `_make_row` runs once per classified record in the pass-1/2/3
+# scan loop. It currently issues two `os.path.get*` calls (`getsize` +
+# `getmtime`) plus `get_filesystem_creation_datetime` — documented at
+# scanner/dedup.py:113-114 as the intentional scan-time-vs-load-time
+# trade-off ("eliminates all filesystem I/O at load time"). The trade-off
+# is principled but has no automatic guardrail: a future 4th
+# `os.path.get*` (e.g. `getctime`, `getatime`) added without realising
+# this is in a hot loop would silently compound the per-row I/O cost.
+#
+# This probe is the guardrail. It walks `_make_row`'s AST and counts
+# every `os.path.get*` attribute call. The threshold is `> 3` — two
+# slots match today's calls, the third leaves headroom for one
+# deliberate addition before the probe fires. A fourth addition trips
+# the probe and forces a code-review conversation: is the new stat
+# really necessary, or can the data come from an already-issued call
+# (or from the manifest)?
+
+
+def _count_os_path_get_calls(fn: ast.FunctionDef) -> list[tuple[int, str]]:
+    """Return (line_no, attr_name) tuples for every ``os.path.get*``
+    call inside the given function body.
+
+    Matches ``os.path.getsize(...)``, ``os.path.getmtime(...)``,
+    ``os.path.getctime(...)``, etc. — any attribute on ``os.path``
+    whose name starts with ``get``. Bare ``getsize(...)`` (from
+    ``from os.path import getsize``) is not counted: the probe is a
+    structural guardrail tied to the canonical spelling used in
+    ``_make_row`` today.
+    """
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute)
+                and func.attr.startswith("get")
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "path"
+                and isinstance(func.value.value, ast.Name)
+                and func.value.value.id == "os"):
+            continue
+        found.append((node.lineno, func.attr))
+    return found
+
+
+def test_probe_make_row_per_row_stat_budget():
+    """#474 forward-defensive: ``scanner/dedup.py::_make_row`` MUST NOT
+    issue more than 3 ``os.path.get*`` calls.
+
+    ``_make_row`` runs once per classified record in the pass-1/2/3
+    scan loop. The current 2 calls (``getsize`` + ``getmtime``) plus
+    ``get_filesystem_creation_datetime`` are the documented scan-time
+    trade-off (see ``scanner/dedup.py:113-114``). The threshold of 3
+    leaves one slot of headroom for a deliberate addition; the 4th
+    addition trips this probe and forces a review: is the new stat
+    actually necessary, or can the data be derived from an
+    already-issued call (or read from the manifest)?
+    """
+    tree = ast.parse(SCANNER_DEDUP_PATH.read_text(encoding="utf-8"))
+    make_row: ast.FunctionDef | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_make_row":
+            make_row = node
+            break
+    assert make_row is not None, (
+        f"_make_row function not found in {SCANNER_DEDUP_PATH} — the "
+        "file may have been refactored. Update the probe to match."
+    )
+
+    calls = _count_os_path_get_calls(make_row)
+    assert len(calls) <= 3, (
+        f"scanner/dedup.py::_make_row issues {len(calls)} os.path.get* "
+        f"calls: {calls!r}. The function runs once per classified "
+        "record in the scan loop; each extra stat compounds per-row "
+        "I/O cost. See scanner/dedup.py:113-114 for the documented "
+        "trade-off and #474 for the guardrail rationale. If the new "
+        "stat is truly necessary, raise the threshold here in the same "
+        "PR with a one-line reason."
     )
