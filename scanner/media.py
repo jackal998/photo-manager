@@ -28,6 +28,28 @@ LOSSY_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif", ".webp", 
 
 SKIP_FILENAMES = {"thumbs.db", "desktop.ini", "failed_inserting_exif.txt", ".ds_store"}
 
+# Directory names that should NEVER be walked into during a scan. Match
+# is case-insensitive against each path segment between scan root and
+# file. Anything under one of these is system / OS-managed scratch
+# space and treated as out-of-scope for dedup:
+#
+#   - ``$RECYCLE.BIN`` — Windows per-drive Recycle Bin. Files inside
+#     are already user-deleted; including them in a scan also causes
+#     send2trash to fail with WinError -2147024809 (E_INVALIDARG)
+#     when the user tries to delete via the Execute Action flow,
+#     because send2trash can't send a recycle-bin file to itself.
+#   - ``System Volume Information`` — Windows shadow-copy / restore
+#     point store. Hidden, system-owned, never user-meaningful media.
+#   - ``.Trashes`` / ``.Trash-*`` — macOS / *nix trash dirs that show
+#     up on networked drives mounted from non-Windows hosts. Same
+#     "already deleted" semantics as ``$RECYCLE.BIN``.
+SKIP_DIRECTORIES = {
+    "$recycle.bin",
+    "system volume information",
+    ".trashes",
+    ".trash",
+}
+
 # Google Takeout: "IMG_9556(1).HEIC" → base="IMG_9556", number=1
 DUPE_RE = re.compile(r"^(.*)\((\d+)\)$")
 

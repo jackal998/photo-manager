@@ -11,10 +11,36 @@ from loguru import logger
 from scanner.media import (
     EDITED_SUFFIXES,
     MEDIA_EXTENSIONS,
+    SKIP_DIRECTORIES,
     SKIP_FILENAMES,
     get_file_type,
     parse_media_filename,
 )
+
+
+def _is_in_skip_directory(path: Path, root: Path) -> bool:
+    """Return True if any ancestor of ``path`` between ``root`` and
+    ``path`` is in :data:`SKIP_DIRECTORIES` (case-insensitive).
+
+    Catches files inside Windows ``$RECYCLE.BIN`` / ``System Volume
+    Information`` / ``.Trashes`` regardless of where the user pointed
+    the scan root. The walker's normal filename / extension filters
+    would happily pull a recycle-bin ``$Rxxxxxx.jpg`` into the
+    manifest — leading to the user-reported "send2trash WinError
+    -2147024809" cluster when the user tries to delete via Execute
+    Action (already-in-recycle-bin files can't be sent to the
+    recycle bin again).
+
+    Args:
+        path: The candidate file path (any descendant of ``root``).
+        root: The scan root for the current source.
+    """
+    current = path.parent if path.is_file() else path
+    while current != root and current != current.parent:
+        if current.name.lower() in SKIP_DIRECTORIES:
+            return True
+        current = current.parent
+    return False
 
 
 def _has_win32_unsafe_name(name: str) -> bool:
@@ -131,6 +157,8 @@ def _scan_dir(
         if not path.is_file():
             continue
         if _traverses_symlink(path, root):
+            continue
+        if _is_in_skip_directory(path, root):
             continue
         if path.name.lower() in SKIP_FILENAMES:
             continue
