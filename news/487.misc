@@ -1,0 +1,1 @@
+Extract per-file hash compute into a top-level picklable ``run_hash_for_record`` — structural precondition for a future ProcessPoolExecutor migration of the HASH stage (#486).
