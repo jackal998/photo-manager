@@ -277,16 +277,39 @@ def main() -> int:
     )
 
 
-def _select_combo_robust(combo, label: str) -> bool:
-    """Set ``combo`` to ``label`` with the same 3-retry + iface_value
-    fallback pattern used by ActionDialog's action_combo at
-    _uia.py:1828-1854. The bare ``combo.select(text)`` call works
-    reliably locally but flakes on hosted CI for non-default items
-    (s29 burned twice on the third item with the simpler call).
+def _combo_current_text(combo) -> str:
+    """Return the QComboBox's current selection text via the UIA
+    ValuePattern.
 
-    Returns ``True`` if the combo's displayed text matches ``label``
-    after the attempt, ``False`` if even the iface_value.SetValue
-    fallback couldn't agree."""
+    Qt's QComboBox does NOT surface its current text through the UIA
+    Name property — ``combo.window_text()`` returns ``''`` for it
+    (confirmed empirically on this widget; that wrong read was the
+    original s60 CI failure). The current selection IS exposed through
+    the ValuePattern's ``CurrentValue``, which mirrors Qt's
+    ``currentText()``. Use this for any "did the combo change?" check.
+    """
+    try:
+        return (combo.iface_value.CurrentValue or "").strip()
+    except Exception:
+        return ""
+
+
+def _select_combo_robust(combo, label: str) -> bool:
+    """Set ``combo`` to ``label`` and confirm via the ValuePattern.
+
+    ``combo.select(text)`` drives Qt's QComboBox correctly —
+    SelectionItemPattern.Select on the popup item fires Qt's
+    ``currentIndexChanged``, which is what triggers
+    ``_on_type_filter_changed`` and re-filters the tree. Verification
+    reads ``iface_value.CurrentValue`` (Qt's ``currentText()``), NOT
+    ``window_text()`` — the latter is empty for a QComboBox and was the
+    root cause of the original s60 CI failure (3× "combo state stuck"
+    while the select had in fact worked on the first attempt).
+
+    Retried up to 3× for the hosted-CI combo flake documented at
+    _uia.py:1820 (s29 burned twice on a non-default item with a single
+    un-retried select). Returns ``True`` once the current value matches
+    ``label``."""
     for _ in range(3):
         try:
             combo.set_focus()
@@ -298,22 +321,9 @@ def _select_combo_robust(combo, label: str) -> bool:
         except Exception:
             pass
         time.sleep(0.4)
-        try:
-            current = (combo.window_text() or "").strip()
-        except Exception:
-            current = ""
-        if current == label:
+        if _combo_current_text(combo) == label:
             return True
-    try:
-        combo.iface_value.SetValue(label)
-    except Exception:
-        pass
-    time.sleep(0.2)
-    try:
-        current = (combo.window_text() or "").strip()
-    except Exception:
-        current = ""
-    return current == label
+    return False
 
 
 def _continue_main(
