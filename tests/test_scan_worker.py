@@ -310,7 +310,10 @@ class TestScanWorkerParallelWalk:
         # encodes the call-site, then sleeps if alpha. We don't care
         # what the manifest stage does with these — we only care that
         # the worker concatenates partials in source-iteration order.
-        def fake_scan_sources(sources, limit=None, recursive_map=None, progress_callback=None):
+        def fake_scan_sources(
+            sources, limit=None, recursive_map=None,
+            progress_callback=None, cancel_check=None,
+        ):
             (label,) = sources.keys()
             (root,) = sources.values()
             if label == "alpha":
@@ -794,4 +797,89 @@ class TestScanWorkerLateCancel:
         )
         assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
             "destination manifest must be preserved on WRITE-stage cancel"
+        )
+
+
+class TestScanWorkerWalkCancel:
+    """#491 — cancel during the WALK stage must propagate into
+    ``scanner.walker.scan_sources`` via the new ``cancel_check`` hook,
+    and the worker must early-return before HASH starts.
+
+    Pre-#491, ``scan_sources`` was synchronous and uncancellable: a
+    cancel during WALK was only observed AFTER the walker exhausted
+    ``rglob``. On large NAS scans that's minutes of unresponsive
+    "Cancel" + an orphan QThread holding ExiftoolProcess subprocesses
+    alive after the dialog closes via its 3-second wait timeout.
+    """
+
+    def test_walk_stage_observes_cancel_check_and_skips_hash(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Pre-set the interruption flag before ``run()`` starts. The
+        walker's ``cancel_check`` predicate (wired to
+        ``self.isInterruptionRequested``) returns True on the first poll
+        and returns no records. The post-WALK gate then short-circuits
+        the rest of the pipeline:
+
+          - ``scanner.hasher.compute_hashes`` MUST NOT be called.
+          - ``scanner.manifest.write_manifest`` MUST NOT be called —
+            any pre-existing manifest at ``output_path`` survives.
+          - ``failed`` emits exactly ``"Scan cancelled."`` so
+            scan_dialog distinguishes from a red error modal.
+        """
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.hasher as _hasher
+        import scanner.manifest as _manifest
+
+        # Several files — enough that a non-cancelling walker would
+        # definitely call compute_hashes at least once.
+        for i in range(5):
+            _write_jpeg(tmp_path / f"img_{i}.jpg")
+        out = tmp_path / "manifest.sqlite"
+        out.write_bytes(b"PRIOR-MANIFEST-SENTINEL")
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=1,
+        )
+
+        # Flag the worker as already-interrupted before WALK starts.
+        # The walker polls ``self.isInterruptionRequested`` on every
+        # rglob hit; the first hit returns True, the loop breaks
+        # immediately, and the walker returns ``records == []``.
+        monkeypatch.setattr(worker, "isInterruptionRequested", lambda: True)
+
+        def must_not_run_hash(*args, **kwargs):
+            raise AssertionError(
+                "compute_hashes called after WALK-stage cancel — the "
+                "#491 cancel_check did not propagate into scan_sources"
+            )
+
+        def must_not_run_write(*args, **kwargs):
+            raise AssertionError(
+                "write_manifest called after WALK-stage cancel — the "
+                "post-WALK gate at scan_worker.py did not fire"
+            )
+
+        monkeypatch.setattr(_hasher, "compute_hashes", must_not_run_hash)
+        monkeypatch.setattr(_manifest, "write_manifest", must_not_run_write)
+
+        failed: list[str] = []
+        finished: list[str] = []
+        worker.failed.connect(failed.append)
+        worker.finished.connect(finished.append)
+        worker.run()
+
+        # Same cancel-emit shape as the HASH / CLASSIFY / SCORE / WRITE
+        # gates — scan_dialog treats this as a clean cancel.
+        assert failed == ["Scan cancelled."], (
+            f"expected exactly ['Scan cancelled.'] but got {failed!r}"
+        )
+        assert finished == [], (
+            f"finished signal must NOT fire on cancel; got {finished!r}"
+        )
+        assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
+            "destination manifest must be preserved on WALK-stage cancel"
         )

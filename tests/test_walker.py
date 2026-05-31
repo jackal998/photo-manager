@@ -383,6 +383,102 @@ class TestProgressCallback:
         assert len(records) == 1
 
 
+class TestCancelCheck:
+    """#491 — cooperative cancel hook for the WALK stage.
+
+    The walker must observe a cancel-check predicate within one rglob tick
+    so a UI-side requestInterruption() doesn't have to wait for the rglob
+    iterator to exhaust before stopping. Without this hook a NAS walk could
+    keep running for minutes after the user clicks Cancel/X, holding the
+    ExiftoolProcess subprocess alive on a detached QThread.
+    """
+
+    def test_pre_set_cancel_returns_empty_partial(self, tmp_path):
+        """A cancel_check that's already True before scan_sources is even
+        invoked must return immediately with no records. Exercises the
+        between-source-iteration check in ``scan_sources``."""
+        from scanner.walker import scan_sources
+        for i in range(20):
+            _write_jpeg(tmp_path / f"img_{i}.jpg")
+        records = scan_sources(
+            {"test": tmp_path},
+            cancel_check=lambda: True,
+        )
+        assert records == []
+
+    def test_cancel_during_walk_returns_partial(self, tmp_path):
+        """A cancel_check flipped to True mid-walk must break out of the
+        rglob loop within a small bounded number of iterations. The
+        partial result is what's been collected so far — no exception.
+        """
+        from scanner.walker import scan_sources
+        for i in range(50):
+            _write_jpeg(tmp_path / f"img_{i:02d}.jpg")
+
+        # Flip the cancel flag after the 5th progress tick (i.e. after 5
+        # media files have been accepted). The next rglob iteration will
+        # see cancel_check() return True and break.
+        ticks = [0]
+        cancelled = [False]
+
+        def cb() -> None:
+            ticks[0] += 1
+            if ticks[0] >= 5:
+                cancelled[0] = True
+
+        records = scan_sources(
+            {"test": tmp_path},
+            progress_callback=cb,
+            cancel_check=lambda: cancelled[0],
+        )
+        # 5 files processed before flip; the very next iteration of the
+        # rglob loop breaks. Allow a +1 overshoot — the flip happens at
+        # the END of the per-file body (after by_dir append), and the
+        # cancel check runs at the TOP of the loop, so iteration #6
+        # always sees the flag set and breaks.
+        assert 5 <= len(records) <= 6, (
+            f"expected partial result of 5 or 6 records after mid-walk cancel, "
+            f"got {len(records)}"
+        )
+
+    def test_cancel_check_none_keeps_existing_behaviour(self, tmp_path):
+        """Existing callers passing no cancel_check must still walk to
+        completion."""
+        from scanner.walker import scan_sources
+        for i in range(10):
+            _write_jpeg(tmp_path / f"img_{i}.jpg")
+        records = scan_sources({"test": tmp_path})
+        assert len(records) == 10
+
+    def test_cancel_check_stops_between_sources(self, tmp_path):
+        """Between-source check skips later sources when cancel_check
+        flips True after the first source completes. Covers the
+        multi-source iteration path."""
+        from scanner.walker import scan_sources
+        src_a = tmp_path / "a"
+        src_b = tmp_path / "b"
+        src_a.mkdir()
+        src_b.mkdir()
+        _write_jpeg(src_a / "a1.jpg")
+        _write_jpeg(src_b / "b1.jpg")
+
+        seen_a = [False]
+        # Flip after first source is walked — the between-source check
+        # at the top of scan_sources's loop will then skip source 'b'.
+        def cb() -> None:
+            seen_a[0] = True
+
+        records = scan_sources(
+            {"a": src_a, "b": src_b},
+            progress_callback=cb,
+            cancel_check=lambda: seen_a[0],
+        )
+        labels = {r.source_label for r in records}
+        assert labels == {"a"}, (
+            f"expected only source 'a' to be walked before cancel, got {labels}"
+        )
+
+
 class TestFlatScan:
     def test_flat_scan_finds_top_level_file(self, tmp_path):
         from scanner.walker import scan_sources
