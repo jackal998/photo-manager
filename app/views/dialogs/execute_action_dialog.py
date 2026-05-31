@@ -1180,10 +1180,14 @@ class ExecuteActionDialog(QDialog):
         selected = self._selected_file_paths()
         if not selected:
             return
-        self._on_execute_requested(paths_filter=selected)
+        # keep_open=True is the defining trait of the "Execute selected"
+        # affordance — it commits a subset and leaves the dialog up so
+        # the user can keep triaging. The full Execute button uses the
+        # default keep_open=False and closes the dialog. See #485 / #502.
+        self._on_execute_requested(paths_filter=selected, keep_open=True)
 
     def _on_execute_requested(
-        self, paths_filter: set[str] | None = None,
+        self, paths_filter: set[str] | None = None, *, keep_open: bool = False,
     ) -> None:
         from PySide6.QtWidgets import QMessageBox
 
@@ -1279,7 +1283,7 @@ class ExecuteActionDialog(QDialog):
             )
             if reply != QMessageBox.Yes:
                 return
-        self._on_execute(paths_filter=paths_filter)
+        self._on_execute(paths_filter=paths_filter, keep_open=keep_open)
 
     def _clear_decision_on(self, paths: list[str]) -> None:
         """Reset ``user_decision`` to '' for ``paths``. Used by the
@@ -1304,7 +1308,9 @@ class ExecuteActionDialog(QDialog):
             except Exception as exc:
                 logger.warning("Failed to persist cleared decisions: {}", exc)
 
-    def _on_execute(self, paths_filter: set[str] | None = None) -> None:
+    def _on_execute(
+        self, paths_filter: set[str] | None = None, *, keep_open: bool = False,
+    ) -> None:
         # #410 baseline: for the full-execute path, groups arrive
         # pre-filtered from the handler — this method acts on every
         # decided row it was given.
@@ -1312,6 +1318,12 @@ class ExecuteActionDialog(QDialog):
         # via the "Execute selected" button), the iteration narrows to
         # records whose path is in the filter. Records outside the
         # filter retain their decisions for a future Execute click.
+        # #502: ``keep_open`` (not ``paths_filter is None``) now decides
+        # close-vs-stay-open. The type filter sets ``paths_filter`` to a
+        # non-None value even for the FULL Execute button, so the old
+        # ``paths_filter is None`` proxy would wrongly keep the dialog
+        # open after a filtered full-Execute. Only "Execute selected"
+        # passes ``keep_open=True``.
 
         def in_scope(rec) -> bool:
             if paths_filter is None:
@@ -1417,13 +1429,16 @@ class ExecuteActionDialog(QDialog):
             )
 
         # Full execute → close the dialog (existing behaviour).
-        # Partial execute → keep the dialog open so the user can
-        # continue reviewing the remaining un-executed rows. Clear the
-        # in-memory user_decision on the records we just executed so a
-        # subsequent click doesn't reprocess them (the deletion already
-        # ran for delete-decision rows; running it again would hit
-        # "file not found").
-        if paths_filter is None:
+        # Partial execute ("Execute selected") → keep the dialog open so
+        # the user can continue reviewing the remaining un-executed rows.
+        # Clear the in-memory user_decision on the records we just
+        # executed so a subsequent click doesn't reprocess them (the
+        # deletion already ran for delete-decision rows; running it again
+        # would hit "file not found").
+        # #502: gate on ``keep_open``, NOT ``paths_filter is None`` — a
+        # type-filtered FULL Execute has a non-None paths_filter but must
+        # still close.
+        if not keep_open:
             self.accept()
             return
         for _group, rec in executed_in_scope:

@@ -538,7 +538,14 @@ class TestOnExecutePartialFilter:
         """After partial execute, in-memory ``user_decision`` on
         executed rows must be cleared — otherwise a subsequent Execute
         click re-processes them and ``_delete_file`` hits an
-        already-deleted path."""
+        already-deleted path.
+
+        #502: the stay-open + clear-decisions branch is now gated on
+        ``keep_open`` (not ``paths_filter is not None``), so this test
+        passes ``keep_open=True`` to exercise the same path the real
+        "Execute selected" button drives via
+        ``_on_execute_selected_requested``.
+        """
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         rec_a = _rec("/a.jpg", "delete")
         rec_b = _rec("/b.jpg", "delete")
@@ -546,22 +553,28 @@ class TestOnExecutePartialFilter:
         dlg = ExecuteActionDialog(groups, manifest_path=None)
 
         with patch.object(dlg, "_delete_file"):
-            dlg._on_execute(paths_filter={"/a.jpg"})
+            dlg._on_execute(paths_filter={"/a.jpg"}, keep_open=True)
 
         assert rec_a.user_decision == ""   # cleared (was in filter)
         assert rec_b.user_decision == "delete"   # preserved (not in filter)
 
     def test_paths_filter_does_not_accept_dialog(self, qapp):
-        """Partial execute keeps the dialog open so the user can
-        continue reviewing — only full execute closes the dialog via
-        ``accept()``."""
+        """Partial execute ("Execute selected", ``keep_open=True``) keeps
+        the dialog open so the user can continue reviewing — only full
+        execute closes the dialog via ``accept()``.
+
+        #502: close-vs-stay-open now keys off ``keep_open``. A bare
+        ``paths_filter`` no longer implies stay-open — that proxy broke
+        once the type filter started passing ``paths_filter`` on the
+        FULL Execute path too.
+        """
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         groups = [_group(_rec("/a.jpg", "delete"), number=1)]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
 
         with patch.object(dlg, "_delete_file"):
             with patch.object(dlg, "accept") as mock_accept:
-                dlg._on_execute(paths_filter={"/a.jpg"})
+                dlg._on_execute(paths_filter={"/a.jpg"}, keep_open=True)
 
         mock_accept.assert_not_called()
 
@@ -2330,7 +2343,7 @@ class TestExecuteDialogTypeFilter:
         # Patch _on_execute to capture the paths_filter it receives.
         captured: dict = {}
 
-        def fake_on_execute(paths_filter=None):
+        def fake_on_execute(paths_filter=None, keep_open=False):
             captured["paths_filter"] = paths_filter
 
         monkeypatch.setattr(dlg, "_on_execute", fake_on_execute)
@@ -2363,7 +2376,7 @@ class TestExecuteDialogTypeFilter:
 
         captured: dict = {}
 
-        def fake_on_execute(paths_filter=None):
+        def fake_on_execute(paths_filter=None, keep_open=False):
             captured["paths_filter"] = paths_filter
 
         monkeypatch.setattr(dlg, "_on_execute", fake_on_execute)
@@ -2452,3 +2465,68 @@ class TestExecuteDialogTypeFilter:
         after_count = sum(len(g.items) for g in after)
         # One delete row vanished from the filtered view.
         assert after_count == 2
+
+    # ── close-vs-stay-open under filter (the s60 local-run bug) ──────────
+
+    def test_full_execute_under_filter_closes_dialog(self, qapp, monkeypatch):
+        """The FULL Execute button must close the dialog even when a type
+        filter is active. Regression for the bug s60's local run caught:
+        the type filter sets ``paths_filter`` to a non-None value, and
+        the pre-#502 close decision keyed off ``paths_filter is None`` —
+        so a filtered full-Execute wrongly took the "Execute selected"
+        stay-open branch and the dialog never closed.
+
+        Now the close decision keys off ``keep_open`` (only "Execute
+        selected" sets it), so full Execute closes regardless of filter.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(1)  # Delete only
+
+        accept_calls: list = []
+        monkeypatch.setattr(dlg, "accept", lambda: accept_calls.append(True))
+        # No-op the actual file ops — we only care about the close path.
+        monkeypatch.setattr(dlg, "_delete_file", lambda path: None)
+        monkeypatch.setattr(
+            "PySide6.QtWidgets.QMessageBox.question",
+            lambda *a, **k: __import__(
+                "PySide6.QtWidgets", fromlist=["QMessageBox"]
+            ).QMessageBox.Yes,
+        )
+
+        dlg._on_execute_requested()  # full Execute button — keep_open defaults False
+
+        assert accept_calls == [True], (
+            "full Execute under a type filter must close the dialog "
+            "(accept called once); got "
+            f"{len(accept_calls)} accept calls"
+        )
+
+    def test_execute_selected_under_filter_keeps_dialog_open(self, qapp, monkeypatch):
+        """The "Execute selected" button must NOT close the dialog, even
+        with a type filter active — it commits a subset and stays up for
+        continued triage. Confirms ``keep_open=True`` overrides the
+        close path."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(1)  # Delete only
+
+        accept_calls: list = []
+        monkeypatch.setattr(dlg, "accept", lambda: accept_calls.append(True))
+        monkeypatch.setattr(dlg, "_delete_file", lambda path: None)
+        monkeypatch.setattr(
+            "PySide6.QtWidgets.QMessageBox.question",
+            lambda *a, **k: __import__(
+                "PySide6.QtWidgets", fromlist=["QMessageBox"]
+            ).QMessageBox.Yes,
+        )
+
+        # Drive the "Execute selected" entry directly with a selected set.
+        dlg._on_execute_requested(
+            paths_filter={"/g1/del_a.jpg"}, keep_open=True,
+        )
+
+        assert accept_calls == [], (
+            "Execute selected must keep the dialog open (accept not "
+            f"called); got {len(accept_calls)} accept calls"
+        )
