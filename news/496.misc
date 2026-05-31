@@ -1,0 +1,1 @@
+Add real-input contract tests for the picklable ``run_hash_for_record`` per-file dispatch path (idx passthrough, exception-to-skip mapping, image-vs-video phash handling) — deferred from #486, unblocked by the #492 test-isolation fix (#486).
