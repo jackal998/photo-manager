@@ -341,7 +341,6 @@ class TestScanDialogSettings:
         ]
         assert saved["sources"]["output"] == "/out/manifest.sqlite"
 
-
 # ---------------------------------------------------------------------------
 # Advanced settings collapse (photo-manager#163)
 # ---------------------------------------------------------------------------
@@ -916,6 +915,8 @@ class TestStartScanShouldProceed:
                 self.failed = MagicMock()
                 self.finished = MagicMock()
                 self.completed_empty = MagicMock()
+                # #486-PR3b — dialog connects this to cache fresh calibrations.
+                self.hash_pool_measured = MagicMock()
 
             def start(self):
                 worker_started.append(True)

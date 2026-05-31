@@ -765,6 +765,137 @@ class TestHashPoolCalibration:
 
         assert out.exists(), "auto scan should resolve and write its manifest"
 
+    # ---- #486-PR3b: fingerprint cache -------------------------------------
+
+    def test_fingerprint_stable_and_sensitive(self):
+        """The cache key is stable for identical inputs and changes when any
+        of (cpu count, source path, recursive flag) changes — so a different
+        machine or folder set correctly misses and re-measures."""
+        from app.views.workers.scan_worker import hash_pool_fingerprint as fp
+
+        base = fp({"a": "/x"}, {"a": True}, 8)
+        assert base == fp({"a": "/x"}, {"a": True}, 8)  # stable
+        assert base != fp({"a": "/x"}, {"a": True}, 4)  # cpu count matters
+        assert base != fp({"a": "/y"}, {"a": True}, 8)  # source path matters
+        assert base != fp({"a": "/x"}, {"a": False}, 8)  # recursive matters
+
+    def test_cached_rates_skip_measurement_and_reproject(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Cache hit: the worker re-projects the cached rates to the current
+        file count WITHOUT re-measuring (the timing helpers would raise), and
+        the pick still adapts to N (small→thread, large→process)."""
+        import app.views.workers.scan_worker as sw
+        from app.views.workers.scan_worker import ScanWorker
+
+        def boom(*a):
+            raise AssertionError("cache hit must not re-measure")
+
+        monkeypatch.setattr(sw, "_time_hash_executor", boom)
+        monkeypatch.setattr(sw, "_profile_process_pool", boom)
+        rates = {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0}
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+            hash_pool_rates=rates,
+        )
+        # break-even N=100 from the cached rates, no measurement
+        assert worker._calibrate_hash_pool(list(range(50)), object(), object()) == "thread"
+        assert worker._calibrate_hash_pool(
+            list(range(10_000)), object(), object()
+        ) == "process"
+
+    def test_fresh_calibration_emits_measured_rates(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Cache miss: a fresh measurement is emitted via hash_pool_measured
+        so the dialog can persist it (the inbound half of the cache)."""
+        import app.views.workers.scan_worker as sw
+        from app.views.workers.scan_worker import ScanWorker
+
+        monkeypatch.setattr(
+            sw, "_time_hash_executor", lambda cls, sample, w: 2.0 * len(sample)
+        )
+        monkeypatch.setattr(
+            sw, "_profile_process_pool", lambda cls, sample, w: (100.0, 1.0)
+        )
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+        )
+        captured: list = []
+        worker.hash_pool_measured.connect(captured.append)
+
+        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
+
+        assert captured == [
+            {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0}
+        ]
+
+    def test_store_hash_pool_rates_round_trips_through_settings(self, tmp_path):
+        """#486-PR3b — a fresh calibration is written to scan.hash_pool_cache
+        under its fingerprint AND flushed to disk, so the next session reads it
+        back. Qt-free (no dialog) — exercises the real JsonSettings round-trip."""
+        import json
+        from app.views.workers.scan_worker import store_hash_pool_rates
+        from infrastructure.settings import JsonSettings
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(json.dumps({"sources": {}}), encoding="utf-8")
+        settings = JsonSettings(settings_path)
+        rates = {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 0.5}
+
+        store_hash_pool_rates(settings, "fp_test", rates)
+
+        assert settings.get("scan.hash_pool_cache")["fp_test"] == rates
+        reloaded = JsonSettings(settings_path)  # next session reads from disk
+        assert reloaded.get("scan.hash_pool_cache")["fp_test"] == rates
+
+    def test_valid_hash_pool_rates_predicate(self):
+        """Boundary validator for hand-editable settings.json cache entries."""
+        from app.views.workers.scan_worker import _valid_hash_pool_rates as ok
+
+        assert ok({"thread_per_file": 1.0, "process_per_file": 0.5, "spawn": 0.1})
+        assert not ok(None)
+        assert not ok({"thread_per_file": 1.0})  # partial
+        assert not ok({"thread_per_file": "x", "process_per_file": 1, "spawn": 1})  # type
+
+    def test_malformed_cached_rates_trigger_remeasure(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """A corrupt/partial cached entry (e.g. hand-edited settings.json) is
+        treated as a cache miss and re-measured, not crashed on."""
+        import app.views.workers.scan_worker as sw
+        from app.views.workers.scan_worker import ScanWorker
+
+        monkeypatch.setattr(
+            sw, "_time_hash_executor", lambda cls, sample, w: 2.0 * len(sample)
+        )
+        monkeypatch.setattr(
+            sw, "_profile_process_pool", lambda cls, sample, w: (100.0, 1.0)
+        )
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+            hash_pool_rates={"thread_per_file": 1.0},  # partial → invalid
+        )
+        captured: list = []
+        worker.hash_pool_measured.connect(captured.append)
+
+        result = worker._calibrate_hash_pool(list(range(10_000)), object(), object())
+
+        assert result == "process"  # re-measured rates project to process
+        assert len(captured) == 1, "malformed cache must trigger a fresh measurement"
+
 
 class TestScanWorkerExifPipeline:
     """#450 — hash→exif pipeline overlap.
