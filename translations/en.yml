@@ -190,7 +190,18 @@ execute_dialog:
   close_button: "Close"
   summary_decided: "<b>{count}</b> file(s) with decisions: {n_delete} delete. Right-click a file row to change its decision."
   summary_none: "No decisions set — use 'Set Action' to mark files for deletion."
+  # #502 — type filter combo above the tree. Default "All" shows every
+  # decided row; switching to a specific type narrows the tree, summary,
+  # banner, and Execute scope to rows whose decision matches.
+  filter_label: "Show:"
+  filter_all: "All decisions"
+  filter_delete_only: "Delete only"
+  filter_remove_only: "Remove from list only"
   warning_complete_groups: "⚠ Group(s) {groups} will have ALL files deleted. Review decisions below before clicking Execute."
+  # #502 — surfaced when the type filter is hiding pending delete-decision
+  # rows. Without this signal, switching the filter to "Remove only" while
+  # delete decisions exist would visually clear the warning state.
+  warning_hidden_destructive: "⚠ {count} pending delete row(s) hidden by the current filter — switch to All or Delete only to see them."
   confirm_all_title: "All Files Will Be Deleted"
   confirm_all_body: "Group(s) {groups} will have EVERY file deleted.\n\nFiles will be sent to the Recycle Bin. Continue?"
   no_match_title: "Set Action — No Match"

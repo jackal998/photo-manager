@@ -2144,3 +2144,311 @@ class TestDecisionsChangedFlag:
         dlg._set_lock("/a.jpg", True)
 
         assert dlg._decisions_changed is True
+
+
+class TestExecuteDialogTypeFilter:
+    """#502 — type filter combo above the tree. Three modes:
+
+      - All decisions (default) — show every decided row
+      - Delete only             — show rows with user_decision == 'delete'
+      - Remove from list only   — show rows with user_decision ==
+                                  REMOVE_FROM_LIST_DECISION
+
+    Filter is purely visual / scope: it never mutates ``self._groups``
+    (group-context contract per #430). Execute commits only what's
+    visible — same "visible = committed" rule as #410 / #485.
+    """
+
+    def _mixed_groups(self):
+        """Return two groups with three decision types mixed across them.
+
+        Group 1: 2 delete + 1 remove_from_list (+ 1 undecided)
+        Group 2: 1 delete + 2 remove_from_list
+
+        Total: 3 delete decisions + 3 remove decisions + 1 undecided.
+        Both groups have visible-decided rows for every filter setting,
+        so a filter that drops a group entirely is testable on the
+        no-match edge case (use the empty group below).
+        """
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        g1 = _group(
+            _rec("/g1/del_a.jpg", "delete"),
+            _rec("/g1/del_b.jpg", "delete"),
+            _rec("/g1/rem_a.jpg", REMOVE_FROM_LIST_DECISION),
+            _rec("/g1/undecided.jpg", ""),
+            number=1,
+        )
+        g2 = _group(
+            _rec("/g2/del_c.jpg", "delete"),
+            _rec("/g2/rem_b.jpg", REMOVE_FROM_LIST_DECISION),
+            _rec("/g2/rem_c.jpg", REMOVE_FROM_LIST_DECISION),
+            number=2,
+        )
+        return [g1, g2]
+
+    # ── combo construction ────────────────────────────────────────────────
+
+    def test_combo_has_three_options_with_decision_values_in_data(self, qapp):
+        """Combo is built with exactly three items; the user-facing
+        labels go through ``t()`` but the data column carries the
+        canonical decision string so locale switches don't break the
+        filter predicate."""
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+
+        combo = dlg._type_filter_combo
+        assert combo.count() == 3
+        # itemData is keyed by Qt UserRole by default — currentData() is
+        # the read path the helper uses.
+        assert combo.itemData(0) is None  # "All decisions" sentinel
+        assert combo.itemData(1) == "delete"
+        assert combo.itemData(2) == REMOVE_FROM_LIST_DECISION
+
+    def test_filter_defaults_to_all_on_construction(self, qapp):
+        """Acceptance: filter resets to "All" every time the dialog is
+        reopened. Combo is constructed fresh per dialog so index 0 is
+        the canonical default — no persistence."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+        assert dlg._type_filter_combo.currentIndex() == 0
+        assert dlg._get_type_filter_value() is None
+
+    # ── _apply_type_filter purity + correctness ──────────────────────────
+
+    def test_apply_type_filter_all_returns_input_unchanged(self, qapp):
+        """Default "All" path: return groups by reference, no allocation.
+        Also pins the contract that ``_apply_type_filter`` never mutates
+        its input — the returned list IS the input list."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = self._mixed_groups()
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        # Combo defaults to "All"
+        result = dlg._apply_type_filter(groups)
+
+        # Same object identity = same list, untouched.
+        assert result is groups
+
+    def test_apply_type_filter_delete_only_drops_remove_rows(self, qapp):
+        """Filter=Delete only: each group's items list shrinks to delete
+        rows; groups with no delete rows are dropped entirely (no empty
+        headers in the tree). Original ``self._groups`` is untouched
+        (#430 group-context contract)."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = self._mixed_groups()
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(1)  # Delete only
+
+        result = dlg._apply_type_filter(groups)
+
+        # Both groups have delete rows, both survive.
+        assert len(result) == 2
+        # Group 1: 2 delete rows (the rem + undecided are dropped)
+        assert len(result[0].items) == 2
+        assert all(r.user_decision == "delete" for r in result[0].items)
+        # Group 2: 1 delete row
+        assert len(result[1].items) == 1
+        assert result[1].items[0].user_decision == "delete"
+        # Source list NOT mutated.
+        assert len(groups[0].items) == 4
+        assert len(groups[1].items) == 3
+
+    def test_apply_type_filter_drops_groups_that_become_empty(self, qapp):
+        """When every row in a group is filtered out, the group header
+        must not render (no empty-header rows in the tree). Build a
+        group whose decisions are all `delete`, then filter to remove
+        — expect zero groups returned."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        all_delete = [_group(
+            _rec("/x/a.jpg", "delete"), _rec("/x/b.jpg", "delete"), number=9,
+        )]
+        dlg = ExecuteActionDialog(all_delete, manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(2)  # Remove only
+
+        result = dlg._apply_type_filter(all_delete)
+
+        assert result == []
+
+    # ── summary respects filter ──────────────────────────────────────────
+
+    def test_summary_count_reflects_filter_scope(self, qapp):
+        """Acceptance: summary at top of dialog reflects visible-after-
+        filter scope, not global. Switching filter updates the count."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+
+        # Default "All": 6 decided rows (3 delete + 3 remove; undecided excluded)
+        all_text = dlg._summary_label.text()
+        assert "6" in all_text and "3 delete" in all_text
+
+        dlg._type_filter_combo.setCurrentIndex(1)  # Delete only
+        delete_text = dlg._summary_label.text()
+        assert "3" in delete_text and "3 delete" in delete_text
+
+        dlg._type_filter_combo.setCurrentIndex(2)  # Remove only
+        remove_text = dlg._summary_label.text()
+        assert "3" in remove_text and "0 delete" in remove_text
+
+    # ── warning banner: hidden destructive line ──────────────────────────
+
+    def test_banner_shows_hidden_destructive_under_remove_filter(self, qapp):
+        """Filter=Remove only with pending delete rows in the manifest →
+        banner shows the hidden-destructive line so the user isn't
+        misled into thinking nothing destructive is staged."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(2)  # Remove only
+
+        # 3 delete rows are hidden (g1 has 2, g2 has 1).
+        assert dlg._warning_banner.isVisibleTo(dlg)
+        assert "3" in dlg._warning_label.text()
+        # The text mentions "hidden" or "pending delete" — keep the
+        # assertion locale-tolerant by checking the count is rendered.
+
+    def test_banner_no_hidden_destructive_under_all_filter(self, qapp):
+        """Filter=All with no complete-delete groups → banner stays
+        hidden (no double-display of the unfiltered destructive set)."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        # No complete-delete groups (both groups have non-delete rows
+        # mixed in) and filter=All → banner hidden.
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+        assert not dlg._warning_banner.isVisibleTo(dlg)
+
+    # ── Execute pipeline: filter narrows scope ───────────────────────────
+
+    def test_execute_under_delete_filter_only_acts_on_delete_rows(
+        self, qapp, monkeypatch
+    ):
+        """Acceptance: filter=Delete only → Execute commits only the 3
+        delete rows; the 3 remove rows survive with decision intact."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(1)  # Delete only
+
+        # Patch _on_execute to capture the paths_filter it receives.
+        captured: dict = {}
+
+        def fake_on_execute(paths_filter=None):
+            captured["paths_filter"] = paths_filter
+
+        monkeypatch.setattr(dlg, "_on_execute", fake_on_execute)
+        # Dismiss the complete-group confirm — group 2 has 1 delete row
+        # and is "complete" under the visible-after-filter view, so the
+        # confirm fires; test wants the underlying flow not the modal.
+        monkeypatch.setattr(
+            "PySide6.QtWidgets.QMessageBox.question",
+            lambda *args, **kwargs: __import__(
+                "PySide6.QtWidgets", fromlist=["QMessageBox"]
+            ).QMessageBox.Yes,
+        )
+
+        dlg._on_execute_requested()
+
+        # The filter resolves to the 3 delete paths; remove paths are
+        # NOT in the filter so they cannot be acted on.
+        assert captured["paths_filter"] == {
+            "/g1/del_a.jpg", "/g1/del_b.jpg", "/g2/del_c.jpg",
+        }
+
+    def test_execute_selected_intersects_with_type_filter(self, qapp, monkeypatch):
+        """Filter=Delete only + Execute selected with 2 highlighted
+        delete rows → effective scope is exactly those 2 paths.
+        Highlighting a remove row under the delete filter would
+        intersect to empty, which is the expected guard."""
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(1)  # Delete only
+
+        captured: dict = {}
+
+        def fake_on_execute(paths_filter=None):
+            captured["paths_filter"] = paths_filter
+
+        monkeypatch.setattr(dlg, "_on_execute", fake_on_execute)
+        monkeypatch.setattr(
+            "PySide6.QtWidgets.QMessageBox.question",
+            lambda *args, **kwargs: __import__(
+                "PySide6.QtWidgets", fromlist=["QMessageBox"]
+            ).QMessageBox.Yes,
+        )
+
+        # Simulate "Execute selected" with 2 of the 3 delete paths
+        # highlighted. Underlying entry point is _on_execute_requested
+        # with an explicit paths_filter — same plumbing as the button.
+        dlg._on_execute_requested(
+            paths_filter={"/g1/del_a.jpg", "/g2/del_c.jpg"}
+        )
+
+        # type_paths ∩ selected = exactly the 2 highlighted delete rows.
+        assert captured["paths_filter"] == {"/g1/del_a.jpg", "/g2/del_c.jpg"}
+
+    # ── lock-confirm composition (researcher's risk #1) ──────────────────
+
+    def test_lock_confirm_does_not_fire_under_remove_only_filter(
+        self, qapp, monkeypatch,
+    ):
+        """Critical ordering: the type filter must intersect with
+        ``paths_filter`` BEFORE the ``in_scope`` closure used by the
+        lock-confirm scan. Otherwise a "Remove only" filter on a
+        manifest containing locked-delete rows would spuriously trigger
+        the destructive-row lock-confirm gate. See #175 / #182."""
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        # Construct a fixture where a locked row has decision=delete —
+        # the classic lock-confirm trigger.
+        locked_delete = _rec("/g1/locked_del.jpg", "delete")
+        locked_delete.is_locked = True
+        remove_row = _rec("/g1/rem.jpg", REMOVE_FROM_LIST_DECISION)
+        groups = [_group(locked_delete, remove_row, number=1)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(2)  # Remove only
+
+        ask_lock_calls: list = []
+        monkeypatch.setattr(
+            dlg, "_ask_lock_confirm",
+            lambda **kwargs: ask_lock_calls.append(kwargs) or 1,
+        )
+        monkeypatch.setattr(dlg, "_on_execute", lambda **kwargs: None)
+
+        dlg._on_execute_requested()
+
+        # Lock-confirm should NOT have fired — the locked delete row is
+        # out of the type-filter scope, so it never reaches the
+        # in_scope predicate as a hit.
+        assert ask_lock_calls == [], (
+            f"lock-confirm fired under Remove-only filter — type filter "
+            f"didn't intersect paths_filter before in_scope (#502 risk #1)"
+        )
+
+    # ── decision change refresh respects filter ──────────────────────────
+
+    def test_decision_change_under_filter_hides_row_on_next_refresh(self, qapp):
+        """User filters Delete only, then right-clicks a visible delete
+        row and switches it to Remove from list. The row must disappear
+        from the tree on the next refresh — the filter is consistent
+        through the decision-change path, not just through the initial
+        build."""
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        groups = self._mixed_groups()
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._type_filter_combo.setCurrentIndex(1)  # Delete only
+
+        # Before change: filtered tree shows 3 delete rows.
+        before = dlg._apply_type_filter(dlg._groups_with_decisions())
+        before_count = sum(len(g.items) for g in before)
+        assert before_count == 3
+
+        # Flip g1's first delete to remove via the public path the
+        # right-click submenu uses; this triggers
+        # _refresh_ui_after_decision_change which calls
+        # _rebuild_tree_model → _apply_type_filter.
+        dlg._set_decision("/g1/del_a.jpg", REMOVE_FROM_LIST_DECISION)
+
+        after = dlg._apply_type_filter(dlg._groups_with_decisions())
+        after_count = sum(len(g.items) for g in after)
+        # One delete row vanished from the filtered view.
+        assert after_count == 2

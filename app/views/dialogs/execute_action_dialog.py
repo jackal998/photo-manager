@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 
 from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
@@ -52,6 +55,14 @@ from infrastructure.i18n import t
 _DIALOG_VERDICT_PROCEED = 1       # Unlock & Apply — caller unlocks + applies
 _DIALOG_VERDICT_SKIP_LOCKED = 2   # Apply to Unlocked Only — caller filters out locked
 _DIALOG_VERDICT_CANCEL = 3        # Cancel — caller aborts
+
+# #502 — type-filter QComboBox values stored as Qt UserData. The combo's
+# label text is localised via t() at build time; the value is the canonical
+# decision string used internally (or ``None`` for "All"). Keeping the
+# value column language-agnostic means the filter predicate never has to
+# round-trip through the locale catalogue, and switching language at runtime
+# doesn't break in-flight filter state.
+_TYPE_FILTER_ALL: str | None = None  # sentinel — show every decision
 
 
 class ExecuteActionDialog(QDialog):
@@ -155,6 +166,80 @@ class ExecuteActionDialog(QDialog):
             if getattr(rec, "user_decision", "")
         ]
 
+    def _get_type_filter_value(self) -> str | None:
+        """Return the currently-selected type filter's decision value.
+
+        ``None`` = "All decisions" sentinel (show everything). Otherwise
+        the canonical decision string (``"delete"`` or
+        :data:`REMOVE_FROM_LIST_DECISION`). Reads ``currentData()`` from
+        the combo so the value column stays language-agnostic — the
+        combo's visible text is localised but its userData is the
+        internal decision string. See #502.
+
+        Defensive: during ``__init__`` the combo isn't built yet, so
+        early callers (e.g. the constructor's ``_update_summary``)
+        gracefully see ``None`` and behave as if no filter is active.
+        """
+        if not hasattr(self, "_type_filter_combo"):
+            return _TYPE_FILTER_ALL
+        return self._type_filter_combo.currentData()
+
+    def _apply_type_filter(self, groups: list) -> list:
+        """Return ``groups`` filtered to only records matching the
+        current type-filter combo selection. Pure — never mutates input.
+
+        Per #430 the group-context contract requires the filter to be
+        purely visual: ``self._groups`` (which aliases ``vm.groups``)
+        must NOT be touched. We return a new list of shallow ``PhotoGroup``
+        copies via :func:`dataclasses.replace` so downstream consumers
+        (``build_model``, ``_decided_records`` callers) see a filtered
+        view without any structural mutation. Groups that become empty
+        after filtering are dropped entirely so the tree doesn't render
+        an empty header row.
+
+        Returns ``groups`` unchanged when the filter is "All" — avoids
+        the per-group copy allocation on the default path.
+        """
+        filter_value = self._get_type_filter_value()
+        if filter_value is _TYPE_FILTER_ALL:
+            return groups
+        filtered: list = []
+        for group in groups:
+            items = getattr(group, "items", [])
+            matching = [
+                rec for rec in items
+                if getattr(rec, "user_decision", "") == filter_value
+            ]
+            if matching:
+                filtered.append(dataclasses.replace(group, items=matching))
+        return filtered
+
+    def _hidden_pending_delete_count(self) -> int:
+        """Return the number of delete-decision rows currently HIDDEN by
+        the type filter — i.e. rows that would be committed by Execute
+        on an unfiltered view but are not visible right now.
+
+        Used by ``_refresh_warning_banner`` to surface the
+        "hidden destructive" line when the user has filtered to a
+        non-delete view but still has pending delete decisions in the
+        full manifest. Without this signal, switching the filter to
+        "Remove only" while pending deletes exist would visually erase
+        the warning state and the user would assume nothing destructive
+        is staged. See #502.
+        """
+        filter_value = self._get_type_filter_value()
+        if filter_value is _TYPE_FILTER_ALL or filter_value == "delete":
+            # Filter doesn't hide anything destructive: filter=All shows
+            # delete rows; filter="delete" makes destructive rows the
+            # visible subset. Both cases: hidden count is zero.
+            return 0
+        return sum(
+            1
+            for group in self._groups
+            for rec in getattr(group, "items", [])
+            if getattr(rec, "user_decision", "") == "delete"
+        )
+
     def _complete_delete_groups(
         self, paths_filter: set[str] | None = None,
     ) -> list[int]:
@@ -212,6 +297,36 @@ class ExecuteActionDialog(QDialog):
         select_btn.clicked.connect(self._show_select_dialog)
         select_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(select_btn)
+
+        # #502 — type filter row. Combo + label live on one horizontal
+        # row above the tree so they're discoverable without competing
+        # for vertical space. Filter resets to "All" on every dialog
+        # reopen (the combo is constructed fresh per dialog instance —
+        # we don't persist this state). Lock/Unlock and Keep are
+        # intentionally omitted: Lock/Unlock live on ``is_locked`` not
+        # ``user_decision`` so filtering by them would surprise users
+        # ("Lock only" would match nothing); Keep collides with the
+        # undecided state (both are empty-string) which would make the
+        # filter ambiguous.
+        type_filter_row = QHBoxLayout()
+        type_filter_row.addWidget(QLabel(t("execute_dialog.filter_label")))
+        self._type_filter_combo = QComboBox()
+        self._type_filter_combo.setObjectName("executeDialogTypeFilterCombo")
+        self._type_filter_combo.addItem(
+            t("execute_dialog.filter_all"), _TYPE_FILTER_ALL,
+        )
+        self._type_filter_combo.addItem(
+            t("execute_dialog.filter_delete_only"), "delete",
+        )
+        self._type_filter_combo.addItem(
+            t("execute_dialog.filter_remove_only"), REMOVE_FROM_LIST_DECISION,
+        )
+        self._type_filter_combo.currentIndexChanged.connect(
+            self._on_type_filter_changed
+        )
+        type_filter_row.addWidget(self._type_filter_combo)
+        type_filter_row.addStretch(1)
+        layout.addLayout(type_filter_row)
 
         self._tree = QTreeView()
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -308,7 +423,11 @@ class ExecuteActionDialog(QDialog):
         self._refresh_warning_banner()
 
     def _rebuild_tree_model(self) -> None:
-        groups = self._groups_with_decisions()
+        # #502 — apply type-filter on top of the decisions filter so the
+        # rendered tree matches the combo selection. ``_apply_type_filter``
+        # returns the input list unchanged when filter is "All", so the
+        # default path costs nothing.
+        groups = self._apply_type_filter(self._groups_with_decisions())
         model, proxy = build_model(groups)
         self._src_model = model
         self._tree.setModel(proxy if proxy is not None else model)
@@ -326,7 +445,22 @@ class ExecuteActionDialog(QDialog):
             self._on_selection_changed()
 
     def _update_summary(self) -> None:
-        decided = self._decided_records()
+        # #502 — summary reflects the visible-after-type-filter scope,
+        # not the global decision set. Matches the "visible = committed"
+        # contract established by #410 / #485 — the counters at the top
+        # of the dialog must agree with what Execute will actually
+        # touch. Filter value None ("All") makes this identical to the
+        # pre-#502 path.
+        filter_value = self._get_type_filter_value()
+        if filter_value is _TYPE_FILTER_ALL:
+            decided = self._decided_records()
+        else:
+            decided = [
+                (group, rec)
+                for group in self._groups
+                for rec in getattr(group, "items", [])
+                if getattr(rec, "user_decision", "") == filter_value
+            ]
         n_delete = sum(1 for _, rec in decided if rec.user_decision == "delete")
         if decided:
             self._summary_label.setText(
@@ -340,6 +474,19 @@ class ExecuteActionDialog(QDialog):
         self._rebuild_tree_model()
         self._update_summary()
         self._btn_box.button(QDialogButtonBox.Ok).setEnabled(bool(self._decided_records()))
+        self._refresh_execute_selected_state()
+        self._refresh_warning_banner()
+
+    def _on_type_filter_changed(self, _index: int) -> None:
+        """Type-filter combo changed — refresh tree, summary, banner.
+
+        Same three-way refresh as ``_refresh_ui_after_decision_change``
+        minus the Execute-button enabled state (the global decision set
+        didn't change, only the visible scope did, so the button stays
+        enabled as long as ANY decisions exist anywhere). See #502.
+        """
+        self._rebuild_tree_model()
+        self._update_summary()
         self._refresh_execute_selected_state()
         self._refresh_warning_banner()
 
@@ -363,14 +510,55 @@ class ExecuteActionDialog(QDialog):
         self._btn_execute_selected.setEnabled(any_with_decision)
 
     def _refresh_warning_banner(self) -> None:
-        complete = self._complete_delete_groups()
+        # #502 — banner is composed of up to two parts:
+        # (a) complete-delete-groups warning (the pre-#502 content) — fires
+        #     when at least one group is fully delete-decided WITHIN the
+        #     currently-visible scope. The visible scope is governed by
+        #     the type filter; ``_complete_delete_groups`` with no
+        #     argument uses the unfiltered groups, so we narrow it by
+        #     passing a ``paths_filter`` derived from the visible records
+        #     when a non-"All" filter is active.
+        # (b) hidden-destructive line — fires when the type filter is set
+        #     to anything other than "All" or "Delete only" AND there are
+        #     pending delete-decision rows that the filter is hiding.
+        #     Without (b), switching to "Remove only" while pending deletes
+        #     exist would visually clear the warning state and the user
+        #     would assume nothing destructive is staged.
+        filter_value = self._get_type_filter_value()
+        if filter_value is _TYPE_FILTER_ALL:
+            complete = self._complete_delete_groups()
+        else:
+            visible_paths = {
+                rec.file_path
+                for group in self._groups
+                for rec in getattr(group, "items", [])
+                if getattr(rec, "user_decision", "") == filter_value
+                and getattr(rec, "file_path", "")
+            }
+            complete = (
+                self._complete_delete_groups(paths_filter=visible_paths)
+                if visible_paths else []
+            )
+        hidden_pending_delete = self._hidden_pending_delete_count()
+
+        parts: list[str] = []
         if complete:
             # Each group number is wrapped in an anchor; the linkActivated
             # connection in _build_ui dispatches the href to _on_jump_to_group.
             group_list = ", ".join(f'<a href="{g}">{g}</a>' for g in complete)
-            self._warning_label.setText(
+            parts.append(
                 t("execute_dialog.warning_complete_groups", groups=group_list)
             )
+        if hidden_pending_delete > 0:
+            parts.append(
+                t(
+                    "execute_dialog.warning_hidden_destructive",
+                    count=hidden_pending_delete,
+                )
+            )
+
+        if parts:
+            self._warning_label.setText("<br>".join(parts))
             self._warning_banner.setVisible(True)
         else:
             self._warning_banner.setVisible(False)
@@ -1006,6 +1194,31 @@ class ExecuteActionDialog(QDialog):
         # added by Improvement 1: the dialog still sees every group
         # it was constructed with, but only acts on records whose
         # path is in the filter.
+
+        # #502 — when the type filter is set to anything other than
+        # "All", AND ``paths_filter`` together to land at the effective
+        # commit scope: ``visible-by-type ∩ selected``. Resolved BEFORE
+        # the ``in_scope`` closure is defined so the lock-confirm
+        # pre-execute scan + the complete-group confirm both see the
+        # same narrowed view — otherwise a "Lock only" filter could
+        # spuriously trigger the destructive-row lock-confirm gate. The
+        # symmetry: "All" + no selection → ``effective_filter is None``
+        # (unchanged behaviour); "Delete only" + no selection →
+        # ``effective_filter`` is every delete path; "Delete only" +
+        # selection → intersection of the two.
+        type_filter_value = self._get_type_filter_value()
+        if type_filter_value is not _TYPE_FILTER_ALL:
+            type_paths = {
+                rec.file_path
+                for group in self._groups
+                for rec in getattr(group, "items", [])
+                if getattr(rec, "user_decision", "") == type_filter_value
+                and getattr(rec, "file_path", "")
+            }
+            if paths_filter is None:
+                paths_filter = type_paths
+            else:
+                paths_filter = paths_filter & type_paths
 
         def in_scope(rec) -> bool:
             if paths_filter is None:

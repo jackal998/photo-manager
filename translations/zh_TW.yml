@@ -153,7 +153,16 @@ execute_dialog:
   close_button: "關閉"
   summary_decided: "<b>{count}</b> 個檔案已設定動作:刪除 {n_delete} 個。在檔案列上按右鍵可變更其決策。"
   summary_none: "尚未設定任何決策 — 請使用「設定動作」標記要刪除的檔案。"
+  # #502 — 樹狀清單上方的動作類型篩選器。預設「全部」顯示所有已設動作的列;
+  # 切換到特定類型會把樹、摘要、警告條、「執行」範圍同步縮小到符合的列。
+  filter_label: "顯示:"
+  filter_all: "全部決策"
+  filter_delete_only: "僅刪除"
+  filter_remove_only: "僅從清單移除"
   warning_complete_groups: "⚠ 群組 {groups} 將會刪除全部檔案。請在按下「執行」前再次確認下方的決策。"
+  # #502 — 當篩選器隱藏了未執行的刪除決策時顯示。沒這條,切到「僅從清單移除」
+  # 會讓警告狀態消失,使用者可能誤以為沒有破壞性動作待執行。
+  warning_hidden_destructive: "⚠ 目前的篩選器隱藏了 {count} 列未執行的刪除決策 — 切回「全部」或「僅刪除」可看到它們。"
   confirm_all_title: "將刪除所有檔案"
   confirm_all_body: "群組 {groups} 將會刪除其中的每一個檔案。\n\n檔案會被送進資源回收筒。確定要繼續嗎?"
   no_match_title: "設定動作 — 無相符項目"
