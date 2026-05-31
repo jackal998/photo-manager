@@ -54,6 +54,7 @@ for the chore plan.
 | [Scan dialog — collapse Advanced Settings](#scan-dialog--collapse-advanced-settings) | Scan |
 | [Scan dialog — exiftool workers (setting-only)](#scan-dialog--exiftool-workers-setting-only) | Scan |
 | [Scan dialog — folder list (no priority arrows)](#scan-dialog--folder-list-no-priority-arrows) | Scan |
+| [Scan dialog — hash pool mode (setting-only)](#scan-dialog--hash-pool-mode-setting-only) | Scan |
 | [Scan dialog — hash workers (NAS-aware default)](#scan-dialog--hash-workers-nas-aware-default) | Scan |
 | [Scan dialog — multi-source scan](#scan-dialog--multi-source-scan) | Scan |
 | [Scan flow — manifest summary in progress log](#scan-flow--manifest-summary-in-progress-log) | Scan |
@@ -453,6 +454,17 @@ for the chore plan.
 - **Conditions / variants:** No UI — operators raise the value via ``settings.json`` only. This is intentionally a *safe rollout knob* per the issue body, not a power-user control. Cancel posts one sentinel per consumer + joins all with a 5s timeout — no zombie exiftool processes.
 - **Related:** [#451](https://github.com/jackal998/photo-manager/issues/451); worker contract pinned by ``tests/test_scan_worker.py::TestScanWorkerExifWorkers``.
 - **Last verified:** 2026-05-28 (#451)
+
+---
+
+### Scan dialog — hash pool mode (setting-only)
+
+- **Entry point:** ``scan.hash_pool`` key in ``settings.json`` — read in [app/views/dialogs/scan_dialog.py](../app/views/dialogs/scan_dialog.py) at scan start and passed to ``ScanWorker``.
+- **Trigger:** Always — value is consumed on every Start Scan.
+- **Behaviour:** Selects the executor for the HASH stage. ``"thread"`` (default) runs the per-file hash compute across a ``ThreadPoolExecutor`` in-process (pre-PR2 behaviour). ``"process"`` runs the picklable ``run_hash_for_record`` across a ``ProcessPoolExecutor`` so CPU-bound hashing escapes the GIL across cores. The hash log line reports the active mode (``pool=thread`` / ``pool=process``). Outcome routing (corrupt-file skips, EXIF-queue handoff) is identical in both modes — in process mode the parent drains completed futures and routes, since the worker subprocess can't touch the thread-only cancel flag / queue.
+- **Conditions / variants:** No UI — operators set the value via ``settings.json`` only (the Advanced-settings checkbox + auto-calibration is a later PR). Default stays ``"thread"`` because the Windows ``spawn`` start method re-imports PIL/rawpy per worker (~150–300ms each), a cost only worth paying on large scans. Unknown values fall back to ``"thread"`` at ``ScanWorker`` construction. Cancellation in process mode stops submitting new work and lets ≤``workers`` in-flight files finish (``cancel_futures=True``) — same ~1-file user-visible latency as thread mode.
+- **Related:** [#486](https://github.com/jackal998/photo-manager/issues/486) (PR1 extracted the picklable compute path); worker contract pinned by ``tests/test_scan_worker.py::TestHashPoolSetting``. Real cross-process spawn is validated by real-world runs, not CI.
+- **Last verified:** 2026-05-31 (PR2)
 
 ---
 

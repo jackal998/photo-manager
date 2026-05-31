@@ -476,6 +476,121 @@ class TestScanWorkerExifWorkers:
         )
 
 
+class TestHashPoolSetting:
+    """#486-PR2 — the ``scan.hash_pool`` executor selector.
+
+    The HASH stage runs across a ThreadPoolExecutor by default and a
+    ProcessPoolExecutor when ``hash_pool="process"``. These tests cover
+    the construction-time validation and the executor-routing branch.
+
+    Routing is verified WITHOUT spawning real OS processes: the process
+    pool is monkeypatched to a ThreadPoolExecutor subclass that records
+    its instantiation. That exercises the real code path (process branch
+    chosen + parent-side outcome routing producing a manifest) while
+    staying CI-safe — the genuine cross-process spawn is validated by
+    real-world runs, not in CI.
+    """
+
+    def test_default_is_thread(self, qapp, tmp_path):
+        from app.views.workers.scan_worker import ScanWorker
+
+        w = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+        )
+        assert w.hash_pool == "thread"
+
+    def test_process_value_kept(self, qapp, tmp_path):
+        from app.views.workers.scan_worker import ScanWorker
+
+        w = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            hash_pool="process",
+        )
+        assert w.hash_pool == "process"
+
+    def test_unknown_value_falls_back_to_thread(self, qapp, tmp_path):
+        """Catches: a typo'd / stale settings.json value silently selecting
+        a non-existent executor mode instead of the safe default."""
+        from app.views.workers.scan_worker import ScanWorker
+
+        w = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            hash_pool="garbage",
+        )
+        assert w.hash_pool == "thread"
+
+    def test_process_mode_routes_to_process_pool_and_writes_manifest(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Catches: the process branch not being selected, OR the parent's
+        _route_outcome path dropping HashResults so the manifest comes out
+        empty. Asserts both the executor choice and end-to-end output."""
+        import concurrent.futures as _cf
+        from app.views.workers.scan_worker import ScanWorker
+
+        _write_jpeg(tmp_path / "only.jpg")
+        out = tmp_path / "manifest.sqlite"
+
+        instantiated: list[bool] = []
+        real_thread_pool = _cf.ThreadPoolExecutor
+
+        class SpyProcessPool(real_thread_pool):
+            # Delegates to a real ThreadPoolExecutor so run_hash_for_record
+            # runs in-thread (no OS spawn) while we record that the process
+            # branch instantiated it.
+            def __init__(self, *args, **kwargs):
+                instantiated.append(True)
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
+
+        worker = ScanWorker(
+            sources={"solo": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"solo": False},
+            workers=1,
+            hash_pool="process",
+        )
+        worker.run()
+
+        assert instantiated == [True], "process mode must select ProcessPoolExecutor"
+        assert out.exists(), "parent-side outcome routing must still write the manifest"
+
+    def test_thread_mode_never_touches_process_pool(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Catches: the default regressing so it accidentally instantiates
+        a ProcessPoolExecutor. Patches it to explode — a default scan must
+        complete without ever constructing it."""
+        import concurrent.futures as _cf
+        from app.views.workers.scan_worker import ScanWorker
+
+        _write_jpeg(tmp_path / "only.jpg")
+        out = tmp_path / "manifest.sqlite"
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("thread mode must not construct a ProcessPoolExecutor")
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", _boom)
+
+        worker = ScanWorker(
+            sources={"solo": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"solo": False},
+            workers=1,
+            hash_pool="thread",
+        )
+        worker.run()
+
+        assert out.exists(), "default thread scan should write its manifest"
+
+
 class TestScanWorkerExifPipeline:
     """#450 — hash→exif pipeline overlap.
 
