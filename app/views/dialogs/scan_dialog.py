@@ -643,6 +643,21 @@ class ScanDialog(QDialog):
         params_layout.addWidget(self._auto_select_aggressive_check)
         params_layout.addWidget(auto_select_aggressive_desc)
 
+        # #486-PR3c — one-shot hash-pool re-calibration trigger. Default off.
+        # When checked, the next scan ignores any cached calibration,
+        # re-measures thread vs process on the real data, switches
+        # scan.hash_pool to "auto", and the box auto-unchecks — so later
+        # scans of the same library silently reuse the cached result. Added
+        # to params_layout (not a splitter child) to keep the cold-launch
+        # layout stable. State machine lives in _start_scan.
+        self._recalibrate_check = QCheckBox(t("scan_dialog.recalibrate_label"))
+        recalibrate_desc = QLabel(t("scan_dialog.recalibrate_desc"))
+        recalibrate_desc.setWordWrap(True)
+        recalibrate_desc.setStyleSheet("color: #555;")
+        self._recalibrate_check.toggled.connect(self._on_recalibrate_toggled)
+        params_layout.addWidget(self._recalibrate_check)
+        params_layout.addWidget(recalibrate_desc)
+
         right_top_layout.addWidget(self._params_group)
         # Trailing stretch so the params group hugs the top and any extra
         # vertical room in the right-top pane stays empty rather than
@@ -792,6 +807,13 @@ class ScanDialog(QDialog):
         self._auto_select_aggressive_check.setChecked(aggressive)
         self._auto_select_aggressive_check.setEnabled(auto_select)
 
+        # Re-calibrate hash pool on next scan (#486-PR3c). Default = False;
+        # a one-shot trigger that auto-unchecks after a scan consumes it.
+        recalibrate = bool(
+            self.settings.get("ui.scan_dialog.recalibrate_hash_pool", False)
+        )
+        self._recalibrate_check.setChecked(recalibrate)
+
         # Hash workers (#449). When the user has explicitly saved a value
         # (scan.workers present), restore it. Otherwise pick a default
         # from the current source paths so a NAS user gets 8 and a
@@ -884,6 +906,19 @@ class ScanDialog(QDialog):
         self.settings.set(
             "ui.scan_dialog.auto_select_aggressive_delete", enabled
         )
+        try:
+            self.settings.save()
+        except OSError:
+            pass  # Non-fatal — see _save_to_settings rationale
+
+    def _on_recalibrate_toggled(self, enabled: bool) -> None:
+        """Persist the re-calibrate checkbox on every toggle (#486-PR3c).
+
+        Mirrors ``_on_auto_select_toggled``. The box also auto-unchecks
+        after a scan consumes it (see ``_start_scan``); persisting here just
+        keeps an un-consumed choice across a close/reopen.
+        """
+        self.settings.set("ui.scan_dialog.recalibrate_hash_pool", enabled)
         try:
             self.settings.save()
         except OSError:
@@ -983,31 +1018,7 @@ class ScanDialog(QDialog):
         except (TypeError, ValueError):
             exif_workers = 2
 
-        # #486 — hash_pool is a setting-only knob today (no UI). Values:
-        # "thread" (default, pre-PR2 behaviour), "process" (PR2 — run the
-        # HASH stage across a ProcessPoolExecutor to escape the GIL at the
-        # cost of per-worker spawn re-imports on Windows), or "auto" (PR3 —
-        # time a sample of the real scan data through both at scan start
-        # and run the faster). The worker validates the value at
-        # construction, falling back to "thread" on anything unrecognised.
-        hash_pool = self.settings.get("scan.hash_pool", "thread")
-
-        # #486-PR3b — for "auto", look up a cached calibration keyed by a
-        # machine+sources fingerprint. A hit lets the worker re-project the
-        # cached rates to the current file count without re-measuring (~2s
-        # saved per re-scan); a miss runs a fresh measurement whose rates the
-        # worker emits via hash_pool_measured for us to persist below.
-        import os as _os
-        from app.views.workers.scan_worker import hash_pool_fingerprint
-
-        hash_pool_rates = None
-        self._hash_pool_fp = None
-        if hash_pool == "auto":
-            self._hash_pool_fp = hash_pool_fingerprint(
-                sources, recursive_map, _os.cpu_count() or 4
-            )
-            cache = self.settings.get("scan.hash_pool_cache", {}) or {}
-            hash_pool_rates = cache.get(self._hash_pool_fp)
+        hash_pool, hash_pool_rates = self._resolve_hash_pool(sources, recursive_map)
 
         self._worker = ScanWorker(
             sources=sources,
@@ -1045,6 +1056,56 @@ class ScanDialog(QDialog):
         self.scan_started.emit()
         self._worker.start()
 
+    def _resolve_hash_pool(self, sources: dict, recursive_map: dict):
+        """#486 — resolve the HASH-stage executor (+ for "auto", its cached
+        calibration). Returns ``(hash_pool, hash_pool_rates)`` and sets
+        ``self._hash_pool_fp`` for the post-scan cache write.
+
+        ``scan.hash_pool`` in settings.json is the power-user escape hatch:
+        "thread" (default) | "process" | "auto". The Advanced-settings
+        "re-calibrate" checkbox (PR3c) is the GUI front end for auto:
+
+        * **checked** → force a fresh measurement this scan (rates stay
+          ``None`` so the worker re-measures + re-caches), switch the
+          persisted mode to "auto", then auto-uncheck the box. Later scans of
+          the same library reuse the cached result.
+        * **unchecked + auto** → cache hit: reuse (the worker re-projects the
+          rates to the current file count); cache miss: ask via
+          :meth:`_prompt_calibrate_or_thread`.
+        * **unchecked + thread/process** → use the explicit value as-is.
+
+        Extracted from ``_start_scan`` so the state machine is unit-testable
+        without launching the worker thread.
+        """
+        import os as _os
+        from app.views.workers.scan_worker import hash_pool_fingerprint
+
+        hash_pool = self.settings.get("scan.hash_pool", "thread")
+        hash_pool_rates = None
+        self._hash_pool_fp = None
+
+        if self._recalibrate_check.isChecked():
+            hash_pool = "auto"
+            self.settings.set("scan.hash_pool", "auto")
+            self._recalibrate_check.setChecked(False)  # toggle handler persists
+            self._hash_pool_fp = hash_pool_fingerprint(
+                sources, recursive_map, _os.cpu_count() or 4
+            )
+        elif hash_pool == "auto":
+            self._hash_pool_fp = hash_pool_fingerprint(
+                sources, recursive_map, _os.cpu_count() or 4
+            )
+            cache = self.settings.get("scan.hash_pool_cache", {}) or {}
+            hash_pool_rates = cache.get(self._hash_pool_fp)
+            if hash_pool_rates is None and not self._prompt_calibrate_or_thread():
+                # No calibration for this machine+folders yet and the user
+                # chose the safe default for this run — don't calibrate, don't
+                # persist (mode stays "auto" so we ask again next time).
+                hash_pool = "thread"
+                self._hash_pool_fp = None
+
+        return hash_pool, hash_pool_rates
+
     def _on_hash_pool_measured(self, rates: dict) -> None:
         """#486-PR3b — persist a fresh hash-pool calibration under its
         machine+sources fingerprint so the next scan of the same library
@@ -1056,6 +1117,33 @@ class ScanDialog(QDialog):
         from app.views.workers.scan_worker import store_hash_pool_rates
 
         store_hash_pool_rates(self.settings, self._hash_pool_fp, rates)
+
+    def _prompt_calibrate_or_thread(self) -> bool:
+        """#486-PR3c — modal shown when auto mode has no cached calibration
+        for this machine+folders. Returns True to calibrate now, False to
+        fall back to the thread pool for this run.
+
+        Isolated into its own method so the ``_start_scan`` state machine is
+        unit-testable by monkeypatching this (no live QMessageBox in tests —
+        see the repo's modal-test traps).
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(t("scan_dialog.calibrate_modal_title"))
+        box.setText(t("scan_dialog.calibrate_modal_body"))
+        calibrate_btn = box.addButton(
+            t("scan_dialog.calibrate_modal_calibrate"),
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        box.addButton(
+            t("scan_dialog.calibrate_modal_thread"),
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        box.setDefaultButton(calibrate_btn)
+        box.exec()
+        return box.clickedButton() is calibrate_btn
 
     def _on_stage_progress(
         self, stage_name: str, completed: int, total: int, files_per_sec: float

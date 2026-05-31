@@ -238,6 +238,12 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # near-duplicates fixture as s30 (1 group, 5 JPEGs basenamed
     # neardup_NN_qXX.jpg) so the regex partition q[89]\d hits 3 of 5.
     "s59_execute_dialog_select_by_main_tree_sync": ["qa/sandbox/near-duplicates"],
+    # s62 (#486-PR3c) — hash-pool re-calibrate checkbox + auto-uncheck.
+    # Small near-duplicates fixture on purpose: 5 < the 24-file calibration
+    # floor, so the recalibrate → auto path runs but SKIPS the real
+    # ProcessPool measurement (no flaky subprocess spawn in the batch).
+    # (s60/s61 are reserved by the planned [QA:s60]/[QA:s61] follow-ups.)
+    "s62_scan_hash_pool_recalibrate": ["qa/sandbox/near-duplicates"],
 }
 
 

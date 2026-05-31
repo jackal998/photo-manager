@@ -1,0 +1,1 @@
+Add a "Re-calibrate hash pool on next scan" checkbox to the scan dialog's Advanced Settings: it forces a fresh thread-vs-process calibration, switches the hash pool to auto, and auto-unchecks itself — with a modal offering calibrate-now vs the safe thread default the first time auto runs on a new machine + folder set (#486).
