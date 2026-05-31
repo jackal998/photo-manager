@@ -318,3 +318,96 @@ class TestRealDecodeFailures:
         bad.write_bytes(full.read_bytes()[:512])
         full.unlink()
         assert compute_phash(bad, "jpeg") is None
+
+
+# ---------------------------------------------------------------------------
+# run_hash_for_record — the picklable per-file compute path (#486)
+# ---------------------------------------------------------------------------
+
+
+def _record(path: Path, file_type: str):
+    """Minimal FileRecord for the run_hash_for_record contract tests."""
+    from scanner.walker import FileRecord
+
+    return FileRecord(path=path, source_label="src", file_type=file_type)
+
+
+class TestRunHashForRecord:
+    """Contract of the picklable per-file dispatch used by the HASH stage.
+
+    These exercise the orchestration run_hash_for_record layers on top of
+    compute_hashes — idx passthrough, exception→HashFailure mapping, and
+    the image-vs-non-image phash=None branch — using REAL inputs (a valid
+    JPEG, a missing path, a truncated JPEG, a video-typed file), not mocked
+    guard branches. The contract matters because a future ProcessPoolExecutor
+    migration (#486 follow-up) relies on it: out-of-order completions are
+    remapped by idx, and one unreadable file must degrade to a skip rather
+    than abort the whole scan.
+    """
+
+    def test_valid_image_returns_hashresult_preserving_idx(self, tmp_path):
+        """Catches: idx dropped/reordered or computed fields not mapped
+        through — both corrupt the manifest when completions arrive out of
+        order from a pool."""
+        from scanner.hasher import run_hash_for_record
+        from scanner.dedup import HashResult
+
+        img = tmp_path / "ok.jpg"
+        _write_jpeg(img, color=(200, 100, 50))
+        expected_sha = hashlib.sha256(img.read_bytes()).hexdigest()
+
+        idx, outcome = run_hash_for_record(7, _record(img, "jpeg"))
+
+        assert idx == 7
+        assert isinstance(outcome, HashResult)
+        assert outcome.sha256 == expected_sha
+        assert outcome.phash is not None
+        assert outcome.mean_color is not None
+
+    def test_missing_path_returns_hashfailure_not_raise(self, tmp_path):
+        """Catches: an unreadable file (deleted mid-scan, permission loss)
+        propagating its exception and aborting the whole scan instead of
+        being recorded as a skip."""
+        from scanner.hasher import run_hash_for_record, HashFailure
+
+        gone = tmp_path / "deleted.jpg"  # never created
+
+        idx, outcome = run_hash_for_record(3, _record(gone, "jpeg"))
+
+        assert idx == 3
+        assert isinstance(outcome, HashFailure)
+        assert outcome.exc_type == "FileNotFoundError"
+        assert outcome.exc_msg  # non-empty reason for the skipped[] log
+
+    def test_truncated_image_returns_decode_failure(self, tmp_path):
+        """Catches: a corrupt image (phash=None for an image type) silently
+        entering the manifest as a success instead of being flagged as an
+        ImageDecodeError skip."""
+        from scanner.hasher import run_hash_for_record, HashFailure
+
+        full = tmp_path / "_full.jpg"
+        _write_jpeg(full)
+        bad = tmp_path / "bad.jpg"
+        bad.write_bytes(full.read_bytes()[:512])
+        full.unlink()
+
+        idx, outcome = run_hash_for_record(0, _record(bad, "jpeg"))
+
+        assert isinstance(outcome, HashFailure)
+        assert outcome.exc_type == "ImageDecodeError"
+
+    def test_video_phash_none_is_success_not_failure(self, tmp_path):
+        """Catches: the `in _IMAGE_TYPES` guard regressing so a video
+        (phash=None by design) is misclassified as a decode failure and
+        dropped from the manifest."""
+        from scanner.hasher import run_hash_for_record
+        from scanner.dedup import HashResult
+
+        vid = tmp_path / "clip.mov"
+        vid.write_bytes(b"\x00\x01\x02not-a-real-video-but-real-bytes")
+
+        idx, outcome = run_hash_for_record(1, _record(vid, "mov"))
+
+        assert isinstance(outcome, HashResult)
+        assert outcome.phash is None
+        assert outcome.sha256 == hashlib.sha256(vid.read_bytes()).hexdigest()
