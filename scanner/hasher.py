@@ -33,8 +33,15 @@ from __future__ import annotations
 
 import hashlib
 import io
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Union
+
+from scanner.dedup import HashResult
+from scanner.exif import parse_exif_date
+
+if TYPE_CHECKING:
+    from scanner.walker import FileRecord
 
 try:
     from PIL import Image
@@ -135,6 +142,83 @@ def compute_hashes(
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
         return sha, None, None, raw_date, px_w, px_h
+
+
+# Formats where PIL is the primary decoder and a missing pHash unambiguously
+# means decode-failure:
+#   - GIF excluded: compute_hashes always returns phash=None for GIF
+#     (intentional early-return at scanner/hasher.py:53), so flagging
+#     phash=None as corruption false-positives 100% of the time (#75).
+#   - RAW excluded: rawpy is the decoder, and rawpy fails on legitimate
+#     non-camera-RAW TIFFs (Photoshop / scanner output) — flagging
+#     those as corrupt drops real user files from the manifest (#75).
+_IMAGE_TYPES = frozenset(("jpeg", "heic", "png", "webp"))
+
+
+@dataclass
+class HashFailure:
+    """Marker returned by :func:`run_hash_for_record` when a file cannot
+    be hashed. Carries the exception type name + message so the caller
+    can append to its ``skipped`` log without re-deriving the failure
+    reason.
+
+    Used for both raised exceptions (``compute_hashes`` failed) and
+    silent decode failures (``compute_hashes`` returned with
+    ``phash=None`` for an image-typed file). The latter is surfaced as
+    ``exc_type="ImageDecodeError"`` so the user-visible log line stays
+    distinguishable from a real Python exception trace.
+    """
+
+    exc_type: str
+    exc_msg: str
+
+
+def run_hash_for_record(
+    idx: int, record: "FileRecord"
+) -> tuple[int, Union[HashResult, HashFailure, None]]:
+    """Pure compute path for one ``FileRecord``.
+
+    Returns ``(idx, outcome)`` where ``outcome`` is one of:
+
+    * :class:`HashResult` — happy path, record was hashed successfully
+    * :class:`HashFailure` — ``compute_hashes`` raised OR returned
+      ``phash=None`` for a format where that means decode-failure
+      (see :data:`_IMAGE_TYPES`)
+    * ``None`` — currently unused; reserved for caller-driven skip
+      signals (e.g. cancel-flag short-circuit, which lives in the
+      dispatch closure, not here)
+
+    The ``idx`` is passed through unchanged so the caller can map
+    out-of-order completions back to the original input ordering.
+    This function is intentionally side-effect-free and picklable so
+    it can be submitted to either a ``ThreadPoolExecutor`` (current
+    use) or a ``ProcessPoolExecutor`` (planned, see follow-up to #486).
+    """
+    try:
+        sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(
+            record.path, record.file_type
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # One bad file must never abort the whole scan — caller logs + skips.
+        return idx, HashFailure(type(exc).__name__, str(exc))
+    if record.file_type in _IMAGE_TYPES and phash is None:
+        # Silent decode failure: PIL couldn't produce a pHash for an
+        # image-typed file → truncated / corrupt. Caller routes this
+        # to its skipped[] log alongside real exceptions.
+        return idx, HashFailure(
+            "ImageDecodeError",
+            "image file could not be decoded (truncated or corrupt)",
+        )
+    pil_date = parse_exif_date(raw_date) if raw_date else None
+    return idx, HashResult(
+        record=record,
+        sha256=sha256,
+        phash=phash,
+        mean_color=mean_color,
+        exif_date=pil_date,
+        pixel_width=px_w,
+        pixel_height=px_h,
+    )
 
 
 def _raw_exif_date(img: "Image.Image") -> Optional[str]:
