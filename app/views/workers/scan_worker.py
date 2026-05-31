@@ -31,6 +31,35 @@ STAGE_CLASSIFY = "CLASSIFY"
 STAGE_SCORE = "SCORE"
 STAGE_WRITE = "WRITE"
 
+# #486-PR3 — auto-calibration sample sizing for ``scan.hash_pool="auto"``.
+# The worker times this many of the real scan's records through both a
+# ThreadPoolExecutor and a ProcessPoolExecutor before the full HASH stage
+# and then runs the faster one. Below the floor the per-spawn / per-pickle
+# overhead swamps any signal, so calibration is skipped and "thread" wins
+# by default.
+_CALIBRATION_SAMPLE = 96
+_CALIBRATION_MIN = 24
+
+
+def _time_hash_executor(executor_cls, sample: list, max_workers: int) -> float:
+    """Hash ``sample`` through one executor and return the elapsed seconds.
+
+    Results are discarded — this measures only wall-clock for the
+    ``hash_pool="auto"`` calibration. Kept module-level (not a closure over
+    pipeline state) so it stays trivially unit-testable and picklable-safe.
+    """
+    from concurrent.futures import as_completed
+    from scanner.hasher import run_hash_for_record
+
+    start = time.perf_counter()
+    with executor_cls(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(run_hash_for_record, i, r) for i, r in enumerate(sample)
+        ]
+        for fut in as_completed(futures):
+            fut.result()
+    return time.perf_counter() - start
+
 
 class _StageTracker:
     """Worker-side throughput accumulator + per-second emit throttle.
@@ -150,15 +179,18 @@ class ScanWorker(QThread):
         cpu = _os.cpu_count() or 4
         cap = max(1, min(4, cpu // 2))
         self.exif_workers = max(1, min(exif_workers, cap))
-        # #486 follow-up (PR2) — HASH-stage executor selector. "thread"
-        # (default) keeps the in-process ThreadPoolExecutor; "process"
-        # runs the picklable run_hash_for_record across a
-        # ProcessPoolExecutor to escape the GIL on CPU-bound hashing.
-        # Default stays "thread" because the Windows spawn start-method
-        # re-imports PIL/rawpy per worker (~150-300ms each) — a cost only
-        # worth paying on large scans, decided per-machine later (PR3
-        # auto-calibration). Unknown values fall back to "thread".
-        self.hash_pool = hash_pool if hash_pool in ("thread", "process") else "thread"
+        # #486 follow-up — HASH-stage executor selector:
+        #   "thread"  (default) — in-process ThreadPoolExecutor
+        #   "process" (PR2) — picklable run_hash_for_record across a
+        #             ProcessPoolExecutor to escape the GIL on CPU-bound
+        #             hashing (Windows spawn re-imports PIL/rawpy per
+        #             worker, so it only pays off on large scans)
+        #   "auto"    (PR3) — time a sample of the real scan data through
+        #             both executors at scan start and run the faster
+        # Unknown values fall back to "thread".
+        self.hash_pool = (
+            hash_pool if hash_pool in ("thread", "process", "auto") else "thread"
+        )
         # #212 — when True, promote the top-scored row in each duplicate
         # group to action="KEEP" before writing the manifest. The scan
         # dialog persists the corresponding setting; defaults False so
@@ -209,6 +241,33 @@ class ScanWorker(QThread):
             self.stage_progress.emit(
                 tracker.stage_name, completed, total, tracker.throughput()
             )
+
+    def _calibrate_hash_pool(self, records: list, thread_cls, process_cls) -> str:
+        """Resolve ``hash_pool="auto"`` to "thread" or "process".
+
+        #486-PR3 — times a sample of the *real* scan data (in-situ, not a
+        synthetic benchmark) through both executors and returns the faster.
+        Below ``_CALIBRATION_MIN`` files the spawn/pickle overhead dwarfs
+        any signal, so we skip the measurement and pick "thread". The
+        chosen mode + both timings are logged so the decision is visible.
+        """
+        sample = records[:_CALIBRATION_SAMPLE]
+        if len(sample) < _CALIBRATION_MIN:
+            self._emit(
+                f"  Hash-pool calibration skipped ({len(sample)} files;"
+                f" need ≥{_CALIBRATION_MIN}) → pool=thread"
+            )
+            return "thread"
+        self._emit(f"  Calibrating hash pool on {len(sample)} files…")
+        thread_s = _time_hash_executor(thread_cls, sample, self.workers)
+        process_s = _time_hash_executor(process_cls, sample, self.workers)
+        winner = "process" if process_s < thread_s else "thread"
+        self._emit(
+            f"  Hash-pool calibration on {len(sample)} files:"
+            f" thread={thread_s * 1000:.0f}ms"
+            f" process={process_s * 1000:.0f}ms → pool={winner}"
+        )
+        return winner
 
     def _run_pipeline(self) -> None:
         import threading
@@ -493,9 +552,18 @@ class ScanWorker(QThread):
             # Once hashing finishes the totals settle.
             self._emit_stage(exif_tracker, done_snapshot, total_snapshot)
 
+        # #486-PR3 — resolve "auto" to thread|process by timing a sample
+        # of the real scan data through both executors. Held in a local so
+        # the log line and the executor branch below see thread|process,
+        # never "auto" — self.hash_pool stays the user's literal setting.
+        resolved_pool = self.hash_pool
+        if resolved_pool == "auto":
+            resolved_pool = self._calibrate_hash_pool(
+                records, ThreadPoolExecutor, ProcessPoolExecutor
+            )
         self._emit(
             f"Hashing {len(records):,} files (workers={self.workers},"
-            f" pool={self.hash_pool})…"
+            f" pool={resolved_pool})…"
         )
         self._emit(
             f"EXIF + scoring signals via exiftool — pipelined,"
@@ -533,7 +601,7 @@ class ScanWorker(QThread):
         # thread-only cancel_flag / exif_queue); the parent routes each
         # outcome in the drain loop. Thread path (default) keeps the
         # in-worker routing via _hash_one — identical to pre-PR2.
-        use_process = self.hash_pool == "process"
+        use_process = resolved_pool == "process"
         executor_cls = ProcessPoolExecutor if use_process else ThreadPoolExecutor
         with executor_cls(max_workers=self.workers) as pool:
             if use_process:
