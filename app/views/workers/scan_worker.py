@@ -126,6 +126,7 @@ class ScanWorker(QThread):
         limit: int | None = None,
         workers: int = 4,
         exif_workers: int = 2,
+        hash_pool: str = "thread",
         auto_select_enabled: bool = False,
         auto_select_aggressive_delete: bool = False,
     ) -> None:
@@ -149,6 +150,15 @@ class ScanWorker(QThread):
         cpu = _os.cpu_count() or 4
         cap = max(1, min(4, cpu // 2))
         self.exif_workers = max(1, min(exif_workers, cap))
+        # #486 follow-up (PR2) — HASH-stage executor selector. "thread"
+        # (default) keeps the in-process ThreadPoolExecutor; "process"
+        # runs the picklable run_hash_for_record across a
+        # ProcessPoolExecutor to escape the GIL on CPU-bound hashing.
+        # Default stays "thread" because the Windows spawn start-method
+        # re-imports PIL/rawpy per worker (~150-300ms each) — a cost only
+        # worth paying on large scans, decided per-machine later (PR3
+        # auto-calibration). Unknown values fall back to "thread".
+        self.hash_pool = hash_pool if hash_pool in ("thread", "process") else "thread"
         # #212 — when True, promote the top-scored row in each duplicate
         # group to action="KEEP" before writing the manifest. The scan
         # dialog persists the corresponding setting; defaults False so
@@ -202,7 +212,11 @@ class ScanWorker(QThread):
 
     def _run_pipeline(self) -> None:
         import threading
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import (
+            ProcessPoolExecutor,
+            ThreadPoolExecutor,
+            as_completed,
+        )
         from scanner.walker import scan_sources
         from scanner.hasher import HashFailure, run_hash_for_record
         from scanner.exif import ExiftoolProcess, batch_read_extracts
@@ -367,22 +381,29 @@ class ScanWorker(QThread):
         # block in the log.
         exiftool_missing = [False]
 
-        def _hash_one(idx_record: tuple) -> tuple:
-            """Dispatch-only closure: call the pure compute path, route
-            the outcome into ``skipped`` / ``exif_queue`` based on
-            type. Cancellation short-circuits before any compute.
+        def _route_outcome(record, outcome):
+            """Route one compute outcome into the shared dispatch state and
+            return the ``HashResult`` to store (or ``None`` to skip).
+
+            #486-PR2 — extracted from ``_hash_one`` so both executor paths
+            share ONE routing implementation. The thread path runs this
+            inside the worker (via ``_hash_one``); the process path runs it
+            in the parent drain loop after the picklable
+            ``run_hash_for_record`` returns across the process boundary.
+            Both contexts are safe: ``skipped.append`` is GIL-atomic,
+            ``exif_queue`` is thread-safe, and the ``exif_total`` bump is
+            taken under ``exif_total_lock`` for the consumers' cross-thread
+            read.
             """
-            idx, record = idx_record
-            if cancel_flag.is_set():
-                return idx, None
-            _, outcome = run_hash_for_record(idx, record)
             if isinstance(outcome, HashFailure):
                 # Both raised exceptions and silent decode failures
                 # land here — the HashFailure carries a distinct
                 # exc_type so the user-visible log line stays
                 # distinguishable.
                 skipped.append((record.path, outcome.exc_type, outcome.exc_msg))
-                return idx, None
+                return None
+            if outcome is None:
+                return None
             # outcome is a HashResult — queue for exif unless this is
             # a skip-type record (the exiftool pass excludes "skip"
             # anyway pre-#450).
@@ -390,7 +411,23 @@ class ScanWorker(QThread):
                 exif_queue.put(outcome)
                 with exif_total_lock:
                     exif_total[0] += 1
-            return idx, outcome
+            return outcome
+
+        def _hash_one(idx_record: tuple) -> tuple:
+            """Thread-path dispatch closure: cancel-check, call the pure
+            compute path, then route the outcome. Cancellation
+            short-circuits before any compute.
+
+            The process path can't use this closure (it captures the
+            thread-only ``cancel_flag`` / ``exif_queue``); it submits
+            ``run_hash_for_record`` directly and routes in the parent drain
+            loop below.
+            """
+            idx, record = idx_record
+            if cancel_flag.is_set():
+                return idx, None
+            _, outcome = run_hash_for_record(idx, record)
+            return idx, _route_outcome(record, outcome)
 
         def _exif_consumer() -> None:
             """Drain ``exif_queue`` into 500-batches fed to one
@@ -456,7 +493,10 @@ class ScanWorker(QThread):
             # Once hashing finishes the totals settle.
             self._emit_stage(exif_tracker, done_snapshot, total_snapshot)
 
-        self._emit(f"Hashing {len(records):,} files (workers={self.workers})…")
+        self._emit(
+            f"Hashing {len(records):,} files (workers={self.workers},"
+            f" pool={self.hash_pool})…"
+        )
         self._emit(
             f"EXIF + scoring signals via exiftool — pipelined,"
             f" {self.exif_workers} parallel process(es)…"
@@ -488,8 +528,23 @@ class ScanWorker(QThread):
         for t in consumer_threads:
             t.start()
 
-        with ThreadPoolExecutor(max_workers=self.workers) as pool:
-            futures = {pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)}
+        # #486-PR2 — executor selector. Process path submits the picklable
+        # run_hash_for_record directly (the child can't touch the
+        # thread-only cancel_flag / exif_queue); the parent routes each
+        # outcome in the drain loop. Thread path (default) keeps the
+        # in-worker routing via _hash_one — identical to pre-PR2.
+        use_process = self.hash_pool == "process"
+        executor_cls = ProcessPoolExecutor if use_process else ThreadPoolExecutor
+        with executor_cls(max_workers=self.workers) as pool:
+            if use_process:
+                futures = {
+                    pool.submit(run_hash_for_record, i, r): i
+                    for i, r in enumerate(records)
+                }
+            else:
+                futures = {
+                    pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)
+                }
             for future in as_completed(futures):
                 if self.isInterruptionRequested():
                     cancel_flag.set()
@@ -506,7 +561,11 @@ class ScanWorker(QThread):
                     logger.warning("Scan cancelled by user during hashing pass")
                     self.failed.emit("Scan cancelled.")
                     return
-                idx, result = future.result()
+                idx, outcome = future.result()
+                # Thread path already routed inside _hash_one (outcome is
+                # the HashResult-or-None to store); process path returns the
+                # raw outcome to route here in the parent.
+                result = _route_outcome(records[idx], outcome) if use_process else outcome
                 if result is not None:
                     hash_results[idx] = result
                 done += 1
