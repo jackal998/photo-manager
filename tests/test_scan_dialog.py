@@ -924,6 +924,62 @@ class TestPostScanCloseFocus:
         assert dlg._btn_scan.isEnabled()
 
 
+class TestProgressFrameResetOnTerminal:
+    """#510 — the stage progress frame is revealed on the first
+    ``stage_progress`` emit and was previously only reset at the TOP of
+    the NEXT ``_start_scan``. The terminal handlers that leave the
+    dialog OPEN (``_on_completed_empty`` / ``_on_failed``) must hide the
+    frame themselves, or the bar + "scanning…" label stay stuck —
+    making a benign empty result (or a scan aborted by an unreadable
+    entry, #509) look frozen.
+    """
+
+    def _make_dialog(self, qapp, tmp_path):
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text('{"sources":{}}', encoding="utf-8")
+        return ScanDialog(JsonSettings(settings_path))
+
+    def _reveal_frame(self, dlg):
+        """Drive a real stage_progress emit so the frame is visible and
+        the labels carry residual text — the exact state a terminal
+        handler must clean up."""
+        dlg._on_stage_progress("WALK", 42, 0, 12.5)
+        assert dlg._progress_frame.isVisibleTo(dlg) is True
+        assert dlg._stage_label.text() != ""
+
+    def test_completed_empty_hides_progress_frame(self, qapp, tmp_path):
+        dlg = self._make_dialog(qapp, tmp_path)
+        self._reveal_frame(dlg)
+        dlg._on_completed_empty()
+        assert dlg._progress_frame.isVisibleTo(dlg) is False
+        assert dlg._stage_label.text() == ""
+        assert dlg._stage_rate_label.text() == ""
+        assert dlg._current_stage is None
+
+    def test_failed_hides_progress_frame(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+
+        monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+
+        dlg = self._make_dialog(qapp, tmp_path)
+        self._reveal_frame(dlg)
+        dlg._on_failed("simulated pipeline error")
+        assert dlg._progress_frame.isVisibleTo(dlg) is False
+        assert dlg._stage_label.text() == ""
+        assert dlg._current_stage is None
+
+    def test_finished_hides_progress_frame(self, qapp, tmp_path):
+        dlg = self._make_dialog(qapp, tmp_path)
+        self._reveal_frame(dlg)
+        dlg._on_finished("manifest.csv")
+        assert dlg._progress_frame.isVisibleTo(dlg) is False
+        assert dlg._stage_label.text() == ""
+        assert dlg._current_stage is None
+
+
 class TestStartScanShouldProceed:
     """#142 — the ``should_proceed`` callback gates the scan worker launch.
 

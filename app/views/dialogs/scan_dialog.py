@@ -695,6 +695,9 @@ class ScanDialog(QDialog):
         # broke qa(2):s02 (cold-launch dialog show event blocked).
         # Initially hidden; revealed on the first stage_progress emit.
         self._progress_frame = QFrame()
+        # objectName lets the layer-3 s02 driver locate this frame via
+        # UIA and assert it's hidden after an empty/failed scan (#510).
+        self._progress_frame.setObjectName("scanProgressFrame")
         self._progress_frame.setFrameShape(QFrame.StyledPanel)
         self._progress_frame.setVisible(False)
         pf_layout = QVBoxLayout(self._progress_frame)
@@ -1046,10 +1049,7 @@ class ScanDialog(QDialog):
         # Reset the stage frame for the new scan: hide until the
         # first stage_progress fires, clear residual labels so the
         # frame can't briefly show prior-scan numbers.
-        self._progress_frame.setVisible(False)
-        self._current_stage = None
-        self._stage_label.setText("")
-        self._stage_rate_label.setText("")
+        self._reset_progress_ui()
         # #468 — emit BEFORE start() so a connected slot that flips a
         # "scan_running" flag is set by the time the worker thread is
         # alive. Emit-after would race the worker's first signals.
@@ -1145,6 +1145,25 @@ class ScanDialog(QDialog):
         box.exec()
         return box.clickedButton() is calibrate_btn
 
+    def _reset_progress_ui(self) -> None:
+        """Hide the stage frame and clear its labels.
+
+        #510 — the progress frame is revealed on the first
+        ``stage_progress`` emit and was previously only reset at the
+        TOP of the NEXT scan's ``_start_scan``. The terminal handlers
+        ``_on_completed_empty`` / ``_on_failed`` leave the dialog open
+        without resetting, so the bar + "scanning…" label stayed stuck
+        after an empty/failed scan — making a benign empty result (or a
+        scan that aborted, e.g. #509) look frozen. Calling this from
+        every terminal handler hides the frame the moment the scan
+        ends. Mirrors the reset block that already lived in
+        ``_start_scan``.
+        """
+        self._progress_frame.setVisible(False)
+        self._current_stage = None
+        self._stage_label.setText("")
+        self._stage_rate_label.setText("")
+
     def _on_stage_progress(
         self, stage_name: str, completed: int, total: int, files_per_sec: float
     ) -> None:
@@ -1211,6 +1230,10 @@ class ScanDialog(QDialog):
 
     def _on_finished(self, manifest_path: str) -> None:
         """Handle scan completion: switch Close button to Close & Load."""
+        # #510 — reset the progress frame for symmetry with the other
+        # terminal handlers (the dialog closes on load, so this is
+        # mostly belt-and-suspenders here).
+        self._reset_progress_ui()
         self.manifest_path = manifest_path
         self._btn_scan.setEnabled(True)
         # `&&` escapes the ampersand so Qt doesn't interpret it as a mnemonic
@@ -1224,6 +1247,9 @@ class ScanDialog(QDialog):
 
     def _on_failed(self, error: str) -> None:
         """Handle scan failure: log the error and re-enable the scan button."""
+        # #510 — hide the stage frame so the bar + "scanning…" label
+        # don't stay stuck on a failed scan that leaves the dialog open.
+        self._reset_progress_ui()
         self._log(t("scan_dialog.log_error", error=error))
         self._btn_scan.setEnabled(True)
         QMessageBox.critical(self, t("scan_dialog.scan_failed_title"), error)
@@ -1236,6 +1262,9 @@ class ScanDialog(QDialog):
 
     def _on_completed_empty(self) -> None:
         """Empty input is benign — re-enable Start Scan, no modal."""
+        # #510 — hide the stage frame so an empty-sources scan doesn't
+        # leave the bar + "scanning…" label stuck, looking frozen.
+        self._reset_progress_ui()
         self._btn_scan.setEnabled(True)
         # Same rationale as _on_failed (#86): no manifest produced, Close is
         # the way out, focus gives the user a visible signal that the scan

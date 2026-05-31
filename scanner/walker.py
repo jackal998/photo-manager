@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from loguru import logger
 
@@ -126,6 +127,67 @@ def _traverses_symlink(path: Path, root: Path) -> bool:
     return False
 
 
+def _iter_tree(root: Path, recursive: bool) -> Iterator[Path]:
+    """Yield every entry under ``root`` (files and dirs), skip-on-error.
+
+    #509 — replaces the bare ``root.rglob("*")`` / ``root.glob("*")``
+    traversal. ``rglob`` is a *generator*: when recursive descent
+    reaches an inaccessible reparse point (a broken symlink/junction,
+    e.g. ``node_modules\\.bin\\acorn``), the underlying ``os.scandir``
+    raises ``OSError`` [WinError 1920] *from inside* the generator, the
+    exception propagates out of the ``for`` loop, ``ScanWorker.run()``
+    emits ``failed``, and the ENTIRE scan aborts on the first bad
+    entry — even though thousands of good files remain.
+
+    A generator can't resume after raising mid-iteration, so the fix is
+    a different traversal primitive. This is a manual ``os.scandir``
+    stack: every ``scandir`` call and every ``entry.is_dir()`` probe is
+    wrapped in ``try/except OSError`` so one inaccessible entry is
+    logged once and skipped while the walk keeps going. The yield order
+    matches ``rglob`` closely enough for the existing tests (entries of
+    a directory before descending into its subdirectories), and — like
+    ``rglob`` — yields BOTH files and directories so the caller's
+    per-path guards (Win32-unsafe warning, symlink/skip-dir/extension
+    filters) run unchanged.
+
+    Args:
+        root: Directory to walk.
+        recursive: When ``True`` descend into subdirectories; when
+            ``False`` yield only the immediate entries of ``root``.
+    """
+    try:
+        with os.scandir(root) as it:
+            entries = list(it)
+    except OSError as exc:
+        # The root itself (or a subdirectory mid-descent) is
+        # inaccessible — log once and skip rather than abort the scan.
+        logger.warning(
+            f"Skipping unreadable directory '{root}' during scan walk: "
+            f"{exc!r}"
+        )
+        return
+    subdirs: list[Path] = []
+    for entry in entries:
+        path = Path(entry.path)
+        yield path
+        if not recursive:
+            continue
+        try:
+            is_dir = entry.is_dir(follow_symlinks=False)
+        except OSError as exc:
+            # Inaccessible reparse point (broken junction/symlink) —
+            # the exact WinError 1920 case from #509. Log once, skip.
+            logger.warning(
+                f"Skipping unreadable entry '{path}' during scan walk: "
+                f"{exc!r}"
+            )
+            continue
+        if is_dir:
+            subdirs.append(path)
+    for subdir in subdirs:
+        yield from _iter_tree(subdir, recursive=True)
+
+
 def _scan_dir(
     root: Path,
     label: str,
@@ -153,8 +215,7 @@ def _scan_dir(
     by_dir: dict[str, list[Path]] = {}
     total = 0
     warned_unsafe: set[str] = set()
-    glob_fn = root.rglob if recursive else root.glob
-    for path in glob_fn("*"):
+    for path in _iter_tree(root, recursive=recursive):
         # #491 — cooperative cancel. Polled here (before any per-path
         # work) so the next ``rglob`` tick after a UI-side
         # ``requestInterruption`` breaks out with the partial result
