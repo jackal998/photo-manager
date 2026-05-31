@@ -100,6 +100,56 @@ def _profile_process_pool(
     return spawn, per_file
 
 
+def hash_pool_fingerprint(
+    sources: dict, recursive_map: dict | None, cpu_count: int
+) -> str:
+    """Stable key for the hash-pool calibration cache (#486-PR3b).
+
+    Captures what makes the thread-vs-process decision vary: the machine
+    (``cpu_count`` — the main determinant of the GIL-escape benefit) and the
+    source set (folder paths + recursive flags — the dataset shape). A new
+    machine or a different folder set yields a different key → cache miss →
+    re-measure. Returns a short hex digest so it stays a tidy settings key.
+    """
+    import hashlib
+
+    rec = recursive_map or {}
+    parts = sorted(
+        (str(path), bool(rec.get(label))) for label, path in (sources or {}).items()
+    )
+    canonical = repr((int(cpu_count), parts))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def store_hash_pool_rates(settings, fingerprint: str, rates: dict) -> None:
+    """Persist a fresh calibration into ``scan.hash_pool_cache`` (#486-PR3b).
+
+    Kept a plain function (not a dialog method) so the cache round-trip is
+    unit-testable against a real ``JsonSettings`` without constructing a Qt
+    dialog. ``settings`` is any object exposing ``get``/``set``/``save``.
+    """
+    cache = settings.get("scan.hash_pool_cache", {}) or {}
+    cache[fingerprint] = rates
+    settings.set("scan.hash_pool_cache", cache)
+    settings.save()
+
+
+_RATE_KEYS = ("thread_per_file", "process_per_file", "spawn")
+
+
+def _valid_hash_pool_rates(rates) -> bool:
+    """True iff ``rates`` is a usable cached calibration.
+
+    ``settings.json`` is hand-editable, so a corrupt or partial
+    ``scan.hash_pool_cache`` entry must be treated as a cache miss
+    (re-measure) rather than crashing the scan with a ``KeyError`` —
+    boundary validation per the project's input-at-boundaries rule.
+    """
+    return isinstance(rates, dict) and all(
+        isinstance(rates.get(k), (int, float)) for k in _RATE_KEYS
+    )
+
+
 class _StageTracker:
     """Worker-side throughput accumulator + per-second emit throttle.
 
@@ -182,6 +232,13 @@ class ScanWorker(QThread):
     finished = Signal(str)
     failed = Signal(str)
     completed_empty = Signal()
+    # #486-PR3b — emitted once after a FRESH hash-pool calibration (cache
+    # miss) carrying the measured rates dict {thread_per_file, process_per_file,
+    # spawn}. The dialog persists it keyed by a machine+sources fingerprint so
+    # the next scan of the same library skips the ~2s re-measurement. Emitted
+    # right after calibration (before the long hash pass) so the measurement
+    # survives even if the user cancels the scan.
+    hash_pool_measured = Signal(dict)
 
     def __init__(
         self,
@@ -195,6 +252,7 @@ class ScanWorker(QThread):
         workers: int = 4,
         exif_workers: int = 2,
         hash_pool: str = "thread",
+        hash_pool_rates: dict | None = None,
         auto_select_enabled: bool = False,
         auto_select_aggressive_delete: bool = False,
     ) -> None:
@@ -230,6 +288,12 @@ class ScanWorker(QThread):
         self.hash_pool = (
             hash_pool if hash_pool in ("thread", "process", "auto") else "thread"
         )
+        # #486-PR3b — pre-measured calibration rates from the dialog's
+        # fingerprint cache. When present (and hash_pool="auto"), the worker
+        # re-projects them to the current file count instead of re-measuring;
+        # when None, "auto" measures fresh and emits hash_pool_measured so the
+        # dialog can cache the result. Ignored unless hash_pool == "auto".
+        self.hash_pool_rates = hash_pool_rates
         # #212 — when True, promote the top-scored row in each duplicate
         # group to action="KEEP" before writing the manifest. The scan
         # dialog persists the corresponding setting; defaults False so
@@ -301,29 +365,45 @@ class ScanWorker(QThread):
         Below ``_CALIBRATION_MIN`` files the measurement is too noisy to
         trust, so we skip it and pick "thread". The projection components
         are logged so the decision stays visible.
+
+        #486-PR3b — when ``self.hash_pool_rates`` is supplied (the dialog's
+        fingerprint cache hit), the measurement is skipped entirely and the
+        cached rates are re-projected to the current ``N`` — so a re-scan of
+        the same library doesn't pay the ~2s calibration again, yet still
+        adapts the pick if the file count changed. On a cache miss the fresh
+        rates are emitted via ``hash_pool_measured`` for the dialog to store.
         """
-        sample = records[:_CALIBRATION_SAMPLE]
-        if len(sample) < _CALIBRATION_MIN:
-            self._emit(
-                f"  Hash-pool calibration skipped ({len(sample)} files;"
-                f" need ≥{_CALIBRATION_MIN}) → pool=thread"
-            )
-            return "thread"
         n = len(records)
-        self._emit(f"  Calibrating hash pool on {len(sample)} files…")
-        thread_s = _time_hash_executor(thread_cls, sample, self.workers)
-        thread_per_file = thread_s / len(sample)
-        spawn_s, process_per_file = _profile_process_pool(
-            process_cls, sample, self.workers
-        )
-        thread_proj = thread_per_file * n
-        process_proj = spawn_s + process_per_file * n
+        rates = self.hash_pool_rates
+        if not _valid_hash_pool_rates(rates):
+            sample = records[:_CALIBRATION_SAMPLE]
+            if len(sample) < _CALIBRATION_MIN:
+                self._emit(
+                    f"  Hash-pool calibration skipped ({len(sample)} files;"
+                    f" need ≥{_CALIBRATION_MIN}) → pool=thread"
+                )
+                return "thread"
+            self._emit(f"  Calibrating hash pool on {len(sample)} files…")
+            thread_s = _time_hash_executor(thread_cls, sample, self.workers)
+            spawn_s, process_per_file = _profile_process_pool(
+                process_cls, sample, self.workers
+            )
+            rates = {
+                "thread_per_file": thread_s / len(sample),
+                "process_per_file": process_per_file,
+                "spawn": spawn_s,
+            }
+            self.hash_pool_measured.emit(rates)
+        else:
+            self._emit("  Using cached hash-pool calibration (fingerprint match)…")
+        thread_proj = rates["thread_per_file"] * n
+        process_proj = rates["spawn"] + rates["process_per_file"] * n
         winner = "process" if process_proj < thread_proj else "thread"
         self._emit(
-            f"  Hash-pool calibration on {len(sample)} files → projected to"
-            f" {n:,}: thread≈{thread_proj:.1f}s process≈{process_proj:.1f}s"
-            f" (spawn {spawn_s * 1000:.0f}ms +"
-            f" {process_per_file * 1000:.1f}ms/file) → pool={winner}"
+            f"  Hash-pool calibration → projected to {n:,}:"
+            f" thread≈{thread_proj:.1f}s process≈{process_proj:.1f}s"
+            f" (spawn {rates['spawn'] * 1000:.0f}ms +"
+            f" {rates['process_per_file'] * 1000:.1f}ms/file) → pool={winner}"
         )
         return winner
 

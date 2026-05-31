@@ -992,6 +992,23 @@ class ScanDialog(QDialog):
         # construction, falling back to "thread" on anything unrecognised.
         hash_pool = self.settings.get("scan.hash_pool", "thread")
 
+        # #486-PR3b — for "auto", look up a cached calibration keyed by a
+        # machine+sources fingerprint. A hit lets the worker re-project the
+        # cached rates to the current file count without re-measuring (~2s
+        # saved per re-scan); a miss runs a fresh measurement whose rates the
+        # worker emits via hash_pool_measured for us to persist below.
+        import os as _os
+        from app.views.workers.scan_worker import hash_pool_fingerprint
+
+        hash_pool_rates = None
+        self._hash_pool_fp = None
+        if hash_pool == "auto":
+            self._hash_pool_fp = hash_pool_fingerprint(
+                sources, recursive_map, _os.cpu_count() or 4
+            )
+            cache = self.settings.get("scan.hash_pool_cache", {}) or {}
+            hash_pool_rates = cache.get(self._hash_pool_fp)
+
         self._worker = ScanWorker(
             sources=sources,
             output_path=output,
@@ -1001,6 +1018,7 @@ class ScanDialog(QDialog):
             workers=self._workers_spin.value(),
             exif_workers=exif_workers,
             hash_pool=hash_pool,
+            hash_pool_rates=hash_pool_rates,
             auto_select_enabled=self._auto_select_check.isChecked(),
             auto_select_aggressive_delete=(
                 self._auto_select_aggressive_check.isChecked()
@@ -1011,6 +1029,9 @@ class ScanDialog(QDialog):
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.completed_empty.connect(self._on_completed_empty)
+        # Persist a fresh calibration (cache miss) under its fingerprint so
+        # the next scan of the same library skips the re-measurement.
+        self._worker.hash_pool_measured.connect(self._on_hash_pool_measured)
         # Reset the stage frame for the new scan: hide until the
         # first stage_progress fires, clear residual labels so the
         # frame can't briefly show prior-scan numbers.
@@ -1023,6 +1044,18 @@ class ScanDialog(QDialog):
         # alive. Emit-after would race the worker's first signals.
         self.scan_started.emit()
         self._worker.start()
+
+    def _on_hash_pool_measured(self, rates: dict) -> None:
+        """#486-PR3b — persist a fresh hash-pool calibration under its
+        machine+sources fingerprint so the next scan of the same library
+        reuses the measured rates instead of re-running the ~2s calibration.
+        Fires only on a cache miss (the worker emits the rates it measured).
+        """
+        if not self._hash_pool_fp:
+            return
+        from app.views.workers.scan_worker import store_hash_pool_rates
+
+        store_hash_pool_rates(self.settings, self._hash_pool_fp, rates)
 
     def _on_stage_progress(
         self, stage_name: str, completed: int, total: int, files_per_sec: float
