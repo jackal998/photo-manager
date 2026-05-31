@@ -1,0 +1,1 @@
+Add a ``scan.hash_pool`` setting (``"thread"`` default | ``"process"``) that runs the HASH stage across a ProcessPoolExecutor to escape the GIL on CPU-bound hashing; default behaviour is unchanged and the knob is settings-only for now (#486).
