@@ -256,18 +256,72 @@ def main() -> int:
     time.sleep(0.3)
 
     print("step: locate_filter_combo")
-    try:
-        combo = exec_dlg.child_window(
-            auto_id=FILTER_COMBO_AID, control_type="ComboBox",
-        )
-        combo.wait("visible", timeout=2.0)
-    except Exception as exc:
+    # Qt's UIA bridge exposes objectName as the trailing path segment of
+    # the auto_id — full id reads like
+    # "QApplication.ExecuteActionDialog.QWidget.executeDialogTypeFilterCombo".
+    # Use suffix-match (same idiom as ActionDialog combos at
+    # _uia.py:1796/1815), NOT child_window(auto_id=exact-match).
+    combo = _uia._find_descendant_by_aid_suffix(
+        exec_dlg, "ComboBox", "." + FILTER_COMBO_AID,
+    )
+    if combo is None:
         print(
-            f"FAIL: type-filter ComboBox with auto_id "
-            f"{FILTER_COMBO_AID!r} not found — combo missing from "
-            f"_build_ui? Error: {exc!r}"
+            f"FAIL: type-filter ComboBox with objectName "
+            f"{FILTER_COMBO_AID!r} not found via aid-suffix descendant "
+            f"search — combo missing from _build_ui?"
         )
         return 1
+
+    return _continue_main(
+        pid, win, exec_dlg, combo, group_a_paths, group_b_paths,
+    )
+
+
+def _select_combo_robust(combo, label: str) -> bool:
+    """Set ``combo`` to ``label`` with the same 3-retry + iface_value
+    fallback pattern used by ActionDialog's action_combo at
+    _uia.py:1828-1854. The bare ``combo.select(text)`` call works
+    reliably locally but flakes on hosted CI for non-default items
+    (s29 burned twice on the third item with the simpler call).
+
+    Returns ``True`` if the combo's displayed text matches ``label``
+    after the attempt, ``False`` if even the iface_value.SetValue
+    fallback couldn't agree."""
+    for _ in range(3):
+        try:
+            combo.set_focus()
+        except Exception:
+            pass
+        time.sleep(0.1)
+        try:
+            combo.select(label)
+        except Exception:
+            pass
+        time.sleep(0.4)
+        try:
+            current = (combo.window_text() or "").strip()
+        except Exception:
+            current = ""
+        if current == label:
+            return True
+    try:
+        combo.iface_value.SetValue(label)
+    except Exception:
+        pass
+    time.sleep(0.2)
+    try:
+        current = (combo.window_text() or "").strip()
+    except Exception:
+        current = ""
+    return current == label
+
+
+def _continue_main(
+    pid, win, exec_dlg, combo, group_a_paths, group_b_paths,
+) -> int:
+    """Continuation point after the combo is located. Kept separate so
+    the lookup-failure return path above stays a flat early-exit
+    instead of an over-indented try/else."""
 
     print("step: verify_combo_has_three_options")
     items = _uia.read_combobox_items(combo)
@@ -281,7 +335,12 @@ def main() -> int:
         return 1
 
     print("step: switch_to_delete_only")
-    combo.select(FILTER_DELETE_ONLY)
+    if not _select_combo_robust(combo, FILTER_DELETE_ONLY):
+        print(
+            f"FAIL: could not switch combo to {FILTER_DELETE_ONLY!r} after "
+            f"3 retries + iface_value fallback; combo state stuck"
+        )
+        return 1
     time.sleep(0.4)
     tree = exec_dlg.descendants(control_type="Tree")[0]
     delete_visible = _file_row_count_in_tree(tree)
@@ -294,7 +353,12 @@ def main() -> int:
         return 1
 
     print("step: switch_to_remove_only")
-    combo.select(FILTER_REMOVE_ONLY)
+    if not _select_combo_robust(combo, FILTER_REMOVE_ONLY):
+        print(
+            f"FAIL: could not switch combo to {FILTER_REMOVE_ONLY!r} after "
+            f"3 retries + iface_value fallback; combo state stuck"
+        )
+        return 1
     time.sleep(0.4)
     remove_visible = _file_row_count_in_tree(tree)
     print(f"  remove_only_visible_rows={remove_visible}")
@@ -335,7 +399,12 @@ def main() -> int:
     print("  hidden_destructive_banner_visible=True")
 
     print("step: switch_back_to_delete_only_for_execute")
-    combo.select(FILTER_DELETE_ONLY)
+    if not _select_combo_robust(combo, FILTER_DELETE_ONLY):
+        print(
+            f"FAIL: could not switch combo back to {FILTER_DELETE_ONLY!r} "
+            f"before Execute; combo state stuck"
+        )
+        return 1
     time.sleep(0.4)
 
     print("step: snapshot_pre_disk_state")
