@@ -593,12 +593,12 @@ class TestHashPoolSetting:
 
 class TestHashPoolCalibration:
     """#486-PR3 — hash_pool="auto" times a sample through both executors at
-    scan start and runs the faster.
+    scan start, projects each to the real file count, and runs the faster.
 
     The decision tests drive _calibrate_hash_pool directly with synthetic
-    per-executor timings (the comparison logic is what matters, not the
-    wall-clock); _time_hash_executor itself is covered by a real-hash
-    timing test so the measurement path isn't mock-only.
+    per-file rates (the projection logic is what matters, not the
+    wall-clock); _time_hash_executor and _profile_process_pool are each
+    covered by a real-hash test so the measurement paths aren't mock-only.
     """
 
     def _worker(self, tmp_path):
@@ -622,39 +622,63 @@ class TestHashPoolCalibration:
         )
         assert w.hash_pool == "auto"
 
-    def test_calibration_picks_process_when_faster(self, qapp, tmp_path, monkeypatch):
-        """Catches: the winner comparison inverted so the slower executor
-        is chosen."""
+    def _patch_timings(self, monkeypatch, thread_per_file, spawn, process_per_file):
+        """Stub the two measurement helpers with fixed per-file rates so the
+        *projection* logic is what's under test, not the wall-clock."""
         import app.views.workers.scan_worker as sw
 
-        THREAD, PROCESS = object(), object()
+        monkeypatch.setattr(
+            sw,
+            "_time_hash_executor",
+            lambda cls, sample, w: thread_per_file * len(sample),
+        )
+        monkeypatch.setattr(
+            sw,
+            "_profile_process_pool",
+            lambda cls, sample, w: (spawn, process_per_file),
+        )
 
-        def fake_time(executor_cls, sample, max_workers):
-            return 0.05 if executor_cls is THREAD else 0.01  # process faster
+    def test_calibration_picks_process_when_projection_favors_it(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Catches: the projected-winner comparison inverted. Large N where
+        process's lower per-file rate beats its one-time spawn."""
+        import app.views.workers.scan_worker as sw
 
-        monkeypatch.setattr(sw, "_time_hash_executor", fake_time)
-        records = list(range(sw._CALIBRATION_MIN))  # contents unused
+        # thread 2s/file; process 100s spawn + 1s/file. Break-even N=100.
+        self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)
+        records = list(range(10_000))  # well past break-even → process
 
         assert self._worker(tmp_path)._calibrate_hash_pool(
-            records, THREAD, PROCESS
+            records, object(), object()
         ) == "process"
 
-    def test_calibration_picks_thread_when_faster(self, qapp, tmp_path, monkeypatch):
-        """Catches: a tie / slower-process case wrongly defaulting to
-        process (process must only win on a strict improvement)."""
-        import app.views.workers.scan_worker as sw
-
-        THREAD, PROCESS = object(), object()
-
-        def fake_time(executor_cls, sample, max_workers):
-            return 0.01 if executor_cls is THREAD else 0.05  # thread faster
-
-        monkeypatch.setattr(sw, "_time_hash_executor", fake_time)
-        records = list(range(sw._CALIBRATION_MIN))
+    def test_calibration_picks_thread_when_projection_favors_it(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Catches: process chosen on a scan too small to amortise its spawn
+        cost (and ties defaulting to process)."""
+        self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)
+        records = list(range(50))  # below break-even → thread
 
         assert self._worker(tmp_path)._calibrate_hash_pool(
-            records, THREAD, PROCESS
+            records, object(), object()
         ) == "thread"
+
+    def test_projection_flips_winner_with_file_count(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """The core of the fix: with *identical* measured rates, the winner
+        must depend on the real file count — process's one-time spawn cost
+        dominates on a small scan and amortises away on a large one. A flat
+        per-sample comparison (the #498 bug) could never flip here."""
+        worker = self._worker(tmp_path)
+        self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)  # break-even N=100
+
+        small = worker._calibrate_hash_pool(list(range(50)), object(), object())
+        large = worker._calibrate_hash_pool(list(range(10_000)), object(), object())
+
+        assert (small, large) == ("thread", "process")
 
     def test_calibration_skipped_below_floor_without_timing(
         self, qapp, tmp_path, monkeypatch
@@ -664,12 +688,12 @@ class TestHashPoolCalibration:
         import app.views.workers.scan_worker as sw
 
         timed: list = []
-
-        def spy_time(executor_cls, sample, max_workers):
-            timed.append(executor_cls)
-            return 0.0
-
-        monkeypatch.setattr(sw, "_time_hash_executor", spy_time)
+        monkeypatch.setattr(
+            sw, "_time_hash_executor", lambda *a: timed.append("thread") or 0.0
+        )
+        monkeypatch.setattr(
+            sw, "_profile_process_pool", lambda *a: timed.append("process") or (0.0, 0.0)
+        )
         records = list(range(sw._CALIBRATION_MIN - 1))  # one below the floor
 
         result = self._worker(tmp_path)._calibrate_hash_pool(
@@ -693,6 +717,25 @@ class TestHashPoolCalibration:
 
         elapsed = sw._time_hash_executor(ThreadPoolExecutor, recs, 2)
         assert elapsed >= 0.0
+
+    def test_profile_process_pool_returns_spawn_and_rate(self, qapp, tmp_path):
+        """Real-hash measurement path (no mock): runs the cold/warm two-batch
+        split through a real executor and returns a non-negative (spawn,
+        per_file) pair. Uses ThreadPoolExecutor so CI never spawns a real
+        subprocess (the cold/warm split logic is what's exercised here)."""
+        from concurrent.futures import ThreadPoolExecutor
+        import app.views.workers.scan_worker as sw
+        from scanner.walker import FileRecord
+
+        recs = []
+        for i in range(4):
+            p = tmp_path / f"f{i}.jpg"
+            _write_jpeg(p)
+            recs.append(FileRecord(path=p, source_label="s", file_type="jpeg"))
+
+        spawn, per_file = sw._profile_process_pool(ThreadPoolExecutor, recs, 2)
+        assert spawn >= 0.0
+        assert per_file >= 0.0
 
     def test_auto_scan_below_floor_runs_thread_and_writes_manifest(
         self, qapp, tmp_path, monkeypatch
