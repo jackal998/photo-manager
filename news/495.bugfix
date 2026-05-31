@@ -1,0 +1,1 @@
+Stop the Action dialog's live-preview timer on close so an orphaned dialog can't fire a stale timeout into a destroyed widget (a Windows/3.11 use-after-free that surfaced as CI test-isolation flake) (#492).

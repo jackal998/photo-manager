@@ -2179,6 +2179,16 @@ class ActionDialog(QDialog):
         current_field = self._current_field()
         if current_field:
             self._settings_set(self._field_key, current_field)
+        # #492: stop the debounced live-preview timer before the dialog
+        # tears down. _preview_timer is a singleShot QTimer (150ms); if a
+        # keystroke armed it just before close, an un-stopped timer leaves
+        # a pending timeout queued against this dialog. When the orphaned
+        # dialog is later collected and its deferred-delete drains during a
+        # subsequent test's processEvents(), that stale timer is a
+        # use-after-free (Windows/3.11 abort in CI test isolation). Stopping
+        # it here makes the timer a plain child QObject, safe to destroy.
+        if hasattr(self, "_preview_timer"):
+            self._preview_timer.stop()
         super().done(result)
 
 
