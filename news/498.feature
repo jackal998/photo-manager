@@ -1,0 +1,1 @@
+Add ``scan.hash_pool="auto"`` which times a sample of the real scan data through both the thread and process executors at scan start and runs the faster for the full HASH stage (in-situ calibration; logs both timings and the pick) (#486).
