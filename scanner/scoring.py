@@ -143,8 +143,11 @@ _BAD_PATH_SEGMENTS: frozenset[str] = frozenset({
     "messenger",
 })
 
-# Video suffixes used by the Live Photo peer detection.
-_VIDEO_SUFFIXES: frozenset[str] = frozenset({"mov", "mp4"})
+# Video suffixes — used by Live Photo peer detection AND by the EXIF-
+# completeness baseline (video rows are scored against the smaller video
+# tag census, not the image one). #461: ".avi" included so AVI rows (now
+# that they reach scoring) get the video treatment, not the image baseline.
+_VIDEO_SUFFIXES: frozenset[str] = frozenset({"mov", "mp4", "avi"})
 # HEIC suffixes used by the Live Photo peer detection.
 _HEIC_SUFFIXES: frozenset[str] = frozenset({"heic", "heif"})
 

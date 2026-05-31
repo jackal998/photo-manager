@@ -1,0 +1,1 @@
+Stop silently dropping ``.avi`` files from the scan manifest — ``.avi`` was walked and counted but had no file-type mapping, so it resolved to "skip" and never produced a row; it now maps to the video type and is hashed like other videos (#461).

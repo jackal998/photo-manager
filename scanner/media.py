@@ -114,6 +114,12 @@ def get_file_type(path: Path) -> tuple[str, bool]:
         ".webp": "webp",
         ".mp4": "mp4", ".m4v": "mp4",
         ".mov": "mov",
+        # #461 — .avi is in MEDIA_EXTENSIONS/VIDEO_EXTENSIONS (so it's walked
+        # + counted), but was missing here, so get_file_type returned "skip"
+        # and walker.py dropped it before FileRecord creation — silent data
+        # loss. Map to "mp4" so it takes the video branch in compute_hashes
+        # (stream SHA-256, phash=None), same as the other video formats.
+        ".avi": "mp4",
     }
     declared = ext_type_map.get(ext, "skip")
 

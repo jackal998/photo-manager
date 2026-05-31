@@ -31,6 +31,10 @@ WEBP_MAGIC = b"RIFF\x00\x00\x00\x00WEBP"
 HEIC_MAGIC = b"\x00\x00\x00\x18ftypheic"
 MP4_MAGIC = b"\x00\x00\x00\x18ftypmp42"
 MOV_MAGIC = b"\x00\x00\x00\x18ftypqt  "
+# #461 — real AVI RIFF header. Video types aren't magic-checked by
+# get_file_type (only heic/raw/png/gif/webp are), so the bytes are
+# incidental here — the extension mapping is what's under test.
+AVI_MAGIC = b"RIFF\x00\x00\x00\x00AVI LIST"
 
 
 def _write(tmp_path: Path, name: str, data: bytes) -> Path:
@@ -74,6 +78,8 @@ class TestGetFileType:
             ("a.mp4", MP4_MAGIC, "mp4"),
             ("a.m4v", MP4_MAGIC, "mp4"),
             ("a.mov", MOV_MAGIC, "mov"),
+            # #461 — .avi must map to a video type ("mp4"), not "skip".
+            ("a.avi", AVI_MAGIC, "mp4"),
         ],
     )
     def test_extension_matches_magic(self, tmp_path, name, data, expected):
@@ -81,6 +87,30 @@ class TestGetFileType:
         kind, mismatch = get_file_type(path)
         assert kind == expected
         assert mismatch is False
+
+    def test_every_media_extension_maps_to_non_skip(self, tmp_path):
+        """#461 — every extension the walker accepts (MEDIA_EXTENSIONS) must
+        resolve to a real file_type, never "skip".
+
+        A "skip" mapping is the exact .avi bug: the walker counts the file
+        toward walk-progress and ``--limit`` but ``get_file_type`` returns
+        "skip", so ``walker.py`` drops it before ``FileRecord`` creation —
+        silently, with no manifest row and no error line. ``get_file_type``
+        only returns "skip" for an extension missing from ``ext_type_map``
+        (the magic-byte branch can reclassify to another real type but never
+        to "skip"), so dummy bytes are sufficient here. Guards the whole
+        class for any future format added to MEDIA_EXTENSIONS.
+        """
+        dropped = [
+            ext
+            for ext in sorted(MEDIA_EXTENSIONS)
+            if get_file_type(_write(tmp_path, f"probe{ext}", b"\x00" * 16))[0]
+            == "skip"
+        ]
+        assert not dropped, (
+            f"these MEDIA_EXTENSIONS resolve to 'skip' and would be silently "
+            f"dropped from the manifest (see #461): {dropped}"
+        )
 
     @pytest.mark.parametrize(
         "ext", [".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".rw2", ".tif", ".tiff"]
