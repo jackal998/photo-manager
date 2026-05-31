@@ -238,11 +238,20 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # near-duplicates fixture as s30 (1 group, 5 JPEGs basenamed
     # neardup_NN_qXX.jpg) so the regex partition q[89]\d hits 3 of 5.
     "s59_execute_dialog_select_by_main_tree_sync": ["qa/sandbox/near-duplicates"],
+    # s60 (#502) — Execute Action filter by action type. Disposable
+    # fixture with two visual seeds × 4 quality variants → 2 clustered
+    # groups of 4 files each. Group A is marked delete via regex
+    # ^s60_groupA_, group B is marked remove_from_list via regex
+    # ^s60_groupB_, then the type-filter combo is exercised end-to-end
+    # before clicking Execute under "Delete only".
+    "s60_execute_filter_by_action_type": [
+        "qa/sandbox/_disposable/s60_source",
+    ],
     # s62 (#486-PR3c) — hash-pool re-calibrate checkbox + auto-uncheck.
     # Small near-duplicates fixture on purpose: 5 < the 24-file calibration
     # floor, so the recalibrate → auto path runs but SKIPS the real
     # ProcessPool measurement (no flaky subprocess spawn in the batch).
-    # (s60/s61 are reserved by the planned [QA:s60]/[QA:s61] follow-ups.)
+    # (s61 reserved by the planned [QA:s61] follow-up.)
     "s62_scan_hash_pool_recalibrate": ["qa/sandbox/near-duplicates"],
 }
 
