@@ -1,0 +1,1 @@
+Project ``scan.hash_pool="auto"`` calibration to the real file count (measuring process spawn cost and per-file rate separately) so a large scan correctly picks the process pool instead of being penalised by the one-time spawn cost charged against the small calibration sample (#486).
