@@ -1,0 +1,1 @@
+Write the delete audit CSV on the in-dialog Execute Action delete path so a real UI deletion is recorded (group, path, success, reason) like the regex/service path already was — previously only DeleteService wrote it, leaving UI deletes with no audit trail (#505).
