@@ -8,16 +8,14 @@ an audit CSV log.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-import csv
-from datetime import datetime
 import os
-from pathlib import Path
 
 from loguru import logger
 from send2trash import send2trash
 
 from core.models import PhotoGroup
 from core.services.interfaces import DeletePlan, DeletePlanGroupSummary, DeleteResult
+from infrastructure.logging import write_delete_log
 
 
 class DeleteService:
@@ -169,37 +167,20 @@ class DeleteService:
                 `%LOCALAPPDATA%/PhotoManager/delete_logs`.
         """
         result = self.delete_to_recycle(plan.delete_paths)
-        # Auto-write CSV log under %LOCALAPPDATA%/PhotoManager/delete_logs unless overridden
-        try:
-            base_dir = (
-                os.path.expandvars(log_dir)
-                if log_dir
-                else os.path.join(
-                    os.path.expandvars("%LOCALAPPDATA%"), "PhotoManager", "delete_logs"
-                )
-            )
-            Path(base_dir).mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_path = os.path.join(base_dir, f"delete_{ts}.csv")
-            with open(log_path, "w", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["GroupNumber", "FilePath", "Success", "Reason"])
-                # Build path -> group mapping for summary
-                path_to_group: dict[str, int] = {}
-                for g in groups:
-                    for r in g.items:
-                        path_to_group[r.file_path] = g.group_number
-                for p in result.success_paths:
-                    writer.writerow([path_to_group.get(p, 0), p, 1, ""])
-                for p, reason in result.failed:
-                    writer.writerow([path_to_group.get(p, 0), p, 0, reason])
+        # Build path -> group mapping, then delegate to the shared audit
+        # writer so this path and the Execute Action dialog (#505) emit
+        # one consistent delete_<ts>.csv format.
+        path_to_group: dict[str, int] = {}
+        for g in groups:
+            for r in g.items:
+                path_to_group[r.file_path] = g.group_number
+        rows: list[tuple[int, str, bool, str]] = [
+            (path_to_group.get(p, 0), p, True, "") for p in result.success_paths
+        ]
+        rows += [
+            (path_to_group.get(p, 0), p, False, reason) for p, reason in result.failed
+        ]
+        log_path = write_delete_log(rows, log_dir)
+        if log_path:
             result.log_path = log_path
-            logger.info(
-                "Delete log written: {} ({} success, {} failed)",
-                log_path,
-                len(result.success_paths),
-                len(result.failed),
-            )
-        except (OSError, ValueError) as ex:
-            logger.error("Write delete log failed: {}", ex)
         return result

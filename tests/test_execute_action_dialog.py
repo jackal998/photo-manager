@@ -503,6 +503,98 @@ class TestDeleteFile:
         assert str(f) in dlg.deleted_paths
 
 
+# ── #505 delete audit CSV on the UI delete path ────────────────────────────
+
+
+class TestDeleteAuditLog:
+    """#505 — the Execute Action delete path must write the same
+    ``delete_<ts>.csv`` audit trail that ``DeleteService`` does. Before
+    the fix the UI path wrote nothing, so an accidental mass-delete left
+    no CSV record (recovery had to fall back to the rotating app log)."""
+
+    def test_on_execute_writes_audit_csv_for_deleted_files(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import csv as _csv
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        f1 = tmp_path / "del1.jpg"
+        f1.write_bytes(b"x")
+        f2 = tmp_path / "del2.jpg"
+        f2.write_bytes(b"x")
+        groups = [_group(_rec(str(f1), "delete"), _rec(str(f2), "delete"), number=7)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        log_dir = tmp_path / "delete_logs"
+        monkeypatch.setattr(
+            "infrastructure.logging.get_delete_log_directory", lambda: str(log_dir)
+        )
+        # send2trash mocked so the real fixtures aren't recycled on the
+        # test runner; the audit rows are built from deleted_paths, which
+        # is populated regardless of the boundary lib.
+        with patch("send2trash.send2trash"):
+            dlg._on_execute()
+
+        csvs = list(log_dir.glob("delete_*.csv"))
+        assert len(csvs) == 1, "UI Execute Action delete must write one audit CSV (#505)"
+        with open(csvs[0], encoding="utf-8", newline="") as fh:
+            rows = list(_csv.reader(fh))
+        assert rows[0] == ["GroupNumber", "FilePath", "Success", "Reason"]
+        logged = {r[1]: r for r in rows[1:]}
+        assert str(f1) in logged and str(f2) in logged
+        assert logged[str(f1)][0] == "7"  # group number mapped from self._groups
+        assert logged[str(f1)][2] == "1"  # success flag
+
+    def test_on_execute_audit_csv_records_failed_delete(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import csv as _csv
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        f = tmp_path / "boom.jpg"
+        f.write_bytes(b"x")
+        groups = [_group(_rec(str(f), "delete"), number=3)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+
+        log_dir = tmp_path / "delete_logs"
+        monkeypatch.setattr(
+            "infrastructure.logging.get_delete_log_directory", lambda: str(log_dir)
+        )
+        # Real failure mode: both the recycle-bin call and the os.remove
+        # fallback raise, so the path lands in _failed_paths.
+        with patch("send2trash.send2trash", side_effect=OSError("locked")):
+            with patch("os.remove", side_effect=OSError("locked")):
+                # _on_execute pops a QMessageBox for failed paths — silence it.
+                with patch("PySide6.QtWidgets.QMessageBox.warning"):
+                    dlg._on_execute()
+
+        csvs = list(log_dir.glob("delete_*.csv"))
+        assert len(csvs) == 1
+        with open(csvs[0], encoding="utf-8", newline="") as fh:
+            rows = list(_csv.reader(fh))
+        failed = [r for r in rows[1:] if r[1] == str(f)]
+        assert len(failed) == 1
+        assert failed[0][2] == "0"  # success flag false
+        assert failed[0][3]  # reason recorded
+
+    def test_on_execute_writes_no_csv_when_nothing_deleted(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """A keep-only / remove-only execute must not emit an empty audit
+        CSV — the log exists to record actual deletions."""
+        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        groups = [_group(_rec("/keep.jpg", REMOVE_FROM_LIST_DECISION))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        log_dir = tmp_path / "delete_logs"
+        monkeypatch.setattr(
+            "infrastructure.logging.get_delete_log_directory", lambda: str(log_dir)
+        )
+        dlg._on_execute()
+        assert not log_dir.exists() or list(log_dir.glob("delete_*.csv")) == []
+
+
 # ── Improvement 1: partial-execute via paths_filter ────────────────────────
 
 

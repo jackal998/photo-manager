@@ -297,7 +297,7 @@ for the chore plan.
 
 - **Entry point:** Main window menu → **Log** — labels in [translations/en.yml:36-41](../translations/en.yml#L36).
 - **Trigger:** User picks one of: **Open Latest Log**, **Open Latest Delete Log**, **Open Log Directory**, **Open Delete Log Directory**.
-- **Behaviour:** Opens the corresponding log file or directory in the OS default application / file manager. "Latest log" resolves to the most recently rotated `loguru` log file; "delete log" resolves to the audit CSV that `delete_service` writes on every Execute Action run.
+- **Behaviour:** Opens the corresponding log file or directory in the OS default application / file manager. "Latest log" resolves to the most recently rotated `loguru` log file; "delete log" resolves to the audit CSV (`delete_<timestamp>.csv`) written on every Execute Action run — both the regex/service delete path and the in-dialog Execute Action delete path go through the shared `infrastructure.logging.write_delete_log`, so a row (group, path, success, reason) is recorded for every file the run removed.
 - **Conditions / variants:** Log directory path comes from `infrastructure/logging.py` configuration. If no log file has been written yet (first run before any logging fires) the "Open Latest" entries open the directory instead.
 - **Related:** QA scenario [`qa/scenarios/s18_log_menu.py`](../qa/scenarios/s18_log_menu.py).
 - **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
