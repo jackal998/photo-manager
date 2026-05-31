@@ -983,13 +983,13 @@ class ScanDialog(QDialog):
         except (TypeError, ValueError):
             exif_workers = 2
 
-        # #486-PR2 — hash_pool is a setting-only knob today (no UI). Default
-        # "thread" preserves pre-PR2 behaviour; set ``scan.hash_pool`` to
-        # "process" in settings.json to run the HASH stage across a
-        # ProcessPoolExecutor (escapes the GIL on CPU-bound hashing at the
-        # cost of per-worker spawn re-imports on Windows). The worker
-        # validates the value at construction, falling back to "thread" on
-        # anything unrecognised.
+        # #486 — hash_pool is a setting-only knob today (no UI). Values:
+        # "thread" (default, pre-PR2 behaviour), "process" (PR2 — run the
+        # HASH stage across a ProcessPoolExecutor to escape the GIL at the
+        # cost of per-worker spawn re-imports on Windows), or "auto" (PR3 —
+        # time a sample of the real scan data through both at scan start
+        # and run the faster). The worker validates the value at
+        # construction, falling back to "thread" on anything unrecognised.
         hash_pool = self.settings.get("scan.hash_pool", "thread")
 
         self._worker = ScanWorker(

@@ -591,6 +591,138 @@ class TestHashPoolSetting:
         assert out.exists(), "default thread scan should write its manifest"
 
 
+class TestHashPoolCalibration:
+    """#486-PR3 — hash_pool="auto" times a sample through both executors at
+    scan start and runs the faster.
+
+    The decision tests drive _calibrate_hash_pool directly with synthetic
+    per-executor timings (the comparison logic is what matters, not the
+    wall-clock); _time_hash_executor itself is covered by a real-hash
+    timing test so the measurement path isn't mock-only.
+    """
+
+    def _worker(self, tmp_path):
+        from app.views.workers.scan_worker import ScanWorker
+
+        return ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+        )
+
+    def test_auto_value_kept_at_construction(self, qapp, tmp_path):
+        from app.views.workers.scan_worker import ScanWorker
+
+        w = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            hash_pool="auto",
+        )
+        assert w.hash_pool == "auto"
+
+    def test_calibration_picks_process_when_faster(self, qapp, tmp_path, monkeypatch):
+        """Catches: the winner comparison inverted so the slower executor
+        is chosen."""
+        import app.views.workers.scan_worker as sw
+
+        THREAD, PROCESS = object(), object()
+
+        def fake_time(executor_cls, sample, max_workers):
+            return 0.05 if executor_cls is THREAD else 0.01  # process faster
+
+        monkeypatch.setattr(sw, "_time_hash_executor", fake_time)
+        records = list(range(sw._CALIBRATION_MIN))  # contents unused
+
+        assert self._worker(tmp_path)._calibrate_hash_pool(
+            records, THREAD, PROCESS
+        ) == "process"
+
+    def test_calibration_picks_thread_when_faster(self, qapp, tmp_path, monkeypatch):
+        """Catches: a tie / slower-process case wrongly defaulting to
+        process (process must only win on a strict improvement)."""
+        import app.views.workers.scan_worker as sw
+
+        THREAD, PROCESS = object(), object()
+
+        def fake_time(executor_cls, sample, max_workers):
+            return 0.01 if executor_cls is THREAD else 0.05  # thread faster
+
+        monkeypatch.setattr(sw, "_time_hash_executor", fake_time)
+        records = list(range(sw._CALIBRATION_MIN))
+
+        assert self._worker(tmp_path)._calibrate_hash_pool(
+            records, THREAD, PROCESS
+        ) == "thread"
+
+    def test_calibration_skipped_below_floor_without_timing(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Catches: paying the (expensive) process-spawn calibration cost on
+        a tiny scan where it can't yield a reliable signal."""
+        import app.views.workers.scan_worker as sw
+
+        timed: list = []
+
+        def spy_time(executor_cls, sample, max_workers):
+            timed.append(executor_cls)
+            return 0.0
+
+        monkeypatch.setattr(sw, "_time_hash_executor", spy_time)
+        records = list(range(sw._CALIBRATION_MIN - 1))  # one below the floor
+
+        result = self._worker(tmp_path)._calibrate_hash_pool(
+            records, object(), object()
+        )
+        assert result == "thread"
+        assert timed == [], "below the floor calibration must not time anything"
+
+    def test_time_hash_executor_returns_elapsed(self, qapp, tmp_path):
+        """Real-hash timing path (no mock): hashes a few real jpegs through a
+        ThreadPoolExecutor and returns a non-negative elapsed time."""
+        from concurrent.futures import ThreadPoolExecutor
+        import app.views.workers.scan_worker as sw
+        from scanner.walker import FileRecord
+
+        recs = []
+        for i in range(3):
+            p = tmp_path / f"f{i}.jpg"
+            _write_jpeg(p)
+            recs.append(FileRecord(path=p, source_label="s", file_type="jpeg"))
+
+        elapsed = sw._time_hash_executor(ThreadPoolExecutor, recs, 2)
+        assert elapsed >= 0.0
+
+    def test_auto_scan_below_floor_runs_thread_and_writes_manifest(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """End-to-end: a small 'auto' scan calibrates (skips, too few),
+        resolves to thread, and still writes a manifest. Patches the process
+        pool to explode to prove the resolved thread path never touches it."""
+        import concurrent.futures as _cf
+        from app.views.workers.scan_worker import ScanWorker
+
+        _write_jpeg(tmp_path / "only.jpg")
+        out = tmp_path / "manifest.sqlite"
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("auto-below-floor must resolve to thread")
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", _boom)
+
+        worker = ScanWorker(
+            sources={"solo": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"solo": False},
+            workers=1,
+            hash_pool="auto",
+        )
+        worker.run()
+
+        assert out.exists(), "auto scan should resolve and write its manifest"
+
+
 class TestScanWorkerExifPipeline:
     """#450 — hash→exif pipeline overlap.
 
