@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+import csv
+from datetime import datetime
 import os
 from pathlib import Path
 import subprocess
@@ -37,6 +40,34 @@ def get_log_directory() -> str:
 def get_delete_log_directory() -> str:
     """Get the delete log directory path."""
     return os.path.join(os.path.expandvars("%LOCALAPPDATA%"), "PhotoManager", "delete_logs")
+
+
+def write_delete_log(
+    rows: Sequence[tuple[int, str, bool, str]], log_dir: str | None = None
+) -> str | None:
+    """Write a delete audit CSV and return its path (``None`` on failure).
+
+    ``rows`` are ``(group_number, file_path, success, reason)`` tuples.
+    Shared by ``DeleteService.execute_delete`` and the Execute Action
+    dialog so every real deletion writes one consistent audit trail
+    under ``delete_<timestamp>.csv`` (photo-manager#505 — the UI delete
+    path previously logged nothing).
+    """
+    base_dir = os.path.expandvars(log_dir) if log_dir else get_delete_log_directory()
+    try:
+        Path(base_dir).mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = os.path.join(base_dir, f"delete_{ts}.csv")
+        with open(log_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["GroupNumber", "FilePath", "Success", "Reason"])
+            for group_number, file_path, success, reason in rows:
+                writer.writerow([group_number, file_path, 1 if success else 0, reason])
+        logger.info("Delete log written: {} ({} rows)", log_path, len(rows))
+        return log_path
+    except (OSError, ValueError) as ex:
+        logger.error("Write delete log failed: {}", ex)
+        return None
 
 
 def find_latest_log_file(log_dir: str | None = None) -> Path | None:

@@ -74,7 +74,7 @@ omit = [
   "main.py",                          # argparse + sys.exit shell; covered by qa-explore launching the real app
   "run_all_linters.py",               # dev tooling shell, not user-facing
   "infrastructure/image_service.py",  # requires running QApplication for decode; covered by qa-explore preview pane (s05)
-  "infrastructure/logging.py",        # module-level loguru sink setup; no executable surface beyond import
+  "infrastructure/logging.py",        # loguru sink setup + os.startfile/subprocess file-openers (no unit-testable surface); the pure write_delete_log helper IS covered via test_delete_service.py + test_execute_action_dialog.py
   # Files previously omitted as "the qa-explore territory of the
   # preview / dialog-dispatch stacks" — loaded into the layer-1
   # coverage report by two distinct triggers:

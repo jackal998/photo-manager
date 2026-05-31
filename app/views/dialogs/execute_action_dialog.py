@@ -1135,6 +1135,12 @@ class ExecuteActionDialog(QDialog):
         # (and _delete_file would hit "file not found" on the now-
         # deleted files).
         executed_in_scope: list[tuple] = []
+        # #505 — snapshot the running tallies so the audit log below
+        # records only THIS pass's deletions. deleted_paths /
+        # _failed_paths accumulate across repeated Execute clicks on a
+        # kept-open partial-execute dialog.
+        deleted_before = len(self.deleted_paths)
+        failed_before = len(self._failed_paths)
         for group in self._groups:
             for rec in getattr(group, "items", []):
                 if not in_scope(rec):
@@ -1149,6 +1155,11 @@ class ExecuteActionDialog(QDialog):
                 elif decision == REMOVE_FROM_LIST_DECISION:
                     deferred_remove_paths.append(rec.file_path)
                     executed_in_scope.append((group, rec))
+
+        # #505 — write the delete audit CSV for the files this pass
+        # actually removed. The UI delete path previously logged nothing,
+        # so the documented per-Execute-Action audit trail was missing.
+        self._write_delete_audit_log(deleted_before, failed_before)
 
         if self._manifest_path:
             all_done = self.deleted_paths + self.executed_paths
@@ -1224,6 +1235,34 @@ class ExecuteActionDialog(QDialog):
                 )
         self._decisions_changed = True
         self._refresh_ui_after_decision_change()
+
+    def _write_delete_audit_log(self, deleted_before: int, failed_before: int) -> None:
+        """Write the delete audit CSV for this Execute pass (#505).
+
+        Builds rows from the slice of ``deleted_paths`` / ``_failed_paths``
+        appended since ``*_before``, maps each path to its group number,
+        and delegates to the shared ``write_delete_log`` so the UI delete
+        path produces the same audit trail as ``DeleteService``.
+        """
+        new_deleted = self.deleted_paths[deleted_before:]
+        new_failed = self._failed_paths[failed_before:]
+        if not new_deleted and not new_failed:
+            return
+        path_to_group: dict[str, int] = {}
+        for group in self._groups:
+            for rec in getattr(group, "items", []):
+                path_to_group[getattr(rec, "file_path", "")] = group.group_number
+        rows: list[tuple[int, str, bool, str]] = [
+            (path_to_group.get(p, 0), p, True, "") for p in new_deleted
+        ]
+        rows += [
+            (path_to_group.get(p, 0), p, False, reason) for p, reason in new_failed
+        ]
+        try:
+            from infrastructure.logging import write_delete_log
+            write_delete_log(rows)
+        except Exception as exc:  # never let audit logging block execute
+            logger.warning("Failed to write delete audit log: {}", exc)
 
     def _delete_file(self, path: str) -> None:
         if not os.path.exists(path):
