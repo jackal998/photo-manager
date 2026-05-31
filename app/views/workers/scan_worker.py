@@ -32,11 +32,10 @@ STAGE_SCORE = "SCORE"
 STAGE_WRITE = "WRITE"
 
 # #486-PR3 — auto-calibration sample sizing for ``scan.hash_pool="auto"``.
-# The worker times this many of the real scan's records through both a
-# ThreadPoolExecutor and a ProcessPoolExecutor before the full HASH stage
-# and then runs the faster one. Below the floor the per-spawn / per-pickle
-# overhead swamps any signal, so calibration is skipped and "thread" wins
-# by default.
+# The worker times this many of the real scan's records through both
+# executors before the full HASH stage, projects each to the real file
+# count, and runs the faster one. Below the floor the measurement is too
+# noisy to trust, so calibration is skipped and "thread" wins by default.
 _CALIBRATION_SAMPLE = 96
 _CALIBRATION_MIN = 24
 
@@ -59,6 +58,46 @@ def _time_hash_executor(executor_cls, sample: list, max_workers: int) -> float:
         for fut in as_completed(futures):
             fut.result()
     return time.perf_counter() - start
+
+
+def _profile_process_pool(
+    executor_cls, sample: list, max_workers: int
+) -> tuple[float, float]:
+    """Return ``(spawn_seconds, per_file_seconds)`` for the process executor.
+
+    Times two halves of ``sample`` on ONE pool: the first (cold) pass pays
+    the one-time worker spawn + per-worker module re-import; the second
+    (warm) pass is steady-state. Subtracting the warm per-file rate from the
+    cold pass isolates the fixed spawn cost, so the caller can project both
+    executors to the *real* file count rather than charging process's
+    one-time startup against a tiny sample (which under-credits it on large
+    scans — the bias #498's flat timing had).
+    """
+    from concurrent.futures import as_completed
+    from scanner.hasher import run_hash_for_record
+
+    half = max(1, len(sample) // 2)
+    cold, warm = sample[:half], sample[half:] or sample[:half]
+
+    def _drain(pool, batch) -> float:
+        start = time.perf_counter()
+        futures = [
+            pool.submit(run_hash_for_record, i, r) for i, r in enumerate(batch)
+        ]
+        for fut in as_completed(futures):
+            fut.result()
+        return time.perf_counter() - start
+
+    with executor_cls(max_workers=max_workers) as pool:
+        cold_s = _drain(pool, cold)  # cold: pays pool spawn + module imports
+        warm_s = _drain(pool, warm)  # warm: steady-state, workers already up
+
+    per_file = warm_s / len(warm)
+    # Clamp at 0: on a fast warm pass the cold pass can measure marginally
+    # cheaper per-file (scheduler warmup noise), which would otherwise yield
+    # a spurious negative spawn estimate.
+    spawn = max(0.0, cold_s - per_file * len(cold))
+    return spawn, per_file
 
 
 class _StageTracker:
@@ -246,10 +285,22 @@ class ScanWorker(QThread):
         """Resolve ``hash_pool="auto"`` to "thread" or "process".
 
         #486-PR3 — times a sample of the *real* scan data (in-situ, not a
-        synthetic benchmark) through both executors and returns the faster.
-        Below ``_CALIBRATION_MIN`` files the spawn/pickle overhead dwarfs
-        any signal, so we skip the measurement and pick "thread". The
-        chosen mode + both timings are logged so the decision is visible.
+        synthetic benchmark) and **projects each executor to the full file
+        count** before comparing:
+
+            thread_total  ≈ thread_per_file × N
+            process_total ≈ spawn_cost + process_per_file × N
+
+        Projecting (rather than comparing raw sample times) is what makes
+        the pick correct across scales: process's one-time spawn cost
+        dominates on a tiny scan (→ thread) but amortises to nothing on a
+        large one (→ process). The flat per-sample timing in the first cut
+        (#498) charged that spawn against the 96-file sample and so
+        under-credited process on large scans.
+
+        Below ``_CALIBRATION_MIN`` files the measurement is too noisy to
+        trust, so we skip it and pick "thread". The projection components
+        are logged so the decision stays visible.
         """
         sample = records[:_CALIBRATION_SAMPLE]
         if len(sample) < _CALIBRATION_MIN:
@@ -258,14 +309,21 @@ class ScanWorker(QThread):
                 f" need ≥{_CALIBRATION_MIN}) → pool=thread"
             )
             return "thread"
+        n = len(records)
         self._emit(f"  Calibrating hash pool on {len(sample)} files…")
         thread_s = _time_hash_executor(thread_cls, sample, self.workers)
-        process_s = _time_hash_executor(process_cls, sample, self.workers)
-        winner = "process" if process_s < thread_s else "thread"
+        thread_per_file = thread_s / len(sample)
+        spawn_s, process_per_file = _profile_process_pool(
+            process_cls, sample, self.workers
+        )
+        thread_proj = thread_per_file * n
+        process_proj = spawn_s + process_per_file * n
+        winner = "process" if process_proj < thread_proj else "thread"
         self._emit(
-            f"  Hash-pool calibration on {len(sample)} files:"
-            f" thread={thread_s * 1000:.0f}ms"
-            f" process={process_s * 1000:.0f}ms → pool={winner}"
+            f"  Hash-pool calibration on {len(sample)} files → projected to"
+            f" {n:,}: thread≈{thread_proj:.1f}s process≈{process_proj:.1f}s"
+            f" (spawn {spawn_s * 1000:.0f}ms +"
+            f" {process_per_file * 1000:.1f}ms/file) → pool={winner}"
         )
         return winner
 
