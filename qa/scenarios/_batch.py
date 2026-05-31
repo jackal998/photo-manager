@@ -249,6 +249,13 @@ ALL_SCENARIOS = [
     # after-decision-change path left the main tree's rendered cells
     # stale relative to vm.groups + SQLite.
     "s59_execute_dialog_select_by_main_tree_sync",
+    # s60 (#502) — Execute Action dialog type-filter combo end-to-end:
+    # regen 8-file disposable fixture (2 clustering seeds × 4 qualities),
+    # mark group A delete + group B remove via standalone regex,
+    # exercise the combo (All/Delete only/Remove only), verify
+    # hidden-destructive banner under Remove-only, execute under
+    # Delete-only and verify group A files removed + group B intact.
+    "s60_execute_filter_by_action_type",
     # s62 (#486-PR3c) — hash-pool re-calibrate checkbox renders, defaults
     # off, and auto-unchecks after a scan (the one-shot trigger). Small
     # near-duplicates fixture (<24 files) so the recalibrate → auto path
