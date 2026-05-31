@@ -249,6 +249,11 @@ ALL_SCENARIOS = [
     # after-decision-change path left the main tree's rendered cells
     # stale relative to vm.groups + SQLite.
     "s59_execute_dialog_select_by_main_tree_sync",
+    # s62 (#486-PR3c) — hash-pool re-calibrate checkbox renders, defaults
+    # off, and auto-unchecks after a scan (the one-shot trigger). Small
+    # near-duplicates fixture (<24 files) so the recalibrate → auto path
+    # skips the real ProcessPool measurement — no flaky subprocess spawn.
+    "s62_scan_hash_pool_recalibrate",
 ]
 
 

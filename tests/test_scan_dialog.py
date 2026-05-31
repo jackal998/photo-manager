@@ -341,6 +341,100 @@ class TestScanDialogSettings:
         ]
         assert saved["sources"]["output"] == "/out/manifest.sqlite"
 
+
+# ---------------------------------------------------------------------------
+# #486-PR3c — hash-pool calibration checkbox + modal state machine
+# ---------------------------------------------------------------------------
+
+class TestResolveHashPool:
+    """The Advanced-settings re-calibrate checkbox + auto-mode modal flow,
+    tested via _resolve_hash_pool (extracted from _start_scan so no worker
+    thread is launched). The modal is monkeypatched — never shown live."""
+
+    SOURCES = {"s": "/x"}
+    RECMAP = {"s": True}
+
+    def _dialog(self, tmp_path, data):
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return ScanDialog(JsonSettings(p))
+
+    def _fp(self):
+        import os
+        from app.views.workers.scan_worker import hash_pool_fingerprint
+
+        return hash_pool_fingerprint(self.SOURCES, self.RECMAP, os.cpu_count() or 4)
+
+    def test_recalibrate_checked_forces_auto_and_unchecks(self, qapp, tmp_path):
+        """Checked → force fresh measure (rates None), persist auto, clear box,
+        set a fingerprint so the worker's emit gets cached."""
+        dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "thread"}})
+        dlg._recalibrate_check.setChecked(True)
+
+        pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
+
+        assert (pool, rates) == ("auto", None)
+        assert dlg.settings.get("scan.hash_pool") == "auto"  # persisted
+        assert dlg._recalibrate_check.isChecked() is False  # auto-unchecked
+        assert dlg._hash_pool_fp == self._fp()
+
+    def test_explicit_thread_used_directly_no_modal(self, qapp, tmp_path, monkeypatch):
+        """thread/process override → returned as-is, no fingerprint, no modal."""
+        dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "thread"}})
+        monkeypatch.setattr(
+            dlg, "_prompt_calibrate_or_thread",
+            lambda: (_ for _ in ()).throw(AssertionError("modal must not fire")),
+        )
+
+        pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
+
+        assert (pool, rates) == ("thread", None)
+        assert dlg._hash_pool_fp is None
+
+    def test_auto_cache_hit_reuses_rates(self, qapp, tmp_path, monkeypatch):
+        """unchecked + auto + cache hit → cached rates returned, no modal."""
+        rates = {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 0.5}
+        dlg = self._dialog(tmp_path, {
+            "sources": {},
+            "scan": {"hash_pool": "auto", "hash_pool_cache": {self._fp(): rates}},
+        })
+        monkeypatch.setattr(
+            dlg, "_prompt_calibrate_or_thread",
+            lambda: (_ for _ in ()).throw(AssertionError("no modal on cache hit")),
+        )
+
+        pool, got = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
+
+        assert (pool, got) == ("auto", rates)
+        assert dlg._hash_pool_fp == self._fp()
+
+    def test_auto_cache_miss_modal_calibrate(self, qapp, tmp_path, monkeypatch):
+        """unchecked + auto + miss + user picks Calibrate → auto, rates None,
+        fingerprint kept so the fresh measurement gets cached."""
+        dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "auto"}})
+        monkeypatch.setattr(dlg, "_prompt_calibrate_or_thread", lambda: True)
+
+        pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
+
+        assert (pool, rates) == ("auto", None)
+        assert dlg._hash_pool_fp == self._fp()
+
+    def test_auto_cache_miss_modal_thread(self, qapp, tmp_path, monkeypatch):
+        """unchecked + auto + miss + user picks Use-thread → thread this run,
+        no fingerprint (nothing cached), auto mode left intact for next time."""
+        dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "auto"}})
+        monkeypatch.setattr(dlg, "_prompt_calibrate_or_thread", lambda: False)
+
+        pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
+
+        assert (pool, rates) == ("thread", None)
+        assert dlg._hash_pool_fp is None
+        assert dlg.settings.get("scan.hash_pool") == "auto"  # not persisted away
+
+
 # ---------------------------------------------------------------------------
 # Advanced settings collapse (photo-manager#163)
 # ---------------------------------------------------------------------------
