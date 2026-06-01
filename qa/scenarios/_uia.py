@@ -56,6 +56,12 @@ EXIT_BTN_SAVE_LEAVE = "Save & leave"   # source has "Save && leave"; UIA strips 
 EXIT_BTN_LEAVE = "Leave"
 EXIT_BTN_BACK = "Back"
 
+# #468 — MainWindow.closeEvent defense-in-depth guard: closing the main
+# window while a scan worker is alive surfaces this Yes/No QMessageBox.
+# Title comes from translations/en.yml `exit.scan_running_title`. Used by
+# s63 (#475) to drive the main-window-X-during-scan guard.
+SCAN_IN_PROGRESS_TITLE = "Scan in progress"
+
 # File menu items
 FILE_SCAN_SOURCES = "Scan Sources…"
 FILE_OPEN_MANIFEST = "Open Manifest…"
