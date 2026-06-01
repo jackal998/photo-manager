@@ -11,6 +11,45 @@ import pytest
 from app.views.dialogs.scan_dialog import _SourceEntry, _SourceListWidget, _auto_label
 
 
+@pytest.fixture(autouse=True)
+def _dispose_orphan_widgets():
+    """Dispose this module's bare top-level widgets after each test (#507).
+
+    The ``_SourceListWidget`` / ``ScanDialog`` tests in this file construct
+    *unparented* top-level widgets and let them fall out of scope without an
+    explicit ``close()``/parent. Their child ``QTableWidget`` cell widgets
+    carry live signal connections that Qt tears down only via *deferred*
+    delete; nothing drains that queue until a *later, unrelated* test calls
+    ``processEvents()``, which then runs the cell-widget destructors against
+    an already-freed Python receiver — a use-after-free that aborted ~1/3 of
+    full-suite runs on Windows/3.12, surfacing far downstream at
+    ``test_select_dialog::test_both_sections_visible_with_match_fn`` (#507;
+    the residual orphan #495 did not reach). In production these widgets are
+    always parented to their dialog and destroyed synchronously, so the leak
+    is test-only.
+
+    The fix is local Qt test hygiene: after each test in *this* module,
+    ``deleteLater`` every unparented top-level widget and drain the
+    deferred-delete queue right here, where an event loop exists — so each
+    orphan's C++ tree is torn down inside the test that created it. Scoped to
+    this file (not a global ``conftest`` fixture) so a future widget leak in
+    another module still surfaces instead of being silently swept, and it is
+    NOT a blanket ``gc.collect()`` + sweep (which merely relocates the crash).
+    """
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        if widget.parent() is None:
+            widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
 # ---------------------------------------------------------------------------
 # _auto_label
 # ---------------------------------------------------------------------------

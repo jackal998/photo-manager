@@ -1,1 +1,1 @@
-Dispose orphaned top-level widgets after each test to end the residual Qt dialog-teardown use-after-free that flaked the suite on Windows/3.12 (#515).
+Dispose the bare top-level widgets that the scan-dialog tests leak, ending the residual Qt dialog-teardown use-after-free that flaked the suite on Windows/3.12 (#515).
