@@ -1,0 +1,1 @@
+Stop flat / near-empty images (icons, blank scans) with degenerate pHashes from collapsing unrelated files into one false duplicate group (#518).
