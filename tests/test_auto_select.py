@@ -29,6 +29,7 @@ class _Row:
     source_path: str
     group_id: Optional[str]
     score: Optional[float]
+    match_confidence: Optional[str] = None  # #517
 
 
 class TestTopScorePathPerGroup:
@@ -389,3 +390,39 @@ class TestApplyAutoSelectDecisions:
             conn.close()
         # #425 — canonical empty keep.
         assert row == ("", 1)
+
+
+class TestNonKeepersForAggressiveDelete:
+    """#517 — the aggressive-delete target set excludes low-confidence
+    (pHash-only) near-dups so they are never auto-marked for deletion."""
+
+    def test_low_confidence_non_keeper_excluded(self):
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/keep.jpg", "g1", 0.9, match_confidence="high"),
+            _Row("/hi.jpg", "g1", 0.5, match_confidence="high"),
+            _Row("/lo.jpg", "g1", 0.4, match_confidence="low"),
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/keep.jpg"})
+        assert targets == {"/hi.jpg"}            # high-confidence non-keeper deleted
+        assert "/lo.jpg" not in targets          # low-confidence spared
+
+    def test_missing_confidence_attr_stays_eligible(self):
+        """EXACT / older rows with no match_confidence behave as before."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/keep.jpg", "g1", 0.9),
+            _Row("/dup.jpg", "g1", 0.5),  # match_confidence defaults to None → eligible
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/keep.jpg"})
+        assert targets == {"/dup.jpg"}
+
+    def test_unscored_and_isolated_excluded(self):
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/keep.jpg", "g1", 0.9, match_confidence="high"),
+            _Row("/passenger.jpg", "g1", None, match_confidence="high"),  # score None
+            _Row("/isolated.jpg", None, 0.5, match_confidence="high"),    # group None
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/keep.jpg"})
+        assert targets == set()

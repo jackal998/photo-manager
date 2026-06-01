@@ -51,6 +51,7 @@ def _hr(
     file_type: str = "jpeg",
     pair_partner: Path | None = None,
     pair_cluster: tuple[Path, ...] | None = None,
+    dhash: str | None = None,
 ) -> HashResult:
     return HashResult(
         record=_record(
@@ -59,6 +60,7 @@ def _hr(
         ),
         sha256=sha256,
         phash=phash,
+        dhash=dhash,
         mean_color=mean_color,
         exif_date=exif_date,
     )
@@ -713,3 +715,62 @@ class TestPhashEntropyGuard:
         assert "REVIEW_DUPLICATE" in actions
         gids = {r.group_id for r in rows.values()}
         assert gids != {None} and len(gids) == 1  # both in one real group
+
+
+# ---------------------------------------------------------------------------
+# Multi-hash confidence vote (#517)
+# ---------------------------------------------------------------------------
+
+class TestMatchConfidence:
+    """A pHash near-dup match is still grouped, but flagged ``match_confidence``
+    'high' only when an independent dHash also agrees. Grouping is unchanged;
+    the flag gates the auto-select aggressive-delete (low → never auto-deleted).
+    """
+
+    # pHash near-dup pair (hamming 4, both non-degenerate)
+    _PA, _PB = "aaaaaaaaaaaaaaaa", "5aaaaaaaaaaaaaaa"
+
+    def test_high_confidence_when_dhash_agrees(self):
+        recs = [
+            _hr("/a.jpg", sha256="s1", phash=self._PA, dhash="cccccccccccccccc",
+                source_label="takeout", exif_date=_dt()),
+            _hr("/b.jpg", sha256="s2", phash=self._PB, dhash="cccccccccccccccc",
+                source_label="jdrive", exif_date=_dt()),
+        ]
+        rows = _rows(classify(recs, threshold=10))
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/b.jpg"].match_confidence == "high"
+
+    def test_low_confidence_when_dhash_disagrees(self):
+        recs = [
+            _hr("/a.jpg", sha256="s1", phash=self._PA, dhash="cccccccccccccccc",
+                source_label="takeout", exif_date=_dt()),
+            _hr("/b.jpg", sha256="s2", phash=self._PB, dhash="3333333333333333",
+                source_label="jdrive", exif_date=_dt()),
+        ]
+        rows = _rows(classify(recs, threshold=10))
+        # Still grouped (grouping is pHash-driven, unchanged)...
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/b.jpg"].group_id == rows["/a.jpg"].group_id
+        # ...but flagged low because the independent dHash disagrees.
+        assert rows["/b.jpg"].match_confidence == "low"
+
+    def test_low_confidence_when_dhash_missing(self):
+        recs = [
+            _hr("/a.jpg", sha256="s1", phash=self._PA, dhash=None,
+                source_label="takeout", exif_date=_dt()),
+            _hr("/b.jpg", sha256="s2", phash=self._PB, dhash=None,
+                source_label="jdrive", exif_date=_dt()),
+        ]
+        rows = _rows(classify(recs, threshold=10))
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/b.jpg"].match_confidence == "low"
+
+    def test_exact_sha_dup_is_high_confidence(self):
+        recs = [
+            _hr("/a/x.jpg", sha256="same", source_label="src_a", exif_date=_dt()),
+            _hr("/b/x.jpg", sha256="same", source_label="src_b", exif_date=_dt()),
+        ]
+        rows = _rows(classify(recs, source_priority={"src_a": 0, "src_b": 1}))
+        assert rows["/b/x.jpg"].action == "EXACT"
+        assert rows["/b/x.jpg"].match_confidence == "high"  # byte-identical is certain
