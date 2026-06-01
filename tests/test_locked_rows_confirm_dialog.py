@@ -205,6 +205,88 @@ class TestBodyTextZhTW:
             restore()
 
 
+class TestContextWordingOverride:
+    """#417 — the dialog accepts caller-driven body + apply-button keys so
+    each trigger context (IMMEDIATE delete-now vs DEFERRED queue-a-decision)
+    can supply wording matched to its consequence. Omitting the overrides
+    must keep the generic shared phrasing as a fallback."""
+
+    def test_default_fallback_uses_shared_keys(self, make_dialog):
+        from infrastructure.i18n import t
+        dlg = make_dialog(action_label="delete", affected=3, locked=["/p/a.jpg"])
+        # No overrides → generic body + generic apply label.
+        assert dlg._btn_unlock_apply.text() == t("locked_confirm.btn_unlock_apply")
+        # The default mixed body contains the generic "would affect" framing.
+        assert t("locked_confirm.body").split("{")[0].strip()[:6] in dlg._body_text()
+
+    def test_immediate_override_renders_delete_now_wording(self, qapp):
+        from infrastructure.i18n import t
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        dlg = LockedRowsConfirmDialog(
+            None,
+            action_label="delete",
+            affected_count=3,
+            locked_paths=["/p/a.jpg"],
+            body_key="locked_confirm.body_immediate",
+            body_all_locked_key="locked_confirm.body_all_locked_immediate",
+            btn_apply_label=t("locked_confirm.btn_unlock_apply_immediate"),
+        )
+        # Apply button carries the delete-now label, distinct from default.
+        assert dlg._btn_unlock_apply.text() == t(
+            "locked_confirm.btn_unlock_apply_immediate"
+        )
+        assert dlg._btn_unlock_apply.text() != t("locked_confirm.btn_unlock_apply")
+        # Body renders the immediate template (counts substituted, DELETE cue).
+        text = dlg._body_text()
+        assert "3" in text
+        assert "DELETE" in text
+
+    def test_deferred_override_renders_queue_decision_wording(self, qapp):
+        from infrastructure.i18n import t
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        dlg = LockedRowsConfirmDialog(
+            None,
+            action_label="delete",
+            affected_count=3,
+            locked_paths=["/p/a.jpg"],
+            body_key="locked_confirm.body_deferred",
+            body_all_locked_key="locked_confirm.body_all_locked_deferred",
+            btn_apply_label=t("locked_confirm.btn_unlock_apply_deferred"),
+        )
+        assert dlg._btn_unlock_apply.text() == t(
+            "locked_confirm.btn_unlock_apply_deferred"
+        )
+        text = dlg._body_text()
+        assert "3" in text
+        # The deferred body must make the "nothing deleted yet" promise.
+        assert "Nothing is deleted yet" in text
+
+    def test_all_locked_override_uses_all_locked_key(self, qapp):
+        """The all-locked degenerate body honours the override key too —
+        otherwise the immediate/deferred split would leak the generic
+        wording when every matched row is locked."""
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        dlg = LockedRowsConfirmDialog(
+            None,
+            action_label="delete",
+            affected_count=2,
+            locked_paths=["/p/a.jpg", "/p/b.jpg"],
+            body_key="locked_confirm.body_immediate",
+            body_all_locked_key="locked_confirm.body_all_locked_immediate",
+            btn_apply_label="Unlock && Delete All",
+        )
+        text = dlg._body_text()
+        assert "DELETE" in text
+        # The all-locked immediate body interpolates {locked}=2 not {total}.
+        assert "2" in text
+
+
 class TestButtonStates:
     def test_unlocked_only_button_enabled_when_some_unlocked(self, make_dialog):
         dlg = make_dialog(affected=3, locked=["/p/a.jpg"])  # 2 unlocked

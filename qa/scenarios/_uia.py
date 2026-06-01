@@ -133,12 +133,24 @@ LOCK_CONFIRM_TITLE = "Locked Rows Affected"
 LOCK_CONFIRM_BTN_UNLOCK_APPLY = "Unlock & Apply to All"
 LOCK_CONFIRM_BTN_UNLOCKED_ONLY = "Apply to Unlocked Only"
 LOCK_CONFIRM_BTN_CANCEL = "Cancel"
+# #417 — the "Apply" button label is now context-specific. IMMEDIATE
+# (Execute-time pre-scan): the click deletes files now → "Unlock & Delete
+# All". DEFERRED (decision-setting via regex / single-row): the click only
+# queues a decision → "Unlock & Set Action". The generic constant above
+# remains as the fallback wording for any caller that passes nothing.
+LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE = "Unlock & Delete All"
+LOCK_CONFIRM_BTN_UNLOCK_SET_DEFERRED = "Unlock & Set Action"
 
 # Convenience verdict aliases — point at the button label strings above.
 # Scenarios can write ``_uia.LOCK_CONFIRM_APPLY_UNLOCKED_ONLY`` rather
 # than the literal button text, which keeps a single source of truth
 # for the label drift check in ``test_uia_label_coupling.py``.
-LOCK_CONFIRM_APPLY_ALL_UNLOCKED = LOCK_CONFIRM_BTN_UNLOCK_APPLY
+# #417 — APPLY_ALL_UNLOCKED now resolves to the IMMEDIATE delete-now label
+# because its only live caller (s36) drives the Execute-time path; the
+# DEFERRED alias is provided for regex-flow scenarios that assert the
+# queue-a-decision wording (s32).
+LOCK_CONFIRM_APPLY_ALL_UNLOCKED = LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE
+LOCK_CONFIRM_APPLY_ALL_UNLOCKED_DEFERRED = LOCK_CONFIRM_BTN_UNLOCK_SET_DEFERRED
 LOCK_CONFIRM_APPLY_UNLOCKED_ONLY = LOCK_CONFIRM_BTN_UNLOCKED_ONLY
 LOCK_CONFIRM_CANCEL = LOCK_CONFIRM_BTN_CANCEL
 
@@ -1671,6 +1683,42 @@ def _find_descendant_by_aid_suffix(
         if aid.endswith(suffix):
             return d
     return None
+
+
+def capture_lock_confirm_text(
+    pid: int, timeout: float = 5.0
+) -> tuple[str, list[str]] | None:
+    """Wait for the LockedRowsConfirmDialog and read its text WITHOUT clicking.
+
+    Returns ``(body_text, button_labels)`` — the concatenated static-text
+    body plus the list of Button accessible names — or ``None`` if the
+    dialog didn't appear within ``timeout``. The modal stays up, so the
+    caller dismisses it afterward via ``drive_lock_confirm`` (#417: lets a
+    scenario assert the context-specific delete-now vs queue-a-decision
+    wording before choosing a verdict).
+    """
+    try:
+        hwnd = wait_for_dialog(pid, LOCK_CONFIRM_TITLE, timeout=timeout)
+    except TimeoutError:
+        return None
+    dlg = connect_by_handle(hwnd)
+    texts: list[str] = []
+    for el in dlg.descendants(control_type="Text"):
+        try:
+            t = (el.window_text() or "").strip()
+        except Exception:
+            continue
+        if t:
+            texts.append(t)
+    buttons: list[str] = []
+    for btn in dlg.descendants(control_type="Button"):
+        try:
+            label = (btn.window_text() or "").strip()
+        except Exception:
+            continue
+        if label:
+            buttons.append(label)
+    return "\n".join(texts), buttons
 
 
 def drive_lock_confirm(

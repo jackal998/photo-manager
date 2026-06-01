@@ -191,8 +191,19 @@ singleton_prune_confirm:
 # LockedRowsConfirmDialog — photo-manager#182(取代 #175 的混合語意)。
 locked_confirm:
   title: "受影響的鎖定列"
+  # 通用共用文案 — 作為未傳入情境專屬覆寫時的後備 (#417)。
   body: "動作「{action}」會影響 {total} 列;其中 {locked} 列已鎖定:\n\n{list}\n\n要解除鎖定並套用至全部 {total} 列、只套用至未鎖定的 {unlocked} 列,還是取消?"
   body_all_locked: "動作「{action}」會影響 {locked} 列,全部已鎖定:\n\n{list}\n\n要解除鎖定並全部套用,還是取消?"
+  # #417 — 立即情境(_on_execute_requested 的執行前掃描):「套用」會
+  # 立刻刪除檔案。文案明確標示此為立即且無法輕易復原的刪除。
+  body_immediate: "你即將立刻刪除 {total} 個檔案;其中 {locked} 個已鎖定:\n\n{list}\n\n要解除鎖定並刪除全部 {total} 個、只刪除未鎖定的 {unlocked} 個,還是取消?"
+  body_all_locked_immediate: "你即將立刻刪除 {locked} 個檔案,全部已鎖定:\n\n{list}\n\n要解除鎖定並全部刪除,還是取消?"
+  btn_unlock_apply_immediate: "解除鎖定並全部刪除"
+  # #417 — 延後情境(_set_decision / _set_decision_by_regex 的決策設定):
+  # 「套用」只會將決策寫入清單;在執行動作前不會刪除任何檔案。
+  body_deferred: "設定動作「{action}」會變更 {total} 列;其中 {locked} 列已鎖定:\n\n{list}\n\n尚未刪除任何檔案 — 此操作僅排入決策。要解除鎖定並設定全部 {total} 列、只設定未鎖定的 {unlocked} 列,還是取消?"
+  body_all_locked_deferred: "設定動作「{action}」會變更 {locked} 列,全部已鎖定:\n\n{list}\n\n尚未刪除任何檔案 — 此操作僅排入決策。要解除鎖定並全部設定,還是取消?"
+  btn_unlock_apply_deferred: "解除鎖定並設定動作"
   list_truncated_suffix: "  …以及其餘 {n} 個"
   btn_unlock_apply: "解除鎖定並全部套用"
   btn_unlocked_only: "僅套用至未鎖定"

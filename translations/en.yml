@@ -229,8 +229,22 @@ singleton_prune_confirm:
 
 locked_confirm:
   title: "Locked Rows Affected"
+  # Generic shared body/button — kept as the fallback for any caller
+  # that doesn't pass a context-specific override (#417).
   body: "Action '{action}' would affect {total} row(s); {locked} locked:\n\n{list}\n\nUnlock and apply to all {total}, apply to unlocked only ({unlocked}), or cancel?"
   body_all_locked: "Action '{action}' would affect {locked} row(s), all locked:\n\n{list}\n\nUnlock and apply to all, or cancel?"
+  # #417 — IMMEDIATE context (pre-execute scan in _on_execute_requested):
+  # "Apply" actually DELETES files now. Wording makes the irreversible
+  # delete-now consequence unmistakable.
+  body_immediate: "You're about to DELETE {total} file(s) now; {locked} are locked:\n\n{list}\n\nUnlock and delete all {total}, delete only the {unlocked} unlocked, or cancel?"
+  body_all_locked_immediate: "You're about to DELETE {locked} file(s) now, all locked:\n\n{list}\n\nUnlock and delete all, or cancel?"
+  btn_unlock_apply_immediate: "Unlock && Delete All"
+  # #417 — DEFERRED context (decision-setting in _set_decision /
+  # _set_decision_by_regex): "Apply" only QUEUES a decision to the
+  # manifest; nothing is deleted until Execute Action runs.
+  body_deferred: "Setting action '{action}' would change {total} row(s); {locked} are locked:\n\n{list}\n\nNothing is deleted yet — this only queues the decision. Unlock and set all {total}, set only the {unlocked} unlocked, or cancel?"
+  body_all_locked_deferred: "Setting action '{action}' would change {locked} row(s), all locked:\n\n{list}\n\nNothing is deleted yet — this only queues the decision. Unlock and set all, or cancel?"
+  btn_unlock_apply_deferred: "Unlock && Set Action"
   list_truncated_suffix: "  …and {n} more"
   btn_unlock_apply: "Unlock && Apply to All"
   btn_unlocked_only: "Apply to Unlocked Only"

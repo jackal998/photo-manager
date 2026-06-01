@@ -56,6 +56,15 @@ _DIALOG_VERDICT_PROCEED = 1       # Unlock & Apply — caller unlocks + applies
 _DIALOG_VERDICT_SKIP_LOCKED = 2   # Apply to Unlocked Only — caller filters out locked
 _DIALOG_VERDICT_CANCEL = 3        # Cancel — caller aborts
 
+# #417 — lock-confirm wording contexts. IMMEDIATE: pre-execute scan in
+# _on_execute_requested where "Apply" deletes files NOW. DEFERRED:
+# decision-setting flows (_set_decision / _set_decision_by_regex) where
+# "Apply" only writes user_decision to the manifest — nothing is deleted
+# until Execute Action runs. The shared LockedRowsConfirmDialog can't tell
+# the two apart on its own, so the caller passes the context.
+_LOCK_CONFIRM_IMMEDIATE = "immediate"
+_LOCK_CONFIRM_DEFERRED = "deferred"
+
 # #502 — type-filter QComboBox values stored as Qt UserData. The combo's
 # label text is localised via t() at build time; the value is the canonical
 # decision string used internally (or ``None`` for "All"). Keeping the
@@ -804,7 +813,12 @@ class ExecuteActionDialog(QDialog):
         return False
 
     def _ask_lock_confirm(
-        self, *, paths: list[str], decision_for_label: str, affected_count: int | None = None
+        self,
+        *,
+        paths: list[str],
+        decision_for_label: str,
+        affected_count: int | None = None,
+        context: str = _LOCK_CONFIRM_DEFERRED,
     ) -> int:
         """Show the locked-rows confirm dialog for ``paths`` (all locked).
 
@@ -813,17 +827,35 @@ class ExecuteActionDialog(QDialog):
         "Apply to Unlocked Only" button is disabled by construction —
         the helper still surfaces the dialog so the user has a
         deliberate stop sign rather than a silent override.
+
+        ``context`` (#417) selects the gate's wording:
+        ``_LOCK_CONFIRM_IMMEDIATE`` for the pre-execute scan where
+        "Apply" deletes files NOW, ``_LOCK_CONFIRM_DEFERRED`` (default)
+        for decision-setting flows where "Apply" only queues a decision
+        to the manifest.
         """
         from app.views.dialogs.locked_rows_confirm_dialog import (
             LockedRowsConfirmDialog,
         )
         from app.views.handlers.file_operations import _decision_display_label
 
+        if context == _LOCK_CONFIRM_IMMEDIATE:
+            body_key = "locked_confirm.body_immediate"
+            body_all_locked_key = "locked_confirm.body_all_locked_immediate"
+            btn_apply_label = t("locked_confirm.btn_unlock_apply_immediate")
+        else:
+            body_key = "locked_confirm.body_deferred"
+            body_all_locked_key = "locked_confirm.body_all_locked_deferred"
+            btn_apply_label = t("locked_confirm.btn_unlock_apply_deferred")
+
         verdict = LockedRowsConfirmDialog.ask(
             self,
             action_label=_decision_display_label(decision_for_label),
             affected_count=affected_count if affected_count is not None else len(paths),
             locked_paths=paths,
+            body_key=body_key,
+            body_all_locked_key=body_all_locked_key,
+            btn_apply_label=btn_apply_label,
         )
         if verdict == LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED:
             return _DIALOG_VERDICT_PROCEED
@@ -1253,6 +1285,7 @@ class ExecuteActionDialog(QDialog):
                 paths=locked_delete_paths,
                 decision_for_label="delete",
                 affected_count=total_delete_count,
+                context=_LOCK_CONFIRM_IMMEDIATE,
             )
             if verdict == _DIALOG_VERDICT_CANCEL:
                 return
