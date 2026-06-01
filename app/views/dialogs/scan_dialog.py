@@ -433,6 +433,8 @@ class ScanDialog(QDialog):
         self._btn_close: QPushButton
         self._phash_slider: QSlider
         self._phash_spin: QSpinBox
+        self._dhash_slider: QSlider
+        self._dhash_spin: QSpinBox
         self._color_slider: QSlider
         self._color_spin: QSpinBox
         self._auto_select_check: QCheckBox
@@ -530,10 +532,9 @@ class ScanDialog(QDialog):
 
         # pHash threshold
         phash_label = QLabel(t("scan_dialog.phash_label"))
-        phash_label.setToolTip(t("scan_dialog.phash_tooltip"))
         phash_desc = QLabel(t("scan_dialog.phash_desc"))
+        phash_desc.setWordWrap(True)
         phash_desc.setStyleSheet("color: #555;")
-        phash_desc.setToolTip(t("scan_dialog.phash_tooltip"))
         phash_row = QHBoxLayout()
         self._phash_slider = QSlider(Qt.Orientation.Horizontal)
         self._phash_slider.setRange(1, 20)
@@ -555,12 +556,35 @@ class ScanDialog(QDialog):
         params_layout.addSpacing(6)
         params_layout.addLayout(phash_row)
 
+        # dHash confidence threshold (#517) — the second, independent
+        # perceptual hash that confirms a pHash near-dup match (high vs low
+        # confidence). Sits directly below pHash; mirrors its 1–20 range.
+        dhash_label = QLabel(t("scan_dialog.dhash_label"))
+        dhash_desc = QLabel(t("scan_dialog.dhash_desc"))
+        dhash_desc.setWordWrap(True)
+        dhash_desc.setStyleSheet("color: #555;")
+        dhash_row = QHBoxLayout()
+        self._dhash_slider = QSlider(Qt.Orientation.Horizontal)
+        self._dhash_slider.setRange(1, 20)
+        self._dhash_slider.setValue(10)
+        self._dhash_spin = QSpinBox()
+        self._dhash_spin.setRange(1, 20)
+        self._dhash_spin.setValue(10)
+        self._dhash_spin.setFixedWidth(60)
+        self._dhash_slider.valueChanged.connect(self._dhash_spin.setValue)
+        self._dhash_spin.valueChanged.connect(self._dhash_slider.setValue)
+        dhash_row.addWidget(self._dhash_slider, stretch=1)
+        dhash_row.addWidget(self._dhash_spin)
+        params_layout.addWidget(dhash_label)
+        params_layout.addWidget(dhash_desc)
+        params_layout.addSpacing(6)
+        params_layout.addLayout(dhash_row)
+
         # Mean-color threshold
         color_label = QLabel(t("scan_dialog.color_label"))
-        color_label.setToolTip(t("scan_dialog.color_tooltip"))
         color_desc = QLabel(t("scan_dialog.color_desc"))
+        color_desc.setWordWrap(True)
         color_desc.setStyleSheet("color: #555;")
-        color_desc.setToolTip(t("scan_dialog.color_tooltip"))
         color_row = QHBoxLayout()
         self._color_slider = QSlider(Qt.Orientation.Horizontal)
         self._color_slider.setRange(0, 100)
@@ -589,10 +613,9 @@ class ScanDialog(QDialog):
         # ``advanced_expanded`` save path) so the choice survives a
         # close/reopen.
         self._auto_select_check = QCheckBox(t("scan_dialog.auto_select_label"))
-        self._auto_select_check.setToolTip(t("scan_dialog.auto_select_tooltip"))
         auto_select_desc = QLabel(t("scan_dialog.auto_select_desc"))
+        auto_select_desc.setWordWrap(True)
         auto_select_desc.setStyleSheet("color: #555;")
-        auto_select_desc.setToolTip(t("scan_dialog.auto_select_tooltip"))
         self._auto_select_check.toggled.connect(self._on_auto_select_toggled)
         params_layout.addWidget(self._auto_select_check)
         params_layout.addWidget(auto_select_desc)
@@ -606,16 +629,11 @@ class ScanDialog(QDialog):
         self._auto_select_aggressive_check = QCheckBox(
             t("scan_dialog.auto_select_aggressive_label")
         )
-        self._auto_select_aggressive_check.setToolTip(
-            t("scan_dialog.auto_select_aggressive_tooltip")
-        )
         auto_select_aggressive_desc = QLabel(
             t("scan_dialog.auto_select_aggressive_desc")
         )
+        auto_select_aggressive_desc.setWordWrap(True)
         auto_select_aggressive_desc.setStyleSheet("color: #555;")
-        auto_select_aggressive_desc.setToolTip(
-            t("scan_dialog.auto_select_aggressive_tooltip")
-        )
         self._auto_select_aggressive_check.toggled.connect(
             self._on_auto_select_aggressive_toggled
         )
@@ -630,10 +648,9 @@ class ScanDialog(QDialog):
         # to params_layout (not a splitter child) to keep the cold-launch
         # layout stable. State machine lives in _start_scan.
         self._recalibrate_check = QCheckBox(t("scan_dialog.recalibrate_label"))
-        self._recalibrate_check.setToolTip(t("scan_dialog.recalibrate_tooltip"))
         recalibrate_desc = QLabel(t("scan_dialog.recalibrate_desc"))
+        recalibrate_desc.setWordWrap(True)
         recalibrate_desc.setStyleSheet("color: #555;")
-        recalibrate_desc.setToolTip(t("scan_dialog.recalibrate_tooltip"))
         self._recalibrate_check.toggled.connect(self._on_recalibrate_toggled)
         params_layout.addWidget(self._recalibrate_check)
         params_layout.addWidget(recalibrate_desc)
@@ -958,6 +975,7 @@ class ScanDialog(QDialog):
             output_path=output,
             recursive_map=recursive_map,
             threshold=self._phash_slider.value(),
+            dhash_threshold=self._dhash_slider.value(),
             mean_color_threshold=self._color_slider.value(),
             # #449 control removed — the hash-worker count is the NAS-aware
             # auto-pick (8 if any source is remote, else min(4, cpu_count)),
