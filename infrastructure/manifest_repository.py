@@ -60,14 +60,16 @@ FROM   migration_manifest
 WHERE  executed = 0
 ORDER  BY
     group_id NULLS LAST,
-    -- "Ref tier" first (KEEP / MOVE / UNDATED / unset all render as "Ref"
+    -- "Ref tier" first (KEEP / UNDATED / unset all render as "Ref"
     -- in the tree per app/views/tree_model_builder._file_similarity), then
     -- duplicates in descending similarity: EXACT (100%) before
     -- REVIEW_DUPLICATE (near-match). Top-down a group reads as "winner"
-    -- → strongest match → weaker matches (#55, #76).
+    -- → strongest match → weaker matches (#55, #76). The legacy MOVE
+    -- action (and dest_path column) were dropped in #433 — old MOVE rows
+    -- are migrated to '' (undecided) by the drop-move migration below,
+    -- which also falls into tier 1 via the '' branch.
     CASE action
         WHEN 'KEEP'             THEN 1
-        WHEN 'MOVE'             THEN 1
         WHEN 'UNDATED'          THEN 1
         WHEN ''                 THEN 1
         WHEN 'EXACT'            THEN 2
@@ -97,6 +99,33 @@ _MIGRATIONS = [
     ("xmp_derived",     "INTEGER NOT NULL DEFAULT 0"),
     ("score",           "REAL"),
 ]
+
+# #433 — drop the legacy ``dest_path`` column and migrate ``action='MOVE'``
+# rows to the canonical undecided action ('').  ``dest_path`` + the MOVE
+# action were the handshake to the now-defunct external photo-transfer tool.
+#
+# This is a STRUCTURAL migration (column removal), not an additive ALTER —
+# it cannot live in ``_MIGRATIONS`` (which is ADD-COLUMN-only and runs the
+# same DDL idempotently).  SQLite < 3.35 has no ``DROP COLUMN``, so we use
+# the portable copy-table dance (create new table without the column, copy
+# every row, drop old, rename) inside a single transaction.  Idempotent:
+# guarded by a ``PRAGMA table_info`` check so re-running on an
+# already-migrated manifest is a no-op.  The MOVE→'' UPDATE is folded into
+# the copy SELECT so old manifests open with the legacy rows already
+# normalised to the empty action the review UI renders as a Ref-tier row.
+_DROP_MOVE_COLUMN = "dest_path"
+
+# New-schema column list (matches scanner.manifest._DDL after #433), in the
+# order the rebuilt table declares them.  Used by the drop-move copy dance
+# to SELECT the surviving columns from the old table.
+_POST_DROP_COLUMNS = (
+    "id", "source_path", "source_label", "action", "source_hash",
+    "phash", "hamming_distance", "group_id", "reason",
+    "executed", "user_decision",
+    "file_size_bytes", "shot_date", "creation_date", "mtime",
+    "pixel_width", "pixel_height",
+    "exif_tag_count", "gps_present", "xmp_derived", "score",
+)
 
 _UPDATE_DECISION_SQL = """
 UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
@@ -218,6 +247,13 @@ class ManifestRepository:
         ``apply_auto_select_decisions``) call it explicitly because
         ``scanner.manifest.write_manifest`` writes only the original
         DDL and the migrated columns are added on first read.
+
+        Order matters: the additive ADD-COLUMN migrations run FIRST so
+        every modern column exists, THEN the #433 drop-move structural
+        migration rebuilds the table without ``dest_path`` and converts
+        legacy ``action='MOVE'`` rows to '' (undecided). Running the
+        drop AFTER the adds guarantees the copy SELECT finds every
+        surviving column on the old table.
         """
         path = Path(manifest_path)
         if not path.exists():
@@ -233,8 +269,79 @@ class ManifestRepository:
                     conn.commit()
                 except Exception:
                     pass  # column already exists
+            self._drop_move_dest_path(conn)
         finally:
             conn.close()
+
+    @staticmethod
+    def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
+        """#433 — drop the legacy ``dest_path`` column and migrate
+        ``action='MOVE'`` rows to '' (undecided).
+
+        Idempotent: the ``PRAGMA table_info`` guard makes this a no-op
+        on manifests that never had ``dest_path`` (written by the
+        post-#433 scanner) or that have already been migrated.
+
+        Portable: uses the copy-table dance (new table → copy rows →
+        drop old → rename) rather than ``ALTER TABLE DROP COLUMN`` so
+        it works on SQLite < 3.35. The whole rebuild runs in one
+        transaction; the MOVE→'' normalisation is folded into the copy
+        ``SELECT`` via ``CASE``. Row count is preserved exactly — no
+        row is dropped, only ``dest_path`` and the MOVE label go away.
+        """
+        cols = {row[1] for row in conn.execute(
+            "PRAGMA table_info(migration_manifest)"
+        )}
+        if _DROP_MOVE_COLUMN not in cols:
+            return  # already migrated / new-schema manifest — no-op
+
+        select_cols = ", ".join(
+            "CASE WHEN action = 'MOVE' THEN '' ELSE action END AS action"
+            if c == "action" else c
+            for c in _POST_DROP_COLUMNS
+        )
+        insert_cols = ", ".join(_POST_DROP_COLUMNS)
+
+        # Single transaction: build the new table from the canonical DDL,
+        # copy every surviving column (MOVE→'' inline), swap names.
+        conn.executescript(
+            f"""
+            BEGIN;
+            CREATE TABLE migration_manifest_new (
+                id               INTEGER PRIMARY KEY,
+                source_path      TEXT    NOT NULL,
+                source_label     TEXT    NOT NULL,
+                action           TEXT    NOT NULL,
+                source_hash      TEXT,
+                phash            TEXT,
+                hamming_distance INTEGER,
+                group_id         TEXT,
+                reason           TEXT,
+                executed         INTEGER NOT NULL DEFAULT 0,
+                user_decision    TEXT    NOT NULL DEFAULT '',
+                file_size_bytes  INTEGER,
+                shot_date        TEXT,
+                creation_date    TEXT,
+                mtime            TEXT,
+                pixel_width      INTEGER,
+                pixel_height     INTEGER,
+                exif_tag_count   INTEGER,
+                gps_present      INTEGER NOT NULL DEFAULT 0,
+                xmp_derived      INTEGER NOT NULL DEFAULT 0,
+                score            REAL,
+                is_locked        INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO migration_manifest_new ({insert_cols}, is_locked)
+                SELECT {select_cols}, is_locked FROM migration_manifest;
+            DROP TABLE migration_manifest;
+            ALTER TABLE migration_manifest_new RENAME TO migration_manifest;
+            CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
+            CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
+            CREATE INDEX IF NOT EXISTS idx_action      ON migration_manifest(action);
+            CREATE INDEX IF NOT EXISTS idx_group_id    ON migration_manifest(group_id);
+            COMMIT;
+            """
+        )
 
     # ------------------------------------------------------------------ load
 
@@ -459,7 +566,6 @@ class ManifestRepository:
             ManifestRow(
                 source_path=r[0],
                 source_label="",           # placeholder — not used by scorer
-                dest_path=None,
                 action=r[1],
                 source_hash="",            # placeholder
                 phash=None,

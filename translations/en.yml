@@ -111,12 +111,6 @@ decision:
 # user only sees these labels.
 manifest_summary:
   keep: "kept (no action)"
-  # #425 — was "to be moved" pre-cleanup; the verb implied a physical
-  # file operation that the read-only scan never performs. The MOVE
-  # action class internally means "unique file with a date, will land
-  # in the dated folder structure if you run migrate.py" — describe
-  # the file's identity, not a future operation on it.
-  move: "dated files"
   exact: "exact duplicates"
   review_duplicate: "near-duplicates (review)"
   undated: "no shot date"

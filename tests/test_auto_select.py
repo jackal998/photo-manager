@@ -88,7 +88,7 @@ class TestTopScorePathPerGroup:
         files (group_id is None) have no peers to compete with — the
         user did not ask the system to make a choice. Marking them
         KEEP would silently flip every solitary file's action away
-        from MOVE, breaking the move-to-destination flow."""
+        from its undecided '' state (#433 — was MOVE)."""
         rows = [
             _Row("/lone1.jpg", None, 0.95),         # isolated
             _Row("/lone2.jpg", None, 0.10),         # isolated
@@ -152,7 +152,6 @@ class TestWorkerIntegrationShape:
             ManifestRow(
                 source_path="/grp/a.jpg",
                 source_label="src",
-                dest_path=None,
                 action="REVIEW_DUPLICATE",
                 source_hash="h1",
                 phash="p1",
@@ -165,8 +164,7 @@ class TestWorkerIntegrationShape:
             ManifestRow(
                 source_path="/grp/b.jpg",
                 source_label="src",
-                dest_path=None,
-                action="MOVE",
+                action="",
                 source_hash="h2",
                 phash="p2",
                 hamming_distance=None,

@@ -1,0 +1,1 @@
+Remove the legacy MOVE action and dest_path column (photo-transfer contract); opening an old manifest auto-migrates (#514)

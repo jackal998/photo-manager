@@ -69,7 +69,7 @@ class MainVM:
         """Remove deleted items and optionally drop groups with exactly 1 item left.
 
         prune_singles=True  — pairs collapse to nothing after one file is deleted.
-        prune_singles=False — single-item groups persist (KEEP / UNDATED / MOVE).
+        prune_singles=False — single-item groups persist (KEEP / UNDATED / "").
         """
         if not deleted_paths:
             return

@@ -81,9 +81,6 @@ decision:
 
 manifest_summary:
   keep: "已保留 (無動作)"
-  # #425 — was "待搬移";內部 MOVE 動作類別代表「有日期、可進入日期化資料夾結構」
-  # 的獨立檔案,並非實際搬移操作。描述檔案的身分,而非未來操作。
-  move: "已標註日期"
   exact: "完全重複"
   review_duplicate: "近似重複 (待檢閱)"
   undated: "無拍攝日期"

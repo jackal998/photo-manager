@@ -77,7 +77,7 @@ class TestExactDuplicate:
             [src_a, src_b, src_c],
             source_priority={"src_a": 0, "src_b": 1, "src_c": 2},
         ))
-        assert rows["/src_a/a.jpg"].action == "MOVE"   # survivor — MOVE, not KEEP
+        assert rows["/src_a/a.jpg"].action == ""   # survivor — undecided (#433: was MOVE)
         assert rows["/src_b/a.jpg"].action == "EXACT"
         assert rows["/src_c/a.jpg"].action == "EXACT"
 
@@ -99,7 +99,7 @@ class TestDynamicSourcePriority:
         a = _hr("/src_a/photo.jpg", sha256="same", source_label="src_a", exif_date=_dt())
         b = _hr("/src_b/photo.jpg", sha256="same", source_label="src_b", exif_date=_dt())
         rows = _rows(classify([a, b], source_priority={"src_a": 0, "src_b": 1}))
-        assert rows["/src_a/photo.jpg"].action == "MOVE"
+        assert rows["/src_a/photo.jpg"].action == ""   # #433: survivor undecided
         assert rows["/src_b/photo.jpg"].action == "EXACT"
 
     def test_second_source_priority_reversed(self):
@@ -107,7 +107,7 @@ class TestDynamicSourcePriority:
         a = _hr("/src_a/photo.jpg", sha256="same", source_label="src_a", exif_date=_dt())
         b = _hr("/src_b/photo.jpg", sha256="same", source_label="src_b", exif_date=_dt())
         rows = _rows(classify([a, b], source_priority={"src_a": 1, "src_b": 0}))
-        assert rows["/src_b/photo.jpg"].action == "MOVE"
+        assert rows["/src_b/photo.jpg"].action == ""   # #433: survivor undecided
         assert rows["/src_a/photo.jpg"].action == "EXACT"
 
     def test_no_source_priority_auto_infers_from_order(self):
@@ -117,7 +117,7 @@ class TestDynamicSourcePriority:
         second = _hr("/second/photo.jpg", sha256="dup", source_label="second_src",
                      exif_date=_dt())
         rows = _rows(classify([first, second]))   # no source_priority
-        assert rows["/first/photo.jpg"].action == "MOVE"   # first-seen wins
+        assert rows["/first/photo.jpg"].action == ""   # first-seen wins (#433: undecided)
         assert rows["/second/photo.jpg"].action == "EXACT"
 
 
@@ -132,18 +132,22 @@ class TestFormatDuplicate:
         jpeg = _hr("/a.jpg", sha256="h2", phash="0" * 16, file_type="jpeg",
                    source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([heic, jpeg]))
-        assert rows["/a.heic"].action in ("MOVE", "KEEP")
+        assert rows["/a.heic"].action in ("", "KEEP")   # #433: survivor undecided
         assert rows["/a.jpg"].action == "EXACT"
 
     def test_raw_and_jpeg_both_move(self):
-        """RAW + JPEG of same shot must both be kept (complementary rule)."""
+        """RAW + JPEG of same shot must both be kept (complementary rule).
+
+        #433: complementary RAW+lossy survivors are undecided ('') — neither
+        is marked EXACT; both stay for the user to triage.
+        """
         raw = _hr("/a.arw", sha256="r1", phash="0" * 16, file_type="raw",
                   source_label="jdrive", exif_date=_dt())
         jpeg = _hr("/a.jpg", sha256="j1", phash="0" * 16, file_type="jpeg",
                    source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([raw, jpeg]))
-        assert rows["/a.arw"].action == "MOVE"
-        assert rows["/a.jpg"].action == "MOVE"
+        assert rows["/a.arw"].action == ""
+        assert rows["/a.jpg"].action == ""
 
     def test_flat_image_phash_collision_rejected_by_mean_color(self):
         """#462 — flat images (black/white/grey) sharing pHash 8000000000000000
@@ -188,15 +192,15 @@ class TestFormatDuplicate:
 
     def test_raw_plus_lossy_with_color_mismatch_still_complementary(self):
         """#462 — RAW + lossy with mismatched mean_color must still return
-        early (both MOVE); the gate must not affect the RAW+lossy
-        complementary branch."""
+        early (both undecided ''); the gate must not affect the RAW+lossy
+        complementary branch (#433: was MOVE)."""
         raw = _hr("/a.arw", sha256="r1", phash="0" * 16, file_type="raw",
                   mean_color="10,20,30", source_label="jdrive", exif_date=_dt())
         jpeg = _hr("/a.jpg", sha256="j1", phash="0" * 16, file_type="jpeg",
                    mean_color="200,180,160", source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([raw, jpeg]))
-        assert rows["/a.arw"].action == "MOVE"
-        assert rows["/a.jpg"].action == "MOVE"
+        assert rows["/a.arw"].action == ""
+        assert rows["/a.jpg"].action == ""
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +295,9 @@ class TestLivePhotoPair:
     def test_mov_pairs_with_dup_heic_keeps_own_action(self):
         """When the HEIC is a duplicate of another HEIC, the paired MOV
         is NOT auto-marked as EXACT — it keeps its independent
-        classification (here, MOVE because exif_date is set and SHA is
-        unique). Both still share the same group_id via the pair edge.
+        classification (here, '' undecided because exif_date is set and
+        SHA is unique; #433: was MOVE). Both still share the same
+        group_id via the pair edge.
 
         Per photo-manager#88: pairing is coupled at matching/grouping
         but per-row at set/execute action. The image's destruction is
@@ -317,8 +322,8 @@ class TestLivePhotoPair:
         rows = _rows(classify([heic, mov, orig], source_priority={"iphone": 0, "jdrive": 1}))
         # HEIC duplicate of orig → EXACT (unchanged)
         assert rows[heic_path.as_posix()].action == "EXACT"
-        # MOV no longer auto-EXACT — keeps its own MOVE classification
-        assert rows[mov_path.as_posix()].action == "MOVE"
+        # MOV no longer auto-EXACT — keeps its own '' classification (#433)
+        assert rows[mov_path.as_posix()].action == ""
         # But both share a group_id via the pair edge (#88 invariant)
         heic_gid = rows[heic_path.as_posix()].group_id
         mov_gid = rows[mov_path.as_posix()].group_id
@@ -345,9 +350,9 @@ class TestLivePhotoPair:
 
         # Both rows survive into manifest
         assert len(rows) == 2
-        # Both classified as MOVE (unique, exif_date present)
-        assert rows[heic_path.as_posix()].action == "MOVE"
-        assert rows[mov_path.as_posix()].action == "MOVE"
+        # Both classified as '' undecided (unique, exif_date present; #433)
+        assert rows[heic_path.as_posix()].action == ""
+        assert rows[mov_path.as_posix()].action == ""
         # Both share the same group_id thanks to the pair edge
         heic_gid = rows[heic_path.as_posix()].group_id
         mov_gid = rows[mov_path.as_posix()].group_id
@@ -435,8 +440,8 @@ class TestLivePhotoPair:
         """When the HEIC is itself a duplicate of another HEIC, the
         paired MOV must NOT inherit the EXACT classification. This
         pins the explicit decoupling intent of #88: the MOV stays
-        MOVE / UNDATED based on its own data, even though its group_id
-        is shared with the HEIC's group via the pair edge.
+        '' (undecided) / UNDATED based on its own data, even though its
+        group_id is shared with the HEIC's group via the pair edge.
         """
         heic_path = Path("/jdrive/IMG_5678.HEIC")
         mov_path = Path("/jdrive/IMG_5678.MOV")
@@ -456,7 +461,7 @@ class TestLivePhotoPair:
         ))
         assert rows[heic_path.as_posix()].action == "EXACT"
         # CRITICAL: NOT EXACT — pre-#88 propagation would have made it EXACT.
-        assert rows[mov_path.as_posix()].action == "MOVE"
+        assert rows[mov_path.as_posix()].action == ""   # #433: was MOVE
         # But still grouped together
         assert rows[heic_path.as_posix()].group_id == rows[mov_path.as_posix()].group_id
 
@@ -528,22 +533,25 @@ class TestGroupId:
 
 
 # ---------------------------------------------------------------------------
-# dest_path
+# Undecided non-duplicate (#433 — replaced the legacy MOVE + dest_path path)
 # ---------------------------------------------------------------------------
 
-class TestDestPath:
-    def test_move_has_dest_path(self):
+class TestUndecidedUnique:
+    def test_unique_dated_file_is_undecided(self):
+        """A unique file with an EXIF date is classified '' (undecided) — the
+        legacy MOVE action and dest_path column were dropped in #433."""
         hr = _hr("/jdrive/IMG.jpg", sha256="u", phash=None,
                  source_label="jdrive", exif_date=_dt(2024, 6, 1))
         rows = classify([hr])
-        assert rows[0].action == "MOVE"
-        assert rows[0].dest_path == "2024/20240601_jdrive/IMG.jpg"
+        assert rows[0].action == ""
 
-    def test_skip_has_no_dest_path(self):
-        a = _hr("/a.jpg", sha256="dup", source_label="takeout", exif_date=_dt())
-        b = _hr("/b.jpg", sha256="dup", source_label="jdrive", exif_date=_dt())
-        rows = _rows(classify([a, b]))
-        assert rows["/b.jpg"].dest_path is None
+    def test_manifest_row_has_no_dest_path_field(self):
+        """#433 — the dest_path field is gone from ManifestRow entirely, so the
+        photo-transfer handshake can never be reconstructed from a row."""
+        hr = _hr("/jdrive/IMG.jpg", sha256="u", phash=None,
+                 source_label="jdrive", exif_date=_dt(2024, 6, 1))
+        row = classify([hr])[0]
+        assert not hasattr(row, "dest_path")
 
 
 # ---------------------------------------------------------------------------
@@ -588,9 +596,9 @@ class TestCaseSensitiveCollision:
                     source_label="jdrive", exif_date=_dt())
         result = classify([upper, lower],
                           source_priority={"takeout": 0, "jdrive": 1})
-        assert len(result) == 2  # both rows still exist — one MOVE, one EXACT
+        assert len(result) == 2  # both rows still exist — one survivor, one EXACT
         actions = {r.source_path: r.action for r in result}
-        assert actions[r"D:\Photos\IMG.JPG"] == "MOVE"
+        assert actions[r"D:\Photos\IMG.JPG"] == ""   # #433: survivor undecided
         assert actions[r"D:\Photos\IMG.jpg"] == "EXACT"
 
     def test_case_only_diff_in_live_photo_pair_partner(self):

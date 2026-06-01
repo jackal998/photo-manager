@@ -16,7 +16,6 @@ def _row(
     source_path: str,
     action: str,
     source_label: str = "iphone",
-    dest_path: str | None = None,
     source_hash: str | None = "abc123",
     phash: str | None = None,
     hamming_distance: int | None = None,
@@ -26,7 +25,6 @@ def _row(
     return ManifestRow(
         source_path=source_path,
         source_label=source_label,
-        dest_path=dest_path,
         action=action,
         source_hash=source_hash,
         phash=phash,
@@ -41,7 +39,7 @@ def _row(
 class TestWriteManifest:
     def test_creates_sqlite_file(self, tmp_path):
         out = tmp_path / "manifest.sqlite"
-        write_manifest([_row("/a/img.jpg", "MOVE", dest_path="/dest/img.jpg")], out)
+        write_manifest([_row("/a/img.jpg", "")], out)
         assert out.exists()
 
     def test_table_has_correct_schema(self, tmp_path):
@@ -54,7 +52,7 @@ class TestWriteManifest:
     def test_rows_inserted(self, tmp_path):
         out = tmp_path / "manifest.sqlite"
         rows = [
-            _row("/a/img1.jpg", "MOVE", dest_path="/dest/img1.jpg"),
+            _row("/a/img1.jpg", ""),
             _row("/a/img2.jpg", "REVIEW_DUPLICATE", duplicate_of="/a/img1.jpg", reason="EXACT_DUPLICATE"),
         ]
         write_manifest(rows, out)
@@ -72,7 +70,7 @@ class TestWriteManifest:
     def test_overwrites_existing_file(self, tmp_path):
         import gc
         out = tmp_path / "manifest.sqlite"
-        write_manifest([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], out)
+        write_manifest([_row("/a.jpg", "")], out)
         gc.collect()  # release Windows file lock from the first connection
         write_manifest([_row("/b.jpg", "REVIEW_DUPLICATE")], out)
         gc.collect()
@@ -87,7 +85,7 @@ class TestWriteManifest:
 
     def test_executed_defaults_to_zero(self, tmp_path):
         out = tmp_path / "manifest.sqlite"
-        write_manifest([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], out)
+        write_manifest([_row("/a.jpg", "")], out)
         with sqlite3.connect(out) as conn:
             executed = conn.execute("SELECT executed FROM migration_manifest").fetchone()[0]
         assert executed == 0
@@ -124,7 +122,7 @@ class TestWriteManifest:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="REVIEW_DUPLICATE", source_hash="abc",
+            action="REVIEW_DUPLICATE", source_hash="abc",
             phash="aabbccdd", hamming_distance=5,
             duplicate_of="/b.jpg",  # transient — NOT written to DB
             reason="near-dup",
@@ -140,11 +138,11 @@ class TestWriteManifest:
         writer must not survive a new write_manifest call."""
         import gc
         out = tmp_path / "manifest.sqlite"
-        write_manifest([_row("/old.jpg", "MOVE", dest_path="/d/old.jpg")], out)
+        write_manifest([_row("/old.jpg", "")], out)
         gc.collect()
         (tmp_path / "manifest.sqlite-wal").write_bytes(b"orphan-wal-bytes")
         (tmp_path / "manifest.sqlite-shm").write_bytes(b"orphan-shm-bytes")
-        write_manifest([_row("/new.jpg", "MOVE", dest_path="/d/new.jpg")], out)
+        write_manifest([_row("/new.jpg", "")], out)
         gc.collect()
         with sqlite3.connect(out) as conn:
             paths = [r[0] for r in conn.execute(
@@ -166,7 +164,7 @@ class TestWriteManifest:
         sidecars) should remain in output.parent — os.replace moved the
         temp file to the destination."""
         out = tmp_path / "manifest.sqlite"
-        write_manifest([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], out)
+        write_manifest([_row("/a.jpg", "")], out)
         leftovers = [p.name for p in tmp_path.iterdir() if "tmp.sqlite" in p.name]
         assert leftovers == [], f"temp-write artifacts left behind: {leftovers}"
 
@@ -180,7 +178,7 @@ class TestWriteManifest:
         import gc
         from scanner import manifest as manifest_mod
         out = tmp_path / "manifest.sqlite"
-        write_manifest([_row("/orig.jpg", "MOVE", dest_path="/d/orig.jpg")], out)
+        write_manifest([_row("/orig.jpg", "")], out)
         gc.collect()
 
         real_connect = sqlite3.connect
@@ -216,7 +214,7 @@ class TestWriteManifest:
         monkeypatch.setattr(manifest_mod.sqlite3, "connect", _failing_connect)
         with pytest.raises(RuntimeError, match="simulated mid-write crash"):
             write_manifest(
-                [_row("/new.jpg", "MOVE", dest_path="/d/new.jpg")], out
+                [_row("/new.jpg", "")], out
             )
         gc.collect()
         monkeypatch.undo()
@@ -235,7 +233,7 @@ class TestWriteManifest:
         (tmp_path / "manifest.sqlite.tmp.sqlite").write_bytes(b"junk")
         (tmp_path / "manifest.sqlite.tmp.sqlite-wal").write_bytes(b"junk-wal")
         (tmp_path / "manifest.sqlite.tmp.sqlite-shm").write_bytes(b"junk-shm")
-        write_manifest([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], out)
+        write_manifest([_row("/a.jpg", "")], out)
         with sqlite3.connect(out) as conn:
             paths = [r[0] for r in conn.execute(
                 "SELECT source_path FROM migration_manifest"
@@ -247,34 +245,37 @@ class TestWriteManifest:
 
 class TestPrintSummary:
     def test_prints_total(self, capsys):
-        rows = [_row(f"/{i}.jpg", "MOVE", dest_path=f"/d/{i}.jpg") for i in range(10)]
+        rows = [_row(f"/{i}.jpg", "") for i in range(10)]
         print_summary(rows)
         out = capsys.readouterr().out
         assert "10" in out
 
     def test_counts_each_action(self, capsys):
+        # #433 — the MOVE bucket was dropped from the summary. Unique
+        # non-duplicate files now carry the empty action ("") and roll up
+        # into the "other" line rather than a dedicated bucket.
         rows = (
-            [_row(f"/m{i}.jpg", "MOVE", dest_path=f"/d/{i}.jpg") for i in range(3)]
+            [_row(f"/m{i}.jpg", "") for i in range(3)]
             + [_row(f"/s{i}.jpg", "EXACT") for i in range(2)]
             + [_row(f"/r{i}.jpg", "REVIEW_DUPLICATE") for i in range(1)]
         )
         print_summary(rows)
         out = capsys.readouterr().out
         # Friendly labels render instead of raw internal action names
-        # (#242 — internal MOVE/EXACT/REVIEW_DUPLICATE must not leak
-        # into the user-visible scan-dialog log).
-        # #425 — was "to be moved"; reworded to "dated files" so the
-        # verb no longer implies a physical file operation that the
-        # read-only scan never performs.
-        assert "dated files" in out
+        # (#242 — internal EXACT/REVIEW_DUPLICATE must not leak into the
+        # user-visible scan-dialog log).
         assert "exact duplicates" in out
         assert "near-duplicates (review)" in out
-        assert "MOVE" not in out
         assert "EXACT" not in out
         assert "REVIEW_DUPLICATE" not in out
-        # #425 negative grep — the old wording must not reappear.
+        # #433 — the MOVE bucket and its label are gone entirely.
+        assert "MOVE" not in out
+        assert "dated files" not in out
+        # #425 negative grep — the old "moved" wording must not reappear.
         assert "to be moved" not in out
         assert "moved" not in out
+        # The 3 undecided rows land in the "other" bucket (3 of 6 total).
+        assert "other" in out.lower()
 
     def test_empty_rows_no_crash(self, capsys):
         print_summary([])
@@ -287,7 +288,7 @@ class TestPrintSummary:
         """The headline counts manifest rows, so the label must say so —
         not 'Total files scanned' (which falsely implies files walked +
         hashed). Catches the misleading-label bug from #87."""
-        print_summary([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")])
+        print_summary([_row("/a.jpg", "")])
         out = capsys.readouterr().out
         assert "Indexed in manifest" in out
         assert "Total files scanned" not in out
@@ -295,7 +296,7 @@ class TestPrintSummary:
     def test_skipped_line_omitted_when_zero(self, capsys):
         """No skipped files → no Skipped line (avoids visual noise on the
         happy path)."""
-        print_summary([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")])
+        print_summary([_row("/a.jpg", "")])
         out = capsys.readouterr().out
         assert "Skipped (unreadable)" not in out
 
@@ -310,7 +311,7 @@ class TestPrintSummary:
 
     def test_skipped_zero_value_not_printed(self, capsys):
         """Explicit skipped=0 is the same as the default — no line printed."""
-        print_summary([_row("/a.jpg", "MOVE", dest_path="/d/a.jpg")], skipped=0)
+        print_summary([_row("/a.jpg", "")], skipped=0)
         out = capsys.readouterr().out
         assert "Skipped (unreadable)" not in out
 
@@ -357,7 +358,7 @@ class TestManifestSchemaColumns:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="MOVE", source_hash="abc",
+            action="", source_hash="abc",
             phash=None, hamming_distance=None, duplicate_of=None, reason="",
             file_size_bytes=12345,
         )
@@ -370,7 +371,7 @@ class TestManifestSchemaColumns:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="MOVE", source_hash="abc",
+            action="", source_hash="abc",
             phash=None, hamming_distance=None, duplicate_of=None, reason="",
             shot_date="2023-01-15T10:30:00",
         )
@@ -388,7 +389,7 @@ class TestManifestSchemaColumns:
             record=MagicMock(path=f, source_label="jdrive", file_type="jpeg", pair_partner=None),
             sha256="abc", phash=None, exif_date=None,
         )
-        result = _make_row(hr, "MOVE")
+        result = _make_row(hr, "")
         assert result.file_size_bytes == 500
 
     def test_make_row_populates_shot_date_from_exif_date(self, tmp_path):
@@ -401,7 +402,7 @@ class TestManifestSchemaColumns:
             record=MagicMock(path=f, source_label="jdrive", file_type="jpeg", pair_partner=None),
             sha256="abc", phash=None, exif_date=datetime(2023, 1, 15, 10, 30, 0),
         )
-        result = _make_row(hr, "MOVE")
+        result = _make_row(hr, "")
         assert result.shot_date == "2023-01-15T10:30:00"
 
     def test_make_row_shot_date_none_when_no_exif(self, tmp_path):
@@ -413,7 +414,7 @@ class TestManifestSchemaColumns:
             record=MagicMock(path=f, source_label="jdrive", file_type="jpeg", pair_partner=None),
             sha256="abc", phash=None, exif_date=None,
         )
-        result = _make_row(hr, "MOVE")
+        result = _make_row(hr, "")
         assert result.shot_date is None
 
 
@@ -456,7 +457,7 @@ class TestScoringSchemaColumns:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="MOVE", source_hash="abc",
+            action="", source_hash="abc",
             phash=None, hamming_distance=None, duplicate_of=None, reason="",
             exif_tag_count=12,
         )
@@ -469,7 +470,7 @@ class TestScoringSchemaColumns:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="MOVE", source_hash="abc",
+            action="", source_hash="abc",
             phash=None, hamming_distance=None, duplicate_of=None, reason="",
             gps_present=True,
         )
@@ -482,7 +483,7 @@ class TestScoringSchemaColumns:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="MOVE", source_hash="abc",
+            action="", source_hash="abc",
             phash=None, hamming_distance=None, duplicate_of=None, reason="",
             xmp_derived=True,
         )
@@ -495,7 +496,7 @@ class TestScoringSchemaColumns:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="REVIEW_DUPLICATE", source_hash="abc",
+            action="REVIEW_DUPLICATE", source_hash="abc",
             phash=None, hamming_distance=None, duplicate_of=None, reason="",
             score=0.875,
         )
@@ -510,7 +511,7 @@ class TestScoringSchemaColumns:
         out = tmp_path / "manifest.sqlite"
         row = ManifestRow(
             source_path="/a.jpg", source_label="iphone",
-            dest_path=None, action="MOVE", source_hash="abc",
+            action="", source_hash="abc",
             phash=None, hamming_distance=None, duplicate_of=None, reason="",
         )
         write_manifest([row], out)

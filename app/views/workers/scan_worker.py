@@ -876,7 +876,7 @@ class ScanWorker(QThread):
         # duplicate group is promoted to action="KEEP" so the manifest
         # loads with keepers already chosen — the user does not have
         # to open the Selection dialog manually. Other duplicates keep
-        # their classifier action (REVIEW_DUPLICATE / EXACT / MOVE) so
+        # their classifier action (REVIEW_DUPLICATE / EXACT / "" undecided) so
         # the user still confirms deletions explicitly.
         #
         # #393 layered on top: keepers also receive user_decision=""
