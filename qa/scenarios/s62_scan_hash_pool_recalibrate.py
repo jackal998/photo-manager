@@ -40,7 +40,7 @@ REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
 
 # UIA accessible names — must match translations/en.yml.
-RECALIBRATE_CHECKBOX_TITLE = "Re-calibrate hash pool on next scan"
+RECALIBRATE_CHECKBOX_TITLE = "Re-calibrate hash pool on scan"
 ADVANCED_GROUP_TITLE = "Advanced settings"
 
 
