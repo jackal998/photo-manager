@@ -147,6 +147,7 @@ def classify(
     threshold: int = 10,
     mean_color_threshold: int = 30,
     source_priority: dict[str, int] | None = None,
+    min_phash_entropy_bits: int = 4,
 ) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
 
@@ -158,6 +159,11 @@ def classify(
         source_priority: Mapping of source label → priority integer (lower wins).
             When ``None``, priority is inferred from the order labels first appear
             in ``records`` (first seen = priority 0).
+        min_phash_entropy_bits: pHash-entropy guard (#516). A pHash whose set-bit
+            count is within this many bits of either extreme (0 or nbits) is
+            degenerate — a flat/near-empty image whose hash collides with every
+            other flat image — and is excluded from pHash near-dup grouping (it
+            still participates in exact-SHA dedup). ``0`` disables the guard.
     """
     if source_priority is None:
         seen: dict[str, int] = {}
@@ -177,7 +183,10 @@ def classify(
     _classify_exact(records, rows, source_priority)
 
     # Pass 2: pHash-based (cross-format + near-duplicate)
-    _classify_phash(records, rows, threshold, source_priority, mean_color_threshold)
+    _classify_phash(
+        records, rows, threshold, source_priority, mean_color_threshold,
+        min_phash_entropy_bits,
+    )
 
     # Pass 3: remaining unclassified files — all sources treated equally
     for hr in records:
@@ -230,16 +239,59 @@ def _classify_exact(
             )
 
 
+def _phash_entropy_ok(phash: str, min_bits: int) -> bool:
+    """True if a pHash carries enough structure to be a trustworthy
+    near-duplicate signal (#516).
+
+    A flat / near-empty image (solid colour, blank scan, UI icon,
+    letterboxed frame) has almost no DCT AC energy, so its perceptual
+    hash degenerates to all-zeros (``0000000000000000``) or all-ones —
+    a value that collides with *every* other flat image regardless of
+    content. Used as a near-dup signal, such a hash is a super-connector
+    that merges unrelated files into one false group. We therefore
+    distrust pHashes whose set-bit count is within ``min_bits`` of either
+    extreme (0 or nbits) and exclude them from pHash grouping; they still
+    participate in exact-SHA dedup (Pass 1) and fall through to the
+    undecided/UNDATED passes.
+
+    ``min_bits <= 0`` disables the guard (pre-#516 behaviour). An
+    unparseable hash is treated as OK — the downstream passes already
+    tolerate odd values, and suppressing them would lose real matches.
+    """
+    if min_bits <= 0:
+        return True
+    try:
+        bits = bin(int(phash, 16)).count("1")
+    except (ValueError, TypeError):
+        return True
+    nbits = len(phash) * 4
+    return min_bits <= bits <= nbits - min_bits
+
+
 def _classify_phash(
     records: list[HashResult],
     rows: dict[str, ManifestRow],
     threshold: int,
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
+    min_phash_entropy_bits: int = 4,
 ) -> None:
-    """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE."""
-    # Only consider records not already classified and with a valid pHash
-    candidates = [hr for hr in records if hr.phash and str(hr.record.path) not in rows]
+    """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE.
+
+    Records whose pHash is degenerate (flat image — see
+    :func:`_phash_entropy_ok`, #516) are excluded from BOTH the
+    exact-pHash format-group path and the near-duplicate scan, so an
+    arbitrary set of flat icons sharing ``0000…`` never collapses into
+    one false group.
+    """
+    # Only consider records not already classified, with a valid pHash,
+    # whose pHash carries enough structure to be trustworthy (#516).
+    candidates = [
+        hr for hr in records
+        if hr.phash
+        and _phash_entropy_ok(hr.phash, min_phash_entropy_bits)
+        and str(hr.record.path) not in rows
+    ]
 
     # Build pHash → records map (exact matches first)
     by_phash: dict[str, list[HashResult]] = {}
