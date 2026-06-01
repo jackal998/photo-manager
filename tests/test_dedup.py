@@ -127,9 +127,9 @@ class TestDynamicSourcePriority:
 
 class TestFormatDuplicate:
     def test_heic_kept_over_jpeg_same_phash(self):
-        heic = _hr("/a.heic", sha256="h1", phash="0" * 16, file_type="heic",
+        heic = _hr("/a.heic", sha256="h1", phash="a" * 16, file_type="heic",
                    source_label="jdrive", exif_date=_dt())
-        jpeg = _hr("/a.jpg", sha256="h2", phash="0" * 16, file_type="jpeg",
+        jpeg = _hr("/a.jpg", sha256="h2", phash="a" * 16, file_type="jpeg",
                    source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([heic, jpeg]))
         assert rows["/a.heic"].action in ("", "KEEP")   # #433: survivor undecided
@@ -141,9 +141,9 @@ class TestFormatDuplicate:
         #433: complementary RAW+lossy survivors are undecided ('') — neither
         is marked EXACT; both stay for the user to triage.
         """
-        raw = _hr("/a.arw", sha256="r1", phash="0" * 16, file_type="raw",
+        raw = _hr("/a.arw", sha256="r1", phash="a" * 16, file_type="raw",
                   source_label="jdrive", exif_date=_dt())
-        jpeg = _hr("/a.jpg", sha256="j1", phash="0" * 16, file_type="jpeg",
+        jpeg = _hr("/a.jpg", sha256="j1", phash="a" * 16, file_type="jpeg",
                    source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([raw, jpeg]))
         assert rows["/a.arw"].action == ""
@@ -172,9 +172,9 @@ class TestFormatDuplicate:
         """#462 regression guard — HEIC + JPEG with same pHash AND similar
         mean_color must still be marked EXACT (the gate doesn't over-reject
         genuine format duplicates)."""
-        heic = _hr("/a.heic", sha256="h1", phash="0" * 16, file_type="heic",
+        heic = _hr("/a.heic", sha256="h1", phash="a" * 16, file_type="heic",
                    mean_color="120,130,140", source_label="jdrive", exif_date=_dt())
-        jpeg = _hr("/a.jpg", sha256="h2", phash="0" * 16, file_type="jpeg",
+        jpeg = _hr("/a.jpg", sha256="h2", phash="a" * 16, file_type="jpeg",
                    mean_color="118,132,138", source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([heic, jpeg]))
         assert rows["/a.jpg"].action == "EXACT"
@@ -183,9 +183,9 @@ class TestFormatDuplicate:
         """#462 — if either side lacks mean_color (RAW thumbnail, hash
         failure), the format-duplicate path still marks EXACT; gate skips on
         missing data, matching _classify_near_duplicates' behavior."""
-        heic = _hr("/a.heic", sha256="h1", phash="0" * 16, file_type="heic",
+        heic = _hr("/a.heic", sha256="h1", phash="a" * 16, file_type="heic",
                    mean_color=None, source_label="jdrive", exif_date=_dt())
-        jpeg = _hr("/a.jpg", sha256="h2", phash="0" * 16, file_type="jpeg",
+        jpeg = _hr("/a.jpg", sha256="h2", phash="a" * 16, file_type="jpeg",
                    mean_color="118,132,138", source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([heic, jpeg]))
         assert rows["/a.jpg"].action == "EXACT"
@@ -194,9 +194,9 @@ class TestFormatDuplicate:
         """#462 — RAW + lossy with mismatched mean_color must still return
         early (both undecided ''); the gate must not affect the RAW+lossy
         complementary branch (#433: was MOVE)."""
-        raw = _hr("/a.arw", sha256="r1", phash="0" * 16, file_type="raw",
+        raw = _hr("/a.arw", sha256="r1", phash="a" * 16, file_type="raw",
                   mean_color="10,20,30", source_label="jdrive", exif_date=_dt())
-        jpeg = _hr("/a.jpg", sha256="j1", phash="0" * 16, file_type="jpeg",
+        jpeg = _hr("/a.jpg", sha256="j1", phash="a" * 16, file_type="jpeg",
                    mean_color="200,180,160", source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([raw, jpeg]))
         assert rows["/a.arw"].action == ""
@@ -210,9 +210,9 @@ class TestFormatDuplicate:
 class TestNearDuplicate:
     def test_near_duplicate_flagged(self):
         import imagehash
-        base = imagehash.hex_to_hash("0" * 16)
+        base = imagehash.hex_to_hash("a" * 16)
         # Flip 5 bits → hamming distance 5 (within default threshold 10)
-        near = imagehash.hex_to_hash("f" + "0" * 15)
+        near = imagehash.hex_to_hash("5" + "a" * 15)
         a = _hr("/a.jpg", sha256="s1", phash=str(base), source_label="takeout",
                 exif_date=_dt())
         b = _hr("/b.jpg", sha256="s2", phash=str(near), source_label="jdrive",
@@ -222,9 +222,9 @@ class TestNearDuplicate:
 
     def test_beyond_threshold_not_flagged(self):
         import imagehash
-        # 16-bit difference: hamming distance = 4 (0x000f vs 0x0000)
-        h1 = imagehash.hex_to_hash("0" * 16)
-        h2 = imagehash.hex_to_hash("000000000000000f")
+        # hamming distance = 4 (one nibble flipped), but threshold is 3 below
+        h1 = imagehash.hex_to_hash("a" * 16)
+        h2 = imagehash.hex_to_hash("aaaaaaaaaaaaaaa5")
         a = _hr("/a.jpg", sha256="s1", phash=str(h1), exif_date=_dt())
         b = _hr("/b.jpg", sha256="s2", phash=str(h2), exif_date=_dt())
         # threshold=3 → distance 4 is beyond threshold
@@ -234,8 +234,8 @@ class TestNearDuplicate:
     def test_mean_color_mismatch_rejects_false_positive(self):
         """pHash near-duplicate with very different mean_color is NOT flagged."""
         import imagehash
-        base = imagehash.hex_to_hash("0" * 16)
-        near = imagehash.hex_to_hash("f" + "0" * 15)   # hamming=4, within threshold
+        base = imagehash.hex_to_hash("a" * 16)
+        near = imagehash.hex_to_hash("5" + "a" * 15)   # hamming=4, within threshold
         # Mean colors with L2 ≈ 280 (>> threshold 30) — clearly different colors
         a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color="10,20,30",
                 source_label="takeout", exif_date=_dt())
@@ -247,8 +247,8 @@ class TestNearDuplicate:
     def test_mean_color_match_confirms_near_duplicate(self):
         """pHash near-duplicate with similar mean_color IS flagged."""
         import imagehash
-        base = imagehash.hex_to_hash("0" * 16)
-        near = imagehash.hex_to_hash("f" + "0" * 15)   # hamming=4, within threshold
+        base = imagehash.hex_to_hash("a" * 16)
+        near = imagehash.hex_to_hash("5" + "a" * 15)   # hamming=4, within threshold
         # Mean colors with L2 ≈ 6 (<< threshold 30) — same color palette
         a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color="100,120,140",
                 source_label="takeout", exif_date=_dt())
@@ -260,8 +260,8 @@ class TestNearDuplicate:
     def test_missing_mean_color_falls_back_to_phash_only(self):
         """If mean_color is None for either file, gate is skipped (pHash-only behavior)."""
         import imagehash
-        base = imagehash.hex_to_hash("0" * 16)
-        near = imagehash.hex_to_hash("f" + "0" * 15)
+        base = imagehash.hex_to_hash("a" * 16)
+        near = imagehash.hex_to_hash("5" + "a" * 15)
         a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color=None,
                 source_label="takeout", exif_date=_dt())
         b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color=None,
@@ -486,8 +486,8 @@ class TestGroupId:
 
     def test_near_duplicate_pair_shares_group_id(self):
         import imagehash
-        base = imagehash.hex_to_hash("0" * 16)
-        near = imagehash.hex_to_hash("f" + "0" * 15)
+        base = imagehash.hex_to_hash("a" * 16)
+        near = imagehash.hex_to_hash("5" + "a" * 15)
         a = _hr("/a.jpg", sha256="s1", phash=str(base), source_label="takeout", exif_date=_dt())
         b = _hr("/b.jpg", sha256="s2", phash=str(near), source_label="jdrive", exif_date=_dt())
         rows = _rows(classify([a, b], threshold=10))
@@ -499,9 +499,9 @@ class TestGroupId:
         """A near-dup of B, and B near-dup of C → all three in the same group."""
         import imagehash
         # Three hashes: a~b (distance≈4), b~c (distance≈4), but a and c may not match
-        h_a = imagehash.hex_to_hash("0000000000000000")
-        h_b = imagehash.hex_to_hash("000000000000000f")  # 4 bits from a
-        h_c = imagehash.hex_to_hash("00000000000000ff")  # 4 bits from b (8 from a)
+        h_a = imagehash.hex_to_hash("aaaaaaaaaaaaaaaa")
+        h_b = imagehash.hex_to_hash("aaaaaaaaaaaaaaa5")  # 4 bits from a
+        h_c = imagehash.hex_to_hash("aaaaaaaaaaaaaa55")  # 4 bits from b (8 from a)
         a = _hr("/a.jpg", sha256="s1", phash=str(h_a), source_label="src", exif_date=_dt())
         b = _hr("/b.jpg", sha256="s2", phash=str(h_b), source_label="src", exif_date=_dt())
         c = _hr("/c.jpg", sha256="s3", phash=str(h_c), source_label="src", exif_date=_dt())
@@ -640,3 +640,76 @@ class TestCaseSensitiveCollision:
         # mov_upper is unrelated → its own component (or group_id None if isolated).
         assert by_path[str(heic)].group_id == by_path[str(mov_lower)].group_id
         assert by_path[str(heic)].group_id != by_path[str(mov_upper)].group_id
+
+
+# ---------------------------------------------------------------------------
+# pHash-entropy guard (#516) — flat-image false grouping
+# ---------------------------------------------------------------------------
+
+class TestPhashEntropyGuard:
+    """Flat / near-empty images degenerate to an all-zero (or all-one) pHash
+    that collides with every other flat image. The #462 mean-color gate
+    doesn't save the case where the flat images also share a similar mean
+    colour (common for mostly-white icons), so the entropy guard distrusts
+    the degenerate hash itself.
+    """
+
+    # Three GENUINELY-DISTINCT flat images (different SHA), same degenerate
+    # pHash, same mean colour — so the mean-colour gate cannot reject them.
+    def _three_flat(self):
+        return [
+            _hr("/a/icon1.png", sha256="f1", phash="0000000000000000",
+                mean_color="250,250,250", file_type="png", exif_date=_dt()),
+            _hr("/a/icon2.png", sha256="f2", phash="0000000000000000",
+                mean_color="250,250,250", file_type="png", exif_date=_dt()),
+            _hr("/a/icon3.png", sha256="f3", phash="0000000000000000",
+                mean_color="250,250,250", file_type="png", exif_date=_dt()),
+        ]
+
+    def test_flat_images_falsely_grouped_without_guard(self):
+        """Reproduces #516: with the guard disabled the three distinct icons
+        collapse into one false duplicate group."""
+        rows = _rows(classify(self._three_flat(), min_phash_entropy_bits=0))
+        actions = {p: r.action for p, r in rows.items()}
+        # At least two of the three get marked as duplicates of the third.
+        dup = [a for a in actions.values() if a in ("EXACT", "REVIEW_DUPLICATE")]
+        assert len(dup) >= 2, actions
+        gids = {r.group_id for r in rows.values()}
+        assert gids != {None}  # they were unioned into a (false) group
+
+    def test_flat_images_not_grouped_with_guard(self):
+        """The fix: at the default guard the degenerate-pHash icons are
+        excluded from pHash grouping and fall through to undecided/isolated."""
+        rows = _rows(classify(self._three_flat()))  # default min_phash_entropy_bits=4
+        for p, r in rows.items():
+            assert r.action == "", (p, r.action)        # undecided, not a dup
+            assert r.group_id is None, (p, r.group_id)   # not unioned into a group
+
+    def test_exact_sha_dup_of_flat_image_still_flagged(self):
+        """The guard must NOT weaken exact-SHA dedup: two byte-identical flat
+        icons (same SHA) are still flagged EXACT."""
+        recs = [
+            _hr("/a/copy1.png", sha256="same", phash="0000000000000000",
+                source_label="src_a", file_type="png", exif_date=_dt()),
+            _hr("/b/copy2.png", sha256="same", phash="0000000000000000",
+                source_label="src_b", file_type="png", exif_date=_dt()),
+        ]
+        rows = _rows(classify(recs, source_priority={"src_a": 0, "src_b": 1}))
+        assert rows["/a/copy1.png"].action == ""        # survivor
+        assert rows["/b/copy2.png"].action == "EXACT"   # exact dup still caught
+        assert rows["/a/copy1.png"].group_id == rows["/b/copy2.png"].group_id
+
+    def test_textured_near_duplicates_still_group_with_guard(self):
+        """No regression: a real near-duplicate pair (non-degenerate pHash,
+        small hamming) still groups with the guard on."""
+        recs = [
+            _hr("/a/photo.jpg", sha256="p1", phash="ffffffff00000000",
+                file_type="jpeg", exif_date=_dt()),
+            _hr("/a/photo_edit.jpg", sha256="p2", phash="ffffffff00000001",
+                file_type="jpeg", exif_date=_dt()),
+        ]
+        rows = _rows(classify(recs))  # guard on by default
+        actions = {r.action for r in rows.values()}
+        assert "REVIEW_DUPLICATE" in actions
+        gids = {r.group_id for r in rows.values()}
+        assert gids != {None} and len(gids) == 1  # both in one real group
