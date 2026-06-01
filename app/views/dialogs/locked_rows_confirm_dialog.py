@@ -52,6 +52,15 @@ class LockedRowsConfirmDialog(QDialog):
     APPLY_UNLOCKED_ONLY = 2
     CANCEL = 3
 
+    # Default translation keys — used as the fallback when a caller
+    # doesn't pass a context-specific override (#417). The two trigger
+    # contexts (IMMEDIATE delete-now vs DEFERRED queue-a-decision) supply
+    # their own keys so the gate's own text tells the user whether
+    # "Apply" deletes files now or merely records a decision.
+    _DEFAULT_BODY_KEY = "locked_confirm.body"
+    _DEFAULT_BODY_ALL_LOCKED_KEY = "locked_confirm.body_all_locked"
+    _DEFAULT_BTN_APPLY_KEY = "locked_confirm.btn_unlock_apply"
+
     def __init__(
         self,
         parent=None,
@@ -59,6 +68,9 @@ class LockedRowsConfirmDialog(QDialog):
         action_label: str,
         affected_count: int,
         locked_paths: list[str],
+        body_key: str | None = None,
+        body_all_locked_key: str | None = None,
+        btn_apply_label: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("locked_confirm.title"))
@@ -68,6 +80,17 @@ class LockedRowsConfirmDialog(QDialog):
         self._action_label = action_label
         self._affected_count = affected_count
         self._locked_paths = list(locked_paths)
+        # #417 — caller-driven wording. None falls back to the generic
+        # shared keys, so callers that pass nothing behave as before.
+        self._body_key = body_key or self._DEFAULT_BODY_KEY
+        self._body_all_locked_key = (
+            body_all_locked_key or self._DEFAULT_BODY_ALL_LOCKED_KEY
+        )
+        self._btn_apply_label = (
+            btn_apply_label
+            if btn_apply_label is not None
+            else t(self._DEFAULT_BTN_APPLY_KEY)
+        )
         self._build_ui()
 
     @property
@@ -82,18 +105,28 @@ class LockedRowsConfirmDialog(QDialog):
         action_label: str,
         affected_count: int,
         locked_paths: list[str],
+        body_key: str | None = None,
+        body_all_locked_key: str | None = None,
+        btn_apply_label: str | None = None,
     ) -> int:
         """Show the dialog modally and return the chosen verdict.
 
         Convenience wrapper so trigger sites can do
         ``verdict = LockedRowsConfirmDialog.ask(self, action_label=..., ...)``
         without managing the dialog lifecycle themselves.
+
+        ``body_key`` / ``body_all_locked_key`` / ``btn_apply_label``
+        let the caller supply context-specific wording (#417); omitting
+        them keeps the generic shared phrasing.
         """
         dlg = cls(
             parent,
             action_label=action_label,
             affected_count=affected_count,
             locked_paths=locked_paths,
+            body_key=body_key,
+            body_all_locked_key=body_all_locked_key,
+            btn_apply_label=btn_apply_label,
         )
         dlg.exec()
         return dlg.verdict
@@ -116,7 +149,10 @@ class LockedRowsConfirmDialog(QDialog):
         # accepted / rejected signal that would obscure which of the
         # three options the user chose.
         self._btn_box = QDialogButtonBox()
-        self._btn_unlock_apply = QPushButton(t("locked_confirm.btn_unlock_apply"))
+        # #417 — the "Apply" button label is context-driven (delete-now vs
+        # set-action), supplied by the caller; falls back to the generic
+        # shared label resolved in __init__.
+        self._btn_unlock_apply = QPushButton(self._btn_apply_label)
         self._btn_unlocked_only = QPushButton(t("locked_confirm.btn_unlocked_only"))
         self._btn_cancel = QPushButton(t("locked_confirm.btn_cancel"))
 
@@ -164,15 +200,15 @@ class LockedRowsConfirmDialog(QDialog):
         if unlocked_count == 0:
             # All-locked degenerate case: dedicated phrasing so the
             # user isn't asked to "apply to unlocked only" when there
-            # are no unlocked rows.
+            # are no unlocked rows. Key is caller-driven (#417).
             return t(
-                "locked_confirm.body_all_locked",
+                self._body_all_locked_key,
                 action=self._action_label,
                 locked=locked_count,
                 list=list_block,
             )
         return t(
-            "locked_confirm.body",
+            self._body_key,
             action=self._action_label,
             total=total,
             locked=locked_count,

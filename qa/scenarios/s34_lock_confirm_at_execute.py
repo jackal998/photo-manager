@@ -119,6 +119,35 @@ def main() -> int:
     execute_btn.click_input()
     time.sleep(0.3)
 
+    # #417 — the IMMEDIATE context wording must make the delete-now
+    # consequence explicit. Read the dialog text BEFORE dismissing and
+    # assert the delete-now apply button + a delete-now body cue. This
+    # distinguishes the Execute-time gate from the DEFERRED decision-set
+    # gate (s32), which shares one dialog class but different wording.
+    captured = _uia.capture_lock_confirm_text(pid, timeout=5.0)
+    if captured is None:
+        print(
+            "FAIL: LockedRowsConfirmDialog did not appear after Execute "
+            "even though q95 is locked-with-decision='delete'"
+        )
+        return 1
+    body_text, button_labels = captured
+    print(f"  lock_confirm_body={body_text!r}")
+    print(f"  lock_confirm_buttons={button_labels!r}")
+    if _uia.LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE not in button_labels:
+        print(
+            f"FAIL: IMMEDIATE context expected apply button "
+            f"{_uia.LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE!r}; "
+            f"got {button_labels}"
+        )
+        return 1
+    if "DELETE" not in body_text:
+        print(
+            f"FAIL: IMMEDIATE body should make delete-now explicit "
+            f"(expected 'DELETE' in body); got {body_text!r}"
+        )
+        return 1
+
     appeared = _uia.drive_lock_confirm(pid, _uia.LOCK_CONFIRM_CANCEL, timeout=5.0)
     if not appeared:
         print(

@@ -221,6 +221,97 @@ class TestExecuteDialogLock:
         assert locked.user_decision == "delete"
         assert locked.is_locked is False  # unlocked as part of action
 
+    def test_regex_destructive_passes_deferred_context_wording(self, qapp):
+        """#417 — bulk regex inside the Execute dialog is the DEFERRED
+        context: clicking "Apply" only writes user_decision to the
+        matched rows; nothing is deleted until Execute runs. The
+        lock-confirm gate must therefore use the deferred body + the
+        'Set Action' apply-button label, not the delete-now wording.
+        Asserts the exact keys/label the call site hands to
+        LockedRowsConfirmDialog.ask so the gate text can't silently
+        drift back to the ambiguous shared wording."""
+        from infrastructure.i18n import t
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        unlocked = _rec("/free.jpg", "")
+        locked = _rec("/pinned.jpg", "")
+        locked.is_locked = True
+        groups = [_group(unlocked, locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ) as ask:
+            dlg._set_decision_by_regex("File Name", r"\.jpg$", "delete")
+        kwargs = ask.call_args.kwargs
+        assert kwargs["body_key"] == "locked_confirm.body_deferred"
+        assert (
+            kwargs["body_all_locked_key"]
+            == "locked_confirm.body_all_locked_deferred"
+        )
+        assert kwargs["btn_apply_label"] == t(
+            "locked_confirm.btn_unlock_apply_deferred"
+        )
+
+    def test_single_row_destructive_passes_deferred_context_wording(self, qapp):
+        """#417 — single-row right-click → Set Action on a locked row is
+        also DEFERRED (in-memory decision change, committed only on
+        Execute). Same wording contract as the regex path."""
+        from infrastructure.i18n import t
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        rec = _rec("/pinned.jpg", "")
+        rec.is_locked = True
+        groups = [_group(rec)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ) as ask:
+            dlg._set_decision("/pinned.jpg", "delete")
+        kwargs = ask.call_args.kwargs
+        assert kwargs["body_key"] == "locked_confirm.body_deferred"
+        assert kwargs["btn_apply_label"] == t(
+            "locked_confirm.btn_unlock_apply_deferred"
+        )
+
+    def test_execute_pre_scan_passes_immediate_context_wording(self, qapp):
+        """#417 — the pre-execute scan in _on_execute_requested is the
+        IMMEDIATE context: clicking "Apply" deletes files NOW. The gate
+        must use the delete-now body + 'Delete All' apply-button label so
+        the user can't mistake it for the deferred decision-set gate."""
+        from infrastructure.i18n import t
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+        from app.views.dialogs.locked_rows_confirm_dialog import (
+            LockedRowsConfirmDialog,
+        )
+        unlocked = _rec("/free.jpg", "delete")
+        locked = _rec("/pinned.jpg", "delete")
+        locked.is_locked = True
+        groups = [_group(unlocked, locked)]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        with patch.object(
+            LockedRowsConfirmDialog,
+            "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ) as ask:
+            dlg._on_execute_requested()
+        kwargs = ask.call_args.kwargs
+        assert kwargs["body_key"] == "locked_confirm.body_immediate"
+        assert (
+            kwargs["body_all_locked_key"]
+            == "locked_confirm.body_all_locked_immediate"
+        )
+        assert kwargs["btn_apply_label"] == t(
+            "locked_confirm.btn_unlock_apply_immediate"
+        )
+
     def test_regex_destructive_cancel_changes_nothing(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         from app.views.dialogs.locked_rows_confirm_dialog import (
@@ -1762,6 +1853,11 @@ class TestExecuteDialogStaticScope:
         kwargs = mock_confirm.call_args.kwargs
         assert kwargs["paths"] == ["/locked.jpg"]
         assert kwargs["affected_count"] == 2
+        # #417 — the pre-execute scan is the IMMEDIATE context: clicking
+        # "Apply" deletes files now, so the gate must say so. Assert the
+        # call site passes the immediate context, not the default deferred.
+        from app.views.dialogs.execute_action_dialog import _LOCK_CONFIRM_IMMEDIATE
+        assert kwargs["context"] == _LOCK_CONFIRM_IMMEDIATE
 
 
 # ── #165 — embedded PreviewPane wiring ─────────────────────────────────────
