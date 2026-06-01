@@ -136,3 +136,33 @@ def top_score_path_per_group(rows: Iterable) -> set[str]:
         ranked.sort(key=lambda t: (-t[0], t[1]))
         keepers.add(ranked[0][1])
     return keepers
+
+
+def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[str]:
+    """Return source_paths to auto-mark ``user_decision='delete'`` in the
+    aggressive auto-select path (#393).
+
+    A non-keeper qualifies only when it is a ranked peer in a scored group
+    (has both ``group_id`` and ``score``) and is not itself the keeper.
+
+    #517 — rows whose ``match_confidence`` is ``"low"`` (a pHash-only
+    near-duplicate match with no independent dHash agreement) are EXCLUDED,
+    so a shaky match is never auto-deleted; the user confirms it manually.
+    Rows lacking the attribute (older shapes / non-near-dup rows) are treated
+    as not-low and remain eligible, preserving prior behaviour.
+
+    Args:
+        rows: Iterable of ``ManifestRow``-shaped objects (``group_id``,
+            ``source_path``, ``score``, ``match_confidence``).
+        keepers: The per-group keepers from :func:`top_score_path_per_group`.
+
+    Returns:
+        Set of ``source_path`` strings eligible for aggressive auto-delete.
+    """
+    return {
+        row.source_path for row in rows
+        if row.group_id is not None
+        and row.score is not None
+        and row.source_path not in keepers
+        and getattr(row, "match_confidence", None) != "low"
+    }

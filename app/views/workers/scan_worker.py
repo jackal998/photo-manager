@@ -941,17 +941,16 @@ class ScanWorker(QThread):
             from core.services.auto_select import apply_auto_select_decisions
             non_keepers: set[str] | None = None
             if self.auto_select_aggressive_delete:
-                # Non-keepers in scored groups: rows with both
-                # ``group_id`` AND ``score`` (i.e. ranked peers) but
-                # NOT picked as the keeper. ``score=None`` peers (Live
-                # Photo MOV passengers, all-MOV groups) are excluded —
-                # they aren't candidates for an explicit delete.
-                non_keepers = {
-                    row.source_path for row in rows
-                    if row.group_id is not None
-                    and row.score is not None
-                    and row.source_path not in keepers
-                }
+                # Non-keepers in scored groups: ranked peers (group_id AND
+                # score) that aren't the keeper. ``score=None`` peers (Live
+                # Photo MOV passengers, all-MOV groups) are excluded, and
+                # #517 excludes low-confidence (pHash-only) near-dups so a
+                # shaky match is never auto-deleted. See the helper for the
+                # full contract.
+                from core.services.auto_select import (
+                    non_keepers_for_aggressive_delete,
+                )
+                non_keepers = non_keepers_for_aggressive_delete(rows, keepers)
                 self._emit(
                     f"Auto-select aggressive: marked {len(non_keepers):,}"
                     f" non-keeper(s) for delete."

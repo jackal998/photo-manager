@@ -57,6 +57,7 @@ class HashResult:
     sha256: str
     phash: Optional[str]       # None for video or hash failure
     exif_date: Optional[datetime]
+    dhash: Optional[str] = None        # #517 — second perceptual hash (gradient); None when phash is None
     mean_color: Optional[str] = None   # "R,G,B" average pixel; None for video/RAW/failure
     pixel_width: Optional[int] = None  # image width in pixels; None for video/failure
     pixel_height: Optional[int] = None # image height in pixels; None for video/failure
@@ -129,6 +130,14 @@ class ManifestRow:
     gps_present: bool = False            # True if GPSLatitude tag present
     xmp_derived: bool = False            # True if xmpMM:DerivedFrom tag present (file is a derivative)
     score: Optional[float] = None        # composite quality score in [0.0, 1.0]; NULL for isolated or unscored rows
+    # #517 — multi-hash confidence: "high" when an independent second hash
+    # (dHash) agrees with the pHash match (or the match is SHA-exact), "low"
+    # when only pHash agrees (dHash missing or disagrees), None for non-dup
+    # rows. Transient like ``duplicate_of`` — NOT written to DB in this phase;
+    # it drives the auto-select aggressive-delete gate (low-confidence rows
+    # are never auto-marked for deletion). Persistence + a UI badge are a
+    # tracked follow-up.
+    match_confidence: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,12 +151,35 @@ def _mean_color_distance(a: str, b: str) -> float:
     return ((ra - rb) ** 2 + (ga - gb) ** 2 + (ba - bb) ** 2) ** 0.5
 
 
+def _dhash_confidence(a: HashResult, b: HashResult, dhash_threshold: int) -> str:
+    """#517 — confidence in a pHash-based duplicate match, voted by dHash.
+
+    pHash (DCT/frequency) and dHash (gradient/brightness) capture different
+    image structure, so requiring a *second, independent* hash to agree is a
+    precision signal. Returns ``"high"`` when dHash also agrees within
+    ``dhash_threshold``; ``"low"`` when only pHash agreed (dHash missing on
+    either side, imagehash unavailable, or dHash beyond threshold).
+
+    The match is NOT dropped on a "low" vote — grouping stays pHash-driven —
+    but the flag lets downstream consumers (auto-select) treat a pHash-only
+    match cautiously instead of auto-deleting it.
+    """
+    if not a.dhash or not b.dhash or not _IMAGEHASH_AVAILABLE:
+        return "low"
+    try:
+        distance = imagehash.hex_to_hash(a.dhash) - imagehash.hex_to_hash(b.dhash)
+    except (ValueError, TypeError):
+        return "low"
+    return "high" if distance <= dhash_threshold else "low"
+
+
 def classify(
     records: list[HashResult],
     threshold: int = 10,
     mean_color_threshold: int = 30,
     source_priority: dict[str, int] | None = None,
     min_phash_entropy_bits: int = 4,
+    dhash_threshold: int = 10,
 ) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
 
@@ -164,6 +196,10 @@ def classify(
             degenerate — a flat/near-empty image whose hash collides with every
             other flat image — and is excluded from pHash near-dup grouping (it
             still participates in exact-SHA dedup). ``0`` disables the guard.
+        dhash_threshold: Maximum dHash Hamming distance for the #517 confidence
+            vote. A pHash match whose dHash also agrees within this distance is
+            flagged ``match_confidence="high"``, otherwise ``"low"``. Does NOT
+            change which rows are grouped — only the confidence flag.
     """
     if source_priority is None:
         seen: dict[str, int] = {}
@@ -185,7 +221,7 @@ def classify(
     # Pass 2: pHash-based (cross-format + near-duplicate)
     _classify_phash(
         records, rows, threshold, source_priority, mean_color_threshold,
-        min_phash_entropy_bits,
+        min_phash_entropy_bits, dhash_threshold,
     )
 
     # Pass 3: remaining unclassified files — all sources treated equally
@@ -236,6 +272,7 @@ def _classify_exact(
                 "EXACT",
                 duplicate_of=str(keeper.record.path),
                 reason=f"exact duplicate of {keeper.record.path.name}",
+                match_confidence="high",  # #517 — byte-identical SHA match is certain
             )
 
 
@@ -275,6 +312,7 @@ def _classify_phash(
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
     min_phash_entropy_bits: int = 4,
+    dhash_threshold: int = 10,
 ) -> None:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE.
 
@@ -302,10 +340,15 @@ def _classify_phash(
     for group in by_phash.values():
         if len(group) < 2:
             continue
-        _classify_format_group(group, rows, source_priority, mean_color_threshold)
+        _classify_format_group(
+            group, rows, source_priority, mean_color_threshold, dhash_threshold
+        )
 
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold
-    _classify_near_duplicates(candidates, rows, threshold, source_priority, mean_color_threshold)
+    _classify_near_duplicates(
+        candidates, rows, threshold, source_priority, mean_color_threshold,
+        dhash_threshold,
+    )
 
 
 def _classify_format_group(
@@ -313,6 +356,7 @@ def _classify_format_group(
     rows: dict[str, ManifestRow],
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
+    dhash_threshold: int = 10,
 ) -> None:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority."""
     has_raw = any(hr.record.file_type == "raw" for hr in group)
@@ -353,6 +397,7 @@ def _classify_format_group(
             hamming=0,
             reason=f"format duplicate of {keeper.record.path.name} "
                    f"({duplicate.record.file_type} vs {keeper.record.file_type})",
+            match_confidence=_dhash_confidence(keeper, duplicate, dhash_threshold),
         )
 
 
@@ -362,6 +407,7 @@ def _classify_near_duplicates(
     threshold: int,
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
+    dhash_threshold: int = 10,
 ) -> None:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE."""
     if not _IMAGEHASH_AVAILABLE:
@@ -400,6 +446,9 @@ def _classify_near_duplicates(
                         hamming=distance,
                         reason=f"near-duplicate (hamming={distance}) of "
                                f"{ordered[0].record.path.name}",
+                        match_confidence=_dhash_confidence(
+                            ordered[0], flagged, dhash_threshold
+                        ),
                     )
 
 
@@ -519,6 +568,7 @@ def _make_row(
     reason: str = "",
     duplicate_of: Optional[str] = None,
     hamming: Optional[int] = None,
+    match_confidence: Optional[str] = None,
 ) -> ManifestRow:
     import os
     from datetime import datetime as _dt
@@ -551,4 +601,5 @@ def _make_row(
         mtime=_mtime,
         pixel_width=hr.pixel_width,
         pixel_height=hr.pixel_height,
+        match_confidence=match_confidence,
     )

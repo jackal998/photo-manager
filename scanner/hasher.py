@@ -76,9 +76,12 @@ def compute_sha256(path: Path) -> str:
 def compute_hashes(
     path: Path, file_type: str
 ) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
-    """Single file read: ``(sha256, phash, mean_color, raw_exif_date, width, height)``.
+    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height)``.
 
-    All six values are derived from one in-memory read — no extra file open.
+    All values are derived from one in-memory read — no extra file open.
+    ``dhash`` is a second, independent perceptual hash (gradient/brightness
+    based, complementary to pHash's DCT) used by the dedup confidence vote
+    (#517); ``None`` whenever ``phash`` is ``None``.
     ``width``/``height`` are the pixel dimensions of the image (or ``None``
     for video/skip and on decode failure).  For RAW files the true sensor
     dimensions are read from ``raw.sizes`` via rawpy (not the embedded thumbnail).
@@ -87,14 +90,14 @@ def compute_hashes(
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
     """
     if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None, None, None
+        return compute_sha256(path), None, None, None, None, None, None
 
-    # Single read: derive all six values from memory.
+    # Single read: derive all values from memory.
     data = path.read_bytes()
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
-        return sha, None, None, None, None, None
+        return sha, None, None, None, None, None, None
 
     img: Optional[Image.Image] = None
     raw_date: Optional[str] = None
@@ -131,17 +134,25 @@ def compute_hashes(
             img = None
 
     if img is None:
-        return sha, None, None, raw_date, None, None
+        return sha, None, None, None, raw_date, None, None
     try:
         tiny = img.resize((1, 1), Image.LANCZOS)
         mc = tiny.getpixel((0, 0))[:3]
-        return sha, str(imagehash.phash(img)), f"{mc[0]},{mc[1]},{mc[2]}", raw_date, px_w, px_h
+        return (
+            sha,
+            str(imagehash.phash(img)),
+            str(imagehash.dhash(img)),
+            f"{mc[0]},{mc[1]},{mc[2]}",
+            raw_date,
+            px_w,
+            px_h,
+        )
     except (ValueError, TypeError):
         # #470 — preserve px_w / px_h measured before the phash compute attempt.
         # Wiping them to None would force scoring._score_resolution to 0.0 even
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
-        return sha, None, None, raw_date, px_w, px_h
+        return sha, None, None, None, raw_date, px_w, px_h
 
 
 # Formats where PIL is the primary decoder and a missing pHash unambiguously
@@ -195,7 +206,7 @@ def run_hash_for_record(
     use) or a ``ProcessPoolExecutor`` (planned, see follow-up to #486).
     """
     try:
-        sha256, phash, mean_color, raw_date, px_w, px_h = compute_hashes(
+        sha256, phash, dhash, mean_color, raw_date, px_w, px_h = compute_hashes(
             record.path, record.file_type
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -214,6 +225,7 @@ def run_hash_for_record(
         record=record,
         sha256=sha256,
         phash=phash,
+        dhash=dhash,
         mean_color=mean_color,
         exif_date=pil_date,
         pixel_width=px_w,
