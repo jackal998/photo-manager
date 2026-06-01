@@ -16,7 +16,6 @@ CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,
     source_path      TEXT NOT NULL,
     source_label     TEXT NOT NULL,
-    dest_path        TEXT,
     action           TEXT NOT NULL,
     source_hash      TEXT,
     phash            TEXT,
@@ -33,7 +32,6 @@ CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,
     source_path      TEXT NOT NULL,
     source_label     TEXT NOT NULL,
-    dest_path        TEXT,
     action           TEXT NOT NULL,
     source_hash      TEXT,
     phash            TEXT,
@@ -54,7 +52,6 @@ CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,
     source_path      TEXT NOT NULL,
     source_label     TEXT NOT NULL,
-    dest_path        TEXT,
     action           TEXT NOT NULL,
     source_hash      TEXT,
     phash            TEXT,
@@ -87,7 +84,6 @@ def _row(overrides: dict) -> dict:
     base = {
         "source_path": "/source/a.jpg",
         "source_label": "jdrive",
-        "dest_path": None,
         "action": "REVIEW_DUPLICATE",
         "hamming_distance": 5,
         "group_id": "/group/a",
@@ -99,12 +95,12 @@ def _row(overrides: dict) -> dict:
 
 
 def _ref_row(overrides: dict = {}) -> dict:
-    """Create a companion MOVE row that shares the same default group_id."""
+    """Create a companion undecided ("") row that shares the same default
+    group_id (#433 — was a MOVE row)."""
     base = {
         "source_path": "/reference/a.jpg",
         "source_label": "takeout",
-        "dest_path": "2024/20240601_takeout/a.jpg",
-        "action": "MOVE",
+        "action": "",
         "hamming_distance": None,
         "group_id": "/group/a",
         "reason": "unique",
@@ -205,11 +201,12 @@ class TestManifestRepositoryLoad:
         assert str(tmp_path / "missing.jpg") in paths
 
     def test_singleton_move_not_yielded(self, tmp_path):
-        """MOVE rows with no group_id are singletons — not shown in the review UI."""
+        """Undecided ("") rows with no group_id are singletons — not shown in
+        the review UI (#433 — these were MOVE rows)."""
         f = tmp_path / "photo.jpg"
         _make_jpeg(f)
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(f), "action": "MOVE", "group_id": None, "hamming_distance": None}),
+            _row({"source_path": str(f), "action": "", "group_id": None, "hamming_distance": None}),
         ])
         records = list(ManifestRepository().load(str(db)))
         assert len(records) == 0
@@ -277,7 +274,7 @@ class TestManifestRepositoryLoad:
         ])
         records = {r.file_path: r for r in ManifestRepository().load(str(db))}
         assert records[str(cand)].action == "REVIEW_DUPLICATE"
-        assert records[str(ref)].action == "MOVE"   # each member keeps its own action
+        assert records[str(ref)].action == ""   # each member keeps its own action
 
     def test_user_decision_defaults_to_empty_string(self, tmp_path):
         cand = tmp_path / "jdrive" / "a.jpg"
@@ -323,7 +320,6 @@ class TestManifestRepositoryLoad:
             {
                 "source_path": str(cand),
                 "source_label": "jdrive",
-                "dest_path": None,
                 "action": "REVIEW_DUPLICATE",
                 "hamming_distance": 3,
                 "group_id": gid,
@@ -333,8 +329,7 @@ class TestManifestRepositoryLoad:
             {
                 "source_path": str(ref),
                 "source_label": "takeout",
-                "dest_path": None,
-                "action": "MOVE",
+                "action": "",
                 "hamming_distance": None,
                 "group_id": gid,
                 "reason": "unique",
@@ -396,11 +391,11 @@ class TestManifestRepositorySave:
         manifests on disk may still carry the literal value, and
         operations that re-save them must preserve the data."""
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "action": "MOVE",
+            _row({"source_path": "/source/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "MOVE", "keep"),
+            self._make_record("/source/a.jpg", "", "keep"),
         ])
         ManifestRepository().save(str(db), [group])
 
@@ -415,10 +410,10 @@ class TestManifestRepositorySave:
         """save() writes empty string when user_decision is unset."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "user_decision": "delete",
-                  "group_id": None, "hamming_distance": None, "action": "MOVE"}),
+                  "group_id": None, "hamming_distance": None, "action": ""}),
         ])
         group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "MOVE", ""),
+            self._make_record("/source/a.jpg", "", ""),
         ])
         ManifestRepository().save(str(db), [group])
 
@@ -449,14 +444,14 @@ class TestManifestRepositorySave:
     def test_save_returns_row_count(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
             _row({"source_path": "/source/b.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
         ])
         # #425 — first record canonical empty keep; second deletes.
         group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "MOVE", ""),
-            self._make_record("/source/b.jpg", "MOVE", "delete"),
+            self._make_record("/source/a.jpg", "", ""),
+            self._make_record("/source/b.jpg", "", "delete"),
         ])
         count = ManifestRepository().save(str(db), [group])
         assert count == 2
@@ -466,9 +461,9 @@ class TestManifestRepositoryUpdateDecision:
     def test_update_decision_sets_single_row(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
             _row({"source_path": "/source/b.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
         ])
         ManifestRepository().update_decision(str(db), "/source/a.jpg", "delete")
 
@@ -489,7 +484,7 @@ class TestManifestRepositoryUpdateDecision:
         # the canonical undecided/keep state.
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/source/a.jpg", "user_decision": "delete",
-                  "group_id": None, "hamming_distance": None, "action": "MOVE"}),
+                  "group_id": None, "hamming_distance": None, "action": ""}),
         ])
         ManifestRepository().update_decision(str(db), "/source/a.jpg", "")
 
@@ -504,9 +499,9 @@ class TestManifestRepositoryUpdateDecision:
 class TestBatchUpdateDecisions:
     def test_updates_multiple_rows_in_one_call(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/b.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
-            _row({"source_path": "/c.jpg", "group_id": None, "hamming_distance": None, "action": "MOVE"}),
+            _row({"source_path": "/a.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
+            _row({"source_path": "/b.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
+            _row({"source_path": "/c.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
         ])
         # #425 — second value flipped "keep" → REMOVE_FROM_LIST_DECISION
         # so the batch test still verifies two distinct non-default
@@ -529,7 +524,7 @@ class TestBatchUpdateDecisions:
         # assertion is distinguishable from the schema default.
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "user_decision": "delete",
-                  "group_id": None, "hamming_distance": None, "action": "MOVE"}),
+                  "group_id": None, "hamming_distance": None, "action": ""}),
         ])
         ManifestRepository().batch_update_decisions(str(db), {})
 
@@ -555,11 +550,11 @@ class TestBatchUpdateDecisionsAndLock:
         """
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/k.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
             _row({"source_path": "/d.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
             _row({"source_path": "/untouched.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
         ])
         # Add is_locked column for parity with the production schema
         # path (auto-select migrates lazily before this call).
@@ -601,7 +596,7 @@ class TestBatchUpdateDecisionsAndLock:
 
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
         ])
         opens: list[str] = []
         real_connect = repo_mod._connect
@@ -623,7 +618,7 @@ class TestRemoveFromReview:
     def test_marks_user_decision_removed(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
         ])
         ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
 
@@ -637,11 +632,11 @@ class TestRemoveFromReview:
     def test_multiple_paths_marked(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
             _row({"source_path": "/b.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
             _row({"source_path": "/c.jpg", "group_id": None,
-                  "hamming_distance": None, "action": "MOVE"}),
+                  "hamming_distance": None, "action": ""}),
         ])
         ManifestRepository().remove_from_review(str(db), ["/a.jpg", "/c.jpg"])
 
@@ -661,7 +656,7 @@ class TestRemoveFromReview:
         f = tmp_path / "photo.jpg"
         _make_jpeg(f)
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(f), "action": "MOVE",
+            _row({"source_path": str(f), "action": "",
                   "group_id": None, "hamming_distance": None,
                   "user_decision": "removed"}),
         ])
@@ -697,9 +692,9 @@ class TestRemoveFromReview:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(f_keep), "action": "REVIEW_DUPLICATE",
                   "group_id": gid, "hamming_distance": 3, "user_decision": ""}),
-            _row({"source_path": str(f_other), "action": "MOVE",
+            _row({"source_path": str(f_other), "action": "",
                   "group_id": gid, "hamming_distance": None, "user_decision": ""}),
-            _row({"source_path": str(f_del), "action": "MOVE",
+            _row({"source_path": str(f_del), "action": "",
                   "group_id": None, "hamming_distance": None,
                   "user_decision": "removed"}),
         ])
@@ -739,7 +734,7 @@ class TestMarkExecuted:
 
     def test_marks_single_path_executed(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg"])
@@ -747,9 +742,9 @@ class TestMarkExecuted:
 
     def test_marks_multiple_paths(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "MOVE",
+            _row({"source_path": "/b.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg", "/b.jpg"])
@@ -758,7 +753,7 @@ class TestMarkExecuted:
 
     def test_noop_for_unknown_path(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/does_not_exist.jpg"])
@@ -766,9 +761,9 @@ class TestMarkExecuted:
 
     def test_does_not_affect_other_rows(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "MOVE",
+            _row({"source_path": "/b.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg"])
@@ -783,8 +778,7 @@ class TestLoadFromDB:
         base = {
             "source_path": path,
             "source_label": "jdrive",
-            "dest_path": None,
-            "action": "MOVE",
+            "action": "",
             "hamming_distance": None,
             "group_id": None,
             "reason": "unique",
@@ -960,7 +954,7 @@ class TestConnectionPragmas:
 
     def test_wal_enabled_after_batch_update(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         # #425 — flipped "keep" → "delete" (canonical keep "" would be
@@ -971,7 +965,7 @@ class TestConnectionPragmas:
 
     def test_wal_enabled_after_save(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         group = PhotoGroup(group_number=1, items=[
@@ -979,7 +973,7 @@ class TestConnectionPragmas:
                 group_number=1, is_mark=False, is_locked=False,
                 folder_path="", file_path="/a.jpg",
                 capture_date=None, modified_date=None, file_size_bytes=0,
-                action="MOVE", user_decision="",  # #425 — canonical keep
+                action="", user_decision="",  # #425 — canonical keep
             )
         ])
         ManifestRepository().save(str(db), [group])
@@ -987,7 +981,7 @@ class TestConnectionPragmas:
 
     def test_wal_enabled_after_mark_executed(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().mark_executed(str(db), ["/a.jpg"])
@@ -995,7 +989,7 @@ class TestConnectionPragmas:
 
     def test_wal_enabled_after_update_decision(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().update_decision(str(db), "/a.jpg", "delete")
@@ -1003,7 +997,7 @@ class TestConnectionPragmas:
 
     def test_wal_enabled_after_remove_from_review(self, tmp_path):
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
@@ -1016,18 +1010,18 @@ class TestSaveUsesExecutemany:
     def test_save_return_count_equals_record_count(self, tmp_path):
         """save() must return the number of records passed, regardless of batch size."""
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "MOVE",
+            _row({"source_path": "/b.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/c.jpg", "action": "MOVE",
+            _row({"source_path": "/c.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         groups = [PhotoGroup(group_number=1, items=[
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,
                         folder_path="", file_path=p,
                         capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="MOVE", user_decision="")  # #425 canonical keep
+                        action="", user_decision="")  # #425 canonical keep
             for p in ("/a.jpg", "/b.jpg", "/c.jpg")
         ])]
         count = ManifestRepository().save(str(db), groups)
@@ -1041,20 +1035,20 @@ class TestSaveUsesExecutemany:
     def test_save_still_writes_all_decisions(self, tmp_path):
         """Correctness check: executemany saves every record."""
         db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "MOVE",
+            _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "MOVE",
+            _row({"source_path": "/b.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
         groups = [PhotoGroup(group_number=1, items=[
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,
                         folder_path="", file_path="/a.jpg",
                         capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="MOVE", user_decision=""),  # #425 canonical keep
+                        action="", user_decision=""),  # #425 canonical keep
             PhotoRecord(group_number=1, is_mark=False, is_locked=False,
                         folder_path="", file_path="/b.jpg",
                         capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="MOVE", user_decision="delete"),
+                        action="", user_decision="delete"),
         ])]
         count = ManifestRepository().save(str(db), groups)
         assert count == 2
@@ -1104,37 +1098,41 @@ class TestInGroupRowOrdering:
 
     `_file_similarity` (in `app/views/tree_model_builder.py`) renders any
     action other than EXACT and REVIEW_DUPLICATE as "Ref". So the SQL
-    ordering puts every "Ref tier" action (KEEP / MOVE / UNDATED / unset)
+    ordering puts every "Ref tier" action (KEEP / UNDATED / unset "")
     at position 1, then EXACT (2 — strongest match), then REVIEW_DUPLICATE
     (3 — weaker), so a group reads top-down as Ref → 100% → near-matches.
+    The legacy MOVE action was dropped in #433 — real-world primaries now
+    carry the empty action "".
     """
 
-    def test_move_primary_appears_before_review_duplicate_and_exact(self, tmp_path):
-        """The s07/s10 case: dedup classifier labels the primary as MOVE.
+    def test_undecided_primary_appears_before_review_duplicate_and_exact(self, tmp_path):
+        """The s07/s10 case: dedup classifier labels the primary as "" undecided.
 
         Regression for #76. The original #55 fix moved only KEEP to position 1,
-        but `dedup.classify` actually assigns MOVE to most real-world primaries
-        — so KEEP-only didn't move the displayed Ref to the top in practice.
+        but `dedup.classify` assigns the empty "" action to most real-world
+        primaries (#433 — was MOVE) — so KEEP-only didn't move the displayed
+        Ref to the top in practice.
         """
         ref = tmp_path / "ref" / "primary.jpg"
         review = tmp_path / "review" / "near.jpg"
         exact = tmp_path / "exact" / "dup.jpg"
         for p in (ref, review, exact):
             _make_jpeg(p)
-        gid = "/group/move-primary"
+        gid = "/group/undecided-primary"
         db = _make_manifest(tmp_path, [
-            # Insert in non-priority order; SQL ordering must still put MOVE first.
+            # Insert in non-priority order; SQL ordering must still put the
+            # undecided "" primary first.
             _row({"source_path": str(review), "action": "REVIEW_DUPLICATE", "group_id": gid}),
             _row({"source_path": str(exact), "action": "EXACT", "group_id": gid,
                   "hamming_distance": None}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ])
         records = list(ManifestRepository().load(str(db)))
         actions = [r.action for r in records]
-        assert actions[0] == "MOVE", \
-            f"MOVE primary (rendered as Ref) should be at top of group; got order {actions}"
-        assert actions == ["MOVE", "EXACT", "REVIEW_DUPLICATE"]
+        assert actions[0] == "", \
+            f"undecided primary (rendered as Ref) should be at top of group; got order {actions}"
+        assert actions == ["", "EXACT", "REVIEW_DUPLICATE"]
 
     def test_keep_primary_appears_before_review_duplicate_and_exact(self, tmp_path):
         """KEEP primary case (rarer in practice) — also a Ref tier action."""
@@ -1167,7 +1165,6 @@ CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,
     source_path      TEXT NOT NULL,
     source_label     TEXT NOT NULL,
-    dest_path        TEXT,
     action           TEXT NOT NULL,
     source_hash      TEXT,
     phash            TEXT,
@@ -1196,7 +1193,7 @@ class TestIsLockedPersistence:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
                   "group_id": gid}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ])
         records = {str(r.file_path): r for r in ManifestRepository().load(str(db))}
@@ -1214,7 +1211,7 @@ class TestIsLockedPersistence:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
                   "group_id": gid}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ], ddl=_DDL_WITH_METADATA)  # _DDL_WITH_METADATA has no is_locked
         # First load triggers the migration (ALTER TABLE ADD COLUMN).
@@ -1236,7 +1233,7 @@ class TestIsLockedPersistence:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
                   "group_id": gid}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ], ddl=_DDL_WITH_IS_LOCKED)
 
@@ -1257,7 +1254,7 @@ class TestIsLockedPersistence:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
                   "group_id": gid, "is_locked": 1}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ], ddl=_DDL_WITH_IS_LOCKED)
 
@@ -1310,7 +1307,7 @@ class TestScoringSchemaMigration:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
                   "group_id": gid}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ], ddl=_DDL_WITH_IS_LOCKED)
 
@@ -1337,7 +1334,7 @@ class TestScoringSchemaMigration:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
                   "group_id": gid}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ], ddl=_DDL_WITH_IS_LOCKED)
 
@@ -1366,7 +1363,7 @@ class TestScoringSchemaMigration:
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "action": "REVIEW_DUPLICATE",
                   "group_id": gid}),
-            _row({"source_path": str(ref), "action": "MOVE", "group_id": gid,
+            _row({"source_path": str(ref), "action": "", "group_id": gid,
                   "hamming_distance": None}),
         ], ddl=_DDL_WITH_IS_LOCKED)
 
@@ -1388,14 +1385,14 @@ class TestScoringSchemaMigration:
         rows = [
             ManifestRow(
                 source_path=str(cand), source_label="src",
-                dest_path=None, action="REVIEW_DUPLICATE",
+                action="REVIEW_DUPLICATE",
                 source_hash="aaa", phash=None, hamming_distance=5,
                 duplicate_of=None, reason="",
                 group_id=gid, score=0.87,
             ),
             ManifestRow(
                 source_path=str(ref), source_label="src",
-                dest_path=None, action="MOVE",
+                action="",
                 source_hash="bbb", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 group_id=gid, score=0.42,
@@ -1423,14 +1420,14 @@ class TestScoringSchemaMigration:
         rows = [
             ManifestRow(
                 source_path=str(cand), source_label="src",
-                dest_path=None, action="MOVE",
+                action="",
                 source_hash="aaa", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 group_id=gid, score=0.75,
             ),
             ManifestRow(
                 source_path=str(ref), source_label="src",
-                dest_path=None, action="MOVE",
+                action="",
                 source_hash="bbb", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 group_id=gid, score=None,  # Live Photo MOV passenger
@@ -1442,3 +1439,147 @@ class TestScoringSchemaMigration:
         records = {r.file_path: r for r in ManifestRepository().load(str(db))}
         assert records[str(ref)].score is None
         assert records[str(cand)].score == pytest.approx(0.75)
+
+
+# ---------------------------------------------------------------------------
+# #433 — drop-move / dest_path migration
+# ---------------------------------------------------------------------------
+
+# Full pre-#433 production schema: the original write-time DDL PLUS every
+# additive column that landed via _MIGRATIONS up to and including #187's
+# scoring columns + #164's is_locked. This is what a real manifest produced
+# by a pre-#433 scanner + opened once by a pre-#433 app looks like on disk:
+# it carries the legacy ``dest_path`` column and ``action='MOVE'`` rows.
+_DDL_PRE_433 = """
+CREATE TABLE migration_manifest (
+    id               INTEGER PRIMARY KEY,
+    source_path      TEXT    NOT NULL,
+    source_label     TEXT    NOT NULL,
+    dest_path        TEXT,
+    action           TEXT    NOT NULL,
+    source_hash      TEXT,
+    phash            TEXT,
+    hamming_distance INTEGER,
+    group_id         TEXT,
+    reason           TEXT,
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    file_size_bytes  INTEGER,
+    shot_date        TEXT,
+    creation_date    TEXT,
+    mtime            TEXT,
+    pixel_width      INTEGER,
+    pixel_height     INTEGER,
+    is_locked        INTEGER NOT NULL DEFAULT 0,
+    exif_tag_count   INTEGER,
+    gps_present      INTEGER NOT NULL DEFAULT 0,
+    xmp_derived      INTEGER NOT NULL DEFAULT 0,
+    score            REAL
+);
+"""
+
+
+class TestDropMoveDestPathMigration:
+    """#433 — opening a legacy manifest must drop the dest_path column and
+    rewrite action='MOVE' rows to '' (undecided), preserving every row.
+
+    This is a REAL migration exercise: it builds an on-disk pre-#433 DB with
+    the legacy column + MOVE rows, runs the production open path, then reads
+    the post-migration schema and data back. No mocks, no forced branches.
+    """
+
+    def _old_db(self, tmp_path: Path) -> Path:
+        db = tmp_path / "legacy.sqlite"
+        with sqlite3.connect(db) as conn:
+            conn.executescript(_DDL_PRE_433)
+            conn.executemany(
+                "INSERT INTO migration_manifest "
+                "(source_path, source_label, dest_path, action, source_hash, "
+                " group_id, reason, executed, user_decision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    # Two MOVE rows (unique survivors) with a real dest_path,
+                    ("/jdrive/a.jpg", "jdrive", "2024/20240601_jdrive/a.jpg",
+                     "MOVE", "h1", None, "unique", 0, ""),
+                    ("/jdrive/b.jpg", "jdrive", "2024/20240601_jdrive/b.jpg",
+                     "MOVE", "h2", "/group/g", "unique", 0, ""),
+                    # plus a duplicate row whose action must survive untouched,
+                    ("/takeout/a.jpg", "takeout", None,
+                     "EXACT", "h1", "/group/g", "exact dup", 0, "delete"),
+                ],
+            )
+            conn.commit()
+        return db
+
+    def _cols(self, db: Path) -> set[str]:
+        with sqlite3.connect(db) as conn:
+            return {r[1] for r in conn.execute(
+                "PRAGMA table_info(migration_manifest)"
+            )}
+
+    def test_dest_path_column_dropped(self, tmp_path):
+        db = self._old_db(tmp_path)
+        assert "dest_path" in self._cols(db)   # precondition: legacy column present
+        ManifestRepository().ensure_schema(str(db))
+        assert "dest_path" not in self._cols(db)
+
+    def test_move_rows_rewritten_to_empty_action(self, tmp_path):
+        db = self._old_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(db) as conn:
+            actions = {
+                r[0]: r[1] for r in conn.execute(
+                    "SELECT source_path, action FROM migration_manifest"
+                )
+            }
+        # Both MOVE rows became '' (undecided); the EXACT row is untouched.
+        assert actions["/jdrive/a.jpg"] == ""
+        assert actions["/jdrive/b.jpg"] == ""
+        assert actions["/takeout/a.jpg"] == "EXACT"
+        # No 'MOVE' label survives anywhere.
+        assert "MOVE" not in set(actions.values())
+
+    def test_row_count_and_data_preserved(self, tmp_path):
+        db = self._old_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute(
+                "SELECT source_path, source_label, source_hash, group_id, "
+                "       reason, user_decision "
+                "FROM migration_manifest ORDER BY source_path"
+            ).fetchall()
+        # Exactly the three rows survive — nothing dropped, nothing duplicated.
+        assert len(rows) == 3
+        # Spot-check that non-dropped columns kept their values through the
+        # copy-table rebuild (the EXACT row's decision + group + reason).
+        takeout = next(r for r in rows if r[0] == "/takeout/a.jpg")
+        assert takeout == (
+            "/takeout/a.jpg", "takeout", "h1", "/group/g", "exact dup", "delete"
+        )
+
+    def test_migration_is_idempotent(self, tmp_path):
+        """Re-running ensure_schema on an already-migrated DB is a no-op —
+        the guard short-circuits when dest_path is already gone, so neither
+        the schema nor the data changes on the second pass."""
+        db = self._old_db(tmp_path)
+        repo = ManifestRepository()
+        repo.ensure_schema(str(db))
+        cols_after_first = self._cols(db)
+        # Second pass must not raise and must leave the schema/data identical.
+        repo.ensure_schema(str(db))
+        assert self._cols(db) == cols_after_first
+        with sqlite3.connect(db) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM migration_manifest"
+            ).fetchone()[0]
+        assert count == 3
+
+    def test_load_after_migration_yields_grouped_rows(self, tmp_path):
+        """End-to-end: load() (which calls ensure_schema) on a legacy DB
+        surfaces the migrated group with the survivor row's action now ''."""
+        db = self._old_db(tmp_path)
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        # /group/g has the migrated survivor (/jdrive/b.jpg, now '') and the
+        # EXACT duplicate (/takeout/a.jpg) — both yielded as a 2-member group.
+        assert records["/jdrive/b.jpg"].action == ""
+        assert records["/takeout/a.jpg"].action == "EXACT"

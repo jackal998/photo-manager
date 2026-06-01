@@ -2,7 +2,7 @@
 
 A Windows tool for **deduplication scanning and review** of large personal photo collections.
 
-Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://github.com/jackal998/photo-transfer)** for the actual file migration.
+Produces `migration_manifest.sqlite` recording each file's dedup classification and review decision. (The legacy `MOVE` action + `dest_path` handshake to the external **[photo-transfer](https://github.com/jackal998/photo-transfer)** tool was removed in #433 — see the classification table below.)
 
 ---
 
@@ -31,9 +31,9 @@ Produces `migration_manifest.sqlite` consumed by **[photo-transfer](https://gith
 │       • delete → send file to recycle bin                                   │
 │       • keep   → mark as executed in the manifest                           │
 │                                                                             │
-│  4. MIGRATE (photo-transfer)                                                │
-│     python migrate.py --manifest migration_manifest.sqlite --dest-root …    │
-│     Copies every MOVE row to the destination tree                           │
+│  4. MIGRATE (photo-transfer) — legacy / defunct                            │
+│     The MOVE action + dest_path handshake were removed in #433.             │
+│     photo-manager is now a standalone dedup-scan + review tool.             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -249,10 +249,17 @@ canonical catalogue.
 |-----------|--------|
 | SHA-256 match | `EXACT` (exact duplicate — lower-priority copy) |
 | pHash hamming = 0, both lossy (JPG / HEIC / PNG) | `EXACT` lower-priority format (format duplicate) |
-| pHash hamming = 0, one RAW + one lossy | `MOVE` both (complementary — always kept together) |
+| pHash hamming = 0, one RAW + one lossy | `""` both (complementary — undecided, kept for review) |
 | pHash hamming 1–threshold | `REVIEW_DUPLICATE` — needs human triage |
 | No EXIF `DateTimeOriginal` | `UNDATED` |
-| Everything else | `MOVE` |
+| Everything else | `""` (undecided non-duplicate file) |
+
+> **#433 — `MOVE` action + `dest_path` column removed.** These were the
+> handshake to the now-defunct external photo-transfer tool. Unique, dated,
+> non-duplicate files now carry the empty action (`""`) — the canonical
+> "undecided" state the review UI already renders as a Ref-tier row. Opening
+> a pre-#433 manifest auto-migrates: the `dest_path` column is dropped and any
+> `action='MOVE'` rows are rewritten to `""`, preserving every row.
 
 **Source priority** (exact duplicates): positional — order in the scan dialog (top = highest priority) or `--source` CLI flag order. No source receives a hardcoded `KEEP`.  
 **Format priority** (FORMAT_DUPLICATE): `heic > jpeg > png > others`

@@ -32,7 +32,7 @@ def _rec(**overrides):
         file_path="/photos/a.jpg",
         folder_path="/photos",
         file_size_bytes=12345,
-        action="MOVE",
+        action="",
         user_decision="",
         is_locked=False,
         hamming_distance=None,
@@ -85,7 +85,9 @@ class TestFileSimilarity:
     def test_review_duplicate_with_no_hamming_returns_placeholder(self):
         assert _file_similarity("REVIEW_DUPLICATE", _rec(hamming_distance=None)) == "~dup"
 
-    @pytest.mark.parametrize("action", ["KEEP", "MOVE", "UNDATED", "", "FOO_UNKNOWN"])
+    # #433 — "MOVE" dropped; "" (the undecided action that replaced it) and an
+    # unknown action both still render as Ref via the non-EXACT/REVIEW branch.
+    @pytest.mark.parametrize("action", ["KEEP", "UNDATED", "", "FOO_UNKNOWN"])
     def test_other_actions_render_as_ref(self, action):
         assert _file_similarity(action, _rec()) == "Ref"
 
@@ -97,7 +99,7 @@ class TestFileSimilarityAgainstDisplayedRef:
     """#253 — REVIEW_DUPLICATE rows render % measured against the Ref
     winner ``_pick_ref_winner`` selects, NOT the scanner's anchor whose
     distance lives in ``record.hamming_distance``. After #241 the two
-    can diverge: scanner anchors on the lex-first MOVE row, but the
+    can diverge: scanner anchors on the lex-first Ref-tier row, but the
     score-aware Ref pick may select a different Ref-tier sibling.
     """
 
@@ -193,8 +195,8 @@ class TestPickRefWinner:
         int — this test pins that the returned value is the actual
         record-shaped object.
         """
-        ref_a = _rec(file_path="/p/a.jpg", action="MOVE", score=0.9, phash="aaaa")
-        ref_b = _rec(file_path="/p/b.jpg", action="MOVE", score=0.5, phash="bbbb")
+        ref_a = _rec(file_path="/p/a.jpg", action="", score=0.9, phash="aaaa")
+        ref_b = _rec(file_path="/p/b.jpg", action="", score=0.5, phash="bbbb")
         winner = _pick_ref_winner([ref_a, ref_b])
         assert winner is ref_a
         assert getattr(winner, "phash") == "aaaa"
@@ -205,8 +207,8 @@ class TestPickRefWinner:
         ``build_model`` reads the higher-scored row's phash and that
         becomes the basis for #253's render-time recomputation.
         """
-        ref_a = _rec(file_path="/p/zzz.jpg", action="MOVE", score=0.9)
-        ref_b = _rec(file_path="/p/aaa.jpg", action="MOVE", score=0.5)
+        ref_a = _rec(file_path="/p/zzz.jpg", action="", score=0.9)
+        ref_b = _rec(file_path="/p/aaa.jpg", action="", score=0.5)
         winner = _pick_ref_winner([ref_a, ref_b])
         assert winner is ref_a
 
@@ -229,13 +231,13 @@ class TestBuildModelSimilarityAgainstDisplayedRef:
         # ref_low (the lex-first scanner anchor).
         ref_high = _rec(
             file_path="/p/ref_high.jpg",
-            action="MOVE",
+            action="",
             score=0.9,
             phash="0000000000000000",
         )
         ref_low = _rec(
             file_path="/p/aaa_ref_low.jpg",  # lex-first
-            action="MOVE",
+            action="",
             score=0.3,
             phash="ffffffffffffffff",
         )
@@ -268,10 +270,14 @@ class TestBuildModelSimilarityAgainstDisplayedRef:
 class TestSortMappings:
     def test_ref_tier_actions_share_top_priority(self):
         # Per #76 + #81: every "Ref"-displayed action sorts at position 1.
+        # #433 — the legacy MOVE key was dropped; unique non-duplicate files
+        # now carry the empty action "", which is the explicit Ref-tier entry.
         assert _ACTION_SORT["KEEP"] == 1
-        assert _ACTION_SORT["MOVE"] == 1
         assert _ACTION_SORT["UNDATED"] == 1
         assert _ACTION_SORT[""] == 1
+        # The dropped MOVE key (and any unknown action) falls to tier 1 via
+        # the default-1 rule, so its Ref-tier sort behaviour is preserved.
+        assert _ACTION_SORT.get("MOVE", 1) == 1
 
     def test_exact_before_review_duplicate(self):
         # Per #81: descending similarity within a group (Ref → 100% → near-match).
@@ -299,7 +305,7 @@ class TestBuildModel:
         assert header_text  # non-empty
 
     def test_one_group_with_two_files_appears_as_group_row_plus_two_children(self, qapp):
-        rec_ref = _rec(file_path="/p/ref.jpg", action="MOVE")
+        rec_ref = _rec(file_path="/p/ref.jpg", action="")
         rec_dup = _rec(file_path="/p/dup.jpg", action="REVIEW_DUPLICATE", hamming_distance=4)
         model, _ = build_model([_group([rec_ref, rec_dup])])
 
@@ -311,7 +317,7 @@ class TestBuildModel:
         assert group_row.rowCount() == 2
 
     def test_child_row_similarity_column_shows_ref_or_pct(self, qapp):
-        rec_ref = _rec(file_path="/p/ref.jpg", action="MOVE")
+        rec_ref = _rec(file_path="/p/ref.jpg", action="")
         rec_exact = _rec(file_path="/p/exact.jpg", action="EXACT")
         rec_review = _rec(
             file_path="/p/near.jpg", action="REVIEW_DUPLICATE", hamming_distance=2

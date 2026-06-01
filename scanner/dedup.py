@@ -1,12 +1,17 @@
-"""Classify files as MOVE/EXACT/REVIEW_DUPLICATE/UNDATED.
+"""Classify files as EXACT/REVIEW_DUPLICATE/UNDATED or undecided ("").
 
 Classification rules:
   SHA-256 match                          → EXACT (exact duplicate)
   pHash hamming == 0, both lossy         → EXACT lower priority (format duplicate)
-  pHash hamming == 0, one RAW + lossy    → MOVE both (complementary)
+  pHash hamming == 0, one RAW + lossy    → "" both (complementary, undecided)
   pHash hamming 1–threshold              → REVIEW_DUPLICATE
   no EXIF date                           → UNDATED
-  otherwise                              → MOVE
+  otherwise                              → "" (undecided non-duplicate file)
+
+The legacy ``MOVE`` action and ``dest_path`` column were the handshake to
+the now-defunct external photo-transfer tool; they were removed in #433.
+Unique, dated, non-duplicate files now carry the empty action ("") — the
+canonical "undecided" state the review UI already renders as a Ref-tier row.
 
 Source priority: positional (index 0 = highest priority).
   Pass ``source_priority`` dict to ``classify()``; omit it for auto-inference
@@ -103,8 +108,7 @@ class ManifestRow:
 
     source_path: str
     source_label: str
-    dest_path: Optional[str]   # relative path under dest root; None if UNDATED
-    action: str                # KEEP | MOVE | EXACT | REVIEW_DUPLICATE | UNDATED
+    action: str                # "" (undecided) | EXACT | REVIEW_DUPLICATE | UNDATED
     source_hash: str
     phash: Optional[str]
     hamming_distance: Optional[int]
@@ -183,9 +187,7 @@ def classify(
         if hr.exif_date is None:
             rows[key] = _make_row(hr, "UNDATED", reason="no EXIF DateTimeOriginal")
         else:
-            rows[key] = _make_row(
-                hr, "MOVE", reason="unique", dest=_dest_path(hr)
-            )
+            rows[key] = _make_row(hr, "", reason="unique")
 
     # Pass 4 (was: action propagation, removed in #88): collect Live Photo
     # pair edges. Pairs always share a group_id, but each row keeps its
@@ -358,7 +360,7 @@ def _collect_pair_edges(
     Per photo-manager#88: files with the same exact stem (clean_stem AND
     ``(N)`` dupe-marker number) in the same directory always share a
     ``group_id`` regardless of whether any side is itself a duplicate
-    of something else. Action / ``user_decision`` / ``dest_path`` /
+    of something else. Action / ``user_decision`` /
     ``reason`` are NOT propagated — each row keeps its independent
     classification. The image's destruction is no longer automatically
     the video's; the user makes those decisions per-row in the UI.
@@ -465,7 +467,6 @@ def _make_row(
     reason: str = "",
     duplicate_of: Optional[str] = None,
     hamming: Optional[int] = None,
-    dest: Optional[str] = None,
 ) -> ManifestRow:
     import os
     from datetime import datetime as _dt
@@ -486,7 +487,6 @@ def _make_row(
     return ManifestRow(
         source_path=path_str,
         source_label=hr.record.source_label,
-        dest_path=dest,
         action=action,
         source_hash=hr.sha256,
         phash=hr.phash,
@@ -500,14 +500,3 @@ def _make_row(
         pixel_width=hr.pixel_width,
         pixel_height=hr.pixel_height,
     )
-
-
-def _dest_path(hr: HashResult) -> Optional[str]:
-    """Compute relative destination path for a MOVE action."""
-    if hr.exif_date is None:
-        return None
-    year = hr.exif_date.strftime("%Y")
-    date_prefix = hr.exif_date.strftime("%Y%m%d")
-    label = hr.record.source_label
-    filename = hr.record.path.name
-    return f"{year}/{date_prefix}_{label}/{filename}"

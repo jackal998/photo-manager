@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
     id               INTEGER PRIMARY KEY,
     source_path      TEXT    NOT NULL,
     source_label     TEXT    NOT NULL,
-    dest_path        TEXT,
     action           TEXT    NOT NULL,
     source_hash      TEXT,
     phash            TEXT,
@@ -41,12 +40,12 @@ CREATE INDEX IF NOT EXISTS idx_group_id    ON migration_manifest(group_id);
 
 _INSERT = """
 INSERT INTO migration_manifest
-    (source_path, source_label, dest_path, action, source_hash,
+    (source_path, source_label, action, source_hash,
      phash, hamming_distance, group_id, reason,
      file_size_bytes, shot_date, creation_date, mtime,
      pixel_width, pixel_height,
      exif_tag_count, gps_present, xmp_derived, score)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)
 """
 
 
@@ -101,7 +100,6 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
                 (
                     r.source_path,
                     r.source_label,
-                    r.dest_path,
                     r.action,
                     r.source_hash,
                     r.phash,
@@ -159,7 +157,6 @@ def print_summary(rows: list[ManifestRow], skipped: int = 0) -> None:
     # and tree rendering); only the row labels are localised. See #242.
     action_label_keys = (
         ("KEEP", "manifest_summary.keep"),
-        ("MOVE", "manifest_summary.move"),
         ("EXACT", "manifest_summary.exact"),
         ("REVIEW_DUPLICATE", "manifest_summary.review_duplicate"),
         ("UNDATED", "manifest_summary.undated"),

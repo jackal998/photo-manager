@@ -77,16 +77,18 @@ def _lock_display(is_locked: bool) -> str:
 # Numeric sort priorities — lower value = sorted first (ascending).
 #
 # "Ref tier" — every action whose `_file_similarity` renders as "Ref" (KEEP /
-# MOVE / UNDATED / unset) shares position 1 so the reference / primary file
+# UNDATED / unset) shares position 1 so the reference / primary file
 # of a group always lands at the top, regardless of which classifier branch
 # assigned its action. This is what users mean by "winner first" (#55, #76).
+# Unique non-duplicate files now carry the empty action "" (the legacy MOVE
+# action + dest_path column were dropped in #433); they fall to position 1
+# via the explicit "" entry — and any unknown action via the default-1 rule.
 #
 # Duplicates follow in descending similarity: EXACT (100%) before
 # REVIEW_DUPLICATE (near-match), so a group reads top-down as
 # Ref → strongest match → weaker matches.
 _ACTION_SORT: dict[str, int] = {
     "KEEP": 1,
-    "MOVE": 1,
     "UNDATED": 1,
     "": 1,
     "EXACT": 2,
@@ -124,7 +126,7 @@ def _file_similarity(
     ``hamming_distance`` when either pHash is missing (old manifests
     pre-phash, video rows, or imagehash unavailable).
 
-    For Ref-tier actions (KEEP / MOVE / UNDATED / ""): when
+    For Ref-tier actions (KEEP / UNDATED / ""): when
     ``is_ref_winner`` is True the row carries the "Ref" label; when
     False it falls back to the neutral passenger sentinel "—". Within
     a single duplicate group only ONE row should be the Ref winner
@@ -159,7 +161,7 @@ def _pick_ref_winner(items_list: Iterable[object]) -> object | None:
       1. ``_ACTION_SORT`` priority (Ref-tier == 1 always beats
          EXACT == 2 / REVIEW_DUPLICATE == 3)
       2. Negated score (HEIC primary with a real float score beats an
-         unscored MOV passenger; both within the MOVE tier of #241's
+         unscored MOV passenger; both within the Ref tier of #241's
          canonical case)
       3. ``file_path`` lexicographic (deterministic when score ties)
 

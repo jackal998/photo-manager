@@ -72,7 +72,7 @@ def _row(
     return ManifestRow(
         source_path=source_path,
         source_label="src",
-        dest_path=None,
+
         action="REVIEW_DUPLICATE",
         source_hash="0",
         phash=None,
@@ -795,7 +795,7 @@ class TestManifestRepositoryRescore:
         rows = [
             ManifestRow(
                 source_path="/x/big.jpg", source_label="src",
-                dest_path=None, action="REVIEW_DUPLICATE",
+                action="REVIEW_DUPLICATE",
                 source_hash="aaa", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 pixel_width=6000, pixel_height=4000,
@@ -805,7 +805,7 @@ class TestManifestRepositoryRescore:
             ),
             ManifestRow(
                 source_path="/x/small.jpg", source_label="src",
-                dest_path=None, action="REVIEW_DUPLICATE",
+                action="REVIEW_DUPLICATE",
                 source_hash="bbb", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 pixel_width=1024, pixel_height=768,
@@ -838,7 +838,7 @@ class TestManifestRepositoryRescore:
         rows = [
             ManifestRow(
                 source_path="/x/alone.jpg", source_label="src",
-                dest_path=None, action="MOVE",
+                action="",
                 source_hash="aaa", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 pixel_width=4000, pixel_height=3000,
@@ -868,7 +868,7 @@ class TestManifestRepositoryRescore:
         rows = [
             ManifestRow(
                 source_path="/x/IMG_001.heic", source_label="src",
-                dest_path=None, action="MOVE",
+                action="",
                 source_hash="aaa", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 pixel_width=4000, pixel_height=3000,
@@ -876,7 +876,7 @@ class TestManifestRepositoryRescore:
             ),
             ManifestRow(
                 source_path="/x/IMG_001.mov", source_label="src",
-                dest_path=None, action="MOVE",
+                action="",
                 source_hash="bbb", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 group_id="g1",
@@ -908,7 +908,7 @@ class TestManifestRepositoryRescore:
         rows = [
             ManifestRow(
                 source_path="/x/a.jpg", source_label="src",
-                dest_path=None, action="MOVE",
+                action="",
                 source_hash="aaa", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 group_id="g1",
@@ -934,7 +934,7 @@ class TestManifestRepositoryRescore:
         rows = [
             ManifestRow(
                 source_path="/x/big.jpg", source_label="src",
-                dest_path=None, action="REVIEW_DUPLICATE",
+                action="REVIEW_DUPLICATE",
                 source_hash="aaa", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 pixel_width=6000, pixel_height=4000,
@@ -943,7 +943,7 @@ class TestManifestRepositoryRescore:
             ),
             ManifestRow(
                 source_path="/x/small.jpg", source_label="src",
-                dest_path=None, action="REVIEW_DUPLICATE",
+                action="REVIEW_DUPLICATE",
                 source_hash="bbb", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 pixel_width=1024, pixel_height=768,
