@@ -1,0 +1,1 @@
+Tidy the scan dialog Advanced Settings: one-line descriptions with full detail on hover, and drop the manual hash-workers spinbox in favour of the NAS-aware auto-pick (#520).
