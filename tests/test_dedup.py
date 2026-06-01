@@ -52,6 +52,8 @@ def _hr(
     pair_partner: Path | None = None,
     pair_cluster: tuple[Path, ...] | None = None,
     dhash: str | None = None,
+    pixel_width: int | None = 4000,
+    pixel_height: int | None = 3000,
 ) -> HashResult:
     return HashResult(
         record=_record(
@@ -63,6 +65,8 @@ def _hr(
         dhash=dhash,
         mean_color=mean_color,
         exif_date=exif_date,
+        pixel_width=pixel_width,
+        pixel_height=pixel_height,
     )
 
 
@@ -774,3 +778,62 @@ class TestMatchConfidence:
         rows = _rows(classify(recs, source_priority={"src_a": 0, "src_b": 1}))
         assert rows["/b/x.jpg"].action == "EXACT"
         assert rows["/b/x.jpg"].match_confidence == "high"  # byte-identical is certain
+
+
+# ---------------------------------------------------------------------------
+# Dimension gate — tiny-icon false grouping
+# ---------------------------------------------------------------------------
+
+class TestDimensionGate:
+    """Tiny images (UI icons / thumbnails) downsample to too few DCT
+    coefficients for a 64-bit pHash to tell apart, so unrelated small images
+    land within the near-dup threshold and form false groups — even though
+    their pHash isn't degenerate (#516) and their dHash agrees (#517). The
+    dimension gate keeps sub-photo-sized images out of pHash grouping.
+    """
+
+    # Non-degenerate pHashes 1 bit apart → a near-dup match if grouped.
+    _PA, _PB = "ffff0000ffff0000", "ffff0000ffff0001"
+
+    def _pair(self, w, h):
+        return [
+            _hr("/a.png", sha256="s1", phash=self._PA, file_type="png",
+                exif_date=_dt(), pixel_width=w, pixel_height=h),
+            _hr("/b.png", sha256="s2", phash=self._PB, file_type="png",
+                exif_date=_dt(), pixel_width=w, pixel_height=h),
+        ]
+
+    def test_tiny_images_not_grouped(self):
+        """24×24 icons below the 128px default gate are excluded from pHash
+        grouping → undecided, no group."""
+        rows = _rows(classify(self._pair(24, 24)))  # default min_phash_dimension=128
+        assert rows["/b.png"].action == ""
+        assert rows["/a.png"].group_id is None and rows["/b.png"].group_id is None
+
+    def test_tiny_images_grouped_when_gate_disabled(self):
+        """Reproduces the bug: with the gate off the same icons collapse."""
+        rows = _rows(classify(self._pair(24, 24), min_phash_dimension=0))
+        assert rows["/b.png"].action == "REVIEW_DUPLICATE"
+
+    def test_photo_sized_images_still_grouped(self):
+        """A real near-dup pair (well above the gate) still groups."""
+        rows = _rows(classify(self._pair(512, 512)))
+        assert rows["/b.png"].action == "REVIEW_DUPLICATE"
+        assert rows["/a.png"].group_id == rows["/b.png"].group_id
+
+    def test_exact_sha_tiny_still_flagged(self):
+        """The gate only affects the pHash path — a byte-identical tiny icon
+        is still flagged EXACT."""
+        recs = [
+            _hr("/a/i.png", sha256="same", file_type="png", source_label="src_a",
+                exif_date=_dt(), pixel_width=24, pixel_height=24),
+            _hr("/b/i.png", sha256="same", file_type="png", source_label="src_b",
+                exif_date=_dt(), pixel_width=24, pixel_height=24),
+        ]
+        rows = _rows(classify(recs, source_priority={"src_a": 0, "src_b": 1}))
+        assert rows["/b/i.png"].action == "EXACT"
+
+    def test_unknown_dimensions_pass_through(self):
+        """Unknown dims (None — video / decode failure) are not excluded."""
+        rows = _rows(classify(self._pair(None, None)))
+        assert rows["/b.png"].action == "REVIEW_DUPLICATE"

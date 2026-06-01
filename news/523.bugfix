@@ -1,0 +1,1 @@
+Stop tiny images (UI icons, thumbnails) below 128px from forming false perceptual near-duplicate groups; they still participate in exact-duplicate detection (#523).
