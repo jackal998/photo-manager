@@ -1,0 +1,1 @@
+Scans no longer abort on an unreadable folder entry (broken junction/symlink) — the walker skips it and continues — and the scan dialog's progress bar no longer stays stuck on "scanning" after an empty or failed scan (#511).

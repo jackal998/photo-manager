@@ -41,6 +41,25 @@ def main() -> int:
         print(f"FAIL: unexpected dialogs after empty scan: {extra!r}")
         return 1
 
+    # #510 — the stage progress frame is revealed on the first
+    # stage_progress emit and must be reset (hidden) by the terminal
+    # handler when an empty-sources scan completes. A hidden Qt widget
+    # produces NO UIA element, so absence-from-the-tree is the visible
+    # proof that the frame was reset and isn't stuck on "scanning".
+    print("step: assert_progress_frame_hidden")
+    pframe = None
+    for ctype in ("Pane", "Group", "Custom"):
+        pframe = _uia._find_descendant_by_aid_suffix(dlg, ctype, "scanProgressFrame")
+        if pframe is not None:
+            break
+    print(f"  progress_frame_present={pframe is not None}")
+    if pframe is not None:
+        print(
+            "FAIL: scan progress frame still visible after empty scan "
+            "(regression of #510 — terminal handler must hide it)"
+        )
+        return 1
+
     # #86 — Close is the canonical exit on the empty path; the source-side
     # fix routes focus there so the user has a visible cue. Assert it.
     print("step: assert_close_button_focused")

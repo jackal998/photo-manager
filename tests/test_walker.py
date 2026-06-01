@@ -152,6 +152,135 @@ class TestScanSources:
         assert labels == {"alpha", "beta"}
 
 
+class TestScanAbortResilience:
+    """#509 — a per-entry ``OSError`` raised DURING traversal must not
+    abort the whole scan.
+
+    ``rglob`` is a generator: when recursive descent reaches an
+    inaccessible reparse point (broken symlink/junction, e.g.
+    ``node_modules\\.bin\\acorn``), ``os.scandir`` raises ``OSError``
+    [WinError 1920] *from inside* the generator. The exception
+    propagates out of the walker's ``for`` loop, ``ScanWorker.run()``
+    emits ``failed``, and the entire scan dies on the first bad entry —
+    even though thousands of good files remain.
+
+    The fix swaps ``rglob`` for an ``os.scandir`` stack
+    (``_iter_tree``) that wraps each ``entry.is_dir()`` probe in
+    ``try/except OSError`` so one bad entry is logged once and skipped
+    while the walk keeps going.
+    """
+
+    def test_inaccessible_reparse_point_does_not_abort_walk(
+        self, tmp_path, monkeypatch
+    ):
+        """Reproduce the WinError-1920 boundary as a REAL failure: one
+        directory entry's ``is_dir()`` raises ``OSError`` (exactly what
+        an inaccessible junction does). The walk must SKIP it and still
+        return the good files alongside, not raise.
+        """
+        import os as _os
+
+        from scanner.walker import scan_sources
+
+        _write_jpeg(tmp_path / "good_a.jpg")
+        _write_jpeg(tmp_path / "good_b.jpg")
+        # A directory entry whose recursive probe will explode.
+        bad = tmp_path / "broken_junction"
+        bad.mkdir()
+        _write_jpeg(bad / "buried.jpg")  # unreachable once is_dir() raises
+
+        real_scandir = _os.scandir
+
+        class _ExplodingEntry:
+            """Wraps a real DirEntry but raises OSError on is_dir() —
+            the WinError-1920 reparse-point failure mode."""
+
+            def __init__(self, inner):
+                self._inner = inner
+                self.path = inner.path
+                self.name = inner.name
+
+            def is_dir(self, *, follow_symlinks=True):
+                raise OSError(
+                    1920,
+                    "The file cannot be accessed by the system",
+                )
+
+            def is_file(self, *, follow_symlinks=True):
+                return self._inner.is_file(follow_symlinks=follow_symlinks)
+
+        class _WrappedScandirCtx:
+            def __init__(self, path):
+                self._it = real_scandir(path)
+
+            def __enter__(self):
+                entries = list(self._it)
+                wrapped = [
+                    _ExplodingEntry(e) if e.name == "broken_junction" else e
+                    for e in entries
+                ]
+                return iter(wrapped)
+
+            def __exit__(self, *exc):
+                self._it.close()
+                return False
+
+        def fake_scandir(path):
+            return _WrappedScandirCtx(path)
+
+        monkeypatch.setattr("scanner.walker.os.scandir", fake_scandir)
+
+        records = scan_sources({"test": tmp_path})
+        names = sorted(r.path.name for r in records)
+        # The walk continued past the exploding entry: both good files
+        # came back, and no exception aborted the scan.
+        assert names == ["good_a.jpg", "good_b.jpg"], (
+            f"walk should skip the inaccessible entry and keep the good "
+            f"files; got {names}"
+        )
+
+    def test_unreadable_root_logs_and_returns_empty(self, tmp_path, caplog):
+        """If ``os.scandir(root)`` itself raises (whole directory
+        inaccessible mid-descent), the walker logs once and returns the
+        partial result rather than propagating the OSError."""
+        import logging
+
+        from loguru import logger
+
+        from scanner.walker import scan_sources
+
+        _write_jpeg(tmp_path / "top.jpg")
+        sub = tmp_path / "locked_sub"
+        sub.mkdir()
+        _write_jpeg(sub / "inner.jpg")
+
+        import os as _os
+
+        real_scandir = _os.scandir
+
+        def fake_scandir(path):
+            if Path(path).name == "locked_sub":
+                raise OSError(1920, "The file cannot be accessed by the system")
+            return real_scandir(path)
+
+        handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
+        try:
+            import unittest.mock as _mock
+
+            with _mock.patch("scanner.walker.os.scandir", fake_scandir):
+                with caplog.at_level(logging.WARNING):
+                    records = scan_sources({"test": tmp_path})
+        finally:
+            logger.remove(handler_id)
+
+        names = sorted(r.path.name for r in records)
+        # Top-level good file survives; the locked subdir is skipped.
+        assert names == ["top.jpg"]
+        assert any("locked_sub" in r.message for r in caplog.records), (
+            "expected a warning naming the skipped unreadable directory"
+        )
+
+
 class TestLivePhotoPairing:
     def test_heic_paired_with_mov(self, tmp_path):
         from scanner.walker import scan_sources
@@ -717,23 +846,28 @@ class TestWalkerWin32UnsafeWarning:
     coercion would be a surprise; the issue body explicitly says don't."""
 
     def test_warning_emitted_on_trailing_dot_dir(self, tmp_path, caplog):
-        """If rglob enumerates a trailing-dot directory, log a warning naming
-        the path. Mocked because a real trailing-dot directory needs the
-        ``\\\\?\\`` NT raw API to create on Windows — covered separately by
-        the platform-gated test below."""
+        """If the tree walk enumerates a trailing-dot directory, log a
+        warning naming the path. Mocked because a real trailing-dot
+        directory needs the ``\\\\?\\`` NT raw API to create on Windows
+        — covered separately by the platform-gated test below.
+
+        Patches ``scanner.walker._iter_tree`` (the #509 os.scandir-based
+        traversal that replaced ``Path.rglob``) to inject the synthetic
+        path."""
         from unittest.mock import patch
         from scanner.walker import scan_sources
         from loguru import logger
         import logging
 
         # Real directory exists so scan_sources passes the existence check;
-        # we mock rglob to inject the synthetic trailing-dot path.
+        # we mock the tree walk to inject the synthetic trailing-dot path.
         fake_unsafe = tmp_path / "E.J."
 
         # Bridge loguru → caplog so pytest captures the warning.
         handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
         try:
-            with patch("pathlib.Path.rglob", return_value=iter([fake_unsafe])):
+            with patch("scanner.walker._iter_tree",
+                       return_value=iter([fake_unsafe])):
                 with caplog.at_level(logging.WARNING):
                     scan_sources({"label": tmp_path})
         finally:
@@ -750,9 +884,10 @@ class TestWalkerWin32UnsafeWarning:
         assert "E.J." in warnings[0]
 
     def test_warning_emitted_only_once_per_path(self, tmp_path, caplog):
-        """If rglob returns the same unsafe path multiple times across the
-        walk (theoretically possible — a unique-by-name set is the guard),
-        we warn once and stay quiet thereafter."""
+        """If the walk yields the same unsafe path multiple times (a
+        unique-by-name set is the guard), we warn once and stay quiet
+        thereafter. Patches the #509 ``_iter_tree`` traversal that
+        replaced ``Path.rglob``."""
         from unittest.mock import patch
         from scanner.walker import scan_sources
         from loguru import logger
@@ -762,7 +897,7 @@ class TestWalkerWin32UnsafeWarning:
 
         handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
         try:
-            with patch("pathlib.Path.rglob",
+            with patch("scanner.walker._iter_tree",
                        return_value=iter([fake_unsafe, fake_unsafe, fake_unsafe])):
                 with caplog.at_level(logging.WARNING):
                     scan_sources({"label": tmp_path})
