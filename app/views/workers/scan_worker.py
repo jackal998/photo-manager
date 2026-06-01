@@ -248,6 +248,7 @@ class ScanWorker(QThread):
         source_priority: dict[str, int] | None = None,
         threshold: int = 10,
         mean_color_threshold: int = 30,
+        dhash_threshold: int = 10,
         limit: int | None = None,
         workers: int = 4,
         exif_workers: int = 2,
@@ -263,6 +264,7 @@ class ScanWorker(QThread):
         self.source_priority = source_priority   # None → auto-inferred in classify()
         self.threshold = threshold
         self.mean_color_threshold = mean_color_threshold
+        self.dhash_threshold = dhash_threshold
         self.limit = limit
         self.workers = workers
         # #451 — number of parallel ExiftoolProcess instances spawned
@@ -853,6 +855,7 @@ class ScanWorker(QThread):
             hash_results,
             threshold=self.threshold,
             mean_color_threshold=self.mean_color_threshold,
+            dhash_threshold=self.dhash_threshold,
             source_priority=self.source_priority,
         )
         self._emit_stage(classify_tracker, 1, 1, force=True)
