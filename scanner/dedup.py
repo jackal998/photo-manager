@@ -180,6 +180,7 @@ def classify(
     source_priority: dict[str, int] | None = None,
     min_phash_entropy_bits: int = 4,
     dhash_threshold: int = 10,
+    min_phash_dimension: int = 128,
 ) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
 
@@ -200,6 +201,13 @@ def classify(
             vote. A pHash match whose dHash also agrees within this distance is
             flagged ``match_confidence="high"``, otherwise ``"low"``. Does NOT
             change which rows are grouped — only the confidence flag.
+        min_phash_dimension: dimension gate. An image whose smaller side is
+            below this many pixels is too low-detail for a 64-bit pHash to
+            discriminate — tiny UI icons / thumbnails flatten to a handful of
+            DCT coefficients, so unrelated small images collide and form false
+            near-dup groups. Such files are excluded from pHash near-dup
+            grouping (exact-SHA dedup still applies); images with unknown
+            dimensions (video / decode failure) pass through. ``0`` disables.
     """
     if source_priority is None:
         seen: dict[str, int] = {}
@@ -221,7 +229,7 @@ def classify(
     # Pass 2: pHash-based (cross-format + near-duplicate)
     _classify_phash(
         records, rows, threshold, source_priority, mean_color_threshold,
-        min_phash_entropy_bits, dhash_threshold,
+        min_phash_entropy_bits, dhash_threshold, min_phash_dimension,
     )
 
     # Pass 3: remaining unclassified files — all sources treated equally
@@ -305,6 +313,30 @@ def _phash_entropy_ok(phash: str, min_bits: int) -> bool:
     return min_bits <= bits <= nbits - min_bits
 
 
+def _phash_dimension_ok(hr: HashResult, min_dimension: int) -> bool:
+    """True if the image is large enough for a 64-bit pHash to discriminate.
+
+    A tiny image (UI icon, thumbnail, sprite) downsamples to a handful of DCT
+    coefficients, so a 64-bit pHash can't tell unrelated small images apart —
+    e.g. a 24×24 button icon and a 24×24 checkbox icon land within the
+    near-dup threshold and form a false group, *even though* their pHash isn't
+    degenerate and their dHash agrees (so #516 / #517 don't catch them). A
+    photo manager only ever wants to perceptually-group photo-sized images, so
+    an image whose smaller side is below ``min_dimension`` is kept out of
+    pHash grouping (exact-SHA dedup still applies).
+
+    ``min_dimension <= 0`` disables the gate. Unknown dimensions (video /
+    decode failure → ``pixel_width``/``pixel_height`` is ``None``) pass
+    through — the same None-tolerant handling as the other guards.
+    """
+    if min_dimension <= 0:
+        return True
+    w, h = hr.pixel_width, hr.pixel_height
+    if w is None or h is None:
+        return True
+    return min(w, h) >= min_dimension
+
+
 def _classify_phash(
     records: list[HashResult],
     rows: dict[str, ManifestRow],
@@ -313,21 +345,24 @@ def _classify_phash(
     mean_color_threshold: int = 30,
     min_phash_entropy_bits: int = 4,
     dhash_threshold: int = 10,
+    min_phash_dimension: int = 128,
 ) -> None:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE.
 
-    Records whose pHash is degenerate (flat image — see
-    :func:`_phash_entropy_ok`, #516) are excluded from BOTH the
-    exact-pHash format-group path and the near-duplicate scan, so an
-    arbitrary set of flat icons sharing ``0000…`` never collapses into
-    one false group.
+    Records are excluded from BOTH the exact-pHash format-group path and the
+    near-duplicate scan when their pHash is degenerate (flat image — see
+    :func:`_phash_entropy_ok`, #516) OR the image is too small for a 64-bit
+    pHash to discriminate (:func:`_phash_dimension_ok` — tiny UI icons /
+    thumbnails). Both classes still get exact-SHA dedup.
     """
     # Only consider records not already classified, with a valid pHash,
-    # whose pHash carries enough structure to be trustworthy (#516).
+    # whose pHash is trustworthy (#516 entropy) and whose image is large
+    # enough to discriminate (dimension gate — kills tiny-icon false groups).
     candidates = [
         hr for hr in records
         if hr.phash
         and _phash_entropy_ok(hr.phash, min_phash_entropy_bits)
+        and _phash_dimension_ok(hr, min_phash_dimension)
         and str(hr.record.path) not in rows
     ]
 
