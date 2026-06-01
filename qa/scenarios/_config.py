@@ -247,13 +247,37 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     "s60_execute_filter_by_action_type": [
         "qa/sandbox/_disposable/s60_source",
     ],
+    # s61 (#484) — SingletonPruneConfirmDialog. The driver regenerates a
+    # 2-cluster fixture (4 JPEGs); Remove-from-List collapses both groups
+    # to a plain + actioned singleton pair. This scenario OVERRIDES the
+    # qa default ui.prune_singletons="never" → "ask" so the prune dialog
+    # actually fires (see PRUNE_OVERRIDE_SCENARIOS below + the
+    # build_settings note). No file deletes — DB-only 'removed' decisions.
+    "s61_actioned_singleton_prune": ["qa/sandbox/_disposable/s61_source"],
+    # s63 (#475) — late-stage cancel + main-window-X #468 guard. The
+    # driver builds a large disposable stub source at setup time; the
+    # initial source list here is empty because the driver reconfigures
+    # the scan dialog to the large source via the in-dialog widgets
+    # (the WALK/HASH must be slow, which the standard sandbox can't do).
+    "s63_late_cancel_and_main_window_guard": [],
+    # s64 (#483) — DESTRUCTIVE: "Execute selected" partial-execute.
+    # Disposable 2-cluster fixture (6 JPEGs) the driver regenerates each
+    # run; a highlighted subset is sent to the recycle bin. Same
+    # disposable-source convention as s13 / s36 / s44. (s60/s62 taken on
+    # master by #502/#486 — this scenario uses the next free slot s64.)
+    "s64_execute_selected_partial": ["qa/sandbox/_disposable/s64_source"],
     # s62 (#486-PR3c) — hash-pool re-calibrate checkbox + auto-uncheck.
     # Small near-duplicates fixture on purpose: 5 < the 24-file calibration
     # floor, so the recalibrate → auto path runs but SKIPS the real
     # ProcessPool measurement (no flaky subprocess spawn in the batch).
-    # (s61 reserved by the planned [QA:s61] follow-up.)
     "s62_scan_hash_pool_recalibrate": ["qa/sandbox/near-duplicates"],
 }
+
+# Scenarios that must see the singleton-prune dialog (the qa default opts
+# OUT via ui.prune_singletons="never"). build_settings flips the key to
+# "ask" for these so the dialog fires. Anticipated by the #426 comment in
+# build_settings ("a future [QA:s60] follow-up can override this key").
+PRUNE_OVERRIDE_SCENARIOS: set[str] = {"s61_actioned_singleton_prune"}
 
 
 def build_settings(scenario_name: str) -> dict | None:
@@ -268,20 +292,20 @@ def build_settings(scenario_name: str) -> dict | None:
     sources = SCENARIO_SOURCES[scenario_name]
     if sources is None:
         return None  # preserve existing settings.json
+    # #426: opt qa scenarios OUT of the singleton-prune dialog by default.
+    # Destructive flows in s13/s20/s29/etc. that happen to leave a
+    # single-item group would otherwise block on the confirm dialog and
+    # break the menu/UIA invariants. The prune-flow scenario s61 (#484)
+    # overrides this to "ask" via PRUNE_OVERRIDE_SCENARIOS — the override
+    # this comment historically anticipated.
+    prune_pref = "ask" if scenario_name in PRUNE_OVERRIDE_SCENARIOS else "never"
     return {
         "_comment": f"Auto-written by qa.scenarios.configure for {scenario_name}.",
         "thumbnail_size": 256,
         "thumbnail_mem_cache": 128,
         "thumbnail_disk_cache_dir": "qa/.thumb-cache",
         "sorting": {"defaults": [{"field": "file_size_bytes", "asc": False}]},
-        # #426: opt qa scenarios OUT of the singleton-prune dialog by
-        # default. Destructive flows in s13/s20/s29/etc. that happen
-        # to leave a single-item group would otherwise block on the
-        # confirm dialog and break the menu/UIA invariants. Scenarios
-        # that specifically exercise the prune flow (a future
-        # `[QA:s60]` follow-up) can override this key from their
-        # scenario-side configure step.
-        "ui": {"prune_singletons": "never"},
+        "ui": {"prune_singletons": prune_pref},
         "sources": {
             "list": [{"path": p, "recursive": True} for p in sources],
             "output": "qa/run-manifest.sqlite",
