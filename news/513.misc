@@ -1,0 +1,1 @@
+Give the locked-rows confirm dialog context-specific wording so the user can tell whether "Apply" deletes files now (Execute-time gate: "Unlock & Delete All") or only queues a decision (Set Action gate: "Unlock & Set Action") (#513).
