@@ -45,6 +45,16 @@ class TreeController:
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
         self.tree.setSelectionMode(QTreeView.ExtendedSelection)
+        # Stop Qt auto-scrolling the viewport to the clicked cell on every
+        # selection change. With autoScroll on, clicking a row whose cells
+        # extend past the viewport made the view jerk horizontally to "align"
+        # the clicked column into view — disorienting on a wide table. This
+        # only gates the implicit scrollTo(current) inside currentChanged();
+        # our deliberate scrollTo() calls (re-select after manifest load /
+        # post-scan auto-select) still scroll the target into view. Trade-off:
+        # drag-select near a viewport edge no longer auto-scrolls, negligible
+        # for this fully-expanded ExtendedSelection tree.
+        self.tree.setAutoScroll(False)
         # Take over double-click handling — our dispatcher routes file rows
         # to the OS viewer (#143) and group rows to toggle expand. Leaving
         # Qt's default on would race our own setExpanded() call, producing
