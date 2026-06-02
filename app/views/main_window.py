@@ -1084,6 +1084,17 @@ class UIUpdaterImpl:
         """Show groups summary (legacy)."""
         self.window.show_groups_summary(groups)
 
+    def clear_preview(self) -> None:
+        """Drop preview-pane content (#431).
+
+        Proxies ``MainWindow.clear_preview``. The ``UIUpdateCallback``
+        Protocol declares this and ``_on_manifest_loaded`` calls it, but
+        the proxy was missing here — so every Open-Manifest load hit an
+        AttributeError inside the worker's ``finished`` slot and aborted
+        the app. See test_probe_uiupdater_impl_proxies_every_protocol_method.
+        """
+        self.window.clear_preview()
+
 
 class TreeDataProviderImpl:
     """Implementation of TreeDataProvider protocol."""

@@ -40,6 +40,7 @@ DIALOG_HANDLER_PATH = REPO / "app" / "views" / "handlers" / "dialog_handler.py"
 MENU_CONTROLLER_PATH = REPO / "app" / "views" / "components" / "menu_controller.py"
 ACTION_HANDLERS_PATH = REPO / "app" / "views" / "handlers" / "action_handlers.py"
 CONTEXT_MENU_PATH = REPO / "app" / "views" / "handlers" / "context_menu.py"
+FILE_OPERATIONS_PATH = REPO / "app" / "views" / "handlers" / "file_operations.py"
 MAIN_WINDOW_PATH = REPO / "app" / "views" / "main_window.py"
 SCANNER_DEDUP_PATH = REPO / "scanner" / "dedup.py"
 EN_YAML = REPO / "translations" / "en.yml"
@@ -248,6 +249,39 @@ def test_probe_action_handlers_impl_proxies_every_protocol_method():
     # can carry helper methods that aren't part of the Protocol surface.
     # If a stale proxy ever needs to be removed, that's a code-review
     # concern, not a structural invariant.
+
+
+def test_probe_uiupdater_impl_proxies_every_protocol_method():
+    """Every method on the ``UIUpdateCallback`` Protocol (the contract
+    ``FileOperationsHandler`` invokes against) MUST be present on
+    ``UIUpdaterImpl`` (the manual proxy bridge to MainWindow).
+
+    Catches: the same bridge-pattern hole as the ActionHandlers probe
+    above, but for the file-operations → MainWindow direction. #431 added
+    ``clear_preview`` to the Protocol, to ``MainWindow``, and to the
+    ``_on_manifest_loaded`` callsite — but forgot the proxy here. Because
+    the call fires from a QThread ``finished`` slot, the resulting
+    AttributeError aborted the whole app on every Open-Manifest load
+    rather than surfacing in a unit test (the handler tests pass a Mock
+    ui_updater, which auto-creates any attribute). This static probe is
+    the enforcement the advisory Protocol can't give us.
+    """
+    protocol_methods = _ast_class_method_names(
+        FILE_OPERATIONS_PATH, "UIUpdateCallback"
+    )
+    impl_methods = _ast_class_method_names(
+        MAIN_WINDOW_PATH, "UIUpdaterImpl"
+    )
+
+    missing = protocol_methods - impl_methods
+    assert not missing, (
+        f"UIUpdaterImpl is missing proxies for UIUpdateCallback "
+        f"Protocol methods: {sorted(missing)}. FileOperationsHandler "
+        f"calls these via self.ui_updater — a missing one raises "
+        f"AttributeError inside a QThread finished slot and aborts the "
+        f"app (manifest-load crash). Background: "
+        f"feedback_action_handlers_bridge in memory."
+    )
 
 
 def test_probe_manifest_dependent_menu_actions_are_gated():
