@@ -1,0 +1,1 @@
+Add the `github-pr-create` skill as the single source of truth for opening a PR that goes green, and rewire `/work` Phase 5 to delegate to it (#531).
