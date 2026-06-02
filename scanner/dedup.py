@@ -193,6 +193,7 @@ def classify(
     min_phash_entropy_bits: int = 4,
     dhash_threshold: int = 10,
     min_phash_dimension: int = 128,
+    bktree_min_candidates: int | None = None,
 ) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
 
@@ -223,6 +224,12 @@ def classify(
             near-dup groups. Such files are excluded from pHash near-dup
             grouping (exact-SHA dedup still applies); images with unknown
             dimensions (video / decode failure) pass through. ``0`` disables.
+        bktree_min_candidates: #526 — candidate count at/above which near-dup
+            search uses the BK-tree instead of the brute O(N²) scan. ``None``
+            (default) uses the module floor :data:`_BKTREE_MIN_CANDIDATES`;
+            the scan worker passes a value measured by the #486 auto-pool
+            calibration so the crossover is per-machine, not baked. Trades
+            speed only — the grouping verdict is identical either way.
     """
     if source_priority is None:
         seen: dict[str, int] = {}
@@ -245,6 +252,7 @@ def classify(
     _classify_phash(
         records, rows, threshold, source_priority, mean_color_threshold,
         min_phash_entropy_bits, dhash_threshold, min_phash_dimension,
+        bktree_min_candidates,
     )
 
     # Pass 3: remaining unclassified files — all sources treated equally
@@ -361,6 +369,7 @@ def _classify_phash(
     min_phash_entropy_bits: int = 4,
     dhash_threshold: int = 10,
     min_phash_dimension: int = 128,
+    bktree_min_candidates: int | None = None,
 ) -> None:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE.
 
@@ -397,7 +406,7 @@ def _classify_phash(
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold
     _classify_near_duplicates(
         candidates, rows, threshold, source_priority, mean_color_threshold,
-        dhash_threshold,
+        dhash_threshold, bktree_min_candidates,
     )
 
 
@@ -459,6 +468,16 @@ def _classify_format_group(
 # ---------------------------------------------------------------------------
 # Near-duplicate candidate generation (#526)
 # ---------------------------------------------------------------------------
+
+# #526 — version token for the grouping *strategy* (candidate-search structure
+# + the gates that decide a near-dup). Folded into
+# ``scan_worker.hash_pool_fingerprint`` so the #486 calibration cache (which
+# now also stores grouping micro-rates) invalidates when grouping changes.
+# BUMP whenever the candidate-search algorithm or a grouping gate changes in a
+# way that shifts cost or verdict: e.g. the BK-tree metric, the threshold
+# defaults, or adding/removing a gate (mean-color #462, dHash #524, entropy
+# #516, dimension #523). Opaque cache-keying token; only equality matters.
+GROUPING_STRATEGY_VERSION = "1"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -539,12 +558,16 @@ class _BKTree:
         return out
 
 
-def _near_dup_neighbors(int_hashes: list[int], threshold: int):
+def _near_dup_neighbors(
+    int_hashes: list[int], threshold: int, min_candidates: int | None = None
+):
     """Return ``neighbors(i) -> iterable[int]`` yielding indices ``j > i``
     whose pHash is within ``threshold`` Hamming of record ``i`` (#526).
 
     Two interchangeable strategies, picked by the candidate count against
-    :data:`_BKTREE_MIN_CANDIDATES`:
+    ``min_candidates`` (``None`` → the module floor
+    :data:`_BKTREE_MIN_CANDIDATES`; the scan worker passes a per-machine value
+    measured by the #486 calibration):
 
     * brute force — ``range(i + 1, n)``; the caller's own
       ``0 < distance <= threshold`` check does the filtering, identical to
@@ -557,8 +580,9 @@ def _near_dup_neighbors(int_hashes: list[int], threshold: int):
     the out-of-threshold ``j`` the brute body would no-op on), so the
     grouping output is bit-identical — see ``test_dedup.py::TestBKTreeParity``.
     """
+    floor = _BKTREE_MIN_CANDIDATES if min_candidates is None else min_candidates
     n = len(int_hashes)
-    if n < _BKTREE_MIN_CANDIDATES:
+    if n < floor:
         def brute(i: int) -> range:
             return range(i + 1, n)
         return brute
@@ -580,6 +604,7 @@ def _classify_near_duplicates(
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
+    bktree_min_candidates: int | None = None,
 ) -> None:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE."""
     if not _IMAGEHASH_AVAILABLE:
@@ -595,7 +620,7 @@ def _classify_near_duplicates(
     # tree's fast XOR-popcount metric; the authoritative recorded distance is
     # still ``hash_a - hash_b`` (imagehash) on the surviving candidates.
     int_hashes = [int(hr.phash, 16) for hr, _ in hashes]
-    neighbors = _near_dup_neighbors(int_hashes, threshold)
+    neighbors = _near_dup_neighbors(int_hashes, threshold, bktree_min_candidates)
 
     for i, (hr_a, hash_a) in enumerate(hashes):
         # Do NOT skip hr_a when it is already classified — it can still serve as

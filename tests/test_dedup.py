@@ -1064,6 +1064,19 @@ class TestBKTreeParity:
         # The disagree regime must actually have blocked some grouping.
         assert any(r.action == "" for r in brute)
 
+    def test_parity_via_classify_param(self):
+        """#526 PR2 — the public ``bktree_min_candidates`` param (the route the
+        scan worker uses to pass its calibrated floor) selects the strategy
+        without touching the module global, and both forced strategies match
+        the default. Proves the param threads classify → _classify_phash →
+        _classify_near_duplicates → _near_dup_neighbors intact."""
+        recs = _parity_fixture(seed=21, count=120)
+        default = classify(list(recs))                              # module floor
+        forced_bk = classify(list(recs), bktree_min_candidates=0)   # always BK
+        forced_brute = classify(list(recs), bktree_min_candidates=10 ** 9)  # brute
+        assert default == forced_bk == forced_brute
+        assert any(r.action == "REVIEW_DUPLICATE" for r in default)
+
     def test_parity_with_exact_sha_interplay(self):
         """SHA-exact dups (pass 1) remove rows before the near-dup pass runs;
         the BK-tree builds over whatever survives. Parity must hold with that

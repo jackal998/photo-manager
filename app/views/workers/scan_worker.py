@@ -39,6 +39,21 @@ STAGE_WRITE = "WRITE"
 _CALIBRATION_SAMPLE = 96
 _CALIBRATION_MIN = 24
 
+# #526 — grouping-stage calibration. The near-dup candidate search has two
+# strategies (brute O(N²) vs BK-tree); the crossover floor is measured per
+# machine from two content-independent micro-rates rather than baked as a
+# constant. ``_GROUP_CALIBRATION_SAMPLE`` synthetic 64-bit hashes (clustered so
+# BK queries return realistic neighbour sets) are timed once; the rates are
+# cached under the same #486 fingerprint and the derived floor is clamped to
+# ``[_GROUP_FLOOR_MIN, _GROUP_FLOOR_MAX]``. PR1 (#529) proved BK wins from N≈10
+# up, so the floor lands near the min on today's recipe — the value of
+# measuring it is that the calibration *self-tunes* if a future hash recipe
+# (longer hashes, slower metric) shifts the economics.
+_GROUP_CALIBRATION_SAMPLE = 256
+_GROUP_CALIBRATION_PAIRS = 4000
+_GROUP_FLOOR_MIN = 8
+_GROUP_FLOOR_MAX = 256
+
 
 def _time_hash_executor(executor_cls, sample: list, max_workers: int) -> float:
     """Hash ``sample`` through one executor and return the elapsed seconds.
@@ -100,6 +115,79 @@ def _profile_process_pool(
     return spawn, per_file
 
 
+def _profile_grouping() -> tuple[float, float]:
+    """Return ``(brute_per_pair_s, bk_per_candidate_s)`` — the two grouping
+    micro-rates the #486 calibration caches to derive the BK-tree floor (#526).
+
+    * ``brute_per_pair_s`` — one ``imagehash`` Hamming subtraction, the cost of
+      a single comparison in the pre-#526 O(N²) inner loop.
+    * ``bk_per_candidate_s`` — amortised BK-tree build + query per indexed
+      hash, the cost of the #526 candidate-generation path.
+
+    Both depend on hash *width* (64-bit) and CPU speed, not on the library's
+    actual content, so they're timed here on a synthetic clustered hash set at
+    the existing pre-hash calibration moment — no need to sequence the
+    measurement after the hash pass. Kept module-level (not a closure over
+    pipeline state) so it stays trivially unit-testable.
+    """
+    import random
+
+    import imagehash
+
+    from scanner.dedup import _BKTree
+
+    rng = random.Random(526)  # fixed seed → stable timing set (Math.random-free)
+    n = _GROUP_CALIBRATION_SAMPLE
+    ints: list[int] = []
+    objs: list = []
+    # Cluster centres + bit jitter so the BK query returns realistic neighbour
+    # sets (pure-random 64-bit hashes sit ~32 apart and would never match).
+    while len(ints) < n:
+        centre = rng.getrandbits(64)
+        for _ in range(rng.randint(1, 6)):
+            if len(ints) >= n:
+                break
+            v = centre
+            for _ in range(rng.randint(0, 7)):
+                v ^= 1 << rng.randint(0, 63)
+            ints.append(v)
+            objs.append(imagehash.hex_to_hash(format(v, "016x")))
+
+    pairs = _GROUP_CALIBRATION_PAIRS
+    start = time.perf_counter()
+    for k in range(pairs):
+        _ = objs[k % n] - objs[(k + 1) % n]
+    brute_per_pair = (time.perf_counter() - start) / pairs
+
+    threshold = 10
+    start = time.perf_counter()
+    tree = _BKTree(ints[0], 0)
+    for idx in range(1, n):
+        tree.add(ints[idx], idx)
+    for idx in range(n):
+        tree.query(ints[idx], threshold)
+    bk_per_candidate = (time.perf_counter() - start) / n
+
+    return brute_per_pair, bk_per_candidate
+
+
+def _derive_bktree_floor(brute_per_pair: float, bk_per_candidate: float) -> int:
+    """Candidate count where BK-tree starts beating brute force (#526).
+
+    Brute force costs ``brute_per_pair × N(N-1)/2``; the BK-tree costs roughly
+    ``bk_per_candidate × N``. Equating them gives the crossover
+    ``N ≈ 2 × bk_per_candidate / brute_per_pair + 1``. Clamped to
+    ``[_GROUP_FLOOR_MIN, _GROUP_FLOOR_MAX]`` so a noisy micro-measurement can't
+    push the floor to a silly value. On today's recipe BK is far cheaper per
+    unit work, so this lands at the min — confirming, from measurement rather
+    than a baked constant, that BK should engage on all but trivial inputs.
+    """
+    if brute_per_pair <= 0:
+        return _GROUP_FLOOR_MAX
+    crossover = round(2 * bk_per_candidate / brute_per_pair + 1)
+    return max(_GROUP_FLOOR_MIN, min(_GROUP_FLOOR_MAX, crossover))
+
+
 def hash_pool_fingerprint(
     sources: dict, recursive_map: dict | None, cpu_count: int
 ) -> str:
@@ -110,14 +198,30 @@ def hash_pool_fingerprint(
     source set (folder paths + recursive flags — the dataset shape). A new
     machine or a different folder set yields a different key → cache miss →
     re-measure. Returns a short hex digest so it stays a tidy settings key.
+
+    #526 — also folds in the hash-recipe and grouping-strategy version tokens
+    (``scanner.hasher.HASH_RECIPE_VERSION`` /
+    ``scanner.dedup.GROUPING_STRATEGY_VERSION``). The cache entry now stores
+    both the hash thread/process rates AND the grouping micro-rates, so a
+    change to either recipe must invalidate the whole entry — otherwise a
+    cached calibration measured under an old recipe would mis-project. Bumping
+    either constant changes every fingerprint → universal cache miss →
+    re-measure under the new recipe. (Closes the #517 breadcrumb: pre-#526 the
+    key had no recipe component, so dHash being added to the 7-tuple never
+    invalidated the cache.)
     """
     import hashlib
+
+    from scanner.dedup import GROUPING_STRATEGY_VERSION
+    from scanner.hasher import HASH_RECIPE_VERSION
 
     rec = recursive_map or {}
     parts = sorted(
         (str(path), bool(rec.get(label))) for label, path in (sources or {}).items()
     )
-    canonical = repr((int(cpu_count), parts))
+    canonical = repr(
+        (int(cpu_count), parts, HASH_RECIPE_VERSION, GROUPING_STRATEGY_VERSION)
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
@@ -307,6 +411,11 @@ class ScanWorker(QThread):
         # pre-populated. Off by default because it's destructive-leaning;
         # the user still confirms via the standard ExecuteAction flow.
         self.auto_select_aggressive_delete = auto_select_aggressive_delete
+        # #526 — per-machine BK-tree crossover floor for the grouping stage,
+        # set by ``_calibrate_hash_pool`` when hash_pool="auto". ``None`` →
+        # classify() uses the module default (thread/process scans, or auto
+        # scans whose cached rates predate the grouping micro-rates).
+        self._calibrated_bktree_floor: int | None = None
 
     def run(self) -> None:
         try:
@@ -390,10 +499,15 @@ class ScanWorker(QThread):
             spawn_s, process_per_file = _profile_process_pool(
                 process_cls, sample, self.workers
             )
+            # #526 — measure the grouping micro-rates in the same calibration
+            # pass and cache them alongside the hash rates under one fingerprint.
+            group_per_pair, group_bk_per_candidate = _profile_grouping()
             rates = {
                 "thread_per_file": thread_s / len(sample),
                 "process_per_file": process_per_file,
                 "spawn": spawn_s,
+                "group_per_pair": group_per_pair,
+                "group_bk_per_candidate": group_bk_per_candidate,
             }
             self.hash_pool_measured.emit(rates)
         else:
@@ -407,7 +521,37 @@ class ScanWorker(QThread):
             f" (spawn {rates['spawn'] * 1000:.0f}ms +"
             f" {rates['process_per_file'] * 1000:.1f}ms/file) → pool={winner}"
         )
+        # #526 — fold the GROUPING stage into the same calibration: derive the
+        # per-machine BK-tree floor from the cached/measured micro-rates and
+        # log the projected brute-vs-BK grouping cost at this file count. Stored
+        # on the worker so the classify() call passes the measured floor instead
+        # of the baked module default. Defensive: a hand-edited cache missing
+        # the group keys falls back to the default floor (None).
+        self._calibrated_bktree_floor = self._resolve_grouping_floor(rates, n)
         return winner
+
+    def _resolve_grouping_floor(self, rates: dict, n: int) -> int | None:
+        """#526 — derive + log the BK-tree floor from grouping micro-rates.
+
+        Returns the per-machine candidate floor (passed to ``classify`` as
+        ``bktree_min_candidates``), or ``None`` when the cached rates lack
+        valid grouping keys — in which case ``classify`` uses the module
+        default and grouping still works, just without the measured crossover.
+        """
+        pp = rates.get("group_per_pair")
+        bpc = rates.get("group_bk_per_candidate")
+        if not isinstance(pp, (int, float)) or not isinstance(bpc, (int, float)):
+            return None
+        if pp <= 0 or bpc < 0:
+            return None
+        floor = _derive_bktree_floor(pp, bpc)
+        brute_proj = pp * n * (n - 1) / 2
+        bk_proj = bpc * n
+        self._emit(
+            f"  Grouping calibration → BK-tree floor {floor} candidates;"
+            f" projected to ≤{n:,}: brute≈{brute_proj:.1f}s vs BK≈{bk_proj:.2f}s"
+        )
+        return floor
 
     def _run_pipeline(self) -> None:
         import threading
@@ -857,6 +1001,9 @@ class ScanWorker(QThread):
             mean_color_threshold=self.mean_color_threshold,
             dhash_threshold=self.dhash_threshold,
             source_priority=self.source_priority,
+            # #526 — per-machine BK-tree crossover from the #486 calibration
+            # (None on thread/process scans → classify uses the module default).
+            bktree_min_candidates=self._calibrated_bktree_floor,
         )
         self._emit_stage(classify_tracker, 1, 1, force=True)
 
