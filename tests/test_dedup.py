@@ -473,6 +473,65 @@ class TestLivePhotoPair:
 
 
 # ---------------------------------------------------------------------------
+# #539 — same-capture gate on the filename-based pair edge
+# ---------------------------------------------------------------------------
+
+class TestSameStemCaptureGate:
+    """#539 — the walker clusters same-stem files by filename alone, so a name
+    COLLISION (merged folders / multi-camera / Takeout) would union genuinely
+    unrelated photos. ``_collect_pair_edges`` now drops a pair edge when both
+    members carry a pHash whose Hamming distance exceeds the threshold — but
+    keeps every pair where a side has no pHash (a video) or the pHashes agree."""
+
+    def test_same_stem_collision_with_far_phash_not_grouped(self):
+        """Two unrelated files that collide on stem+dir but are different
+        images (far pHash) must NOT be unioned. Without the gate the pair edge
+        merged them and the non-keeper could be aggressive-delete eligible."""
+        a = _hr("/merged/DSC_0015.jpg", sha256="aa", phash="ffffffff00000000",
+                source_label="src", file_type="jpeg", exif_date=_dt(),
+                pair_cluster=(Path("/merged/DSC_0015.nef"),))
+        b = _hr("/merged/DSC_0015.nef", sha256="bb", phash="00000000ffffffff",
+                source_label="src", file_type="raw", exif_date=_dt(),
+                pair_cluster=(Path("/merged/DSC_0015.jpg"),))
+        rows = _rows(classify([a, b]))
+        # Hamming(ffffffff00000000, 00000000ffffffff) = 64 >> threshold(10).
+        assert rows["/merged/DSC_0015.jpg"].group_id is None
+        assert rows["/merged/DSC_0015.nef"].group_id is None
+
+    def test_same_stem_raw_jpg_identical_phash_still_grouped(self):
+        """A genuine RAW+JPG of one shot (identical pHash → complementary, so
+        NOT content-grouped) must STILL share a group via the pair edge — the
+        gate keeps it because the pHashes agree. Proves the grouping here comes
+        from the pair edge, not the near-dup pass."""
+        ph = "f0f0f0f0f0f0f0f0"
+        a = _hr("/cam/DSC_0020.jpg", sha256="aa", phash=ph,
+                source_label="src", file_type="jpeg", exif_date=_dt(),
+                pair_cluster=(Path("/cam/DSC_0020.nef"),))
+        b = _hr("/cam/DSC_0020.nef", sha256="bb", phash=ph,
+                source_label="src", file_type="raw", exif_date=_dt(),
+                pair_cluster=(Path("/cam/DSC_0020.jpg"),))
+        rows = _rows(classify([a, b]))
+        ga = rows["/cam/DSC_0020.jpg"].group_id
+        gb = rows["/cam/DSC_0020.nef"].group_id
+        assert ga is not None and ga == gb
+
+    def test_live_photo_pair_preserved_when_video_has_no_phash(self):
+        """A Live Photo HEIC+MOV must stay grouped: the MOV has no pHash, so
+        the gate has no disconfirming evidence and keeps the edge (no
+        regression to the #88 pair invariant)."""
+        heic = _hr("/cam/IMG_1.heic", sha256="hh", phash="f0f0f0f0f0f0f0f0",
+                   source_label="src", file_type="heic", exif_date=_dt(),
+                   pair_cluster=(Path("/cam/IMG_1.mov"),))
+        mov = _hr("/cam/IMG_1.mov", sha256="mm", phash=None,
+                  source_label="src", file_type="mov", exif_date=_dt(),
+                  pair_cluster=(Path("/cam/IMG_1.heic"),))
+        rows = _rows(classify([heic, mov]))
+        gh = rows["/cam/IMG_1.heic"].group_id
+        gm = rows["/cam/IMG_1.mov"].group_id
+        assert gh is not None and gh == gm
+
+
+# ---------------------------------------------------------------------------
 # group_id — transitive connected-component assignment
 # ---------------------------------------------------------------------------
 
