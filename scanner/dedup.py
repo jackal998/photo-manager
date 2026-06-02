@@ -456,6 +456,123 @@ def _classify_format_group(
         )
 
 
+# ---------------------------------------------------------------------------
+# Near-duplicate candidate generation (#526)
+# ---------------------------------------------------------------------------
+
+# Candidate count below which we keep the legacy O(N²) brute-force pairwise
+# scan instead of building a BK-tree.
+#
+# Measurement (scripts/bench_grouping.py, threshold=10) found NO crossover
+# where brute force wins: the BK-tree is ~5-6× faster at every N from 10 up,
+# because it replaces the brute path's per-pair ``imagehash`` subtraction
+# (numpy-backed, ~µs each) with an integer XOR popcount (``int.bit_count()``),
+# and that constant-factor win lands *before* the quadratic term even starts
+# to bite. So this threshold is NOT a performance crossover — it's only a
+# guard to skip tree allocation on trivially small inputs (≤ a few dozen
+# candidates, where the whole scan is sub-millisecond either way). The exact
+# value is immaterial to wall-clock; 16 is a conservative floor. PR #526's
+# follow-up folds an auto-calibrated structure choice into the #486
+# fingerprint cache. The two paths are proven bit-identical by
+# ``test_dedup.py::TestBKTreeParity`` — changing this constant only trades a
+# hair of micro-overhead, never the grouping verdict.
+_BKTREE_MIN_CANDIDATES = 16
+
+
+class _BKTree:
+    """Minimal Burkhard-Keller tree over integer perceptual hashes (#526).
+
+    Metric is Hamming distance via XOR popcount (``int.bit_count()``,
+    Python 3.10+). Each node stores one hash value plus the list of record
+    indices that share it — equal hashes collapse onto a single node because
+    a BK-tree cannot hold two children at edge-distance 0. Children are keyed
+    by their integer edge distance to the parent.
+
+    This is *candidate generation only*: ``query`` returns every indexed
+    record within ``threshold`` Hamming of a probe, turning the O(N²)
+    all-pairs near-dup scan into ~O(N log N). The grouping verdict
+    (mean-color gate #462, dHash gate #524, source-priority ordering) is
+    unchanged and still applied per surviving pair by the caller — the tree
+    only decides *which* pairs are tested, never the outcome.
+    """
+
+    __slots__ = ("_key", "_indices", "_children")
+
+    def __init__(self, key: int, index: int) -> None:
+        self._key = key
+        self._indices: list[int] = [index]
+        self._children: dict[int, "_BKTree"] = {}
+
+    def add(self, key: int, index: int) -> None:
+        node = self
+        while True:
+            d = (node._key ^ key).bit_count()
+            if d == 0:
+                node._indices.append(index)
+                return
+            child = node._children.get(d)
+            if child is None:
+                node._children[d] = _BKTree(key, index)
+                return
+            node = child
+
+    def query(self, key: int, threshold: int) -> list[int]:
+        """Indices of every record within ``threshold`` Hamming of ``key``.
+
+        Iterative (explicit stack) so a degenerate near-linear tree can't
+        blow the recursion limit on a large library. Triangle inequality:
+        a target within ``threshold`` of the probe must sit at edge distance
+        in ``[d - threshold, d + threshold]`` from any node, so only those
+        children are visited.
+        """
+        out: list[int] = []
+        stack: list["_BKTree"] = [self]
+        while stack:
+            node = stack.pop()
+            d = (node._key ^ key).bit_count()
+            if d <= threshold:
+                out.extend(node._indices)
+            lo, hi = d - threshold, d + threshold
+            for edge, child in node._children.items():
+                if lo <= edge <= hi:
+                    stack.append(child)
+        return out
+
+
+def _near_dup_neighbors(int_hashes: list[int], threshold: int):
+    """Return ``neighbors(i) -> iterable[int]`` yielding indices ``j > i``
+    whose pHash is within ``threshold`` Hamming of record ``i`` (#526).
+
+    Two interchangeable strategies, picked by the candidate count against
+    :data:`_BKTREE_MIN_CANDIDATES`:
+
+    * brute force — ``range(i + 1, n)``; the caller's own
+      ``0 < distance <= threshold`` check does the filtering, identical to
+      the pre-#526 nested ``hashes[i + 1:]`` loop.
+    * BK-tree — query the tree for ``i``'s neighbours, keep those with
+      ``j > i``, return them sorted ascending so the caller visits pairs in
+      the exact ``(i, j)`` lexicographic order the brute-force loop used.
+
+    Both yield the same actionable ``j`` per ``i`` (the BK-tree merely skips
+    the out-of-threshold ``j`` the brute body would no-op on), so the
+    grouping output is bit-identical — see ``test_dedup.py::TestBKTreeParity``.
+    """
+    n = len(int_hashes)
+    if n < _BKTREE_MIN_CANDIDATES:
+        def brute(i: int) -> range:
+            return range(i + 1, n)
+        return brute
+
+    tree = _BKTree(int_hashes[0], 0)
+    for idx in range(1, n):
+        tree.add(int_hashes[idx], idx)
+
+    def bk(i: int) -> list[int]:
+        return sorted(j for j in tree.query(int_hashes[i], threshold) if j > i)
+
+    return bk
+
+
 def _classify_near_duplicates(
     candidates: list[HashResult],
     rows: dict[str, ManifestRow],
@@ -471,11 +588,21 @@ def _classify_near_duplicates(
     unclassified = [hr for hr in candidates if str(hr.record.path) not in rows]
     hashes = [(hr, imagehash.hex_to_hash(hr.phash)) for hr in unclassified if hr.phash]
 
+    # #526 — candidate generation via BK-tree (large N) or brute force (small
+    # N), replacing the inner ``hashes[i + 1:]`` enumeration ONLY. Every
+    # per-pair gate below is unchanged, so the output is bit-identical to the
+    # pre-#526 O(N²) scan (proven by TestBKTreeParity). The int form feeds the
+    # tree's fast XOR-popcount metric; the authoritative recorded distance is
+    # still ``hash_a - hash_b`` (imagehash) on the surviving candidates.
+    int_hashes = [int(hr.phash, 16) for hr, _ in hashes]
+    neighbors = _near_dup_neighbors(int_hashes, threshold)
+
     for i, (hr_a, hash_a) in enumerate(hashes):
         # Do NOT skip hr_a when it is already classified — it can still serve as
         # a comparator so that transitively-similar files (hr_b similar to hr_a
         # which is similar to an earlier file) are connected into the same group.
-        for hr_b, hash_b in hashes[i + 1:]:
+        for j in neighbors(i):
+            hr_b, hash_b = hashes[j]
             if str(hr_b.record.path) in rows:
                 continue
             distance = hash_a - hash_b
