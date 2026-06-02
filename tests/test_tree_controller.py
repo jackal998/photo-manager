@@ -68,6 +68,21 @@ def _build(qapp, groups=None):
     return controller, tree.model()
 
 
+# ── setup_tree_properties ──────────────────────────────────────────────────
+
+
+class TestSetupTreeProperties:
+    def test_autoscroll_disabled(self, qapp):
+        """Clicking a row must not jerk the viewport to align the clicked
+        column. setup_tree_properties turns Qt's implicit auto-scroll off;
+        if this regresses the wide-table horizontal jump returns."""
+        from app.views.components.tree_controller import TreeController
+
+        tree = QTreeView()
+        TreeController(tree).setup_tree_properties()
+        assert tree.hasAutoScroll() is False
+
+
 # ── get_selected_items ─────────────────────────────────────────────────────
 
 

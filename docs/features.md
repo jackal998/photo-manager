@@ -46,6 +46,7 @@ for the chore plan.
 | [Main window — geometry + splitter persistence](#main-window--geometry--splitter-persistence) | Main window |
 | [Main window — keyboard navigation](#main-window--keyboard-navigation) | Main window |
 | [Main window — results tree double-click](#main-window--results-tree-double-click) | Main window |
+| [Main window — row selection (no horizontal auto-scroll)](#main-window--row-selection-no-horizontal-auto-scroll) | Main window |
 | [Main window — sort persistence within session](#main-window--sort-persistence-within-session) | Main window |
 | [Main window — status bar baseline](#main-window--status-bar-baseline) | Main window |
 | [Open Manifest — base flow](#open-manifest--base-flow) | File operations |
@@ -362,6 +363,17 @@ for the chore plan.
 - **Conditions / variants:** The OS-spawn branch for files is layer-1 covered only — spawning a real viewer has no deterministic close-trigger across image apps. The Open Folder cascade is shared with the context menu via [app/views/handlers/file_opener.py](../app/views/handlers/file_opener.py).
 - **Related:** [PR #198](https://github.com/jackal998/photo-manager/pull/198) (closes [#143](https://github.com/jackal998/photo-manager/issues/143)); QA scenario [`qa/scenarios/s40_results_tree_double_click.py`](../qa/scenarios/s40_results_tree_double_click.py).
 - **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+
+---
+
+### Main window — row selection (no horizontal auto-scroll)
+
+- **Entry point:** `TreeController.setup_tree_properties` — [tree_controller.py](../app/views/components/tree_controller.py) calls `setAutoScroll(False)` on the main result tree.
+- **Trigger:** User clicks (or arrow-keys to) a row whose cells extend past the visible viewport on a horizontally-scrolled wide table.
+- **Behaviour:** Selecting a row no longer jerks the viewport sideways to "align" the clicked column into view. Qt's default `autoScroll` calls `scrollTo(current)` on every selection change inside `currentChanged`; disabling it keeps the horizontal scroll position fixed where the user left it. Deliberate scroll-into-view paths are unaffected — re-select after manifest load and the post-scan auto-select still call `scrollTo()` explicitly (those are independent of the `autoScroll` property).
+- **Conditions / variants:** Trade-off — drag-selecting near a viewport edge no longer auto-scrolls the contents. Negligible for this fully-expanded `ExtendedSelection` tree. Only the main tree is affected; the Execute Action and Scan dialog trees construct their own `QTreeView` and keep Qt defaults.
+- **Related:** QA scenario [`qa/scenarios/s26_keyboard_navigation.py`](../qa/scenarios/s26_keyboard_navigation.py) exercises row selection on the main tree; unit invariant in [`tests/test_tree_controller.py`](../tests/test_tree_controller.py) (`TestSetupTreeProperties::test_autoscroll_disabled`).
+- **Last verified:** 2026-06-02
 
 ---
 
