@@ -4,9 +4,15 @@ Classification rules:
   SHA-256 match                          → EXACT (exact duplicate)
   pHash hamming == 0, both lossy         → EXACT lower priority (format duplicate)
   pHash hamming == 0, one RAW + lossy    → "" both (complementary, undecided)
-  pHash hamming 1–threshold              → REVIEW_DUPLICATE
+  pHash hamming 1–threshold AND dHash agrees → REVIEW_DUPLICATE (#524 gate)
   no EXIF date                           → UNDATED
   otherwise                              → "" (undecided non-duplicate file)
+
+A pHash near-dup is only a *candidate*: the independent dHash must also agree
+(#524) — different scenes that collide on the coarse 64-bit pHash disagree on
+dHash by a wide margin, so requiring agreement kills those false positives
+without costing real near-duplicates. dHash-unavailable pairs fall back to
+pHash-only (low confidence).
 
 The legacy ``MOVE`` action and ``dest_path`` column were the handshake to
 the now-defunct external photo-transfer tool; they were removed in #433.
@@ -151,26 +157,32 @@ def _mean_color_distance(a: str, b: str) -> float:
     return ((ra - rb) ** 2 + (ga - gb) ** 2 + (ba - bb) ** 2) ** 0.5
 
 
-def _dhash_confidence(a: HashResult, b: HashResult, dhash_threshold: int) -> str:
-    """#517 — confidence in a pHash-based duplicate match, voted by dHash.
+def _dhash_vote(a: HashResult, b: HashResult, dhash_threshold: int) -> str:
+    """#517/#524 — dHash's verdict on a pHash near-dup pair.
+
+    Returns one of:
+      * ``"agree"``    — dHash is also within ``dhash_threshold`` → a real
+                         near-duplicate (group it, high confidence).
+      * ``"disagree"`` — both dHashes present but beyond the threshold →
+                         the pHash match is a false positive; do NOT group.
+      * ``"unknown"``  — dHash unavailable on either side (no imagehash /
+                         decode failure) → fall back to pHash-only and group
+                         with low confidence (preserves the #517 fallback).
 
     pHash (DCT/frequency) and dHash (gradient/brightness) capture different
-    image structure, so requiring a *second, independent* hash to agree is a
-    precision signal. Returns ``"high"`` when dHash also agrees within
-    ``dhash_threshold``; ``"low"`` when only pHash agreed (dHash missing on
-    either side, imagehash unavailable, or dHash beyond threshold).
-
-    The match is NOT dropped on a "low" vote — grouping stays pHash-driven —
-    but the flag lets downstream consumers (auto-select) treat a pHash-only
-    match cautiously instead of auto-deleting it.
+    structure, so a different-scene pair that coincidentally lands within the
+    pHash threshold almost always disagrees on dHash by a wide margin
+    (measured 17–32 on real false positives vs <10 for genuine near-dups).
+    Requiring agreement (#524) is therefore a high-precision grouping gate
+    that doesn't cost real near-duplicates.
     """
     if not a.dhash or not b.dhash or not _IMAGEHASH_AVAILABLE:
-        return "low"
+        return "unknown"
     try:
         distance = imagehash.hex_to_hash(a.dhash) - imagehash.hex_to_hash(b.dhash)
     except (ValueError, TypeError):
-        return "low"
-    return "high" if distance <= dhash_threshold else "low"
+        return "unknown"
+    return "agree" if distance <= dhash_threshold else "disagree"
 
 
 def classify(
@@ -197,10 +209,13 @@ def classify(
             degenerate — a flat/near-empty image whose hash collides with every
             other flat image — and is excluded from pHash near-dup grouping (it
             still participates in exact-SHA dedup). ``0`` disables the guard.
-        dhash_threshold: Maximum dHash Hamming distance for the #517 confidence
-            vote. A pHash match whose dHash also agrees within this distance is
-            flagged ``match_confidence="high"``, otherwise ``"low"``. Does NOT
-            change which rows are grouped — only the confidence flag.
+        dhash_threshold: Maximum dHash Hamming distance for the #524 grouping
+            gate. A pHash near-dup candidate is only grouped when its dHash
+            ALSO agrees within this distance (``match_confidence="high"``);
+            if both dHashes are present but disagree, the pair is a pHash false
+            positive and is NOT grouped. When dHash is unavailable (no
+            imagehash / decode failure) the pair falls back to pHash-only and
+            groups with ``match_confidence="low"``.
         min_phash_dimension: dimension gate. An image whose smaller side is
             below this many pixels is too low-detail for a 64-bit pHash to
             discriminate — tiny UI icons / thumbnails flatten to a handful of
@@ -425,6 +440,11 @@ def _classify_format_group(
         if mean_color_threshold > 0 and keeper.mean_color and duplicate.mean_color:
             if _mean_color_distance(keeper.mean_color, duplicate.mean_color) > mean_color_threshold:
                 continue
+        # #524 — dHash grouping gate: an independent second hash must agree
+        # (or be unavailable) for the format-dup to stand. "disagree" → skip.
+        vote = _dhash_vote(keeper, duplicate, dhash_threshold)
+        if vote == "disagree":
+            continue
         rows[key] = _make_row(
             duplicate,
             "EXACT",
@@ -432,7 +452,7 @@ def _classify_format_group(
             hamming=0,
             reason=f"format duplicate of {keeper.record.path.name} "
                    f"({duplicate.record.file_type} vs {keeper.record.file_type})",
-            match_confidence=_dhash_confidence(keeper, duplicate, dhash_threshold),
+            match_confidence="high" if vote == "agree" else "low",
         )
 
 
@@ -466,6 +486,13 @@ def _classify_near_duplicates(
                 if mean_color_threshold > 0 and hr_a.mean_color and hr_b.mean_color:
                     if _mean_color_distance(hr_a.mean_color, hr_b.mean_color) > mean_color_threshold:
                         continue
+                # #524 — dHash grouping gate: pHash is only a candidate; the
+                # independent dHash must also agree (or be unavailable) for a
+                # near-dup to stand. A "disagree" verdict means the two scenes
+                # only collided on the coarse pHash → not a real near-dup, skip.
+                vote = _dhash_vote(hr_a, hr_b, dhash_threshold)
+                if vote == "disagree":
+                    continue
                 # Flag the lower-priority file as REVIEW_DUPLICATE
                 ordered = sorted(
                     [hr_a, hr_b],
@@ -481,9 +508,7 @@ def _classify_near_duplicates(
                         hamming=distance,
                         reason=f"near-duplicate (hamming={distance}) of "
                                f"{ordered[0].record.path.name}",
-                        match_confidence=_dhash_confidence(
-                            ordered[0], flagged, dhash_threshold
-                        ),
+                        match_confidence="high" if vote == "agree" else "low",
                     )
 
 

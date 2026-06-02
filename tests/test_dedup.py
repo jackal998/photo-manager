@@ -745,7 +745,10 @@ class TestMatchConfidence:
         assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
         assert rows["/b.jpg"].match_confidence == "high"
 
-    def test_low_confidence_when_dhash_disagrees(self):
+    def test_dhash_disagree_not_grouped(self):
+        """#524 — pHash within threshold but dHash disagrees → the pair is a
+        pHash false positive and is NOT grouped (the real fix for the
+        different-scene-at-hamming-10 false groups)."""
         recs = [
             _hr("/a.jpg", sha256="s1", phash=self._PA, dhash="cccccccccccccccc",
                 source_label="takeout", exif_date=_dt()),
@@ -753,11 +756,8 @@ class TestMatchConfidence:
                 source_label="jdrive", exif_date=_dt()),
         ]
         rows = _rows(classify(recs, threshold=10))
-        # Still grouped (grouping is pHash-driven, unchanged)...
-        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
-        assert rows["/b.jpg"].group_id == rows["/a.jpg"].group_id
-        # ...but flagged low because the independent dHash disagrees.
-        assert rows["/b.jpg"].match_confidence == "low"
+        assert rows["/b.jpg"].action == ""           # not a near-dup
+        assert rows["/a.jpg"].group_id is None and rows["/b.jpg"].group_id is None
 
     def test_low_confidence_when_dhash_missing(self):
         recs = [

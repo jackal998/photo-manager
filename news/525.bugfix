@@ -1,0 +1,1 @@
+Require an independent second perceptual hash (dHash) to agree before grouping near-duplicates, removing ~44% of false-positive near-dup matches on real photos (#525).
