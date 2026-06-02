@@ -304,6 +304,7 @@ Skills live in two homes, split by trust level:
   conventions, test scaffolding, QA drivers. Today this includes
   `agentic-engineering/`, `app-security-patterns/`, `conventional-comments/`,
   `docs-features-drift/`, `github-issue-create/`,
+  `github-pr-create/`,
   `github-pr-review-fetch/`, `github-pr-review-pending/`,
   `github-pr-review-submitted/`, `impact-map/`,
   `parallel-brief-generator/`, `pr-review/`,
@@ -374,6 +375,21 @@ Skills live in two homes, split by trust level:
   issue for X" / "track this for later". Closes the "deferred
   work must always be filed" gap captured by the
   [Capture full design space](#) memory rule.
+
+  `github-pr-create/` is the single source of truth for **opening a
+  PR that goes green**. It owns the whole lifecycle — pre-flight
+  (branch guard, the docs / qa / news token decisions), `gh pr
+  create`, the post-create tail that is easy to forget (the
+  `news/<PR>.<type>` fragment keyed by the new PR number, the
+  `gh pr checks --watch` with a 20-min timeout, one auto-iteration on
+  red), and the "ready for your merge" handoff. It **orchestrates and
+  supplies inputs**; it does not re-implement the enforcement that
+  lives in the `pr-gates` / `news-gate` CI workflows or the
+  `docs_guard` / `qa_scenario_guard` PreToolUse hooks. `/work` Phase 5
+  delegates wholesale to it rather than inlining the steps — the
+  inline scatter is what kept dropping the news fragment. Fires on
+  trigger phrases like "open a PR" / "create a pull request" / "ship
+  this", and is the delegated PR step inside `/work`.
 - **Personal skills** — `.claude/skills/personal/<name>/` (gitignored)
   or `~/.claude/skills/<name>/` (user-level, never in any repo). For
   ad-hoc skills with machine-specific paths, Synology IPs, NAS

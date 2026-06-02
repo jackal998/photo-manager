@@ -202,131 +202,51 @@ If overlap **was** found: sequence in this session.
 1. Pick an order (smallest blast-radius first usually wins —
    reduces rebase pain on the larger PRs).
 2. Run Phase 4's simple/medium or complex path for the first issue
-   end-to-end, including Phase 5 (Post-PR completion). Don't start
+   end-to-end, including Phase 5 (delegated `/github-pr-create`). Don't start
    the next issue until the previous PR's CI is green or the human
    explicitly says to proceed.
 3. Repeat for each remaining issue. The branch base for issue #2 is
    the **merged** main branch, not the open PR — wait for human
    merge before starting #2.
 
-## Phase 5 — Post-PR completion
+## Phase 5 — Open the PR and drive it green (delegated)
 
-Phase 5 starts the moment `gh pr create` returns a PR URL — i.e.
-right after the human approves the `gh pr create` gate that flows
-out of Phase 4's `/pr-review` step. The simple, medium, and complex
-paths all funnel through Phase 5. Multi-issue fan-out skips Phase 5
-(each parallel session runs its own).
+Phase 5 starts when Phase 4 is ready to open the PR — right after the
+`/pr-review` step. The simple, medium, and complex paths all funnel
+through Phase 5. Multi-issue fan-out skips it (each parallel session
+runs its own).
 
-Phase 5's exit condition is **CI green on the open PR**, not "PR
-opened" — the leak this section closes is the post-`gh pr create`
-tail that today gets improvised into ad-hoc follow-up commits
-(news fragment, CI-failure fix-up, etc.).
+**Phase 5 is delegated wholesale to [`/github-pr-create`](../github-pr-create/SKILL.md).**
+That skill is the single source of truth for opening a PR that goes
+green — it owns `gh pr create`, the news fragment, the CI watch, the
+one-shot red-fix auto-iteration, and the merge-ready handoff. `/work`
+does **not** inline those steps; duplicating them is exactly the
+scatter that used to drop the news fragment. The skill's exit condition
+is CI green (or a surfaced failure after one auto-iteration), which is
+also Phase 5's — `/work` is done when `/github-pr-create` returns.
 
-### 5.1 — Capture PR number
+Hand the skill the context Phase 4 already has:
 
-`gh pr create`'s stdout is the PR URL. Parse the trailing integer:
-`https://github.com/<owner>/<repo>/pull/<N>` → N. Store as `$PR`.
+- the feature branch (pushed),
+- the docs decision (features.md updated via `/update-docs`, or the
+  `[docs-not-needed: <reason>]` token),
+- the qa decision (driver added, or the `[qa-not-needed: <reason>]`
+  token),
+- the news decision (changelog line, or `[skip-news: <reason>]`).
 
-### 5.2 — Write news fragment inline
+Everything downstream of that — title/body composition, create, news
+`news/<PR>.<type>`, `gh pr checks --watch` with the 20-min timeout, the
+single auto-iteration on red, "ready for your merge" — is the skill's
+gate map and workflow. Read it there, not here.
 
-The repo's CI requires `news/<PR>.<type>` matching the type table in
-`news/README.md`. Steps:
+### 5.1 — `/work watch <N>` resume mode (Phase 0 extension)
 
-1. Read the head commit's conventional-commits type:
-   ```bash
-   git log -1 --format=%s | grep -oE '^(feat|fix|docs|chore|test|refactor|perf|ci|build|revert)'
-   ```
-2. Map conventional-commits type → news fragment suffix
-   (canonical table in [`news/README.md`](../../../news/README.md)):
-   `feat → feature`, `fix → bugfix`, `docs → doc`,
-   `chore → misc`, `refactor → misc`, `test → misc`,
-   `perf → misc`, `ci → misc`, `build → misc`,
-   `revert → misc`. Breaking schema changes or removed features
-   that don't fit any cc type → `removal` (judge by content, not
-   commit prefix).
-3. Write `news/<PR>.<type>` with a one-line imperative-mood
-   description ending in `(#<issue>)`. The text should be derived
-   from the PR title / commit message — not invented fresh.
-4. Don't ask the human to confirm the fragment text unless the
-   PR title is ambiguous (single-issue, well-titled PR → just write
-   it).
-5. **Skip-news bypass.** If the PR body or title contains the
-   literal token `[skip-news: <reason>]`, the news-gate CI check
-   passes without a fragment. Don't write one in that case — Phase
-   5.2 is a no-op and Phase 5.3's commit/push is skipped.
-
-### 5.3 — Commit and push the fragment
-
-```bash
-git add news/<PR>.<type>
-git commit -m "docs(news): add fragment for #<issue>"
-```
-
-Then surface the push gate per CLAUDE.md (mandatory; news-fragment
-push is still a `git push`):
-
-> **Gated action — `git push` (news fragment)**
-> - What: push the news-fragment commit to `origin/<branch>`.
-> - Risk: single-line text file, no secrets, additive.
-> - Verdict: safe.
-
-After "yes": `git push`.
-
-### 5.4 — Watch CI with timeout
-
-```bash
-gh pr checks <PR> --watch --interval 30
-```
-
-Wrap in a Bash call with `timeout: 1200000` (20 minutes). Known
-flakiness: the `--watch` listener can stall silently. If Bash
-returns from the timeout instead of from the `gh` exit, fall through
-to step 5.5's **timeout** branch and surface the current state from
-a one-shot `gh pr checks <PR>`.
-
-The user may also interrupt the watch manually (Ctrl-C / "stop").
-Treat that the same as the timeout branch — re-fetch state and
-surface, don't loop on watch.
-
-### 5.5 — Branch on CI result
-
-**Green** — `gh pr checks --watch` exits 0:
-> Emit one line: `PR #<N> CI green — ready for human review.`
-> EXIT Phase 5. /work is done.
-
-**Red** — `gh pr checks --watch` exits non-zero:
-1. Run `gh pr checks <PR> --output json` to enumerate failed checks
-   with their names and conclusions.
-2. Classify the failure: lint? unit test? `require-news-fragment`?
-   integration? Each class has a known fix recipe.
-3. **One auto-iteration** only — fetch the relevant log
-   (`gh run view <run-id> --log-failed`), implement the fix, commit,
-   surface push gate, push.
-4. After the iteration's push: loop back to step 5.4 ONCE. If the
-   second `--watch` returns red again, EXIT Phase 5 with:
-   > `CI failed after 1 auto-iteration on PR #<N>. Failing checks:
-   > <list>. Surfacing for human review — fix manually or say
-   > "retry" to attempt another auto-iteration.`
-5. Hard limit: never auto-iterate more than once per Phase 5 entry.
-   The 4-cycle dev↔QA limit in the complex path is independent.
-
-**Timeout / interrupt** — Bash killed the watch:
-1. One-shot `gh pr checks <PR>` to get current state.
-2. Surface:
-   > `Watch timed out at 20min on PR #<N>. Current checks: <state>.
-   > Resume the watch ("/work watch #<N>") or surface now.`
-3. EXIT Phase 5 — don't loop. The user decides whether to wait.
-
-### 5.6 — `/work watch <N>` resume mode (Phase 0 extension)
-
-To support the timeout/interrupt case, Phase 0 also accepts:
+The CI-watch listener can stall (see `/github-pr-create` Step 5). To
+support the "I had to step away mid-watch" case, Phase 0 also accepts:
 
 | Input shape | How to resolve |
 |---|---|
-| `watch #N` or `watch <N>` | **Skip Phases 1–4 entirely.** Re-enter Phase 5 at step 5.4 for PR `<N>`. No researcher, no plan, no implementation. |
-
-This is the "I had to step away mid-watch" affordance the listener
-flakiness makes necessary.
+| `watch #N` or `watch <N>` | **Skip Phases 1–4 entirely.** Re-enter `/github-pr-create` at its Step 5 (CI watch) for PR `<N>`. No researcher, no plan, no implementation. |
 
 ## Self-management rules
 
