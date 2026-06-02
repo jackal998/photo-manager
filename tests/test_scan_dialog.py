@@ -618,27 +618,33 @@ class TestAdvancedSettingsCollapse:
         dlg._params_group.setChecked(False)
         assert dlg._params_content.isVisibleTo(dlg) is False
 
-    def test_descriptions_are_one_line_with_hover_tooltips(self, qapp, tmp_path):
-        """Each Advanced-Settings control shows a SHORT one-line description
-        with the full technical detail on hover (the #520 concise-label +
-        tooltip design). #521 inlined the full multi-line text with
-        ``setWordWrap(True)``; PySide6 6.11 stopped flagging
-        ``hasHeightForWidth`` on wrapped QLabels, so the QVBoxLayout clipped
-        those descriptions to one line — they looked truncated under Advanced
-        Settings. This pins the restored design: the muted (#555) description
-        labels must NOT word-wrap (a one-line label can't be height-clipped)
-        and must each carry a tooltip. A flip back to wrapped inline text — the
-        regression that has now happened twice — fails here."""
+    def test_descriptions_one_line_tooltip_on_desc_not_title(self, qapp, tmp_path):
+        """The Advanced-Settings design: bold TITLE + short one-line muted
+        description, with the full detail in a hover tooltip **on the
+        description only — never on the title**.
+
+        Two regressions are pinned here:
+        * #521 inlined the full multi-line text with ``setWordWrap(True)``;
+          PySide6 6.11 stopped flagging ``hasHeightForWidth`` on wrapped
+          QLabels, so the QVBoxLayout clipped descriptions to one line. The
+          muted (#555) descriptions must therefore NOT word-wrap (a one-line
+          label can't be height-clipped) and must each carry a tooltip.
+        * The titles (bold slider labels + the three checkboxes) must NOT
+          carry a tooltip — hovering a title popping the full blurb was
+          unwanted. Only the description line gets the tooltip.
+
+        A flip back to wrapped inline text, or a tooltip creeping back onto a
+        title, fails here."""
         from PySide6.QtWidgets import QLabel
         from app.views.dialogs.scan_dialog import ScanDialog
         from infrastructure.settings import JsonSettings
 
         settings = JsonSettings(self._make_settings_file(tmp_path, {"sources": {}}))
         dlg = ScanDialog(settings)
-        descs = [
-            lab for lab in dlg._params_content.findChildren(QLabel)
-            if "#555" in lab.styleSheet()
-        ]
+        labels = dlg._params_content.findChildren(QLabel)
+        descs = [lab for lab in labels if "#555" in lab.styleSheet()]
+        titles = [lab for lab in labels if "#555" not in lab.styleSheet()]
+
         assert len(descs) >= 6, "expected one muted description per advanced control"
         for lab in descs:
             assert not lab.wordWrap(), (
@@ -647,6 +653,19 @@ class TestAdvancedSettingsCollapse:
             assert lab.toolTip(), (
                 f"description missing hover tooltip: {lab.text()[:30]!r}"
             )
+
+        # Titles (bold slider labels + checkboxes) must NOT pop a tooltip.
+        assert len(titles) >= 3, "expected the bold slider title labels"
+        for lab in titles:
+            assert not lab.toolTip(), (
+                f"title label must NOT have a tooltip: {lab.text()[:30]!r}"
+            )
+        for cb in (
+            dlg._auto_select_check,
+            dlg._auto_select_aggressive_check,
+            dlg._recalibrate_check,
+        ):
+            assert not cb.toolTip(), "checkbox title must NOT have a tooltip"
 
 
 # ---------------------------------------------------------------------------
