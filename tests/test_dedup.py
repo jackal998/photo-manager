@@ -837,3 +837,243 @@ class TestDimensionGate:
         """Unknown dims (None — video / decode failure) are not excluded."""
         rows = _rows(classify(self._pair(None, None)))
         assert rows["/b.png"].action == "REVIEW_DUPLICATE"
+
+
+# ---------------------------------------------------------------------------
+# BK-tree candidate generation (#526)
+# ---------------------------------------------------------------------------
+
+import random as _random
+
+import scanner.dedup as _dedup
+from scanner.dedup import _BKTree, _near_dup_neighbors
+
+# Captured so resets restore the real production default rather than a
+# hardcoded copy that would silently drift if the source constant changes.
+_DEFAULT_FLOOR = _dedup._BKTREE_MIN_CANDIDATES
+
+
+def _popcount(x: int) -> int:
+    return bin(x).count("1")
+
+
+def _naive_neighbors(int_hashes: list[int], i: int, threshold: int) -> list[int]:
+    """Reference: every j != i within ``threshold`` Hamming of i, ascending."""
+    return sorted(
+        j
+        for j in range(len(int_hashes))
+        if j != i and _popcount(int_hashes[i] ^ int_hashes[j]) <= threshold
+    )
+
+
+class TestBKTreeStructure:
+    """The hand-rolled BK-tree must return exactly the within-threshold set a
+    naive all-pairs popcount scan would — it is candidate *generation*, so a
+    missed neighbour would silently drop a real near-dup group."""
+
+    def test_query_matches_naive_scan(self):
+        rng = _random.Random(1234)
+        # Cluster centres + jitter so the set actually has near-neighbours;
+        # pure random 64-bit hashes sit ~32 apart and would never match.
+        ints: list[int] = []
+        for _ in range(40):
+            centre = rng.getrandbits(64)
+            for _ in range(rng.randint(1, 5)):
+                v = centre
+                for _ in range(rng.randint(0, 8)):
+                    v ^= 1 << rng.randint(0, 63)
+                ints.append(v)
+        tree = _BKTree(ints[0], 0)
+        for idx in range(1, len(ints)):
+            tree.add(ints[idx], idx)
+        for threshold in (0, 5, 10, 20):
+            for i in range(len(ints)):
+                got = sorted(set(tree.query(ints[i], threshold)))
+                want = sorted(
+                    j
+                    for j in range(len(ints))
+                    if _popcount(ints[i] ^ ints[j]) <= threshold
+                )
+                # query includes i itself (distance 0) plus any equal-hash peers
+                assert got == want, f"threshold={threshold} i={i}"
+
+    def test_equal_hashes_collapse_onto_one_node(self):
+        """Two records with the identical pHash must both be returned — the
+        BK-tree stores them as an index list on a single node, since it can't
+        hold two children at edge-distance 0."""
+        v = 0xABCDABCDABCDABCD
+        tree = _BKTree(v, 0)
+        tree.add(v, 1)
+        tree.add(v, 2)
+        assert sorted(tree.query(v, 0)) == [0, 1, 2]
+
+    def test_neighbors_enumerator_only_yields_forward(self):
+        """``_near_dup_neighbors`` returns j > i in ascending order under both
+        the brute and BK strategies, so the caller walks pairs in the same
+        ``(i, j)`` order the legacy nested loop used."""
+        rng = _random.Random(99)
+        ints = []
+        for _ in range(30):
+            centre = rng.getrandbits(64)
+            for _ in range(rng.randint(1, 4)):
+                v = centre
+                for _ in range(rng.randint(0, 6)):
+                    v ^= 1 << rng.randint(0, 63)
+                ints.append(v)
+        threshold = 10
+        n = len(ints)
+        try:
+            # BK strategy (floor 0): the enumerator itself returns the
+            # threshold-filtered forward set.
+            _dedup._BKTREE_MIN_CANDIDATES = 0
+            bk_enum = _near_dup_neighbors(ints, threshold)
+            for i in range(n):
+                want = [j for j in _naive_neighbors(ints, i, threshold) if j > i]
+                assert list(bk_enum(i)) == want, f"bk i={i}"
+            # Brute strategy (huge floor): returns ALL forward indices by
+            # contract — the caller's ``0 < distance <= threshold`` check does
+            # the filtering. After applying that same filter the two
+            # strategies must agree.
+            _dedup._BKTREE_MIN_CANDIDATES = 10 ** 9
+            brute_enum = _near_dup_neighbors(ints, threshold)
+            for i in range(n):
+                assert list(brute_enum(i)) == list(range(i + 1, n)), f"brute i={i}"
+                filtered = [
+                    j for j in brute_enum(i)
+                    if _popcount(ints[i] ^ ints[j]) <= threshold
+                ]
+                assert filtered == list(bk_enum(i)), f"agree i={i}"
+        finally:
+            _dedup._BKTREE_MIN_CANDIDATES = _DEFAULT_FLOOR
+
+
+def _parity_fixture(seed: int, count: int) -> list[HashResult]:
+    """Deterministic varied HashResult set with real near-dup clusters.
+
+    Cluster centres + bit jitter create genuine near-duplicate chains
+    (transitive grouping, gate interactions); varied source labels exercise
+    priority ordering; varied mean_color exercises the #462 gate. dHash is
+    left None here so the enumeration is what's under test — gate-agreement
+    parity is covered separately by ``test_parity_dhash_gates``.
+    """
+    rng = _random.Random(seed)
+    hrs: list[HashResult] = []
+    n = 0
+    labels = ["takeout", "jdrive", "backup"]
+    while len(hrs) < count:
+        centre = rng.getrandbits(64)
+        # Per-cluster base colour with small intra-cluster jitter — real
+        # near-dups share a palette, so members pass the #462 mean-color gate
+        # and form genuine groups (rich transitive parity surface). A few
+        # clusters get a clashing colour so the gate also rejects under test.
+        cr, cg, cb = (rng.randint(20, 235) for _ in range(3))
+        for _ in range(rng.randint(1, 6)):
+            if len(hrs) >= count:
+                break
+            v = centre
+            for _ in range(rng.randint(0, 7)):  # 0–7 flips → some within, some beyond t=10
+                v ^= 1 << rng.randint(0, 63)
+            r = min(255, max(0, cr + rng.randint(-8, 8)))
+            g = min(255, max(0, cg + rng.randint(-8, 8)))
+            b = min(255, max(0, cb + rng.randint(-8, 8)))
+            hrs.append(_hr(
+                f"/{rng.choice(labels)}/img{n:05d}.jpg",
+                sha256=f"sha-{n}",                       # unique → isolate near-dup pass
+                phash=format(v, "016x"),
+                mean_color=f"{r},{g},{b}",
+                source_label=rng.choice(labels),
+                exif_date=_dt(),
+            ))
+            n += 1
+    rng.shuffle(hrs)
+    return hrs
+
+
+def _force_floor(floor: int):
+    _dedup._BKTREE_MIN_CANDIDATES = floor
+
+
+class TestBKTreeParity:
+    """The BK-tree path must produce output bit-identical to the brute-force
+    path (#526 hard constraint): the tree changes *which pairs are tested*,
+    never *the verdict*. Each test runs the same fixture through both
+    strategies and asserts the full ManifestRow list (values AND order) is
+    identical."""
+
+    def teardown_method(self):
+        _dedup._BKTREE_MIN_CANDIDATES = _DEFAULT_FLOOR
+
+    def _both_paths(self, recs: list[HashResult], **kwargs) -> tuple[list, list]:
+        _force_floor(10 ** 9)          # always brute
+        brute = classify(list(recs), **kwargs)
+        _force_floor(0)                # always BK-tree
+        bk = classify(list(recs), **kwargs)
+        return brute, bk
+
+    def test_parity_small_varied_fixture(self):
+        recs = _parity_fixture(seed=7, count=60)
+        brute, bk = self._both_paths(recs)
+        assert brute == bk
+        # Sanity: the fixture actually produces groupings, else parity is vacuous.
+        assert any(r.action == "REVIEW_DUPLICATE" for r in brute)
+
+    def test_parity_large_fixture_natural_bk_path(self):
+        """At 400 candidates the *unpatched* pipeline already takes the BK
+        path (>16). Assert it equals the forced brute path — proves the
+        production default is bit-identical, not just a monkeypatched run."""
+        recs = _parity_fixture(seed=42, count=400)
+        _force_floor(10 ** 9)
+        brute = classify(list(recs))
+        _dedup._BKTREE_MIN_CANDIDATES = _DEFAULT_FLOOR   # default (16) → BK at N=400
+        natural = classify(list(recs))
+        assert brute == natural
+        assert sum(r.action == "REVIEW_DUPLICATE" for r in brute) > 5
+
+    def test_parity_varied_thresholds(self):
+        recs = _parity_fixture(seed=11, count=120)
+        for threshold in (3, 10, 20):
+            brute, bk = self._both_paths(recs, threshold=threshold)
+            assert brute == bk, f"threshold={threshold}"
+
+    def test_parity_dhash_gates(self):
+        """Mixed dHash agree/disagree/unknown across a near-dup cluster — the
+        #524 gate must fire identically under both enumeration strategies."""
+        rng = _random.Random(5)
+        centre = 0xF0F0F0F0F0F0F0F0
+        recs: list[HashResult] = []
+        for k in range(40):
+            v = centre
+            for _ in range(rng.randint(0, 5)):
+                v ^= 1 << rng.randint(0, 63)
+            # Three dHash regimes: agree (near centre dhash), disagree (far),
+            # unknown (None) — so the gate takes every branch within the cluster.
+            regime = k % 3
+            if regime == 0:
+                dh = format(0xCCCCCCCCCCCCCCCC ^ (1 << rng.randint(0, 63)), "016x")
+            elif regime == 1:
+                dh = format(0x3333333333333333 ^ (1 << rng.randint(0, 63)), "016x")
+            else:
+                dh = None
+            recs.append(_hr(
+                f"/src{k % 3}/d{k:03d}.jpg", sha256=f"s{k}",
+                phash=format(v, "016x"), dhash=dh,
+                source_label=f"src{k % 3}", exif_date=_dt(),
+            ))
+        brute, bk = self._both_paths(recs)
+        assert brute == bk
+        # The disagree regime must actually have blocked some grouping.
+        assert any(r.action == "" for r in brute)
+
+    def test_parity_with_exact_sha_interplay(self):
+        """SHA-exact dups (pass 1) remove rows before the near-dup pass runs;
+        the BK-tree builds over whatever survives. Parity must hold with that
+        interplay too."""
+        recs = _parity_fixture(seed=3, count=80)
+        # Inject a few exact-SHA duplicates sharing a hash → pass 1 classifies
+        # them, so they're absent from the near-dup candidate set.
+        recs[5] = _hr("/takeout/dupA.jpg", sha256="DUP", phash=recs[5].phash,
+                      source_label="takeout", exif_date=_dt())
+        recs[6] = _hr("/jdrive/dupA.jpg", sha256="DUP", phash=recs[6].phash,
+                      source_label="jdrive", exif_date=_dt())
+        brute, bk = self._both_paths(recs)
+        assert brute == bk
