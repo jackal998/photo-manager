@@ -82,6 +82,45 @@ def test_preview_pane_constructs_with_qapp(qapp):
         pane.deleteLater()
 
 
+# ── fit-on-width feedback-loop guard (the Close-&-Load freeze) ────────────
+
+
+def test_single_image_view_reserves_vertical_scrollbar(qapp):
+    """Single-image view MUST reserve the vertical scrollbar (AlwaysOn).
+
+    Regression for the Close-&-Load freeze: the fit-on-width path refits the
+    pixmap to the *viewport* width on every Resize. With ``AsNeeded`` a tall
+    portrait image whose fitted height straddles the viewport toggles the
+    scrollbar on/off, each toggle changing the viewport width and firing
+    another Resize → refit → toggle — an unbounded resize⇄refit loop that pegs
+    the UI thread at 100% CPU forever (reproduced: 1124 refits/0.8s vs 2 with
+    the scrollbar reserved). Reserving the scrollbar keeps the viewport width
+    constant so the fit converges. Grid / video views must NOT reserve it
+    (no fit-on-width path there)."""
+    from PySide6.QtCore import Qt
+
+    pane = PreviewPane(parent=None, task_runner=MagicMock())
+    try:
+        pane.show_single("photo.jpg", {"name": "photo.jpg"})
+        assert (
+            pane.preview_area.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOn
+        ), "single-image view must reserve the vertical scrollbar (loop guard)"
+
+        # Switching to grid releases it again.
+        pane.show_grid([("a.jpg", "a", "1", "100")])
+        assert (
+            pane.preview_area.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+        ), "grid view must not reserve the vertical scrollbar"
+
+        # …and back to a single image re-reserves it.
+        pane.show_single("photo2.jpg", {"name": "photo2.jpg"})
+        assert (
+            pane.preview_area.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOn
+        )
+    finally:
+        pane.deleteLater()
+
+
 # ── refit (delegation) ───────────────────────────────────────────────────
 
 

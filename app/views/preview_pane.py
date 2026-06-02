@@ -160,6 +160,9 @@ class PreviewPane(QWidget):
             try:
                 self.preview_area.setWidgetResizable(True)
                 self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                # Reset vertical to AsNeeded — only single-image view reserves
+                # it (the player manages its own size, no fit-on-width loop).
+                self.preview_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
                 if info and isinstance(info, dict):
                     info_rows = build_info_rows(
                         name=info.get("name") or "",
@@ -187,7 +190,21 @@ class PreviewPane(QWidget):
                 self._single_label.setVisible(True)
                 self._single_label.setText(t("preview.video_unavailable"))
         else:
-            # Show image preview with persistent info block
+            # Show image preview with persistent info block.
+            #
+            # Reserve the vertical scrollbar (AlwaysOn) for single-image view.
+            # The fit-on-width path recomputes the pixmap to the *viewport*
+            # width on every Resize (see ``eventFilter`` → ``_apply_single_pixmap_fit``).
+            # With ``AsNeeded`` a tall (portrait) image whose fitted height
+            # straddles the viewport makes the scrollbar appear → viewport
+            # narrows → refit → image now fits → scrollbar disappears →
+            # viewport widens → refit → … an unbounded resize⇄refit loop that
+            # pegs the UI thread at 100% CPU and never settles (the
+            # Close-&-Load freeze: a portrait keeper auto-previewed at the
+            # boundary width). Reserving the scrollbar keeps the viewport width
+            # constant, so the fit converges in one pass. Reset to AsNeeded in
+            # the video / grid branches below.
+            self.preview_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
             self._single_label.setVisible(True)
             if info and isinstance(info, dict):
                 res = _read_resolution(normalize_windows_path(path))
@@ -213,6 +230,8 @@ class PreviewPane(QWidget):
         self.clear()
         self.preview_area.setWidgetResizable(True)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Reset vertical to AsNeeded — only single-image view reserves it.
+        self.preview_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         # Normalize paths; read image dimensions once per image (header-only) for both
         # aspect-ratio sort and resolution display — avoids double QImageReader opens.
         # Tuple layout: (path, name, folder, size_txt, creation_txt, shot_txt, resolution)
