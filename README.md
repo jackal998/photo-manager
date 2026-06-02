@@ -165,6 +165,15 @@ The PySide6 desktop app is the primary interface. Launch it with `run.bat`.
 
 Source paths are persisted to `settings.json` (`sources.list`) between sessions.
 
+> **Scanning a Google Takeout export?** On export, Google strips the
+> original capture date and GPS from the media files themselves — that
+> metadata lives only in the per-file `.json` sidecars, which this scanner
+> does not read. Run [`galbum`](https://github.com/jackal998/google-album-metadata)
+> first (`galbum sync "…/Takeout/Google Photos"`) to write the sidecar
+> metadata back into the files, then scan the result. Photo Manager reads
+> the now-embedded EXIF dates normally, so Takeout photos date and dedupe
+> correctly instead of landing in the `UNDATED` bucket.
+
 ### Step 2 — Review groups
 
 The tree shows all files loaded from the manifest.
