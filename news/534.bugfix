@@ -1,0 +1,1 @@
+Scan dialog Advanced settings: the hover tooltip now lives on the description line only (the bold title no longer pops a tooltip), and long tooltips word-wrap to a tidy ~360px block — long zh_TW tooltips previously rendered as one over-long line off the screen edge because Qt only word-wraps rich-text tooltips and CJK has no spaces to break on.
