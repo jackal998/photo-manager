@@ -64,6 +64,19 @@ except ImportError:
     _HEIF_AVAILABLE = False
 
 
+# #526 — version token for the per-file hash *recipe* (what
+# ``compute_hashes`` / ``run_hash_for_record`` produce and how long it takes).
+# Folded into ``scan_worker.hash_pool_fingerprint`` so the #486 auto-pool
+# calibration cache invalidates when the recipe changes — otherwise a cached
+# thread/process pick (and the grouping micro-rates) measured under an old
+# recipe would silently mis-project. BUMP this whenever the per-file hash work
+# changes in a way that shifts its cost: e.g. adding/removing a hash from the
+# 7-tuple (sha256, phash, dhash, mean_color, raw_date, px_w, px_h — dHash was
+# #517), changing decode/resize, or swapping the imagehash size. Purely a
+# cache-keying token; the value is opaque, only equality matters.
+HASH_RECIPE_VERSION = "1"
+
+
 def compute_sha256(path: Path) -> str:
     """Stream-compute SHA-256 of a file in 64 KB chunks."""
     h = hashlib.sha256()

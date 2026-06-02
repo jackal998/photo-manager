@@ -779,6 +779,22 @@ class TestHashPoolCalibration:
         assert base != fp({"a": "/y"}, {"a": True}, 8)  # source path matters
         assert base != fp({"a": "/x"}, {"a": False}, 8)  # recursive matters
 
+    def test_fingerprint_invalidates_on_recipe_version_bump(self, monkeypatch):
+        """#526 — bumping the hash-recipe or grouping-strategy version must
+        change the key so a calibration measured under an old recipe (e.g.
+        before dHash joined the 7-tuple) is never reused. This is the #517
+        breadcrumb: pre-#526 the key had no recipe component."""
+        import scanner.dedup as dedup
+        import scanner.hasher as hasher
+        from app.views.workers.scan_worker import hash_pool_fingerprint as fp
+
+        base = fp({"a": "/x"}, {"a": True}, 8)
+        monkeypatch.setattr(hasher, "HASH_RECIPE_VERSION", "999")
+        assert base != fp({"a": "/x"}, {"a": True}, 8)  # hash recipe matters
+        monkeypatch.setattr(hasher, "HASH_RECIPE_VERSION", "1")  # restore for next
+        monkeypatch.setattr(dedup, "GROUPING_STRATEGY_VERSION", "999")
+        assert base != fp({"a": "/x"}, {"a": True}, 8)  # grouping strategy matters
+
     def test_cached_rates_skip_measurement_and_reproject(
         self, qapp, tmp_path, monkeypatch
     ):
@@ -822,6 +838,9 @@ class TestHashPoolCalibration:
         monkeypatch.setattr(
             sw, "_profile_process_pool", lambda cls, sample, w: (100.0, 1.0)
         )
+        # #526 — stub the grouping micro-benchmark so the emitted schema is
+        # deterministic (the real one times a synthetic hash set).
+        monkeypatch.setattr(sw, "_profile_grouping", lambda: (1e-6, 5e-7))
         worker = ScanWorker(
             sources={"s": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
@@ -834,9 +853,14 @@ class TestHashPoolCalibration:
 
         worker._calibrate_hash_pool(list(range(10_000)), object(), object())
 
-        assert captured == [
-            {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0}
-        ]
+        # #526 — the cache entry now carries the grouping micro-rates too.
+        assert captured == [{
+            "thread_per_file": 2.0,
+            "process_per_file": 1.0,
+            "spawn": 100.0,
+            "group_per_pair": 1e-6,
+            "group_bk_per_candidate": 5e-7,
+        }]
 
     def test_store_hash_pool_rates_round_trips_through_settings(self, tmp_path):
         """#486-PR3b — a fresh calibration is written to scan.hash_pool_cache
@@ -895,6 +919,111 @@ class TestHashPoolCalibration:
 
         assert result == "process"  # re-measured rates project to process
         assert len(captured) == 1, "malformed cache must trigger a fresh measurement"
+
+    # ---- #526 grouping-stage calibration -------------------------------------
+
+    def test_derive_bktree_floor_crossover_and_clamp(self):
+        """The floor is the measured brute-vs-BK crossover, clamped so a noisy
+        micro-measurement can't yield a silly value."""
+        from app.views.workers.scan_worker import (
+            _GROUP_FLOOR_MAX,
+            _GROUP_FLOOR_MIN,
+            _derive_bktree_floor,
+        )
+
+        # BK cheap per unit vs brute per pair → crossover below the min → clamp.
+        assert _derive_bktree_floor(1e-6, 5e-7) == _GROUP_FLOOR_MIN
+        # Mid-range crossover passes through: 2*1e-5/1e-7 + 1 = 201.
+        assert _derive_bktree_floor(1e-7, 1e-5) == 201
+        # Huge ratio → clamp at the max.
+        assert _derive_bktree_floor(1e-8, 1e-4) == _GROUP_FLOOR_MAX
+        # Degenerate per-pair → max (never engage BK on a bad measurement).
+        assert _derive_bktree_floor(0.0, 1e-6) == _GROUP_FLOOR_MAX
+
+    def test_fresh_calibration_sets_grouping_floor(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """A fresh calibration derives the BK-tree floor from the measured
+        grouping micro-rates and stashes it for the classify() call."""
+        import app.views.workers.scan_worker as sw
+        from app.views.workers.scan_worker import ScanWorker, _derive_bktree_floor
+
+        monkeypatch.setattr(
+            sw, "_time_hash_executor", lambda cls, sample, w: 2.0 * len(sample)
+        )
+        monkeypatch.setattr(
+            sw, "_profile_process_pool", lambda cls, sample, w: (100.0, 1.0)
+        )
+        monkeypatch.setattr(sw, "_profile_grouping", lambda: (1e-7, 1e-5))
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+        )
+        assert worker._calibrated_bktree_floor is None  # not yet calibrated
+
+        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
+
+        assert worker._calibrated_bktree_floor == _derive_bktree_floor(1e-7, 1e-5)
+
+    def test_cached_group_rates_set_floor_without_measuring(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Cache hit carrying grouping micro-rates derives the floor with no
+        re-measurement (the timing helpers would raise)."""
+        import app.views.workers.scan_worker as sw
+        from app.views.workers.scan_worker import ScanWorker, _derive_bktree_floor
+
+        def boom(*a):
+            raise AssertionError("cache hit must not re-measure")
+
+        monkeypatch.setattr(sw, "_time_hash_executor", boom)
+        monkeypatch.setattr(sw, "_profile_process_pool", boom)
+        monkeypatch.setattr(sw, "_profile_grouping", boom)
+        rates = {
+            "thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0,
+            "group_per_pair": 1e-7, "group_bk_per_candidate": 1e-5,
+        }
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+            hash_pool_rates=rates,
+        )
+        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
+        assert worker._calibrated_bktree_floor == _derive_bktree_floor(1e-7, 1e-5)
+
+    def test_legacy_cache_without_group_keys_floor_stays_none(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """A pre-#526 cache entry (hash rates only, no grouping keys) still
+        serves the hash pick, but the grouping floor falls back to None so
+        classify() uses the module default — no crash."""
+        import app.views.workers.scan_worker as sw
+        from app.views.workers.scan_worker import ScanWorker
+
+        def boom(*a):
+            raise AssertionError("cache hit must not re-measure")
+
+        monkeypatch.setattr(sw, "_time_hash_executor", boom)
+        monkeypatch.setattr(sw, "_profile_process_pool", boom)
+        monkeypatch.setattr(sw, "_profile_grouping", boom)
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+            hash_pool_rates={
+                "thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0,
+            },
+        )
+        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
+        assert worker._calibrated_bktree_floor is None
 
 
 class TestScanWorkerExifPipeline:
