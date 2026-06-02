@@ -30,6 +30,11 @@ class _Row:
     group_id: Optional[str]
     score: Optional[float]
     match_confidence: Optional[str] = None  # #517
+    # #536 — the classifier action. Defaults to "" (Ref-tier / undecided):
+    # the conservative, safe default, since only EXACT / REVIEW_DUPLICATE rows
+    # are eligible for aggressive auto-delete. Tests that model a deletable
+    # duplicate set this explicitly.
+    action: str = ""
 
 
 class TestTopScorePathPerGroup:
@@ -399,23 +404,51 @@ class TestNonKeepersForAggressiveDelete:
     def test_low_confidence_non_keeper_excluded(self):
         from core.services.auto_select import non_keepers_for_aggressive_delete
         rows = [
-            _Row("/keep.jpg", "g1", 0.9, match_confidence="high"),
-            _Row("/hi.jpg", "g1", 0.5, match_confidence="high"),
-            _Row("/lo.jpg", "g1", 0.4, match_confidence="low"),
+            _Row("/keep.jpg", "g1", 0.9, match_confidence="high",
+                 action="REVIEW_DUPLICATE"),
+            _Row("/hi.jpg", "g1", 0.5, match_confidence="high",
+                 action="REVIEW_DUPLICATE"),
+            _Row("/lo.jpg", "g1", 0.4, match_confidence="low",
+                 action="REVIEW_DUPLICATE"),
         ]
         targets = non_keepers_for_aggressive_delete(rows, keepers={"/keep.jpg"})
         assert targets == {"/hi.jpg"}            # high-confidence non-keeper deleted
         assert "/lo.jpg" not in targets          # low-confidence spared
 
     def test_missing_confidence_attr_stays_eligible(self):
-        """EXACT / older rows with no match_confidence behave as before."""
+        """EXACT / older rows with no match_confidence behave as before:
+        eligible, PROVIDED the action is a duplicate action (#536)."""
         from core.services.auto_select import non_keepers_for_aggressive_delete
         rows = [
-            _Row("/keep.jpg", "g1", 0.9),
-            _Row("/dup.jpg", "g1", 0.5),  # match_confidence defaults to None → eligible
+            _Row("/keep.jpg", "g1", 0.9, action="EXACT"),
+            # match_confidence defaults to None; EXACT action → still eligible.
+            _Row("/dup.jpg", "g1", 0.5, action="EXACT"),
         ]
         targets = non_keepers_for_aggressive_delete(rows, keepers={"/keep.jpg"})
         assert targets == {"/dup.jpg"}
+
+    def test_ref_tier_passenger_excluded_from_aggressive_delete(self):
+        """#536 — a Ref-tier passenger (action "" / KEEP / UNDATED) pulled into
+        a group by the ungated, filename-based pair edge (same-stem RAW+JPG /
+        HEIC+JPG, Live Photo) renders as the "—" passenger. It carries a real
+        score and a group_id but match_confidence=None, so before this guard it
+        slipped past the #517 ``!= "low"`` filter and a complementary ORIGINAL
+        was aggressive-delete eligible (the observed DSC_0015 → "—" → delete).
+        Only EXACT / REVIEW_DUPLICATE rows may be auto-deleted; both Ref-tier
+        passengers here must be spared while the genuine duplicate is not."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/DSC_0015.nef", "g1", 0.92, action="UNDATED"),     # Ref winner (keeper)
+            _Row("/DSC_0015.jpg", "g1", 0.71, action=""),            # "—" passenger (undecided)
+            _Row("/IMG.heic", "g1", 0.65, action="UNDATED"),         # "—" passenger (undated)
+            _Row("/real_dup.jpg", "g1", 0.40, action="REVIEW_DUPLICATE",
+                 match_confidence="high"),                            # genuine duplicate
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/DSC_0015.nef"})
+        # Complementary originals spared; only the asserted duplicate deleted.
+        assert "/DSC_0015.jpg" not in targets
+        assert "/IMG.heic" not in targets
+        assert targets == {"/real_dup.jpg"}
 
     def test_unscored_and_isolated_excluded(self):
         from core.services.auto_select import non_keepers_for_aggressive_delete

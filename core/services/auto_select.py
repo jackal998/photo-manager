@@ -138,6 +138,20 @@ def top_score_path_per_group(rows: Iterable) -> set[str]:
     return keepers
 
 
+# #536 — the only actions the classifier assigns when it has POSITIVELY
+# identified a row as a duplicate. Aggressive auto-delete is restricted to
+# these: a row carrying any OTHER (Ref-tier "" / KEEP / UNDATED) action was
+# never asserted to be a duplicate of anything. Such a row can still land in a
+# duplicate group via the unconditional, filename-based pair edge
+# (`scanner/dedup.py::_collect_pair_edges` — RAW+JPG / HEIC+JPG same-stem, Live
+# Photo) where it renders as the "—" passenger; it carries a real score but
+# ``match_confidence=None``, so the #517 ``!= "low"`` guard alone let it through
+# and a complementary ORIGINAL could be auto-marked for deletion. An allowlist
+# (not a Ref-tier denylist) is deliberate: any future non-duplicate action is
+# excluded by default — fail-safe.
+_DUPLICATE_ACTIONS = frozenset({"EXACT", "REVIEW_DUPLICATE"})
+
+
 def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[str]:
     """Return source_paths to auto-mark ``user_decision='delete'`` in the
     aggressive auto-select path (#393).
@@ -145,15 +159,22 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
     A non-keeper qualifies only when it is a ranked peer in a scored group
     (has both ``group_id`` and ``score``) and is not itself the keeper.
 
+    #536 — the row's ``action`` must be in :data:`_DUPLICATE_ACTIONS`
+    (``EXACT`` / ``REVIEW_DUPLICATE``). A Ref-tier row (``""`` / ``KEEP`` /
+    ``UNDATED``) pulled into a group by the ungated pair edge renders as a
+    "—" passenger and is NOT a duplicate the engine asserted — auto-deleting
+    it risks removing a complementary original (the same-stem RAW+JPG /
+    Live-Photo case). Only positively-classified duplicates are eligible.
+
     #517 — rows whose ``match_confidence`` is ``"low"`` (a pHash-only
     near-duplicate match with no independent dHash agreement) are EXCLUDED,
     so a shaky match is never auto-deleted; the user confirms it manually.
-    Rows lacking the attribute (older shapes / non-near-dup rows) are treated
-    as not-low and remain eligible, preserving prior behaviour.
+    Rows lacking ``match_confidence`` (older shapes) are treated as not-low and
+    remain eligible *provided* their action is a duplicate action.
 
     Args:
         rows: Iterable of ``ManifestRow``-shaped objects (``group_id``,
-            ``source_path``, ``score``, ``match_confidence``).
+            ``source_path``, ``score``, ``action``, ``match_confidence``).
         keepers: The per-group keepers from :func:`top_score_path_per_group`.
 
     Returns:
@@ -164,5 +185,6 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
         if row.group_id is not None
         and row.score is not None
         and row.source_path not in keepers
+        and getattr(row, "action", "") in _DUPLICATE_ACTIONS
         and getattr(row, "match_confidence", None) != "low"
     }
