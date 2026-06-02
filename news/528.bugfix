@@ -1,0 +1,1 @@
+Fix the app aborting on every Open Manifest load — restore the missing `UIUpdaterImpl.clear_preview` proxy so the post-load preview reset no longer raises inside the loader thread (#528).
