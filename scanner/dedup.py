@@ -39,6 +39,7 @@ except ImportError:
     _IMAGEHASH_AVAILABLE = False
 
 from scanner.media import RAW_EXTENSIONS
+from scanner.phash_distance import hamming_distance
 from scanner.walker import FileRecord
 
 # ---------------------------------------------------------------------------
@@ -269,7 +270,7 @@ def classify(
     # pair edges. Pairs always share a group_id, but each row keeps its
     # independent action / user_decision — the image's classification no
     # longer dictates the video's.
-    pair_edges = _collect_pair_edges(records, rows)
+    pair_edges = _collect_pair_edges(records, rows, threshold)
 
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges.
     _assign_group_ids(rows, pair_edges)
@@ -665,10 +666,25 @@ def _classify_near_duplicates(
 
 
 def _collect_pair_edges(
-    records: list[HashResult], rows: dict[str, ManifestRow]
+    records: list[HashResult], rows: dict[str, ManifestRow], threshold: int = 10
 ) -> list[tuple[str, str]]:
     """Return ``(own_path, peer_path)`` edges for every Live Photo cluster
     member that survived classification.
+
+    #539 — same-capture gate. The cluster comes from the walker keyed on
+    filename only (``(clean_stem, number)`` + directory); it assumes
+    "same stem ⇒ same capture", which is false when unrelated files collide
+    on a name (merged folders, multi-camera, Takeout). To stop a name
+    collision from unioning genuinely-different photos, an edge is dropped
+    when BOTH members carry a pHash AND their Hamming distance exceeds
+    ``threshold`` — positive evidence they are different images. The gate is
+    deliberately conservative: it fires only on disconfirming content
+    evidence, so any pair where a side lacks a pHash (a Live Photo's MOV/MP4)
+    or whose pHashes agree (a RAW+JPG / HEIC+JPG of one shot) is preserved
+    exactly as before. A pHash gate is used rather than a shot-date gate
+    because a Live Photo's HEIC (``DateTimeOriginal``, camera-local) and its
+    MOV (QuickTime date, frequently UTC) legitimately differ by a whole
+    timezone offset — a date gate would split real pairs.
 
     Per photo-manager#88: files with the same exact stem (clean_stem AND
     ``(N)`` dupe-marker number) in the same directory always share a
@@ -699,6 +715,7 @@ def _collect_pair_edges(
     directions. Union-find dedupes them implicitly.
     """
     edges: list[tuple[str, str]] = []
+    by_path: dict[str, HashResult] = {str(hr.record.path): hr for hr in records}
     for hr in records:
         own_key = str(hr.record.path)
         if own_key not in rows:
@@ -707,6 +724,16 @@ def _collect_pair_edges(
             peer_key = str(peer_path)
             if peer_key not in rows:
                 continue
+            # #539 — drop the edge only on positive evidence the two
+            # same-stem files are different images. ``hamming_distance``
+            # returns None when either pHash is missing (a video peer) or
+            # imagehash is unavailable; None means "no evidence" → keep the
+            # edge, preserving Live Photo and same-shot RAW+JPG pairings.
+            peer_hr = by_path.get(peer_key)
+            if peer_hr is not None:
+                d = hamming_distance(hr.phash, peer_hr.phash)
+                if d is not None and d > threshold:
+                    continue
             edges.append((own_key, peer_key))
     return edges
 
