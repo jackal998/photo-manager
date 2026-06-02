@@ -618,6 +618,36 @@ class TestAdvancedSettingsCollapse:
         dlg._params_group.setChecked(False)
         assert dlg._params_content.isVisibleTo(dlg) is False
 
+    def test_descriptions_are_one_line_with_hover_tooltips(self, qapp, tmp_path):
+        """Each Advanced-Settings control shows a SHORT one-line description
+        with the full technical detail on hover (the #520 concise-label +
+        tooltip design). #521 inlined the full multi-line text with
+        ``setWordWrap(True)``; PySide6 6.11 stopped flagging
+        ``hasHeightForWidth`` on wrapped QLabels, so the QVBoxLayout clipped
+        those descriptions to one line — they looked truncated under Advanced
+        Settings. This pins the restored design: the muted (#555) description
+        labels must NOT word-wrap (a one-line label can't be height-clipped)
+        and must each carry a tooltip. A flip back to wrapped inline text — the
+        regression that has now happened twice — fails here."""
+        from PySide6.QtWidgets import QLabel
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        settings = JsonSettings(self._make_settings_file(tmp_path, {"sources": {}}))
+        dlg = ScanDialog(settings)
+        descs = [
+            lab for lab in dlg._params_content.findChildren(QLabel)
+            if "#555" in lab.styleSheet()
+        ]
+        assert len(descs) >= 6, "expected one muted description per advanced control"
+        for lab in descs:
+            assert not lab.wordWrap(), (
+                f"description must be one-line, not wrapped: {lab.text()[:30]!r}"
+            )
+            assert lab.toolTip(), (
+                f"description missing hover tooltip: {lab.text()[:30]!r}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Auto-select after scan (photo-manager#212)
