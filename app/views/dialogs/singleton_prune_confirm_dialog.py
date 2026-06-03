@@ -163,9 +163,14 @@ class SingletonPruneConfirmDialog(QDialog):
         layout.addWidget(button_box)
 
         self._remove_btn.clicked.connect(self._on_remove)
-        self._keep_btn.clicked.connect(self._on_keep)
-        # Esc / window close → KEEP (the safe default, matching #182's
-        # CANCEL-on-close pattern). User must explicitly click Remove.
+        # The keep button routes through the dialog's reject() — the safe
+        # pattern locked_rows_confirm_dialog uses. reject() emits `rejected`,
+        # which fires `_on_keep` to record the verdict; that single wire ALSO
+        # covers Esc / window close (the safe default, #182's CANCEL-on-close
+        # pattern). `_on_keep` must NOT call done()/reject() itself — doing so
+        # re-emitted `rejected` → `_on_keep` → … unbounded reentrance → the
+        # keep-all stack-overflow crash.
+        self._keep_btn.clicked.connect(self.reject)
         self.rejected.connect(self._on_keep)
 
         self._keep_btn.setDefault(True)
@@ -176,12 +181,18 @@ class SingletonPruneConfirmDialog(QDialog):
         self.accept()
 
     def _on_keep(self) -> None:
+        # Invoked ONLY from the `rejected` signal (keep button RejectRole /
+        # Esc / window close), so the dialog is already being rejected — just
+        # record the verdict. Do NOT call done()/reject() again.
+        #
+        # The previous guard `if self.result() == 0: self.done(QDialog.Rejected)`
+        # was broken and crashed the app: `QDialog.Rejected == 0`, so the guard
+        # could never tell "still open" from "rejected", and re-calling
+        # `done(Rejected)` re-emitted `rejected` → `_on_keep` → `done` → …
+        # unbounded reentrance → C++ stack overflow / segfault when the user
+        # clicked "Keep all" (#544-followup).
         self._verdict = self.KEEP
         self._remember = self._remember_checkbox.isChecked()
-        # Only call done() if the dialog is still open (rejected signal
-        # can fire after explicit reject as well).
-        if self.result() == 0:
-            self.done(QDialog.Rejected)
 
     @property
     def verdict(self) -> int:
