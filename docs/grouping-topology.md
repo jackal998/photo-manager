@@ -8,7 +8,8 @@ the canonical answer to *"what is a group, and why is it shaped this way?"*
 **Status:** Decided 2026-06-03 (research under [#537](https://github.com/jackal998/photo-manager/issues/537);
 root-cause + safety work in [#536](https://github.com/jackal998/photo-manager/issues/536)).
 **Model:** a group is a *similarity connected component*; non-reference members
-are labelled by their similarity to the **nearest group member**.
+are labelled by their similarity to the displayed Ref, with a star (`N*%`) and a
+nearest-member tooltip for transitive "passengers".
 
 ---
 
@@ -144,13 +145,15 @@ without the determinism break.
   orphaned members → the [#486](https://github.com/jackal998/photo-manager/issues/486)
   calibration cache invalidates).
 - **[#536](https://github.com/jackal998/photo-manager/issues/536) Direction A —
-  relabel the passenger.** Render a passenger's similarity to its **nearest group
-  member** instead of a bare "—" (`tree_model_builder._file_similarity`,
-  render-time only). Complete-linkage's textbook guarantee proves the
-  nearest-member number is always non-empty; every precision-pole tool surveyed
-  gives each member a concrete number. This is the keystone that makes the #538
-  recall fix *legible*: a reconnected near-dup shows "X% similar to \<nearest\>"
-  rather than "—".
+  relabel the passenger** (shipped as option D, render-time only,
+  `tree_model_builder`). A passenger shows its similarity to the **displayed
+  Ref** — the same reference every other row uses, so the column is internally
+  consistent — with a **trailing star** (`N*%`) marking it as an
+  indirect/transitive member; a **tooltip** names the *nearest* group member
+  (the strongest actual link: `"N% similar to <file>"`). The bare "—" is reserved
+  for a passenger with no comparable pHash (a Live Photo MOV). This is the
+  keystone that makes the #538 recall fix *legible*: a reconnected near-dup reads
+  `75*%` with a "97% similar to \<neighbour\>" tooltip rather than a blank "—".
 
 `group_id` semantics, the DB schema, the scoring layer, and the BK-tree are all
 **unchanged** by both follow-ups.

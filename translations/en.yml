@@ -93,6 +93,9 @@ tree:
   # multi-source duplicates that union-find collapsed into one group)
   # render this neutral sentinel rather than confusingly repeating "Ref".
   similarity_passenger: "—"
+  # #536 Direction A — tooltip on a passenger's starred "N*%" cell, naming the
+  # nearest group member (the strongest actual link behind the star).
+  similarity_passenger_tooltip: "{pct}% similar to {name}"
 
 # Decision labels shown in context menus and the action dialog.
 # The stored value is internal ("delete" / "") — only the label is

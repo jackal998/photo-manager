@@ -108,31 +108,32 @@ def _hamming_to_pct(hamming: int | None) -> str:
     return f"{round((64 - hamming) / 64 * 100)}%"
 
 
-def _nearest_member_hamming(
+def _nearest_member(
     record: object, group_items: "Iterable[object] | None"
-) -> int | None:
-    """Smallest pHash Hamming distance from ``record`` to any OTHER member of
-    its group (#536 Direction A).
+) -> "tuple[object, int] | None":
+    """The OTHER group member closest to ``record`` by pHash Hamming, returned
+    as ``(member, distance)`` — or ``None`` when ``record`` has no pHash, the
+    group is unknown/empty, or no other member has a comparable pHash (#536
+    Direction A).
 
-    Returns ``None`` when the record has no pHash, the group is unknown/empty,
-    or no other member has a comparable pHash. Self is excluded by object
-    identity (not pHash equality), so a passenger whose peer is pixel-identical
-    still reads 100% rather than being skipped as "self".
+    Self is excluded by object identity (not pHash equality), so a passenger
+    whose peer is pixel-identical still resolves to that peer at distance 0.
+    Used for the passenger tooltip ("N% similar to <nearest>").
     """
     if not group_items:
         return None
     record_phash = getattr(record, "phash", None)
     if not record_phash:
         return None
-    best: int | None = None
+    best: "tuple[object, int] | None" = None
     for other in group_items:
         if other is record:
             continue
         d = _phash_hamming(record_phash, getattr(other, "phash", None))
         if d is None:
             continue
-        if best is None or d < best:
-            best = d
+        if best is None or d < best[1]:
+            best = (other, d)
     return best
 
 
@@ -141,7 +142,6 @@ def _file_similarity(
     record: object,
     is_ref_winner: bool = True,
     ref_phash: str | None = None,
-    group_items: "Iterable[object] | None" = None,
 ) -> str:
     """Return similarity label for a file row.
 
@@ -155,13 +155,14 @@ def _file_similarity(
     ``hamming_distance`` when either pHash is missing (old manifests
     pre-phash, video rows, or imagehash unavailable).
 
-    For Ref-tier actions (KEEP / UNDATED / ""): when
-    ``is_ref_winner`` is True the row carries the "Ref" label; when
-    False it falls back to the neutral passenger sentinel "—". Within
-    a single duplicate group only ONE row should be the Ref winner
-    (#241) — Live Photo HEIC primary + MOV passenger, multi-source
-    duplicates union-find collapsed into one group, etc. all used to
-    render two or three "Ref" labels in the same group.
+    For Ref-tier actions (KEEP / UNDATED / ""): when ``is_ref_winner``
+    is True the row carries the "Ref" label. When False the row is a
+    "passenger" and shows its similarity to the displayed Ref with a
+    trailing star (e.g. ``75*%``, #536 Direction A) — the star marks it
+    as an indirect/transitive member, and ``build_model`` adds a tooltip
+    naming the nearest member. It falls back to the bare "—" sentinel
+    only when no comparable pHash exists (a Live Photo MOV). Within a
+    single duplicate group only ONE row is the Ref winner (#241).
 
     Default ``is_ref_winner=True`` and ``ref_phash=None`` keep the
     legacy behaviour for callers that don't track within-group winners
@@ -179,16 +180,19 @@ def _file_similarity(
         return _hamming_to_pct(getattr(record, "hamming_distance", None))
     if is_ref_winner:
         return t("tree.similarity_ref")
-    # #536 Direction A — a Ref-tier passenger (a member pulled into the group
-    # but not the chosen Ref, e.g. a same-stem RAW+JPG companion, a Live Photo,
-    # or a #538-reconnected near-dup) renders its similarity to its NEAREST
-    # group member instead of a bare "—", so a grouped row never shows an empty
-    # similarity cell. Falls back to the passenger sentinel only when no
-    # comparable member exists (the row or every peer lacks a pHash — e.g. a
-    # Live Photo MOV).
-    nearest = _nearest_member_hamming(record, group_items)
-    if nearest is not None:
-        return _hamming_to_pct(nearest)
+    # #536 Direction A (option D) — a Ref-tier passenger (a member pulled into
+    # the group but not the chosen Ref: a same-stem RAW+JPG companion or a
+    # #538-reconnected near-dup) shows its similarity to the DISPLAYED Ref,
+    # exactly like a REVIEW_DUPLICATE row, so every grouped image row is measured
+    # against the same reference (a consistent column). A trailing star marks it
+    # as an indirect/transitive member rather than a directly-classified
+    # duplicate; build_model sets a tooltip naming the nearest member (the
+    # strongest actual link). Falls back to the bare "—" sentinel only when no
+    # comparable pHash exists (a Live Photo MOV), keeping "—" reserved for that.
+    record_phash = getattr(record, "phash", None)
+    vs_ref = _phash_hamming(ref_phash, record_phash)
+    if vs_ref is not None:
+        return _hamming_to_pct(vs_ref).replace("%", "*%")
     return t("tree.similarity_passenger")
 
 
@@ -435,7 +439,6 @@ def build_model(
                 p,
                 is_ref_winner=(p is ref_winner),
                 ref_phash=ref_winner_phash,
-                group_items=items_list,
             )
 
             # Col 1: user's decision (delete / keep / "" / remove_from_list).
@@ -458,6 +461,23 @@ def build_model(
                 QStandardItem(shot_txt),             # COL_SHOT_DATE  (9)
                 QStandardItem(resolution_txt),       # COL_RESOLUTION (10)
             ]
+
+            # #536 Direction A — for a passenger row (the starred "N*%" cell,
+            # i.e. a Ref-tier non-winner), set a tooltip naming the nearest
+            # group member so the strongest actual link behind the star is
+            # explicit on hover. No tooltip when there is no comparable pHash
+            # (a Live Photo MOV, which renders the bare "—").
+            if p is not ref_winner and file_action not in ("EXACT", "REVIEW_DUPLICATE"):
+                nearest = _nearest_member(p, items_list)
+                if nearest is not None:
+                    near_item, near_h = nearest
+                    child_row[COL_GROUP].setToolTip(
+                        t(
+                            "tree.similarity_passenger_tooltip",
+                            pct=round((64 - near_h) / 64 * 100),
+                            name=Path(getattr(near_item, "file_path", "")).name,
+                        )
+                    )
 
             try:
                 child_row[COL_GROUP].setData(_ACTION_SORT.get(file_action, 1), SORT_ROLE)
