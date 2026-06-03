@@ -28,6 +28,12 @@ Subdirs and contents:
   live-photo/        — IMG_0001.HEIC + IMG_0001.MOV pair
                        (probes Live Photo pairing logic in walker/dedup)
 
+NOT generated here (committed real photos — see their README):
+  passenger-bridge-a/ + passenger-bridge-b/ — 3 downscaled, EXIF-stripped burst
+                       frames forming a pHash+dHash bridge that yields the #538
+                       "passenger" (#544). A synthetic bridge can't survive the
+                       dHash gate (#524), so these are committed static files.
+
 Usage:
   python scripts/make_qa_sandbox.py [--force]
 """

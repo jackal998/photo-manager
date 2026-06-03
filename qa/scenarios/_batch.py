@@ -278,6 +278,7 @@ ALL_SCENARIOS = [
     # (s60/s62 are taken on master by #502/#486; this scenario landed
     # on the next free slot s64.)
     "s64_execute_selected_partial",
+    "s65_passenger_bridge",
 ]
 
 
