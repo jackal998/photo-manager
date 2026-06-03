@@ -18,7 +18,7 @@ from app.views.tree_model_builder import (
     _action_display,
     _file_similarity,
     _hamming_to_pct,
-    _nearest_member_hamming,
+    _nearest_member,
     _pick_ref_winner,
     build_model,
 )
@@ -94,68 +94,67 @@ class TestFileSimilarity:
 
 
 class TestPassengerRelabel:
-    """#536 Direction A — a Ref-tier passenger (not the chosen Ref) renders its
-    similarity to the NEAREST group member instead of a bare "—", so a grouped
-    row never shows an empty/confusing similarity cell."""
+    """#536 Direction A (option D) — a Ref-tier passenger shows its similarity to
+    the DISPLAYED Ref with a trailing star (a consistent column + a marker that
+    it's an indirect/transitive member); build_model adds a tooltip naming the
+    nearest member. "—" stays reserved for a passenger with no comparable pHash."""
 
-    def test_passenger_shows_nearest_member_pct(self):
-        """The whole point: a non-winner Ref-tier row that used to render "—"
-        now shows how similar it is to the closest file in its group."""
-        passenger = _rec(action="", phash="ffffffffffffffff")
-        near = _rec(file_path="/photos/b.jpg", action="", phash="fffffffffffffffc")  # 2 bits
-        far = _rec(file_path="/photos/c.jpg", action="", phash="0000000000000000")   # 64 bits
-        result = _file_similarity(
-            "", passenger, is_ref_winner=False,
-            group_items=[passenger, near, far],
-        )
-        assert result == "97%"            # 2/64 → 97, the NEAREST member
+    REF = "ffffffffffffffff"
 
-    def test_picks_nearest_of_multiple_peers(self):
-        """Catches a max-instead-of-min bug: the displayed % must be the
-        closest member, not an arbitrary or farthest one."""
-        passenger = _rec(action="", phash="ffffffffffffffff")
-        near = _rec(file_path="/b.jpg", action="", phash="fffffffffffffffc")    # 2 bits → 97%
-        nearer = _rec(file_path="/c.jpg", action="", phash="fffffffffffffffe")  # 1 bit  → 98%
-        result = _file_similarity(
-            "", passenger, is_ref_winner=False,
-            group_items=[passenger, near, nearer],
-        )
-        assert result == "98%"
+    def test_passenger_shows_vs_ref_pct_with_star(self):
+        """Headline: a non-winner Ref-tier row shows its % vs the DISPLAYED Ref
+        (like a REVIEW_DUPLICATE row) marked with a trailing star."""
+        passenger = _rec(action="", phash="ffffffffff0000ff")  # 16 bits from REF → 75%
+        result = _file_similarity("", passenger, is_ref_winner=False, ref_phash=self.REF)
+        assert result == "75*%"
 
-    def test_identical_peer_reads_100_not_skipped_as_self(self):
-        """Self is excluded by identity, NOT by pHash equality — a pixel-
-        identical (but byte-distinct) peer must still read 100%."""
-        passenger = _rec(file_path="/photos/a.jpg", action="", phash="ffffffffffffffff")
-        twin = _rec(file_path="/photos/b.jpg", action="", phash="ffffffffffffffff")
-        result = _file_similarity(
-            "", passenger, is_ref_winner=False, group_items=[passenger, twin],
-        )
-        assert result == "100%"
+    def test_star_distinguishes_passenger_from_direct_dup(self):
+        """Same distance, same reference (the Ref): a REVIEW_DUPLICATE shows a
+        bare %, the passenger shows the SAME % with a star — consistent column,
+        distinguishable member type."""
+        rec = _rec(phash="ffffffffff0000ff")
+        dup = _file_similarity("REVIEW_DUPLICATE", rec, ref_phash=self.REF)
+        passenger = _file_similarity("", rec, is_ref_winner=False, ref_phash=self.REF)
+        assert dup == "75%"
+        assert passenger == "75*%"
+        assert passenger == dup.replace("%", "*%")
 
-    def test_no_comparable_member_falls_back_to_passenger(self):
-        """When no peer has a comparable pHash (a Live Photo MOV, or the row
-        itself has no pHash), it falls back to the legacy passenger sentinel —
-        never a wrong number."""
-        passenger = _rec(action="", phash="ffffffffffffffff")
-        peer = _rec(file_path="/photos/b.jpg", action="", phash=None)
+    def test_no_phash_passenger_falls_back_to_dash(self):
+        """A passenger with no comparable pHash (a Live Photo MOV) still renders
+        the bare "—" — "—" stays reserved for that case, with no star."""
+        mov = _rec(action="", phash=None)
         fallback = _file_similarity("", _rec(action=""), is_ref_winner=False)  # legacy "—"
-        result = _file_similarity(
-            "", passenger, is_ref_winner=False, group_items=[passenger, peer],
-        )
+        result = _file_similarity("", mov, is_ref_winner=False, ref_phash=self.REF)
         assert result == fallback
-
-    def test_nearest_member_excludes_self_by_identity(self):
-        """A group of one (only self) has no nearest member → None → fallback."""
-        passenger = _rec(action="", phash="ffffffffffffffff")
-        assert _nearest_member_hamming(passenger, [passenger]) is None
+        assert "*" not in result
 
     def test_ref_winner_still_renders_ref(self):
-        """The chosen Ref is unchanged — only the non-winner passengers relabel."""
-        ref = _rec(action="", phash="ffffffffffffffff")
-        peer = _rec(file_path="/b.jpg", action="", phash="fffffffffffffffc")
-        assert _file_similarity(
-            "", ref, is_ref_winner=True, group_items=[ref, peer],
-        ) == "Ref"
+        """The chosen Ref is unchanged — only non-winner passengers get a star."""
+        ref = _rec(action="", phash=self.REF)
+        assert _file_similarity("", ref, is_ref_winner=True, ref_phash=self.REF) == "Ref"
+
+    def test_nearest_member_picks_closest(self):
+        """`_nearest_member` (drives the tooltip) returns the CLOSEST other
+        member as (item, distance) — catches a max-instead-of-min bug."""
+        passenger = _rec(file_path="/a.jpg", action="", phash="ffffffffffffffff")
+        near = _rec(file_path="/b.jpg", action="", phash="fffffffffffffffc")    # 2 bits
+        nearer = _rec(file_path="/c.jpg", action="", phash="fffffffffffffffe")  # 1 bit
+        item, dist = _nearest_member(passenger, [passenger, near, nearer])
+        assert item is nearer and dist == 1
+
+    def test_nearest_member_excludes_self_by_identity(self):
+        """Self excluded by IDENTITY not pHash equality: a pixel-identical twin
+        (distance 0) is still picked, but the row itself is not."""
+        passenger = _rec(file_path="/a.jpg", action="", phash="ffffffffffffffff")
+        twin = _rec(file_path="/b.jpg", action="", phash="ffffffffffffffff")
+        item, dist = _nearest_member(passenger, [passenger, twin])
+        assert item is twin and dist == 0
+
+    def test_nearest_member_none_when_alone_or_no_phash(self):
+        """No comparable peer → None (drives the "—" fallback + no tooltip)."""
+        solo = _rec(action="", phash="ffffffffffffffff")
+        assert _nearest_member(solo, [solo]) is None
+        assert _nearest_member(_rec(phash=None), [_rec(phash="ffffffffffffffff")]) is None
 
 
 # ── #253: % against the displayed Ref, not the scanner's anchor ────────────
@@ -327,6 +326,33 @@ class TestBuildModelSimilarityAgainstDisplayedRef:
             f"REVIEW_DUPLICATE row should render % against ref_high (score=0.9, "
             f"distance=1 → 98%), not against ref_low (stored hamming=63 → 2%); "
             f"got {dup_sim!r}"
+        )
+
+    def test_passenger_renders_star_pct_and_nearest_member_tooltip(self, qapp):
+        """#536 Direction A (option D) end-to-end: a passenger row renders its %
+        vs the displayed Ref WITH a star, and its tooltip names the NEAREST
+        member (not the Ref). Exercises the live build_model wiring + the
+        ``tree.similarity_passenger_tooltip`` substitution."""
+        from app.views.constants import COL_GROUP, COL_NAME, PATH_ROLE
+        ref = _rec(file_path="/p/ref.jpg", action="", score=0.9,
+                   phash="0000000000000000")
+        passenger = _rec(file_path="/p/passenger.jpg", action="", score=0.3,
+                         phash="000000000000ffff")        # 16 bits from ref → 75%
+        nearest = _rec(file_path="/p/nearest.jpg", action="REVIEW_DUPLICATE",
+                       phash="000000000000fffc")          # 2 bits from passenger → 97%
+        model, _ = build_model([_group([ref, passenger, nearest])])
+        group_row = model.item(0, 0)
+        cell = None
+        for r in range(group_row.rowCount()):
+            if group_row.child(r, COL_NAME).data(PATH_ROLE) == "/p/passenger.jpg":
+                cell = group_row.child(r, COL_GROUP)
+        assert cell is not None
+        assert cell.text() == "75*%", (
+            f"passenger renders % vs the Ref with a star; got {cell.text()!r}"
+        )
+        tip = cell.toolTip()
+        assert "nearest.jpg" in tip and "97%" in tip, (
+            f"tooltip should name the nearest member (nearest.jpg, 97%); got {tip!r}"
         )
 
 
