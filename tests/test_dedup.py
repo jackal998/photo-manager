@@ -598,6 +598,62 @@ class TestGroupId:
 
 
 # ---------------------------------------------------------------------------
+# #538 — true transitive closure (no orphaned near-dup, order-independent)
+# ---------------------------------------------------------------------------
+
+class TestUnderGroupingFix:
+    """#538 — a genuine near-dup whose only bridge is an already-classified file
+    must NOT be orphaned to group_id=None. Edge collection is decoupled from
+    classification so the union-find is a true closure, not a spanning forest.
+
+    Fixture: bx bridges k1 and k2 (non-degenerate pHashes, 32 set bits each):
+    d(k1,bx)=8, d(k2,bx)=8 (both ≤ threshold 10), d(k1,k2)=16 (> threshold).
+    k1/k2 are higher source-priority than bx, so bx is flagged first against k1;
+    pre-#538 the k2~bx edge was then dropped (bx already classified) → k2 orphaned.
+    """
+
+    K1 = "f0f0f0f0f0f0f0f0"
+    BX = "f0f0f0f0f0f0f00f"   # 8 bits from K1 (low byte F0→0F)
+    K2 = "f0f0f0f0f0f00f0f"   # 8 bits from BX (2nd byte), 16 from K1
+
+    def test_bridge_orphan_now_grouped(self):
+        k1 = _hr("/iphone/k1.jpg", sha256="s1", phash=self.K1, source_label="iphone", exif_date=_dt())
+        k2 = _hr("/iphone/k2.jpg", sha256="s2", phash=self.K2, source_label="iphone", exif_date=_dt())
+        bx = _hr("/jdrive/bx.jpg", sha256="s3", phash=self.BX, source_label="jdrive", exif_date=_dt())
+        rows = _rows(classify(
+            [k1, k2, bx], source_priority={"iphone": 0, "jdrive": 1}, threshold=10,
+        ))
+        g_k1 = rows["/iphone/k1.jpg"].group_id
+        g_k2 = rows["/iphone/k2.jpg"].group_id
+        g_bx = rows["/jdrive/bx.jpg"].group_id
+        assert g_k2 is not None, "k2 (a genuine near-dup of bx, d=8) must not be orphaned (#538)"
+        assert g_k1 == g_k2 == g_bx, "bridge component must close transitively"
+
+    def test_grouping_deterministic_under_input_shuffle(self):
+        """group_id (= lex-min path) must be identical regardless of input
+        order — the load-bearing rescore-without-rescan invariant. #538's full
+        edge set makes the partition order-independent; pre-#538 the orphan
+        appeared in some orders and not others."""
+        def build(order):
+            recs = [
+                _hr(p, sha256=f"sha-{p}", phash=h, source_label=lbl, exif_date=_dt())
+                for p, h, lbl in order
+            ]
+            return _rows(classify(recs, source_priority={"iphone": 0, "jdrive": 1}, threshold=10))
+
+        a = ("/iphone/k1.jpg", self.K1, "iphone")
+        b = ("/iphone/k2.jpg", self.K2, "iphone")
+        c = ("/jdrive/bx.jpg", self.BX, "jdrive")
+        r1 = build([a, b, c])
+        r2 = build([c, b, a])
+        r3 = build([b, c, a])
+        for path in ("/iphone/k1.jpg", "/iphone/k2.jpg", "/jdrive/bx.jpg"):
+            gids = {r1[path].group_id, r2[path].group_id, r3[path].group_id}
+            assert len(gids) == 1, f"{path} group_id is order-dependent: {gids}"
+            assert None not in gids, f"{path} orphaned in some order"
+
+
+# ---------------------------------------------------------------------------
 # Undecided non-duplicate (#433 — replaced the legacy MOVE + dest_path path)
 # ---------------------------------------------------------------------------
 

@@ -108,11 +108,40 @@ def _hamming_to_pct(hamming: int | None) -> str:
     return f"{round((64 - hamming) / 64 * 100)}%"
 
 
+def _nearest_member_hamming(
+    record: object, group_items: "Iterable[object] | None"
+) -> int | None:
+    """Smallest pHash Hamming distance from ``record`` to any OTHER member of
+    its group (#536 Direction A).
+
+    Returns ``None`` when the record has no pHash, the group is unknown/empty,
+    or no other member has a comparable pHash. Self is excluded by object
+    identity (not pHash equality), so a passenger whose peer is pixel-identical
+    still reads 100% rather than being skipped as "self".
+    """
+    if not group_items:
+        return None
+    record_phash = getattr(record, "phash", None)
+    if not record_phash:
+        return None
+    best: int | None = None
+    for other in group_items:
+        if other is record:
+            continue
+        d = _phash_hamming(record_phash, getattr(other, "phash", None))
+        if d is None:
+            continue
+        if best is None or d < best:
+            best = d
+    return best
+
+
 def _file_similarity(
     action: str,
     record: object,
     is_ref_winner: bool = True,
     ref_phash: str | None = None,
+    group_items: "Iterable[object] | None" = None,
 ) -> str:
     """Return similarity label for a file row.
 
@@ -150,6 +179,16 @@ def _file_similarity(
         return _hamming_to_pct(getattr(record, "hamming_distance", None))
     if is_ref_winner:
         return t("tree.similarity_ref")
+    # #536 Direction A — a Ref-tier passenger (a member pulled into the group
+    # but not the chosen Ref, e.g. a same-stem RAW+JPG companion, a Live Photo,
+    # or a #538-reconnected near-dup) renders its similarity to its NEAREST
+    # group member instead of a bare "—", so a grouped row never shows an empty
+    # similarity cell. Falls back to the passenger sentinel only when no
+    # comparable member exists (the row or every peer lacks a pHash — e.g. a
+    # Live Photo MOV).
+    nearest = _nearest_member_hamming(record, group_items)
+    if nearest is not None:
+        return _hamming_to_pct(nearest)
     return t("tree.similarity_passenger")
 
 
@@ -396,6 +435,7 @@ def build_model(
                 p,
                 is_ref_winner=(p is ref_winner),
                 ref_phash=ref_winner_phash,
+                group_items=items_list,
             )
 
             # Col 1: user's decision (delete / keep / "" / remove_from_list).

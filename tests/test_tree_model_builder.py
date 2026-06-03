@@ -18,6 +18,7 @@ from app.views.tree_model_builder import (
     _action_display,
     _file_similarity,
     _hamming_to_pct,
+    _nearest_member_hamming,
     _pick_ref_winner,
     build_model,
 )
@@ -90,6 +91,71 @@ class TestFileSimilarity:
     @pytest.mark.parametrize("action", ["KEEP", "UNDATED", "", "FOO_UNKNOWN"])
     def test_other_actions_render_as_ref(self, action):
         assert _file_similarity(action, _rec()) == "Ref"
+
+
+class TestPassengerRelabel:
+    """#536 Direction A — a Ref-tier passenger (not the chosen Ref) renders its
+    similarity to the NEAREST group member instead of a bare "—", so a grouped
+    row never shows an empty/confusing similarity cell."""
+
+    def test_passenger_shows_nearest_member_pct(self):
+        """The whole point: a non-winner Ref-tier row that used to render "—"
+        now shows how similar it is to the closest file in its group."""
+        passenger = _rec(action="", phash="ffffffffffffffff")
+        near = _rec(file_path="/photos/b.jpg", action="", phash="fffffffffffffffc")  # 2 bits
+        far = _rec(file_path="/photos/c.jpg", action="", phash="0000000000000000")   # 64 bits
+        result = _file_similarity(
+            "", passenger, is_ref_winner=False,
+            group_items=[passenger, near, far],
+        )
+        assert result == "97%"            # 2/64 → 97, the NEAREST member
+
+    def test_picks_nearest_of_multiple_peers(self):
+        """Catches a max-instead-of-min bug: the displayed % must be the
+        closest member, not an arbitrary or farthest one."""
+        passenger = _rec(action="", phash="ffffffffffffffff")
+        near = _rec(file_path="/b.jpg", action="", phash="fffffffffffffffc")    # 2 bits → 97%
+        nearer = _rec(file_path="/c.jpg", action="", phash="fffffffffffffffe")  # 1 bit  → 98%
+        result = _file_similarity(
+            "", passenger, is_ref_winner=False,
+            group_items=[passenger, near, nearer],
+        )
+        assert result == "98%"
+
+    def test_identical_peer_reads_100_not_skipped_as_self(self):
+        """Self is excluded by identity, NOT by pHash equality — a pixel-
+        identical (but byte-distinct) peer must still read 100%."""
+        passenger = _rec(file_path="/photos/a.jpg", action="", phash="ffffffffffffffff")
+        twin = _rec(file_path="/photos/b.jpg", action="", phash="ffffffffffffffff")
+        result = _file_similarity(
+            "", passenger, is_ref_winner=False, group_items=[passenger, twin],
+        )
+        assert result == "100%"
+
+    def test_no_comparable_member_falls_back_to_passenger(self):
+        """When no peer has a comparable pHash (a Live Photo MOV, or the row
+        itself has no pHash), it falls back to the legacy passenger sentinel —
+        never a wrong number."""
+        passenger = _rec(action="", phash="ffffffffffffffff")
+        peer = _rec(file_path="/photos/b.jpg", action="", phash=None)
+        fallback = _file_similarity("", _rec(action=""), is_ref_winner=False)  # legacy "—"
+        result = _file_similarity(
+            "", passenger, is_ref_winner=False, group_items=[passenger, peer],
+        )
+        assert result == fallback
+
+    def test_nearest_member_excludes_self_by_identity(self):
+        """A group of one (only self) has no nearest member → None → fallback."""
+        passenger = _rec(action="", phash="ffffffffffffffff")
+        assert _nearest_member_hamming(passenger, [passenger]) is None
+
+    def test_ref_winner_still_renders_ref(self):
+        """The chosen Ref is unchanged — only the non-winner passengers relabel."""
+        ref = _rec(action="", phash="ffffffffffffffff")
+        peer = _rec(file_path="/b.jpg", action="", phash="fffffffffffffffc")
+        assert _file_similarity(
+            "", ref, is_ref_winner=True, group_items=[ref, peer],
+        ) == "Ref"
 
 
 # ── #253: % against the displayed Ref, not the scanner's anchor ────────────
