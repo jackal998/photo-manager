@@ -180,7 +180,7 @@ The tree shows all files loaded from the manifest.
 
 | Column | Meaning |
 |--------|---------|
-| **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)* |
+| **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)*. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
 | **Action** | Your decision: `delete` / `keep` / *(empty = undecided)* |
 | **Score** | Keep-worthiness ranking in `[0.0, 1.0]` (#187). Within-group rows sort by this descending — best copy at the top. Empty for Live Photo MOV passengers. |
 | **Lock** | 🔒 if the row is locked against bulk operations (#182), empty otherwise. Sortable; searchable via the regex dialog as `Locked` / `""`. |
