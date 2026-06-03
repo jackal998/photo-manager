@@ -1433,3 +1433,296 @@ class TestScanWorkerWalkCancel:
         assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
             "destination manifest must be preserved on WALK-stage cancel"
         )
+
+
+class TestScanWorkerPerDeviceHashPools:
+    """#548 — the HASH stage's thread path runs one ThreadPoolExecutor PER
+    PHYSICAL DEVICE concurrently, so NAS-latency-bound reads overlap
+    HDD-seek-bound reads instead of queueing behind them in one flat pool.
+
+    These tests drive the worker end-to-end with SYNTHETIC two-device
+    records (paths on ``D:`` and ``J:`` — no real files, since CI has no
+    such drives) injected via a patched ``scan_sources``, and a patched
+    ``run_hash_for_record`` so nothing touches disk. The seams are the same
+    ones the established ``TestHashPoolSetting`` tests use (patch the late
+    imports the worker resolves inside ``_run_pipeline``).
+    """
+
+    def _records_two_devices(self):
+        """Five records: 3 on D:, 2 on J:, interleaved in source order so a
+        flat ``records[:n]`` slice would NOT span both devices."""
+        from scanner.walker import FileRecord
+
+        specs = [
+            (r"D:\photos\a.jpg", "D"),
+            (r"J:\nas\b.jpg", "J"),
+            (r"D:\photos\c.jpg", "D"),
+            (r"J:\nas\d.jpg", "J"),
+            (r"D:\photos\e.jpg", "D"),
+        ]
+        return [
+            FileRecord(path=Path(p), source_label=lbl, file_type="skip")
+            for p, lbl in specs
+        ]
+
+    def _install_synthetic_pipeline(self, monkeypatch, records, *, remote_drive):
+        """Patch the worker's late imports so a synthetic two-device scan
+        reaches and exercises the HASH thread branch without disk I/O:
+
+        - ``scan_sources`` → returns ``records`` (the worker walks once).
+        - ``run_hash_for_record`` → returns a synthetic ``HashResult`` per
+          record (no PIL, no file read).
+        - ``is_remote_drive`` → classifies ``J:`` as NAS so the per-device
+          worker count is 8 for J and ``min(4,cpu)`` for D.
+        - ``classify`` → captures the ``hash_results`` ordering and returns
+          ``[]`` so the manifest stage is a trivial empty write.
+        """
+        import scanner.walker as _walker
+        import scanner.hasher as _hasher
+        import scanner.workers as _workers
+        import scanner.dedup as _dedup
+        from scanner.dedup import HashResult
+
+        def fake_scan_sources(sources, **kwargs):
+            cb = kwargs.get("progress_callback")
+            if cb:
+                for _ in records:
+                    cb()
+            return list(records)
+
+        def fake_hash(idx, record):
+            return idx, HashResult(
+                record=record,
+                sha256=f"sha-{idx}",
+                phash=None,
+                exif_date=None,
+            )
+
+        captured = {"hash_results": None}
+
+        def fake_classify(hash_results, **kwargs):
+            captured["hash_results"] = list(hash_results)
+            return []
+
+        monkeypatch.setattr(_walker, "scan_sources", fake_scan_sources)
+        monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
+        monkeypatch.setattr(
+            _workers, "is_remote_drive", lambda root: remote_drive(root)
+        )
+        monkeypatch.setattr(_dedup, "classify", fake_classify)
+        return captured
+
+    def _spy_thread_pools(self, monkeypatch):
+        """Record the ``max_workers`` of every ThreadPoolExecutor the worker
+        constructs during HASH (delegates to the real one so work runs)."""
+        import concurrent.futures as _cf
+
+        constructed: list[int] = []
+        real = _cf.ThreadPoolExecutor
+
+        class SpyThreadPool(real):
+            def __init__(self, *args, **kwargs):
+                constructed.append(kwargs.get("max_workers"))
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(_cf, "ThreadPoolExecutor", SpyThreadPool)
+        return constructed
+
+    def test_one_pool_per_device_with_correct_worker_counts(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Two devices → two ThreadPoolExecutors, J: (NAS) gets 8 workers and
+        D: (local) gets min(4, cpu). A flat single pool would construct one
+        executor with self.workers — this asserts the per-device fan-out."""
+        import os
+        from app.views.workers.scan_worker import ScanWorker
+
+        records = self._records_two_devices()
+        self._install_synthetic_pipeline(
+            monkeypatch, records, remote_drive=lambda root: str(root).upper() == "J:"
+        )
+        constructed = self._spy_thread_pools(monkeypatch)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+        )
+        worker.run()
+
+        # One pool per device — D: at min(4,cpu), J: at 8. Order follows
+        # source-iteration order (D first, since record 0 is on D:).
+        local = min(4, os.cpu_count() or 4)
+        assert constructed == [local, 8], (
+            f"expected one pool per device [D={local}, J=8]; got {constructed!r}"
+        )
+
+    def test_hash_results_preserve_input_order_across_devices(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Records on two devices complete in arbitrary pool-interleaved
+        order, but hash_results MUST stay in original input index order —
+        classify()'s union-find group_ids depend on walk order."""
+        from app.views.workers.scan_worker import ScanWorker
+
+        records = self._records_two_devices()
+        captured = self._install_synthetic_pipeline(
+            monkeypatch, records, remote_drive=lambda root: str(root).upper() == "J:"
+        )
+        self._spy_thread_pools(monkeypatch)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+        )
+        worker.run()
+
+        result_paths = [hr.record.path for hr in captured["hash_results"]]
+        assert result_paths == [r.path for r in records], (
+            "per-device pools must not reorder hash_results — original "
+            f"input order required; got {result_paths!r}"
+        )
+
+    def test_cancel_during_hash_across_pools_emits_cancelled(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """A user-cancel mid-HASH with N device pools must tear down cleanly:
+        no deadlock, consumers get sentinels, exactly ['Scan cancelled.']
+        fires and the prior manifest survives (classify never runs)."""
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.dedup as _dedup
+
+        records = self._records_two_devices()
+        self._install_synthetic_pipeline(
+            monkeypatch, records, remote_drive=lambda root: str(root).upper() == "J:"
+        )
+        self._spy_thread_pools(monkeypatch)
+
+        out = tmp_path / "manifest.sqlite"
+        out.write_bytes(b"PRIOR-MANIFEST-SENTINEL")
+
+        def must_not_classify(*a, **k):
+            raise AssertionError("classify ran despite mid-HASH cancel")
+
+        monkeypatch.setattr(_dedup, "classify", must_not_classify)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=2,
+        )
+        cancel_state = {"flag": True}  # cancel before the first drain check
+        monkeypatch.setattr(
+            worker, "isInterruptionRequested", lambda: cancel_state["flag"]
+        )
+
+        failed: list[str] = []
+        finished: list[str] = []
+        worker.failed.connect(failed.append)
+        worker.finished.connect(finished.append)
+        worker.run()
+
+        assert failed == ["Scan cancelled."], (
+            f"mid-HASH cancel across pools must emit ['Scan cancelled.']; "
+            f"got {failed!r}"
+        )
+        assert finished == [], "finished must not fire on cancel"
+        assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
+            "prior manifest must survive a mid-HASH cancel"
+        )
+
+    def test_single_device_uses_one_pool(self, qapp, tmp_path, monkeypatch):
+        """The common case (one device) must construct exactly one pool —
+        zero regression for single-device users."""
+        import os
+        from app.views.workers.scan_worker import ScanWorker
+        from scanner.walker import FileRecord
+
+        records = [
+            FileRecord(path=Path(rf"D:\photos\{i}.jpg"), source_label="s",
+                       file_type="skip")
+            for i in range(4)
+        ]
+        self._install_synthetic_pipeline(
+            monkeypatch, records, remote_drive=lambda root: False
+        )
+        constructed = self._spy_thread_pools(monkeypatch)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+        )
+        worker.run()
+
+        assert constructed == [min(4, os.cpu_count() or 4)], (
+            f"single-device scan must use exactly one pool; got {constructed!r}"
+        )
+
+
+class TestStratifiedSample:
+    """#548 — _stratified_sample spreads the auto-calibration sample across
+    devices so the thread-vs-process pick isn't measured on the first
+    (source-order) device alone."""
+
+    def test_multi_device_sample_spans_all_devices(self):
+        from app.views.workers.scan_worker import _stratified_sample
+        from scanner.walker import FileRecord
+
+        # 50 D: records first, then 50 J: records — a naive records[:10]
+        # would be ALL D:. The stratified sample must include J: too.
+        recs = [
+            FileRecord(path=Path(rf"D:\a\{i}.jpg"), source_label="d",
+                       file_type="jpeg")
+            for i in range(50)
+        ] + [
+            FileRecord(path=Path(rf"J:\b\{i}.jpg"), source_label="j",
+                       file_type="jpeg")
+            for i in range(50)
+        ]
+
+        # Odd n exercises the mid-row cap: the round-robin reaches n in the
+        # middle of a device row and must stop EXACTLY at n, not overshoot.
+        sample = _stratified_sample(recs, 7)
+
+        drives = {str(r.path)[:2].upper() for r in sample}
+        assert drives == {"D:", "J:"}, (
+            f"stratified sample must span both devices; got {drives!r}"
+        )
+        assert len(sample) == 7, (
+            f"odd n must cap exactly, not overshoot; got {len(sample)}"
+        )
+
+    def test_single_device_sample_is_prefix_slice(self):
+        """One device → behaviour identical to records[:n] (the common case
+        stays byte-for-byte unchanged)."""
+        from app.views.workers.scan_worker import _stratified_sample
+        from scanner.walker import FileRecord
+
+        recs = [
+            FileRecord(path=Path(rf"D:\a\{i}.jpg"), source_label="d",
+                       file_type="jpeg")
+            for i in range(20)
+        ]
+        assert _stratified_sample(recs, 5) == recs[:5]
+
+    def test_sample_capped_at_n_when_devices_have_few_records(self):
+        """Round-robin stops at n even when buckets are uneven, and never
+        exceeds the available records."""
+        from app.views.workers.scan_worker import _stratified_sample
+        from scanner.walker import FileRecord
+
+        recs = [
+            FileRecord(path=Path(r"D:\a\1.jpg"), source_label="d", file_type="jpeg"),
+            FileRecord(path=Path(r"D:\a\2.jpg"), source_label="d", file_type="jpeg"),
+            FileRecord(path=Path(r"J:\b\1.jpg"), source_label="j", file_type="jpeg"),
+        ]
+        # Ask for more than exist — must return all 3, no duplicates, no raise.
+        sample = _stratified_sample(recs, 10)
+        assert len(sample) == 3
+        assert {str(r.path) for r in sample} == {str(r.path) for r in recs}

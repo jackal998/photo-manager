@@ -188,6 +188,49 @@ def _derive_bktree_floor(brute_per_pair: float, bk_per_candidate: float) -> int:
     return max(_GROUP_FLOOR_MIN, min(_GROUP_FLOOR_MAX, crossover))
 
 
+def _stratified_sample(records: list, n: int) -> list:
+    """#548 — draw up to ``n`` records spread across physical devices.
+
+    ``records`` is a source-order concatenation, so a naive ``records[:n]``
+    slice samples only the first device (e.g. all D: files) and the
+    thread-vs-process calibration then measures the slowest device alone.
+    Round-robin across ``device_key`` buckets (in source-iteration order so
+    the sample stays deterministic) so the pick is fair on a mixed scan.
+
+    With a single device this returns ``records[:n]`` exactly — the common
+    case is unchanged.
+    """
+    from collections import OrderedDict
+
+    from scanner.workers import device_key
+
+    buckets: "OrderedDict[str, list]" = OrderedDict()
+    for r in records:
+        # FileRecord exposes ``.path``; tolerate plain values (e.g. the
+        # synthetic int lists the calibration unit tests pass) by keying
+        # off the value itself — they all collapse into one bucket so the
+        # function degrades to the records[:n] single-device path.
+        key = device_key(getattr(r, "path", r))
+        buckets.setdefault(key, []).append(r)
+    if len(buckets) <= 1:
+        return records[:n]
+    sample: list = []
+    cursors = {dev: 0 for dev in buckets}
+    while len(sample) < n:
+        progressed = False
+        for dev, items in buckets.items():
+            if len(sample) >= n:
+                break
+            cur = cursors[dev]
+            if cur < len(items):
+                sample.append(items[cur])
+                cursors[dev] = cur + 1
+                progressed = True
+        if not progressed:
+            break
+    return sample
+
+
 def hash_pool_fingerprint(
     sources: dict, recursive_map: dict | None, cpu_count: int
 ) -> str:
@@ -487,7 +530,11 @@ class ScanWorker(QThread):
         n = len(records)
         rates = self.hash_pool_rates
         if not _valid_hash_pool_rates(rates):
-            sample = records[:_CALIBRATION_SAMPLE]
+            # #548 — stratify the sample across devices so the thread-vs-
+            # process pick is measured fairly on a mixed scan instead of on
+            # the first (source-order) device alone. Single-device scans are
+            # unchanged (the helper returns records[:n] verbatim).
+            sample = _stratified_sample(records, _CALIBRATION_SAMPLE)
             if len(sample) < _CALIBRATION_MIN:
                 self._emit(
                     f"  Hash-pool calibration skipped ({len(sample)} files;"
@@ -560,12 +607,14 @@ class ScanWorker(QThread):
             ThreadPoolExecutor,
             as_completed,
         )
+        from collections import OrderedDict
         from scanner.walker import scan_sources
         from scanner.hasher import HashFailure, run_hash_for_record
         from scanner.exif import ExiftoolProcess, batch_read_extracts
         from scanner.dedup import HashResult, classify
         from scanner.manifest import write_manifest, print_summary
         from scanner.scoring import apply_scoring_to_rows
+        from scanner.workers import device_key, hash_workers_for_root
         import io
         from contextlib import redirect_stdout
 
@@ -886,48 +935,110 @@ class ScanWorker(QThread):
         # outcome in the drain loop. Thread path (default) keeps the
         # in-worker routing via _hash_one — identical to pre-PR2.
         use_process = resolved_pool == "process"
-        executor_cls = ProcessPoolExecutor if use_process else ThreadPoolExecutor
-        with executor_cls(max_workers=self.workers) as pool:
-            if use_process:
+        if use_process:
+            # TODO(#548 follow-on): per-device process pools. The
+            # seek-thrash problem #548 targets is I/O-bound, so the
+            # per-device overlap win lives entirely in the thread branch.
+            # Keep the single flat ProcessPoolExecutor here unchanged.
+            with ProcessPoolExecutor(max_workers=self.workers) as pool:
                 futures = {
                     pool.submit(run_hash_for_record, i, r): i
                     for i, r in enumerate(records)
                 }
-            else:
-                futures = {
-                    pool.submit(_hash_one, (i, r)): i for i, r in enumerate(records)
-                }
-            for future in as_completed(futures):
-                if self.isInterruptionRequested():
-                    cancel_flag.set()
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    # Tell each consumer to stop — one sentinel per
-                    # consumer so each gets exactly one ``None`` off
-                    # the queue. The 0.5s ``get(timeout)`` inside the
-                    # consumer guarantees cancel_flag is picked up
-                    # within ~½s even before the sentinel arrives.
-                    for _ in consumer_threads:
-                        exif_queue.put(None)
-                    for t in consumer_threads:
-                        t.join(timeout=5)
-                    logger.warning("Scan cancelled by user during hashing pass")
-                    self.failed.emit("Scan cancelled.")
-                    return
-                idx, outcome = future.result()
-                # Thread path already routed inside _hash_one (outcome is
-                # the HashResult-or-None to store); process path returns the
-                # raw outcome to route here in the parent.
-                result = _route_outcome(records[idx], outcome) if use_process else outcome
-                if result is not None:
-                    hash_results[idx] = result
-                done += 1
-                if done % 100 == 0 or done == len(records):
-                    self._emit(f"  Hashed {done:,}/{len(records):,}")
-                # #424 — per-second-throttled stage_progress emit
-                # alongside the existing per-100 log line. The tracker
-                # records every iteration so throughput stays accurate
-                # even when the emit is throttled away.
-                self._emit_stage(hash_tracker, done, len(records))
+                for future in as_completed(futures):
+                    if self.isInterruptionRequested():
+                        cancel_flag.set()
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        # Tell each consumer to stop — one sentinel per
+                        # consumer so each gets exactly one ``None`` off
+                        # the queue. The 0.5s ``get(timeout)`` inside the
+                        # consumer guarantees cancel_flag is picked up
+                        # within ~½s even before the sentinel arrives.
+                        for _ in consumer_threads:
+                            exif_queue.put(None)
+                        for t in consumer_threads:
+                            t.join(timeout=5)
+                        logger.warning("Scan cancelled by user during hashing pass")
+                        self.failed.emit("Scan cancelled.")
+                        return
+                    idx, outcome = future.result()
+                    # Process path returns the raw outcome to route here
+                    # in the parent (the child can't touch the thread-only
+                    # cancel_flag / exif_queue).
+                    result = _route_outcome(records[idx], outcome)
+                    if result is not None:
+                        hash_results[idx] = result
+                    done += 1
+                    if done % 100 == 0 or done == len(records):
+                        self._emit(f"  Hashed {done:,}/{len(records):,}")
+                    # #424 — per-second-throttled stage_progress emit
+                    # alongside the existing per-100 log line.
+                    self._emit_stage(hash_tracker, done, len(records))
+        else:
+            # #548 — THREAD path: one ThreadPoolExecutor PER PHYSICAL
+            # DEVICE, all running concurrently, so NAS-latency-bound reads
+            # overlap HDD-seek-bound reads instead of the NAS waiting behind
+            # local files in one flat queue. Per-device worker counts come
+            # from hash_workers_for_root (NAS=8, local=min(4,cpu)). Records
+            # are partitioned by device_key while PRESERVING the original
+            # enumerate index — hash_results is indexed by that original idx
+            # so classify()'s walk-order-dependent union-find group_ids stay
+            # deterministic regardless of completion order.
+            device_records: "OrderedDict[str, list[tuple[int, object]]]" = (
+                OrderedDict()
+            )
+            for idx, r in enumerate(records):
+                device_records.setdefault(device_key(r.path), []).append((idx, r))
+            device_workers = {
+                dev: hash_workers_for_root(dev) for dev in device_records
+            }
+            self._emit(
+                f"Hashing {len(records):,} files across"
+                f" {len(device_records)} device(s): "
+                + ", ".join(
+                    f"{dev or 'local'}={device_workers[dev]}×{len(items)}f"
+                    for dev, items in device_records.items()
+                )
+            )
+            pools = {
+                dev: ThreadPoolExecutor(max_workers=device_workers[dev])
+                for dev in device_records
+            }
+            try:
+                futures = {}
+                for dev, items in device_records.items():
+                    for idx, r in items:
+                        futures[pools[dev].submit(_hash_one, (idx, r))] = idx
+                # as_completed accepts futures from multiple executors, so
+                # a single drain loop services all device pools as their
+                # work completes in any interleaving.
+                for future in as_completed(futures):
+                    if self.isInterruptionRequested():
+                        cancel_flag.set()
+                        for p in pools.values():
+                            p.shutdown(wait=False, cancel_futures=True)
+                        for _ in consumer_threads:
+                            exif_queue.put(None)
+                        for t in consumer_threads:
+                            t.join(timeout=5)
+                        logger.warning("Scan cancelled by user during hashing pass")
+                        self.failed.emit("Scan cancelled.")
+                        return
+                    idx, outcome = future.result()
+                    # Thread path already routed inside _hash_one (outcome
+                    # is the HashResult-or-None to store).
+                    result = outcome
+                    if result is not None:
+                        hash_results[idx] = result
+                    done += 1
+                    if done % 100 == 0 or done == len(records):
+                        self._emit(f"  Hashed {done:,}/{len(records):,}")
+                    # #424 — per-second-throttled stage_progress emit
+                    # alongside the existing per-100 log line.
+                    self._emit_stage(hash_tracker, done, len(records))
+            finally:
+                for p in pools.values():
+                    p.shutdown(wait=False)
 
         # Signal each consumer that no more items are coming and wait
         # for them to drain whatever's still queued. The hash threads

@@ -62,3 +62,39 @@ def default_hash_workers(paths: Iterable[Path | str] | None = None) -> int:
                 return 8
     cpu = os.cpu_count() or 4
     return min(4, cpu)
+
+
+def device_key(path: Path | str) -> str:
+    """Physical-device grouping key for ``path``.
+
+    ``os.path.splitdrive`` on a drive-letter path returns the drive
+    (e.g. ``'D:'``, ``'J:'``); on a UNC path it returns the
+    ``\\\\server\\share`` prefix. Either way the result is upper-cased so
+    two paths on the same device land in the same bucket regardless of
+    case. An empty / relative path returns ``''`` — callers treat ``''``
+    as a single bucket. Pure, no I/O.
+
+    #548 — used by the HASH stage to run one ThreadPoolExecutor per
+    physical device concurrently, so NAS-latency-bound reads overlap
+    HDD-seek-bound reads instead of queueing behind them in one flat pool.
+    """
+    drive = os.path.splitdrive(str(path))[0]
+    return drive.upper()
+
+
+def hash_workers_for_root(root: str) -> int:
+    """Per-device hash worker count for one device root (#548).
+
+    NAS (``is_remote_drive``) → 8 — SMB request latency dominates, so
+    more concurrent reads pay off. Local → ``min(4, os.cpu_count())``,
+    the historical local default.
+
+    TODO(#548 PR-B): split local into HDD (1-2 workers, seek-thrash
+    bound) vs SSD (4-8) via WMI ``MSFT_PhysicalDisk.MediaType``; without
+    that signal we keep the SSD-safe ``min(4, cpu)`` for all local devices
+    so SSD-only users don't regress.
+    """
+    if is_remote_drive(root):
+        return 8
+    cpu = os.cpu_count() or 4
+    return min(4, cpu)
