@@ -249,8 +249,10 @@ def classify(
     # Pass 1: exact SHA-256 duplicates
     _classify_exact(records, rows, source_priority)
 
-    # Pass 2: pHash-based (cross-format + near-duplicate)
-    _classify_phash(
+    # Pass 2: pHash-based (cross-format + near-duplicate). Returns the near-dup
+    # union-find edges (#538 — a true transitive closure, decoupled from
+    # classification so a genuine near-dup is never orphaned).
+    near_dup_edges = _classify_phash(
         records, rows, threshold, source_priority, mean_color_threshold,
         min_phash_entropy_bits, dhash_threshold, min_phash_dimension,
         bktree_min_candidates,
@@ -272,8 +274,9 @@ def classify(
     # longer dictates the video's.
     pair_edges = _collect_pair_edges(records, rows, threshold)
 
-    # Pass 5: assign group_id via union-find over duplicate_of + pair edges.
-    _assign_group_ids(rows, pair_edges)
+    # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
+    # near-dup transitive edges (#538).
+    _assign_group_ids(rows, pair_edges + near_dup_edges)
 
     return list(rows.values())
 
@@ -371,8 +374,9 @@ def _classify_phash(
     dhash_threshold: int = 10,
     min_phash_dimension: int = 128,
     bktree_min_candidates: int | None = None,
-) -> None:
-    """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE.
+) -> list[tuple[str, str]]:
+    """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE, and
+    return the near-duplicate union-find edges (#538).
 
     Records are excluded from BOTH the exact-pHash format-group path and the
     near-duplicate scan when their pHash is degenerate (flat image — see
@@ -404,8 +408,10 @@ def _classify_phash(
             group, rows, source_priority, mean_color_threshold, dhash_threshold
         )
 
-    # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold
-    _classify_near_duplicates(
+    # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold.
+    # Returns the union-find edges (#538 — a true transitive closure, decoupled
+    # from classification).
+    return _classify_near_duplicates(
         candidates, rows, threshold, source_priority, mean_color_threshold,
         dhash_threshold, bktree_min_candidates,
     )
@@ -478,7 +484,7 @@ def _classify_format_group(
 # way that shifts cost or verdict: e.g. the BK-tree metric, the threshold
 # defaults, or adding/removing a gate (mean-color #462, dHash #524, entropy
 # #516, dimension #523). Opaque cache-keying token; only equality matters.
-GROUPING_STRATEGY_VERSION = "1"
+GROUPING_STRATEGY_VERSION = "2"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -606,10 +612,21 @@ def _classify_near_duplicates(
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
     bktree_min_candidates: int | None = None,
-) -> None:
-    """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE."""
+) -> list[tuple[str, str]]:
+    """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE,
+    and return their ``(path_a, path_b)`` union-find edges.
+
+    #538 — edge collection is DECOUPLED from classification. Every pair that
+    passes the distance + mean-color (#462) + dHash (#524) gates yields a
+    union-find edge, even when one endpoint is already classified via another
+    bridge. Previously the ``if hr_b … in rows: continue`` guard dropped such an
+    edge, so a genuine near-dup whose only bridge was already classified fell to
+    ``group_id=None`` (an order-dependent spanning *forest*, not a true
+    transitive closure). Classification (which row becomes REVIEW_DUPLICATE, and
+    its ``match_confidence``) is unchanged — only the returned edge set is new.
+    """
     if not _IMAGEHASH_AVAILABLE:
-        return
+        return []
 
     unclassified = [hr for hr in candidates if str(hr.record.path) not in rows]
     hashes = [(hr, imagehash.hex_to_hash(hr.phash)) for hr in unclassified if hr.phash]
@@ -623,46 +640,56 @@ def _classify_near_duplicates(
     int_hashes = [int(hr.phash, 16) for hr, _ in hashes]
     neighbors = _near_dup_neighbors(int_hashes, threshold, bktree_min_candidates)
 
+    edges: list[tuple[str, str]] = []
     for i, (hr_a, hash_a) in enumerate(hashes):
-        # Do NOT skip hr_a when it is already classified — it can still serve as
-        # a comparator so that transitively-similar files (hr_b similar to hr_a
-        # which is similar to an earlier file) are connected into the same group.
+        # hr_a may already be classified — it still serves as a comparator so
+        # transitively-similar files connect into one component.
         for j in neighbors(i):
             hr_b, hash_b = hashes[j]
+            distance = hash_a - hash_b
+            if not (0 < distance <= threshold):
+                continue
+            # Mean-color gate: reject if average colors clearly differ (a pHash
+            # false positive — similar DCT structure, different colours).
+            # Skipped when either file lacks mean_color (RAW, hash failure).
+            if mean_color_threshold > 0 and hr_a.mean_color and hr_b.mean_color:
+                if _mean_color_distance(hr_a.mean_color, hr_b.mean_color) > mean_color_threshold:
+                    continue
+            # #524 — dHash grouping gate: pHash is only a candidate; the
+            # independent dHash must also agree (or be unavailable). A
+            # "disagree" verdict means the two scenes only collided on the
+            # coarse pHash → not a real near-dup → no edge, no classification.
+            vote = _dhash_vote(hr_a, hr_b, dhash_threshold)
+            if vote == "disagree":
+                continue
+            # #538 — record the union-find edge for EVERY surviving pair,
+            # decoupled from the in-rows classification guard below. This is the
+            # only behavioural change: the edge stands even when hr_b is already
+            # classified (exactly the case the old top-of-loop guard dropped →
+            # orphan). Redundant edges are union-find no-ops.
+            edges.append((str(hr_a.record.path), str(hr_b.record.path)))
+            # Classification (unchanged from pre-#538): flag the lower-priority
+            # side, but only when hr_b is still unclassified — so the
+            # REVIEW_DUPLICATE / match_confidence assignment is byte-identical.
             if str(hr_b.record.path) in rows:
                 continue
-            distance = hash_a - hash_b
-            if 0 < distance <= threshold:
-                # Mean-color gate: reject if average colors clearly differ.
-                # Catches pHash false positives (similar DCT structure, different colors).
-                # Gate is skipped when either file lacks mean_color (RAW, hash failure).
-                if mean_color_threshold > 0 and hr_a.mean_color and hr_b.mean_color:
-                    if _mean_color_distance(hr_a.mean_color, hr_b.mean_color) > mean_color_threshold:
-                        continue
-                # #524 — dHash grouping gate: pHash is only a candidate; the
-                # independent dHash must also agree (or be unavailable) for a
-                # near-dup to stand. A "disagree" verdict means the two scenes
-                # only collided on the coarse pHash → not a real near-dup, skip.
-                vote = _dhash_vote(hr_a, hr_b, dhash_threshold)
-                if vote == "disagree":
-                    continue
-                # Flag the lower-priority file as REVIEW_DUPLICATE
-                ordered = sorted(
-                    [hr_a, hr_b],
-                    key=lambda h: _priority(h.record.source_label, source_priority),
+            ordered = sorted(
+                [hr_a, hr_b],
+                key=lambda h: _priority(h.record.source_label, source_priority),
+            )
+            flagged = ordered[1]
+            flagged_key = str(flagged.record.path)
+            if flagged_key not in rows:
+                rows[flagged_key] = _make_row(
+                    flagged,
+                    "REVIEW_DUPLICATE",
+                    duplicate_of=str(ordered[0].record.path),
+                    hamming=distance,
+                    reason=f"near-duplicate (hamming={distance}) of "
+                           f"{ordered[0].record.path.name}",
+                    match_confidence="high" if vote == "agree" else "low",
                 )
-                flagged = ordered[1]
-                flagged_key = str(flagged.record.path)
-                if flagged_key not in rows:
-                    rows[flagged_key] = _make_row(
-                        flagged,
-                        "REVIEW_DUPLICATE",
-                        duplicate_of=str(ordered[0].record.path),
-                        hamming=distance,
-                        reason=f"near-duplicate (hamming={distance}) of "
-                               f"{ordered[0].record.path.name}",
-                        match_confidence="high" if vote == "agree" else "low",
-                    )
+    return edges
 
 
 def _collect_pair_edges(
@@ -749,12 +776,14 @@ def _assign_group_ids(
     Isolated files (no similarity edge AND no pair edge) receive
     group_id = None.
 
-    ``pair_edges`` are Live Photo HEIC ↔ MOV/MP4 pairs from
-    ``_collect_pair_edges`` (photo-manager#88). They participate in the
-    same union-find as ``duplicate_of`` edges, so a unique pair (neither
-    side a duplicate of anything else) still gets its own 2-row group;
-    a pair where each side belongs to a different SHA-group still
-    transitively closes into a single component.
+    ``pair_edges`` carries the non-``duplicate_of`` union edges: Live Photo
+    HEIC ↔ MOV/MP4 pairs from ``_collect_pair_edges`` (photo-manager#88) AND
+    the near-duplicate transitive edges from ``_classify_near_duplicates``
+    (#538). They participate in the same union-find as ``duplicate_of`` edges,
+    so a unique pair (neither side a duplicate of anything else) still gets its
+    own 2-row group; a pair where each side belongs to a different SHA-group
+    still transitively closes into a single component; and a genuine near-dup
+    whose only bridge was already classified is no longer orphaned (#538).
     """
     parent: dict[str, str] = {}
 
