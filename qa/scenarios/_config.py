@@ -271,6 +271,14 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # floor, so the recalibrate → auto path runs but SKIPS the real
     # ProcessPool measurement (no flaky subprocess spawn in the batch).
     "s62_scan_hash_pool_recalibrate": ["qa/sandbox/near-duplicates"],
+    # #544 — passenger-bridge-a (originals, priority 0) FIRST, then
+    # passenger-bridge-b (the bridge, priority 1): order = scan/dedup priority,
+    # so the lower-priority bridge becomes the REVIEW_DUPLICATE and both
+    # originals stay Ref-tier → one is the #538 passenger.
+    "s65_passenger_bridge": [
+        "qa/sandbox/passenger-bridge-a",
+        "qa/sandbox/passenger-bridge-b",
+    ],
 }
 
 # Scenarios that must see the singleton-prune dialog (the qa default opts
