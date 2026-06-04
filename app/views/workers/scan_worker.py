@@ -297,6 +297,37 @@ def _valid_hash_pool_rates(rates) -> bool:
     )
 
 
+def _assign_process_pool_to_kill_job(pool) -> int:
+    """#549(a) — register a ``ProcessPoolExecutor``'s worker processes with the
+    #460 ``KILL_ON_JOB_CLOSE`` job so an ungraceful parent exit (crash / Task
+    Manager force-kill) reaps them too — the same guard exiftool already gets.
+    Returns the number of workers assigned (0 = no-op).
+
+    Process-mode hash workers read the source disks directly; without this a
+    force-kill of the app orphans them mid-read and they keep spinning the disk
+    after the user has "exited" (verified #549). The parent does the assignment
+    (it holds the sole job handle, so the kill-on-last-handle-close semantics
+    stay correct — identical to exiftool's).
+
+    Best-effort + fail-open: off Windows, without pywin32, or if the pool's
+    worker set isn't introspectable, this is a no-op and the pre-#549
+    orphan-on-hard-exit behaviour applies (no worse than before). ``_processes``
+    is a CPython implementation detail — read defensively via ``getattr`` so a
+    future stdlib change degrades to the no-op rather than raising.
+    """
+    from scanner.exif import assign_pid_to_kill_job
+
+    procs = getattr(pool, "_processes", None)
+    if not procs:
+        return 0
+    assigned = 0
+    for proc in list(procs.values()):
+        pid = getattr(proc, "pid", None)
+        if pid is not None and assign_pid_to_kill_job(pid):
+            assigned += 1
+    return assigned
+
+
 class _StageTracker:
     """Worker-side throughput accumulator + per-second emit throttle.
 
@@ -939,12 +970,28 @@ class ScanWorker(QThread):
             # TODO(#548 follow-on): per-device process pools. The
             # seek-thrash problem #548 targets is I/O-bound, so the
             # per-device overlap win lives entirely in the thread branch.
-            # Keep the single flat ProcessPoolExecutor here unchanged.
-            with ProcessPoolExecutor(max_workers=self.workers) as pool:
+            # Keep the single flat ProcessPoolExecutor here.
+            #
+            # #549(b) — explicit pool + try/finally, NOT ``with``. A
+            # ``with ProcessPoolExecutor() as pool:`` runs shutdown(wait=True)
+            # on __exit__, which on a user-cancel blocks until every in-flight
+            # worker finishes its current read_bytes() — defeating the
+            # requestInterruption()/wait(3000) teardown and leaving the disk
+            # grinding after "exit". ``finally: shutdown(wait=False)`` lets the
+            # QThread return promptly; #549(a)'s job assignment reaps any
+            # still-running workers when the parent exits. Mirrors the thread
+            # branch's teardown shape below.
+            pool = ProcessPoolExecutor(max_workers=self.workers)
+            try:
                 futures = {
                     pool.submit(run_hash_for_record, i, r): i
                     for i, r in enumerate(records)
                 }
+                # #549(a) — workers are spawned by the submit() calls above;
+                # assign them to the #460 KILL_ON_JOB_CLOSE job so a hard
+                # parent-kill reaps them instead of leaving python.exe workers
+                # reading the source disks. No-op off Windows / without pywin32.
+                _assign_process_pool_to_kill_job(pool)
                 for future in as_completed(futures):
                     if self.isInterruptionRequested():
                         cancel_flag.set()
@@ -974,6 +1021,11 @@ class ScanWorker(QThread):
                     # #424 — per-second-throttled stage_progress emit
                     # alongside the existing per-100 log line.
                     self._emit_stage(hash_tracker, done, len(records))
+            finally:
+                # wait=False (NOT the ``with``-exit's wait=True) so cancel
+                # doesn't block on in-flight reads; on normal completion every
+                # future is already drained so there is nothing to wait for.
+                pool.shutdown(wait=False)
         else:
             # #548 — THREAD path: one ThreadPoolExecutor PER PHYSICAL
             # DEVICE, all running concurrently, so NAS-latency-bound reads

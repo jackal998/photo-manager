@@ -1,0 +1,1 @@
+Process-mode scans no longer leave orphaned worker processes reading the disk after a force-quit, and cancelling no longer stalls on an in-flight file read (#553).
