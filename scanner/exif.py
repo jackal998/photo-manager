@@ -170,14 +170,21 @@ class ExiftoolProcess:
             errors="replace",
             creationflags=_CREATE_NO_WINDOW,
         )
-        # #460 — assign exiftool to the Win32 ``KILL_ON_JOB_CLOSE`` job so an
-        # ungraceful parent exit (crash, Task Manager kill, Explorer freeze →
-        # user force-quits) terminates it too; orphan exiftool processes
-        # holding file handles into the scanned tree are the root cause of the
-        # user-reported Explorer freeze. #549 extracted the assignment into the
-        # shared ``assign_pid_to_kill_job`` (also used for the process-pool
-        # hash workers). No-op on POSIX / without pywin32.
-        assign_pid_to_kill_job(self.proc.pid)
+        # #556 — exiftool is intentionally NOT assigned to the
+        # ``KILL_ON_JOB_CLOSE`` job. The #555 fix made ``assign_pid_to_kill_job``
+        # actually succeed (it had been a silent no-op since #460 because of the
+        # ``int(OpenProcess())`` handle bug). Jailing a live exiftool ``-stay_open``
+        # process — when the parent is itself inside a job (e.g. the GitHub
+        # Actions runner, or a console host) — corrupts its extended pass:
+        # ``s42_scoring`` began failing with ``exif_tag_count`` NULL for a
+        # non-deterministic subset of files. Because exiftool was never actually
+        # jailed before (the bug), leaving it un-jailed here is exactly the
+        # behaviour every prior release shipped — no regression — and exiftool
+        # already gets a graceful ``-stay_open`` sentinel shutdown on normal exit
+        # (the common case). The hard-exit reaping goal of #460 for exiftool is
+        # deferred to a follow-up that resolves the job-nesting interaction
+        # safely; the process-pool hash workers (the real disk-readers / the
+        # #549 orphan pain) ARE still jailed via ``assign_pid_to_kill_job``.
         self._stderr_buf: list[str] = []
         self._stderr_lock = threading.Lock()
         self._stderr_thread = threading.Thread(
