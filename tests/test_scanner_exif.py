@@ -1465,3 +1465,40 @@ def test_assign_pid_to_kill_job_real_child_win32():
     finally:
         child.kill()
         child.wait()
+
+
+# --- #561 — hard-kill for the scan cancel path ---
+
+
+def test_exiftool_process_kill_terminates_subprocess():
+    """#561 — kill() hard-terminates the exiftool subprocess so a consumer
+    wedged in a batch unblocks (execute() hits EOF) instead of the cancel join
+    timing out and orphaning the process. Uses a fake Popen (no real exiftool
+    spawn) — bypasses __init__ to avoid launching a process."""
+    from scanner.exif import ExiftoolProcess
+
+    class _FakeProc:
+        def __init__(self):
+            self.killed = False
+
+        def kill(self):
+            self.killed = True
+
+    et = ExiftoolProcess.__new__(ExiftoolProcess)
+    et.proc = _FakeProc()
+    et.kill()
+    assert et.proc.killed is True
+
+
+def test_exiftool_process_kill_is_best_effort():
+    """kill() must never raise — it runs from the cancel path, so a double-kill
+    or an already-dead process must not abort teardown."""
+    from scanner.exif import ExiftoolProcess
+
+    class _BoomProc:
+        def kill(self):
+            raise OSError("already dead")
+
+    et = ExiftoolProcess.__new__(ExiftoolProcess)
+    et.proc = _BoomProc()
+    et.kill()  # must not raise
