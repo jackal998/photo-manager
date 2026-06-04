@@ -22,6 +22,28 @@ from typing import Iterable
 # shares, mapped network drives, and DFS roots.
 _DRIVE_REMOTE = 4
 
+# Per-device hash-stage worker counts.
+#   NAS  → 8: SMB request latency dominates, more concurrent reads pay off.
+#   HDD  → 2: a spinning disk seek-thrashes under many concurrent readers
+#             (#548 — observed 25.6 MB/s at 8 readers vs the drive's ~150 MB/s
+#             sequential ceiling); 1-2 readers keep the head near-sequential.
+#   else → min(4, cpu): SSD / NVMe / unknown — decode-bound, the historical
+#             local default. Unknown stays here so a detection miss never
+#             regresses an SSD-only user.
+_NAS_WORKERS = 8
+_HDD_WORKERS = 2
+
+# IOCTL_STORAGE_QUERY_PROPERTY with StorageDeviceSeekPenaltyProperty — the
+# canonical Windows "is this volume rotational" probe (Win7+). Returns a
+# DEVICE_SEEK_PENALTY_DESCRIPTOR whose IncursSeekPenalty bit is True for a
+# spinning HDD, False for SSD/NVMe. Used in preference to WMI MSFT_PhysicalDisk
+# (#548 PR-B) because it maps a drive letter straight to the seek bit with one
+# ctypes call — no COM, no WMI service dependency, same dependency surface as
+# the existing GetDriveTypeW probe in is_remote_drive.
+_IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
+_STORAGE_DEVICE_SEEK_PENALTY_PROPERTY = 7
+_PROPERTY_STANDARD_QUERY = 0
+
 
 def is_remote_drive(path: Path | str) -> bool:
     """Return True if ``path`` lives on a Windows network drive.
@@ -45,6 +67,82 @@ def is_remote_drive(path: Path | str) -> bool:
         return kernel32.GetDriveTypeW(root) == _DRIVE_REMOTE
     except (OSError, AttributeError, ValueError):
         return False
+
+
+def disk_incurs_seek_penalty(root: str) -> bool | None:
+    """Return True if the local volume ``root`` is a spinning disk, else False.
+
+    Returns ``None`` when the answer is unknown — non-Windows, a non
+    drive-letter root (UNC / relative / empty), or any Win32 failure. The
+    caller treats ``None`` as "not known to be spinning" and keeps the
+    SSD-safe default, so a detection miss never regresses an SSD user.
+
+    Queries ``IOCTL_STORAGE_QUERY_PROPERTY`` for the seek-penalty descriptor
+    on a no-access handle to ``\\\\.\\<drive>`` — the same low-level ctypes
+    style as :func:`is_remote_drive`. Pure read-only probe; opens the volume
+    with zero desired access so it needs no admin rights.
+    """
+    if sys.platform != "win32":
+        return None
+    # Only drive-letter roots are probeable here (e.g. ``'D:'``). UNC roots are
+    # remote (handled by is_remote_drive before we get here); '' is relative.
+    if len(root) != 2 or root[1] != ":":
+        return None
+    # The Win32 IOCTL boundary below is excluded from coverage (the directive
+    # is on the ``try`` line): it can't run on the Linux CI runner (the
+    # sys.platform guard above short-circuits there), and unit-testing it would
+    # mean mocking ctypes.windll.kernel32, which the project bans as coverage
+    # padding. It is exercised by real scans on the dev's Windows machine
+    # (manual / layer-3). The testable contract — the guards plus the
+    # True/False/None return — is covered by tests/test_scanner_workers.py.
+    try:  # pragma: no cover
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+
+        class _STORAGE_PROPERTY_QUERY(ctypes.Structure):
+            _fields_ = [
+                ("PropertyId", ctypes.c_ulong),
+                ("QueryType", ctypes.c_ulong),
+                ("AdditionalParameters", ctypes.c_byte * 1),
+            ]
+
+        class _DEVICE_SEEK_PENALTY_DESCRIPTOR(ctypes.Structure):
+            _fields_ = [
+                ("Version", ctypes.c_ulong),
+                ("Size", ctypes.c_ulong),
+                ("IncursSeekPenalty", ctypes.c_byte),
+            ]
+
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        # 0 desired access, share R|W (3), OPEN_EXISTING (3).
+        handle = kernel32.CreateFileW(f"\\\\.\\{root}", 0, 3, None, 3, 0, None)
+        if handle == wintypes.HANDLE(-1).value:
+            return None
+        try:
+            query = _STORAGE_PROPERTY_QUERY(
+                _STORAGE_DEVICE_SEEK_PENALTY_PROPERTY, _PROPERTY_STANDARD_QUERY, (0,)
+            )
+            descriptor = _DEVICE_SEEK_PENALTY_DESCRIPTOR()
+            returned = wintypes.DWORD(0)
+            ok = kernel32.DeviceIoControl(
+                handle, _IOCTL_STORAGE_QUERY_PROPERTY,
+                ctypes.byref(query), ctypes.sizeof(query),
+                ctypes.byref(descriptor), ctypes.sizeof(descriptor),
+                ctypes.byref(returned), None,
+            )
+            if not ok:
+                return None
+            return bool(descriptor.IncursSeekPenalty)
+        finally:
+            kernel32.CloseHandle(handle)
+    except (OSError, AttributeError, ValueError):  # pragma: no cover
+        return None
 
 
 def default_hash_workers(paths: Iterable[Path | str] | None = None) -> int:
@@ -82,19 +180,32 @@ def device_key(path: Path | str) -> str:
     return drive.upper()
 
 
-def hash_workers_for_root(root: str) -> int:
+def hash_workers_for_root(root: str, *, seek_penalty_detector=None) -> int:
     """Per-device hash worker count for one device root (#548).
 
-    NAS (``is_remote_drive``) → 8 — SMB request latency dominates, so
-    more concurrent reads pay off. Local → ``min(4, os.cpu_count())``,
-    the historical local default.
+    * NAS (``is_remote_drive``) → ``_NAS_WORKERS`` (8) — SMB request latency
+      dominates, so more concurrent reads pay off.
+    * Local spinning HDD (``seek_penalty_detector`` returns True) →
+      ``_HDD_WORKERS`` (2) — a mechanical disk seek-thrashes under many
+      concurrent readers (#548 PR-B).
+    * Everything else — local SSD / NVMe, or any device whose rotational
+      state is unknown (detector returns False or ``None``) → the SSD-safe
+      ``min(4, os.cpu_count())``. Unknown lands here so a detection miss
+      never regresses an SSD-only user.
 
-    TODO(#548 PR-B): split local into HDD (1-2 workers, seek-thrash
-    bound) vs SSD (4-8) via WMI ``MSFT_PhysicalDisk.MediaType``; without
-    that signal we keep the SSD-safe ``min(4, cpu)`` for all local devices
-    so SSD-only users don't regress.
+    ``seek_penalty_detector`` is injected so the rotational decision is
+    unit-testable without real hardware or Win32. When ``None`` (the default)
+    it resolves to the module-level :func:`disk_incurs_seek_penalty` at call
+    time — a late lookup so tests can monkeypatch the module attribute, and so
+    the production probe (which fails open to ``None`` off Windows or on any
+    error) is used in the real worker.
     """
     if is_remote_drive(root):
-        return 8
+        return _NAS_WORKERS
+    detector = seek_penalty_detector or disk_incurs_seek_penalty
+    # ``is True`` so both False (SSD) and None (unknown) fall through to the
+    # SSD-safe default — only a *confirmed* spinning disk gets the 2-cap.
+    if detector(root) is True:
+        return _HDD_WORKERS
     cpu = os.cpu_count() or 4
     return min(4, cpu)

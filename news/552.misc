@@ -1,0 +1,1 @@
+Cap local spinning-HDD hash readers to 2 so concurrent reads no longer seek-thrash the one spindle (#552).
