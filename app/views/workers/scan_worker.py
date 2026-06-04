@@ -557,7 +557,41 @@ class ScanWorker(QThread):
         the same library doesn't pay the ~2s calibration again, yet still
         adapts the pick if the file count changed. On a cache miss the fresh
         rates are emitted via ``hash_pool_measured`` for the dialog to store.
+
+        #554 — multi-device + NAS guard: when the scan spans ≥2 physical
+        devices AND at least one is a remote (NAS) drive, the flat
+        thread-vs-process projection is skipped and "thread" is returned
+        unconditionally. The flat calibration builds a FLAT
+        ThreadPoolExecutor over the sample — it never learned that #550
+        made thread mode PER-DEVICE. On a mixed HDD+NAS scan it measures
+        "8 threads thrashing the HDD" (slow) and under-credits thread →
+        picks process. But process runs the old flat single pool, bypassing
+        the per-device I/O-overlap win entirely. The per-device overlap is
+        exactly what the flat calibration cannot measure, and on an
+        I/O-bound mixed scan it dominates. The single-device / all-local
+        case is unaffected — calibration still runs there and process can
+        legitimately win.
         """
+        from scanner.workers import device_key, is_remote_drive
+
+        device_keys = {device_key(getattr(r, "path", r)) for r in records}
+        if len(device_keys) >= 2 and any(
+            is_remote_drive(dk) for dk in device_keys if dk
+        ):
+            self._emit(
+                "  Multi-device + NAS scan → per-device thread path"
+                " (I/O overlap wins; skipping flat process calibration)"
+            )
+            # #554 — still resolve grouping floor from cached rates if
+            # available, so the BK-tree calibration isn't lost on the
+            # thread-fast path. When no cached rates exist the floor
+            # stays None and classify() uses the module default.
+            if _valid_hash_pool_rates(self.hash_pool_rates):
+                self._calibrated_bktree_floor = self._resolve_grouping_floor(
+                    self.hash_pool_rates, len(records)
+                )
+            return "thread"
+
         n = len(records)
         rates = self.hash_pool_rates
         if not _valid_hash_pool_rates(rates):

@@ -1025,6 +1025,109 @@ class TestHashPoolCalibration:
         worker._calibrate_hash_pool(list(range(10_000)), object(), object())
         assert worker._calibrated_bktree_floor is None
 
+    # ---- #554 multi-device + NAS guard --------------------------------------
+
+    def _make_records(self, specs):
+        """Build FileRecord stubs for (path_str, label) pairs.
+
+        Uses file_type='skip' so the worker never tries to read real files —
+        the same seam TestScanWorkerPerDeviceHashPools uses.
+        """
+        from scanner.walker import FileRecord
+
+        return [
+            FileRecord(path=Path(p), source_label=lbl, file_type="skip")
+            for p, lbl in specs
+        ]
+
+    def test_multi_device_with_remote_skips_process_calibration(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#554 — when a scan spans ≥2 devices and at least one is remote
+        (NAS), auto resolves to 'thread' without consulting the flat
+        thread-vs-process calibration. This pins the real bug: before the
+        guard, the flat calibration measured 'thread as 8 threads on a HDD'
+        (slow) and picked process, which ran the OLD flat single pool,
+        bypassing the per-device I/O-overlap win entirely."""
+        import concurrent.futures as _cf
+        import app.views.workers.scan_worker as sw
+        import scanner.workers as _workers
+        from app.views.workers.scan_worker import ScanWorker
+
+        # Two devices: D: local, J: NAS — the exact mixed-scan topology from #554.
+        records = self._make_records([
+            (r"D:\photos\a.jpg", "D"),
+            (r"J:\nas\b.jpg", "J"),
+            (r"D:\photos\c.jpg", "D"),
+        ])
+
+        # Patch is_remote_drive so J: is NAS, D: is local.
+        monkeypatch.setattr(
+            _workers, "is_remote_drive",
+            lambda path: str(path).upper() == "J:"
+        )
+
+        # ProcessPoolExecutor must NEVER be constructed — if the guard fires
+        # correctly the projection is skipped entirely.
+        def _boom(*args, **kwargs):
+            raise AssertionError(
+                "#554 guard must bypass process calibration on multi-device+NAS scan"
+            )
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", _boom)
+        monkeypatch.setattr(sw, "_time_hash_executor", lambda *a: _boom())
+        monkeypatch.setattr(sw, "_profile_process_pool", lambda *a: _boom())
+
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+        )
+        result = worker._calibrate_hash_pool(records, object(), _cf.ProcessPoolExecutor)
+
+        assert result == "thread", (
+            f"multi-device+NAS scan must resolve to 'thread', not '{result}'"
+        )
+
+    def test_single_device_all_local_still_runs_calibration(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#554 — a single-device all-local scan must still run the normal
+        thread-vs-process calibration (the guard must NOT trigger). Process
+        can still be the winner for large single-device local scans."""
+        import app.views.workers.scan_worker as sw
+        import scanner.workers as _workers
+        from app.views.workers.scan_worker import ScanWorker
+
+        records = self._make_records([
+            (r"D:\photos\a.jpg", "D"),
+            (r"D:\photos\b.jpg", "D"),
+        ])
+
+        # All local — no remote drives.
+        monkeypatch.setattr(_workers, "is_remote_drive", lambda path: False)
+
+        # Rates that project to 'process' on a large N: break-even = 100.
+        self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)
+
+        worker = ScanWorker(
+            sources={"s": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="auto",
+        )
+        # Large enough to be past break-even → calibration picks process.
+        result = worker._calibrate_hash_pool(
+            list(range(10_000)), object(), object()
+        )
+
+        assert result == "process", (
+            f"single-device all-local large scan must still run calibration "
+            f"and can pick 'process'; got '{result}'"
+        )
+
 
 class TestScanWorkerExifPipeline:
     """#450 — hash→exif pipeline overlap.
