@@ -43,6 +43,22 @@ from scanner.exif import parse_exif_date
 if TYPE_CHECKING:
     from scanner.walker import FileRecord
 
+
+@dataclass
+class ReadFailure:
+    """Carries the exception that prevented a file read in :func:`read_for_record`.
+
+    Kept separate from :class:`HashFailure` so callers can distinguish "we
+    never even opened the file" (I/O error on read) from "we read the bytes
+    but couldn't hash them" (decode failure).  The dispatcher in the
+    read→compute pipeline passes ``ReadFailure`` through as the ``data``
+    argument to :func:`compute_from_bytes`, which maps it to a
+    :class:`HashFailure` for the standard skip path.
+    """
+
+    exc_type: str
+    exc_msg: str
+
 try:
     from PIL import Image
     import imagehash
@@ -86,27 +102,17 @@ def compute_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def compute_hashes(
-    path: Path, file_type: str
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
-    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height)``.
+def _hashes_from_data(
+    path: Path, file_type: str, data: bytes
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
+    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h)``
+    from bytes that have already been read off disk.
 
-    All values are derived from one in-memory read — no extra file open.
-    ``dhash`` is a second, independent perceptual hash (gradient/brightness
-    based, complementary to pHash's DCT) used by the dedup confidence vote
-    (#517); ``None`` whenever ``phash`` is ``None``.
-    ``width``/``height`` are the pixel dimensions of the image (or ``None``
-    for video/skip and on decode failure).  For RAW files the true sensor
-    dimensions are read from ``raw.sizes`` via rawpy (not the embedded thumbnail).
-    ``mean_color`` is the average RGB via a 1×1 LANCZOS downscale.
-    ``raw_date_str`` is ``None`` for RAW/video; callers pass those to exiftool.
-    For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
+    This is the single implementation used by both :func:`compute_hashes`
+    (which reads the bytes) and :func:`compute_from_bytes` (which receives
+    them from the bounded read→compute queue).  Only call for non-video/gif/skip
+    types; callers must stream video SHA separately via :func:`compute_sha256`.
     """
-    if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None, None, None, None
-
-    # Single read: derive all values from memory.
-    data = path.read_bytes()
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
@@ -166,6 +172,29 @@ def compute_hashes(
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
         return sha, None, None, None, raw_date, px_w, px_h
+
+
+def compute_hashes(
+    path: Path, file_type: str
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
+    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height)``.
+
+    All values are derived from one in-memory read — no extra file open.
+    ``dhash`` is a second, independent perceptual hash (gradient/brightness
+    based, complementary to pHash's DCT) used by the dedup confidence vote
+    (#517); ``None`` whenever ``phash`` is ``None``.
+    ``width``/``height`` are the pixel dimensions of the image (or ``None``
+    for video/skip and on decode failure).  For RAW files the true sensor
+    dimensions are read from ``raw.sizes`` via rawpy (not the embedded thumbnail).
+    ``mean_color`` is the average RGB via a 1×1 LANCZOS downscale.
+    ``raw_date_str`` is ``None`` for RAW/video; callers pass those to exiftool.
+    For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
+    """
+    if file_type in ("mp4", "mov", "gif", "skip"):
+        return compute_sha256(path), None, None, None, None, None, None
+
+    # Single read: delegate all hash computation to _hashes_from_data.
+    return _hashes_from_data(path, file_type, path.read_bytes())
 
 
 # Formats where PIL is the primary decoder and a missing pHash unambiguously
@@ -229,6 +258,81 @@ def run_hash_for_record(
         # Silent decode failure: PIL couldn't produce a pHash for an
         # image-typed file → truncated / corrupt. Caller routes this
         # to its skipped[] log alongside real exceptions.
+        return idx, HashFailure(
+            "ImageDecodeError",
+            "image file could not be decoded (truncated or corrupt)",
+        )
+    pil_date = parse_exif_date(raw_date) if raw_date else None
+    return idx, HashResult(
+        record=record,
+        sha256=sha256,
+        phash=phash,
+        dhash=dhash,
+        mean_color=mean_color,
+        exif_date=pil_date,
+        pixel_width=px_w,
+        pixel_height=px_h,
+    )
+
+
+def read_for_record(
+    idx: int, record: "FileRecord"
+) -> "tuple[int, FileRecord, bytes | None | ReadFailure]":
+    """READ stage: load raw bytes for ``record`` without any decoding.
+
+    Returns ``(idx, record, data)`` where ``data`` is:
+
+    * ``None``              — video/gif/skip; no bytes to read (SHA will be
+                             streamed from disk in :func:`compute_from_bytes`).
+    * ``bytes``             — image data ready for :func:`_hashes_from_data`.
+    * :class:`ReadFailure`  — I/O error; :func:`compute_from_bytes` converts
+                             this to a :class:`HashFailure` for the skip path.
+
+    The ``idx`` is passed through unchanged so the compute stage can scatter
+    results back to ``hash_results[idx]`` — preserving the original walk order
+    that :func:`~scanner.dedup.classify` relies on for deterministic group IDs.
+    """
+    if record.file_type in ("mp4", "mov", "gif", "skip"):
+        return idx, record, None
+    try:
+        data = record.path.read_bytes()
+        return idx, record, data
+    except OSError as exc:
+        return idx, record, ReadFailure(type(exc).__name__, str(exc))
+
+
+def compute_from_bytes(
+    idx: int, record: "FileRecord", data: "bytes | None | ReadFailure"
+) -> "tuple[int, HashResult | HashFailure | None]":
+    """COMPUTE stage: derive all hash fields from pre-read ``data``.
+
+    Counterpart to :func:`read_for_record` in the bounded read→compute
+    pipeline.  Mirrors the outcome contract of :func:`run_hash_for_record`:
+
+    * :class:`HashResult`  — happy path.
+    * :class:`HashFailure` — read failed, or decode failed on an image type.
+    * ``None``             — (unused; reserved for caller-driven skip signals).
+
+    Video/gif/skip files arrive with ``data=None`` and have their SHA
+    streamed from disk here (same single-read guarantee as the fused path —
+    the file is only opened once in the pipeline, just at a different stage).
+    """
+    if isinstance(data, ReadFailure):
+        return idx, HashFailure(data.exc_type, data.exc_msg)
+
+    try:
+        if data is None:
+            # video/gif/skip: stream SHA from path, no perceptual hashes.
+            sha256 = compute_sha256(record.path)
+            phash = dhash = mean_color = raw_date = px_w = px_h = None
+        else:
+            sha256, phash, dhash, mean_color, raw_date, px_w, px_h = (
+                _hashes_from_data(record.path, record.file_type, data)
+            )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return idx, HashFailure(type(exc).__name__, str(exc))
+
+    if record.file_type in _IMAGE_TYPES and phash is None:
         return idx, HashFailure(
             "ImageDecodeError",
             "image file could not be decoded (truncated or corrupt)",
