@@ -1672,14 +1672,14 @@ class TestScanWorkerPerDeviceHashPools:
             f"expected one pool per device [D={local}, J=8]; got {constructed!r}"
         )
 
-    def test_spinning_local_device_capped_to_two_workers(
+    def test_spinning_local_device_capped_to_one_worker(
         self, qapp, tmp_path, monkeypatch
     ):
-        """#548 PR-B — a local device the seek probe flags as a spinning HDD
-        gets a 2-worker pool (not min(4,cpu)) so 8 concurrent reads don't
-        seek-thrash the one spindle, while the NAS still gets 8. This is the
-        end-to-end proof that the rotational cap reaches the fan-out, not just
-        the unit-level hash_workers_for_root."""
+        """#548 PR-B / #552 — a local device the seek probe flags as a spinning
+        HDD gets a 1-worker pool (single sequential reader, seek-minimising) so
+        the one spindle is never bounced between concurrently-open files, while
+        the NAS still gets 8. This is the end-to-end proof that the rotational
+        cap reaches the fan-out, not just the unit-level hash_workers_for_root."""
         from app.views.workers.scan_worker import ScanWorker
 
         records = self._records_two_devices()
@@ -1699,9 +1699,9 @@ class TestScanWorkerPerDeviceHashPools:
         )
         worker.run()
 
-        # D: spinning → capped to 2; J: NAS → 8. Order is source-iteration (D first).
-        assert constructed == [2, 8], (
-            f"expected spinning D: capped to 2 and NAS J: at 8; got {constructed!r}"
+        # D: spinning → 1 reader (seek-minimising); J: NAS → 8. Order is source-iteration (D first).
+        assert constructed == [1, 8], (
+            f"expected spinning D: single reader and NAS J: at 8; got {constructed!r}"
         )
 
     def test_hash_results_preserve_input_order_across_devices(

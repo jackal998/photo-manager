@@ -143,14 +143,15 @@ def test_hash_workers_for_root_local_ssd_returns_cpu_capped(monkeypatch):
 # --- #548 PR-B — local spinning-disk reader cap ---
 
 
-def test_hash_workers_for_root_spinning_hdd_capped(monkeypatch):
-    """A local spinning HDD (seek detector returns True) is capped to 2 readers
-    so 8 concurrent reads don't seek-thrash the one spindle (the #548 PR-B
-    seek-thrash fix — observed 25.6 MB/s at 8 readers)."""
+def test_hash_workers_for_root_spinning_hdd_one_reader(monkeypatch):
+    """A local spinning HDD (seek detector returns True) gets 1 reader — single
+    sequential reader, seek-minimising (#552 anti-thrash principle). On a single
+    mechanical HDD the disk is the bottleneck (observed 97% active, CPU only 38%);
+    one reader keeps the head moving sequentially without inter-file seek bouncing."""
     from scanner import workers as wm
 
     monkeypatch.setattr(wm, "is_remote_drive", lambda root: False)
-    assert wm.hash_workers_for_root("D:", seek_penalty_detector=lambda root: True) == 2
+    assert wm.hash_workers_for_root("D:", seek_penalty_detector=lambda root: True) == 1
 
 
 def test_hash_workers_for_root_unknown_seek_uses_ssd_default(monkeypatch):
