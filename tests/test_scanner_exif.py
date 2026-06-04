@@ -1502,3 +1502,98 @@ def test_exiftool_process_kill_is_best_effort():
     et = ExiftoolProcess.__new__(ExiftoolProcess)
     et.proc = _BoomProc()
     et.kill()  # must not raise
+
+
+# --- #558 — gated exiftool kill-on-close (avoid job-nesting corruption) ---
+
+
+def test_process_in_any_job_true_on_posix(monkeypatch):
+    """On non-Windows the Job Object machinery is inert; the gate reports
+    'in a job' (True) so exiftool is never jailed and the Windows-only API is
+    never touched. This is what keeps the whole #460/#558 reaping path a clean
+    no-op on POSIX/macOS dev and CI hosts."""
+    from scanner import exif
+
+    monkeypatch.setattr(exif.sys, "platform", "linux")
+    assert exif._process_in_any_job() is True
+
+
+def test_process_in_any_job_failsafe_without_pywin32(monkeypatch):
+    """Fail-safe: when the platform reports Windows but pywin32 can't be
+    imported (a dev checkout without the optional deps, or a locked-down host),
+    the gate returns True so exiftool is NOT jailed — the no-corruption choice —
+    rather than raising into ``ExiftoolProcess.__init__``. Mirrors the
+    optional-pywin32 fallback ``_get_kill_on_close_job`` already relies on, and
+    is the only way to exercise the except branch on the Windows coverage host
+    (where pywin32 IS present)."""
+    import builtins
+
+    from scanner import exif
+
+    monkeypatch.setattr(exif.sys, "platform", "win32")
+    real_import = builtins.__import__
+
+    def _no_pywin32(name, *args, **kwargs):
+        if name in ("win32api", "win32job"):
+            raise ImportError(f"simulated missing optional dep: {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_pywin32)
+    assert exif._process_in_any_job() is True
+
+
+def _fake_exiftool_proc(pid: int) -> MagicMock:
+    """Minimal stand-in for the exiftool Popen object: stdout yields the
+    ``{ready}`` sentinel then EOF and stderr EOFs immediately, so the reader /
+    drain threads exit and ``ExiftoolProcess.__init__`` completes without a
+    real exiftool spawn."""
+    proc = MagicMock()
+    proc.pid = pid
+    stdout_iter = iter(["{ready}\n", ""])
+    proc.stdout.readline.side_effect = lambda: next(stdout_iter, "")
+    stderr_iter = iter([""])
+    proc.stderr.readline.side_effect = lambda: next(stderr_iter, "")
+    return proc
+
+
+def test_exiftool_jailed_when_parent_not_in_job(monkeypatch):
+    """#558 — on a bare desktop (NOT already inside a Job Object) the exiftool
+    launcher IS assigned to the KILL_ON_JOB_CLOSE job, restoring #460's
+    hard-exit reaping: a crash / Task Manager force-kill of the parent no longer
+    orphans exiftool holding handles into the scanned tree (the Explorer-freeze
+    #460 was filed for)."""
+    from scanner import exif
+
+    assigned: list[int] = []
+    monkeypatch.setattr(
+        exif.subprocess, "Popen", lambda *a, **k: _fake_exiftool_proc(4242)
+    )
+    monkeypatch.setattr(exif, "_process_in_any_job", lambda: False)
+    monkeypatch.setattr(
+        exif, "assign_pid_to_kill_job", lambda pid: assigned.append(pid) or True
+    )
+
+    exif.ExiftoolProcess()
+    assert assigned == [4242]
+
+
+def test_exiftool_not_jailed_when_parent_in_job(monkeypatch):
+    """#558 / #556 regression — when the parent is ALREADY in a job (the
+    GitHub Actions runner, a console host), exiftool is NOT assigned, so our
+    KILL_ON_JOB_CLOSE job never nests under the outer job and exiftool's PAR
+    child interpreter is never starved/killed by the outer job's intersected
+    limits. This is the exact condition that broke s42_scoring in #556
+    (non-deterministic NULL exif_tag_count) — the gate prevents it."""
+    from scanner import exif
+
+    assigned: list[int] = []
+    monkeypatch.setattr(
+        exif.subprocess, "Popen", lambda *a, **k: _fake_exiftool_proc(4242)
+    )
+    monkeypatch.setattr(exif, "_process_in_any_job", lambda: True)
+    monkeypatch.setattr(
+        exif, "assign_pid_to_kill_job", lambda pid: assigned.append(pid) or True
+    )
+
+    exif.ExiftoolProcess()
+    assert assigned == []

@@ -132,6 +132,49 @@ def assign_pid_to_kill_job(pid: int) -> bool:
         return False
 
 
+def _process_in_any_job() -> bool:
+    """Return ``True`` if this process already belongs to *any* Windows Job
+    Object, ``False`` if it is job-free, and ``True`` (fail-safe) on POSIX /
+    missing pywin32 / any Win32 error.
+
+    #558 — gating exiftool's kill-on-close assignment on this is what makes
+    re-enabling #460's hard-exit reaping SAFE. ``exiftool.exe`` is a PAR
+    self-extracting Perl executable: it re-execs a child interpreter (a
+    *grandchild* of this process) that does the actual tag extraction. When
+    our ``KILL_ON_JOB_CLOSE`` job is assigned while we are ALREADY inside
+    another job (the GitHub Actions runner, some console hosts, RDP /
+    Task-Scheduler launches), our job nests under that outer job; the
+    grandchild interpreter is then force-joined to the whole chain and the
+    outer job's limits intersect onto it, corrupting the extended EXIF pass
+    non-deterministically (#556: ``s42_scoring`` NULL ``exif_tag_count``).
+    The process-pool hash workers never hit this — they are single leaf
+    processes with no grandchild.
+
+    Rather than fight the nesting (``CREATE_BREAKAWAY_FROM_JOB`` depends on the
+    outer job permitting breakaway, which is undocumented and — empirically,
+    on Win10 under a session host — unreliable), we simply DON'T jail when
+    already nested. Nothing is lost by skipping: when the parent is in a job,
+    that outer owner (e.g. the CI runner) already reaps the whole tree on its
+    own teardown. Reaping is only *needed* on a bare desktop — exactly the
+    case where we are NOT in a job.
+
+    Fail-safe direction: any uncertainty returns ``True`` ("treat as already
+    owned by someone else → don't add our own job"), which is the
+    no-corruption choice.
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import win32api  # type: ignore[import-not-found]
+        import win32job  # type: ignore[import-not-found]
+
+        # Pass ``None`` as the job handle to ask "in ANY job?" rather than a
+        # specific one (documented pywin32 / Win32 ``IsProcessInJob`` contract).
+        return bool(win32job.IsProcessInJob(win32api.GetCurrentProcess(), None))
+    except Exception:  # pylint: disable=broad-exception-caught
+        return True
+
+
 class ExiftoolProcess:
     """Persistent exiftool process for batch EXIF reads.
 
@@ -170,21 +213,20 @@ class ExiftoolProcess:
             errors="replace",
             creationflags=_CREATE_NO_WINDOW,
         )
-        # #556 — exiftool is intentionally NOT assigned to the
-        # ``KILL_ON_JOB_CLOSE`` job. The #555 fix made ``assign_pid_to_kill_job``
-        # actually succeed (it had been a silent no-op since #460 because of the
-        # ``int(OpenProcess())`` handle bug). Jailing a live exiftool ``-stay_open``
-        # process — when the parent is itself inside a job (e.g. the GitHub
-        # Actions runner, or a console host) — corrupts its extended pass:
-        # ``s42_scoring`` began failing with ``exif_tag_count`` NULL for a
-        # non-deterministic subset of files. Because exiftool was never actually
-        # jailed before (the bug), leaving it un-jailed here is exactly the
-        # behaviour every prior release shipped — no regression — and exiftool
-        # already gets a graceful ``-stay_open`` sentinel shutdown on normal exit
-        # (the common case). The hard-exit reaping goal of #460 for exiftool is
-        # deferred to a follow-up that resolves the job-nesting interaction
-        # safely; the process-pool hash workers (the real disk-readers / the
-        # #549 orphan pain) ARE still jailed via ``assign_pid_to_kill_job``.
+        # #558 — re-enable #460's hard-exit reaping for exiftool, but ONLY
+        # when this process is not already inside another Job Object. Jailing a
+        # live ``-stay_open`` exiftool while nested under an outer job (CI
+        # runner / console host) corrupts its extended pass — see
+        # ``_process_in_any_job`` for the PAR-grandchild mechanism (#556:
+        # ``s42_scoring`` NULL ``exif_tag_count`` for a non-deterministic
+        # subset of files). On a bare desktop (not in a job) we still want the
+        # kill-on-close guard so an ungraceful parent exit (crash / Task
+        # Manager force-kill) doesn't orphan exiftool and leave file handles
+        # into the scanned tree — the Explorer-freeze #460 was filed for.
+        # #561 already hard-kills exiftool on the *graceful* cancel/close path;
+        # this gate covers the *hard*-exit path without the #556 corruption.
+        if not _process_in_any_job():
+            assign_pid_to_kill_job(self.proc.pid)
         self._stderr_buf: list[str] = []
         self._stderr_lock = threading.Lock()
         self._stderr_thread = threading.Thread(

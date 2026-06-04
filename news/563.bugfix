@@ -1,0 +1,1 @@
+Force-killing or crashing the app mid-scan no longer leaves an orphaned exiftool process running on the desktop, while keeping the CI EXIF pass uncorrupted via a job-nesting gate (#558).
