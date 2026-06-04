@@ -2070,10 +2070,12 @@ class TestScanTeardownGaps:
         )
         worker.run()
 
-        # Subset, not equality: the exiftool consumer's ExiftoolProcess also
-        # registers ITS pid via the same helper (#460), so `assigned` may also
-        # contain exiftool pids where exiftool is installed. What this test
-        # guards is that BOTH process-pool worker pids were registered.
+        # Subset, not equality: when the process is not already inside a Job
+        # Object, the exiftool consumer's ExiftoolProcess ALSO registers its pid
+        # via the same helper (#558 gate — was unconditional in #460, un-jailed
+        # in #556), so `assigned` may also contain exiftool pids where exiftool
+        # is installed and the host is job-free. What this test guards is that
+        # BOTH process-pool worker pids were registered.
         assert {4101, 4102}.issubset(set(assigned)), (
             "every process-pool worker pid must be assigned to the #460 kill "
             f"job; got {assigned!r}"
