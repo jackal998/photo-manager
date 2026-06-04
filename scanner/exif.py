@@ -91,6 +91,40 @@ def _get_kill_on_close_job():
     return job
 
 
+def assign_pid_to_kill_job(pid: int) -> bool:
+    """Assign process ``pid`` to the process-wide ``KILL_ON_JOB_CLOSE`` job so
+    an ungraceful parent exit (crash / Task Manager force-kill) terminates it
+    too. Returns ``True`` if assigned, ``False`` on no-op — POSIX, pywin32
+    missing, no job, or any Win32 failure.
+
+    #460 originally covered only the exiftool children (assigned inline in
+    ``ExiftoolProcess.__init__``). #549(a) extracts that to this shared helper
+    so the ``ProcessPoolExecutor`` hash workers — which read the source disks
+    directly and otherwise orphan on a hard parent-kill — get the same guard.
+
+    The parent process holds the sole job handle (intentionally leaked in
+    ``_get_kill_on_close_job``), so assigning a child here keeps the
+    last-handle-closes-on-parent-death semantics intact. Fail-open by design:
+    a miss just means that one process orphans on a hard kill (pre-#460
+    behaviour), never a scan abort.
+    """
+    job = _get_kill_on_close_job()
+    if job is None:
+        return False
+    try:
+        import win32api  # type: ignore[import-not-found]
+        import win32job  # type: ignore[import-not-found]
+        # PROCESS_ALL_ACCESS = 0x001F0FFF (documented Win32 constant) — needed
+        # for AssignProcessToJobObject to transfer the process into the job.
+        handle = int(win32api.OpenProcess(0x001F0FFF, False, pid))
+        win32job.AssignProcessToJobObject(job, handle)
+        return True
+    except Exception:  # pylint: disable=broad-exception-caught
+        # Already-in-another-job (pre-Win8 no-nesting), denied access, etc. —
+        # leave the process unjailed rather than abort the scan.
+        return False
+
+
 class ExiftoolProcess:
     """Persistent exiftool process for batch EXIF reads.
 
@@ -129,30 +163,14 @@ class ExiftoolProcess:
             errors="replace",
             creationflags=_CREATE_NO_WINDOW,
         )
-        # #460 — assign the child to a Win32 Job Object with
-        # ``KILL_ON_JOB_CLOSE`` so an ungraceful parent exit (crash,
-        # Task Manager kill, Explorer freeze → user force-quits)
-        # terminates exiftool too. Without this, orphan exiftool
-        # processes holding file handles into the scanned tree are
-        # the root cause of the user-reported Explorer freeze. On
-        # POSIX or when pywin32 isn't installed, this block is a no-op
-        # and the legacy Popen lifetime applies.
-        _job = _get_kill_on_close_job()
-        if _job is not None:
-            try:
-                import win32api  # type: ignore[import-not-found]
-                import win32job  # type: ignore[import-not-found]
-                # PROCESS_ALL_ACCESS = 0x001F0FFF (documented Win32
-                # constant). Needed for AssignProcessToJobObject to
-                # transfer the child to the job.
-                _handle = int(win32api.OpenProcess(0x001F0FFF, False, self.proc.pid))
-                win32job.AssignProcessToJobObject(_job, _handle)
-            except Exception:  # pylint: disable=broad-exception-caught
-                # AssignProcessToJobObject can fail if the child is
-                # already in another job and nesting is disabled
-                # (pre-Win8) — leave the child unjailed rather than
-                # abort the scan.
-                pass
+        # #460 — assign exiftool to the Win32 ``KILL_ON_JOB_CLOSE`` job so an
+        # ungraceful parent exit (crash, Task Manager kill, Explorer freeze →
+        # user force-quits) terminates it too; orphan exiftool processes
+        # holding file handles into the scanned tree are the root cause of the
+        # user-reported Explorer freeze. #549 extracted the assignment into the
+        # shared ``assign_pid_to_kill_job`` (also used for the process-pool
+        # hash workers). No-op on POSIX / without pywin32.
+        assign_pid_to_kill_job(self.proc.pid)
         self._stderr_buf: list[str] = []
         self._stderr_lock = threading.Lock()
         self._stderr_thread = threading.Thread(

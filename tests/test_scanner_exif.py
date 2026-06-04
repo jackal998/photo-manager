@@ -1406,3 +1406,19 @@ class TestHashResultToMediaExtract:
         me = hr.to_media_extract()
         assert me.exif_date == datetime(2024, 1, 1, 12, 0, 0)
         assert me.exif_date_tag is None
+
+
+# --- #549(a) — shared KILL_ON_JOB_CLOSE assignment helper ---
+
+
+def test_assign_pid_to_kill_job_noop_without_job(monkeypatch):
+    """Fail-open: with no Job Object available (POSIX, pywin32 missing, or a
+    Win32 failure creating the job) the assignment is a no-op that returns
+    False and never raises — so a scan on an unsupported platform is not
+    aborted, and a caller can treat the result as a soft hint. This is the
+    contract both ExiftoolProcess and the #549 process-pool path rely on.
+    """
+    from scanner import exif
+
+    monkeypatch.setattr(exif, "_get_kill_on_close_job", lambda: None)
+    assert exif.assign_pid_to_kill_job(12345) is False

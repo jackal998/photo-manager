@@ -1769,3 +1769,135 @@ class TestStratifiedSample:
         sample = _stratified_sample(recs, 10)
         assert len(sample) == 3
         assert {str(r.path) for r in sample} == {str(r.path) for r in recs}
+
+
+class TestScanTeardownGaps:
+    """#549 — process-mode HASH teardown must not strand the disk/app.
+
+    (b) A mid-hash cancel must not run shutdown(wait=True) (the old
+        ``with ProcessPoolExecutor()`` __exit__ did, blocking on in-flight
+        reads past the 3s teardown budget).
+    (a) The spawned worker processes must be registered with the #460
+        KILL_ON_JOB_CLOSE job so a hard parent-kill reaps them.
+
+    Both drive the worker end-to-end in process mode with a SpyProcessPool
+    that delegates to a real ThreadPoolExecutor (run_hash_for_record runs
+    in-thread — no OS spawn), the same seam TestHashPoolSetting uses.
+    """
+
+    def test_process_cancel_never_calls_shutdown_wait_true(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#549(b) — cancel mid-process-hash must tear down with
+        shutdown(wait=False), never wait=True. A revert to the
+        ``with ProcessPoolExecutor() as pool:`` form would re-introduce the
+        __exit__ shutdown(wait=True) that blocks on in-flight read_bytes() —
+        this spy records every shutdown ``wait`` and fails if any is True."""
+        import concurrent.futures as _cf
+        import scanner.hasher as _hasher
+        from app.views.workers.scan_worker import ScanWorker
+        from scanner.dedup import HashResult
+
+        _write_jpeg(tmp_path / "only.jpg")
+        out = tmp_path / "manifest.sqlite"
+
+        shutdown_waits: list[bool] = []
+        real_thread_pool = _cf.ThreadPoolExecutor
+
+        class SpyProcessPool(real_thread_pool):
+            def shutdown(self, wait=True, **kwargs):  # noqa: D401
+                shutdown_waits.append(wait)
+                # Never actually block the test, regardless of what the
+                # production code asked for — we only care WHICH wait it passed.
+                return super().shutdown(wait=False, **kwargs)
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
+
+        # Trip the cancel from inside the HASH drain (not the WALK gate): the
+        # first hashed record flips the interruption flag, so walk completes
+        # normally and the process-branch drain loop is the thing that cancels.
+        flag = {"v": False}
+
+        def fake_hash(idx, record):
+            flag["v"] = True
+            return idx, HashResult(record=record, sha256=f"sha-{idx}",
+                                   phash=None, exif_date=None)
+
+        monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
+
+        worker = ScanWorker(
+            sources={"solo": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"solo": False},
+            workers=1,
+            hash_pool="process",
+        )
+        monkeypatch.setattr(worker, "isInterruptionRequested", lambda: flag["v"])
+
+        failed: list[str] = []
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert failed == ["Scan cancelled."], (
+            f"process-mode mid-hash cancel must emit ['Scan cancelled.']; got {failed!r}"
+        )
+        assert shutdown_waits, "the process pool must be shut down on cancel"
+        assert not any(shutdown_waits), (
+            "process-branch teardown must never call shutdown(wait=True) — the "
+            f"`with`-exit regression that blocks on in-flight reads; got {shutdown_waits!r}"
+        )
+
+    def test_process_pool_workers_assigned_to_kill_job(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#549(a) — the process-pool worker pids are registered with the #460
+        KILL_ON_JOB_CLOSE job. Drop the assignment call and a force-kill of the
+        app orphans python.exe workers still reading the disks (verified #549)."""
+        import concurrent.futures as _cf
+        import scanner.exif as _exif
+        from app.views.workers.scan_worker import ScanWorker
+
+        _write_jpeg(tmp_path / "only.jpg")
+        out = tmp_path / "manifest.sqlite"
+
+        class _FakeProc:
+            def __init__(self, pid):
+                self.pid = pid
+
+        real_thread_pool = _cf.ThreadPoolExecutor
+
+        class SpyProcessPool(real_thread_pool):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                # ProcessPoolExecutor exposes worker processes here; fake two
+                # so the parent-side job assignment has pids to enumerate.
+                self._processes = {4101: _FakeProc(4101), 4102: _FakeProc(4102)}
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
+
+        assigned: list[int] = []
+
+        def fake_assign(pid):
+            assigned.append(pid)
+            return True
+
+        monkeypatch.setattr(_exif, "assign_pid_to_kill_job", fake_assign)
+
+        worker = ScanWorker(
+            sources={"solo": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"solo": False},
+            workers=2,
+            hash_pool="process",
+        )
+        worker.run()
+
+        # Subset, not equality: the exiftool consumer's ExiftoolProcess also
+        # registers ITS pid via the same helper (#460), so `assigned` may also
+        # contain exiftool pids where exiftool is installed. What this test
+        # guards is that BOTH process-pool worker pids were registered.
+        assert {4101, 4102}.issubset(set(assigned)), (
+            "every process-pool worker pid must be assigned to the #460 kill "
+            f"job; got {assigned!r}"
+        )
+        assert out.exists(), "the scan must still complete and write its manifest"
