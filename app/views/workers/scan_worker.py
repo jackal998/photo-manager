@@ -811,6 +811,22 @@ class ScanWorker(QThread):
         chunk_size = 500
         cancel_flag = threading.Event()
         skipped: list[tuple[Path, str, str]] = []  # (path, exc type, exc msg)
+        # #561 — live ExiftoolProcess instances owned by the consumer threads.
+        # A consumer wedged inside a batch only checks cancel_flag between
+        # queue gets, so on cancel we kill its exiftool directly to unblock it
+        # (see _kill_exif_procs) instead of waiting out the join timeout and
+        # orphaning the process. Guarded by a lock — consumers register from
+        # their own threads while the HASH-cancel branch reads the list.
+        exif_procs: list = []
+        exif_procs_lock = threading.Lock()
+
+        def _kill_exif_procs() -> None:
+            """#561 — hard-kill every live exiftool so a consumer wedged in a
+            batch unblocks immediately (its execute() hits EOF and returns),
+            letting the cancel join complete fast and leaving no orphan."""
+            with exif_procs_lock:
+                for _p in exif_procs:
+                    _p.kill()
 
         # Silent image-decode-failure detection lives in
         # scanner.hasher.run_hash_for_record now (#486 refactor). The
@@ -913,6 +929,11 @@ class ScanWorker(QThread):
                     if item is None:
                         return
                 return
+            # #561 — register so the HASH-cancel branch can kill this exiftool
+            # if this consumer wedges inside a batch. Registered before the
+            # batch loop; the lock guards the cross-thread read in _kill_exif_procs.
+            with exif_procs_lock:
+                exif_procs.append(proc)
             try:
                 with proc as et:
                     batch: list = []
@@ -1030,11 +1051,15 @@ class ScanWorker(QThread):
                     if self.isInterruptionRequested():
                         cancel_flag.set()
                         pool.shutdown(wait=False, cancel_futures=True)
+                        # #561 — kill exiftool first so a consumer wedged in a
+                        # batch unblocks immediately (execute() hits EOF);
+                        # otherwise the join below waits out the whole batch
+                        # and the abandoned consumer orphans its process.
+                        _kill_exif_procs()
                         # Tell each consumer to stop — one sentinel per
-                        # consumer so each gets exactly one ``None`` off
-                        # the queue. The 0.5s ``get(timeout)`` inside the
-                        # consumer guarantees cancel_flag is picked up
-                        # within ~½s even before the sentinel arrives.
+                        # consumer so each gets exactly one ``None`` off the
+                        # queue. With exiftool killed + the 0.5s get(timeout)
+                        # the consumer picks up cancel within ~½s.
                         for _ in consumer_threads:
                             exif_queue.put(None)
                         for t in consumer_threads:
@@ -1103,6 +1128,11 @@ class ScanWorker(QThread):
                         cancel_flag.set()
                         for p in pools.values():
                             p.shutdown(wait=False, cancel_futures=True)
+                        # #561 — kill exiftool first so a consumer wedged in a
+                        # batch unblocks immediately (execute() hits EOF) and
+                        # the join below completes fast instead of timing out
+                        # and orphaning the process.
+                        _kill_exif_procs()
                         for _ in consumer_threads:
                             exif_queue.put(None)
                         for t in consumer_threads:

@@ -287,6 +287,26 @@ class ExiftoolProcess:
         except Exception:  # pylint: disable=broad-exception-caught
             self.proc.kill()
 
+    def kill(self) -> None:
+        """Hard-kill the exiftool subprocess immediately, from any thread.
+
+        Unlike :meth:`close` (graceful ``-stay_open False``), this terminates
+        the process NOW. #561 — used by the scan cancel path: a consumer thread
+        wedged inside a 500-file ``batch_read_extracts`` only checks the cancel
+        flag between ``exif_queue.get`` calls, so it would otherwise hang the
+        cancel ``join`` until the whole batch finished (and then orphan the
+        process, since exiftool is un-jailed per #556). Killing the subprocess
+        drops EOF onto the consumer's stdout queue, so its ``execute()`` returns
+        promptly (the ``line is None`` break, not the 60s read-timeout) and the
+        consumer exits on its next cancel check. ``subprocess.Popen.kill`` is
+        safe to call from a thread other than the one using the process;
+        best-effort / idempotent.
+        """
+        try:
+            self.proc.kill()
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
     def __enter__(self) -> "ExiftoolProcess":
         return self
 

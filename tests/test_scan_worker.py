@@ -1781,6 +1781,81 @@ class TestScanWorkerPerDeviceHashPools:
             "prior manifest must survive a mid-HASH cancel"
         )
 
+    def test_cancel_during_hash_hard_kills_exiftool_consumers(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#561 — a user-cancel during HASH must hard-kill the exiftool consumer
+        processes, not just sentinel-and-join-with-timeout. A consumer wedged
+        inside a 500-file batch never sees the sentinel until the batch
+        finishes; without the kill the join times out and the abandoned daemon
+        orphans its (un-jailed, #556) exiftool. The kill drops EOF into the
+        consumer's stdout queue so it unblocks immediately and teardown stays
+        within the dialog's 3s budget.
+
+        The cancel must fire INSIDE the HASH drain (not the WALK gate), so the
+        consumer threads have started and registered their exiftool first; the
+        first hashed record flips the interruption flag after a short beat that
+        lets registration happen.
+        """
+        import time
+        import scanner.exif as _exif
+        import scanner.hasher as _hasher
+        from app.views.workers.scan_worker import ScanWorker
+
+        killed: list[int] = []
+
+        class _FakeExif:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                pass
+
+            def kill(self):
+                killed.append(1)
+
+        # Patch the ExiftoolProcess the consumer threads construct so no real
+        # exiftool spawns and we can observe the cancel-path kill.
+        monkeypatch.setattr(_exif, "ExiftoolProcess", _FakeExif)
+
+        records = self._records_two_devices()
+        self._install_synthetic_pipeline(
+            monkeypatch, records, remote_drive=lambda root: str(root).upper() == "J:"
+        )
+        self._spy_thread_pools(monkeypatch)
+
+        flag = {"v": False}
+
+        def fake_hash(idx, record):
+            if not flag["v"]:
+                # Let the consumer threads (started before the HASH pools)
+                # create + register their _FakeExif before we trip the cancel.
+                time.sleep(0.2)
+                flag["v"] = True
+            return idx, None
+
+        monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+        )
+        monkeypatch.setattr(worker, "isInterruptionRequested", lambda: flag["v"])
+
+        failed: list[str] = []
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert failed == ["Scan cancelled."], (
+            f"mid-HASH cancel must emit ['Scan cancelled.']; got {failed!r}"
+        )
+        assert killed, (
+            "#561: a mid-HASH cancel must hard-kill the exiftool consumers so a "
+            "wedged consumer unblocks and nothing orphans — none were killed"
+        )
+
     def test_single_device_uses_one_pool(self, qapp, tmp_path, monkeypatch):
         """The common case (one device) must construct exactly one pool —
         zero regression for single-device users."""
