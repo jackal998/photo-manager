@@ -123,11 +123,80 @@ def test_hash_workers_for_root_remote_returns_eight(monkeypatch):
     assert wm.hash_workers_for_root("J:") == 8
 
 
-def test_hash_workers_for_root_local_returns_cpu_capped(monkeypatch):
-    """A local device gets the historical ``min(4, cpu_count())`` — PR-A does
-    NOT cap HDD lower (that's the WMI follow-on PR-B), so SSD users don't
-    regress."""
+def test_hash_workers_for_root_local_ssd_returns_cpu_capped(monkeypatch):
+    """A local SSD (seek detector returns False) gets the historical
+    ``min(4, cpu_count())`` — only a *confirmed* spinning disk is capped, so
+    SSD users never regress.
+
+    The seek detector is injected (returns False) so the test is deterministic
+    regardless of the machine's real D: drive type.
+    """
     from scanner import workers as wm
 
     monkeypatch.setattr(wm, "is_remote_drive", lambda root: False)
-    assert wm.hash_workers_for_root("D:") == min(4, os.cpu_count() or 4)
+    assert (
+        wm.hash_workers_for_root("D:", seek_penalty_detector=lambda root: False)
+        == min(4, os.cpu_count() or 4)
+    )
+
+
+# --- #548 PR-B — local spinning-disk reader cap ---
+
+
+def test_hash_workers_for_root_spinning_hdd_capped(monkeypatch):
+    """A local spinning HDD (seek detector returns True) is capped to 2 readers
+    so 8 concurrent reads don't seek-thrash the one spindle (the #548 PR-B
+    seek-thrash fix — observed 25.6 MB/s at 8 readers)."""
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda root: False)
+    assert wm.hash_workers_for_root("D:", seek_penalty_detector=lambda root: True) == 2
+
+
+def test_hash_workers_for_root_unknown_seek_uses_ssd_default(monkeypatch):
+    """When the rotational state is unknown (detector returns None — off
+    Windows, a non-drive-letter root, or a Win32 failure) the device gets the
+    SSD-safe default, NOT the 2-cap. A detection miss must never throttle an
+    SSD user."""
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda root: False)
+    assert (
+        wm.hash_workers_for_root("D:", seek_penalty_detector=lambda root: None)
+        == min(4, os.cpu_count() or 4)
+    )
+
+
+def test_hash_workers_for_root_remote_does_not_probe_seek(monkeypatch):
+    """A NAS short-circuits to 8 BEFORE the local seek probe — the rotational
+    detector is meaningless for an SMB share and must not be called (it would
+    open a \\\\.\\<drive> handle that doesn't apply)."""
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda root: True)
+
+    def _must_not_run(root):
+        raise AssertionError("seek detector called for a remote drive")
+
+    assert wm.hash_workers_for_root("J:", seek_penalty_detector=_must_not_run) == 8
+
+
+def test_disk_incurs_seek_penalty_non_drive_letter_is_none():
+    """A relative / empty / non-drive-letter root has no probeable volume — the
+    detector returns None (unknown) without touching Win32, so records on
+    relative paths don't crash the worker-count picker."""
+    from scanner.workers import disk_incurs_seek_penalty
+
+    assert disk_incurs_seek_penalty("") is None
+    assert disk_incurs_seek_penalty("photos/a.jpg") is None
+    assert disk_incurs_seek_penalty("D") is None
+
+
+def test_disk_incurs_seek_penalty_non_windows_is_none(monkeypatch):
+    """Off Windows there is no IOCTL_STORAGE_QUERY_PROPERTY equivalent wired up,
+    so the probe returns None (unknown) and the caller keeps the SSD-safe
+    default — mirrors is_remote_drive's POSIX behaviour."""
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm.sys, "platform", "linux")
+    assert wm.disk_incurs_seek_penalty("D:") is None

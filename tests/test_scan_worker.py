@@ -1465,7 +1465,9 @@ class TestScanWorkerPerDeviceHashPools:
             for p, lbl in specs
         ]
 
-    def _install_synthetic_pipeline(self, monkeypatch, records, *, remote_drive):
+    def _install_synthetic_pipeline(
+        self, monkeypatch, records, *, remote_drive, seek_penalty=None
+    ):
         """Patch the worker's late imports so a synthetic two-device scan
         reaches and exercises the HASH thread branch without disk I/O:
 
@@ -1474,6 +1476,10 @@ class TestScanWorkerPerDeviceHashPools:
           record (no PIL, no file read).
         - ``is_remote_drive`` → classifies ``J:`` as NAS so the per-device
           worker count is 8 for J and ``min(4,cpu)`` for D.
+        - ``disk_incurs_seek_penalty`` → injected so the local rotational
+          probe never opens a real ``\\\\.\\D:`` handle on the test machine.
+          Defaults to "not spinning" (SSD) so local stays ``min(4,cpu)``;
+          pass ``seek_penalty`` to mark a device as a spinning HDD (#548 PR-B).
         - ``classify`` → captures the ``hash_results`` ordering and returns
           ``[]`` so the manifest stage is a trivial empty write.
         """
@@ -1508,6 +1514,11 @@ class TestScanWorkerPerDeviceHashPools:
         monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
         monkeypatch.setattr(
             _workers, "is_remote_drive", lambda root: remote_drive(root)
+        )
+        monkeypatch.setattr(
+            _workers,
+            "disk_incurs_seek_penalty",
+            seek_penalty or (lambda root: False),
         )
         monkeypatch.setattr(_dedup, "classify", fake_classify)
         return captured
@@ -1556,6 +1567,38 @@ class TestScanWorkerPerDeviceHashPools:
         local = min(4, os.cpu_count() or 4)
         assert constructed == [local, 8], (
             f"expected one pool per device [D={local}, J=8]; got {constructed!r}"
+        )
+
+    def test_spinning_local_device_capped_to_two_workers(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#548 PR-B — a local device the seek probe flags as a spinning HDD
+        gets a 2-worker pool (not min(4,cpu)) so 8 concurrent reads don't
+        seek-thrash the one spindle, while the NAS still gets 8. This is the
+        end-to-end proof that the rotational cap reaches the fan-out, not just
+        the unit-level hash_workers_for_root."""
+        from app.views.workers.scan_worker import ScanWorker
+
+        records = self._records_two_devices()
+        self._install_synthetic_pipeline(
+            monkeypatch,
+            records,
+            remote_drive=lambda root: str(root).upper() == "J:",
+            seek_penalty=lambda root: str(root).upper() == "D:",  # D: spinning HDD
+        )
+        constructed = self._spy_thread_pools(monkeypatch)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+        )
+        worker.run()
+
+        # D: spinning → capped to 2; J: NAS → 8. Order is source-iteration (D first).
+        assert constructed == [2, 8], (
+            f"expected spinning D: capped to 2 and NAS J: at 8; got {constructed!r}"
         )
 
     def test_hash_results_preserve_input_order_across_devices(
