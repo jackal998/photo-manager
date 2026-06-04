@@ -1,0 +1,1 @@
+Auto hash-pool mode now keeps the per-device thread path (NAS reads overlapping the local disk) on mixed-device scans instead of switching to a flat single pool that bypassed the per-device optimization (#557).
