@@ -20,6 +20,7 @@ exiftool ``-j -G`` output captured against ``qa/sandbox/`` files.
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -1422,3 +1423,45 @@ def test_assign_pid_to_kill_job_noop_without_job(monkeypatch):
 
     monkeypatch.setattr(exif, "_get_kill_on_close_job", lambda: None)
     assert exif.assign_pid_to_kill_job(12345) is False
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason=(
+        "Win32 Job Object API is Windows-only; mocking win32api.OpenProcess "
+        "would be the banned padding pattern (it can't catch the int() "
+        "handle-lifetime regression). Skipped on POSIX — that path is "
+        "covered by test_assign_pid_to_kill_job_noop_without_job above."
+    ),
+)
+def test_assign_pid_to_kill_job_real_child_win32():
+    """#555 regression: assign_pid_to_kill_job must return True against a
+    real live child process.
+
+    Before the fix, win32api.OpenProcess() returned a PyHANDLE that was
+    immediately wrapped in int(), dropping the Python object and closing
+    the OS handle on GC. AssignProcessToJobObject then received a stale
+    handle → ERROR_INVALID_HANDLE (6), the bare except swallowed it, and
+    assign returned False. Nothing was ever placed in the kill-on-close
+    job, so exiftool and process-pool workers orphaned on a hard parent-kill.
+
+    This test spawns a real short-lived child (15-second sleep) and asserts
+    the assignment succeeds. It would return False (not True) against the
+    int()-wrapped handle, so it catches the exact regression.
+    """
+    import subprocess as _subprocess
+    from scanner import exif
+
+    child = _subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(15)"]
+    )
+    try:
+        result = exif.assign_pid_to_kill_job(child.pid)
+        assert result is True, (
+            f"assign_pid_to_kill_job returned {result!r} for pid {child.pid} — "
+            "likely the int(PyHANDLE) regression: the OS handle was closed "
+            "before AssignProcessToJobObject ran."
+        )
+    finally:
+        child.kill()
+        child.wait()

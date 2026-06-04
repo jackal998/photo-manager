@@ -1,0 +1,1 @@
+Fix the Windows kill-on-close Job Object so exiting or force-killing the app actually terminates the exiftool and hash-worker child processes instead of orphaning them (#556).
