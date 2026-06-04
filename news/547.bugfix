@@ -1,0 +1,1 @@
+Fixed a crash when clicking "Keep all" in the prune-singletons confirmation dialog (the prompt shown after Remove from List collapses a group down to a single item). The keep button re-entered its own close handler without bound, overflowing the stack and taking the app down; it now closes cleanly and keeps the singletons as intended (#547).
