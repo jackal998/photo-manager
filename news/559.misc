@@ -1,0 +1,1 @@
+Confirmed spinning HDDs now use a single sequential hash reader (down from 2) to minimise seeks, since the disk — not the CPU — is the bottleneck on a mechanical drive (#559).

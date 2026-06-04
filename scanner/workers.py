@@ -24,14 +24,17 @@ _DRIVE_REMOTE = 4
 
 # Per-device hash-stage worker counts.
 #   NAS  → 8: SMB request latency dominates, more concurrent reads pay off.
-#   HDD  → 2: a spinning disk seek-thrashes under many concurrent readers
-#             (#548 — observed 25.6 MB/s at 8 readers vs the drive's ~150 MB/s
-#             sequential ceiling); 1-2 readers keep the head near-sequential.
+#   HDD  → 1: single sequential reader on a spinning disk (#552 anti-thrash
+#             principle, logical extreme). On a single mechanical HDD the disk
+#             is the bottleneck (observed 97% active, CPU only 38%); the goal
+#             is to MINIMISE inter-file seeks — one sequential reader does that
+#             best. Two readers still bounce the head between two
+#             concurrently-open files.
 #   else → min(4, cpu): SSD / NVMe / unknown — decode-bound, the historical
 #             local default. Unknown stays here so a detection miss never
 #             regresses an SSD-only user.
 _NAS_WORKERS = 8
-_HDD_WORKERS = 2
+_HDD_WORKERS = 1
 
 # IOCTL_STORAGE_QUERY_PROPERTY with StorageDeviceSeekPenaltyProperty — the
 # canonical Windows "is this volume rotational" probe (Win7+). Returns a
@@ -186,8 +189,11 @@ def hash_workers_for_root(root: str, *, seek_penalty_detector=None) -> int:
     * NAS (``is_remote_drive``) → ``_NAS_WORKERS`` (8) — SMB request latency
       dominates, so more concurrent reads pay off.
     * Local spinning HDD (``seek_penalty_detector`` returns True) →
-      ``_HDD_WORKERS`` (2) — a mechanical disk seek-thrashes under many
-      concurrent readers (#548 PR-B).
+      ``_HDD_WORKERS`` (1) — single sequential reader, seek-minimising (#552
+      anti-thrash principle). On a single mechanical HDD the disk is the
+      bottleneck (observed 97% active, CPU only 38%); one reader keeps the
+      head moving sequentially. Two readers still bounce the head between two
+      concurrently-open files.
     * Everything else — local SSD / NVMe, or any device whose rotational
       state is unknown (detector returns False or ``None``) → the SSD-safe
       ``min(4, os.cpu_count())``. Unknown lands here so a detection miss
@@ -204,7 +210,7 @@ def hash_workers_for_root(root: str, *, seek_penalty_detector=None) -> int:
         return _NAS_WORKERS
     detector = seek_penalty_detector or disk_incurs_seek_penalty
     # ``is True`` so both False (SSD) and None (unknown) fall through to the
-    # SSD-safe default — only a *confirmed* spinning disk gets the 2-cap.
+    # SSD-safe default — only a *confirmed* spinning disk gets the 1-reader cap.
     if detector(root) is True:
         return _HDD_WORKERS
     cpu = os.cpu_count() or 4
