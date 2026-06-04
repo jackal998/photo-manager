@@ -261,11 +261,9 @@ ALL_SCENARIOS = [
     # mutation (Remove from List), no file deletes. Configure overrides
     # ui.prune_singletons="ask" so the dialog actually fires.
     "s61_actioned_singleton_prune",
-    # s62 (#486-PR3c) — hash-pool re-calibrate checkbox renders, defaults
-    # off, and auto-unchecks after a scan (the one-shot trigger). Small
-    # near-duplicates fixture (<24 files) so the recalibrate → auto path
-    # skips the real ProcessPool measurement — no flaky subprocess spawn.
-    "s62_scan_hash_pool_recalibrate",
+    # s62 (#486-PR3c) removed in #560 — the re-calibrate checkbox it drove no
+    # longer exists (calibration is now always-on, non-user-facing). The
+    # always-auto resolution is unit-covered by TestResolveHashPool.
     # s63 (#475) — late-stage (post-HASH) cancel + main-window-X-during-
     # scan #468 guard. Uses a large disposable stub source so the cancel
     # lands past WALK/HASH and the worker is still alive when the main-

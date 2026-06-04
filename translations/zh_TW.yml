@@ -123,13 +123,6 @@ scan_dialog:
   auto_select_aggressive_label: "同時將其他檔案標記為刪除"
   auto_select_aggressive_desc: "另把所有非保留者預先標記為刪除 — 實際刪除仍在執行動作時確認。"
   auto_select_aggressive_tooltip: "偏向破壞性,需明確選用。與自動選取一同啟用時,每個有分數的群組中,所有非保留者皆會被標記為刪除。執行動作對話框會以完整的整理結果開啟 — 一鍵即可送出整批處理。實際刪除動作仍須透過標準的執行流程確認。"
-  recalibrate_label: "掃描時重新校準雜湊池"
-  recalibrate_desc: "實測 thread 與 process 雜湊速度一次,記住這台機器 + 資料夾較快的選擇。"
-  recalibrate_tooltip: "啟用時,掃描會先用一小批檔案實測 thread 與 process 兩種雜湊方式的速度,將雜湊池切換為 auto,並記住這台機器 + 資料夾組合下較快的選擇。校準後此選項會自動取消勾選 — 之後重掃同一個庫會直接沿用記住的結果。更換硬體或想重新測量時再勾選一次。"
-  calibrate_modal_title: "雜湊池尚未校準"
-  calibrate_modal_body: "auto 雜湊池模式在這台機器與資料夾組合下還沒有校準資料。要現在校準嗎 (在本次掃描開始時跑一個快速計時樣本),還是這次先退回安全的 thread 池?"
-  calibrate_modal_calibrate: "現在校準"
-  calibrate_modal_thread: "使用 thread (安全)"
   log_placeholder: "掃描進度將顯示於此…"
   # #424 — 顯示於進度面板的階段名稱。
   stage_walk: "正在掃描來源"
