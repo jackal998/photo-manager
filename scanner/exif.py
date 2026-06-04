@@ -116,7 +116,14 @@ def assign_pid_to_kill_job(pid: int) -> bool:
         import win32job  # type: ignore[import-not-found]
         # PROCESS_ALL_ACCESS = 0x001F0FFF (documented Win32 constant) — needed
         # for AssignProcessToJobObject to transfer the process into the job.
-        handle = int(win32api.OpenProcess(0x001F0FFF, False, pid))
+        #
+        # IMPORTANT: keep the PyHANDLE as a live local — do NOT wrap in int().
+        # int(pyhandle) drops the PyHANDLE object, which closes the OS handle
+        # immediately on GC, leaving AssignProcessToJobObject a stale handle
+        # → ERROR_INVALID_HANDLE (6). This was the silent regression in #555:
+        # assign always returned False, nothing was ever in the kill-on-close
+        # job, and exiftool + process-pool workers orphaned on hard parent-kill.
+        handle = win32api.OpenProcess(0x001F0FFF, False, pid)
         win32job.AssignProcessToJobObject(job, handle)
         return True
     except Exception:  # pylint: disable=broad-exception-caught
