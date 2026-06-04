@@ -1,0 +1,1 @@
+Scan hashing now runs one I/O pool per physical device concurrently, so mixed local-disk + NAS scans no longer bottleneck all readers on a single drive (#550).

@@ -77,3 +77,57 @@ def test_is_remote_drive_bad_path_returns_false(monkeypatch):
     # No exceptions even for empty input — falls into except block or
     # the no-drive branch.
     assert wm.is_remote_drive("") is False
+
+
+# --- #548 — per-device grouping key + per-device worker count ---
+
+
+def test_device_key_drive_letter_uppercased():
+    """A drive-letter path groups by its drive, upper-cased so two paths on
+    the same device land in the same bucket regardless of case."""
+    from scanner.workers import device_key
+
+    assert device_key(r"D:\photos\a.jpg") == "D:"
+    assert device_key(r"d:\photos\b.jpg") == "D:"
+    assert device_key(r"J:\nas\c.heic") == "J:"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="UNC splitdrive is Windows-only")
+def test_device_key_unc_path_groups_by_share():
+    """On Windows a UNC path groups by its ``\\\\server\\share`` prefix, so two
+    files on the same share share a device bucket."""
+    from scanner.workers import device_key
+
+    assert device_key(r"\\srv\share\a") == r"\\SRV\SHARE"
+    assert device_key(r"\\srv\share\sub\b") == r"\\SRV\SHARE"
+
+
+def test_device_key_relative_path_is_empty_bucket():
+    """A relative / driveless path has no device — callers treat '' as one
+    bucket so such records still get hashed (single flat pool)."""
+    from scanner.workers import device_key
+
+    assert device_key("photos/a.jpg") == ""
+    assert device_key("a.jpg") == ""
+
+
+def test_hash_workers_for_root_remote_returns_eight(monkeypatch):
+    """A NAS (remote) device gets 8 workers — SMB request latency dominates.
+
+    ``is_remote_drive`` is the DI seam, patched so the test doesn't need a
+    real mapped network drive.
+    """
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda root: True)
+    assert wm.hash_workers_for_root("J:") == 8
+
+
+def test_hash_workers_for_root_local_returns_cpu_capped(monkeypatch):
+    """A local device gets the historical ``min(4, cpu_count())`` — PR-A does
+    NOT cap HDD lower (that's the WMI follow-on PR-B), so SSD users don't
+    regress."""
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda root: False)
+    assert wm.hash_workers_for_root("D:") == min(4, os.cpu_count() or 4)
