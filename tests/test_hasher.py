@@ -412,3 +412,168 @@ class TestRunHashForRecord:
         assert isinstance(outcome, HashResult)
         assert outcome.phash is None
         assert outcome.sha256 == hashlib.sha256(vid.read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# read_for_record + compute_from_bytes — the split pipeline (#566)
+# ---------------------------------------------------------------------------
+
+
+class TestReadForRecord:
+    """Contract of the READ stage of the bounded read→compute pipeline.
+
+    These use REAL inputs so the tests catch actual I/O and routing bugs,
+    not mocked guard branches.
+    """
+
+    def test_image_returns_bytes(self, tmp_path):
+        """Catches: data=None or ReadFailure on a readable image file, which
+        would silently bypass all hash computation downstream."""
+        from scanner.hasher import read_for_record
+
+        img = tmp_path / "ok.jpg"
+        _write_jpeg(img)
+        idx, record, data = read_for_record(5, _record(img, "jpeg"))
+
+        assert idx == 5
+        assert isinstance(data, bytes)
+        assert len(data) == img.stat().st_size
+
+    def test_idx_threaded_through_unchanged(self, tmp_path):
+        """Catches: idx being reset to 0 or lost — would reorder
+        hash_results and corrupt group_id determinism."""
+        from scanner.hasher import read_for_record
+
+        img = tmp_path / "ok.png"
+        _write_png(img)
+        idx, _, _ = read_for_record(42, _record(img, "png"))
+        assert idx == 42
+
+    def test_video_returns_data_none(self, tmp_path):
+        """Video/gif/skip must return data=None so compute_from_bytes streams
+        SHA from path without materialising the whole file into RAM (#453)."""
+        from scanner.hasher import read_for_record
+
+        vid = tmp_path / "v.mov"
+        vid.write_bytes(b"fake" * 100)
+        idx, _, data = read_for_record(3, _record(vid, "mov"))
+        assert idx == 3
+        assert data is None
+
+    def test_gif_and_skip_return_data_none(self, tmp_path):
+        """gif and skip types must also return data=None (not bytes)."""
+        from scanner.hasher import read_for_record
+
+        gif = tmp_path / "a.gif"
+        gif.write_bytes(b"GIF89a" + b"\x00" * 20)
+        _, _, data_gif = read_for_record(0, _record(gif, "gif"))
+        assert data_gif is None
+
+        # skip type — just a path that exists
+        skip_f = tmp_path / "s.bin"
+        skip_f.write_bytes(b"\x00")
+        _, _, data_skip = read_for_record(0, _record(skip_f, "skip"))
+        assert data_skip is None
+
+    def test_missing_file_returns_read_failure(self, tmp_path):
+        """An OSError on read must become a ReadFailure (not a raised
+        exception), so compute_from_bytes maps it to HashFailure for the
+        standard skip path rather than aborting the scan."""
+        from scanner.hasher import read_for_record, ReadFailure
+
+        gone = tmp_path / "deleted.jpg"  # never created
+        idx, _, data = read_for_record(7, _record(gone, "jpeg"))
+
+        assert idx == 7
+        assert isinstance(data, ReadFailure)
+        assert data.exc_type == "FileNotFoundError"
+        assert data.exc_msg  # non-empty for the skipped[] log
+
+
+class TestComputeFromBytes:
+    """Contract of the COMPUTE stage of the bounded read→compute pipeline.
+
+    Mirrors the existing run_hash_for_record contract tests: idx passthrough,
+    ReadFailure→HashFailure mapping, video data-None→SHA stream, image happy
+    path.  Each test catches a distinct failure mode in the two-stage split.
+    """
+
+    def test_image_returns_hashresult_preserving_idx(self, tmp_path):
+        """Catches: idx not threaded through or hash fields not built — both
+        corrupt the manifest when compute futures complete out of order."""
+        from scanner.hasher import compute_from_bytes
+        from scanner.dedup import HashResult
+
+        img = tmp_path / "ok.jpg"
+        _write_jpeg(img, color=(200, 100, 50))
+        data = img.read_bytes()
+        idx, outcome = compute_from_bytes(9, _record(img, "jpeg"), data)
+
+        assert idx == 9
+        assert isinstance(outcome, HashResult)
+        assert outcome.sha256 == hashlib.sha256(data).hexdigest()
+        assert outcome.phash is not None
+        assert outcome.mean_color is not None
+
+    def test_read_failure_maps_to_hash_failure(self, tmp_path):
+        """Catches: ReadFailure silently becoming None (record skipped with
+        no log entry) instead of HashFailure (record appears in skipped[])."""
+        from scanner.hasher import compute_from_bytes, ReadFailure, HashFailure
+
+        rf = ReadFailure("FileNotFoundError", "no such file")
+        idx, outcome = compute_from_bytes(3, _record(tmp_path / "x.jpg", "jpeg"), rf)
+
+        assert idx == 3
+        assert isinstance(outcome, HashFailure)
+        assert outcome.exc_type == "FileNotFoundError"
+
+    def test_video_data_none_streams_sha(self, tmp_path):
+        """Catches: video data=None triggering a KeyError or a full
+        in-memory read (which would blow the #453 RAM ceiling on large
+        video files)."""
+        from scanner.hasher import compute_from_bytes
+        from scanner.dedup import HashResult
+
+        vid = tmp_path / "clip.mov"
+        vid.write_bytes(b"\x00\x01\x02fake-video-payload" * 50)
+        idx, outcome = compute_from_bytes(1, _record(vid, "mov"), None)
+
+        assert idx == 1
+        assert isinstance(outcome, HashResult)
+        expected_sha = hashlib.sha256(vid.read_bytes()).hexdigest()
+        assert outcome.sha256 == expected_sha
+        assert outcome.phash is None
+
+    def test_corrupt_image_returns_decode_failure(self, tmp_path):
+        """Catches: a truncated JPEG silently entering the manifest as a
+        success instead of appearing in skipped[] with ImageDecodeError."""
+        from scanner.hasher import compute_from_bytes, HashFailure
+
+        full = tmp_path / "_full.jpg"
+        _write_jpeg(full)
+        data = full.read_bytes()[:512]  # truncated
+        full.unlink()
+
+        _, outcome = compute_from_bytes(0, _record(tmp_path / "bad.jpg", "jpeg"), data)
+        assert isinstance(outcome, HashFailure)
+        assert outcome.exc_type == "ImageDecodeError"
+
+    def test_uses_provided_bytes_not_re_reading_file(self, tmp_path):
+        """RAW path must use the provided data (open_buffer(data)) — not
+        re-read the file from disk — to preserve the single-read guarantee.
+
+        We verify this by passing bytes that differ from the on-disk content:
+        compute_from_bytes must hash the PASSED bytes, not the file.
+        """
+        from scanner.hasher import compute_from_bytes
+
+        img = tmp_path / "ok.jpg"
+        _write_jpeg(img, color=(10, 20, 30))
+        # Bytes we pass: a differently-colored JPEG written to a temp path
+        img2 = tmp_path / "ok2.jpg"
+        _write_jpeg(img2, color=(200, 180, 160))
+        data_to_pass = img2.read_bytes()
+
+        _, outcome = compute_from_bytes(0, _record(img, "jpeg"), data_to_pass)
+        # SHA must match the PASSED bytes, not the on-disk file
+        assert outcome.sha256 == hashlib.sha256(data_to_pass).hexdigest()

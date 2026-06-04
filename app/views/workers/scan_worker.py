@@ -674,7 +674,13 @@ class ScanWorker(QThread):
         )
         from collections import OrderedDict
         from scanner.walker import scan_sources
-        from scanner.hasher import HashFailure, run_hash_for_record
+        from scanner.hasher import (
+            HashFailure,
+            run_hash_for_record,
+            read_for_record,
+            compute_from_bytes,
+        )
+        import os
         from scanner.exif import ExiftoolProcess, batch_read_extracts
         from scanner.dedup import HashResult, classify
         from scanner.manifest import write_manifest, print_summary
@@ -835,6 +841,23 @@ class ScanWorker(QThread):
         # corrupt-image gate are inside run_hash_for_record so the same
         # pure function can be reused by a future ProcessPoolExecutor path.
 
+        # #566 — bounded read→compute queue for the thread branch HASH stage.
+        # Capacity of 128 provides ~2× the typical per-device pool size in
+        # flight at once; when compute falls behind, back-pressure blocks the
+        # reader threads so the RAM ceiling stays near one read-window worth of
+        # bytes rather than the whole scan.  The process branch and calibration
+        # timers keep calling the fused run_hash_for_record unchanged.
+        _HASH_QUEUE_MAXSIZE = 128
+        hash_in_q: _queue.Queue = _queue.Queue(maxsize=_HASH_QUEUE_MAXSIZE)
+
+        def _drain_queue_nowait(q: _queue.Queue) -> None:
+            """Empty a queue without blocking (swallows ``queue.Empty``)."""
+            while True:
+                try:
+                    q.get_nowait()
+                except _queue.Empty:
+                    break
+
         exif_queue: _queue.Queue = _queue.Queue()
         extracts: dict = {}
         exif_tracker = _StageTracker(STAGE_EXIFTOOL)
@@ -885,22 +908,6 @@ class ScanWorker(QThread):
                 with exif_total_lock:
                     exif_total[0] += 1
             return outcome
-
-        def _hash_one(idx_record: tuple) -> tuple:
-            """Thread-path dispatch closure: cancel-check, call the pure
-            compute path, then route the outcome. Cancellation
-            short-circuits before any compute.
-
-            The process path can't use this closure (it captures the
-            thread-only ``cancel_flag`` / ``exif_queue``); it submits
-            ``run_hash_for_record`` directly and routes in the parent drain
-            loop below.
-            """
-            idx, record = idx_record
-            if cancel_flag.is_set():
-                return idx, None
-            _, outcome = run_hash_for_record(idx, record)
-            return idx, _route_outcome(record, outcome)
 
         def _exif_consumer() -> None:
             """Drain ``exif_queue`` into 500-batches fed to one
@@ -1086,15 +1093,26 @@ class ScanWorker(QThread):
                 # future is already drained so there is nothing to wait for.
                 pool.shutdown(wait=False)
         else:
-            # #548 — THREAD path: one ThreadPoolExecutor PER PHYSICAL
-            # DEVICE, all running concurrently, so NAS-latency-bound reads
-            # overlap HDD-seek-bound reads instead of the NAS waiting behind
-            # local files in one flat queue. Per-device worker counts come
-            # from hash_workers_for_root (NAS=8, local=min(4,cpu)). Records
-            # are partitioned by device_key while PRESERVING the original
-            # enumerate index — hash_results is indexed by that original idx
-            # so classify()'s walk-order-dependent union-find group_ids stay
-            # deterministic regardless of completion order.
+            # #566 — THREAD path: READ stage + COMPUTE stage joined by a
+            # bounded queue (#566).  The two-stage split lets I/O-bound reads
+            # (per-device pools, one executor per physical device so NAS and
+            # HDD overlap) and CPU-bound decoding (one flat compute pool at
+            # os.cpu_count()) run concurrently instead of serialised in each
+            # worker thread.  The bounded hash_in_q back-pressures the readers
+            # when compute falls behind, keeping RAM within the #453 ceiling.
+            #
+            # Ordering invariant: idx is threaded through both hops so the
+            # parent can do hash_results[idx]=result — completion-order never
+            # reaches classify().  This is the hard constraint from #526 /
+            # #538 (lex-min group_id determinism / rescore key).
+            #
+            # Cancellation contract (#492/#495/#507/#561 scars):
+            #   1. cancel_flag.set() — stops new dispatcher submissions.
+            #   2. _drain_queue_nowait(hash_in_q) — unblocks any reader wedged
+            #      in a bounded put() so reader threads can exit.
+            #   3. reader_pools + compute_pool.shutdown(wait=False) — abandon
+            #      in-flight work; no blocking on reads.
+            #   4. _kill_exif_procs() + sentinels — existing exif teardown.
             device_records: "OrderedDict[str, list[tuple[int, object]]]" = (
                 OrderedDict()
             )
@@ -1111,39 +1129,108 @@ class ScanWorker(QThread):
                     for dev, items in device_records.items()
                 )
             )
-            pools = {
+
+            # READER pools — one per device, same per-device worker counts
+            # as the pre-#566 thread branch.  Each submits read_for_record
+            # whose result flows into hash_in_q.
+            reader_pools = {
                 dev: ThreadPoolExecutor(max_workers=device_workers[dev])
                 for dev in device_records
             }
-            try:
-                futures = {}
+            # COMPUTE pool — one flat pool for CPU-bound decode/hash work.
+            compute_pool = ThreadPoolExecutor(
+                max_workers=os.cpu_count() or 4
+            )
+            # out_q carries (idx, outcome) tuples from compute callbacks
+            # back to the parent drain loop.
+            out_q: _queue.Queue = _queue.Queue()
+
+            def _read_drain() -> None:
+                """Drive read futures into hash_in_q; put a None sentinel when done."""
+                reader_futures = []
                 for dev, items in device_records.items():
-                    for idx, r in items:
-                        futures[pools[dev].submit(_hash_one, (idx, r))] = idx
-                # as_completed accepts futures from multiple executors, so
-                # a single drain loop services all device pools as their
-                # work completes in any interleaving.
-                for future in as_completed(futures):
-                    if self.isInterruptionRequested():
-                        cancel_flag.set()
-                        for p in pools.values():
-                            p.shutdown(wait=False, cancel_futures=True)
-                        # #561 — kill exiftool first so a consumer wedged in a
-                        # batch unblocks immediately (execute() hits EOF) and
-                        # the join below completes fast instead of timing out
-                        # and orphaning the process.
-                        _kill_exif_procs()
-                        for _ in consumer_threads:
-                            exif_queue.put(None)
-                        for t in consumer_threads:
-                            t.join(timeout=5)
-                        logger.warning("Scan cancelled by user during hashing pass")
-                        self.failed.emit("Scan cancelled.")
-                        return
-                    idx, outcome = future.result()
-                    # Thread path already routed inside _hash_one (outcome
-                    # is the HashResult-or-None to store).
-                    result = outcome
+                    for _idx, _r in items:
+                        reader_futures.append(
+                            reader_pools[dev].submit(read_for_record, _idx, _r)
+                        )
+                for fut in as_completed(reader_futures):
+                    if cancel_flag.is_set():
+                        break
+                    try:
+                        # Cooperative bounded put: retry with a short timeout so
+                        # a cancel_flag check doesn't leave us stuck forever when
+                        # compute is stopped and the queue is full.
+                        result = fut.result()
+                        while not cancel_flag.is_set():
+                            try:
+                                hash_in_q.put(result, timeout=0.05)
+                                break
+                            except _queue.Full:
+                                pass
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+                hash_in_q.put(None)  # sentinel — always sent, even on cancel
+
+            def _compute_dispatch() -> None:
+                """Pull from hash_in_q, submit compute_from_bytes futures."""
+                while not cancel_flag.is_set():
+                    try:
+                        item = hash_in_q.get(timeout=0.05)
+                    except _queue.Empty:
+                        continue
+                    if item is None:
+                        break
+                    c_idx, c_record, c_data = item
+
+                    def _cb(f, _idx=c_idx):
+                        out_q.put(f.result())
+
+                    compute_pool.submit(
+                        compute_from_bytes, c_idx, c_record, c_data
+                    ).add_done_callback(_cb)
+
+            import threading as _threading
+            read_drain_thread = _threading.Thread(
+                target=_read_drain, name="hash-read-drain", daemon=True
+            )
+            compute_dispatch_thread = _threading.Thread(
+                target=_compute_dispatch,
+                name="hash-compute-dispatch",
+                daemon=True,
+            )
+            read_drain_thread.start()
+            compute_dispatch_thread.start()
+
+            cancelled = False
+            try:
+                for _ in range(len(records)):
+                    while True:
+                        if self.isInterruptionRequested():
+                            cancel_flag.set()
+                            # Unblock any reader wedged in a bounded put().
+                            _drain_queue_nowait(hash_in_q)
+                            for p in reader_pools.values():
+                                p.shutdown(wait=False, cancel_futures=True)
+                            compute_pool.shutdown(
+                                wait=False, cancel_futures=True
+                            )
+                            _kill_exif_procs()
+                            for _ in consumer_threads:
+                                exif_queue.put(None)
+                            for t in consumer_threads:
+                                t.join(timeout=5)
+                            logger.warning(
+                                "Scan cancelled by user during hashing pass"
+                            )
+                            self.failed.emit("Scan cancelled.")
+                            cancelled = True
+                            return
+                        try:
+                            idx, outcome = out_q.get(timeout=0.5)
+                            break
+                        except _queue.Empty:
+                            continue
+                    result = _route_outcome(records[idx], outcome)
                     if result is not None:
                         hash_results[idx] = result
                     done += 1
@@ -1153,8 +1240,16 @@ class ScanWorker(QThread):
                     # alongside the existing per-100 log line.
                     self._emit_stage(hash_tracker, done, len(records))
             finally:
-                for p in pools.values():
+                # On cancel the flag was already set in the inner loop;
+                # on normal completion we don't set it (exif consumers
+                # check cancel_flag and must keep running after hashing).
+                if cancelled:
+                    _drain_queue_nowait(hash_in_q)
+                read_drain_thread.join(timeout=5)
+                compute_dispatch_thread.join(timeout=5)
+                for p in reader_pools.values():
                     p.shutdown(wait=False)
+                compute_pool.shutdown(wait=False)
 
         # Signal each consumer that no more items are coming and wait
         # for them to drain whatever's still queued. The hash threads

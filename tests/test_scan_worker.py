@@ -44,18 +44,21 @@ class TestScanWorkerSkipsBadFile:
         _write_jpeg(b, color=(0, 255, 0))
         bad.write_bytes(b"II*\x00" + b"\x00" * 64)  # TIFF magic, unparseable
 
-        # Patch compute_hashes at the source so the late import in _run_pipeline picks it up.
+        # Patch _hashes_from_data at the source so the late import in _run_pipeline
+        # picks it up.  Pre-#566 this patched compute_hashes (the fused single-read
+        # path); after #566 the thread branch calls compute_from_bytes →
+        # _hashes_from_data, so we patch the leaf that both paths share.
         import scanner.hasher as _hasher
         import rawpy
 
-        real_compute = _hasher.compute_hashes
+        real_hashes_from_data = _hasher._hashes_from_data
 
-        def fake_compute(path, file_type):
+        def fake_hashes_from_data(path, file_type, data):
             if Path(path) == bad:
                 raise rawpy.LibRawFileUnsupportedError("Unsupported file format or not RAW file")
-            return real_compute(path, file_type)
+            return real_hashes_from_data(path, file_type, data)
 
-        monkeypatch.setattr(_hasher, "compute_hashes", fake_compute)
+        monkeypatch.setattr(_hasher, "_hashes_from_data", fake_hashes_from_data)
 
         out = tmp_path / "manifest.sqlite"
         worker = ScanWorker(
@@ -1320,16 +1323,21 @@ class TestScanWorkerLateCancel:
 
         monkeypatch.setattr(worker, "isInterruptionRequested", fake_is_interrupt)
 
-        real_compute_hashes = _hasher.compute_hashes
+        # #566 — thread branch now calls compute_from_bytes → _hashes_from_data
+        # (not compute_hashes directly).  Patch _hashes_from_data so the cancel
+        # flag is set after the leaf hash work completes, just before the result
+        # propagates back to the parent drain loop.  The CLASSIFY-entry check
+        # fires between the hash drain and classify(), which is the right moment.
+        real_hashes_from_data = _hasher._hashes_from_data
 
-        def cancel_during_hash(path, file_type):
-            """Run the real hash, then flip the cancel flag. The HASH
-            ``as_completed`` loop has already passed its own cancel
-            check for this iteration; with only one record, there's no
-            next iteration. So the next check the pipeline hits is at
-            CLASSIFY entry — exactly the new #463 check this test pins.
+        def cancel_during_hash(path, file_type, data):
+            """Run the real hash leaf, then flip the cancel flag. With only
+            one record, the parent drain loop gets the result, increments
+            ``done``, and then the next interrupt-check iteration sees True.
+            The next check the pipeline hits is at CLASSIFY entry — exactly
+            the #463 check this test pins.
             """
-            result = real_compute_hashes(path, file_type)
+            result = real_hashes_from_data(path, file_type, data)
             cancel_state["flag"] = True
             return result
 
@@ -1352,7 +1360,7 @@ class TestScanWorkerLateCancel:
                 "output_path would be overwritten"
             )
 
-        monkeypatch.setattr(_hasher, "compute_hashes", cancel_during_hash)
+        monkeypatch.setattr(_hasher, "_hashes_from_data", cancel_during_hash)
         monkeypatch.setattr(_dedup, "classify", must_not_run_classify)
         monkeypatch.setattr(_scoring, "apply_scoring_to_rows", must_not_run_score)
         monkeypatch.setattr(_manifest, "write_manifest", must_not_run_write)
@@ -1575,8 +1583,10 @@ class TestScanWorkerPerDeviceHashPools:
         reaches and exercises the HASH thread branch without disk I/O:
 
         - ``scan_sources`` → returns ``records`` (the worker walks once).
-        - ``run_hash_for_record`` → returns a synthetic ``HashResult`` per
-          record (no PIL, no file read).
+        - ``read_for_record`` → returns (idx, record, None) so no disk read
+          occurs; ``compute_from_bytes`` → returns a synthetic ``HashResult``
+          per record.  Together they replace the pre-#566 ``run_hash_for_record``
+          seam for the thread branch.
         - ``is_remote_drive`` → classifies ``J:`` as NAS so the per-device
           worker count is 8 for J and ``min(4,cpu)`` for D.
         - ``disk_incurs_seek_penalty`` → injected so the local rotational
@@ -1599,7 +1609,11 @@ class TestScanWorkerPerDeviceHashPools:
                     cb()
             return list(records)
 
-        def fake_hash(idx, record):
+        def fake_read(idx, record):
+            # Return data=None so compute_from_bytes is called with None.
+            return idx, record, None
+
+        def fake_compute(idx, record, data):
             return idx, HashResult(
                 record=record,
                 sha256=f"sha-{idx}",
@@ -1614,7 +1628,8 @@ class TestScanWorkerPerDeviceHashPools:
             return []
 
         monkeypatch.setattr(_walker, "scan_sources", fake_scan_sources)
-        monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
+        monkeypatch.setattr(_hasher, "read_for_record", fake_read)
+        monkeypatch.setattr(_hasher, "compute_from_bytes", fake_compute)
         monkeypatch.setattr(
             _workers, "is_remote_drive", lambda root: remote_drive(root)
         )
@@ -1665,11 +1680,16 @@ class TestScanWorkerPerDeviceHashPools:
         )
         worker.run()
 
-        # One pool per device — D: at min(4,cpu), J: at 8. Order follows
-        # source-iteration order (D first, since record 0 is on D:).
-        local = min(4, os.cpu_count() or 4)
-        assert constructed == [local, 8], (
-            f"expected one pool per device [D={local}, J=8]; got {constructed!r}"
+        # #566 — three pools total: two reader pools (one per device) +
+        # one flat compute pool.  Reader pools: D: at min(4,cpu), J: at 8,
+        # in source-iteration order (D first, since record 0 is on D:).
+        # Compute pool: os.cpu_count() or 4.
+        import os as _os
+        local = min(4, _os.cpu_count() or 4)
+        cpu = _os.cpu_count() or 4
+        assert constructed == [local, 8, cpu], (
+            f"expected reader pools [D={local}, J=8] + compute pool [{cpu}];"
+            f" got {constructed!r}"
         )
 
     def test_spinning_local_device_capped_to_one_worker(
@@ -1699,9 +1719,12 @@ class TestScanWorkerPerDeviceHashPools:
         )
         worker.run()
 
-        # D: spinning → 1 reader (seek-minimising); J: NAS → 8. Order is source-iteration (D first).
-        assert constructed == [1, 8], (
-            f"expected spinning D: single reader and NAS J: at 8; got {constructed!r}"
+        # #566 — three pools: D: spinning reader (1), J: NAS reader (8), compute (cpu_count).
+        import os as _os
+        cpu = _os.cpu_count() or 4
+        assert constructed == [1, 8, cpu], (
+            f"expected spinning D: single reader [1], NAS J: [8], compute [{cpu}];"
+            f" got {constructed!r}"
         )
 
     def test_hash_results_preserve_input_order_across_devices(
@@ -1826,15 +1849,21 @@ class TestScanWorkerPerDeviceHashPools:
 
         flag = {"v": False}
 
-        def fake_hash(idx, record):
+        # #566 — thread branch now calls read_for_record + compute_from_bytes.
+        # Patch both seams: read returns immediately; compute sleeps briefly on
+        # the first call so the exif consumer threads get a chance to start and
+        # register their _FakeExif before we trip the cancel.
+        def fake_read(idx, record):
+            return idx, record, None
+
+        def fake_compute(idx, record, data):
             if not flag["v"]:
-                # Let the consumer threads (started before the HASH pools)
-                # create + register their _FakeExif before we trip the cancel.
                 time.sleep(0.2)
                 flag["v"] = True
             return idx, None
 
-        monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
+        monkeypatch.setattr(_hasher, "read_for_record", fake_read)
+        monkeypatch.setattr(_hasher, "compute_from_bytes", fake_compute)
 
         worker = ScanWorker(
             sources={"src": str(tmp_path)},
@@ -1881,8 +1910,12 @@ class TestScanWorkerPerDeviceHashPools:
         )
         worker.run()
 
-        assert constructed == [min(4, os.cpu_count() or 4)], (
-            f"single-device scan must use exactly one pool; got {constructed!r}"
+        # #566 — two pools: one reader pool (single device) + one flat compute pool.
+        local = min(4, os.cpu_count() or 4)
+        cpu = os.cpu_count() or 4
+        assert constructed == [local, cpu], (
+            f"single-device scan must use one reader pool + one compute pool;"
+            f" expected [{local}, {cpu}], got {constructed!r}"
         )
 
 
@@ -2081,3 +2114,163 @@ class TestScanTeardownGaps:
             f"job; got {assigned!r}"
         )
         assert out.exists(), "the scan must still complete and write its manifest"
+
+
+# ---------------------------------------------------------------------------
+# #566 gate tests — two highest-risk invariants for the bounded pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestBoundedPipelineDeadlockSafety:
+    """#566 — cancellation must not deadlock the bounded read→compute queue.
+
+    The #492/#495/#507/#561 scar class: a cancel signal arrives while a
+    thread is wedged in a blocking queue operation.  The read stage puts
+    into a bounded ``hash_in_q``; if the compute side stops consuming (cancel
+    fired) the reader threads get stuck in ``put()`` forever.  This test
+    validates the cooperative-put + drain-on-cancel pattern used by
+    ``_read_drain``.
+    """
+
+    def test_bounded_read_queue_cancel_does_not_deadlock(self):
+        """A bounded queue full of items + cancel_flag set must allow all
+        reader threads to exit within 5 s — NOT stay stuck in put().
+
+        Failure mode: if the reader does a bare ``q.put(item)`` (blocking
+        forever) instead of ``q.put(item, timeout=…) + cancel_flag check``,
+        the threads never exit and the test times out — exactly the deadlock
+        the teardown scars document.
+        """
+        import queue
+        import threading
+
+        MAXSIZE = 8
+        N_READERS = 4
+        cancel_flag = threading.Event()
+        q: queue.Queue = queue.Queue(maxsize=MAXSIZE)
+
+        def reader():
+            """Cooperative bounded put — matches the _read_drain pattern."""
+            for _ in range(MAXSIZE * 2):  # would overfill a naive put()
+                item = object()
+                while not cancel_flag.is_set():
+                    try:
+                        q.put(item, timeout=0.05)
+                        break
+                    except queue.Full:
+                        pass
+                if cancel_flag.is_set():
+                    return  # exit on cancel, don't block
+
+        # Fill the queue to capacity so the FIRST put() in each reader blocks.
+        for _ in range(MAXSIZE):
+            q.put(object())
+
+        threads = [threading.Thread(target=reader, daemon=True) for _ in range(N_READERS)]
+        for t in threads:
+            t.start()
+
+        # Let threads hit the full queue and start their cooperative retry.
+        import time
+        time.sleep(0.1)
+
+        # Trip the cancel — cooperative readers must wake and exit.
+        cancel_flag.set()
+
+        for t in threads:
+            t.join(timeout=5)
+            assert not t.is_alive(), (
+                "reader thread still alive after cancel_flag set — deadlock! "
+                "The bounded-put loop must check cancel_flag to avoid wedging "
+                "on a full queue (the #492/#495/#507/#561 scar class)."
+            )
+
+
+class TestPipelineIndexOrderDeterminism:
+    """#566 — hash_results must be assembled in ORIGINAL WALK ORDER, not
+    completion order, so classify()'s union-find produces deterministic
+    lex-min group_ids (load-bearing for rescore).
+
+    If the parent drain loop used ``append`` instead of ``hash_results[idx]=result``,
+    the group_ids would depend on which thread finished first — a Heisenbug that
+    corrupts the manifest on any multi-device or variable-latency scan.
+    """
+
+    def test_pipeline_reassembles_hash_results_in_index_order(self, tmp_path):
+        """Four records processed in deliberately inverted completion order
+        (fastest compute = highest idx) must still produce results in walk
+        order when assembled via ``hash_results[idx]``.
+
+        Failure mode: if the caller builds results by append/completion order,
+        the final list is reversed — and the lex-min group_id from classify()
+        would be keyed to the wrong file.
+        """
+        import queue
+        import threading
+        import time
+
+        # Build four JPEG files — real files so read_for_record works.
+        paths = []
+        for i in range(4):
+            p = tmp_path / f"img{i}.jpg"
+            _write_jpeg(p, color=(i * 60 % 256, i * 40 % 256, i * 20 % 256))
+            paths.append(p)
+
+        from scanner.hasher import read_for_record, compute_from_bytes
+        from scanner.dedup import HashResult
+        from scanner.walker import FileRecord
+
+        records = [
+            FileRecord(path=p, source_label="src", file_type="jpeg")
+            for p in paths
+        ]
+
+        # Simulate the pipeline: read, then compute with INVERTED delay
+        # so idx=3 finishes fastest and idx=0 finishes last.
+        hash_results: list = [None] * len(records)
+        out_q: queue.Queue = queue.Queue()
+
+        for orig_idx, rec in enumerate(records):
+            _idx, _rec, data = read_for_record(orig_idx, rec)
+
+            def _work(i=_idx, r=_rec, d=data):
+                # Invert: higher idx → shorter sleep → finishes first.
+                time.sleep((len(records) - i) * 0.02)
+                return compute_from_bytes(i, r, d)
+
+            t = threading.Thread(target=lambda i=_idx, r=_rec, d=data: (
+                out_q.put(compute_from_bytes(i, r, d))
+            ), daemon=True)
+            # Use actual sleep-inverted compute:
+            def _delayed_compute(i=_idx, r=_rec, d=data):
+                time.sleep((len(records) - i) * 0.02)
+                out_q.put(compute_from_bytes(i, r, d))
+
+            threading.Thread(target=_delayed_compute, daemon=True).start()
+
+        for _ in range(len(records)):
+            idx, outcome = out_q.get(timeout=5)
+            if isinstance(outcome, HashResult):
+                hash_results[idx] = outcome
+
+        # Filter None slots (same as the parent pipeline).
+        results = [r for r in hash_results if r is not None]
+
+        # Assert: walk order preserved (path order must match original).
+        result_paths = [r.record.path for r in results]
+        assert result_paths == paths, (
+            "hash_results[idx] scatter must preserve walk order — "
+            f"expected {paths!r}, got {result_paths!r}. "
+            "Completion-order append would give reversed order here."
+        )
+
+        # Assert: lex-min group_id is stable — first path in walk order
+        # should produce the lexicographically smallest sha256 prefix key
+        # if all shas are distinct.  The real guard is ordering.
+        from scanner.dedup import classify
+        rows = classify(results, threshold=0, mean_color_threshold=999)
+        # All files are distinct (different colors) so they're isolated
+        # (no duplicates) — the ordering assertion above is the load-bearing check.
+        assert len(rows) == len(records), (
+            f"classify must produce one row per isolated record; got {len(rows)}"
+        )

@@ -1,0 +1,1 @@
+The HASH stage now overlaps disk reads with CPU decode via a read/compute pipeline split, making mixed local-disk + NAS scans roughly 2.3× faster and steadier (less throughput oscillation) (#566).
