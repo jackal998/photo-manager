@@ -157,13 +157,6 @@ scan_dialog:
   auto_select_aggressive_label: "Also mark all other files for delete"
   auto_select_aggressive_desc: "Also pre-mark every non-keeper for delete — you still confirm at Execute."
   auto_select_aggressive_tooltip: "Destructive-leaning, opt-in. When enabled together with Auto select, every non-keeper row in a scored group is marked for delete. The Execute Action dialog opens with the full triage pre-populated — one click ships the sweep. You still confirm the actual deletion through the standard execute flow."
-  recalibrate_label: "Re-calibrate hash pool on scan"
-  recalibrate_desc: "Time thread vs process hashers once and remember the faster for this machine + folders."
-  recalibrate_tooltip: "When enabled, the scan times a sample of your files through both the thread and process hashers, switches the hash pool to auto, and remembers the faster choice for this machine + folder set. The box clears itself after — later scans of the same library reuse the saved result silently. Re-check it after a hardware change or to re-measure."
-  calibrate_modal_title: "Hash pool not calibrated"
-  calibrate_modal_body: "Auto hash-pool mode has no saved calibration for this machine and folder set yet. Calibrate now (a quick timed sample at the start of this scan), or fall back to the safe thread pool for this run?"
-  calibrate_modal_calibrate: "Calibrate now"
-  calibrate_modal_thread: "Use thread (safe)"
   log_placeholder: "Scan progress will appear here…"
   # #424 — stage names shown in the stage label above the log.
   stage_walk: "Walking sources"

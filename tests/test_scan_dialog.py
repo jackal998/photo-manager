@@ -407,71 +407,60 @@ class TestResolveHashPool:
 
         return hash_pool_fingerprint(self.SOURCES, self.RECMAP, os.cpu_count() or 4)
 
-    def test_recalibrate_checked_forces_auto_and_unchecks(self, qapp, tmp_path):
-        """Checked → force fresh measure (rates None), persist auto, clear box,
-        set a fingerprint so the worker's emit gets cached."""
-        dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "thread"}})
-        dlg._recalibrate_check.setChecked(True)
+    def test_default_is_auto_and_calibrates(self, qapp, tmp_path):
+        """#560 — with no scan.hash_pool set, calibration is always-on: the
+        mode defaults to "auto", the machine+sources are fingerprinted, and on
+        a cache miss rates stay None so the worker calibrates silently."""
+        dlg = self._dialog(tmp_path, {"sources": {}})
 
         pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
 
         assert (pool, rates) == ("auto", None)
-        assert dlg.settings.get("scan.hash_pool") == "auto"  # persisted
-        assert dlg._recalibrate_check.isChecked() is False  # auto-unchecked
         assert dlg._hash_pool_fp == self._fp()
 
-    def test_explicit_thread_used_directly_no_modal(self, qapp, tmp_path, monkeypatch):
-        """thread/process override → returned as-is, no fingerprint, no modal."""
+    def test_explicit_thread_used_directly(self, qapp, tmp_path):
+        """The settings.json power-user override "thread" is returned as-is,
+        with no fingerprint and no calibration."""
         dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "thread"}})
-        monkeypatch.setattr(
-            dlg, "_prompt_calibrate_or_thread",
-            lambda: (_ for _ in ()).throw(AssertionError("modal must not fire")),
-        )
 
         pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
 
         assert (pool, rates) == ("thread", None)
         assert dlg._hash_pool_fp is None
 
-    def test_auto_cache_hit_reuses_rates(self, qapp, tmp_path, monkeypatch):
-        """unchecked + auto + cache hit → cached rates returned, no modal."""
+    def test_explicit_process_used_directly(self, qapp, tmp_path):
+        """The "process" override is honoured verbatim — no fingerprint."""
+        dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "process"}})
+
+        pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
+
+        assert (pool, rates) == ("process", None)
+        assert dlg._hash_pool_fp is None
+
+    def test_auto_cache_hit_reuses_rates(self, qapp, tmp_path):
+        """auto + cache hit → the cached rates are returned and the fingerprint
+        is set (the worker re-projects them to the current file count)."""
         rates = {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 0.5}
         dlg = self._dialog(tmp_path, {
             "sources": {},
             "scan": {"hash_pool": "auto", "hash_pool_cache": {self._fp(): rates}},
         })
-        monkeypatch.setattr(
-            dlg, "_prompt_calibrate_or_thread",
-            lambda: (_ for _ in ()).throw(AssertionError("no modal on cache hit")),
-        )
 
         pool, got = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
 
         assert (pool, got) == ("auto", rates)
         assert dlg._hash_pool_fp == self._fp()
 
-    def test_auto_cache_miss_modal_calibrate(self, qapp, tmp_path, monkeypatch):
-        """unchecked + auto + miss + user picks Calibrate → auto, rates None,
-        fingerprint kept so the fresh measurement gets cached."""
+    def test_auto_cache_miss_calibrates_silently(self, qapp, tmp_path):
+        """#560 — auto + cache miss → ("auto", None) with the fingerprint kept,
+        so the worker measures + caches this scan. No modal (removed in #560);
+        the #554 multi-device+NAS guard handles the one risky case in-worker."""
         dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "auto"}})
-        monkeypatch.setattr(dlg, "_prompt_calibrate_or_thread", lambda: True)
 
         pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
 
         assert (pool, rates) == ("auto", None)
         assert dlg._hash_pool_fp == self._fp()
-
-    def test_auto_cache_miss_modal_thread(self, qapp, tmp_path, monkeypatch):
-        """unchecked + auto + miss + user picks Use-thread → thread this run,
-        no fingerprint (nothing cached), auto mode left intact for next time."""
-        dlg = self._dialog(tmp_path, {"sources": {}, "scan": {"hash_pool": "auto"}})
-        monkeypatch.setattr(dlg, "_prompt_calibrate_or_thread", lambda: False)
-
-        pool, rates = dlg._resolve_hash_pool(self.SOURCES, self.RECMAP)
-
-        assert (pool, rates) == ("thread", None)
-        assert dlg._hash_pool_fp is None
-        assert dlg.settings.get("scan.hash_pool") == "auto"  # not persisted away
 
 
 # ---------------------------------------------------------------------------
@@ -629,7 +618,7 @@ class TestAdvancedSettingsCollapse:
           QLabels, so the QVBoxLayout clipped descriptions to one line. The
           muted (#555) descriptions must therefore NOT word-wrap (a one-line
           label can't be height-clipped) and must each carry a tooltip.
-        * The titles (bold slider labels + the three checkboxes) must NOT
+        * The titles (bold slider labels + the two checkboxes) must NOT
           carry a tooltip — hovering a title popping the full blurb was
           unwanted. Only the description line gets the tooltip.
 
@@ -645,7 +634,7 @@ class TestAdvancedSettingsCollapse:
         descs = [lab for lab in labels if "#555" in lab.styleSheet()]
         titles = [lab for lab in labels if "#555" not in lab.styleSheet()]
 
-        assert len(descs) >= 6, "expected one muted description per advanced control"
+        assert len(descs) >= 5, "expected one muted description per advanced control"
         for lab in descs:
             assert not lab.wordWrap(), (
                 f"description must be one-line, not wrapped: {lab.text()[:30]!r}"
@@ -663,7 +652,6 @@ class TestAdvancedSettingsCollapse:
         for cb in (
             dlg._auto_select_check,
             dlg._auto_select_aggressive_check,
-            dlg._recalibrate_check,
         ):
             assert not cb.toolTip(), "checkbox title must NOT have a tooltip"
 

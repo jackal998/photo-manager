@@ -266,11 +266,6 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # disposable-source convention as s13 / s36 / s44. (s60/s62 taken on
     # master by #502/#486 — this scenario uses the next free slot s64.)
     "s64_execute_selected_partial": ["qa/sandbox/_disposable/s64_source"],
-    # s62 (#486-PR3c) — hash-pool re-calibrate checkbox + auto-uncheck.
-    # Small near-duplicates fixture on purpose: 5 < the 24-file calibration
-    # floor, so the recalibrate → auto path runs but SKIPS the real
-    # ProcessPool measurement (no flaky subprocess spawn in the batch).
-    "s62_scan_hash_pool_recalibrate": ["qa/sandbox/near-duplicates"],
     # #544 — passenger-bridge-a (originals, priority 0) FIRST, then
     # passenger-bridge-b (the bridge, priority 1): order = scan/dedup priority,
     # so the lower-priority bridge becomes the REVIEW_DUPLICATE and both
