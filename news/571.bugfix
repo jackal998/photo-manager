@@ -1,0 +1,1 @@
+Fix a memory-backpressure gap in the read/compute scan pipeline: in-flight image bytes are now bounded so a fast disk feeding a slow decode stage can no longer grow memory without limit (#570).

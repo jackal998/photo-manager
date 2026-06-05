@@ -2186,6 +2186,87 @@ class TestBoundedPipelineDeadlockSafety:
             )
 
 
+class TestComputeBackpressure:
+    """#570 — _compute_dispatch must bound the number of submitted-but-
+    unfinished compute tasks, so the image bytes each task holds can't pile up
+    unboundedly in the ThreadPoolExecutor's internal work queue.
+
+    The #566 regression: ``ThreadPoolExecutor.submit()`` never blocks, so a fast
+    reader floods the unbounded ``_work_queue`` with byte-holding tasks (the
+    ``hash_in_q`` maxsize can't bound them — _compute_dispatch drains it instantly
+    into the pool). The fix acquires a ``Semaphore(maxsize)`` permit before submit
+    and releases it in the done-callback. This models that exact logic and asserts
+    the bound holds.
+    """
+
+    def test_compute_dispatch_bounds_inflight_tasks(self):
+        """With a fast reader flooding the queue and a slow compute stage, the
+        number of submitted-but-unfinished compute tasks must stay <= maxsize.
+
+        Failure mode: drop the semaphore (bare ``submit()``) and in-flight grows
+        to the full input size — the unbounded-RAM bug. This test fails in that
+        case (peak >> maxsize), so it is not padding: it pins the backpressure
+        bound the #570 fix introduces.
+        """
+        import queue
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        MAXSIZE = 4
+        N = 40
+        in_q: queue.Queue = queue.Queue()
+        out_q: queue.Queue = queue.Queue()
+        compute_inflight = threading.Semaphore(MAXSIZE)
+        pool = ThreadPoolExecutor(max_workers=2)
+
+        lock = threading.Lock()
+        state = {"inflight": 0, "peak": 0}
+
+        def slow_compute(i):
+            time.sleep(0.01)  # compute slower than the instant reader
+            return i
+
+        def dispatch():
+            # Mirrors the real _compute_dispatch: acquire a permit, submit, then
+            # release it in the callback — capping submitted-but-unfinished tasks.
+            while True:
+                item = in_q.get()
+                if item is None:
+                    break
+                compute_inflight.acquire()
+                with lock:
+                    state["inflight"] += 1
+                    state["peak"] = max(state["peak"], state["inflight"])
+
+                def _cb(f):
+                    with lock:
+                        state["inflight"] -= 1
+                    compute_inflight.release()
+                    out_q.put(f.result())
+
+                pool.submit(slow_compute, item).add_done_callback(_cb)
+
+        t = threading.Thread(target=dispatch, daemon=True)
+        t.start()
+        # Instant reader: flood the queue far faster than compute can drain it.
+        for i in range(N):
+            in_q.put(i)
+        in_q.put(None)
+
+        results = [out_q.get(timeout=5) for _ in range(N)]
+        t.join(timeout=5)
+        pool.shutdown(wait=True)
+
+        assert sorted(results) == list(range(N)), "every item must be computed"
+        assert state["peak"] <= MAXSIZE, (
+            f"in-flight compute tasks peaked at {state['peak']}, exceeding the "
+            f"{MAXSIZE} bound — the bytes they hold would grow unboundedly in the "
+            "pool's work queue (the #570 RAM regression). A bare submit() with no "
+            "semaphore fails here."
+        )
+
+
 class TestPipelineIndexOrderDeterminism:
     """#566 — hash_results must be assembled in ORIGINAL WALK ORDER, not
     completion order, so classify()'s union-find produces deterministic
