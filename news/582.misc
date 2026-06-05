@@ -1,0 +1,1 @@
+Add a real round-trip test for the #551 read-knee persistence slot (read_knee_measured to store_read_knee to the next scan's cache-hit handoff), covering the one previously-untested link before the Phase-4 default-ON flip. (#582)
