@@ -1,0 +1,1 @@
+Add an env-gated occupancy probe (PHOTO_MANAGER_AUTOTUNE_PROBE, off by default) that measures read/compute queue regime, toward validating the #551 auto-tuner. (#577)

@@ -1177,6 +1177,13 @@ class ScanWorker(QThread):
             # back to the parent drain loop.
             out_q: _queue.Queue = _queue.Queue()
 
+            # #551 Phase-0 — occupancy probe, env-gated.  When the flag is
+            # unset (the common case) the if-body never executes; zero overhead.
+            _autotune_probe = None
+            if os.environ.get("PHOTO_MANAGER_AUTOTUNE_PROBE"):  # pragma: no cover
+                from scanner.autotune import OccupancyProbe  # pragma: no cover
+                _autotune_probe = OccupancyProbe()  # pragma: no cover
+
             def _read_drain() -> None:
                 """Drive read futures into hash_in_q; put a None sentinel when done."""
                 reader_futures = []
@@ -1214,16 +1221,28 @@ class ScanWorker(QThread):
                         break
                     c_idx, c_record, c_data = item
 
+                    # #551 Phase-0 — sample occupancy after each get(); O(1),
+                    # no allocation.  qsize() on a full/draining queue captures
+                    # the back-pressure signal #571 restored.
+                    if _autotune_probe is not None:  # pragma: no cover
+                        _autotune_probe.sample(  # pragma: no cover
+                            hash_in_q.qsize(), _HASH_QUEUE_MAXSIZE  # pragma: no cover
+                        )  # pragma: no cover
+
                     # #570 — acquire an in-flight permit before submitting so the
                     # bytes in c_data can't pile up behind a slow compute stage.
                     # Cancel-safe: drop the item (the scan is aborting) if
                     # cancelled while waiting for a permit — same shape as the
                     # bounded put() in _read_drain above.
                     acquired = False
+                    _permit_spun = False
                     while not cancel_flag.is_set():
                         if compute_inflight.acquire(timeout=0.05):
                             acquired = True
                             break
+                        _permit_spun = True
+                    if _autotune_probe is not None and _permit_spun:  # pragma: no cover
+                        _autotune_probe.note_starved()  # pragma: no cover
                     if not acquired:
                         break
 
@@ -1301,6 +1320,18 @@ class ScanWorker(QThread):
                 for p in reader_pools.values():
                     p.shutdown(wait=False)
                 compute_pool.shutdown(wait=False)
+
+            # #551 Phase-0 — emit occupancy summary when probe is active.
+            if _autotune_probe is not None:  # pragma: no cover
+                _s = _autotune_probe.summary()  # pragma: no cover
+                logger.info(  # pragma: no cover
+                    "autotune-probe: occ_ewma={:.4f} n={} starved={}/{} regime={}",  # pragma: no cover
+                    _s["occ_ewma"],  # pragma: no cover
+                    _s["n_samples"],  # pragma: no cover
+                    _s["starved"],  # pragma: no cover
+                    _s["n_samples"],  # pragma: no cover
+                    _s["regime"],  # pragma: no cover
+                )  # pragma: no cover
 
         # Signal each consumer that no more items are coming and wait
         # for them to drain whatever's still queued. The hash threads
