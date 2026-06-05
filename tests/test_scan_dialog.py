@@ -1456,3 +1456,90 @@ class TestPathFieldEntry:
         panel._on_add_typed()
 
         assert emitted == [str(real_dir)]
+
+
+class TestReadKneeCachePersistence:
+    """#551 Phase 3 — the `read_knee_measured → _on_read_knee_measured → store_read_knee`
+    bridge (the one untested link in the persistence chain) + the cache → worker handoff.
+
+    Drives the REAL dialog slot through a REAL JsonSettings round-trip (not a
+    'call it, assert no exception' smoke test): the learned knee must persist under its
+    `device_key` AND be handed to the next scan's worker so the worker's cache-hit branch
+    (Semaphore(knee), no ramp — pinned in test_scan_worker.py) can skip the probe. This is
+    the link that ships the whole 'learn once, auto-reuse forever' value when default-ON.
+    """
+
+    def _dialog(self, tmp_path, data):
+        import json
+
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return ScanDialog(JsonSettings(p)), p
+
+    def test_on_read_knee_measured_persists_keyed_by_device(self, qapp, tmp_path):
+        from infrastructure.settings import JsonSettings
+        from scanner.autotune import AUTOTUNE_RECIPE_VERSION
+
+        dlg, p = self._dialog(tmp_path, {"sources": {}})
+        dlg._on_read_knee_measured(
+            {"device": r"\\LINXIAOYUN", "knee": 2, "sole_ramping": True}
+        )
+
+        entry = dlg.settings.get("scan.read_knee_cache")[r"\\LINXIAOYUN"]
+        assert entry == {"knee": 2, "recipe": AUTOTUNE_RECIPE_VERSION}
+        # store_read_knee must flush to disk so the NEXT session reads it back.
+        reloaded = JsonSettings(p)
+        assert reloaded.get("scan.read_knee_cache")[r"\\LINXIAOYUN"]["knee"] == 2
+
+    def test_on_read_knee_measured_ignores_invalid_knee(self, qapp, tmp_path):
+        # The slot's `if device and isinstance(knee, int)` guard: a None knee
+        # (a ramp that froze with no usable measurement) writes NOTHING — never a
+        # partial/garbage cache entry the next scan would trust.
+        dlg, _ = self._dialog(tmp_path, {"sources": {}})
+        dlg._on_read_knee_measured({"device": r"\\SRV", "knee": None})
+        assert not (dlg.settings.get("scan.read_knee_cache") or {})
+
+    def test_start_scan_hands_cached_knees_to_worker(self, qapp, tmp_path, monkeypatch):
+        # The load → handoff half of the round-trip: a persisted knee is loaded and
+        # passed to the next ScanWorker as autotune_knees, so the worker's cache-hit
+        # branch (Semaphore(knee), no ReadKneeRamp built) engages. Captures the worker
+        # kwargs via a fake (the dialog's default should_proceed is always-True).
+        from app.views.dialogs import scan_dialog as sd
+        from app.views.dialogs.scan_dialog import _SourceEntry
+        from scanner.autotune import AUTOTUNE_RECIPE_VERSION
+
+        cache = {r"\\LINXIAOYUN": {"knee": 2, "recipe": AUTOTUNE_RECIPE_VERSION}}
+        dlg, _ = self._dialog(
+            tmp_path, {"sources": {}, "scan": {"read_knee_cache": cache}}
+        )
+        dlg._source_list.set_entries(
+            [_SourceEntry(path=str(tmp_path), recursive=True)]
+        )
+        dlg._output_field.setText(str(tmp_path / "out.sqlite"))
+
+        captured = {}
+
+        class FakeWorker:
+            def __init__(self, *a, **kw):
+                captured.update(kw)
+                self.progress = MagicMock()
+                self.stage_progress = MagicMock()
+                self.failed = MagicMock()
+                self.finished = MagicMock()
+                self.completed_empty = MagicMock()
+                self.hash_pool_measured = MagicMock()
+                self.read_knee_measured = MagicMock()
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(sd, "ScanWorker", FakeWorker)
+        dlg._start_scan()
+
+        assert captured.get("autotune_knees") == cache, (
+            "the dialog must load scan.read_knee_cache and hand it to the worker as "
+            "autotune_knees so the next scan's cache-hit branch can skip the ramp"
+        )
