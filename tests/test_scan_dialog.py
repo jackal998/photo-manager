@@ -1143,6 +1143,9 @@ class TestStartScanShouldProceed:
                 self.completed_empty = MagicMock()
                 # #486-PR3b — dialog connects this to cache fresh calibrations.
                 self.hash_pool_measured = MagicMock()
+                # #551 Phase 3 — dialog connects this to persist a measured
+                # read-knee per device_key.
+                self.read_knee_measured = MagicMock()
 
             def start(self):
                 worker_started.append(True)

@@ -59,6 +59,7 @@ for the chore plan.
 | [Scan dialog — hash pool mode](#scan-dialog--hash-pool-mode) | Scan |
 | [Scan dialog — hash workers (NAS-aware auto, no UI control)](#scan-dialog--hash-workers-nas-aware-auto-no-ui-control) | Scan |
 | [Scan dialog — multi-source scan](#scan-dialog--multi-source-scan) | Scan |
+| [Scan dialog — read-knee autotune opt-in](#scan-dialog--read-knee-autotune-opt-in) | Scan |
 | [Scan flow — manifest summary in progress log](#scan-flow--manifest-summary-in-progress-log) | Scan |
 | [Scan flow — rescan confirm](#scan-flow--rescan-confirm) | Scan |
 | [Scan flow — visual selection of KEEP rows after scan](#scan-flow--visual-selection-of-keep-rows-after-scan) | Scan |
@@ -484,6 +485,17 @@ for the chore plan.
 - **Conditions / variants:** No UI — operators raise the value via ``settings.json`` only. This is intentionally a *safe rollout knob* per the issue body, not a power-user control. Cancel posts one sentinel per consumer + joins all with a 5s timeout — no zombie exiftool processes.
 - **Related:** [#451](https://github.com/jackal998/photo-manager/issues/451); worker contract pinned by ``tests/test_scan_worker.py::TestScanWorkerExifWorkers``.
 - **Last verified:** 2026-05-28 (#451)
+
+---
+
+### Scan dialog — read-knee autotune opt-in
+
+- **Entry point:** "Auto-tune reader concurrency (experimental)" checkbox under Advanced Settings in [app/views/dialogs/scan_dialog.py](../app/views/dialogs/scan_dialog.py).
+- **Trigger:** User expands **Advanced settings** in the Scan dialog and ticks **Auto-tune reader concurrency**. Setting persists across sessions via `ui.scan_dialog.autotune_read_knee` (defaults `False`).
+- **Behaviour:** When enabled, the scan measures each physical device's read-concurrency knee at scan start instead of using the static `NAS=8 / spinning-HDD=1 / else min(4, cpu)` guess: it ramps that device's reader threads `1→2→4→8`, measures files/s per level, and settles on the concurrency where doubling stops paying off. The measured knee is cached per `device_key` in `scan.read_knee_cache` and reused on later scans of that device, so the ramp runs at most once per device. Spinning HDDs stay pinned at a single reader. Reader concurrency never changes which duplicates are found — only read speed — because `idx` is threaded through the read→compute pipeline so completion order can't reach `group_id` ([#526](https://github.com/jackal998/photo-manager/issues/526)/[#538](https://github.com/jackal998/photo-manager/issues/538) lex-min determinism).
+- **Conditions / variants:** Default **off** (opt-in, experimental). Devices with too few image files to fill the ramp's per-level budget, and confirmed spinning HDDs, fall open to the static reader count (no ramp). A per-device measurement failure also falls open to the static value, so enabling the option never reads slower than the static guess after the first scan. The case it helps is hardware the static guess mis-fits (a low-channel NAS that 8 over-subscribes, an SSD under-served by `min(4, cpu)`); on hardware the static guess already fits, the cached knee equals the static value and it is a no-op.
+- **Related:** [#551](https://github.com/jackal998/photo-manager/issues/551) (Phase 3 — the dialog opt-in; Phases 1–2 landed the pure read-knee logic and the in-pipeline ramp); QA scenario [`qa/scenarios/s66_autotune_read_knee.py`](../qa/scenarios/s66_autotune_read_knee.py) (autotune-ON still yields the correct grouping).
+- **Last verified:** 2026-06-05 (#551)
 
 ---
 

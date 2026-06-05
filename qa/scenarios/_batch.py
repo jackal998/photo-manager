@@ -277,6 +277,7 @@ ALL_SCENARIOS = [
     # on the next free slot s64.)
     "s64_execute_selected_partial",
     "s65_passenger_bridge",
+    "s66_autotune_read_knee",
 ]
 
 
