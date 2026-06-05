@@ -1,0 +1,1 @@
+Bound the exiftool queue and make its producer cancel-safe, capping scan-time RAM growth and closing a cancel-deadlock hazard on large scans. (#575)

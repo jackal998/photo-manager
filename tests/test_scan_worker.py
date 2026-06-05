@@ -2355,3 +2355,82 @@ class TestPipelineIndexOrderDeterminism:
         assert len(rows) == len(records), (
             f"classify must produce one row per isolated record; got {len(rows)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# #564 gate tests — bounded exif_queue cancel safety
+# ---------------------------------------------------------------------------
+
+
+class TestBoundedExifQueueCancelSafety:
+    """#564 — cancelling while the bounded exif_queue is full must not deadlock
+    the producer.
+
+    The pre-#564 bug: exif_queue was unbounded (queue.Queue()), so a slow
+    exiftool consumer never applied back-pressure. After bounding the queue, a
+    producer running _route_outcome's cooperative put loop could wedge forever
+    if cancel arrived while the queue was full AND no drain was called before
+    the sentinel puts. This class tests the cooperative-put escape path.
+    """
+
+    def test_bounded_exif_queue_cancel_does_not_deadlock(self):
+        """A bounded exif_queue full of items + cancel_flag set must allow the
+        producer thread to exit within 5 s — NOT stay stuck in put().
+
+        Failure mode: if the producer does a bare ``q.put(item)`` (blocking
+        forever) or the cooperative loop isn't checking cancel_flag, the
+        thread never exits — exactly the deadlock the #564 fix prevents.
+
+        This reproduces the exact bounded-put loop from ``_route_outcome``:
+            while not cancel_flag.is_set():
+                try:
+                    exif_queue.put(outcome, timeout=0.05)
+                    break
+                except queue.Full:
+                    pass
+        """
+        import queue
+        import threading
+        import time
+
+        MAXSIZE = 8
+        cancel_flag = threading.Event()
+        q: queue.Queue = queue.Queue(maxsize=MAXSIZE)
+
+        # Pre-fill the queue to capacity so the FIRST put() in the producer
+        # raises queue.Full — matching the real failure scenario where a slow
+        # exiftool consumer causes the queue to fill up completely.
+        for _ in range(MAXSIZE):
+            q.put(object())
+
+        def producer():
+            """Cooperative bounded put — matches the _route_outcome pattern."""
+            outcome = object()  # simulated HashResult (no bytes — just a ref)
+            while not cancel_flag.is_set():
+                try:
+                    q.put(outcome, timeout=0.05)
+                    break
+                except queue.Full:
+                    pass
+            # Falls through when cancel_flag is set (never breaks out of put).
+
+        t = threading.Thread(target=producer, daemon=True)
+        t.start()
+
+        # Let the producer hit the full queue and enter the cooperative retry.
+        time.sleep(0.1)
+        assert t.is_alive(), (
+            "producer thread must be blocked in the cooperative put loop before "
+            "cancel_flag is set — pre-fill wasn't sufficient"
+        )
+
+        # Trip the cancel — cooperative producer must wake and exit.
+        cancel_flag.set()
+
+        t.join(timeout=5)
+        assert not t.is_alive(), (
+            "producer thread still alive after cancel_flag set — deadlock! "
+            "The cooperative bounded-put loop must check cancel_flag to avoid "
+            "wedging on a full exif_queue (the #564 bug class). A bare "
+            "exif_queue.put(outcome) would hang here forever."
+        )

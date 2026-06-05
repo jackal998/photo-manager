@@ -858,7 +858,13 @@ class ScanWorker(QThread):
                 except _queue.Empty:
                     break
 
-        exif_queue: _queue.Queue = _queue.Queue()
+        # #564 — bound the exif_queue so hash-stage producers can't grow it
+        # unboundedly in RAM while a slow exiftool consumer falls behind.
+        # Capacity = 2 full batches per consumer keeps the #450 hash/exif
+        # overlap intact (the producer never has to block under normal load)
+        # while capping RAM to a predictable ceiling.
+        _EXIF_QUEUE_MAXSIZE = 2 * chunk_size * self.exif_workers
+        exif_queue: _queue.Queue = _queue.Queue(maxsize=_EXIF_QUEUE_MAXSIZE)
         extracts: dict = {}
         exif_tracker = _StageTracker(STAGE_EXIFTOOL)
         exif_done = [0]
@@ -881,15 +887,17 @@ class ScanWorker(QThread):
             """Route one compute outcome into the shared dispatch state and
             return the ``HashResult`` to store (or ``None`` to skip).
 
-            #486-PR2 — extracted from ``_hash_one`` so both executor paths
-            share ONE routing implementation. The thread path runs this
-            inside the worker (via ``_hash_one``); the process path runs it
-            in the parent drain loop after the picklable
-            ``run_hash_for_record`` returns across the process boundary.
-            Both contexts are safe: ``skipped.append`` is GIL-atomic,
-            ``exif_queue`` is thread-safe, and the ``exif_total`` bump is
-            taken under ``exif_total_lock`` for the consumers' cross-thread
-            read.
+            #486-PR2 — extracted so both executor paths share ONE routing
+            implementation. Both the process path (parent drain loop) and
+            the thread path (``out_q`` drain loop) call this in the single
+            parent drain loop after the compute stage returns.
+            ``skipped.append`` is GIL-atomic, ``exif_queue`` is thread-safe,
+            and the ``exif_total`` bump is taken under ``exif_total_lock``
+            for the consumers' cross-thread read.
+
+            #564 — the put is cancel-safe: uses a cooperative bounded-put
+            loop so a slow exiftool consumer with a full queue doesn't
+            deadlock the producer on cancel.
             """
             if isinstance(outcome, HashFailure):
                 # Both raised exceptions and silent decode failures
@@ -904,7 +912,15 @@ class ScanWorker(QThread):
             # a skip-type record (the exiftool pass excludes "skip"
             # anyway pre-#450).
             if record.file_type != "skip":
-                exif_queue.put(outcome)
+                # #564 — cooperative bounded put: mirrors the _read_drain
+                # pattern so a full exif_queue (slow exiftool consumer) can't
+                # wedge the producer forever on cancel.
+                while not cancel_flag.is_set():
+                    try:
+                        exif_queue.put(outcome, timeout=0.05)
+                        break
+                    except _queue.Full:
+                        pass
                 with exif_total_lock:
                     exif_total[0] += 1
             return outcome
@@ -1063,6 +1079,11 @@ class ScanWorker(QThread):
                         # otherwise the join below waits out the whole batch
                         # and the abandoned consumer orphans its process.
                         _kill_exif_procs()
+                        # #564 — drain the bounded exif_queue so any producer
+                        # wedged in a cooperative put() unblocks and can exit
+                        # on the cancel_flag check (mirrors hash_in_q drain in
+                        # the thread branch).
+                        _drain_queue_nowait(exif_queue)
                         # Tell each consumer to stop — one sentinel per
                         # consumer so each gets exactly one ``None`` off the
                         # queue. With exiftool killed + the 0.5s get(timeout)
@@ -1240,6 +1261,11 @@ class ScanWorker(QThread):
                                 wait=False, cancel_futures=True
                             )
                             _kill_exif_procs()
+                            # #564 — drain the bounded exif_queue so any
+                            # producer wedged in a cooperative put() unblocks
+                            # and can exit on the cancel_flag check (mirrors
+                            # hash_in_q drain above).
+                            _drain_queue_nowait(exif_queue)
                             for _ in consumer_threads:
                                 exif_queue.put(None)
                             for t in consumer_threads:
