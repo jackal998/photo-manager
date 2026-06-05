@@ -499,13 +499,15 @@ class ScanWorker(QThread):
         # classify() uses the module default (thread/process scans, or auto
         # scans whose cached rates predate the grouping micro-rates).
         self._calibrated_bktree_floor: int | None = None
-        # #551 Phase 2 — in-pipeline read-knee ramp, DEFAULT-OFF. When False the
+        # #551 Phase 2 — in-pipeline read-knee ramp. This ctor flag defaults False
+        # (a library-safe default); the Scan dialog passes the explicit checkbox
+        # state, which is ON by default since #551 Phase 4 (bounded first-scan ramp
+        # tax — the conservative N=8 floor, _RAMP_MIN_SCAN_FILES). When False the
         # thread branch builds reader pools at the static hash_workers_for_root
         # count exactly as before (byte-identical path). When True, each device's
         # reader pool is still sized at that static MAX but a per-device Semaphore
         # caps active reads, ramped 1→2→4→8 to a measured files/s knee (or started
-        # at a cached knee). Stays default-off until the first-scan ramp tax is
-        # bounded on a mis-fit device (#551 Phase 4 flips the default).
+        # at a cached knee).
         self._autotune_read_knee = autotune_read_knee
         # Pre-cached per-device knees {device_key: {"knee": int, "recipe": str}}
         # read from scan.read_knee_cache by the dialog (#551 Phase 3). A valid
@@ -709,9 +711,8 @@ class ScanWorker(QThread):
         from scanner.scoring import apply_scoring_to_rows
         from scanner.workers import device_key, hash_workers_for_root
         from scanner.autotune import (
-            READ_KNEE_LADDER,
             ReadKneeRamp,
-            _RAMP_FILES_PER_LEVEL,
+            _RAMP_MIN_SCAN_FILES,
             _valid_read_knee,
         )
         import io
@@ -1193,15 +1194,15 @@ class ScanWorker(QThread):
                     if _valid_read_knee(cached):
                         read_permits[dev] = threading.Semaphore(cached["knee"])
                         continue
-                    ladder = [c for c in READ_KNEE_LADDER if c <= max_c]
                     eligible = sum(
                         1
                         for _i, _r in device_records[dev]
                         if _r.file_type not in ("mp4", "mov", "gif", "skip")
                     )
-                    if max_c <= 1 or eligible < len(ladder) * _RAMP_FILES_PER_LEVEL:
-                        # Single-rung HDD, or a scan too short to fill the ladder
-                        # without noise → run at the static MAX, no ramp.
+                    if max_c <= 1 or eligible < _RAMP_MIN_SCAN_FILES:
+                        # Single-rung HDD, or a scan too short to reach the ramp's
+                        # minimum size (_RAMP_MIN_SCAN_FILES — bounds the worst-case
+                        # sub-MAX read tax, #551 Phase 4) → static MAX, no ramp.
                         read_permits[dev] = threading.Semaphore(max_c)
                         continue
                     read_permits[dev] = threading.Semaphore(1)
