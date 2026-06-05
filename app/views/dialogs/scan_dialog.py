@@ -652,7 +652,7 @@ class ScanDialog(QDialog):
         params_layout.addWidget(self._auto_select_aggressive_check)
         params_layout.addWidget(auto_select_aggressive_desc)
 
-        # #551 Phase 3 — opt-in read-knee autotune. Default OFF: when enabled the
+        # #551 read-knee autotune — default-ON / opt-out since Phase 4. When on the
         # scan ramps reader concurrency per device at the start and settles on the
         # measured knee instead of the static NAS=8 / HDD=1 / else guess. Persists
         # via ``ui.scan_dialog.autotune_read_knee`` (mirrors auto_select). Never
@@ -830,10 +830,14 @@ class ScanDialog(QDialog):
         self._auto_select_aggressive_check.setChecked(aggressive)
         self._auto_select_aggressive_check.setEnabled(auto_select)
 
-        # Read-knee autotune (#551 Phase 3). Default = False — opt-in,
-        # experimental read-speed tuning that never affects scan results.
+        # Read-knee autotune (#551 Phase 4: default = True — opt-OUT). The
+        # universal-auto default: every scan measures each device's read-knee
+        # unless the user unticks it. Safe because the ramp is monotone-up
+        # (can only under-utilise, never over-subscribe), caches only a clean
+        # sole-ramping measurement, and falls open to the static reader count —
+        # so it never changes scan *results*, only read speed.
         autotune_read_knee = bool(
-            self.settings.get("ui.scan_dialog.autotune_read_knee", False)
+            self.settings.get("ui.scan_dialog.autotune_read_knee", True)
         )
         self._autotune_read_knee_check.setChecked(autotune_read_knee)
 
@@ -885,7 +889,7 @@ class ScanDialog(QDialog):
             pass  # Non-fatal — see _save_to_settings rationale
 
     def _on_autotune_read_knee_toggled(self, enabled: bool) -> None:
-        """Persist the read-knee autotune opt-in on every toggle (#551 Phase 3).
+        """Persist the read-knee autotune choice on every toggle (#551; default-ON since Phase 4).
 
         Same write-through shape as ``_on_auto_select_toggled`` so the choice
         survives a close/reopen without depending on the scan-start save path.
@@ -1014,7 +1018,7 @@ class ScanDialog(QDialog):
             auto_select_aggressive_delete=(
                 self._auto_select_aggressive_check.isChecked()
             ),
-            # #551 Phase 3 — opt-in read-knee autotune (default OFF) + the
+            # #551 read-knee autotune (default-ON / opt-out since Phase 4) + the
             # device_key-keyed knee cache so a knee measured on a prior scan of
             # this physical device is reused with no ramp. The worker ignores
             # both unless autotune_read_knee is True.

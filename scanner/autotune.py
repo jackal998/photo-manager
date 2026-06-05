@@ -50,7 +50,10 @@ from typing import Optional
 # Bump to universally invalidate every cached read-knee (the cache is keyed by
 # device_key + this token, so a measurement-algorithm change re-probes on the
 # next scan). Purely a cache-keying token; only equality matters.
-AUTOTUNE_RECIPE_VERSION = "1"
+# "2" (#551 Phase 4): the short-scan floor was raised (256 → _RAMP_MIN_SCAN_FILES
+# = 1584) when the feature flipped to default-ON, so every cached knee re-probes
+# once on the next scan under the new floor.
+AUTOTUNE_RECIPE_VERSION = "2"
 
 # Concurrency rungs the ramp climbs. Clamped per device to the static MAX
 # (a confirmed HDD's MAX is 1, so its ladder is [1] and the ramp is a no-op).
@@ -65,6 +68,24 @@ _KNEE_GAIN_THRESHOLD = 0.15
 # slower) — see Q2/Q8 in the #551 body for the standard-error rationale.
 _RAMP_FILES_PER_LEVEL = 64
 _RAMP_MIN_SECONDS = 0.5
+
+# Short-scan floor (#551 Phase 4): a device whose eligible-image count is below
+# this never ramps — it runs at the static MAX with no probe. The ramp reads
+# below MAX concurrency only while climbing, so the worst-case *relative* tax is
+# the sub-MAX file count over the smallest eligible scan: for the 4-rung ladder
+# that sub-MAX count is (3·t + 6) ≈ 198 image reads (t = _RAMP_FILES_PER_LEVEL;
+# the +6 = the 2+4 per-level fill-transient discards). Raising the floor to
+# N·(3·t + 6) caps that worst-case relative tax at 1/N. We ship the first
+# default-ON release at N=8 → 1584 (12.5% worst-case file-fraction on the
+# smallest eligible scan, paid once per device then cached) — the conservative
+# choice that protects the well-fit majority's irreversible first scan, where a
+# pre-scan opt-out is useless. A later release drops it to N=4 (792) once real
+# mis-fit-NAS A/B evidence retires the irreversibility risk. The constant is
+# ladder-length-independent on purpose: a shorter ladder reads even less below
+# MAX, so the fixed floor only over-protects it — never under-protects.
+# AUTOTUNE_RECIPE_VERSION is bumped whenever this floor changes (clean cache
+# invalidation — see #551 Phase 4 GATE-3).
+_RAMP_MIN_SCAN_FILES = 8 * (3 * _RAMP_FILES_PER_LEVEL + 6)  # = 1584 (N = 8)
 
 
 def _is_positive_number(value) -> bool:

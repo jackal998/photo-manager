@@ -1543,3 +1543,14 @@ class TestReadKneeCachePersistence:
             "the dialog must load scan.read_knee_cache and hand it to the worker as "
             "autotune_knees so the next scan's cache-hit branch can skip the ramp"
         )
+
+    def test_checkbox_defaults_on_with_no_setting(self, qapp, tmp_path):
+        """#551 Phase 4 — the read-knee autotune checkbox now defaults ON
+        (opt-OUT). This IS the universal-auto contract: a user who never opens
+        Advanced Settings still gets the per-device read-knee. The mirror of
+        ``TestAutoSelectCheckbox.test_default_unchecked_with_no_setting`` (which
+        guards the opposite default for a *destructive* option) — a silent revert
+        of THIS default to False would turn the optimisation off for everyone and
+        the feature would reach nobody, exactly the failure Phase 4 closes."""
+        dlg, _ = self._dialog(tmp_path, {"sources": {}})
+        assert dlg._autotune_read_knee_check.isChecked() is True

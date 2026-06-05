@@ -48,6 +48,9 @@ additional-builtins = ["Data1", "Data2", "Data3", "Data4"]
 [tool.pytest.ini_options]
 addopts = "-q --cov=. --cov-report=term-missing --cov-report=json --cov-config=pyproject.toml"
 testpaths = ["tests"]
+markers = [
+    "integration: layer-2 test needing real timing or binaries; skipped in CI, run locally with PHOTO_MANAGER_RUN_INTEGRATION=1 (see docs/testing.md)",
+]
 
 [tool.coverage.run]
 branch = true

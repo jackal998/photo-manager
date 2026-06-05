@@ -158,8 +158,8 @@ scan_dialog:
   auto_select_aggressive_desc: "Also pre-mark every non-keeper for delete — you still confirm at Execute."
   auto_select_aggressive_tooltip: "Destructive-leaning, opt-in. When enabled together with Auto select, every non-keeper row in a scored group is marked for delete. The Execute Action dialog opens with the full triage pre-populated — one click ships the sweep. You still confirm the actual deletion through the standard execute flow."
   autotune_read_knee_label: "Auto-tune reader concurrency (experimental)"
-  autotune_read_knee_desc: "Measure each device's best read concurrency at scan start instead of a fixed guess. Off by default; never changes results."
-  autotune_read_knee_tooltip: "When enabled, the scan briefly ramps reader threads per device (1→2→4→8) at the start, measures read throughput, and settles on the concurrency where doubling stops paying off — instead of the static guess (NAS 8 / spinning HDD 1 / else CPU-based). The measured knee is cached per physical device and reused on later scans, so the ramp only happens once per device. Spinning HDDs stay at a single reader. Off by default; turning it on only affects read speed — it never changes which duplicates are found."
+  autotune_read_knee_desc: "Measure each device's best read concurrency at scan start instead of a fixed guess. On by default; never changes results."
+  autotune_read_knee_tooltip: "When enabled, the scan briefly ramps reader threads per device (1→2→4→8) at the start, measures read throughput, and settles on the concurrency where doubling stops paying off — instead of the static guess (NAS 8 / spinning HDD 1 / else CPU-based). The measured knee is cached per physical device and reused on later scans, so the ramp only happens once per device. Spinning HDDs stay at a single reader. On by default; turning it off only affects read speed — it never changes which duplicates are found."
   log_placeholder: "Scan progress will appear here…"
   # #424 — stage names shown in the stage label above the log.
   stage_walk: "Walking sources"

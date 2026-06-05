@@ -2704,7 +2704,9 @@ class TestScanWorkerReadKneeRamp:
 
         monkeypatch.setattr(_FakeRamp, "__init__", _capturing_init)
         monkeypatch.setattr(_at, "ReadKneeRamp", _FakeRamp)
-        monkeypatch.setattr(_at, "_RAMP_FILES_PER_LEVEL", 2)  # gate: 4 rungs * 2 = 8
+        # Lower the short-scan floor so a handful of records engages the ramp
+        # (the #551 Phase-4 gate compares eligible against _RAMP_MIN_SCAN_FILES).
+        monkeypatch.setattr(_at, "_RAMP_MIN_SCAN_FILES", 8)
 
         records = self._records("J:", 10)  # 10 image files > 8 gate → ramp on J:
         self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
@@ -2727,3 +2729,145 @@ class TestScanWorkerReadKneeRamp:
         # Sole-ramping freeze → the worker reached the emit and augmented summary().
         assert fakes[0].summary_dict.get("device") == "J:"
         assert fakes[0].summary_dict.get("sole_ramping") is True
+
+    # -- GATE-1 (#551 Phase 4): the REAL ramp finds the knee on a synthetic cliff
+    #
+    # The two tests below are the flip gate's CI evidence. Unlike the _FakeRamp
+    # test above (which proves the record/widen/emit *plumbing*), these drive the
+    # REAL ``ReadKneeRamp`` — only its per-level budget is shrunk for speed; every
+    # gain/knee decision is the production code's — through the real reader pool +
+    # per-device Semaphore + the ``_gated_read`` permit seam, with a latency cliff
+    # injected at ``read_for_record``. Because ``_gated_read`` acquires the permit
+    # BEFORE the read, the number of reads in flight equals the live permit budget,
+    # so a cliff keyed on in-flight count makes one ladder rung's throughput
+    # *collapse* and the gain rule freeze at the rung below it.
+    #
+    # Both curves are detected by a 6× COLLAPSE (knee=1 → collapse at c=2; knee=2 →
+    # collapse at c=4), never by fast-regime throughput *scaling*. A rising-gain
+    # detection (proving e.g. c=2→c=4 actually doubles) is unreliable under
+    # Python's GIL, which caps effective read parallelism and intermittently
+    # flattens the rise — a knee=4 curve flaked ~1-in-6 to knee=2 in verification.
+    # A collapse is latency-dominated and robust. The pair {1, 2} are two DISTINCT
+    # detected knees, so a regression that hardcodes / always-returns 2 (the
+    # _FakeRamp failure mode) fails the knee=1 test; always-returns-1 fails knee=2;
+    # always-returns-cap fails both. The knee asserted is a value (1 / 2) — never a
+    # wall-time number.
+
+    def _cliff_read(self, fast_max_inflight, *, fast_s=0.015, slow_s=0.09,
+                    data=b"x" * 16):
+        """A ``read_for_record`` stand-in whose latency cliffs on the number of
+        reads in flight (== the live permit budget, since ``_gated_read`` acquires
+        first): ≤ ``fast_max_inflight`` concurrent reads are fast, above that they
+        are ~6× slower. This is the synthetic mis-fit-device cliff — the knee is
+        the rung just below where the slow regime begins. Detection rides the
+        *collapse* (a 6× latency step), not fast-regime scaling, so it does not
+        depend on the GIL letting N readers actually run N-way parallel."""
+        import threading as _t
+        import time as _time
+
+        lock = _t.Lock()
+        state = {"inflight": 0}
+
+        def fake_read(idx, record):
+            with lock:
+                state["inflight"] += 1
+                n = state["inflight"]
+            base = fast_s if n <= fast_max_inflight else slow_s
+            # Deterministic per-read jitter (±30%). Without it, concurrent
+            # uniform-latency reads complete in synchronized waves: each wave's
+            # intra-span collapses toward zero (garbage files/s) and — because the
+            # lock serialises the in-flight increments — the first reads of every
+            # wave sample a low count and escape the cliff, so a slow rung measures
+            # fast. Real device reads carry this jitter; the synthetic model must
+            # too. Derived from idx (no RNG) so it is thread-safe and reproducible.
+            jitter = 0.7 + 0.6 * (((idx * 2654435761) % 997) / 997.0)
+            try:
+                _time.sleep(base * jitter)
+                return idx, record, data
+            finally:
+                with lock:
+                    state["inflight"] -= 1
+
+        return fake_read
+
+    def _drive_real_ramp(self, qapp, tmp_path, monkeypatch, *, fast_max_inflight,
+                         n_records=44):
+        """Run a full gated scan on a single NAS (max_c 8) with the REAL ramp and
+        the in-flight cliff. Returns ``(captured_ramp, emitted_knees)``. ``n_records``
+        is sized just past the freeze point (knee=1 freezes after ~2 levels,
+        knee=2 after ~3) so the post-freeze slow tail stays short."""
+        import scanner.autotune as _at
+        import scanner.hasher as _hasher
+        from PySide6.QtCore import Qt
+
+        from app.views.workers.scan_worker import ScanWorker
+
+        real_cls = _at.ReadKneeRamp
+        built: list = []
+
+        class _SmallRealRamp(real_cls):
+            # The REAL ramp: record / advance_if_level_done / _close_current_level
+            # / knee are all inherited, unmodified — only the per-level budget is
+            # shrunk so a few dozen reads exercise the whole ladder. NOT a fake:
+            # knee() runs the real detection (the _FakeRamp's was hardcoded to 2).
+            def __init__(self, max_c):
+                super().__init__(max_c, target_files_per_level=8, min_seconds=0.0025)
+                built.append(self)
+
+        records = self._records("J:", n_records)  # > the lowered gate; enough to freeze
+        self._install(monkeypatch, records,
+                      remote_drive=lambda r: str(r).upper() == "J:")
+        # Apply AFTER _install (which patches read_for_record to a trivial read).
+        monkeypatch.setattr(_at, "ReadKneeRamp", _SmallRealRamp)
+        monkeypatch.setattr(_at, "_RAMP_MIN_SCAN_FILES", 8)  # low gate → ramp engages
+        monkeypatch.setattr(_hasher, "read_for_record",
+                            self._cliff_read(fast_max_inflight))
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+            autotune_read_knee=True,
+        )
+        emitted: list = []
+        worker.read_knee_measured.connect(
+            lambda s: emitted.append(s.get("knee")), Qt.DirectConnection
+        )
+        self._run_with_watchdog(worker, timeout=30)
+        assert len(built) == 1, "exactly one real ramp should be built (single NAS)"
+        return built[0], emitted
+
+    def test_synthetic_throttled_nas_finds_knee_2(self, qapp, tmp_path, monkeypatch):
+        # Cliff at > 2 in-flight: c=1,2 fast (rising gain → climb), c=4 collapses
+        # (gain(2→4) < 0.15) → the REAL ramp must freeze at knee=2, and the
+        # sole-ramping emit must carry that real knee out to be cached.
+        ramp, emitted = self._drive_real_ramp(
+            qapp, tmp_path, monkeypatch, fast_max_inflight=2
+        )
+        assert ramp.knee() == 2, (
+            f"real ReadKneeRamp must detect knee=2 on a >2-in-flight cliff; "
+            f"got {ramp.knee()!r} from levels {ramp.summary()['levels']!r}"
+        )
+        assert emitted == [2], (
+            f"the sole-ramping emit must publish the real detected knee (2) for "
+            f"caching; got {emitted!r}"
+        )
+
+    def test_synthetic_throttled_nas_finds_knee_1(self, qapp, tmp_path, monkeypatch):
+        # A DIFFERENT cliff (> 1 in-flight) must yield a DIFFERENT knee, so a
+        # regression that hardcodes / always-returns 2 (the _FakeRamp failure mode)
+        # fails GATE-1. c=1 (serial) fast, c=2 collapses (gain(1→2) < 0.15) → knee=1.
+        # Collapse-based, so unlike a knee=4 curve it needs no fast-regime scaling
+        # and is not GIL-flaky.
+        ramp, emitted = self._drive_real_ramp(
+            qapp, tmp_path, monkeypatch, fast_max_inflight=1, n_records=30
+        )
+        assert ramp.knee() == 1, (
+            f"real ReadKneeRamp must detect knee=1 on a >1-in-flight cliff; "
+            f"got {ramp.knee()!r} from levels {ramp.summary()['levels']!r}"
+        )
+        assert emitted == [1], (
+            f"the sole-ramping emit must publish the real detected knee (1); "
+            f"got {emitted!r}"
+        )

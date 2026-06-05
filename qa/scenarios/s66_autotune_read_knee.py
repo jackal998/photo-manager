@@ -1,4 +1,4 @@
-"""Scenario 66 — read-knee autotune opt-in, end-to-end (#551 Phase 3).
+"""Scenario 66 — read-knee autotune (default-ON / opt-out), end-to-end (#551 Phase 3+4).
 
 Required source: ``qa/sandbox/near-duplicates`` (5 JPEGs
 ``neardup_00_q95.jpg`` … ``neardup_04_q65.jpg`` — the same image at
@@ -8,12 +8,13 @@ group of five).
 What this exercises (the production wiring layer-1 unit tests can't reach):
 
   1. The "Auto-tune reader concurrency" checkbox in ScanDialog's Advanced
-     Settings is wired to ScanWorker.autotune_read_knee (the #551 Phase-2
+     Settings starts **ON by default** (#551 Phase 4 flipped it to opt-out)
+     and is wired to ScanWorker.autotune_read_knee (the #551 Phase-2
      in-pipeline read-knee ramp).
-  2. Turning it ON and running a real scan **does not change the grouping** —
-     the five near-duplicates still collapse into exactly one non-null
-     ``group_id``, identical to the autotune-OFF result every other
-     scan scenario (s01, s42, s49, …) produces.
+  2. Running a real scan with autotune at its default-ON state **does not
+     change the grouping** — the five near-duplicates still collapse into
+     exactly one non-null ``group_id``, identical to the autotune-OFF result
+     every other scan scenario (s01, s42, s49, …) produces.
 
 Why a single run (not an OFF-vs-ON two-run): the read-knee determinism
 property — reader concurrency never affects ``group_id`` — is *structural*
@@ -21,12 +22,15 @@ property — reader concurrency never affects ``group_id`` — is *structural*
 ``hash_results[idx]`` → ``classify``; #526/#538 lex-min) and is pinned at
 layer 1 by ``tests/test_scan_worker.py`` (idx-order under gating) and
 ``tests/test_autotune.py`` (completion-order invariance). On a qa-sized
-fixture (5 files ≪ the 256-file ramp gate) the ramp also *falls open to
-static*, so an OFF-vs-ON pair would compare two identical static paths.
-This scenario's job is the integration the units can't reach: the UI toggle
-→ setting → worker → real scan → manifest path, asserting autotune-ON still
-yields the known-correct grouping. The actual ramp (NAS knee≈2 / HDD knee=1)
-is verified on real hardware by the #551 dev-rig manual checkpoint.
+fixture (5 files ≪ the 1584-file ramp gate, ``_RAMP_MIN_SCAN_FILES``) the
+ramp also *falls open to static*, so an OFF-vs-ON pair would compare two
+identical static paths. This scenario's job is the integration the units
+can't reach: the default-ON checkbox → setting → worker → real scan →
+manifest path, asserting autotune still yields the known-correct grouping.
+The actual ramp + no-regression A/B (NAS knee≈2 / HDD knee=1) is verified by
+GATE-1 (``tests/test_scan_worker.py``), GATE-2
+(``tests/integration/test_autotune_ab.py``), and the #551 dev-rig manual
+checkpoint on real hardware.
 
 PRE: PHOTO_MANAGER_HOME=qa QT_ACCESSIBILITY=1 .venv/Scripts/python.exe main.py
 """
@@ -70,12 +74,6 @@ def _click_advanced_group(dlg) -> None:
     time.sleep(0.2)
 
 
-def _toggle_autotune_checkbox(dlg) -> None:
-    cb = dlg.child_window(title=AUTOTUNE_CHECKBOX_TITLE, control_type="CheckBox")
-    cb.toggle()
-    time.sleep(0.2)
-
-
 def _is_autotune_checked(dlg) -> bool:
     cb = dlg.child_window(title=AUTOTUNE_CHECKBOX_TITLE, control_type="CheckBox")
     # get_toggle_state: 0 off / 1 on / 2 indeterminate.
@@ -96,17 +94,11 @@ def main() -> int:
     print("step: expand_advanced_settings")
     _click_advanced_group(dlg)
 
-    print("step: assert_checkbox_default_off")
-    if _is_autotune_checked(dlg):
-        failures.append("autotune checkbox starts ON; default must be OFF")
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-
-    print("step: toggle_autotune_on")
-    _toggle_autotune_checkbox(dlg)
+    print("step: assert_checkbox_default_on")
+    # #551 Phase 4 — the checkbox now defaults ON (opt-out). The universal-auto
+    # contract: the scan runs with autotune without the user touching anything.
     if not _is_autotune_checked(dlg):
-        failures.append("toggling did not turn the autotune checkbox on")
+        failures.append("autotune checkbox starts OFF; #551 Phase 4 default must be ON")
         for f in failures:
             print(f"FAIL: {f}")
         return 1
