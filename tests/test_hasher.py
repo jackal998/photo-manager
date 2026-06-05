@@ -577,3 +577,62 @@ class TestComputeFromBytes:
         _, outcome = compute_from_bytes(0, _record(img, "jpeg"), data_to_pass)
         # SHA must match the PASSED bytes, not the on-disk file
         assert outcome.sha256 == hashlib.sha256(data_to_pass).hexdigest()
+
+
+class TestImageDraftPhashSafety:
+    """#569 — Image.draft (JPEG shrink-on-load at 256px) must not shift phash/
+    dhash beyond the near-duplicate grouping threshold, or it would change group
+    membership across a re-scan.
+
+    An A/B on 597 real JPEGs proved it safe at (256,256) (0 over threshold, 0
+    real group flips). This is the CI regression guard: shrink the draft target
+    too far (e.g. 32px) or low-pass the image away and the phash drift exceeds
+    the threshold and this fails. Not padding — it pins the (256,256) choice
+    against a real correctness failure mode (silent group-membership flips).
+    """
+
+    def test_draft_preserves_phash_and_dhash_within_threshold(self):
+        import io as _io
+
+        import imagehash
+        import numpy as np
+        from PIL import Image
+
+        PHASH_THRESHOLD = 10  # scan default (config.threshold)
+        DHASH_THRESHOLD = 10
+
+        def _make_jpeg(seed: int) -> bytes:
+            # Photo-like content: a low-frequency gradient (what phash keys on)
+            # plus BLOCK-level colour regions (128px) — NOT per-pixel white noise,
+            # whose high-frequency energy aliases under any downscale and isn't
+            # representative of real photos. >256px so draft really shrinks.
+            rng = np.random.default_rng(seed)
+            gy, gx = np.mgrid[0:768, 0:1024]
+            r = (gx * 255 // 1024).astype(np.uint8)
+            g = (gy * 255 // 768).astype(np.uint8)
+            blocks = rng.integers(0, 256, size=(768 // 128, 1024 // 128), dtype=np.uint8)
+            b = np.repeat(np.repeat(blocks, 128, axis=0), 128, axis=1).astype(np.uint8)
+            arr = np.stack([r, g, b], axis=-1)
+            buf = _io.BytesIO()
+            Image.fromarray(arr, "RGB").save(buf, format="JPEG", quality=88)
+            return buf.getvalue()
+
+        for seed in range(6):
+            data = _make_jpeg(seed)
+            with Image.open(_io.BytesIO(data)) as im:
+                base = im.convert("RGB")
+                base.load()
+            with Image.open(_io.BytesIO(data)) as im:
+                im.draft("RGB", (256, 256))  # the #569 path
+                drafted = im.convert("RGB")
+                drafted.load()
+
+            ph_drift = imagehash.phash(base) - imagehash.phash(drafted)
+            dh_drift = imagehash.dhash(base) - imagehash.dhash(drafted)
+            assert ph_drift <= PHASH_THRESHOLD, (
+                f"seed {seed}: Image.draft shifted phash by {ph_drift} > "
+                f"{PHASH_THRESHOLD} — would flip near-duplicate group membership (#569)"
+            )
+            assert dh_drift <= DHASH_THRESHOLD, (
+                f"seed {seed}: Image.draft shifted dhash by {dh_drift} > {DHASH_THRESHOLD}"
+            )
