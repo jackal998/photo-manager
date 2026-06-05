@@ -2434,3 +2434,296 @@ class TestBoundedExifQueueCancelSafety:
             "wedging on a full exif_queue (the #564 bug class). A bare "
             "exif_queue.put(outcome) would hang here forever."
         )
+
+
+class TestScanWorkerReadKneeRamp:
+    """#551 Phase 2 — the in-pipeline read-knee ramp wiring (thread branch).
+
+    Default-OFF: when ``autotune_read_knee`` is unset the reader path is
+    byte-identical to the pre-#551 thread branch (guarded by the existing
+    ``TestScanWorkerPerDeviceHashPools`` tests). These tests drive the flag-ON
+    path with synthetic records. The ramp's own knee math is unit-tested in
+    ``tests/test_autotune.py``; here we verify the *integration*: pools stay at
+    MAX, the per-device Semaphore is sized right, the cache path short-circuits,
+    the gated path completes without the GUARD permit-release deadlock and keeps
+    idx order, and the record→advance→widen→freeze→emit protocol is driven.
+    """
+
+    def _records(self, drive, n, *, file_type="jpeg"):
+        from scanner.walker import FileRecord
+
+        return [
+            FileRecord(
+                path=Path(rf"{drive}\img_{i}.jpg"),
+                source_label="src",
+                file_type=file_type,
+            )
+            for i in range(n)
+        ]
+
+    def _install(self, monkeypatch, records, *, remote_drive, seek_penalty=None,
+                 data=b"x" * 16):
+        """Synthetic pipeline reaching the thread branch; ``read_for_record``
+        returns real ``data`` bytes so a ramp sees ``nbytes > 0``."""
+        import scanner.dedup as _dedup
+        import scanner.hasher as _hasher
+        import scanner.walker as _walker
+        import scanner.workers as _workers
+        from scanner.dedup import HashResult
+
+        def fake_scan_sources(sources, **kwargs):
+            cb = kwargs.get("progress_callback")
+            if cb:
+                for _ in records:
+                    cb()
+            return list(records)
+
+        def fake_read(idx, record):
+            return idx, record, data
+
+        def fake_compute(idx, record, d):
+            return idx, HashResult(
+                record=record, sha256=f"sha-{idx}", phash=None, exif_date=None
+            )
+
+        captured = {"hash_results": None}
+
+        def fake_classify(hash_results, **kwargs):
+            captured["hash_results"] = list(hash_results)
+            return []
+
+        monkeypatch.setattr(_walker, "scan_sources", fake_scan_sources)
+        monkeypatch.setattr(_hasher, "read_for_record", fake_read)
+        monkeypatch.setattr(_hasher, "compute_from_bytes", fake_compute)
+        monkeypatch.setattr(_workers, "is_remote_drive", lambda root: remote_drive(root))
+        monkeypatch.setattr(
+            _workers, "disk_incurs_seek_penalty", seek_penalty or (lambda root: False)
+        )
+        monkeypatch.setattr(_dedup, "classify", fake_classify)
+        return captured
+
+    def _spy_thread_pools(self, monkeypatch):
+        import concurrent.futures as _cf
+
+        constructed: list[int] = []
+        real = _cf.ThreadPoolExecutor
+
+        class SpyThreadPool(real):
+            def __init__(self, *args, **kwargs):
+                constructed.append(kwargs.get("max_workers"))
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(_cf, "ThreadPoolExecutor", SpyThreadPool)
+        return constructed
+
+    def _spy_semaphores(self, monkeypatch):
+        """Record the initial value of every threading.Semaphore constructed."""
+        import threading as _t
+
+        values: list[int] = []
+        real = _t.Semaphore
+
+        def spy(value=1):
+            values.append(value)
+            return real(value)
+
+        monkeypatch.setattr(_t, "Semaphore", spy)
+        return values
+
+    def _run_with_watchdog(self, worker, timeout=20):
+        """Run worker.run() in a thread so a permit-release deadlock regression
+        fails cleanly on timeout instead of hanging the whole suite."""
+        import threading
+
+        done = threading.Event()
+
+        def _go():
+            worker.run()
+            done.set()
+
+        threading.Thread(target=_go, daemon=True).start()
+        assert done.wait(timeout=timeout), (
+            "gated scan did not complete — _gated_read must release its permit in "
+            "a finally on every read, or the per-device Semaphore deadlocks"
+        )
+
+    def test_flag_on_keeps_reader_pools_at_static_max(self, qapp, tmp_path, monkeypatch):
+        # Flag ON must NOT shrink the reader pools — they stay sized at the static
+        # MAX (hash_workers_for_root); the ramp caps *active* reads via a Semaphore,
+        # not via pool size. Skip records → no ramp, but the gated path still runs.
+        import os as _os
+
+        from app.views.workers.scan_worker import ScanWorker
+
+        records = self._records("J:", 4, file_type="skip") + self._records(
+            "D:", 4, file_type="skip"
+        )
+        self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
+        constructed = self._spy_thread_pools(monkeypatch)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+            autotune_read_knee=True,
+        )
+        worker.run()
+
+        cpu = _os.cpu_count() or 4
+        local = min(4, cpu)
+        # J: first (record 0) → reader pools [J=8, D=local] + compute [cpu].
+        assert constructed == [8, local, cpu], (
+            f"flag-on must keep reader pools at static MAX; got {constructed!r}"
+        )
+
+    def test_flag_off_builds_no_read_permit_semaphore(self, qapp, tmp_path, monkeypatch):
+        # Default-OFF: no per-device read Semaphore is constructed — only the #570
+        # compute_inflight(128). A read-permit for J: would be Semaphore(8).
+        from app.views.workers.scan_worker import ScanWorker
+
+        records = self._records("J:", 4, file_type="skip")
+        self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
+        sem_values = self._spy_semaphores(monkeypatch)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+        )  # autotune_read_knee defaults False
+        worker.run()
+
+        assert 128 in sem_values, "compute_inflight(128) should still be built"
+        assert 8 not in sem_values, "flag-off must not build a per-device read Semaphore"
+
+    def test_cached_knee_starts_semaphore_at_knee(self, qapp, tmp_path, monkeypatch):
+        # Flag ON + a valid cached knee for the NAS → its reader Semaphore starts
+        # at the cached knee (2), skipping the ramp (no Semaphore(1), no MAX=8).
+        from app.views.workers.scan_worker import ScanWorker
+        from scanner.autotune import AUTOTUNE_RECIPE_VERSION
+
+        records = self._records("J:", 5)
+        self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
+        sem_values = self._spy_semaphores(monkeypatch)
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+            autotune_read_knee=True,
+            autotune_knees={"J:": {"knee": 2, "recipe": AUTOTUNE_RECIPE_VERSION}},
+        )
+        worker.run()
+
+        assert 2 in sem_values, "cached knee must start the NAS read Semaphore at 2"
+        assert 1 not in sem_values, "a cache hit must skip the ramp (no Semaphore(1))"
+
+    def test_gated_scan_completes_and_preserves_order(self, qapp, tmp_path, monkeypatch):
+        # GUARD deadlock guard + determinism. Flag ON, local device a spinning HDD
+        # → reader Semaphore is 1 (no ramp). _gated_read MUST release the permit in
+        # its finally on every read, or Semaphore(1) deadlocks on read #2. The scan
+        # must complete and hash_results must stay in original idx order.
+        from app.views.workers.scan_worker import ScanWorker
+
+        records = self._records("D:", 6)
+        captured = self._install(
+            monkeypatch,
+            records,
+            remote_drive=lambda r: False,
+            seek_penalty=lambda r: str(r).upper() == "D:",  # spinning HDD → Semaphore(1)
+        )
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+            autotune_read_knee=True,
+        )
+        self._run_with_watchdog(worker)
+
+        hrs = captured["hash_results"]
+        assert hrs is not None and len(hrs) == 6
+        assert [hr.sha256 for hr in hrs] == [f"sha-{i}" for i in range(6)], (
+            "idx-passthrough order must survive the per-device gating (determinism)"
+        )
+
+    def test_active_ramp_records_and_emits_on_sole_ramping_freeze(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        # Drive the full ramp protocol deterministically via a fake ramp: the
+        # worker must record(nbytes>0, level_tag=acquire-budget), widen the
+        # Semaphore on a level close, and — for a SOLE-ramping device — reach the
+        # emit (augmenting summary() with device + sole_ramping) once it freezes.
+        import scanner.autotune as _at
+        from app.views.workers.scan_worker import ScanWorker
+
+        seen = {"records": []}
+
+        class _FakeRamp:
+            def __init__(self, max_c):
+                self._permits = 1
+                self._n = 0
+                self.summary_dict = {
+                    "ladder": [1, 2, 4, 8],
+                    "levels": {1: 100.0, 2: 110.0},
+                    "knee": 2,
+                    "current_permits": 2,
+                    "frozen": True,
+                }
+
+            def current_permits(self):
+                return self._permits
+
+            def record(self, nbytes, now, *, level_tag):
+                seen["records"].append((nbytes, level_tag))
+                self._n += 1
+
+            def advance_if_level_done(self):
+                if self._n >= 2:
+                    self._permits = 2  # widen after the first level closes
+                return self._permits
+
+            def is_ramping(self):
+                return self._n < 4  # freeze after 4 records
+
+            def knee(self):
+                return 2
+
+            def summary(self):
+                return self.summary_dict
+
+        fakes: list = []
+        real_init = _FakeRamp.__init__
+
+        def _capturing_init(self, max_c):
+            real_init(self, max_c)
+            fakes.append(self)
+
+        monkeypatch.setattr(_FakeRamp, "__init__", _capturing_init)
+        monkeypatch.setattr(_at, "ReadKneeRamp", _FakeRamp)
+        monkeypatch.setattr(_at, "_RAMP_FILES_PER_LEVEL", 2)  # gate: 4 rungs * 2 = 8
+
+        records = self._records("J:", 10)  # 10 image files > 8 gate → ramp on J:
+        self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+            autotune_read_knee=True,
+        )
+        self._run_with_watchdog(worker)
+
+        assert len(fakes) == 1, "exactly one ramp should be built (single NAS device)"
+        assert seen["records"], "ramp.record was never called on the gated path"
+        assert all(nb > 0 for nb, _tag in seen["records"]), "image reads carry nbytes>0"
+        assert all(tag in (1, 2) for _nb, tag in seen["records"]), (
+            "level_tag must be the live permit budget captured at acquire"
+        )
+        # Sole-ramping freeze → the worker reached the emit and augmented summary().
+        assert fakes[0].summary_dict.get("device") == "J:"
+        assert fakes[0].summary_dict.get("sole_ramping") is True

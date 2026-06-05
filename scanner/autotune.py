@@ -312,3 +312,45 @@ class ReadKneeRamp:
         self._level_ts = []
         self._level_tmin = float("inf")
         self._level_tmax = float("-inf")
+
+
+# -- read-knee cache (keyed per device_key alone) --------------------------
+#
+# The read knee is a DEVICE property (SMB channel count / RTT for a NAS, queue
+# depth for an SSD), not a property of which folders are scanned. So the cache
+# is keyed by device_key ALONE plus AUTOTUNE_RECIPE_VERSION — NOT by a
+# source-path fingerprint — so a knee learned scanning one library is reused for
+# every later scan of any library on the same physical device (#551 Phase 2).
+
+
+def store_read_knee(settings, device_key: str, knee: int) -> None:
+    """Persist a measured read-knee into ``scan.read_knee_cache``.
+
+    Kept a plain function (not a dialog method) so the round-trip is
+    unit-testable against a real ``JsonSettings`` without a Qt dialog —
+    ``settings`` is any object exposing ``get``/``set``/``save`` (mirrors
+    ``store_hash_pool_rates``). Each entry stamps the recipe version so a probe
+    algorithm change invalidates every cached knee.
+    """
+    cache = settings.get("scan.read_knee_cache", {}) or {}
+    cache[device_key] = {"knee": int(knee), "recipe": AUTOTUNE_RECIPE_VERSION}
+    settings.set("scan.read_knee_cache", cache)
+    settings.save()
+
+
+def _valid_read_knee(entry) -> bool:
+    """True iff ``entry`` is a usable cached read-knee for the CURRENT recipe.
+
+    ``settings.json`` is hand-editable and the recipe can change between
+    releases, so a corrupt / partial / stale-recipe entry must be a cache MISS
+    (re-probe), never a crash — boundary validation per the project's
+    input-at-boundaries rule. ``bool`` is rejected even though it is an ``int``
+    subclass, so a hand-edited ``true`` is not mistaken for a knee of 1.
+    """
+    return (
+        isinstance(entry, dict)
+        and isinstance(entry.get("knee"), int)
+        and not isinstance(entry.get("knee"), bool)
+        and entry.get("knee") > 0
+        and entry.get("recipe") == AUTOTUNE_RECIPE_VERSION
+    )

@@ -417,6 +417,13 @@ class ScanWorker(QThread):
     # right after calibration (before the long hash pass) so the measurement
     # survives even if the user cancels the scan.
     hash_pool_measured = Signal(dict)
+    # #551 Phase 2 — emitted once per device after its read-knee ramp freezes
+    # with a clean (sole-ramping) measurement, carrying ReadKneeRamp.summary()
+    # augmented with the device_key. The dialog (#551 Phase 3) persists it via
+    # scanner.autotune.store_read_knee keyed by device_key, so the next scan of
+    # that device starts at the cached knee with no ramp. No persistence slot is
+    # wired in this PR — the signal exists and fires; the dialog connects it next.
+    read_knee_measured = Signal(dict)
 
     def __init__(
         self,
@@ -434,6 +441,8 @@ class ScanWorker(QThread):
         hash_pool_rates: dict | None = None,
         auto_select_enabled: bool = False,
         auto_select_aggressive_delete: bool = False,
+        autotune_read_knee: bool = False,
+        autotune_knees: dict | None = None,
     ) -> None:
         super().__init__()
         self.sources = {k: Path(v) for k, v in sources.items() if v.strip()}
@@ -490,6 +499,19 @@ class ScanWorker(QThread):
         # classify() uses the module default (thread/process scans, or auto
         # scans whose cached rates predate the grouping micro-rates).
         self._calibrated_bktree_floor: int | None = None
+        # #551 Phase 2 — in-pipeline read-knee ramp, DEFAULT-OFF. When False the
+        # thread branch builds reader pools at the static hash_workers_for_root
+        # count exactly as before (byte-identical path). When True, each device's
+        # reader pool is still sized at that static MAX but a per-device Semaphore
+        # caps active reads, ramped 1→2→4→8 to a measured files/s knee (or started
+        # at a cached knee). Stays default-off until the first-scan ramp tax is
+        # bounded on a mis-fit device (#551 Phase 4 flips the default).
+        self._autotune_read_knee = autotune_read_knee
+        # Pre-cached per-device knees {device_key: {"knee": int, "recipe": str}}
+        # read from scan.read_knee_cache by the dialog (#551 Phase 3). A valid
+        # entry skips the ramp for that device — its Semaphore starts at the
+        # cached knee. Empty by default; ignored unless _autotune_read_knee.
+        self.autotune_knees = autotune_knees or {}
 
     def run(self) -> None:
         try:
@@ -686,6 +708,12 @@ class ScanWorker(QThread):
         from scanner.manifest import write_manifest, print_summary
         from scanner.scoring import apply_scoring_to_rows
         from scanner.workers import device_key, hash_workers_for_root
+        from scanner.autotune import (
+            READ_KNEE_LADDER,
+            ReadKneeRamp,
+            _RAMP_FILES_PER_LEVEL,
+            _valid_read_knee,
+        )
         import io
         from contextlib import redirect_stdout
 
@@ -1145,6 +1173,40 @@ class ScanWorker(QThread):
             device_workers = {
                 dev: hash_workers_for_root(dev) for dev in device_records
             }
+            # #551 Phase 2 — read-knee ramp setup (default-OFF). reader pools are
+            # ALWAYS sized at device_workers[dev] (the static MAX); the ramp only
+            # caps *active* reads via a per-device Semaphore. When the flag is off
+            # read_permits stays None and the reader path below is byte-identical
+            # to the pre-#551 thread branch. Per device, on the flag-on path:
+            #   • valid cached knee  → Semaphore(knee), no ramp (lifetime cache hit)
+            #   • HDD (MAX 1) / too few image files → Semaphore(MAX), no ramp
+            #   • otherwise          → Semaphore(1) + a ReadKneeRamp that widens to MAX
+            read_permits: "dict | None" = None
+            ramps: dict = {}
+            _last_permits: dict = {}
+            _knee_emitted: set = set()
+            if self._autotune_read_knee:
+                read_permits = {}
+                for dev in device_records:
+                    max_c = device_workers[dev]
+                    cached = self.autotune_knees.get(dev)
+                    if _valid_read_knee(cached):
+                        read_permits[dev] = threading.Semaphore(cached["knee"])
+                        continue
+                    ladder = [c for c in READ_KNEE_LADDER if c <= max_c]
+                    eligible = sum(
+                        1
+                        for _i, _r in device_records[dev]
+                        if _r.file_type not in ("mp4", "mov", "gif", "skip")
+                    )
+                    if max_c <= 1 or eligible < len(ladder) * _RAMP_FILES_PER_LEVEL:
+                        # Single-rung HDD, or a scan too short to fill the ladder
+                        # without noise → run at the static MAX, no ramp.
+                        read_permits[dev] = threading.Semaphore(max_c)
+                        continue
+                    read_permits[dev] = threading.Semaphore(1)
+                    ramps[dev] = ReadKneeRamp(max_c)
+                    _last_permits[dev] = 1
             self._emit(
                 f"Hashing {len(records):,} files across"
                 f" {len(device_records)} device(s): "
@@ -1177,25 +1239,96 @@ class ScanWorker(QThread):
             # back to the parent drain loop.
             out_q: _queue.Queue = _queue.Queue()
 
+            def _gated_read(dev, idx, r):
+                """#551 Phase 2 — reader worker wrapped with the per-device permit.
+
+                Cooperative acquire (mirrors the #570 compute_inflight loop): block
+                on the device's Semaphore but wake on cancel within 50 ms. The
+                ``acquired`` guard means a cancel-before-acquire path takes NO
+                release (releasing an un-acquired permit would silently raise the
+                active-read cap). The permit is released in a ``finally`` on ANY
+                read_for_record return (bytes / None / ReadFailure) — without that
+                release a Semaphore that only ever decreases would deadlock on the
+                first read at concurrency 1.
+
+                Returns ``(read_result, dev, level_tag, t_end)`` where read_result is
+                the ``(idx, record, data)`` tuple _compute_dispatch expects (or None
+                when cancelled before acquiring). ``level_tag`` is the permit budget
+                captured at acquire time — the concurrency the read ran AT — for a
+                ramping device, else None.
+                """
+                acquired = False
+                while not cancel_flag.is_set():
+                    if read_permits[dev].acquire(timeout=0.05):
+                        acquired = True
+                        break
+                if not acquired:
+                    return None, dev, None, None
+                ramp = ramps.get(dev)
+                level_tag = ramp.current_permits() if ramp is not None else None
+                try:
+                    read_result = read_for_record(idx, r)
+                finally:
+                    read_permits[dev].release()
+                return read_result, dev, level_tag, time.monotonic()
+
             def _read_drain() -> None:
                 """Drive read futures into hash_in_q; put a None sentinel when done."""
+                gated = read_permits is not None
                 reader_futures = []
                 for dev, items in device_records.items():
                     for _idx, _r in items:
-                        reader_futures.append(
-                            reader_pools[dev].submit(read_for_record, _idx, _r)
-                        )
+                        if gated:
+                            reader_futures.append(
+                                reader_pools[dev].submit(_gated_read, dev, _idx, _r)
+                            )
+                        else:
+                            reader_futures.append(
+                                reader_pools[dev].submit(read_for_record, _idx, _r)
+                            )
                 for fut in as_completed(reader_futures):
                     if cancel_flag.is_set():
                         break
                     try:
-                        # Cooperative bounded put: retry with a short timeout so
-                        # a cancel_flag check doesn't leave us stuck forever when
+                        if gated:
+                            read_result, _dev, level_tag, t_end = fut.result()
+                            if read_result is None:
+                                continue  # cancelled before this read acquired
+                            ramp = ramps.get(_dev)
+                            if ramp is not None:
+                                _data = read_result[2]
+                                _nbytes = len(_data) if isinstance(_data, bytes) else 0
+                                ramp.record(_nbytes, t_end, level_tag=level_tag)
+                                _new = ramp.advance_if_level_done()
+                                if _new > _last_permits[_dev]:
+                                    # Widen the cap: hand out the delta permits the
+                                    # level-close raised the budget by (monotone — we
+                                    # never narrow a live Semaphore, see #551 Open
+                                    # risk 7).
+                                    read_permits[_dev].release(_new - _last_permits[_dev])
+                                    _last_permits[_dev] = _new
+                                if (not ramp.is_ramping()) and _dev not in _knee_emitted:
+                                    _knee_emitted.add(_dev)
+                                    # Knee-acceptance gate: only a sole-ramping
+                                    # device's measurement is clean enough to cache.
+                                    # len(ramps)==1 is exactly "sole actively-ramping"
+                                    # for the dominant topologies (single device;
+                                    # HDD+NAS where the HDD never ramps). The monotone
+                                    # condition is implied by the gain rule, which only
+                                    # freezes after strictly-rising rungs.
+                                    if len(ramps) == 1 and ramp.knee() is not None:
+                                        _summary = ramp.summary()
+                                        _summary["device"] = _dev
+                                        _summary["sole_ramping"] = True
+                                        self.read_knee_measured.emit(_summary)
+                        else:
+                            read_result = fut.result()
+                        # Cooperative bounded put: retry with a short timeout so a
+                        # cancel_flag check doesn't leave us stuck forever when
                         # compute is stopped and the queue is full.
-                        result = fut.result()
                         while not cancel_flag.is_set():
                             try:
-                                hash_in_q.put(result, timeout=0.05)
+                                hash_in_q.put(read_result, timeout=0.05)
                                 break
                             except _queue.Full:
                                 pass
