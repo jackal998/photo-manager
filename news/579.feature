@@ -1,0 +1,1 @@
+Add the read-knee probe's pure decision layer (`knee_from_throughput` + the `ReadKneeRamp` state machine) for the #551 in-pipeline reader-concurrency tuner, and remove the now-orphaned #577 occupancy probe — Phase 1, default-off and unwired. (#579)
