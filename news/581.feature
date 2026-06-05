@@ -1,0 +1,1 @@
+Add a "Auto-tune reader concurrency (experimental)" opt-in toggle to the Scan dialog's Advanced Settings (#551 Phase 3): when enabled the scan measures each device's read-concurrency knee at scan start instead of a fixed guess, caches it per device, and reuses it on later scans — default off, never changes which duplicates are found. (#581)
