@@ -1,0 +1,1 @@
+Group SMB shares on one physical NAS server into a single hash-reader pool, so two mapped drive letters on one box no longer double-subscribe it with 16 concurrent reads. (#576)
