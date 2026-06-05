@@ -1098,8 +1098,11 @@ class ScanWorker(QThread):
             # (per-device pools, one executor per physical device so NAS and
             # HDD overlap) and CPU-bound decoding (one flat compute pool at
             # os.cpu_count()) run concurrently instead of serialised in each
-            # worker thread.  The bounded hash_in_q back-pressures the readers
-            # when compute falls behind, keeping RAM within the #453 ceiling.
+            # worker thread.  #570 — a ``compute_inflight`` semaphore bounds the
+            # number of submitted-but-unfinished compute tasks, so the bytes they
+            # hold can't pile up unboundedly behind a slow compute stage (a bare
+            # ``ThreadPoolExecutor.submit()`` never blocks); together with the
+            # bounded hash_in_q this keeps RAM within the #453 ceiling.
             #
             # Ordering invariant: idx is threaded through both hops so the
             # parent can do hash_results[idx]=result — completion-order never
@@ -1141,6 +1144,14 @@ class ScanWorker(QThread):
             compute_pool = ThreadPoolExecutor(
                 max_workers=os.cpu_count() or 4
             )
+            # #570 — bound in-flight compute tasks. ThreadPoolExecutor.submit()
+            # never blocks, so without this the bytes each pending task holds
+            # would accumulate unboundedly in the pool's internal work queue (the
+            # hash_in_q maxsize alone can't bound them — _compute_dispatch drains
+            # it instantly into the pool). A permit is acquired before submit and
+            # released in the done-callback, capping submitted-but-unfinished
+            # compute tasks at _HASH_QUEUE_MAXSIZE.
+            compute_inflight = threading.Semaphore(_HASH_QUEUE_MAXSIZE)
             # out_q carries (idx, outcome) tuples from compute callbacks
             # back to the parent drain loop.
             out_q: _queue.Queue = _queue.Queue()
@@ -1182,7 +1193,21 @@ class ScanWorker(QThread):
                         break
                     c_idx, c_record, c_data = item
 
+                    # #570 — acquire an in-flight permit before submitting so the
+                    # bytes in c_data can't pile up behind a slow compute stage.
+                    # Cancel-safe: drop the item (the scan is aborting) if
+                    # cancelled while waiting for a permit — same shape as the
+                    # bounded put() in _read_drain above.
+                    acquired = False
+                    while not cancel_flag.is_set():
+                        if compute_inflight.acquire(timeout=0.05):
+                            acquired = True
+                            break
+                    if not acquired:
+                        break
+
                     def _cb(f, _idx=c_idx):
+                        compute_inflight.release()
                         out_q.put(f.result())
 
                     compute_pool.submit(
