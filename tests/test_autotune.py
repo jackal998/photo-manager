@@ -284,3 +284,74 @@ class TestReadKneeRampRobustness:
         assert ramp.advance_if_level_done() == 1
         assert ramp.knee() == 1
         assert ramp.summary()["levels"] == {}
+
+
+class TestReadKneeCache:
+    """store_read_knee / _valid_read_knee — the device_key-keyed lifetime cache."""
+
+    def test_store_read_knee_round_trips_through_settings(self, tmp_path):
+        # Real JsonSettings round-trip (no Qt) — a knee written under a device_key
+        # survives write+reload so the next scan of that device reads it back.
+        import json
+
+        from infrastructure.settings import JsonSettings
+        from scanner.autotune import AUTOTUNE_RECIPE_VERSION, store_read_knee
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(json.dumps({"sources": {}}), encoding="utf-8")
+        settings = JsonSettings(settings_path)
+
+        store_read_knee(settings, r"\\LINXIAOYUN", 2)
+
+        entry = settings.get("scan.read_knee_cache")[r"\\LINXIAOYUN"]
+        assert entry == {"knee": 2, "recipe": AUTOTUNE_RECIPE_VERSION}
+        reloaded = JsonSettings(settings_path)  # next session reads from disk
+        assert reloaded.get("scan.read_knee_cache")[r"\\LINXIAOYUN"]["knee"] == 2
+
+    def test_store_read_knee_is_per_device_not_per_source_set(self, tmp_path):
+        # The whole point of dropping the source-path fingerprint: two devices'
+        # knees coexist under their own keys, and re-measuring one device updates
+        # it in place without disturbing the other — independent of which folders
+        # were scanned to produce them (no fingerprint in the key).
+        import json
+
+        from infrastructure.settings import JsonSettings
+        from scanner.autotune import store_read_knee
+
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(json.dumps({}), encoding="utf-8")
+        settings = JsonSettings(settings_path)
+
+        store_read_knee(settings, r"\\NAS", 2)
+        store_read_knee(settings, "D:", 1)
+        store_read_knee(settings, r"\\NAS", 4)  # re-measured on a later, different scan
+
+        cache = settings.get("scan.read_knee_cache")
+        assert cache[r"\\NAS"]["knee"] == 4
+        assert cache["D:"]["knee"] == 1
+
+    def test_valid_read_knee_accepts_current_recipe(self):
+        from scanner.autotune import AUTOTUNE_RECIPE_VERSION, _valid_read_knee
+
+        assert _valid_read_knee({"knee": 2, "recipe": AUTOTUNE_RECIPE_VERSION})
+
+    def test_valid_read_knee_rejects_stale_recipe(self):
+        # A knee measured under an older probe algorithm must be re-probed — this
+        # is the ONLY invalidation lever now the source-path fingerprint is gone.
+        from scanner.autotune import _valid_read_knee
+
+        assert not _valid_read_knee({"knee": 2, "recipe": "999-old"})
+
+    def test_valid_read_knee_rejects_malformed_entries(self):
+        # Hand-editable settings.json → a corrupt/partial entry is a cache miss,
+        # never a crash. bool is rejected though it's an int subclass; a
+        # non-positive knee is rejected (a stalled-device 0 is not a real knee).
+        from scanner.autotune import AUTOTUNE_RECIPE_VERSION as V
+        from scanner.autotune import _valid_read_knee
+
+        assert not _valid_read_knee(None)
+        assert not _valid_read_knee({"recipe": V})              # no knee
+        assert not _valid_read_knee({"knee": 2})                # no recipe
+        assert not _valid_read_knee({"knee": "x", "recipe": V})  # non-int knee
+        assert not _valid_read_knee({"knee": True, "recipe": V})  # bool, not a knee
+        assert not _valid_read_knee({"knee": 0, "recipe": V})    # non-positive
