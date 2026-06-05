@@ -652,6 +652,27 @@ class ScanDialog(QDialog):
         params_layout.addWidget(self._auto_select_aggressive_check)
         params_layout.addWidget(auto_select_aggressive_desc)
 
+        # #551 Phase 3 — opt-in read-knee autotune. Default OFF: when enabled the
+        # scan ramps reader concurrency per device at the start and settles on the
+        # measured knee instead of the static NAS=8 / HDD=1 / else guess. Persists
+        # via ``ui.scan_dialog.autotune_read_knee`` (mirrors auto_select). Never
+        # changes which duplicates are found — only read speed (#551 Q5 determinism).
+        # Added to params_layout (inside the existing params group), NOT a new
+        # splitter child (#467 cold-launch fragility).
+        self._autotune_read_knee_check = QCheckBox(
+            t("scan_dialog.autotune_read_knee_label")
+        )
+        autotune_read_knee_desc = QLabel(t("scan_dialog.autotune_read_knee_desc"))
+        autotune_read_knee_desc.setStyleSheet("color: #555;")
+        autotune_read_knee_desc.setToolTip(
+            _tip(t("scan_dialog.autotune_read_knee_tooltip"))
+        )
+        self._autotune_read_knee_check.toggled.connect(
+            self._on_autotune_read_knee_toggled
+        )
+        params_layout.addWidget(self._autotune_read_knee_check)
+        params_layout.addWidget(autotune_read_knee_desc)
+
         # #486/#560 — hash-pool calibration is now always-on (the per-scan
         # "auto" default), so there is no user-facing re-calibrate toggle. The
         # power-user ``scan.hash_pool`` = "thread"/"process" escape hatch in
@@ -809,6 +830,13 @@ class ScanDialog(QDialog):
         self._auto_select_aggressive_check.setChecked(aggressive)
         self._auto_select_aggressive_check.setEnabled(auto_select)
 
+        # Read-knee autotune (#551 Phase 3). Default = False — opt-in,
+        # experimental read-speed tuning that never affects scan results.
+        autotune_read_knee = bool(
+            self.settings.get("ui.scan_dialog.autotune_read_knee", False)
+        )
+        self._autotune_read_knee_check.setChecked(autotune_read_knee)
+
     def _save_to_settings(self) -> None:
         """Persist the current source list and output path to settings."""
         entries = self._source_list.entries()
@@ -851,6 +879,18 @@ class ScanDialog(QDialog):
         self.settings.set(
             "ui.scan_dialog.auto_select_aggressive_delete", enabled
         )
+        try:
+            self.settings.save()
+        except OSError:
+            pass  # Non-fatal — see _save_to_settings rationale
+
+    def _on_autotune_read_knee_toggled(self, enabled: bool) -> None:
+        """Persist the read-knee autotune opt-in on every toggle (#551 Phase 3).
+
+        Same write-through shape as ``_on_auto_select_toggled`` so the choice
+        survives a close/reopen without depending on the scan-start save path.
+        """
+        self.settings.set("ui.scan_dialog.autotune_read_knee", enabled)
         try:
             self.settings.save()
         except OSError:
@@ -974,6 +1014,12 @@ class ScanDialog(QDialog):
             auto_select_aggressive_delete=(
                 self._auto_select_aggressive_check.isChecked()
             ),
+            # #551 Phase 3 — opt-in read-knee autotune (default OFF) + the
+            # device_key-keyed knee cache so a knee measured on a prior scan of
+            # this physical device is reused with no ramp. The worker ignores
+            # both unless autotune_read_knee is True.
+            autotune_read_knee=self._autotune_read_knee_check.isChecked(),
+            autotune_knees=self.settings.get("scan.read_knee_cache", {}) or {},
         )
         self._worker.progress.connect(self._log)
         self._worker.stage_progress.connect(self._on_stage_progress)
@@ -983,6 +1029,10 @@ class ScanDialog(QDialog):
         # Persist a fresh calibration (cache miss) under its fingerprint so
         # the next scan of the same library skips the re-measurement.
         self._worker.hash_pool_measured.connect(self._on_hash_pool_measured)
+        # #551 Phase 3 — persist a freshly-measured read-knee (sole-ramping
+        # device) under its device_key so the next scan of that device skips the
+        # ramp and starts at the cached knee.
+        self._worker.read_knee_measured.connect(self._on_read_knee_measured)
         # Reset the stage frame for the new scan: hide until the
         # first stage_progress fires, clear residual labels so the
         # frame can't briefly show prior-scan numbers.
@@ -1043,6 +1093,20 @@ class ScanDialog(QDialog):
         from app.views.workers.scan_worker import store_hash_pool_rates
 
         store_hash_pool_rates(self.settings, self._hash_pool_fp, rates)
+
+    def _on_read_knee_measured(self, summary: dict) -> None:
+        """#551 Phase 3 — persist a freshly-measured read-knee keyed by
+        ``device_key`` so the next scan of that physical device reuses it with
+        no ramp. Fires once per sole-ramping device when its ramp freezes (the
+        worker only emits for a clean, uncontended measurement). ``store_read_knee``
+        flushes settings to disk, so no extra save is needed here.
+        """
+        from scanner.autotune import store_read_knee
+
+        device = summary.get("device")
+        knee = summary.get("knee")
+        if device and isinstance(knee, int):
+            store_read_knee(self.settings, device, knee)
 
     def _reset_progress_ui(self) -> None:
         """Hide the stage frame and clear its labels.

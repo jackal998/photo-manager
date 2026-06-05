@@ -274,6 +274,7 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
         "qa/sandbox/passenger-bridge-a",
         "qa/sandbox/passenger-bridge-b",
     ],
+    "s66_autotune_read_knee": ["qa/sandbox/near-duplicates"],
 }
 
 # Scenarios that must see the singleton-prune dialog (the qa default opts
