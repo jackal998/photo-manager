@@ -1,0 +1,1 @@
+Speed up JPEG decoding ~4x during hashing via shrink-on-load (Image.draft); near-duplicate grouping is unchanged. The win shows on warm re-scans and compute-bound machines; a read-bound first scan is unaffected (#569).
