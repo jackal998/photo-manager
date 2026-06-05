@@ -171,6 +171,12 @@ class ReadKneeRamp:
         # Completion timestamps of nbytes>0 reads tagged with the CURRENT level,
         # reset on each step. Sorted at close, so call order never matters.
         self._level_ts: list[float] = []
+        # Running min/max of the current level's timestamps — a cheap O(1) gate so
+        # advance_if_level_done() can reject a not-yet-closable level without
+        # sorting the growing list on every per-read call (matters on a fast SSD
+        # whose level fills long before it spans _RAMP_MIN_SECONDS).
+        self._level_tmin = float("inf")
+        self._level_tmax = float("-inf")
         if len(self._ladder) == 1:
             # Single-rung ladder (a confirmed HDD pinned at 1): nothing to
             # measure — the only rung IS the knee, and the ramp is inert.
@@ -228,6 +234,8 @@ class ReadKneeRamp:
             if not _is_positive_number(nbytes):
                 return
             self._level_ts.append(now)
+            self._level_tmin = min(self._level_tmin, now)
+            self._level_tmax = max(self._level_tmax, now)
 
     def advance_if_level_done(self) -> int:
         """Close the current level if it is fully measured, then freeze or step.
@@ -248,6 +256,11 @@ class ReadKneeRamp:
                 return self._ladder[self._level_idx]
             fill_skip = 0 if self._level_idx == 0 else self._ladder[self._level_idx]
             if len(self._level_ts) < fill_skip + self._target:
+                return self._ladder[self._level_idx]
+            if (self._level_tmax - self._level_tmin) < self._min_seconds:
+                # Cheap O(1) pre-gate: the post-fill span can't exceed the full
+                # span, so if even the full span is too short there is nothing to
+                # measure yet — skip the sort and keep accumulating.
                 return self._ladder[self._level_idx]
             # Drop the earliest-completing fill-transient reads, then measure the
             # rest. Sorting makes the result independent of record() call order.
@@ -297,3 +310,5 @@ class ReadKneeRamp:
         """Advance to the next ladder rung and reset the per-level accumulator."""
         self._level_idx += 1
         self._level_ts = []
+        self._level_tmin = float("inf")
+        self._level_tmax = float("-inf")
