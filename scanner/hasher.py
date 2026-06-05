@@ -90,7 +90,9 @@ except ImportError:
 # 7-tuple (sha256, phash, dhash, mean_color, raw_date, px_w, px_h — dHash was
 # #517), changing decode/resize, or swapping the imagehash size. Purely a
 # cache-keying token; the value is opaque, only equality matters.
-HASH_RECIPE_VERSION = "1"
+# "2" (#569) — added Image.draft JPEG shrink-on-load before convert(); the
+# decode resolution (and so the phash bits, marginally) changed.
+HASH_RECIPE_VERSION = "2"
 
 
 def compute_sha256(path: Path) -> str:
@@ -146,7 +148,16 @@ def _hashes_from_data(
             with Image.open(io.BytesIO(data)) as pil_img:
                 # Extract date BEFORE convert() — that creates a new image without EXIF.
                 raw_date = _raw_exif_date(pil_img)
+                # True dimensions — read BEFORE draft() mutates the reported size.
                 px_w, px_h = pil_img.size
+                # #569 — libjpeg DCT shrink-on-load: decode JPEG/MPO directly at
+                # ~1/4 resolution (a no-op on PNG/WebP/HEIC/RAW). phash (32×32),
+                # dhash (9×8) and the 1×1 mean-color all downsample far below
+                # 256px, so this is pHash-safe — A/B on 597 real JPEGs: 0 over the
+                # grouping threshold, 0 group-membership flips — while cutting JPEG
+                # decode ~4×. The win lands on warm re-scans (~5–6×) and
+                # compute-bound hardware; a read-bound first scan is unchanged.
+                pil_img.draft("RGB", (256, 256))
                 img = pil_img.convert("RGB")
                 img.load()
         except (OSError, ValueError):
