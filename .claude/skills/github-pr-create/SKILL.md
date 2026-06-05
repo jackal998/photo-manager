@@ -74,6 +74,16 @@ asserting a value only a flaky UIA read can observe), not to dodge real
 coverage — the project's no-test-padding rule (CLAUDE.md "Testing
 ground rules") applies to the token decision too.
 
+**Also decide the issue link.** Which issue(s) does this PR *fully
+resolve*? Each one needs a `Closes #N` (or `Fixes #N` / `Resolves #N`)
+line in the body (Step 2) so GitHub **auto-closes it on merge**. Use
+`Closes` only for a full fix; for partial / superseded / related work,
+reference it as `Refs #N` (no auto-close) and close it by hand with a
+reason. This is the easiest step to drop — a PR that fixes an issue but
+omits the keyword merges green yet leaves the issue **open**, needing
+manual cleanup. That silent drop is the same failure mode this skill
+exists to prevent.
+
 ### Step 2 — Compose title + body
 
 - **Title:** Conventional Commits shape — `type(scope): description`,
@@ -81,6 +91,13 @@ ground rules") applies to the token decision too.
 - **Body:** `## What` / `## Why` / `## How`, plus any bypass tokens from
   Step 1 placed on their own line so the CI grep finds them. Tokens may
   go in the title or body; body is cleaner.
+- **Issue link (from Step 1):** add a **`Closes #N` line** (one per issue
+  the PR fully resolves) on its own line in the body so the issue
+  auto-closes when the PR merges. `Closes` / `Fixes` / `Resolves` all
+  work; use `Refs #N` for related-but-not-closed. **Caveat:** auto-close
+  only fires on merge to the **default branch** — a stacked PR based on
+  another feature branch won't close its issues until that chain reaches
+  `master`.
 
 ### Step 3 — Create the PR
 
@@ -216,13 +233,18 @@ most one long wakeup if a follow-up depends on the merge.
   event. Order: body first, then push.
 - **Looping the CI watch past one auto-iteration.** Two reds in a row →
   surface, don't keep guessing.
+- **No `Closes #N` for the issue the PR fixes.** Without the closing
+  keyword in the body (or a commit message), GitHub won't auto-close the
+  issue on merge — it stays open and needs manual cleanup. The drop is
+  silent: the PR still merges green, so nothing flags it. Decide the
+  link in Step 1, write it in Step 2.
 - **Merging.** Not yours to do — hand off at Step 6.
 
 ## Minimal flow
 
 1. Pre-flight: branch ≠ master, pushed, `/pr-review` if it qualifies.
-2. Decide docs / qa / news → content or honest token.
-3. Compose CC title + What/Why/How body (+ tokens).
+2. Decide docs / qa / news tokens + the issue link (`Closes #N`?).
+3. Compose CC title + What/Why/How body (+ tokens + `Closes #N`).
 4. `gh pr create --body-file -` → parse `$PR`.
 5. Write `news/<PR>.<type>` (or skip-news) → commit → push.
 6. `gh pr checks <PR> --watch` → green: hand off; red: one fix, one
