@@ -4,7 +4,7 @@ Required source: qa/sandbox/_disposable/s61_source/ — regenerated each run.
 Two independent near-duplicate clusters of 2 files each (groups A and B).
 
 ⚠ HEADS-UP: this scenario does NOT delete any file from disk. "Remove from
-List" sets ``user_decision='removed'`` in the manifest (a deferred, reversible
+List" writes ``outcome='ignored'`` in the manifest (a deferred, reversible
 DB-only mutation) — no send2trash. The DESTRUCTIVE-COVERAGE GUARD still
 applies because the fixture is regenerated and lives under the isolated
 ``qa/sandbox/_disposable/`` dir (asserted at startup); the scenario never
@@ -25,8 +25,8 @@ Three variants, each a fresh scan + setup + Remove-from-List that collapses
 both groups to a plain + actioned singleton pair:
 
   * Variant A — click "Remove" WITHOUT checking the actioned-bucket box →
-    ONLY the plain singleton is pruned (``removed``); the actioned singleton
-    stays in the list with its ``delete`` decision intact.
+    ONLY the plain singleton is pruned (``outcome='ignored'``); the actioned
+    singleton stays in the list with its ``delete`` decision intact.
   * Variant B — click "Remove" WITH the box checked → BOTH singletons pruned.
   * Variant C — click "Keep all" → NOTHING pruned; both singletons stay.
 
@@ -144,6 +144,32 @@ def _regen_fixture() -> None:
 
 
 def _read_decisions() -> dict[str, str]:
+    """Return {basename: outcome} for fixture rows.
+
+    Reads the outcome column (#584) rather than user_decision — the
+    visibility predicate is now WHERE outcome='' and the prune path writes
+    outcome='ignored' (not user_decision='removed').  user_decision is still
+    read separately where needed (e.g. B_KEEP's 'delete' decision at setup).
+    """
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT source_path, COALESCE(outcome, '') "
+            "FROM migration_manifest WHERE source_path LIKE ?",
+            (f"%{FIXTURE_DIR.name}%",),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {Path(p).name: d for p, d in rows}
+
+
+def _read_user_decisions() -> dict[str, str]:
+    """Return {basename: user_decision} for fixture rows.
+
+    Used only in _scan_and_setup to verify the staged intent ('delete')
+    on B_KEEP — user_decision holds the pending action before execute,
+    while outcome holds the final post-execute state.
+    """
     conn = sqlite3.connect(str(MANIFEST_PATH))
     try:
         rows = conn.execute(
@@ -162,7 +188,7 @@ def _scan_and_setup(win):
     Each variant runs this so the prune dialog sees a clean plain+actioned
     singleton pair. After a previous variant has mutated decisions, the
     re-scan rebuilds the manifest from disk (files are never deleted —
-    only ``removed`` decisions were written, which a re-scan clears).
+    only ``outcome='ignored'`` was written, which a re-scan clears).
     """
     print("step: open_scan_dialog")
     pid = win.process_id()
@@ -202,10 +228,12 @@ def _scan_and_setup(win):
     )
     _, win = _uia.connect_main()
     time.sleep(0.3)
-    dec = _read_decisions()
-    print(f"  decisions_after_setup={dec}")
+    # Read user_decision (staged intent) — not outcome (post-execute) — to
+    # verify the mark_all_via_regex_standalone step wrote 'delete'.
+    dec = _read_user_decisions()
+    print(f"  user_decisions_after_setup={dec}")
     if dec.get(B_KEEP) != "delete":
-        print(f"FAIL: setup did not set {B_KEEP} decision=delete (got {dec.get(B_KEEP)!r})")
+        print(f"FAIL: setup did not set {B_KEEP} user_decision=delete (got {dec.get(B_KEEP)!r})")
         return None
     return win
 
@@ -312,43 +340,57 @@ def _run_variant(win, label: str, action: str) -> int:
         remove_btn.click_input()
     time.sleep(1.0)
 
-    # Verify outcome via direct sqlite read of the 'removed' decision.
-    post = _read_decisions()
-    print(f"  decisions_after_variant={post}")
-    a_keep = post.get(A_KEEP, "")
-    b_keep = post.get(B_KEEP, "")
+    # Verify outcome via direct sqlite read. (#584: outcome column replaces
+    # user_decision='removed'; B_KEEP's pending 'delete' user_decision is
+    # read separately since it is NOT a finalised outcome.)
+    post_outcome = _read_decisions()   # {basename: outcome}
+    print(f"  outcomes_after_variant={post_outcome}")
+
+    # Read B_KEEP's user_decision separately (its pending intent, not outcome).
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        b_decision_rows = conn.execute(
+            "SELECT user_decision FROM migration_manifest WHERE source_path LIKE ?",
+            (f"%{B_KEEP}%",),
+        ).fetchall()
+    finally:
+        conn.close()
+    b_user_decision = b_decision_rows[0][0] if b_decision_rows else ""
+
+    a_keep_outcome = post_outcome.get(A_KEEP, "")
+    b_keep_outcome = post_outcome.get(B_KEEP, "")
 
     if action == "remove_plain_only":
-        # Plain singleton (A_KEEP) pruned → 'removed'; actioned (B_KEEP)
-        # stays with its 'delete' decision intact.
-        if a_keep != "removed":
-            print(f"FAIL[A]: plain singleton {A_KEEP} should be 'removed', got {a_keep!r}")
+        # Plain singleton (A_KEEP) pruned → outcome='ignored'; actioned
+        # (B_KEEP) stays with its 'delete' user_decision intact (outcome='').
+        if a_keep_outcome != "ignored":
+            print(f"FAIL[A]: plain singleton {A_KEEP} should have outcome='ignored', got {a_keep_outcome!r}")
             return 1
-        if b_keep != "delete":
+        if b_user_decision != "delete":
             print(
                 f"FAIL[A]: actioned singleton {B_KEEP} should KEEP its 'delete' "
-                f"decision (box unchecked), got {b_keep!r}"
+                f"user_decision (box unchecked), got {b_user_decision!r}"
             )
             return 1
-        print("  variant_A=PASS (plain removed, actioned intact)")
+        print("  variant_A=PASS (plain ignored, actioned intact)")
     elif action == "remove_both":
-        if a_keep != "removed" or b_keep != "removed":
+        if a_keep_outcome != "ignored" or b_keep_outcome != "ignored":
             print(
-                f"FAIL[B]: both singletons should be 'removed' with the box "
-                f"checked — A_KEEP={a_keep!r} B_KEEP={b_keep!r}"
+                f"FAIL[B]: both singletons should have outcome='ignored' with the box "
+                f"checked — A_KEEP={a_keep_outcome!r} B_KEEP={b_keep_outcome!r}"
             )
             return 1
-        print("  variant_B=PASS (both removed)")
+        print("  variant_B=PASS (both ignored)")
     else:  # keep_all
-        if a_keep == "removed" or b_keep == "removed":
+        if a_keep_outcome == "ignored" or b_keep_outcome == "ignored":
             print(
                 f"FAIL[C]: Keep all should prune NOTHING — "
-                f"A_KEEP={a_keep!r} B_KEEP={b_keep!r}"
+                f"A_KEEP outcome={a_keep_outcome!r} B_KEEP outcome={b_keep_outcome!r}"
             )
             return 1
-        # B_KEEP should still carry its delete decision; A_KEEP still blank.
-        if b_keep != "delete":
-            print(f"FAIL[C]: actioned singleton lost its decision on Keep all (got {b_keep!r})")
+        # B_KEEP should still carry its delete user_decision; A_KEEP still blank.
+        if b_user_decision != "delete":
+            print(f"FAIL[C]: actioned singleton lost its decision on Keep all (got {b_user_decision!r})")
             return 1
         print("  variant_C=PASS (nothing pruned)")
 

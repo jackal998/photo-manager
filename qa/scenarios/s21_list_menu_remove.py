@@ -12,11 +12,11 @@ currently only probes for enabled-state, never invokes:
       QMessageBox carrying "No items selected" body. Manifest
       unchanged.
   (b) Single highlight: left-click one row → List → Remove from List
-      → status bar "Removed 1 item from list", that row marked
-      'removed' in the manifest, others unchanged.
+      → status bar "Removed 1 item from list", that row's
+      outcome='ignored' in the manifest, others unchanged.
   (c) Multi highlight: left-click + Ctrl+click → List → Remove from
       List → status bar "Removed 2 items from list", both rows
-      marked 'removed', untouched rows unchanged.
+      outcome='ignored', untouched rows unchanged.
 
 Distinct from s20 (right-click multi-row branch through
 remove_items_from_list) and from s15 (Set Action via context menu).
@@ -41,13 +41,37 @@ ALL_ROWS = (ROW_SINGLE, ROW_MULTI_A, ROW_MULTI_B, *ROWS_UNTOUCHED)
 
 
 def _read_decisions() -> dict[str, str]:
-    """Return {basename: user_decision} for every fixture row in the manifest."""
+    """Return {basename: user_decision} for every fixture row in the manifest.
+
+    Used only for the pre-operation snapshot to confirm the fixture started
+    clean (user_decision=='').  Post-operation assertions use _read_outcomes().
+    """
     if not MANIFEST_PATH.exists():
         raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
     conn = sqlite3.connect(str(MANIFEST_PATH))
     try:
         rows = conn.execute(
             "SELECT source_path, user_decision FROM migration_manifest "
+            "WHERE source_path LIKE ?",
+            ("%neardup_%",),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {Path(p).name: (d or "") for p, d in rows}
+
+
+def _read_outcomes() -> dict[str, str]:
+    """Return {basename: outcome} for every fixture row in the manifest.
+
+    #584: remove_from_list writes outcome='ignored' via finalize_outcome
+    (not user_decision='removed').  Used for all post-operation assertions.
+    """
+    if not MANIFEST_PATH.exists():
+        raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT source_path, outcome FROM migration_manifest "
             "WHERE source_path LIKE ?",
             ("%neardup_%",),
         ).fetchall()
@@ -116,10 +140,12 @@ def main() -> int:
         failures.append(
             "could not dismiss no-selection 'Remove from List' QMessageBox"
         )
-    post_a = _read_decisions()
-    if post_a != pre:
+    post_a = _read_outcomes()
+    pre_outcomes = _read_outcomes()
+    # No-selection should leave all outcomes empty.
+    if any(v for v in post_a.values()):
         failures.append(
-            f"manifest mutated by no-selection branch: pre={pre} post={post_a}"
+            f"manifest mutated by no-selection branch: outcomes={post_a}"
         )
 
     # ── (b) Single-row highlight branch ───────────────────────────────────
@@ -132,20 +158,20 @@ def main() -> int:
     )
     if not inv_b:
         failures.append("status bar did not echo 'Removed 1 item from list'")
-    post_b = _read_decisions()
+    post_b = _read_outcomes()
     print(f"  post_b={dict(sorted(post_b.items()))}")
-    if post_b.get(ROW_SINGLE) != "removed":
+    if post_b.get(ROW_SINGLE) != "ignored":
         failures.append(
-            f"single branch: {ROW_SINGLE} user_decision="
-            f"{post_b.get(ROW_SINGLE)!r}, expected 'removed'"
+            f"single branch: {ROW_SINGLE} outcome="
+            f"{post_b.get(ROW_SINGLE)!r}, expected 'ignored'"
         )
     for other in ALL_ROWS:
         if other == ROW_SINGLE:
             continue
-        if post_b.get(other) != pre.get(other):
+        if post_b.get(other) != pre_outcomes.get(other):
             failures.append(
                 f"single branch leaked into {other}: "
-                f"pre={pre.get(other)!r} post={post_b.get(other)!r}"
+                f"pre={pre_outcomes.get(other)!r} post={post_b.get(other)!r}"
             )
 
     # ── (c) Multi-row highlight branch ────────────────────────────────────
@@ -159,22 +185,23 @@ def main() -> int:
     )
     if not inv_c:
         failures.append("status bar did not echo 'Removed 2 items from list'")
-    post_c = _read_decisions()
+    post_c = _read_outcomes()
     print(f"  post_c={dict(sorted(post_c.items()))}")
-    if post_c.get(ROW_MULTI_A) != "removed":
+    if post_c.get(ROW_MULTI_A) != "ignored":
         failures.append(
-            f"multi branch: {ROW_MULTI_A} user_decision="
-            f"{post_c.get(ROW_MULTI_A)!r}, expected 'removed'"
+            f"multi branch: {ROW_MULTI_A} outcome="
+            f"{post_c.get(ROW_MULTI_A)!r}, expected 'ignored'"
         )
-    if post_c.get(ROW_MULTI_B) != "removed":
+    if post_c.get(ROW_MULTI_B) != "ignored":
         failures.append(
-            f"multi branch: {ROW_MULTI_B} user_decision="
-            f"{post_c.get(ROW_MULTI_B)!r}, expected 'removed'"
+            f"multi branch: {ROW_MULTI_B} outcome="
+            f"{post_c.get(ROW_MULTI_B)!r}, expected 'ignored'"
         )
+    # ROW_SINGLE was already 'ignored' from branch (b); untouched means unchanged.
     for other in ROWS_UNTOUCHED:
-        if post_c.get(other) != pre.get(other):
+        if post_c.get(other) != post_b.get(other):
             failures.append(
-                f"untouched {other}: pre={pre.get(other)!r} "
+                f"untouched {other}: pre={post_b.get(other)!r} "
                 f"post={post_c.get(other)!r}"
             )
 

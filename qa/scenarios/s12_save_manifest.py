@@ -80,12 +80,12 @@ def main() -> int:
         grouped = conn.execute(
             "SELECT COUNT(*) FROM migration_manifest WHERE group_id IS NOT NULL"
         ).fetchone()[0]
-        executed_zero = conn.execute(
-            "SELECT COUNT(*) FROM migration_manifest WHERE executed=0"
+        in_review = conn.execute(
+            "SELECT COUNT(*) FROM migration_manifest WHERE outcome=''"
         ).fetchone()[0]
         print(f"  manifest_total_rows={total}")
         print(f"  manifest_grouped_rows={grouped}")
-        print(f"  manifest_executed_zero_rows={executed_zero}")
+        print(f"  manifest_in_review_rows={in_review}")
     finally:
         conn.close()
 

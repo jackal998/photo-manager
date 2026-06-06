@@ -5,10 +5,12 @@ Required source: qa/sandbox/near-duplicates (5 files, basenames neardup_NN_qXX.j
 Companion to s53 (lock + decision via dialog right-click). Covers the
 fourth #324 path: single-row right-click → Set Action → "remove from
 list" → QMessageBox confirm → Yes. The dialog-internal
-``_remove_from_list_paths`` writes ``user_decision='removed'`` via
-``ManifestRepository.remove_from_review`` and drops the row from the
+``_remove_from_list_paths`` writes ``outcome='ignored'`` via
+``ManifestRepository.finalize_outcome`` and drops the row from the
 in-memory groups; the row should no longer surface in subsequent
-load()s.
+load()s. (#584: visibility predicate changed from executed=0 to
+WHERE outcome=''; assertion updated from user_decision='removed' to
+outcome='ignored'.)
 
 This path is harder to layer-1 unit-test than #324 paths 1–3 because
 the QMessageBox.question is a modal that pywinauto can't drive from
@@ -29,7 +31,7 @@ exercise:
   Set Action → "remove from list" →
   QMessageBox "Remove from List" confirm fires (default No) →
   click Yes →
-  assert: targeted row's user_decision='removed' in manifest;
+  assert: targeted row's outcome='ignored' in manifest;
   other rows untouched.
 
 Sister to s20 (main-window route remove-from-list) and s29 (regex
@@ -74,17 +76,33 @@ REMOVE_CONFIRM_TITLE = "Remove from List"
 CTX_REMOVE_FROM_LIST = "remove from list"
 
 
-def _read_manifest_state() -> dict[str, str]:
-    """Return ``{basename: user_decision}`` for every fixture row that
-    is still present in the manifest.
+def _read_manifest_outcomes() -> dict[str, str]:
+    """Return ``{basename: outcome}`` for every fixture row in the manifest.
 
-    Rows that ``ManifestRepository.remove_from_review`` has marked
-    ``user_decision='removed'`` still exist in the table — the SQL is
-    an UPDATE, not a DELETE — so they appear here too. The DELETE-vs-
-    UPDATE choice is documented in the repo (no VACUUM, removed rows
-    just get filtered out of load()), so the assertion below reads the
-    'removed' marker rather than expecting the row to be physically
-    gone.
+    Reads the finalised outcome column (#584).  Rows that
+    ``ManifestRepository.finalize_outcome`` has marked ``outcome='ignored'``
+    still exist in the table — the SQL is an UPDATE, not a DELETE — so they
+    appear here too.
+    """
+    if not MANIFEST_PATH.exists():
+        raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT source_path, outcome FROM migration_manifest "
+            "WHERE source_path LIKE ?",
+            (f"%{FIXTURE_NAME_GLOB}%",),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {Path(p).name: (d or "") for p, d in rows}
+
+
+def _read_manifest_user_decisions() -> dict[str, str]:
+    """Return ``{basename: user_decision}`` for every fixture row.
+
+    Used to verify that the seed step wrote user_decision='delete'
+    (a staged intent, not a finalised outcome — outcome stays '' at seed time).
     """
     if not MANIFEST_PATH.exists():
         raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
@@ -102,7 +120,7 @@ def _read_manifest_state() -> dict[str, str]:
 
 def _print_state(label: str, state: dict[str, str]) -> None:
     for name in sorted(state):
-        print(f"  {label}  dec={state[name]!r:<10} {name}")
+        print(f"  {label}  value={state[name]!r:<10} {name}")
 
 
 def _coord_right_click_file_row(exec_dlg, row_offset: int) -> None:
@@ -143,14 +161,14 @@ def main() -> int:
     _uia.close_and_load_manifest(dlg)
     _, win = _uia.connect_main()
 
-    print("step: snapshot_initial")
-    initial = _read_manifest_state()
-    _print_state("init", initial)
-    if not initial:
+    print("step: snapshot_initial_outcomes")
+    initial_outcomes = _read_manifest_outcomes()
+    _print_state("init_outcome", initial_outcomes)
+    if not initial_outcomes:
         print("FAIL: no fixture rows found in manifest after scan")
         return 1
-    if any(d for d in initial.values()):
-        print("FAIL: fresh manifest has unexpected pre-set decisions")
+    if any(d for d in initial_outcomes.values()):
+        print("FAIL: fresh manifest has unexpected pre-set outcomes")
         return 1
 
     # Seed via main-window right-click so the Execute Action dialog has
@@ -164,14 +182,17 @@ def main() -> int:
     print("step: open_execute_action_dialog")
     exec_dlg, _ = _uia.open_execute_action_dialog(win)
 
-    print("step: snapshot_pre_remove")
-    pre = _read_manifest_state()
-    _print_state("pre ", pre)
-    # The seed row carries 'delete'; everything else should still be empty.
-    if pre.get(SEED_ROW) != "delete":
-        print(f"FAIL: seed step did not set {SEED_ROW!r} to 'delete' "
-              f"(got {pre.get(SEED_ROW)!r}) — main-window flow regressed?")
+    # Verify seed via user_decision (staged intent, not outcome).
+    print("step: snapshot_pre_remove_user_decisions")
+    pre_decisions = _read_manifest_user_decisions()
+    _print_state("pre_ud", pre_decisions)
+    if pre_decisions.get(SEED_ROW) != "delete":
+        print(f"FAIL: seed step did not set {SEED_ROW!r} user_decision='delete' "
+              f"(got {pre_decisions.get(SEED_ROW)!r}) — main-window flow regressed?")
         return 1
+
+    pre_outcomes = _read_manifest_outcomes()
+    _print_state("pre_outcome", pre_outcomes)
 
     # ── Coord-right-click a file row → Set Action → remove from list ─────
     # row_offset=1 is a hint, not a guarantee — the coord formula was
@@ -179,9 +200,9 @@ def main() -> int:
     # on a different absolute row. That's fine: this scenario tests the
     # menu-click → method dispatch → manifest-write chain, not which
     # specific row got removed. The assertion is "exactly one row picked
-    # up 'removed'" — true regardless of which row the click landed on,
+    # up 'ignored'" — true regardless of which row the click landed on,
     # including the seed row itself (in which case the seed's 'delete'
-    # decision gets overwritten by 'removed', which is the correct
+    # decision gets overwritten by 'ignored', which is the correct
     # semantic).
     print("step: dialog_set_action_remove_from_list")
     _coord_right_click_file_row(exec_dlg, row_offset=1)
@@ -203,37 +224,37 @@ def main() -> int:
     time.sleep(0.5)
 
     print("step: snapshot_post_remove")
-    post = _read_manifest_state()
+    post = _read_manifest_outcomes()
     _print_state("post", post)
 
-    # Identify which row(s) picked up 'removed'. We expect exactly one
-    # — the row the coord-click happened to land on. We deliberately
+    # Identify which row(s) picked up outcome='ignored'. We expect exactly
+    # one — the row the coord-click happened to land on. We deliberately
     # don't assert WHICH row: see _coord_right_click_file_row's comment
     # above and the failure mode the CI 2026-05-21 runner caught (the
     # tree's smaller render geometry made row_offset=1 land on the seed
     # row, which is a legitimate target — just not the one assumed
-    # locally). Counting "exactly one new 'removed'" is the invariant
+    # locally). Counting "exactly one new 'ignored'" is the invariant
     # that catches the real regression class: menu → method → manifest
     # write chain wired correctly. If the click missed all rows, the
     # menu's `select_popup_menu_path` would have timed out earlier;
     # if it hit a row but the Yes button didn't reach
-    # `_remove_from_list_paths`, zero rows would carry 'removed' and
-    # this assertion fires.
-    newly_removed = {
+    # `_remove_from_list_paths`, zero rows would carry 'ignored' and
+    # this assertion fires. (#584: outcome='ignored' replaces user_decision='removed'.)
+    newly_ignored = {
         n
         for n, d in post.items()
-        if d == "removed" and pre.get(n) != "removed"
+        if d == "ignored" and pre_outcomes.get(n) != "ignored"
     }
     failures: list[str] = []
-    if len(newly_removed) != 1:
+    if len(newly_ignored) != 1:
         failures.append(
-            f"expected exactly one row to get 'removed' decision, "
-            f"got {sorted(newly_removed)}"
+            f"expected exactly one row to get outcome='ignored', "
+            f"got {sorted(newly_ignored)}"
         )
 
     # ── Close (NOT Execute) — keep the scenario non-destructive ──────────
-    # The 'removed' rows are already persisted to the manifest as a
-    # decision marker; Execute would actually move/delete files, which
+    # The 'ignored' rows are already persisted to the manifest as a
+    # finalised outcome; Execute would actually move/delete files, which
     # is destructive and out of scope for this driver.
     print("step: close_execute_action_dialog")
     close_btn = _uia._find_dialog_button(exec_dlg, "Close")

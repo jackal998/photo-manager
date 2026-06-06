@@ -503,12 +503,12 @@ class TestBatchUpdateDecisions:
             _row({"source_path": "/b.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
             _row({"source_path": "/c.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
         ])
-        # #425 — second value flipped "keep" → REMOVE_FROM_LIST_DECISION
+        # #425 — second value flipped "keep" → IGNORE_DECISION
         # so the batch test still verifies two distinct non-default
         # writes (canonical keep "" would be indistinguishable from
         # the untouched /c.jpg row).
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
-        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": REMOVE_FROM_LIST_DECISION})
+        from app.views.constants import IGNORE_DECISION
+        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": IGNORE_DECISION})
 
         conn = sqlite3.connect(db)
         rows = {r[0]: r[1] for r in conn.execute(
@@ -516,7 +516,7 @@ class TestBatchUpdateDecisions:
         ).fetchall()}
         conn.close()
         assert rows["/a.jpg"] == "delete"
-        assert rows["/b.jpg"] == REMOVE_FROM_LIST_DECISION
+        assert rows["/b.jpg"] == IGNORE_DECISION
         assert rows["/c.jpg"] == ""  # untouched
 
     def test_noop_on_empty_dict(self, tmp_path):
@@ -612,10 +612,28 @@ class TestBatchUpdateDecisionsAndLock:
         assert opens == []
 
 
-class TestRemoveFromReview:
-    """remove_from_review() and the load() filter for user_decision='removed'."""
+_DDL_WITH_OUTCOME = """
+CREATE TABLE migration_manifest (
+    id               INTEGER PRIMARY KEY,
+    source_path      TEXT NOT NULL,
+    source_label     TEXT NOT NULL,
+    action           TEXT NOT NULL,
+    source_hash      TEXT,
+    phash            TEXT,
+    hamming_distance INTEGER,
+    group_id         TEXT,
+    reason           TEXT,
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    outcome          TEXT    NOT NULL DEFAULT ''
+);
+"""
 
-    def test_marks_user_decision_removed(self, tmp_path):
+
+class TestRemoveFromReview:
+    """remove_from_review() and the load() visibility filter (WHERE outcome='')."""
+
+    def test_marks_outcome_ignored(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "group_id": None,
                   "hamming_distance": None, "action": ""}),
@@ -624,12 +642,12 @@ class TestRemoveFromReview:
 
         conn = sqlite3.connect(db)
         row = conn.execute(
-            "SELECT user_decision FROM migration_manifest WHERE source_path = '/a.jpg'"
+            "SELECT outcome FROM migration_manifest WHERE source_path = '/a.jpg'"
         ).fetchone()
         conn.close()
-        assert row[0] == "removed"
+        assert row[0] == "ignored"
 
-    def test_multiple_paths_marked(self, tmp_path):
+    def test_multiple_paths_marked_ignored(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "group_id": None,
                   "hamming_distance": None, "action": ""}),
@@ -644,27 +662,52 @@ class TestRemoveFromReview:
         rows = {
             r[0]: r[1]
             for r in conn.execute(
-                "SELECT source_path, user_decision FROM migration_manifest"
+                "SELECT source_path, outcome FROM migration_manifest"
             ).fetchall()
         }
         conn.close()
-        assert rows["/a.jpg"] == "removed"
-        assert rows["/b.jpg"] == ""      # untouched
-        assert rows["/c.jpg"] == "removed"
+        assert rows["/a.jpg"] == "ignored"
+        assert rows["/b.jpg"] == ""       # untouched — still in-review
+        assert rows["/c.jpg"] == "ignored"
 
-    def test_load_skips_removed_candidates(self, tmp_path):
+    def test_load_skips_ignored_candidates(self, tmp_path):
+        """outcome='ignored' rows are excluded by the WHERE outcome='' predicate."""
         f = tmp_path / "photo.jpg"
         _make_jpeg(f)
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(f), "action": "",
-                  "group_id": None, "hamming_distance": None,
-                  "user_decision": "removed"}),
-        ])
+                  "group_id": None, "hamming_distance": None}),
+        ], ddl=_DDL_WITH_OUTCOME)
+        # Simulate a pre-existing ignored row (outcome='ignored').
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET outcome = 'ignored' WHERE source_path = ?",
+                (str(f),),
+            )
+            conn.commit()
         records = list(ManifestRepository().load(str(db)))
         assert all(r.file_path != str(f) for r in records)
 
-    def test_load_skips_removed_group_member(self, tmp_path):
-        """When one group member is removed, it is excluded from load."""
+    def test_load_skips_deleted_candidates(self, tmp_path):
+        """outcome='deleted' rows are also excluded by the WHERE outcome='' predicate."""
+        f = tmp_path / "photo.jpg"
+        _make_jpeg(f)
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(f), "action": "",
+                  "group_id": None, "hamming_distance": None}),
+        ], ddl=_DDL_WITH_OUTCOME)
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET outcome = 'deleted', executed = 1"
+                " WHERE source_path = ?",
+                (str(f),),
+            )
+            conn.commit()
+        records = list(ManifestRepository().load(str(db)))
+        assert all(r.file_path != str(f) for r in records)
+
+    def test_load_skips_ignored_group_member(self, tmp_path):
+        """When one group member is ignored (outcome='ignored'), it is excluded."""
         cand = tmp_path / "cand.jpg"
         ref = tmp_path / "ref.jpg"
         _make_jpeg(cand)
@@ -672,16 +715,22 @@ class TestRemoveFromReview:
         gid = "/group/a"
         db = _make_manifest(tmp_path, [
             _row({"source_path": str(cand), "group_id": gid}),
-            _ref_row({"source_path": str(ref), "group_id": gid, "user_decision": "removed"}),
-        ])
+            _ref_row({"source_path": str(ref), "group_id": gid}),
+        ], ddl=_DDL_WITH_OUTCOME)
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET outcome = 'ignored' WHERE source_path = ?",
+                (str(ref),),
+            )
+            conn.commit()
         records = list(ManifestRepository().load(str(db)))
-        # Only 1 member remains → group has <2 members → neither is yielded
+        # Only 1 member remains → group has <2 members → orphan-skip kicks in
         paths = {r.file_path for r in records}
         assert str(ref) not in paths
         assert str(cand) not in paths  # orphaned single is also skipped
 
-    def test_load_non_removed_rows_unaffected(self, tmp_path):
-        """Non-removed group members still load; removed ones do not."""
+    def test_load_in_review_rows_unaffected(self, tmp_path):
+        """Rows with outcome='' (in-review) still load; ignored/deleted ones do not."""
         f_keep = tmp_path / "keep.jpg"
         f_del = tmp_path / "del.jpg"
         f_other = tmp_path / "other.jpg"
@@ -695,17 +744,22 @@ class TestRemoveFromReview:
             _row({"source_path": str(f_other), "action": "",
                   "group_id": gid, "hamming_distance": None, "user_decision": ""}),
             _row({"source_path": str(f_del), "action": "",
-                  "group_id": None, "hamming_distance": None,
-                  "user_decision": "removed"}),
-        ])
+                  "group_id": None, "hamming_distance": None, "user_decision": ""}),
+        ], ddl=_DDL_WITH_OUTCOME)
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET outcome = 'ignored' WHERE source_path = ?",
+                (str(f_del),),
+            )
+            conn.commit()
         records = list(ManifestRepository().load(str(db)))
         paths = {r.file_path for r in records}
         assert str(f_keep) in paths
         assert str(f_other) in paths
         assert str(f_del) not in paths
 
-    def test_removed_candidate_leaves_orphaned_group(self, tmp_path):
-        """If one group member is removed, the remaining single member is not yielded
+    def test_ignored_candidate_leaves_orphaned_group(self, tmp_path):
+        """If one group member is ignored, the remaining single member is not yielded
         (a group needs ≥2 active members to be shown in the review UI)."""
         cand = tmp_path / "cand.jpg"
         ref = tmp_path / "ref.jpg"
@@ -713,51 +767,76 @@ class TestRemoveFromReview:
         _make_jpeg(ref)
         gid = "/group/a"
         db = _make_manifest(tmp_path, [
-            _row({"source_path": str(cand), "group_id": gid,
-                  "user_decision": "removed"}),
+            _row({"source_path": str(cand), "group_id": gid}),
             _ref_row({"source_path": str(ref), "group_id": gid}),
-        ])
+        ], ddl=_DDL_WITH_OUTCOME)
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET outcome = 'ignored' WHERE source_path = ?",
+                (str(cand),),
+            )
+            conn.commit()
         records = list(ManifestRepository().load(str(db)))
         paths = {r.file_path for r in records}
-        assert str(cand) not in paths  # was removed
+        assert str(cand) not in paths  # was ignored
         assert str(ref) not in paths   # orphaned single — group < 2 members
 
 
-class TestMarkExecuted:
-    def _read_executed(self, db, path: str) -> int:
-        import sqlite3 as _sq
-        with _sq.connect(db) as conn:
-            row = conn.execute(
-                "SELECT executed FROM migration_manifest WHERE source_path = ?", (path,)
-            ).fetchone()
-        return row[0] if row else -1
+class TestFinalizeOutcome:
+    """finalize_outcome() — the write-once post-execute state writer."""
 
-    def test_marks_single_path_executed(self, tmp_path):
+    def _read_row(self, db, path: str) -> tuple:
+        """Return (outcome, executed) for the given path."""
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT outcome, executed FROM migration_manifest WHERE source_path = ?",
+                (path,),
+            ).fetchone()
+        return row if row else (None, None)
+
+    def test_deleted_sets_outcome_and_executed(self, tmp_path):
+        """finalize_outcome('deleted') → outcome='deleted', executed=1."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
-        ManifestRepository().mark_executed(str(db), ["/a.jpg"])
-        assert self._read_executed(db, "/a.jpg") == 1
+        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
+        outcome, executed = self._read_row(db, "/a.jpg")
+        assert outcome == "deleted"
+        assert executed == 1
 
-    def test_marks_multiple_paths(self, tmp_path):
+    def test_ignored_sets_outcome_executed_zero(self, tmp_path):
+        """finalize_outcome('ignored') → outcome='ignored', executed=0."""
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "",
+                  "group_id": None, "hamming_distance": None}),
+        ])
+        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "ignored")
+        outcome, executed = self._read_row(db, "/a.jpg")
+        assert outcome == "ignored"
+        assert executed == 0
+
+    def test_multiple_paths(self, tmp_path):
+        """Multiple paths in one call — all updated atomically."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
             _row({"source_path": "/b.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
-        ManifestRepository().mark_executed(str(db), ["/a.jpg", "/b.jpg"])
-        assert self._read_executed(db, "/a.jpg") == 1
-        assert self._read_executed(db, "/b.jpg") == 1
+        ManifestRepository().finalize_outcome(str(db), ["/a.jpg", "/b.jpg"], "deleted")
+        assert self._read_row(db, "/a.jpg") == ("deleted", 1)
+        assert self._read_row(db, "/b.jpg") == ("deleted", 1)
 
-    def test_noop_for_unknown_path(self, tmp_path):
+    def test_noop_for_empty_paths(self, tmp_path):
+        """Empty list → no DB access, no error."""
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().mark_executed(str(db), ["/does_not_exist.jpg"])
-        assert self._read_executed(db, "/a.jpg") == 0
+        ], ddl=_DDL_WITH_OUTCOME)
+        ManifestRepository().finalize_outcome(str(db), [], "deleted")
+        # Row is untouched — outcome stays ''
+        assert self._read_row(db, "/a.jpg") == ("", 0)
 
     def test_does_not_affect_other_rows(self, tmp_path):
         db = _make_manifest(tmp_path, [
@@ -766,9 +845,30 @@ class TestMarkExecuted:
             _row({"source_path": "/b.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
-        ManifestRepository().mark_executed(str(db), ["/a.jpg"])
-        assert self._read_executed(db, "/a.jpg") == 1
-        assert self._read_executed(db, "/b.jpg") == 0
+        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
+        assert self._read_row(db, "/a.jpg") == ("deleted", 1)
+        assert self._read_row(db, "/b.jpg") == ("", 0)  # untouched
+
+    def test_fail_loud_propagates_db_error(self, tmp_path):
+        """finalize_outcome propagates DB errors — no swallowing.
+
+        Verified by asking finalize_outcome to update a table that does not
+        exist (DB has no migration_manifest table after we drop it).
+        """
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": "/a.jpg", "action": "",
+                  "group_id": None, "hamming_distance": None}),
+        ])
+        # Ensure schema is applied first (outcome column present).
+        ManifestRepository().ensure_schema(str(db))
+
+        # Drop the table so the UPDATE inside finalize_outcome fails.
+        with sqlite3.connect(db) as conn:
+            conn.execute("DROP TABLE migration_manifest")
+            conn.commit()
+
+        with pytest.raises(Exception):
+            ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
 
 
 class TestLoadFromDB:
@@ -979,12 +1079,12 @@ class TestConnectionPragmas:
         ManifestRepository().save(str(db), [group])
         assert self._journal_mode(db) == "wal"
 
-    def test_wal_enabled_after_mark_executed(self, tmp_path):
+    def test_wal_enabled_after_finalize_outcome(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
-        ManifestRepository().mark_executed(str(db), ["/a.jpg"])
+        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
         assert self._journal_mode(db) == "wal"
 
     def test_wal_enabled_after_update_decision(self, tmp_path):
@@ -1583,3 +1683,19 @@ class TestDropMoveDestPathMigration:
         # EXACT duplicate (/takeout/a.jpg) — both yielded as a 2-member group.
         assert records["/jdrive/b.jpg"].action == ""
         assert records["/takeout/a.jpg"].action == "EXACT"
+
+    def test_drop_move_adds_outcome_column_with_default(self, tmp_path):
+        """#584 crash-guard — opening a pre-#433 manifest (with dest_path)
+        via ensure_schema must add the outcome column with DEFAULT ''.
+        _drop_move_dest_path hardcodes outcome in the new DDL so ancient
+        manifests opened after the #584 migration always have the column."""
+        db = self._old_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        cols = self._cols(db)
+        assert "outcome" in cols
+        # All rows must have the default empty-string outcome (in-review).
+        with sqlite3.connect(db) as conn:
+            non_empty = conn.execute(
+                "SELECT COUNT(*) FROM migration_manifest WHERE outcome != ''"
+            ).fetchone()[0]
+        assert non_empty == 0

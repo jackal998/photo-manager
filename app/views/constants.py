@@ -66,22 +66,24 @@ def headers() -> list[str]:
 
 
 # Sentinel emitted by the regex / right-click dispatch when the user
-# picks "remove from list". The receiving handler routes the sentinel
-# differently depending on context:
+# picks "ignore" (formerly "remove from list"). The receiving handler
+# routes the sentinel differently depending on context:
 #   * single-row right-click in the execute dialog → IMMEDIATE
 #     (set + execute together, with confirmation), the row vanishes
-#     and the manifest is updated.
+#     and the manifest is updated (outcome='ignored').
 #   * regex bulk path → DEFERRED, mirroring the delete/keep UX:
 #     each matched row's user_decision is set to
-#     :data:`REMOVE_FROM_LIST_DECISION` and the user reviews + commits
+#     :data:`IGNORE_DECISION` and the user reviews + commits
 #     via the execute action dialog.
-REMOVE_FROM_LIST_SENTINEL: str = "__remove_from_list__"
+# Wire value is internal-only; the user-facing label stays
+# "remove from list" / "從清單移除" (decision.remove_from_list in en/zh_TW).
+IGNORE_SENTINEL: str = "__ignore__"
 
-# Stored user_decision value for the deferred remove-from-list flow.
-# Persisted to SQLite alongside the existing "" / "delete" / "keep"
-# values, displayed in the Action column via a localised label, and
-# applied at execute time (mark removed in the manifest, drop from vm).
-REMOVE_FROM_LIST_DECISION: str = "remove_from_list"
+# Stored user_decision value for the deferred ignore flow.
+# Displayed in the Action column via the localised "remove from list" label,
+# and applied at execute time (outcome='ignored', drop from vm).
+# Wire value is internal-only; user-facing label is decision.remove_from_list.
+IGNORE_DECISION: str = "ignore"
 
 # Sentinels for lock / unlock dispatched through the same regex / multi-
 # select code path as decisions. They DO NOT update ``user_decision`` —
@@ -104,12 +106,13 @@ def settable_decisions(
     internal (``"delete"`` or empty string for "keep — remove action");
     only the label is translated.
 
-    When ``include_remove`` is True, appends an entry whose stored value
-    is :data:`REMOVE_FROM_LIST_SENTINEL`. When ``include_lock`` is True,
-    appends two more entries with the lock/unlock sentinels. Callers
-    that recognise the sentinels route to the appropriate backend
-    instead of the decision-update path. Defaults are both False so the
-    main-window right-click submenu (which has separate top-level Lock /
+    When ``include_remove`` is True, appends an entry for the ignore
+    flow whose stored value is :data:`IGNORE_SENTINEL`. The user-facing
+    label stays "remove from list" (decision.remove_from_list). When
+    ``include_lock`` is True, appends two more entries with the lock/unlock
+    sentinels. Callers that recognise the sentinels route to the appropriate
+    backend instead of the decision-update path. Defaults are both False so
+    the main-window right-click submenu (which has separate top-level Lock /
     Unlock items) doesn't gain duplicate entries.
     """
     decisions: list[tuple[str, str]] = [
@@ -117,7 +120,8 @@ def settable_decisions(
         (t("decision.keep"), ""),
     ]
     if include_remove:
-        decisions.append((t("decision.remove_from_list"), REMOVE_FROM_LIST_SENTINEL))
+        # User-facing label is "remove from list"; wire value is IGNORE_SENTINEL.
+        decisions.append((t("decision.remove_from_list"), IGNORE_SENTINEL))
     if include_lock:
         decisions.append((t("decision.lock"), LOCK_SENTINEL))
         decisions.append((t("decision.unlock"), UNLOCK_SENTINEL))

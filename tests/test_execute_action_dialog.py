@@ -53,20 +53,20 @@ class TestDialogState:
         from PySide6.QtWidgets import QDialogButtonBox
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         # #425 — was "keep"; the canonical keep state is "" but that's
-        # also undecided. Use REMOVE_FROM_LIST_DECISION as a distinct
+        # also undecided. Use IGNORE_DECISION as a distinct
         # decided-but-not-delete value.
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", REMOVE_FROM_LIST_DECISION))]
+        from app.views.constants import IGNORE_DECISION
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", IGNORE_DECISION))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         btn = dlg._btn_box.button(QDialogButtonBox.Ok)
         assert btn.isEnabled()
 
-    def test_deleted_and_executed_paths_initially_empty(self, qapp):
+    def test_deleted_and_removed_paths_initially_empty(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         groups = [_group(_rec("/a.jpg", "delete"))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         assert dlg.deleted_paths == []
-        assert dlg.executed_paths == []
+        assert dlg.removed_from_list_paths == []
 
     def test_tree_view_has_model_on_init(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
@@ -99,9 +99,9 @@ class TestDecidedRecords:
     def test_counts_decided_records(self, qapp):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         # #425 — was "keep"; "" is canonical keep but also undecided.
-        # Use REMOVE_FROM_LIST_DECISION as the second decided state.
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", REMOVE_FROM_LIST_DECISION), _rec("/c.jpg", ""))]
+        # Use IGNORE_DECISION as the second decided state.
+        from app.views.constants import IGNORE_DECISION
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", IGNORE_DECISION), _rec("/c.jpg", ""))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         assert len(dlg._decided_records()) == 2
 
@@ -451,49 +451,35 @@ class TestOnExecute:
 
         mock_del.assert_called_once_with("/a.jpg")
 
-    def test_legacy_keep_literal_adds_to_executed_paths(self, qapp):
-        """#425 back-compat — manifests written before auto-select was
-        canonicalised to ``""`` still carry the literal ``"keep"``
-        string. The execute path treats that as decided-keep and adds
-        to executed_paths (the elif branch at execute_action_dialog.py:991).
-        New manifests use ``""`` and are correctly excluded from the
-        executed-paths sweep — only delete actions fire on Execute."""
+    def test_keep_literal_and_empty_both_skipped(self, qapp):
+        """#584 — the dead ``elif decision == "keep"`` branch is removed;
+        legacy ``"keep"`` and canonical ``""`` rows are both skipped on Execute
+        (neither files are deleted nor added to any path-accumulator)."""
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(_rec("/a.jpg", "keep"))]  # legacy literal
+        groups = [_group(
+            _rec("/del.jpg", "delete"),
+            _rec("/legacy_keep.jpg", "keep"),  # old literal — now skipped
+            _rec("/canonical_keep.jpg", ""),   # canonical undecided — skipped
+        )]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
 
         with patch.object(dlg, "_delete_file") as mock_del:
             dlg._on_execute()
 
-        mock_del.assert_not_called()
-        assert "/a.jpg" in dlg.executed_paths
-
-    def test_undecided_and_canonical_keep_skipped(self, qapp):
-        """#425 — canonical empty-keep ``""`` rows are NOT marked executed
-        (they're undecided semantically; nothing to execute). Only the
-        legacy literal ``"keep"`` triggers the executed-paths append.
-        """
-        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        groups = [_group(
-            _rec("/del.jpg", "delete"),
-            _rec("/legacy_keep.jpg", "keep"),  # legacy literal — adds
-            _rec("/canonical_keep.jpg", ""),   # canonical — skipped
-        )]
-        dlg = ExecuteActionDialog(groups, manifest_path=None)
-
-        with patch.object(dlg, "_delete_file"):
-            dlg._on_execute()
-
-        assert "/legacy_keep.jpg" in dlg.executed_paths
-        assert "/canonical_keep.jpg" not in dlg.executed_paths
+        # Only the delete row fires _delete_file.
+        mock_del.assert_called_once_with("/del.jpg")
+        # Neither keep variant ends up in any accumulator.
+        assert "/legacy_keep.jpg" not in dlg.deleted_paths
+        assert "/legacy_keep.jpg" not in dlg.removed_from_list_paths
+        assert "/canonical_keep.jpg" not in dlg.deleted_paths
 
     def test_batch_update_decisions_called_before_execute(self, qapp, tmp_path):
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        # #425 — second rec uses REMOVE_FROM_LIST_DECISION as a non-default
+        # #425 — second rec uses IGNORE_DECISION as a non-default
         # decided state distinct from delete (canonical keep "" would be
         # filtered by _decided_records).
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", REMOVE_FROM_LIST_DECISION))]
+        from app.views.constants import IGNORE_DECISION
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", IGNORE_DECISION))]
         dlg = ExecuteActionDialog(groups, manifest_path="/fake/manifest.sqlite")
 
         def fake_delete(path):
@@ -504,7 +490,7 @@ class TestOnExecute:
                 "infrastructure.manifest_repository.ManifestRepository.batch_update_decisions"
             ) as mock_batch:
                 with patch(
-                    "infrastructure.manifest_repository.ManifestRepository.mark_executed"
+                    "infrastructure.manifest_repository.ManifestRepository.finalize_outcome"
                 ):
                     dlg._on_execute()
 
@@ -513,12 +499,14 @@ class TestOnExecute:
         assert "/a.jpg" in batch_arg
         assert "/b.jpg" in batch_arg
 
-    def test_mark_executed_called_with_all_done(self, qapp, tmp_path):
+    def test_finalize_outcome_called_for_ignore_decision(self, qapp, tmp_path):
+        """#584 — finalize_outcome('ignored') is called for IGNORE_DECISION
+        rows at execute time; deleted rows call it with 'deleted' inside
+        _delete_file; neither calls the removed mark_executed."""
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        # #425 — legacy "keep" string (back-compat path that fires
-        # mark_executed via execute_action_dialog.py:991). Canonical ""
-        # rows would not appear in executed_paths.
-        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", "keep"))]
+        from app.views.constants import IGNORE_DECISION
+
+        groups = [_group(_rec("/a.jpg", "delete"), _rec("/b.jpg", IGNORE_DECISION))]
         dlg = ExecuteActionDialog(groups, manifest_path="/fake/manifest.sqlite")
 
         def fake_delete(path):
@@ -529,27 +517,30 @@ class TestOnExecute:
                 "infrastructure.manifest_repository.ManifestRepository.batch_update_decisions"
             ):
                 with patch(
-                    "infrastructure.manifest_repository.ManifestRepository.mark_executed"
-                ) as mock_mark:
+                    "infrastructure.manifest_repository.ManifestRepository.finalize_outcome"
+                ) as mock_finalize:
                     dlg._on_execute()
 
-        mock_mark.assert_called_once()
-        called_paths = set(mock_mark.call_args[0][1])
-        assert "/a.jpg" in called_paths
-        assert "/b.jpg" in called_paths
+        # finalize_outcome called for the deferred-ignore path.
+        mock_finalize.assert_called_once()
+        call_args = mock_finalize.call_args[0]
+        assert "/b.jpg" in call_args[1]  # paths arg
+        assert call_args[2] == "ignored"  # outcome arg
 
-    def test_mark_executed_not_called_when_no_manifest(self, qapp):
+    def test_finalize_outcome_not_called_when_no_manifest(self, qapp):
+        """No manifest path → finalize_outcome is never invoked for ignore rows."""
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        # #425 — legacy "keep" exercises the back-compat executed path.
-        groups = [_group(_rec("/a.jpg", "keep"))]
+        from app.views.constants import IGNORE_DECISION
+
+        groups = [_group(_rec("/a.jpg", IGNORE_DECISION))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
 
         with patch(
-            "infrastructure.manifest_repository.ManifestRepository.mark_executed"
-        ) as mock_mark:
+            "infrastructure.manifest_repository.ManifestRepository.finalize_outcome"
+        ) as mock_finalize:
             dlg._on_execute()
 
-        mock_mark.assert_not_called()
+        mock_finalize.assert_not_called()
 
 
 # ── _delete_file ───────────────────────────────────────────────────────────
@@ -592,6 +583,73 @@ class TestDeleteFile:
 
         mock_remove.assert_called_once_with(str(f))
         assert str(f) in dlg.deleted_paths
+
+    def test_d7_delete_outcome_db_failure_self_heal(self, qapp, tmp_path):
+        """D7 — if the DB write of outcome='deleted' fails after the file
+        is trashed, the row stays outcome='' (reappears on next load)
+        so the user can see it hit _missing_paths rather than silently
+        losing track. Guards the self-heal property.
+
+        Contract:
+          (a) path IS in deleted_paths  — file was physically trashed
+          (b) path IS in _failed_paths  — DB write failure recorded
+          (c) DB row stays outcome=''   — would reappear on next load
+        """
+        import sqlite3 as _sq
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        # Create a real file so _delete_file's os.path.exists check passes.
+        photo = tmp_path / "photo.jpg"
+        photo.write_bytes(b"fake")
+        photo_path = str(photo)
+
+        # Build a real DB with the outcome column so we can read it back.
+        db = tmp_path / "manifest.sqlite"
+        with _sq.connect(db) as conn:
+            conn.executescript("""
+                CREATE TABLE migration_manifest (
+                    id INTEGER PRIMARY KEY,
+                    source_path TEXT NOT NULL,
+                    source_label TEXT NOT NULL DEFAULT 'test',
+                    action TEXT NOT NULL DEFAULT '',
+                    source_hash TEXT, phash TEXT,
+                    hamming_distance INTEGER, group_id TEXT, reason TEXT,
+                    executed INTEGER NOT NULL DEFAULT 0,
+                    user_decision TEXT NOT NULL DEFAULT '',
+                    outcome TEXT NOT NULL DEFAULT ''
+                );
+            """)
+            conn.execute(
+                "INSERT INTO migration_manifest (source_path) VALUES (?)",
+                (photo_path,),
+            )
+            conn.commit()
+
+        groups = [_group(_rec(photo_path, "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=str(db))
+
+        import sqlite3 as _sqlite3_mod
+        with patch("send2trash.send2trash"):  # trash succeeds — file "gone"
+            with patch(
+                "infrastructure.manifest_repository.ManifestRepository.finalize_outcome",
+                side_effect=_sqlite3_mod.OperationalError("disk full"),
+            ):
+                dlg._delete_file(photo_path)
+
+        # (a) deleted_paths populated — file was trashed
+        assert photo_path in dlg.deleted_paths
+        # (b) _failed_paths captures the DB write failure
+        failed_paths = [p for p, _ in dlg._failed_paths]
+        assert photo_path in failed_paths
+        failed_reasons = {p: r for p, r in dlg._failed_paths}
+        assert "DB outcome write failed" in failed_reasons[photo_path]
+        # (c) DB row stays outcome='' — self-heal: reappears on next load
+        with _sq.connect(db) as conn:
+            row = conn.execute(
+                "SELECT outcome FROM migration_manifest WHERE source_path = ?",
+                (photo_path,),
+            ).fetchone()
+        assert row and row[0] == ""
 
 
 # ── #505 delete audit CSV on the UI delete path ────────────────────────────
@@ -673,10 +731,10 @@ class TestDeleteAuditLog:
     ):
         """A keep-only / remove-only execute must not emit an empty audit
         CSV — the log exists to record actual deletions."""
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.constants import IGNORE_DECISION
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
-        groups = [_group(_rec("/keep.jpg", REMOVE_FROM_LIST_DECISION))]
+        groups = [_group(_rec("/keep.jpg", IGNORE_DECISION))]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         log_dir = tmp_path / "delete_logs"
         monkeypatch.setattr(
@@ -1540,7 +1598,7 @@ class TestSetDecisionByRegexPersistFailure:
 
 
 class TestRemoveFromListBranch:
-    """The execute-action dialog routes the REMOVE_FROM_LIST_SENTINEL
+    """The execute-action dialog routes the IGNORE_SENTINEL
     to a separate path that mutates self._groups in place (preserving
     the alias to vm.groups), syncs the manifest, and accumulates
     removed paths for the parent to read after exec()."""
@@ -1551,7 +1609,7 @@ class TestRemoveFromListBranch:
         the parent can refresh the main tree on close."""
         from PySide6.QtWidgets import QMessageBox
 
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
         rec_a = _rec("/a.jpg", "delete")
@@ -1566,7 +1624,7 @@ class TestRemoveFromListBranch:
                 "PySide6.QtWidgets.QMessageBox.question",
                 return_value=QMessageBox.Yes,
             ) as q:
-                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+                dlg._set_decision("/a.jpg", IGNORE_SENTINEL)
             q.assert_called_once()
             remaining = [r.file_path for g in dlg._groups for r in g.items]
             assert remaining == ["/b.jpg"]
@@ -1578,7 +1636,7 @@ class TestRemoveFromListBranch:
         """Decline path: prompt fires, user clicks No, row stays."""
         from PySide6.QtWidgets import QMessageBox
 
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
         rec_a = _rec("/a.jpg", "delete")
@@ -1589,7 +1647,7 @@ class TestRemoveFromListBranch:
                 "PySide6.QtWidgets.QMessageBox.question",
                 return_value=QMessageBox.No,
             ):
-                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+                dlg._set_decision("/a.jpg", IGNORE_SENTINEL)
             # Row still present, removed_from_list_paths empty.
             assert dlg._groups[0].items == [rec_a]
             assert dlg.removed_from_list_paths == []
@@ -1601,7 +1659,7 @@ class TestRemoveFromListBranch:
         must disappear — otherwise the tree shows an empty header."""
         from PySide6.QtWidgets import QMessageBox
 
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
         rec_a = _rec("/a.jpg", "delete")
@@ -1612,7 +1670,7 @@ class TestRemoveFromListBranch:
                 "PySide6.QtWidgets.QMessageBox.question",
                 return_value=QMessageBox.Yes,
             ):
-                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+                dlg._set_decision("/a.jpg", IGNORE_SENTINEL)
             assert dlg._groups == []
         finally:
             dlg.close()
@@ -1623,7 +1681,7 @@ class TestRemoveFromListBranch:
         vm.groups (the caller's list) reflects the removal automatically."""
         from PySide6.QtWidgets import QMessageBox
 
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
         rec_a = _rec("/a.jpg", "delete")
@@ -1635,7 +1693,7 @@ class TestRemoveFromListBranch:
                 "PySide6.QtWidgets.QMessageBox.question",
                 return_value=QMessageBox.Yes,
             ):
-                dlg._set_decision("/a.jpg", REMOVE_FROM_LIST_SENTINEL)
+                dlg._set_decision("/a.jpg", IGNORE_SENTINEL)
             # Caller's list reflects the removal because we mutated in place.
             assert caller_groups is dlg._groups
             remaining = [r.file_path for g in caller_groups for r in g.items]
@@ -1645,9 +1703,9 @@ class TestRemoveFromListBranch:
 
     def test_regex_remove_writes_decision_no_prompt(self, qapp, tmp_path):
         """Regex 'remove from list' is now deferred — no prompt fires,
-        matched rows just get user_decision='remove_from_list' set.
+        matched rows just get user_decision='ignore' (IGNORE_DECISION) set.
         The actual removal happens at Execute time."""
-        from app.views.constants import REMOVE_FROM_LIST_DECISION, REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_DECISION, IGNORE_SENTINEL
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
         rec_a = _rec("/a.jpg", "delete")
@@ -1657,11 +1715,11 @@ class TestRemoveFromListBranch:
         try:
             with patch("PySide6.QtWidgets.QMessageBox.question") as q:
                 dlg._set_decision_by_regex(
-                    "File Name", r"^a\.jpg$", REMOVE_FROM_LIST_SENTINEL
+                    "File Name", r"^a\.jpg$", IGNORE_SENTINEL
                 )
             q.assert_not_called()
             # Row stays in groups; decision is updated.
-            assert rec_a.user_decision == REMOVE_FROM_LIST_DECISION
+            assert rec_a.user_decision == IGNORE_DECISION
             assert rec_b.user_decision == "delete"
             assert dlg.removed_from_list_paths == [], (
                 "Bulk regex must not append to removed_from_list_paths "
@@ -1672,7 +1730,7 @@ class TestRemoveFromListBranch:
 
     def test_regex_remove_no_match_shows_info(self, qapp, tmp_path):
         """Zero matches → no-match info dialog, no prompt, no decision change."""
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
         rec = _rec("/a.jpg", "delete")
@@ -1681,7 +1739,7 @@ class TestRemoveFromListBranch:
             with patch("PySide6.QtWidgets.QMessageBox.information") as info, \
                  patch("PySide6.QtWidgets.QMessageBox.question") as q:
                 dlg._set_decision_by_regex(
-                    "File Name", "wont_match", REMOVE_FROM_LIST_SENTINEL
+                    "File Name", "wont_match", IGNORE_SENTINEL
                 )
             info.assert_called_once()
             q.assert_not_called()
@@ -1691,17 +1749,17 @@ class TestRemoveFromListBranch:
             dlg.close()
 
     def test_on_execute_handles_remove_from_list_decision(self, qapp, tmp_path):
-        """When _on_execute encounters user_decision='remove_from_list',
+        """When _on_execute encounters user_decision='ignore' (IGNORE_DECISION),
         it should NOT delete the file (no recycle-bin call) but should
         accumulate the path in removed_from_list_paths so the parent
-        can drop it from vm.groups, AND mark it in remove_from_review
-        in the manifest."""
+        can drop it from vm.groups, AND write outcome='ignored' in the
+        manifest via finalize_outcome."""
         import sqlite3
 
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.constants import IGNORE_DECISION
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
-        # Build a real SQLite manifest so remove_from_review can write.
+        # Build a real SQLite manifest so finalize_outcome can write.
         db = tmp_path / "manifest.sqlite"
         with sqlite3.connect(db) as conn:
             conn.executescript("""
@@ -1709,15 +1767,15 @@ class TestRemoveFromListBranch:
                     id INTEGER PRIMARY KEY,
                     source_path TEXT NOT NULL,
                     source_label TEXT NOT NULL DEFAULT 'test',
-                    dest_path TEXT,
-                    action TEXT NOT NULL DEFAULT 'MOVE',
+                    action TEXT NOT NULL DEFAULT '',
                     source_hash TEXT,
                     phash TEXT,
                     hamming_distance INTEGER,
                     group_id TEXT,
                     reason TEXT,
                     executed INTEGER NOT NULL DEFAULT 0,
-                    user_decision TEXT NOT NULL DEFAULT ''
+                    user_decision TEXT NOT NULL DEFAULT '',
+                    outcome TEXT NOT NULL DEFAULT ''
                 );
             """)
             conn.execute(
@@ -1726,24 +1784,24 @@ class TestRemoveFromListBranch:
             )
             conn.commit()
 
-        rec_a = _rec("/a.jpg", REMOVE_FROM_LIST_DECISION)
+        rec_a = _rec("/a.jpg", IGNORE_DECISION)
         groups = [_group(rec_a)]
         dlg = ExecuteActionDialog(groups, manifest_path=str(db))
         try:
             with patch.object(dlg, "_delete_file") as delete_file:
                 dlg._on_execute()
-            # No file delete attempted for remove decisions.
+            # No file delete attempted for ignore decisions.
             delete_file.assert_not_called()
             # Path landed in removed_from_list_paths so the parent
             # can drop it from vm.groups.
             assert dlg.removed_from_list_paths == ["/a.jpg"]
-            # The manifest row was marked removed.
+            # The manifest row has outcome='ignored'.
             with sqlite3.connect(db) as conn:
                 row = conn.execute(
-                    "SELECT user_decision FROM migration_manifest WHERE source_path = ?",
+                    "SELECT outcome FROM migration_manifest WHERE source_path = ?",
                     ("/a.jpg",),
                 ).fetchone()
-            assert row and row[0] == "removed"
+            assert row and row[0] == "ignored"
         finally:
             dlg.close()
 
@@ -1812,9 +1870,7 @@ class TestExecuteDialogStaticScope:
         from unittest.mock import patch
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
-        # #425 — third row uses legacy "keep" so executed_paths gets a
-        # back-compat marker; canonical "" rows are undecided and would
-        # be filtered before this point.
+        # The "keep" literal row is silently skipped (#584 — dead elif removed).
         groups = [_group(
             _rec("/del1.jpg", "delete"),
             _rec("/legacy_keep.jpg", "keep"),
@@ -1829,7 +1885,9 @@ class TestExecuteDialogStaticScope:
 
         # Both delete rows execute — in-dialog selection no longer scopes.
         assert sorted(deleted) == ["/del1.jpg", "/del2.jpg"]
-        assert "/legacy_keep.jpg" in dlg.executed_paths
+        # The "keep" literal is silently skipped (no executed_paths accumulator).
+        assert "/legacy_keep.jpg" not in dlg.deleted_paths
+        assert "/legacy_keep.jpg" not in dlg.removed_from_list_paths
 
     def test_lock_guard_fires_for_every_locked_delete_row(self, qapp):
         """The lock-confirm scan no longer narrows to highlighted rows —
@@ -2353,7 +2411,7 @@ class TestExecuteDialogTypeFilter:
       - All decisions (default) — show every decided row
       - Delete only             — show rows with user_decision == 'delete'
       - Remove from list only   — show rows with user_decision ==
-                                  REMOVE_FROM_LIST_DECISION
+                                  IGNORE_DECISION
 
     Filter is purely visual / scope: it never mutates ``self._groups``
     (group-context contract per #430). Execute commits only what's
@@ -2371,18 +2429,18 @@ class TestExecuteDialogTypeFilter:
         so a filter that drops a group entirely is testable on the
         no-match edge case (use the empty group below).
         """
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.constants import IGNORE_DECISION
         g1 = _group(
             _rec("/g1/del_a.jpg", "delete"),
             _rec("/g1/del_b.jpg", "delete"),
-            _rec("/g1/rem_a.jpg", REMOVE_FROM_LIST_DECISION),
+            _rec("/g1/rem_a.jpg", IGNORE_DECISION),
             _rec("/g1/undecided.jpg", ""),
             number=1,
         )
         g2 = _group(
             _rec("/g2/del_c.jpg", "delete"),
-            _rec("/g2/rem_b.jpg", REMOVE_FROM_LIST_DECISION),
-            _rec("/g2/rem_c.jpg", REMOVE_FROM_LIST_DECISION),
+            _rec("/g2/rem_b.jpg", IGNORE_DECISION),
+            _rec("/g2/rem_c.jpg", IGNORE_DECISION),
             number=2,
         )
         return [g1, g2]
@@ -2394,7 +2452,7 @@ class TestExecuteDialogTypeFilter:
         labels go through ``t()`` but the data column carries the
         canonical decision string so locale switches don't break the
         filter predicate."""
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.constants import IGNORE_DECISION
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         dlg = ExecuteActionDialog(self._mixed_groups(), manifest_path=None)
 
@@ -2404,7 +2462,7 @@ class TestExecuteDialogTypeFilter:
         # the read path the helper uses.
         assert combo.itemData(0) is None  # "All decisions" sentinel
         assert combo.itemData(1) == "delete"
-        assert combo.itemData(2) == REMOVE_FROM_LIST_DECISION
+        assert combo.itemData(2) == IGNORE_DECISION
 
     def test_filter_defaults_to_all_on_construction(self, qapp):
         """Acceptance: filter resets to "All" every time the dialog is
@@ -2595,14 +2653,14 @@ class TestExecuteDialogTypeFilter:
         lock-confirm scan. Otherwise a "Remove only" filter on a
         manifest containing locked-delete rows would spuriously trigger
         the destructive-row lock-confirm gate. See #175 / #182."""
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.constants import IGNORE_DECISION
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
 
         # Construct a fixture where a locked row has decision=delete —
         # the classic lock-confirm trigger.
         locked_delete = _rec("/g1/locked_del.jpg", "delete")
         locked_delete.is_locked = True
-        remove_row = _rec("/g1/rem.jpg", REMOVE_FROM_LIST_DECISION)
+        remove_row = _rec("/g1/rem.jpg", IGNORE_DECISION)
         groups = [_group(locked_delete, remove_row, number=1)]
         dlg = ExecuteActionDialog(groups, manifest_path=None)
         dlg._type_filter_combo.setCurrentIndex(2)  # Remove only
@@ -2632,7 +2690,7 @@ class TestExecuteDialogTypeFilter:
         from the tree on the next refresh — the filter is consistent
         through the decision-change path, not just through the initial
         build."""
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
+        from app.views.constants import IGNORE_DECISION
         from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
         groups = self._mixed_groups()
         dlg = ExecuteActionDialog(groups, manifest_path=None)
@@ -2647,7 +2705,7 @@ class TestExecuteDialogTypeFilter:
         # right-click submenu uses; this triggers
         # _refresh_ui_after_decision_change which calls
         # _rebuild_tree_model → _apply_type_filter.
-        dlg._set_decision("/g1/del_a.jpg", REMOVE_FROM_LIST_DECISION)
+        dlg._set_decision("/g1/del_a.jpg", IGNORE_DECISION)
 
         after = dlg._apply_type_filter(dlg._groups_with_decisions())
         after_count = sum(len(g.items) for g in after)

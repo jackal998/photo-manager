@@ -27,10 +27,10 @@ from app.views.components.status_messages import report_count
 from app.views.constants import (
     COL_GROUP,
     COL_NAME,
+    IGNORE_DECISION,
+    IGNORE_SENTINEL,
     LOCK_SENTINEL,
     PATH_ROLE,
-    REMOVE_FROM_LIST_DECISION,
-    REMOVE_FROM_LIST_SENTINEL,
     SORT_ROLE,
     UNLOCK_SENTINEL,
     settable_decisions,
@@ -121,7 +121,6 @@ class ExecuteActionDialog(QDialog):
         self._groups = groups
         self._manifest_path = manifest_path
         self.deleted_paths: list[str] = []
-        self.executed_paths: list[str] = []
         # Paths removed from the review list during this dialog session
         # (via the new "remove from list" action). The parent inspects
         # this after exec() so it can refresh the main tree — vm.groups
@@ -180,7 +179,7 @@ class ExecuteActionDialog(QDialog):
 
         ``None`` = "All decisions" sentinel (show everything). Otherwise
         the canonical decision string (``"delete"`` or
-        :data:`REMOVE_FROM_LIST_DECISION`). Reads ``currentData()`` from
+        :data:`IGNORE_DECISION`). Reads ``currentData()`` from
         the combo so the value column stays language-agnostic — the
         combo's visible text is localised but its userData is the
         internal decision string. See #502.
@@ -328,7 +327,7 @@ class ExecuteActionDialog(QDialog):
             t("execute_dialog.filter_delete_only"), "delete",
         )
         self._type_filter_combo.addItem(
-            t("execute_dialog.filter_remove_only"), REMOVE_FROM_LIST_DECISION,
+            t("execute_dialog.filter_remove_only"), IGNORE_DECISION,
         )
         self._type_filter_combo.currentIndexChanged.connect(
             self._on_type_filter_changed
@@ -747,7 +746,7 @@ class ExecuteActionDialog(QDialog):
         if decision == UNLOCK_SENTINEL:
             self._set_lock(path, False)
             return
-        if decision == REMOVE_FROM_LIST_SENTINEL:
+        if decision == IGNORE_SENTINEL:
             # Single-row right-click — always confirm before removing,
             # for symmetry with the regex flow. Set+execute is a bigger
             # commitment than delete/keep, even on one row.
@@ -761,7 +760,7 @@ class ExecuteActionDialog(QDialog):
             if self._row_is_locked(path):
                 verdict = self._ask_lock_confirm(
                     paths=[path],
-                    decision_for_label=REMOVE_FROM_LIST_DECISION,
+                    decision_for_label=IGNORE_DECISION,
                 )
                 if verdict != _DIALOG_VERDICT_PROCEED:
                     return
@@ -1007,7 +1006,7 @@ class ExecuteActionDialog(QDialog):
     def _set_decision_by_regex(self, field: str, pattern: str, new_decision: str) -> None:
         """Find all file rows where field matches pattern and route by action.
 
-        ``new_decision == REMOVE_FROM_LIST_SENTINEL`` removes the
+        ``new_decision == IGNORE_SENTINEL`` removes the
         matched rows from the review list (mirrors the main-window
         regex flow). ``LOCK_SENTINEL`` / ``UNLOCK_SENTINEL`` flip
         ``is_locked`` for matched rows (idempotent — applied to all,
@@ -1087,11 +1086,11 @@ class ExecuteActionDialog(QDialog):
                 )
             return
 
-        # Bulk regex remove behaves like bulk regex delete/keep —
-        # matched rows get REMOVE_FROM_LIST_DECISION and the user
+        # Bulk regex ignore behaves like bulk regex delete/keep —
+        # matched rows get IGNORE_DECISION and the user
         # reviews + commits via Execute.
-        if new_decision == REMOVE_FROM_LIST_SENTINEL:
-            new_decision = REMOVE_FROM_LIST_DECISION
+        if new_decision == IGNORE_SENTINEL:
+            new_decision = IGNORE_DECISION
 
         # Compute locked subset from the unified matched set. Order
         # preserved from matched_for_op so the lock-confirm dialog's
@@ -1382,11 +1381,11 @@ class ExecuteActionDialog(QDialog):
                 except Exception as exc:
                     logger.warning("Failed to persist decisions before execute: {}", exc)
 
-        # Collect deferred-remove paths separately from immediate ones
+        # Collect deferred-ignore paths separately from immediate ones
         # so we don't double-mark already-removed rows in SQLite. The
         # immediate single-row right-click path already calls
         # remove_from_review at click time.
-        deferred_remove_paths: list[str] = []
+        deferred_ignore_paths: list[str] = []
         # Track in-scope records we executed so we can clear their
         # decision in-memory below. Without this, a subsequent
         # "Execute selected" or "Execute" click would re-process them
@@ -1407,11 +1406,8 @@ class ExecuteActionDialog(QDialog):
                 if decision == "delete":
                     self._delete_file(rec.file_path)
                     executed_in_scope.append((group, rec))
-                elif decision == "keep":
-                    self.executed_paths.append(rec.file_path)
-                    executed_in_scope.append((group, rec))
-                elif decision == REMOVE_FROM_LIST_DECISION:
-                    deferred_remove_paths.append(rec.file_path)
+                elif decision == IGNORE_DECISION:
+                    deferred_ignore_paths.append(rec.file_path)
                     executed_in_scope.append((group, rec))
 
         # #505 — write the delete audit CSV for the files this pass
@@ -1420,28 +1416,20 @@ class ExecuteActionDialog(QDialog):
         self._write_delete_audit_log(deleted_before, failed_before)
 
         if self._manifest_path:
-            all_done = self.deleted_paths + self.executed_paths
-            if all_done:
+            if deferred_ignore_paths:
                 try:
                     from infrastructure.manifest_repository import ManifestRepository
-                    ManifestRepository().mark_executed(self._manifest_path, all_done)
-                except Exception as exc:
-                    logger.warning("Failed to mark executed in manifest: {}", exc)
-
-            if deferred_remove_paths:
-                try:
-                    from infrastructure.manifest_repository import ManifestRepository
-                    ManifestRepository().remove_from_review(
-                        self._manifest_path, deferred_remove_paths
+                    ManifestRepository().finalize_outcome(
+                        self._manifest_path, deferred_ignore_paths, "ignored"
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Failed to mark deferred remove rows: {}", exc
+                        "Failed to write ignored outcome for deferred rows: {}", exc
                     )
                 # Surface to the caller so it can drop these from
                 # vm.groups; the immediate-path entries are already
                 # gone from there via in-place mutation.
-                self.removed_from_list_paths.extend(deferred_remove_paths)
+                self.removed_from_list_paths.extend(deferred_ignore_paths)
 
         if self._missing_paths:
             from PySide6.QtWidgets import QMessageBox
@@ -1541,6 +1529,22 @@ class ExecuteActionDialog(QDialog):
         except Exception as exc:
             logger.warning("Failed to delete {}: {}", path, exc)
             self._failed_paths.append((path, str(exc)))
+            return
+        # D7: write outcome='deleted' immediately after the trash succeeds.
+        # Fail-loud: on DB failure the row stays outcome='' (reappears on
+        # next load) which is the intended self-heal for disk-deleted-but-
+        # DB-failed files. The file IS gone from disk (deleted_paths is
+        # already appended for the audit CSV) but its manifest row is not
+        # silently lost — it resurfaces and hits the _missing_paths branch.
+        if self._manifest_path:
+            try:
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().finalize_outcome(
+                    self._manifest_path, [path], "deleted"
+                )
+            except Exception as exc:
+                logger.warning("Failed to write deleted outcome for {}: {}", path, exc)
+                self._failed_paths.append((path, f"DB outcome write failed: {exc}"))
 
     def done(self, result: int) -> None:
         """Persist geometry on every close path (#215).

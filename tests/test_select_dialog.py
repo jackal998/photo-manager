@@ -255,12 +255,12 @@ class TestSettableDecisionOptions:
     def test_action_combo_includes_remove_option(self, qapp):
         """Specifically verify the remove sentinel is reachable from the
         dropdown — that's the whole point of include_remove=True here."""
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
         from app.views.dialogs.select_dialog import ActionDialog
         dlg = ActionDialog(fields=["File Name"])
         # _decisions stores the (label, value) pairs the dropdown emits.
         values = [v for _, v in dlg._decisions]
-        assert REMOVE_FROM_LIST_SENTINEL in values
+        assert IGNORE_SENTINEL in values
 
 
 class TestBackwardCompatAlias:

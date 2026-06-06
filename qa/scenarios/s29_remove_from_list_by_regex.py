@@ -119,13 +119,14 @@ def main() -> int:
         return 1
 
     failures: list[str] = []
-    # Matched rows: user_decision must be the deferred marker. NOT
-    # 'removed' — that's the value remove_from_review writes at Execute
+    # Matched rows: user_decision must be the deferred marker 'ignore'
+    # (IGNORE_DECISION, #584 rename from 'remove_from_list'). NOT
+    # 'ignored' — that's the outcome finalize_outcome writes at Execute
     # time, which this scenario deliberately does not exercise.
     for name in expected_match:
-        if post[name] != "remove_from_list":
+        if post[name] != "ignore":
             failures.append(
-                f"{name}: expected 'remove_from_list' decision, got {post[name]!r}"
+                f"{name}: expected 'ignore' decision (IGNORE_DECISION), got {post[name]!r}"
             )
     for name in expected_unchanged:
         if post[name] != pre[name]:
@@ -134,7 +135,7 @@ def main() -> int:
             )
 
     matched_rows = sum(
-        1 for name in expected_match if post[name] == "remove_from_list"
+        1 for name in expected_match if post[name] == "ignore"
     )
     unchanged_rows = sum(
         1 for name in expected_unchanged if post[name] == pre[name]

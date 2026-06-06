@@ -10,14 +10,14 @@ file_operations.remove_items_from_list. Two sub-branches:
 
   (a) File-multi: left-click + Ctrl+click 3 file rows → right-click
       one of them → "Remove from List" → status bar "Removed 3 items
-      from list"; the three target rows marked 'removed' in the
+      from list"; the three target rows outcome='ignored' in the
       manifest, others unchanged.
   (b) Group + file: click the format-dup group header (selects the
       whole group as one item) → Ctrl+click one remaining near-dup
       file → right-click that file → "Remove from List" → status bar
       "Removed 2 items from list" (1 group + 1 file in the
       user-visible count). DB-side: BOTH files in the format-dup
-      group AND the lone near-dup file all marked 'removed' —
+      group AND the lone near-dup file all outcome='ignored' —
       verifies the group→file expansion in remove_items_from_list
       (paths_for_db spans children of selected groups).
 
@@ -58,13 +58,35 @@ ALL_FILES = NEAR_DUP_FILES + FORMAT_DUP_FILES
 
 
 def _read_decisions() -> dict[str, str]:
-    """Return {basename: user_decision} for every fixture row."""
+    """Return {basename: user_decision} for every fixture row.
+
+    Used only for the pre-operation snapshot (confirms fixture starts clean).
+    Post-operation assertions use _read_outcomes().
+    """
     if not MANIFEST_PATH.exists():
         raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
     conn = sqlite3.connect(str(MANIFEST_PATH))
     try:
         rows = conn.execute(
             "SELECT source_path, user_decision FROM migration_manifest"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {Path(p).name: (d or "") for p, d in rows}
+
+
+def _read_outcomes() -> dict[str, str]:
+    """Return {basename: outcome} for every fixture row.
+
+    #584: remove_from_list writes outcome='ignored' via finalize_outcome
+    (not user_decision='removed').  Used for all post-operation assertions.
+    """
+    if not MANIFEST_PATH.exists():
+        raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT source_path, outcome FROM migration_manifest"
         ).fetchall()
     finally:
         conn.close()
@@ -84,15 +106,16 @@ def _compute_group_numbers() -> dict[str, int]:
     conn = sqlite3.connect(str(MANIFEST_PATH))
     try:
         rows = conn.execute(
-            "SELECT source_path, group_id, user_decision "
+            "SELECT source_path, group_id, outcome "
             "FROM migration_manifest"
         ).fetchall()
     finally:
         conn.close()
 
     by_group: dict[str, list[str]] = defaultdict(list)
-    for source_path, group_id, user_decision in rows:
-        if (user_decision or "") == "removed":
+    for source_path, group_id, outcome in rows:
+        # #584: visibility predicate is WHERE outcome='' (mirrors load()).
+        if (outcome or "") != "":
             continue
         if group_id:
             by_group[group_id].append(source_path)
@@ -138,6 +161,9 @@ def main() -> int:
         return 1
     print(f"  pre={dict(sorted(pre.items()))}")
 
+    # Pre-outcomes snapshot (all should be '' for a fresh scan).
+    pre_outcomes = _read_outcomes()
+
     group_map = _compute_group_numbers()
     print(f"  group_map={group_map!r}")
     near_group = group_map.get(ROW_A1)
@@ -166,21 +192,21 @@ def main() -> int:
     if not inv_a:
         failures.append("branch A: status bar did not echo 'Removed 3 items from list'")
 
-    post_a = _read_decisions()
+    post_a = _read_outcomes()
     print(f"  post_a={dict(sorted(post_a.items()))}")
     for target in (ROW_A1, ROW_A2, ROW_A3):
-        if post_a.get(target) != "removed":
+        if post_a.get(target) != "ignored":
             failures.append(
-                f"branch A: {target} user_decision="
-                f"{post_a.get(target)!r}, expected 'removed'"
+                f"branch A: {target} outcome="
+                f"{post_a.get(target)!r}, expected 'ignored'"
             )
     for other in ALL_FILES:
         if other in (ROW_A1, ROW_A2, ROW_A3):
             continue
-        if post_a.get(other) != pre.get(other):
+        if post_a.get(other) != pre_outcomes.get(other):
             failures.append(
                 f"branch A leaked into {other}: "
-                f"pre={pre.get(other)!r} post={post_a.get(other)!r}"
+                f"pre={pre_outcomes.get(other)!r} post={post_a.get(other)!r}"
             )
 
     # ── (b) Group + file branch ───────────────────────────────────────────
@@ -203,25 +229,25 @@ def main() -> int:
     if not inv_b:
         failures.append("branch B: status bar did not echo 'Removed 2 items from list'")
 
-    post_b = _read_decisions()
+    post_b = _read_outcomes()
     print(f"  post_b={dict(sorted(post_b.items()))}")
-    # Group→file expansion: BOTH format-dup files should now be 'removed'.
+    # Group→file expansion: BOTH format-dup files should now be 'ignored'.
     for target in (FORMAT_DUP_HEIC, FORMAT_DUP_JPG):
-        if post_b.get(target) != "removed":
+        if post_b.get(target) != "ignored":
             failures.append(
-                f"branch B: format-dup file {target} user_decision="
-                f"{post_b.get(target)!r}, expected 'removed' "
+                f"branch B: format-dup file {target} outcome="
+                f"{post_b.get(target)!r}, expected 'ignored' "
                 f"(group→file expansion in remove_items_from_list)"
             )
-    if post_b.get(ROW_B_FILE) != "removed":
+    if post_b.get(ROW_B_FILE) != "ignored":
         failures.append(
-            f"branch B: lone file {ROW_B_FILE} user_decision="
-            f"{post_b.get(ROW_B_FILE)!r}, expected 'removed'"
+            f"branch B: lone file {ROW_B_FILE} outcome="
+            f"{post_b.get(ROW_B_FILE)!r}, expected 'ignored'"
         )
-    # ROW_UNTOUCHED must keep its pre value across both branches.
-    if post_b.get(ROW_UNTOUCHED) != pre.get(ROW_UNTOUCHED):
+    # ROW_UNTOUCHED must keep its pre outcome value across both branches.
+    if post_b.get(ROW_UNTOUCHED) != post_a.get(ROW_UNTOUCHED):
         failures.append(
-            f"untouched {ROW_UNTOUCHED}: pre={pre.get(ROW_UNTOUCHED)!r} "
+            f"untouched {ROW_UNTOUCHED}: pre={post_a.get(ROW_UNTOUCHED)!r} "
             f"post={post_b.get(ROW_UNTOUCHED)!r}"
         )
 
