@@ -6,13 +6,22 @@ Memory-footprint audit (#453)
 The hashing path holds the entire file in Python heap for image
 formats (JPEG / PNG / HEIC / WebP / RAW) because all three downstream
 operations — ``hashlib.sha256``, ``PIL.Image.open`` and
-``rawpy.open_buffer`` — want a ``bytes`` buffer. This is intentional:
-the single ``path.read_bytes()`` in ``compute_hashes`` was the #446
-fix that eliminated a double-read of every image and roughly halved
-NAS scan time. Backing it out for RAW (e.g. mmap the SHA pass,
+``rawpy.imread(io.BytesIO(...))`` — want a ``bytes`` buffer. This is
+intentional: the single ``path.read_bytes()`` in ``compute_hashes`` was
+the #446 fix that eliminated a double-read of every image and roughly
+halved NAS scan time. Backing it out for RAW (e.g. mmap the SHA pass,
 re-read for decode) would regress #446's gain — verified during the
 #453 audit: ``rawpy`` has no zero-copy decode path and a fresh
 ``bytes(mm)`` materialisation costs the same RAM as ``read_bytes()``.
+
+#591: the in-memory RAW path decodes those bytes via
+``rawpy.imread(io.BytesIO(data))`` — rawpy 0.26.1 dropped the
+module-level ``rawpy.open_buffer`` the older code called, so that call
+dead-ended on ``AttributeError`` and silently re-read the file from disk
+(3 touches per RAW). The single-read guarantee therefore holds for valid
+camera RAW; a non-camera TIFF routed to the ``raw`` branch (#75) still
+falls back to a path re-read in ``_load_raw_preview`` so it skips
+cleanly rather than crashing.
 
 The video path (``mp4`` / ``mov``) already streams via 64 KB chunks
 in ``compute_sha256`` — peak heap is ~64 KB regardless of file size.
@@ -128,13 +137,17 @@ def _hashes_from_data(
     if file_type == "raw":
         img = _load_raw_preview_from_bytes(data)
         if img is None:
-            # rawpy.open_buffer not available in this version; re-use path-based loader.
+            # In-memory decode failed (genuine LibRaw error / non-camera TIFF
+            # routed to 'raw', #75) — fall back to the path-based loader so the
+            # file still skips cleanly.
             img = _load_raw_preview(path)
         # True sensor dimensions come from rawpy metadata, not the embedded thumbnail.
         # Thumbnails are typically low-res previews (e.g. 1024×768 for a 12 MP DNG).
         if _RAWPY_AVAILABLE:
             try:
-                with rawpy.open_buffer(data) as raw:
+                # #591 — decode the already-read bytes via a fresh io.BytesIO
+                # (rawpy 0.26.1 has no module-level open_buffer); no disk re-read.
+                with rawpy.imread(io.BytesIO(data)) as raw:
                     px_w, px_h = raw.sizes.width, raw.sizes.height
             except (OSError, ValueError, AttributeError, rawpy.LibRawError):
                 try:
@@ -439,15 +452,24 @@ def _load_raw_preview(path: Path) -> Optional[Image.Image]:
 
 
 def _load_raw_preview_from_bytes(data: bytes) -> Optional[Image.Image]:
-    """Load a PIL Image from RAW bytes using rawpy.open_buffer (no second file read).
+    """Load a PIL Image from RAW bytes via ``rawpy.imread(io.BytesIO(data))`` (no second file read).
 
-    Returns None if rawpy.open_buffer is unavailable (older rawpy versions);
-    the caller falls back to _load_raw_preview() in that case.
+    #591 — feeds the already-read bytes straight to ``rawpy.imread`` through a
+    fresh ``io.BytesIO`` (a file-like object, which ``imread`` accepts). This
+    replaces the dead ``rawpy.open_buffer`` call: rawpy 0.26.1 has no
+    module-level ``open_buffer``, so the old code raised ``AttributeError`` and
+    the caller silently re-read the file from disk. Decode is bit-identical to
+    the path-based loader (same LibRaw, same bytes).
+
+    Returns None on any decode failure (genuine ``LibRawError`` / non-camera
+    TIFF, #75); the caller falls back to ``_load_raw_preview(path)`` then.
     """
     if not _RAWPY_AVAILABLE:
         return None
     try:
-        with rawpy.open_buffer(data) as raw:
+        # Fresh io.BytesIO per call — a reused/non-zero-position buffer would
+        # raise LibRawIOError and silently degrade to a path re-read.
+        with rawpy.imread(io.BytesIO(data)) as raw:
             try:
                 thumb = raw.extract_thumb()
                 if thumb.format == rawpy.ThumbFormat.JPEG:
@@ -459,5 +481,6 @@ def _load_raw_preview_from_bytes(data: bytes) -> Optional[Image.Image]:
             rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
             return Image.fromarray(rgb).convert("RGB")
     except (OSError, ValueError, AttributeError, rawpy.LibRawError):
-        # AttributeError → rawpy.open_buffer not available in this rawpy build.
+        # Any LibRaw decode failure (incl. LibRawFileUnsupportedError for a
+        # non-camera TIFF, #75) → None so the caller's path fallback runs.
         return None

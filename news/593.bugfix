@@ -1,0 +1,1 @@
+Fix RAW/DNG files being needlessly re-read from disk during hashing (rawpy 0.26.1 had dropped the in-memory `open_buffer` API the code relied on); they are now decoded directly from the bytes already read for the checksum (#591).
