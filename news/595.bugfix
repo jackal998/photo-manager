@@ -1,0 +1,1 @@
+Fix the Scan dialog not stopping the scan when closed mid-scan — closing now reliably cancels the worker instead of leaving it running, and no longer prints a "cannot schedule new futures" error on exit (#594).
