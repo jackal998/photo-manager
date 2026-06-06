@@ -1918,6 +1918,122 @@ class TestScanWorkerPerDeviceHashPools:
             f" expected [{local}, {cpu}], got {constructed!r}"
         )
 
+    def test_close_unblocks_route_outcome_on_full_exif_queue(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#594 — requestInterruption() (dialog close) must tear the worker down
+        even when the parent drain thread is wedged in ``_route_outcome``'s
+        cooperative ``exif_queue.put`` loop because the queue is full.
+
+        The real hang: that put loop watched ``cancel_flag`` ONLY, but
+        ``cancel_flag`` is set exclusively by the parent's own interrupt branch —
+        which the parent cannot reach while blocked here. A title-bar-X close calls
+        ``requestInterruption()`` (the Qt interruption flag, NOT ``cancel_flag``),
+        so on pre-#594 code the parent never escapes, ``wait(3000)`` times out, the
+        QThread orphans (reads keep running), and ``_compute_dispatch`` later
+        raises ``RuntimeError: cannot schedule new futures after interpreter
+        shutdown`` — the user's CMD traceback.
+
+        We wedge the lone exiftool consumer in ``__enter__`` so it never drains the
+        bounded ``exif_queue``; with > MAXSIZE non-skip records the parent fills the
+        queue and blocks in the put loop. Then we flip ``isInterruptionRequested``
+        and assert ``run()`` returns + emits ['Scan cancelled.'] within seconds. On
+        pre-#594 code ``run()`` never returns and the join below times out.
+        """
+        import threading
+        import time
+        import scanner.exif as _exif
+        from PySide6.QtCore import Qt
+        from app.views.workers.scan_worker import ScanWorker
+        from scanner.walker import FileRecord
+
+        # exif_workers=1 → _EXIF_QUEUE_MAXSIZE = 2 * chunk_size(500) * 1 = 1000.
+        # Need > MAXSIZE NON-skip records so the (MAXSIZE+1)th put blocks (skip
+        # records never reach the exif_queue put — see _route_outcome).
+        records = [
+            FileRecord(path=Path(rf"J:\nas\img_{i}.jpg"), source_label="s",
+                       file_type="jpeg")
+            for i in range(1100)
+        ]
+        self._install_synthetic_pipeline(
+            monkeypatch, records, remote_drive=lambda root: str(root).upper() == "J:"
+        )
+
+        # Wedge the lone exiftool consumer in __enter__ so it NEVER drains the
+        # queue → the queue fills and the parent blocks in _route_outcome's put.
+        # kill() (the #561 cancel path) releases it so teardown completes.
+        released = threading.Event()
+
+        class _BlockingExif:
+            def __enter__(self):
+                released.wait()
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+            def kill(self):
+                released.set()
+
+        monkeypatch.setattr(_exif, "ExiftoolProcess", _BlockingExif)
+        # Once released on cancel, the consumer may drain+flush — make the flush a
+        # no-op so teardown can't touch a fake exiftool process.
+        monkeypatch.setattr(_exif, "batch_read_extracts", lambda *a, **k: {})
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=2,
+            exif_workers=1,
+            hash_pool="thread",  # force the thread branch (where _route_outcome runs)
+        )
+
+        # Flip the Qt interruption flag only AFTER the parent is blocked inside
+        # _route_outcome (queue full). The synthetic read+compute are instant so
+        # the queue fills in well under the delay; flipping then exercises the
+        # #594 break (vs the drain-loop top-check catching it first).
+        interrupted = {"v": False}
+        monkeypatch.setattr(
+            worker, "isInterruptionRequested", lambda: interrupted["v"]
+        )
+
+        def trip():
+            time.sleep(0.8)
+            interrupted["v"] = True
+
+        failed: list[str] = []
+        # DirectConnection: run() executes in a sub-thread below so the test can
+        # time-bound a hang, but the worker's affinity is the main (test) thread.
+        # Under the default AutoConnection a cross-thread failed.emit() would queue
+        # to a main-thread event loop that isn't running here, and the capture would
+        # be lost — force Direct so the slot fires inline in the run() thread.
+        worker.failed.connect(failed.append, Qt.ConnectionType.DirectConnection)
+
+        done = threading.Event()
+
+        def run_worker():
+            try:
+                worker.run()
+            finally:
+                released.set()  # never leave the consumer wedged
+                done.set()
+
+        threading.Thread(target=trip, daemon=True).start()
+        threading.Thread(target=run_worker, daemon=True).start()
+
+        finished = done.wait(timeout=10)
+        released.set()  # belt-and-suspenders before asserting
+        assert finished, (
+            "#594 regression: worker.run() did not return within 10s after "
+            "requestInterruption() — the parent is wedged in _route_outcome's "
+            "cooperative put loop (pre-#594 it watched cancel_flag only, never the "
+            "Qt interruption flag). This is the dialog-close hang/orphan."
+        )
+        assert failed == ["Scan cancelled."], (
+            f"a mid-HASH interruption must emit ['Scan cancelled.']; got {failed!r}"
+        )
+
 
 class TestStratifiedSample:
     """#548 — _stratified_sample spreads the auto-calibration sample across

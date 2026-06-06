@@ -927,7 +927,10 @@ class ScanWorker(QThread):
 
             #564 — the put is cancel-safe: uses a cooperative bounded-put
             loop so a slow exiftool consumer with a full queue doesn't
-            deadlock the producer on cancel.
+            deadlock the producer on cancel. #594 — the loop also watches
+            ``isInterruptionRequested()`` so a dialog-close (which sets the
+            Qt interruption flag, not ``cancel_flag``) can't wedge the parent
+            drain thread here.
             """
             if isinstance(outcome, HashFailure):
                 # Both raised exceptions and silent decode failures
@@ -945,7 +948,16 @@ class ScanWorker(QThread):
                 # #564 — cooperative bounded put: mirrors the _read_drain
                 # pattern so a full exif_queue (slow exiftool consumer) can't
                 # wedge the producer forever on cancel.
-                while not cancel_flag.is_set():
+                # #594 — ALSO break on isInterruptionRequested(). This runs in
+                # the parent drain thread, and cancel_flag is set ONLY by that
+                # same thread's interrupt branch downstream. Watching cancel_flag
+                # alone, a full queue here wedges the parent BEFORE it can reach
+                # that branch — so requestInterruption() (dialog close) could
+                # never tear the worker down (orphaned QThread + the interpreter-
+                # shutdown RuntimeError, #594). Breaking on the Qt interruption
+                # flag lets the parent escape and run the cancel teardown that
+                # then sets cancel_flag for the daemon threads.
+                while not cancel_flag.is_set() and not self.isInterruptionRequested():
                     try:
                         exif_queue.put(outcome, timeout=0.05)
                         break
@@ -1404,9 +1416,20 @@ class ScanWorker(QThread):
                         byte_budget.release(_n)
                         out_q.put(f.result())
 
-                    compute_pool.submit(
-                        compute_from_bytes, c_idx, c_record, c_data
-                    ).add_done_callback(_cb)
+                    try:
+                        compute_pool.submit(
+                            compute_from_bytes, c_idx, c_record, c_data
+                        ).add_done_callback(_cb)
+                    except RuntimeError:
+                        # #594 — shutdown race: the parent cancel branch may have
+                        # called compute_pool.shutdown(cancel_futures=True) (or the
+                        # interpreter is tearing down) between this loop's
+                        # cancel_flag check and the submit. Stop dispatching — the
+                        # cancel branch drains hash_in_q and abandons the budget on
+                        # teardown. Without this guard the daemon thread raises
+                        # "cannot schedule new futures after ... shutdown" — the
+                        # user-visible CMD traceback.
+                        break
 
             import threading as _threading
             read_drain_thread = _threading.Thread(
