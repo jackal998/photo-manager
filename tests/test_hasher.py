@@ -277,7 +277,8 @@ class TestComputeHashes:
             # Preserve the real exception class so isinstance/except matches.
             mock_rawpy.LibRawError = _rawpy.LibRawError
             mock_rawpy.LibRawNoThumbnailError = _rawpy.LibRawNoThumbnailError
-            mock_rawpy.open_buffer.side_effect = unsupported
+            # #591 — the RAW in-memory path now calls rawpy.imread(io.BytesIO(data))
+            # (not the dropped rawpy.open_buffer); the path fallback also uses imread.
             mock_rawpy.imread.side_effect = unsupported
 
             sha, ph, dh, ch, dt, w, h = compute_hashes(f, "raw")  # +dhash at index 2
@@ -319,6 +320,32 @@ class TestRealDecodeFailures:
         bad.write_bytes(full.read_bytes()[:512])
         full.unlink()
         assert compute_phash(bad, "jpeg") is None
+
+    def test_raw_in_memory_path_skips_non_camera_tiff_unmocked(self, tmp_path):
+        """#591 — the REAL in-memory RAW path (``rawpy.imread(io.BytesIO(data))``)
+        must skip a non-camera TIFF cleanly: SHA present, all decode fields None,
+        no crash.
+
+        This is NOT mocked — it drives the actual rawpy 0.26.1 decode that every
+        other RAW test stubs out (test_raw_unsupported_format_returns_sha_only
+        patches ``rawpy`` entirely), which is exactly why the dead
+        ``rawpy.open_buffer`` dead-end shipped untested. A regression that drops
+        the ``io.BytesIO`` wrapper (passing raw ``bytes`` to ``imread`` raises an
+        uncaught ``SystemError``) or breaks the LibRaw except chain fails here.
+        """
+        from scanner.hasher import compute_hashes, compute_sha256
+
+        f = tmp_path / "scanner_output.tif"
+        # TIFF magic but not a real camera RAW → LibRaw rejects it
+        # (LibRawFileUnsupportedError) on both the io.BytesIO decode and the
+        # path fallback — the #75 non-camera-TIFF class, routed to "raw".
+        f.write_bytes(b"II*\x00" + b"\x00" * 256)
+
+        sha, ph, dh, ch, dt, w, h = compute_hashes(f, "raw")
+
+        assert sha == compute_sha256(f)
+        assert ph is None and dh is None and ch is None
+        assert dt is None and w is None and h is None
 
 
 # ---------------------------------------------------------------------------
@@ -559,11 +586,13 @@ class TestComputeFromBytes:
         assert outcome.exc_type == "ImageDecodeError"
 
     def test_uses_provided_bytes_not_re_reading_file(self, tmp_path):
-        """RAW path must use the provided data (open_buffer(data)) — not
-        re-read the file from disk — to preserve the single-read guarantee.
+        """compute_from_bytes must hash the PROVIDED data, not re-read the file
+        from disk — preserving the single-read guarantee.
 
-        We verify this by passing bytes that differ from the on-disk content:
-        compute_from_bytes must hash the PASSED bytes, not the file.
+        Demonstrated on the JPEG path by passing bytes that differ from the
+        on-disk content: the SHA must match the PASSED bytes, not the file.
+        (The RAW in-memory path's single-read property is covered separately by
+        the #591 fix and TestRealDecodeFailures.)
         """
         from scanner.hasher import compute_from_bytes
 
