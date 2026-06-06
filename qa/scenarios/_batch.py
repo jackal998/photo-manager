@@ -278,6 +278,11 @@ ALL_SCENARIOS = [
     "s64_execute_selected_partial",
     "s65_passenger_bridge",
     "s66_autotune_read_knee",
+    # s67 (#589) — D6 regression guard: under ui.prune_singletons="always"
+    # the LockedRowsConfirmDialog still gates locked singletons (pre-D6
+    # the always-path swept them silently). Disposable 2-JPEG cluster;
+    # CANCEL → outcome='' (lock holds); Unlock & Apply → outcome='ignored'.
+    "s67_locked_singleton_prune_always",
 ]
 
 
