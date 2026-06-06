@@ -715,6 +715,7 @@ class ScanWorker(QThread):
             _RAMP_MIN_SCAN_FILES,
             _valid_read_knee,
         )
+        from scanner.byte_budget import ByteBudget, default_budget_bytes
         import io
         from contextlib import redirect_stdout
 
@@ -1228,14 +1229,16 @@ class ScanWorker(QThread):
             compute_pool = ThreadPoolExecutor(
                 max_workers=os.cpu_count() or 4
             )
-            # #570 — bound in-flight compute tasks. ThreadPoolExecutor.submit()
-            # never blocks, so without this the bytes each pending task holds
-            # would accumulate unboundedly in the pool's internal work queue (the
-            # hash_in_q maxsize alone can't bound them — _compute_dispatch drains
-            # it instantly into the pool). A permit is acquired before submit and
-            # released in the done-callback, capping submitted-but-unfinished
-            # compute tasks at _HASH_QUEUE_MAXSIZE.
-            compute_inflight = threading.Semaphore(_HASH_QUEUE_MAXSIZE)
+            # #587 — replace the count-based compute_inflight Semaphore with a
+            # byte-budget gate.  Count alone (128 × ~130 MB DNG = ~16 GB) can't
+            # bound the RAM footprint on a large DNG library.  ByteBudget caps
+            # in-flight *bytes* instead: the byte cost is acquired in the READER
+            # worker (_gated_read / _budgeted_read) — which back-pressures the
+            # reader pool so completed-read bytes can't accumulate in
+            # Future._result — and released in the compute done-callback.
+            # hash_in_q maxsize=_HASH_QUEUE_MAXSIZE remains a secondary
+            # queue-DEPTH cap.
+            byte_budget = ByteBudget(default_budget_bytes(), cancel_flag.is_set)
             # out_q carries (idx, outcome) tuples from compute callbacks
             # back to the parent drain loop.
             out_q: _queue.Queue = _queue.Queue()
@@ -1271,21 +1274,54 @@ class ScanWorker(QThread):
                     read_result = read_for_record(idx, r)
                 finally:
                     read_permits[dev].release()
-                return read_result, dev, level_tag, time.monotonic()
+                # Capture read-completion time BEFORE the byte-budget wait so the
+                # autotune ramp measures pure read throughput, not back-pressure.
+                t_end = time.monotonic()
+                # #587 — reader-side byte-budget backpressure. Acquiring HERE (in the
+                # reader-pool worker), NOT in _compute_dispatch, is what actually
+                # bounds RAM: it makes the reader pool stop producing once `budget`
+                # bytes are in flight, so completed-read bytes can't pile up in
+                # Future._result faster than compute drains them — the dominant #587
+                # leak. Released in the compute done-callback. n=0 (video / None /
+                # ReadFailure) is a no-op; on cancel acquire returns False and we
+                # still return the result — the drain loop drops it on its cancel check.
+                _data = read_result[2]
+                byte_budget.acquire(len(_data) if isinstance(_data, bytes) else 0)
+                return read_result, dev, level_tag, t_end
+
+            def _budgeted_read(idx, r):
+                """#587 — ungated reader (autotune off) with byte-budget backpressure.
+
+                Mirrors _gated_read's post-read acquire so the reader pool can't
+                outrun compute and accumulate read bytes in Future._result. The
+                budget is released in the compute done-callback.
+                """
+                read_result = read_for_record(idx, r)
+                _data = read_result[2]
+                byte_budget.acquire(len(_data) if isinstance(_data, bytes) else 0)
+                return read_result
 
             def _read_drain() -> None:
                 """Drive read futures into hash_in_q; put a None sentinel when done."""
                 gated = read_permits is not None
-                reader_futures = []
+                # #587 Part A — use a set so each future can be discarded
+                # (reader_futures.discard(fut)) immediately after its result is
+                # consumed.  CPython never clears Future._result after .result(),
+                # so keeping every future in a list for the lifetime of the scan
+                # would retain ALL read bytes (up to N × DNG size) until the list
+                # is freed at scan end — triggering OOM on large DNG libraries.
+                # as_completed() snapshots its input at call time, so mutating the
+                # set inside the loop is safe.
+                reader_futures: set = set()
                 for dev, items in device_records.items():
                     for _idx, _r in items:
                         if gated:
-                            reader_futures.append(
+                            reader_futures.add(
                                 reader_pools[dev].submit(_gated_read, dev, _idx, _r)
                             )
                         else:
-                            reader_futures.append(
-                                reader_pools[dev].submit(read_for_record, _idx, _r)
+                            reader_futures.add(
+                                reader_pools[dev].submit(_budgeted_read, _idx, _r)
                             )
                 for fut in as_completed(reader_futures):
                     if cancel_flag.is_set():
@@ -1293,6 +1329,11 @@ class ScanWorker(QThread):
                     try:
                         if gated:
                             read_result, _dev, level_tag, t_end = fut.result()
+                            # Drop the strong reference to this future NOW so
+                            # CPython can GC Future._result (the read bytes)
+                            # immediately rather than holding them until the
+                            # set is freed at scan end.
+                            reader_futures.discard(fut)
                             if read_result is None:
                                 continue  # cancelled before this read acquired
                             ramp = ramps.get(_dev)
@@ -1324,6 +1365,8 @@ class ScanWorker(QThread):
                                         self.read_knee_measured.emit(_summary)
                         else:
                             read_result = fut.result()
+                            # Drop the strong reference so the bytes can be GC'd.
+                            reader_futures.discard(fut)
                         # Cooperative bounded put: retry with a short timeout so a
                         # cancel_flag check doesn't leave us stuck forever when
                         # compute is stopped and the queue is full.
@@ -1348,21 +1391,17 @@ class ScanWorker(QThread):
                         break
                     c_idx, c_record, c_data = item
 
-                    # #570 — acquire an in-flight permit before submitting so the
-                    # bytes in c_data can't pile up behind a slow compute stage.
-                    # Cancel-safe: drop the item (the scan is aborting) if
-                    # cancelled while waiting for a permit — same shape as the
-                    # bounded put() in _read_drain above.
-                    acquired = False
-                    while not cancel_flag.is_set():
-                        if compute_inflight.acquire(timeout=0.05):
-                            acquired = True
-                            break
-                    if not acquired:
-                        break
+                    # #587 — the byte budget is acquired in the READER worker
+                    # (_gated_read / _budgeted_read), so dispatch just submits.
+                    # n is the byte cost to release once this compute completes;
+                    # 0 for video / None / ReadFailure (acquire was a no-op there).
+                    n = len(c_data) if isinstance(c_data, bytes) else 0
 
-                    def _cb(f, _idx=c_idx):
-                        compute_inflight.release()
+                    def _cb(f, _idx=c_idx, _n=n):
+                        # release() never raises (#587 invariant) so out_q.put
+                        # always runs; releasing here (compute done) is what wakes
+                        # a reader blocked on the byte budget.
+                        byte_budget.release(_n)
                         out_q.put(f.result())
 
                     compute_pool.submit(
