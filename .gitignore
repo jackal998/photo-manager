@@ -123,6 +123,19 @@ settings.local.json
 # locally to spot dropped task assignments.
 .claude/team_idle.log
 
+# Local-only scratch under .claude/. Convention: anything prefixed
+# `tmp-` (file or directory) is per-session scratch — drafts from
+# skills (e.g. build-goal-prompt), perf-investigation artifacts
+# (CSVs, ad-hoc scripts), monitor dumps. Never tracked.
+.claude/tmp-*
+
+# Workflow scripts persisted by the Workflow tool to
+# .claude/workflows/<name>.js. Default local-only — they capture an
+# ad-hoc fan-out a session ran, not a reusable contract. To promote
+# one to a shared workflow, move/rename it into a tracked location
+# or `git add -f` deliberately.
+.claude/workflows/
+
 # Window geometry / splitter state — written by MainWindow.closeEvent on
 # every clean exit. Anchored under PHOTO_MANAGER_HOME (or repo root) so
 # the QA scenario can isolate from the user's real install; never
