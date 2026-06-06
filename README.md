@@ -29,7 +29,7 @@ Produces `migration_manifest.sqlite` recording each file's dedup classification 
 │     confirming.  If every file in a group is marked delete, a               │
 │     confirmation dialog appears before proceeding.  Confirm to:             │
 │       • delete → send file to recycle bin                                   │
-│       • keep   → mark as executed in the manifest                           │
+│       • keep   → left in review; no state written                           │
 │                                                                             │
 │  4. MIGRATE (photo-transfer) — legacy / defunct                            │
 │     The MOVE action + dest_path handshake were removed in #433.             │
@@ -237,7 +237,7 @@ window) showing all groups for final review.
   **Execute Action (highlighted)** when in scope (#211).
 - The chosen rows are then carried out:
   - `delete` → file sent to the recycle bin (`send2trash`)
-  - `keep` → marked as executed in the manifest (no file operation)
+  - `keep` → left in review; no manifest state written (the `outcome` column records `deleted` / `ignored` only)
   - Files that no longer exist on disk are skipped and listed in a warning dialog.
 
 All decision changes are batch-persisted to SQLite in a single transaction
@@ -469,7 +469,7 @@ photo-manager/
 │       └── sort_service.py       # SortService
 │
 ├── infrastructure/          # I/O: manifest repo, delete service, image cache
-│   ├── manifest_repository.py   # load/save/batch_update_decisions; mark_executed()
+│   ├── manifest_repository.py   # load/save/batch_update_decisions; finalize_outcome()
 │   ├── delete_service.py         # Recycle-bin deletion + audit CSV logging
 │   ├── image_service.py          # Thumbnail loading; disk + memory LRU cache
 │   ├── i18n.py                   # YAML translator catalog + t() lookup helper
