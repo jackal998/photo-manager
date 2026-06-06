@@ -2186,85 +2186,15 @@ class TestBoundedPipelineDeadlockSafety:
             )
 
 
-class TestComputeBackpressure:
-    """#570 — _compute_dispatch must bound the number of submitted-but-
-    unfinished compute tasks, so the image bytes each task holds can't pile up
-    unboundedly in the ThreadPoolExecutor's internal work queue.
-
-    The #566 regression: ``ThreadPoolExecutor.submit()`` never blocks, so a fast
-    reader floods the unbounded ``_work_queue`` with byte-holding tasks (the
-    ``hash_in_q`` maxsize can't bound them — _compute_dispatch drains it instantly
-    into the pool). The fix acquires a ``Semaphore(maxsize)`` permit before submit
-    and releases it in the done-callback. This models that exact logic and asserts
-    the bound holds.
-    """
-
-    def test_compute_dispatch_bounds_inflight_tasks(self):
-        """With a fast reader flooding the queue and a slow compute stage, the
-        number of submitted-but-unfinished compute tasks must stay <= maxsize.
-
-        Failure mode: drop the semaphore (bare ``submit()``) and in-flight grows
-        to the full input size — the unbounded-RAM bug. This test fails in that
-        case (peak >> maxsize), so it is not padding: it pins the backpressure
-        bound the #570 fix introduces.
-        """
-        import queue
-        import threading
-        import time
-        from concurrent.futures import ThreadPoolExecutor
-
-        MAXSIZE = 4
-        N = 40
-        in_q: queue.Queue = queue.Queue()
-        out_q: queue.Queue = queue.Queue()
-        compute_inflight = threading.Semaphore(MAXSIZE)
-        pool = ThreadPoolExecutor(max_workers=2)
-
-        lock = threading.Lock()
-        state = {"inflight": 0, "peak": 0}
-
-        def slow_compute(i):
-            time.sleep(0.01)  # compute slower than the instant reader
-            return i
-
-        def dispatch():
-            # Mirrors the real _compute_dispatch: acquire a permit, submit, then
-            # release it in the callback — capping submitted-but-unfinished tasks.
-            while True:
-                item = in_q.get()
-                if item is None:
-                    break
-                compute_inflight.acquire()
-                with lock:
-                    state["inflight"] += 1
-                    state["peak"] = max(state["peak"], state["inflight"])
-
-                def _cb(f):
-                    with lock:
-                        state["inflight"] -= 1
-                    compute_inflight.release()
-                    out_q.put(f.result())
-
-                pool.submit(slow_compute, item).add_done_callback(_cb)
-
-        t = threading.Thread(target=dispatch, daemon=True)
-        t.start()
-        # Instant reader: flood the queue far faster than compute can drain it.
-        for i in range(N):
-            in_q.put(i)
-        in_q.put(None)
-
-        results = [out_q.get(timeout=5) for _ in range(N)]
-        t.join(timeout=5)
-        pool.shutdown(wait=True)
-
-        assert sorted(results) == list(range(N)), "every item must be computed"
-        assert state["peak"] <= MAXSIZE, (
-            f"in-flight compute tasks peaked at {state['peak']}, exceeding the "
-            f"{MAXSIZE} bound — the bytes they hold would grow unboundedly in the "
-            "pool's work queue (the #570 RAM regression). A bare submit() with no "
-            "semaphore fails here."
-        )
+# NOTE (#587): the former ``TestComputeBackpressure`` modelled the #570
+# count-semaphore (``compute_inflight = Semaphore(_HASH_QUEUE_MAXSIZE)``) that
+# bounded in-flight compute by COUNT. #587 replaced that with a reader-side
+# BYTE budget (count alone can't bound RAM when files range 5–130 MB), so a
+# count-bound simulation no longer matches the code. Real coverage of the new
+# backpressure now lives in ``tests/test_byte_budget.py`` (the pure ByteBudget
+# accounting / cancel-wake / peak-bound invariant) and in
+# ``TestByteBudgetPipelineBound`` below (drives the real thread-branch pipeline
+# and asserts the reader pool is back-pressured by the budget).
 
 
 class TestPipelineIndexOrderDeterminism:
@@ -2578,13 +2508,25 @@ class TestScanWorkerReadKneeRamp:
         )
 
     def test_flag_off_builds_no_read_permit_semaphore(self, qapp, tmp_path, monkeypatch):
-        # Default-OFF: no per-device read Semaphore is constructed — only the #570
-        # compute_inflight(128). A read-permit for J: would be Semaphore(8).
+        # Default-OFF: no per-device read Semaphore is constructed (a read-permit
+        # for J: would be Semaphore(8)). The in-flight bound is still built — since
+        # #587 it is a ByteBudget (a Condition), not the old #570
+        # compute_inflight Semaphore(128).
         from app.views.workers.scan_worker import ScanWorker
+        import scanner.byte_budget as _bb
 
         records = self._records("J:", 4, file_type="skip")
         self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
         sem_values = self._spy_semaphores(monkeypatch)
+
+        built: list[int] = []
+        real_bb = _bb.ByteBudget
+
+        def spy_bb(budget_bytes, cancel_check):
+            built.append(budget_bytes)
+            return real_bb(budget_bytes, cancel_check)
+
+        monkeypatch.setattr(_bb, "ByteBudget", spy_bb)
 
         worker = ScanWorker(
             sources={"src": str(tmp_path)},
@@ -2594,7 +2536,7 @@ class TestScanWorkerReadKneeRamp:
         )  # autotune_read_knee defaults False
         worker.run()
 
-        assert 128 in sem_values, "compute_inflight(128) should still be built"
+        assert built, "the #587 ByteBudget in-flight bound should still be built (flag off)"
         assert 8 not in sem_values, "flag-off must not build a per-device read Semaphore"
 
     def test_cached_knee_starts_semaphore_at_knee(self, qapp, tmp_path, monkeypatch):
@@ -2871,3 +2813,100 @@ class TestScanWorkerReadKneeRamp:
             f"the sole-ramping emit must publish the real detected knee (1); "
             f"got {emitted!r}"
         )
+
+
+class TestByteBudgetPipelineBound:
+    """#587 — the reader-side byte budget must back-pressure the reader pool so a
+    large-file (DNG-cluster) window can't read the whole library into RAM.
+
+    Drives the REAL thread-branch pipeline with the compute stage held closed:
+    nothing releases the budget, so the reader pool stalls once the budget is
+    full. The number of reads that execute is then bounded by the budget
+    (≈ budget/size + the per-device reader pool), NOT ~N. Pre-#587 the budget
+    was acquired in _compute_dispatch (downstream of the reader), so the reader
+    pool had no back-pressure and read every file into hash_in_q / Future._result
+    — the OOM this test guards against.
+    """
+
+    def test_reader_pool_is_backpressured_by_byte_budget(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import threading
+        import time as _time
+
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.byte_budget as _bb
+        import scanner.hasher as _hasher
+
+        N = 200
+        SIZE = 64 * 1024
+        BUDGET = 16 * SIZE  # ~16 buffers may be in flight at once
+
+        for i in range(N):
+            (tmp_path / f"img_{i:04d}.jpg").write_bytes(b"x")
+
+        reads = {"n": 0}
+        reads_lock = threading.Lock()
+
+        def fake_read(idx, record):
+            with reads_lock:
+                reads["n"] += 1
+            return idx, record, bytes(SIZE)
+
+        # Hold compute closed so nothing releases the budget — the read side
+        # fills and reaches a steady state we can measure deterministically.
+        compute_gate = threading.Event()
+
+        def blocked_hashes(path, file_type, data):
+            compute_gate.wait()
+            return (f"sha{len(data)}", "p", "d", "1,2,3", None, 4, 4)
+
+        monkeypatch.setattr(_hasher, "read_for_record", fake_read)
+        monkeypatch.setattr(_hasher, "_hashes_from_data", blocked_hashes)
+        monkeypatch.setattr(_bb, "default_budget_bytes", lambda: BUDGET)
+
+        worker = ScanWorker(
+            sources={"S": str(tmp_path)},
+            output_path=str(tmp_path / "out.sqlite"),
+            recursive_map={"S": True},
+            autotune_read_knee=True,  # default path → _gated_read
+        )
+        run_thread = threading.Thread(target=worker.run, daemon=True)
+        run_thread.start()
+        try:
+            deadline = _time.monotonic() + 25
+            # Let reads begin so the steady-state measurement isn't vacuous.
+            while _time.monotonic() < deadline and reads["n"] == 0:
+                _time.sleep(0.02)
+            # Poll until the read count holds steady (compute blocked → the
+            # reader pool stops once the budget is full).
+            last, stable, peak = -1, 0, 0
+            while _time.monotonic() < deadline:
+                with reads_lock:
+                    n = reads["n"]
+                peak = max(peak, n)
+                if n == last:
+                    stable += 1
+                    if stable >= 6:
+                        break
+                else:
+                    stable, last = 0, n
+                _time.sleep(0.05)
+
+            assert 0 < peak <= 64, (
+                f"reader pool read {peak} of {N} files with compute blocked — "
+                f"the byte budget did not back-pressure the reader pool "
+                f"(expected ≈ budget/size + pool). Pre-#587 it reads the whole "
+                f"library into RAM."
+            )
+        finally:
+            compute_gate.set()  # release compute so the scan can finish
+            run_thread.join(timeout=30)
+
+        assert not run_thread.is_alive(), "scan should finish after compute is released"
+        assert (tmp_path / "out.sqlite").exists(), "manifest should be written"
+        with reads_lock:
+            assert reads["n"] == N, (
+                f"all {N} files must eventually be read once compute drains; "
+                f"got {reads['n']}"
+            )
