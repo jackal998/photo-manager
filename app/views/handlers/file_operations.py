@@ -11,9 +11,9 @@ from loguru import logger
 
 from app.views.components.status_messages import pluralize, report_count, t_pluralize
 from app.views.constants import (
+    IGNORE_DECISION,
+    IGNORE_SENTINEL,
     LOCK_SENTINEL,
-    REMOVE_FROM_LIST_DECISION,
-    REMOVE_FROM_LIST_SENTINEL,
     UNLOCK_SENTINEL,
 )
 from app.views.window_state import (
@@ -105,7 +105,8 @@ def _decision_display_label(decision: str) -> str:
         # "" is the canonical keep state; "keep" is the legacy literal
         # back-compat path (#425 — older manifests may carry it).
         return t("decision.keep")
-    if decision == REMOVE_FROM_LIST_DECISION:
+    if decision == IGNORE_DECISION:
+        # Wire value is 'ignore'; user-facing label stays "remove from list".
         return t("decision.remove_from_list")
     return decision
 
@@ -454,7 +455,7 @@ class FileOperationsHandler:
                     )
                     verdict = LockedRowsConfirmDialog.ask(
                         self.parent,
-                        action_label=_decision_display_label(REMOVE_FROM_LIST_DECISION),
+                        action_label=_decision_display_label(IGNORE_DECISION),
                         affected_count=len(all_paths),
                         locked_paths=locked_paths,
                     )
@@ -547,7 +548,7 @@ class FileOperationsHandler:
                 )
                 verdict = LockedRowsConfirmDialog.ask(
                     self.parent,
-                    action_label=_decision_display_label(REMOVE_FROM_LIST_DECISION),
+                    action_label=_decision_display_label(IGNORE_DECISION),
                     affected_count=len(all_paths),
                     locked_paths=locked_paths,
                 )
@@ -679,9 +680,12 @@ class FileOperationsHandler:
         """
         # Collect singletons from the current vm state, classified by
         # whether the remaining item has a pending non-keep-able decision.
+        # D6: also track which singletons are locked — they require the
+        # LockedRowsConfirmDialog gate before any prune fires.
         plain_paths: list[str] = []
         actioned_paths: list[str] = []
-        non_keepable_decisions = {"delete", REMOVE_FROM_LIST_DECISION}
+        locked_paths: list[str] = []
+        non_keepable_decisions = {"delete", IGNORE_DECISION}
         for g in self.vm.groups:
             items = getattr(g, "items", [])
             if len(items) != 1:
@@ -690,12 +694,15 @@ class FileOperationsHandler:
             fp = getattr(rec, "file_path", None)
             if not fp:
                 continue
+            if getattr(rec, "is_locked", False):
+                locked_paths.append(fp)
+                continue
             decision = getattr(rec, "user_decision", "") or ""
             if decision in non_keepable_decisions:
                 actioned_paths.append(fp)
             else:
                 plain_paths.append(fp)
-        if not plain_paths and not actioned_paths:
+        if not plain_paths and not actioned_paths and not locked_paths:
             return
 
         pref = "ask"
@@ -705,13 +712,39 @@ class FileOperationsHandler:
             pref = "ask"
         if pref == "never":
             return
+
+        # D6: gate locked singletons through LockedRowsConfirmDialog on
+        # BOTH the "always" and "ask" paths — the standing "always"
+        # instruction does not bypass the lock confirmation.
+        prunable_locked: list[str] = []
+        if locked_paths:
+            from app.views.dialogs.locked_rows_confirm_dialog import (
+                LockedRowsConfirmDialog,
+            )
+            all_for_lock_gate = plain_paths + actioned_paths + locked_paths
+            verdict = LockedRowsConfirmDialog.ask(
+                self.parent,
+                action_label=_decision_display_label(IGNORE_DECISION),
+                affected_count=len(all_for_lock_gate),
+                locked_paths=locked_paths,
+            )
+            if verdict == LockedRowsConfirmDialog.CANCEL:
+                # User cancelled — skip ALL locked singletons; proceed
+                # with unlocked ones below if any.
+                prunable_locked = []
+            elif verdict == LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED:
+                prunable_locked = locked_paths
+            else:
+                # APPLY_UNLOCKED_ONLY — locked singletons stay untouched.
+                prunable_locked = []
+
         if pref == "always":
-            # Standing instruction is "prune singletons" — sweep both
-            # buckets in the single batched call.
-            self._apply_singleton_prune(plain_paths + actioned_paths)
+            # Standing instruction is "prune singletons" — sweep all opted-in
+            # buckets in one batched call (unlocked + any lock-confirmed ones).
+            self._apply_singleton_prune(plain_paths + actioned_paths + prunable_locked)
             return
 
-        # pref == "ask" — show the dialog.
+        # pref == "ask" — show the singleton-prune dialog for unlocked buckets.
         from app.views.dialogs.singleton_prune_confirm_dialog import (
             SingletonPruneConfirmDialog,
         )
@@ -743,14 +776,34 @@ class FileOperationsHandler:
             self._apply_singleton_prune(plain_paths)
         if prune_verdict.prune_actioned and actioned_paths:
             self._apply_singleton_prune(actioned_paths)
+        if prunable_locked:
+            self._apply_singleton_prune(prunable_locked)
 
     def _apply_singleton_prune(self, paths: list[str]) -> None:
-        """Run the batched prune — one vm call, one DB sync, one refresh."""
+        """Run the batched prune — DB-first, then vm, then refresh.
+
+        D10: DB write is attempted first. If it fails, vm and UI are left
+        unchanged (no divergence between DB and in-memory state).
+        """
         if not paths:
             return
         logger.info("Pruning {} singleton groups (#426)", len(paths))
+        # D10: DB-first ordering prevents DB/vm divergence on failure.
+        manifest_path = getattr(self, "_manifest_path", None)
+        if manifest_path:
+            try:
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().finalize_outcome(manifest_path, paths, "ignored")
+            except Exception as exc:
+                logger.error("Failed to write ignored outcome for singleton prune: {}", exc)
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self.parent,
+                    t("file_op.remove_error_title"),
+                    t("file_op.remove_failed_body", error=str(exc)),
+                )
+                return
         self.vm.remove_from_list(paths)
-        self._sync_removed_to_db(paths)
         self._mark_dirty()
         self.ui_updater.refresh_tree(self.vm.groups)
 
@@ -930,13 +983,13 @@ class FileOperationsHandler:
             return
 
         locked_paths = self._locked_paths_in(file_items)
-        # REMOVE_FROM_LIST_SENTINEL is translated to its deferred
-        # decision value before applying; do it once here so both the
-        # dialog body (action label) and the eventual set_decision()
-        # call see a consistent string.
+        # IGNORE_SENTINEL is translated to its deferred decision value
+        # before applying; do it once here so both the dialog body
+        # (action label) and the eventual set_decision() call see a
+        # consistent string.
         resolved_decision = (
-            REMOVE_FROM_LIST_DECISION
-            if new_decision == REMOVE_FROM_LIST_SENTINEL
+            IGNORE_DECISION
+            if new_decision == IGNORE_SENTINEL
             else new_decision
         )
 
@@ -1003,8 +1056,8 @@ class FileOperationsHandler:
                 branch existed here, so numeric Apply via the
                 main-window route silently no-op'd.
             new_decision: ``"delete"`` / ``""`` set the corresponding
-                user_decision; :data:`REMOVE_FROM_LIST_SENTINEL`
-                attaches the deferred remove decision; the
+                user_decision; :data:`IGNORE_SENTINEL`
+                attaches the deferred ignore decision; the
                 :data:`LOCK_SENTINEL` / :data:`UNLOCK_SENTINEL`
                 sentinels flip ``is_locked`` for matched rows
                 (idempotent — applied to all matched, no confirm
@@ -1214,7 +1267,10 @@ class FileOperationsHandler:
                 # filters by path, so duplicates are harmless.
                 self.vm.remove_from_list(dlg.removed_from_list_paths)
             self.ui_updater.refresh_tree(self.vm.groups)
-            total = len(dlg.deleted_paths) + len(dlg.executed_paths)
+            # D4: executed_paths is gone (dead "keep" branch removed); count
+            # ignored rows via removed_from_list_paths so the status bar
+            # reflects the full set of rows resolved this pass.
+            total = len(dlg.deleted_paths) + len(dlg.removed_from_list_paths)
             report_count(
                 self.status_reporter,
                 t("status.verb_executed"),

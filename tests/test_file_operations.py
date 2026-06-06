@@ -106,6 +106,16 @@ def _read_decision(db: Path, path: str) -> str:
     return row[0] if row else ""
 
 
+def _read_outcome(db: Path, path: str) -> str:
+    """Read the outcome column (post-execute state) for a row."""
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT outcome FROM migration_manifest WHERE source_path = ?",
+            (path,),
+        ).fetchone()
+    return row[0] if row else ""
+
+
 def _read_locked(db: Path, path: str) -> bool:
     with sqlite3.connect(db) as conn:
         row = conn.execute(
@@ -220,7 +230,7 @@ class TestSetDecision:
 
 class TestRemoveFromList:
     def test_remove_items_updates_db_when_manifest_loaded(self, tmp_path):
-        """remove_items_from_list writes user_decision='removed' to SQLite."""
+        """remove_items_from_list writes outcome='ignored' to SQLite (#584)."""
         from app.viewmodels.main_vm import MainVM
         from unittest.mock import MagicMock
 
@@ -233,8 +243,8 @@ class TestRemoveFromList:
 
         handler.remove_items_from_list([{"type": "file", "path": "/a.jpg"}])
 
-        assert _read_decision(db, "/a.jpg") == "removed"
-        assert _read_decision(db, "/b.jpg") == ""
+        assert _read_outcome(db, "/a.jpg") == "ignored"
+        assert _read_outcome(db, "/b.jpg") == ""
 
     def test_remove_items_noop_when_no_manifest(self, tmp_path):
         """remove_items_from_list does NOT write to DB when no manifest is loaded."""
@@ -254,7 +264,7 @@ class TestRemoveFromList:
         assert _read_decision(db, "/a.jpg") == ""
 
     def test_remove_group_marks_all_files_in_group(self, tmp_path):
-        """Removing a whole group marks every file in that group as 'removed'."""
+        """Removing a whole group writes outcome='ignored' for every file (#584)."""
         from app.viewmodels.main_vm import MainVM
         from unittest.mock import MagicMock
 
@@ -267,11 +277,11 @@ class TestRemoveFromList:
 
         handler.remove_items_from_list([{"type": "group", "group_number": 5}])
 
-        assert _read_decision(db, "/a.jpg") == "removed"
-        assert _read_decision(db, "/b.jpg") == "removed"
+        assert _read_outcome(db, "/a.jpg") == "ignored"
+        assert _read_outcome(db, "/b.jpg") == "ignored"
 
     def test_remove_via_toolbar_highlighted_updates_db(self, tmp_path):
-        """remove_from_list_toolbar with highlighted items writes 'removed' to SQLite."""
+        """remove_from_list_toolbar with highlighted items writes outcome='ignored' (#584)."""
         from app.viewmodels.main_vm import MainVM
         from unittest.mock import MagicMock
 
@@ -284,8 +294,8 @@ class TestRemoveFromList:
 
         handler.remove_from_list_toolbar([{"type": "file", "path": "/a.jpg"}])
 
-        assert _read_decision(db, "/a.jpg") == "removed"
-        assert _read_decision(db, "/b.jpg") == ""
+        assert _read_outcome(db, "/a.jpg") == "ignored"
+        assert _read_outcome(db, "/b.jpg") == ""
 
     @patch("PySide6.QtWidgets.QMessageBox.information")
     def test_no_items_shows_message(self, mock_info, tmp_path):
@@ -345,8 +355,8 @@ class TestRemoveFromListLockGuard:
         remaining = [r.file_path for r in handler.vm.groups[0].items]
         assert "/a.jpg" not in remaining
         assert "/b.jpg" in remaining
-        assert _read_decision(db, "/a.jpg") == "removed"
-        assert _read_decision(db, "/b.jpg") == ""
+        assert _read_outcome(db, "/a.jpg") == "ignored"
+        assert _read_outcome(db, "/b.jpg") == ""
 
     def test_apply_all_unlocked_unlocks_then_removes_all(self, tmp_path):
         from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
@@ -362,8 +372,8 @@ class TestRemoveFromListLockGuard:
             handler.remove_items_from_list(items)
         assert handler.vm.groups == []
         assert rec_b.is_locked is False
-        assert _read_decision(db, "/a.jpg") == "removed"
-        assert _read_decision(db, "/b.jpg") == "removed"
+        assert _read_outcome(db, "/a.jpg") == "ignored"
+        assert _read_outcome(db, "/b.jpg") == "ignored"
 
     def test_no_locked_items_skips_dialog(self, tmp_path):
         from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
@@ -828,10 +838,10 @@ class TestSaveManifestLoadRoundTrip:
         ref_rec = next(r for r in records if r.file_path.endswith("ref.jpg"))
         cand_rec.user_decision = "delete"
         # #425 — was "keep"; canonical keep state is "" (the default).
-        # Leave ref_rec at the default and use REMOVE_FROM_LIST_DECISION
+        # Leave ref_rec at the default and use IGNORE_DECISION
         # to mark a distinct non-delete decision for round-trip proof.
-        from app.views.constants import REMOVE_FROM_LIST_DECISION
-        ref_rec.user_decision = REMOVE_FROM_LIST_DECISION
+        from app.views.constants import IGNORE_DECISION
+        ref_rec.user_decision = IGNORE_DECISION
 
         # Save to a NEW path via the real handler (dialog mocked).
         new_path = str(tmp_path / "exported.sqlite")
@@ -842,7 +852,7 @@ class TestSaveManifestLoadRoundTrip:
 
         # Verify the loaded -> decided -> saved chain preserved decisions.
         assert _read_decision(Path(new_path), cand_rec.file_path) == "delete"
-        assert _read_decision(Path(new_path), ref_rec.file_path) == REMOVE_FROM_LIST_DECISION
+        assert _read_decision(Path(new_path), ref_rec.file_path) == IGNORE_DECISION
         assert handler._manifest_path == new_path
 
 
@@ -1479,7 +1489,7 @@ class TestSetDecisionByRegexNumericFields:
         assert recs[0].user_decision == ""
 
 
-# ── set_decision_by_regex with REMOVE_FROM_LIST_SENTINEL ──────────────────
+# ── set_decision_by_regex with IGNORE_SENTINEL ──────────────────
 
 
 class TestSetDecisionByRegexRemoveFromList:
@@ -1497,7 +1507,7 @@ class TestSetDecisionByRegexRemoveFromList:
     def test_match_writes_remove_decision_no_immediate_drop(self, tmp_path):
         """Matched rows stay in vm.groups and have
         user_decision='remove_from_list' written. No prompt fires."""
-        from app.views.constants import REMOVE_FROM_LIST_DECISION, REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_DECISION, IGNORE_SENTINEL
         from app.viewmodels.main_vm import MainVM
 
         db = _make_db(tmp_path, [
@@ -1512,7 +1522,7 @@ class TestSetDecisionByRegexRemoveFromList:
 
         with patch("PySide6.QtWidgets.QMessageBox.question") as q:
             handler.set_decision_by_regex(
-                "File Name", r"^match", REMOVE_FROM_LIST_SENTINEL
+                "File Name", r"^match", IGNORE_SENTINEL
             )
 
         # No prompt — deferred path matches delete/keep regex feel.
@@ -1522,17 +1532,17 @@ class TestSetDecisionByRegexRemoveFromList:
         all_paths = [r.file_path for g in vm.groups for r in g.items]
         assert "/photos/match.jpg" in all_paths
         assert "/photos/keep.jpg" in all_paths
-        assert rec_match.user_decision == REMOVE_FROM_LIST_DECISION
+        assert rec_match.user_decision == IGNORE_DECISION
         assert rec_keep.user_decision == ""
         # SQLite reflects the same.
-        assert _read_decision(db, "/photos/match.jpg") == REMOVE_FROM_LIST_DECISION
+        assert _read_decision(db, "/photos/match.jpg") == IGNORE_DECISION
         assert _read_decision(db, "/photos/keep.jpg") == ""
         ui_updater.refresh_tree.assert_called()
 
     def test_remove_decision_marks_handler_dirty(self, tmp_path):
         """Setting the deferred remove decision must flip the dirty
         flag — the exit prompt depends on it (Item 2)."""
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
         from app.viewmodels.main_vm import MainVM
 
         db = _make_db(tmp_path, [{"source_path": "/photos/m.jpg"}])
@@ -1541,13 +1551,13 @@ class TestSetDecisionByRegexRemoveFromList:
         handler, _, _ = _make_handler(vm, str(db))
         assert handler.is_dirty() is False
 
-        handler.set_decision_by_regex("File Name", r"^m", REMOVE_FROM_LIST_SENTINEL)
+        handler.set_decision_by_regex("File Name", r"^m", IGNORE_SENTINEL)
         assert handler.is_dirty() is True
 
     def test_bulk_regex_no_match_shows_info(self, tmp_path):
         """A pattern that matches nothing still shows the no-match info
         dialog (unchanged from prior behaviour)."""
-        from app.views.constants import REMOVE_FROM_LIST_SENTINEL
+        from app.views.constants import IGNORE_SENTINEL
 
         rec = _rec("/photos/a.jpg")
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
@@ -1557,7 +1567,7 @@ class TestSetDecisionByRegexRemoveFromList:
         with patch("PySide6.QtWidgets.QMessageBox.information") as info, \
              patch("PySide6.QtWidgets.QMessageBox.question") as q:
             handler.set_decision_by_regex(
-                "File Name", "wont_match", REMOVE_FROM_LIST_SENTINEL
+                "File Name", "wont_match", IGNORE_SENTINEL
             )
 
         info.assert_called_once()
@@ -2310,7 +2320,8 @@ class TestSingletonPruneOffer:
         scale fixtures grind the UI thread.
     """
 
-    def _build(self, group_layouts, *, pref="ask", actioned_groups=None):
+    def _build(self, group_layouts, *, pref="ask", actioned_groups=None,
+               locked_groups=None):
         """Build a handler whose vm.groups match group_layouts (a list
         of group sizes — e.g. [1, 1, 3] = two singletons + a 3-row
         group). ``pref`` seeds the settings reply.
@@ -2320,13 +2331,20 @@ class TestSingletonPruneOffer:
         (a non-keep-able decision). Only meaningful for groups of
         size 1; lets a test produce mixed plain/actioned singleton
         buckets to drive Improvement 2's classifier.
+
+        ``locked_groups`` (optional) — set of group_number values
+        whose SINGLE item should have ``is_locked=True``. Used by D6
+        tests to verify the LockedRowsConfirmDialog gate fires.
         """
         actioned_groups = actioned_groups or set()
+        locked_groups = locked_groups or set()
         groups: list[PhotoGroup] = []
         for gn, size in enumerate(group_layouts, start=1):
             items = [_rec(f"/g{gn}_i{i}.jpg") for i in range(size)]
             if size == 1 and gn in actioned_groups:
                 items[0].user_decision = "delete"
+            if size == 1 and gn in locked_groups:
+                items[0].is_locked = True
             groups.append(PhotoGroup(group_number=gn, items=items))
         vm = SimpleNamespace(
             groups=groups,
@@ -2564,3 +2582,52 @@ class TestSingletonPruneOffer:
         assert vm.remove_from_list.call_count == 1
         passed = vm.remove_from_list.call_args[0][0]
         assert len(passed) == 50
+
+    # ── D6: locked-singleton lock gate ────────────────────────────────
+
+    def test_d6_locked_singleton_not_pruned_when_lock_dialog_cancelled(self):
+        """D6 — a locked singleton must NOT be silently pruned on the
+        'always' path. The LockedRowsConfirmDialog must fire; if the
+        user returns CANCEL, that locked singleton is skipped entirely
+        (no finalize_outcome call, no vm.remove_from_list).
+
+        Regression guard: before D6, the 'always' path swept locked
+        singletons with no dialog — the user's lock was silently
+        overridden.
+        """
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+
+        # Group 1: plain unlocked singleton. Group 2: LOCKED singleton.
+        handler, vm, settings, ui = self._build(
+            [1, 1], pref="always", locked_groups={2}
+        )
+        with patch.object(
+            LockedRowsConfirmDialog, "ask",
+            return_value=LockedRowsConfirmDialog.CANCEL,
+        ):
+            handler._maybe_offer_singleton_prune()
+
+        # Only the unlocked singleton (group 1) should be pruned.
+        vm.remove_from_list.assert_called_once()
+        pruned = vm.remove_from_list.call_args[0][0]
+        assert "/g1_i0.jpg" in pruned
+        assert "/g2_i0.jpg" not in pruned  # locked, CANCEL → skipped
+
+    def test_d6_locked_singleton_pruned_when_lock_dialog_unlock_apply(self):
+        """D6 — if the user chooses APPLY_ALL_UNLOCKED on the lock-confirm
+        dialog, the locked singleton IS included in the prune."""
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+
+        handler, vm, settings, ui = self._build(
+            [1, 1], pref="always", locked_groups={2}
+        )
+        with patch.object(
+            LockedRowsConfirmDialog, "ask",
+            return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED,
+        ):
+            handler._maybe_offer_singleton_prune()
+
+        vm.remove_from_list.assert_called_once()
+        pruned = vm.remove_from_list.call_args[0][0]
+        assert "/g1_i0.jpg" in pruned
+        assert "/g2_i0.jpg" in pruned  # lock-confirmed → included

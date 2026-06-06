@@ -84,15 +84,16 @@ def _compute_group_numbers() -> dict[str, int]:
     conn = sqlite3.connect(str(MANIFEST_PATH))
     try:
         rows = conn.execute(
-            "SELECT source_path, group_id, user_decision "
+            "SELECT source_path, group_id, outcome "
             "FROM migration_manifest"
         ).fetchall()
     finally:
         conn.close()
 
     by_group: dict[str, list[str]] = defaultdict(list)
-    for source_path, group_id, user_decision in rows:
-        if (user_decision or "") == "removed":
+    for source_path, group_id, outcome in rows:
+        # #584: visibility predicate is WHERE outcome='' (mirrors load()).
+        if (outcome or "") != "":
             continue
         if group_id:
             by_group[group_id].append(source_path)

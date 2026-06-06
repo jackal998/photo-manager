@@ -2,24 +2,24 @@
 into PhotoRecord/PhotoGroup objects for the Qt review UI.
 
 Load flow:
-  Every row is loaded except those with user_decision='removed' (dismissed by
-  the user via "Remove from List").  Files with a duplicate_of reference (EXACT /
-  REVIEW_DUPLICATE) are grouped with their reference as a pair.  If the reference
-  file itself is marked 'removed', the inline yield is also skipped.
+  Every row is loaded where outcome=''.  The ``outcome`` column is the single
+  visibility authority: '' = in-review, 'deleted' = trashed, 'ignored' = dismissed.
+  Files with a duplicate_of reference (EXACT / REVIEW_DUPLICATE) are grouped with
+  their reference as a pair.
   All records load with is_mark=False; is_locked is read from the
   ``is_locked`` column (0 / 1, defaults to 0 for older manifests via the
   additive migration).
 
   EXIF date is only read for REVIEW_DUPLICATE rows (performance).
 
-  If the DB pre-dates the user_decision column, an ALTER TABLE migration runs
+  If the DB pre-dates any column, an ALTER TABLE migration runs
   automatically so older manifests open without error.
 
 Save flow:
   Writes rec.user_decision for every record back to the manifest. Lock
   state is written by ``batch_update_lock_state`` separately — locking is
   a UI affordance, not a per-decision side-effect.
-  (executed=1 is set separately by ExecuteActionDialog after operations run.)
+  Outcome is written by ``finalize_outcome`` after execute operations run.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        phash,
        score
 FROM   migration_manifest
-WHERE  executed = 0
+WHERE  outcome = ''
 ORDER  BY
     group_id NULLS LAST,
     -- "Ref tier" first (KEEP / UNDATED / unset all render as "Ref"
@@ -98,6 +98,10 @@ _MIGRATIONS = [
     ("gps_present",     "INTEGER NOT NULL DEFAULT 0"),
     ("xmp_derived",     "INTEGER NOT NULL DEFAULT 0"),
     ("score",           "REAL"),
+    # Outcome column (#584): write-once post-execute state.
+    # '' = in-review (default), 'deleted' = trashed, 'ignored' = dismissed.
+    # This is the single visibility predicate in _LOAD_ALL_SQL (WHERE outcome='').
+    ("outcome",         "TEXT    NOT NULL DEFAULT ''"),
 ]
 
 # #433 — drop the legacy ``dest_path`` column and migrate ``action='MOVE'``
@@ -135,12 +139,8 @@ _UPDATE_LOCK_SQL = """
 UPDATE migration_manifest SET is_locked = ? WHERE source_path = ?
 """
 
-_MARK_EXECUTED_SQL = """
-UPDATE migration_manifest SET executed = 1 WHERE source_path = ?
-"""
-
-_REMOVE_FROM_REVIEW_SQL = """
-UPDATE migration_manifest SET user_decision = 'removed' WHERE source_path = ?
+_FINALIZE_OUTCOME_SQL = """
+UPDATE migration_manifest SET outcome = ?, executed = ? WHERE source_path = ?
 """
 
 
@@ -288,6 +288,11 @@ class ManifestRepository:
         transaction; the MOVE→'' normalisation is folded into the copy
         ``SELECT`` via ``CASE``. Row count is preserved exactly — no
         row is dropped, only ``dest_path`` and the MOVE label go away.
+
+        #584 — ``outcome`` is added as a hardcoded tail (crash-avoidance
+        for ancient dest_path manifests opened after the #584 migration).
+        It is NOT in ``_POST_DROP_COLUMNS`` to avoid a duplicate-column
+        error; it is always written as '' (the default in-review state).
         """
         cols = {row[1] for row in conn.execute(
             "PRAGMA table_info(migration_manifest)"
@@ -329,10 +334,11 @@ class ManifestRepository:
                 gps_present      INTEGER NOT NULL DEFAULT 0,
                 xmp_derived      INTEGER NOT NULL DEFAULT 0,
                 score            REAL,
-                is_locked        INTEGER NOT NULL DEFAULT 0
+                is_locked        INTEGER NOT NULL DEFAULT 0,
+                outcome          TEXT    NOT NULL DEFAULT ''
             );
-            INSERT INTO migration_manifest_new ({insert_cols}, is_locked)
-                SELECT {select_cols}, is_locked FROM migration_manifest;
+            INSERT INTO migration_manifest_new ({insert_cols}, is_locked, outcome)
+                SELECT {select_cols}, is_locked, '' FROM migration_manifest;
             DROP TABLE migration_manifest;
             ALTER TABLE migration_manifest_new RENAME TO migration_manifest;
             CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
@@ -349,10 +355,14 @@ class ManifestRepository:
         """Yield PhotoRecords for every row in a similarity group (group_id IS NOT NULL).
 
         Rows are grouped by group_id; each group is assigned a sequential
-        group_number.  Groups that end up with only one surviving member (i.e.,
-        the partner was removed) are skipped.  Singleton rows (group_id IS NULL,
-        e.g. MOVE / UNDATED with no near-duplicate) are not yielded — the UI
-        focuses on files that need review.
+        group_number.  Only rows with outcome='' (in-review) are considered —
+        the WHERE clause in _LOAD_ALL_SQL is the single visibility predicate.
+        Groups that end up with only one surviving member are skipped.
+        Singleton rows (group_id IS NULL) are not yielded — the UI focuses
+        on files that need review.
+
+        The orphan-skip (len(db_rows) < 2) must stay in Python: it is a
+        post-grouping survivor count — no per-row SQL WHERE can express it.
 
         Ordering within a group: any action that renders as "Ref" in the
         tree (KEEP / MOVE / UNDATED / unset) → EXACT → REVIEW_DUPLICATE.
@@ -375,11 +385,10 @@ class ManifestRepository:
         finally:
             conn.close()
 
-        # Group rows by group_id, skipping removed and singletons (no group_id).
+        # Group rows by group_id; WHERE outcome='' already excludes ignored/deleted rows.
+        # Orphan-skip must remain here in Python (post-grouping survivor count).
         by_group: dict[str, list] = defaultdict(list)
         for row in all_rows:
-            if (row["user_decision"] or "") == "removed":
-                continue
             gid = row["group_id"]
             if gid:
                 by_group[gid].append(row)
@@ -389,7 +398,10 @@ class ManifestRepository:
         for gid in sorted(by_group):
             db_rows = by_group[gid]
             if len(db_rows) < 2:
-                continue  # partner was removed; skip orphan
+                # Partner was ignored/deleted; skip the orphaned single.
+                # Must stay in Python — no per-row SQL WHERE can express
+                # a post-grouping survivor-count predicate.
+                continue
             group_number += 1
             for row in db_rows:
                 action: str = row["action"]
@@ -612,26 +624,43 @@ class ManifestRepository:
         logger.info("Rescored {} rows in {}", len(updates), manifest_path)
         return len(updates)
 
-    def mark_executed(self, manifest_path: str, file_paths: list[str]) -> None:
-        """Mark a list of rows as executed=1."""
+    def finalize_outcome(
+        self, manifest_path: str, file_paths: list[str], outcome: str
+    ) -> None:
+        """Write the post-execute outcome for a batch of rows.
+
+        Sets ``outcome`` and the redundant ``executed`` cross-check in one
+        committed UPDATE per path.  The mapping is:
+          'deleted'  → outcome='deleted', executed=1
+          'ignored'  → outcome='ignored', executed=0
+          (any other value is written as-is with executed=0)
+
+        Calls ensure_schema first so old manifests gain the outcome column
+        before the UPDATE runs (mirrors load()'s auto-migrate contract).
+
+        Fail-loud: exceptions from the UPDATE/commit propagate to the caller.
+        Do NOT wrap in a swallowing try/except — the caller decides how to
+        surface failures.
+        """
+        if not file_paths:
+            return
+        # Auto-migrate so old manifests gain the outcome column before the UPDATE.
+        self.ensure_schema(manifest_path)
+        executed_value = 1 if outcome == "deleted" else 0
+        params = [(outcome, executed_value, p) for p in file_paths]
         conn = _connect(manifest_path)
         try:
-            conn.executemany(_MARK_EXECUTED_SQL, [(p,) for p in file_paths])
+            conn.executemany(_FINALIZE_OUTCOME_SQL, params)
             conn.commit()
         finally:
             conn.close()
 
     def remove_from_review(self, manifest_path: str, file_paths: list[str]) -> None:
-        """Mark rows as removed from the review list (user_decision='removed').
+        """Mark rows as dismissed from review (outcome='ignored').
 
-        Removed rows are excluded from future load() calls so they do not
+        Ignored rows are excluded from future load() calls so they do not
         reappear when the manifest is reopened.  VACUUM is intentionally omitted:
         rows are marked (UPDATE), not deleted, so SQLite has no freed pages to
         reclaim and a VACUUM call would be a no-op at the cost of a full DB rewrite.
         """
-        conn = _connect(manifest_path)
-        try:
-            conn.executemany(_REMOVE_FROM_REVIEW_SQL, [(p,) for p in file_paths])
-            conn.commit()
-        finally:
-            conn.close()
+        self.finalize_outcome(manifest_path, file_paths, "ignored")

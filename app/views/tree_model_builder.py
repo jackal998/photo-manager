@@ -19,8 +19,8 @@ from app.views.constants import (
     COL_SCORE,
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
+    IGNORE_DECISION,
     PATH_ROLE,
-    REMOVE_FROM_LIST_DECISION,
     SORT_ROLE,
     headers,
 )
@@ -37,21 +37,22 @@ def _action_display(decision: str, is_locked: bool = False) -> str:
     Three explicit branches so every locale sees a translated label,
     and the canonical empty-keep state stays empty:
 
-    * ``REMOVE_FROM_LIST_DECISION`` → ``t("decision.remove_from_list")``
-    * ``"delete"``                  → ``t("decision.delete")`` (#425 — was raw passthrough,
+    * ``IGNORE_DECISION`` ('ignore') → ``t("decision.remove_from_list")``
+      (user-facing label stays "remove from list"; wire value is internal)
+    * ``"delete"``                   → ``t("decision.delete")`` (#425 — was raw passthrough,
       invisible on en but rendered as English "delete" on zh_TW)
-    * ``"keep"``                    → ``""`` (back-compat: legacy manifests
+    * ``"keep"``                     → ``""`` (back-compat: legacy manifests
       that pre-date #425's canonicalisation of auto-select's keeper write
       still carry the literal "keep" — render as the canonical empty
       cell so the leak doesn't surface)
-    * ``""`` and any other value    → returned as-is (the canonical
+    * ``""`` and any other value     → returned as-is (the canonical
       keep state is the empty string)
 
     ``is_locked`` is accepted for backward compatibility but no longer
     affects the returned text — the lock indicator moved to its own
     :data:`COL_LOCK` column in #182. See :func:`_lock_display`.
     """
-    if decision == REMOVE_FROM_LIST_DECISION:
+    if decision == IGNORE_DECISION:
         return t("decision.remove_from_list")
     if decision == "delete":
         return t("decision.delete")
@@ -98,8 +99,8 @@ _ACTION_SORT: dict[str, int] = {
 _DECISION_SORT: dict[str, int] = {
     "delete": 1,
     "keep": 2,
-    REMOVE_FROM_LIST_DECISION: 4,
-}  # "" (undecided) → 3 (between keep and remove_from_list)
+    IGNORE_DECISION: 4,
+}  # "" (undecided) → 3 (between keep and ignore)
 
 def _hamming_to_pct(hamming: int | None) -> str:
     """Convert pHash Hamming distance to a similarity percentage string."""
@@ -441,7 +442,7 @@ def build_model(
                 ref_phash=ref_winner_phash,
             )
 
-            # Col 1: user's decision (delete / keep / "" / remove_from_list).
+            # Col 1: user's decision (delete / keep / "" / ignore).
             # Lock state moved to its own COL_LOCK column in #182 so the
             # Action column stays sortable / searchable as just the
             # decision label — no 🔒 prefix.
