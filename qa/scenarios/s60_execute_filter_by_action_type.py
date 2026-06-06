@@ -22,7 +22,7 @@ Drives the in-dialog type-filter combo end-to-end:
     visible scope) →
   verify (a) all 4 group A files no longer exist on disk,
          (b) all 4 group B files still exist on disk,
-         (c) manifest rows for group B retain decision='remove_from_list'
+         (c) manifest rows for group B retain user_decision='ignore'
              with executed=0.
 
 ⚠ HEADS-UP: every run sends 4 files to the operator's real Windows
@@ -475,10 +475,10 @@ def _continue_main(
 
     for p in group_b_paths:
         decision, executed = by_name.get(p.name, ("?", -1))
-        if decision != "remove_from_list":
+        if decision != "ignore":
             failures.append(
                 f"group B file {p.name} should retain "
-                f"decision='remove_from_list' (filter excluded it from "
+                f"user_decision='ignore' (filter excluded it from "
                 f"execute scope), got decision={decision!r}"
             )
         if executed != 0:

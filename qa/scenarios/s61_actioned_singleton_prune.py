@@ -149,12 +149,31 @@ def _read_decisions() -> dict[str, str]:
     Reads the outcome column (#584) rather than user_decision — the
     visibility predicate is now WHERE outcome='' and the prune path writes
     outcome='ignored' (not user_decision='removed').  user_decision is still
-    read separately where needed (e.g. B_KEEP's 'delete' decision).
+    read separately where needed (e.g. B_KEEP's 'delete' decision at setup).
     """
     conn = sqlite3.connect(str(MANIFEST_PATH))
     try:
         rows = conn.execute(
             "SELECT source_path, COALESCE(outcome, '') "
+            "FROM migration_manifest WHERE source_path LIKE ?",
+            (f"%{FIXTURE_DIR.name}%",),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {Path(p).name: d for p, d in rows}
+
+
+def _read_user_decisions() -> dict[str, str]:
+    """Return {basename: user_decision} for fixture rows.
+
+    Used only in _scan_and_setup to verify the staged intent ('delete')
+    on B_KEEP — user_decision holds the pending action before execute,
+    while outcome holds the final post-execute state.
+    """
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT source_path, COALESCE(user_decision, '') "
             "FROM migration_manifest WHERE source_path LIKE ?",
             (f"%{FIXTURE_DIR.name}%",),
         ).fetchall()
@@ -209,10 +228,12 @@ def _scan_and_setup(win):
     )
     _, win = _uia.connect_main()
     time.sleep(0.3)
-    dec = _read_decisions()
-    print(f"  decisions_after_setup={dec}")
+    # Read user_decision (staged intent) — not outcome (post-execute) — to
+    # verify the mark_all_via_regex_standalone step wrote 'delete'.
+    dec = _read_user_decisions()
+    print(f"  user_decisions_after_setup={dec}")
     if dec.get(B_KEEP) != "delete":
-        print(f"FAIL: setup did not set {B_KEEP} decision=delete (got {dec.get(B_KEEP)!r})")
+        print(f"FAIL: setup did not set {B_KEEP} user_decision=delete (got {dec.get(B_KEEP)!r})")
         return None
     return win
 
