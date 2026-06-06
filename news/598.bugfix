@@ -1,0 +1,1 @@
+Fix multi-device scans stalling reads from a fast source (e.g. a NAS) when another drive is busy with large RAW/DNG files — the HASH-stage read memory budget is now split per device instead of shared globally (#596).
