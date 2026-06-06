@@ -14,7 +14,11 @@ import threading
 import time
 
 import scanner.byte_budget as bb_mod
-from scanner.byte_budget import ByteBudget, default_budget_bytes
+from scanner.byte_budget import (
+    ByteBudget,
+    default_budget_bytes,
+    per_device_budgets,
+)
 
 
 class TestByteBudgetAccounting:
@@ -178,3 +182,48 @@ class TestDefaultBudgetSizing:
         budget = default_budget_bytes()
         assert budget == 1 * 1024 ** 3
         assert budget <= 2 * 1024 ** 3
+
+
+class TestPerDeviceBudgets:
+    """#596 — split the global ceiling into one budget per device so a slow
+    big-file device (D: HDD ProRAW DNGs) can't starve a fast device's reader."""
+
+    def test_equal_split_preserves_oom_bound(self):
+        total = 2 * 1024 ** 3
+        budgets = per_device_budgets(total, ["D", "NAS"], lambda: False)
+        assert set(budgets) == {"D", "NAS"}
+        # #587's OOM bound must survive: the sum of slices never exceeds total.
+        assert sum(b._budget for b in budgets.values()) <= total
+        assert all(b._budget == total // 2 for b in budgets.values())
+
+    def test_single_device_keeps_full_budget(self):
+        # One device → the whole budget, byte-identical to the pre-#596 global
+        # behaviour (no regression for single-device users).
+        total = 2 * 1024 ** 3
+        budgets = per_device_budgets(total, ["only"], lambda: False)
+        assert budgets["only"]._budget == total
+
+    def test_one_device_full_does_not_block_another(self):
+        # THE fix: a device whose budget is saturated must NOT block another
+        # device's reader. Pre-#596 (one shared global budget) D: filling the
+        # ceiling blocked the NAS reader at acquire — the measured starvation
+        # (budget 100% full during 100% of NAS-idle samples).
+        total = 2 * 1024 ** 3
+        budgets = per_device_budgets(total, ["D", "NAS"], lambda: False)
+        # Fill D: entirely (mimics clustered 100-130 MB DNGs held in flight).
+        assert budgets["D"].acquire(budgets["D"]._budget) is True
+        # A further D: acquire would now block — but NAS is a SEPARATE budget and
+        # must admit immediately. A shared global budget would block here.
+        out: dict = {}
+
+        def nas_reader():
+            out["r"] = budgets["NAS"].acquire(100 * 1024 * 1024)
+
+        t = threading.Thread(target=nas_reader)
+        t.start()
+        t.join(timeout=2)
+        assert not t.is_alive(), (
+            "NAS reader blocked even though D: filled only ITS OWN budget — "
+            "per-device isolation regressed to a shared budget (#596)"
+        )
+        assert out["r"] is True

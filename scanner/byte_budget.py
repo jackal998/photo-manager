@@ -162,6 +162,39 @@ def default_budget_bytes() -> int:
     return max(_256_MIB, min(_2_GIB, total_ram // 2))
 
 
+def per_device_budgets(
+    total_bytes: int,
+    device_keys: list[str],
+    cancel_check: Callable[[], bool],
+) -> dict[str, ByteBudget]:
+    """Split ``total_bytes`` into one :class:`ByteBudget` per device (#596).
+
+    A single GLOBAL ByteBudget shared across devices lets a slow, large-file
+    device (e.g. an HDD full of 100-130 MB ProRAW DNGs) consume the whole ceiling
+    and starve a fast device's reader at ``acquire`` — even though that device's
+    own files are small and its link is idle. Giving each device its own slice
+    isolates them so one device's in-flight bytes can't block another's reader.
+
+    The split is EQUAL, which preserves #587's OOM bound: the sum of the
+    per-device budgets never exceeds ``total_bytes`` (``n * (total // n) <=
+    total``). A single device therefore keeps the full budget — byte-identical to
+    the pre-#596 global behaviour. Each per-device ByteBudget keeps the
+    admit-one-over-budget rule, so a file larger than its slice is still admitted
+    alone rather than deadlocking.
+
+    Args:
+        total_bytes: the global ceiling (e.g. from ``default_budget_bytes``).
+        device_keys: the active HASH-stage per-device bucket keys.
+        cancel_check: forwarded to each ByteBudget (``cancel_flag.is_set``).
+
+    Returns:
+        ``{device_key: ByteBudget}`` — one bounded budget per device.
+    """
+    n = max(1, len(device_keys))
+    per_device = max(1, total_bytes // n)
+    return {key: ByteBudget(per_device, cancel_check) for key in device_keys}
+
+
 def _probe_total_ram() -> int | None:
     """Return total physical RAM in bytes, or None on any failure.
 

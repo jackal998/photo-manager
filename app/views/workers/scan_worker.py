@@ -715,7 +715,7 @@ class ScanWorker(QThread):
             _RAMP_MIN_SCAN_FILES,
             _valid_read_knee,
         )
-        from scanner.byte_budget import ByteBudget, default_budget_bytes
+        from scanner.byte_budget import default_budget_bytes, per_device_budgets
         import io
         from contextlib import redirect_stdout
 
@@ -1250,7 +1250,17 @@ class ScanWorker(QThread):
             # Future._result — and released in the compute done-callback.
             # hash_in_q maxsize=_HASH_QUEUE_MAXSIZE remains a secondary
             # queue-DEPTH cap.
-            byte_budget = ByteBudget(default_budget_bytes(), cancel_flag.is_set)
+            # #596 — ONE budget PER DEVICE, not one global budget. A single global
+            # ceiling let a slow big-file device (D: HDD full of 100-130 MB ProRAW
+            # DNGs) consume it all and starve a fast device's reader at acquire
+            # (measured: budget 100% full during 100% of NAS-idle samples). The
+            # equal split keeps #587's OOM bound (sum of slices <= total); a
+            # single-device scan still gets the whole budget. Each reader acquires
+            # from ITS device's budget and the compute callback releases from the
+            # same one (the device is threaded through hash_in_q).
+            byte_budgets = per_device_budgets(
+                default_budget_bytes(), list(device_records.keys()), cancel_flag.is_set
+            )
             # out_q carries (idx, outcome) tuples from compute callbacks
             # back to the parent drain loop.
             out_q: _queue.Queue = _queue.Queue()
@@ -1298,20 +1308,22 @@ class ScanWorker(QThread):
                 # ReadFailure) is a no-op; on cancel acquire returns False and we
                 # still return the result — the drain loop drops it on its cancel check.
                 _data = read_result[2]
-                byte_budget.acquire(len(_data) if isinstance(_data, bytes) else 0)
+                byte_budgets[dev].acquire(len(_data) if isinstance(_data, bytes) else 0)
                 return read_result, dev, level_tag, t_end
 
-            def _budgeted_read(idx, r):
+            def _budgeted_read(dev, idx, r):
                 """#587 — ungated reader (autotune off) with byte-budget backpressure.
 
                 Mirrors _gated_read's post-read acquire so the reader pool can't
                 outrun compute and accumulate read bytes in Future._result. The
-                budget is released in the compute done-callback.
+                budget is released in the compute done-callback. #596 — acquires
+                from the per-device budget and returns ``dev`` so the drain loop can
+                thread it through hash_in_q for the matching release.
                 """
                 read_result = read_for_record(idx, r)
                 _data = read_result[2]
-                byte_budget.acquire(len(_data) if isinstance(_data, bytes) else 0)
-                return read_result
+                byte_budgets[dev].acquire(len(_data) if isinstance(_data, bytes) else 0)
+                return read_result, dev
 
             def _read_drain() -> None:
                 """Drive read futures into hash_in_q; put a None sentinel when done."""
@@ -1333,7 +1345,7 @@ class ScanWorker(QThread):
                             )
                         else:
                             reader_futures.add(
-                                reader_pools[dev].submit(_budgeted_read, _idx, _r)
+                                reader_pools[dev].submit(_budgeted_read, dev, _idx, _r)
                             )
                 for fut in as_completed(reader_futures):
                     if cancel_flag.is_set():
@@ -1376,15 +1388,17 @@ class ScanWorker(QThread):
                                         _summary["sole_ramping"] = True
                                         self.read_knee_measured.emit(_summary)
                         else:
-                            read_result = fut.result()
+                            read_result, _dev = fut.result()
                             # Drop the strong reference so the bytes can be GC'd.
                             reader_futures.discard(fut)
                         # Cooperative bounded put: retry with a short timeout so a
                         # cancel_flag check doesn't leave us stuck forever when
                         # compute is stopped and the queue is full.
+                        # #596 — carry the device key alongside the read so the
+                        # compute callback releases from the same per-device budget.
                         while not cancel_flag.is_set():
                             try:
-                                hash_in_q.put(read_result, timeout=0.05)
+                                hash_in_q.put((*read_result, _dev), timeout=0.05)
                                 break
                             except _queue.Full:
                                 pass
@@ -1401,7 +1415,7 @@ class ScanWorker(QThread):
                         continue
                     if item is None:
                         break
-                    c_idx, c_record, c_data = item
+                    c_idx, c_record, c_data, c_dev = item
 
                     # #587 — the byte budget is acquired in the READER worker
                     # (_gated_read / _budgeted_read), so dispatch just submits.
@@ -1409,11 +1423,12 @@ class ScanWorker(QThread):
                     # 0 for video / None / ReadFailure (acquire was a no-op there).
                     n = len(c_data) if isinstance(c_data, bytes) else 0
 
-                    def _cb(f, _idx=c_idx, _n=n):
+                    def _cb(f, _dev=c_dev, _n=n):
                         # release() never raises (#587 invariant) so out_q.put
                         # always runs; releasing here (compute done) is what wakes
-                        # a reader blocked on the byte budget.
-                        byte_budget.release(_n)
+                        # a reader blocked on the byte budget. #596 — release from
+                        # the SAME per-device budget the reader acquired from.
+                        byte_budgets[_dev].release(_n)
                         out_q.put(f.result())
 
                     try:
