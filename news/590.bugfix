@@ -1,0 +1,1 @@
+Fix scan crash (out of memory) on photo libraries containing many large RAW/DNG files — the HASH stage now bounds in-flight reads by total bytes, not file count (#587).
