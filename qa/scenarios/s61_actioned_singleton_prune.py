@@ -1,4 +1,5 @@
-"""Scenario 61 — SingletonPruneConfirmDialog actioned-singleton flow (#484).
+"""Scenario 61 — SingletonPruneConfirmDialog actioned-singleton flow (#484)
+plus D6 locked-singleton gate on the "ask" path (#589, follow-up to #588).
 
 Required source: qa/sandbox/_disposable/s61_source/ — regenerated each run.
 Two independent near-duplicate clusters of 2 files each (groups A and B).
@@ -21,22 +22,40 @@ decision; one ACTIONED — remaining item carries an un-executed
 ``user_decision='delete'``) surfaces the mixed-bucket dialog with its opt-in
 checkbox, and that each verdict produces the right manifest outcome.
 
-Three variants, each a fresh scan + setup + Remove-from-List that collapses
-both groups to a plain + actioned singleton pair:
+Five variants, each a fresh scan + setup + Remove-from-List that collapses
+both groups to singletons (per-variant bucket layout below):
 
-  * Variant A — click "Remove" WITHOUT checking the actioned-bucket box →
-    ONLY the plain singleton is pruned (``outcome='ignored'``); the actioned
-    singleton stays in the list with its ``delete`` decision intact.
-  * Variant B — click "Remove" WITH the box checked → BOTH singletons pruned.
-  * Variant C — click "Keep all" → NOTHING pruned; both singletons stay.
+  * Variant A — actioned-bucket box UNCHECKED on Remove → ONLY the plain
+    singleton is pruned (``outcome='ignored'``); the actioned singleton
+    stays in the list with its ``delete`` decision intact.
+  * Variant B — actioned box CHECKED on Remove → BOTH singletons pruned.
+  * Variant C — Keep all → NOTHING pruned; both singletons stay.
+  * Variant D-cancel (#589) — A_KEEP is LOCKED before the remove. The
+    LockedRowsConfirmDialog fires FIRST (D6 gate); CANCEL holds the
+    locked singleton (outcome=''). The SingletonPruneConfirmDialog fires
+    next for the actioned bucket — dismissed with Keep all so the
+    assertion isolates the lock-gate's effect.
+  * Variant D-apply (#589) — same setup; click "Unlock & Apply to All"
+    on the lock dialog → A_KEEP becomes pruned (outcome='ignored'); the
+    prune dialog is dismissed with Keep all so the actioned bucket
+    decision stays intact, and the locked-bucket prune happens via
+    ``_apply_singleton_prune(prunable_locked)`` at the tail of the "ask"
+    branch.
 
 The prune dialog only fires when ``ui.prune_singletons == "ask"`` — s61's
-configure step overrides the qa default of ``"never"`` (see the
-``[QA:s60/s61]`` note in ``qa/scenarios/_config.py``).
+configure step overrides the qa default of ``"never"`` (see
+``PRUNE_PREF_OVERRIDES`` in ``qa/scenarios/_config.py``). The sibling
+scenario s67 covers the D6 gate on the ``"always"`` path.
 
 Tree-content assertions use direct sqlite reads (s14/s32/s35 pattern), never
 ``read_result_rows``. Row picks use ``ctrl_click`` + ``right_click`` +
 ``select_popup_menu_path`` (s20 multi-remove precedent).
+
+Button label discipline for Variant D (carried from #588's qa fix): in the
+prune context the LockedRowsConfirmDialog uses ``LOCK_CONFIRM_BTN_UNLOCK_APPLY``
+("Unlock & Apply to All"), NOT the Execute-time alias
+``LOCK_CONFIRM_APPLY_ALL_UNLOCKED`` (which resolves to "Unlock & Delete All").
+The driver passes the literal constant directly to ``drive_lock_confirm``.
 """
 from __future__ import annotations
 
@@ -397,6 +416,146 @@ def _run_variant(win, label: str, action: str) -> int:
     return 0
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Variant D (#589) — D6 locked-singleton gate on the "ask" path.
+# Setup is identical to A/B/C (B_KEEP=delete) PLUS A_KEEP is locked
+# before the multi-remove, so the post-remove bucket layout is:
+#   locked_paths   = [A_KEEP]      ← drives LockedRowsConfirmDialog
+#   actioned_paths = [B_KEEP]      ← drives SingletonPruneConfirmDialog
+#   plain_paths    = []
+# The prune dialog is dismissed with "Keep all" so the assertion
+# isolates the LOCK gate's effect (whether A_KEEP is pruned depends
+# entirely on the lock-dialog verdict; the actioned bucket stays
+# intact either way).
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _scan_setup_lock_a_keep(win):
+    """Fresh scan + mark B_KEEP delete + lock A_KEEP. Returns the
+    reconnected main window, or None on a setup failure."""
+    win = _scan_and_setup(win)
+    if win is None:
+        return None
+    print("step: lock_A_keep_via_regex")
+    _uia.mark_all_via_regex_standalone(
+        win, field="File Name", regex=r"s61_a_keep", action_label="lock"
+    )
+    _, win = _uia.connect_main()
+    time.sleep(0.3)
+    # Verify the lock landed.
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT COALESCE(is_locked, 0) FROM migration_manifest "
+            "WHERE source_path LIKE ?",
+            (f"%{A_KEEP}",),
+        ).fetchall()
+    finally:
+        conn.close()
+    is_locked = rows[0][0] if rows else 0
+    if is_locked != 1:
+        print(f"FAIL: setup did not lock {A_KEEP} (is_locked={is_locked})")
+        return None
+    print(f"  is_locked[{A_KEEP}]=1 (confirmed)")
+    return win
+
+
+def _multi_remove_drops_no_wait(win) -> None:
+    """Multi-select A_DROP+B_DROP, Remove from List. Does NOT wait for
+    the prune dialog — the caller drives the lock dialog first (D6 fires
+    before SingletonPruneConfirmDialog on the "ask" path)."""
+    pid = win.process_id()
+    print(f"step: multiselect_drop_rows [{A_DROP}, {B_DROP}]")
+    _uia.left_click_tree_row(win, A_DROP)
+    _uia.ctrl_click_tree_row(win, B_DROP)
+    _uia.right_click_tree_row(win, B_DROP)
+    _uia.select_popup_menu_path(pid, ["Remove from List"])
+
+
+def _dismiss_prune_dialog_keep_all(pid: int) -> bool:
+    """Wait for SingletonPruneConfirmDialog and click Keep all. The "ask"
+    path fires the prune dialog AFTER the lock dialog is dismissed (the
+    actioned bucket has B_KEEP). Returns True on success, False if the
+    dialog never appeared (which is itself a FAIL in this flow)."""
+    try:
+        hwnd = _uia.wait_for_dialog(pid, PRUNE_TITLE, timeout=6)
+    except TimeoutError:
+        print(
+            "FAIL: SingletonPruneConfirmDialog did not appear after the "
+            "lock dialog was dismissed — the \"ask\" path should fire it "
+            "for the unlocked actioned bucket."
+        )
+        return False
+    dlg = _uia.connect_by_handle(hwnd)
+    _uia._focus(dlg)
+    time.sleep(0.3)
+    keep_btn = _uia._find_dialog_button(dlg, PRUNE_BTN_KEEP)
+    keep_btn.click_input()
+    time.sleep(0.6)
+    return True
+
+
+def _run_locked_variant(win, label: str, lock_verdict: str, expected_a_outcome: str) -> int:
+    """label: 'D-cancel' or 'D-apply'. lock_verdict: one of
+    _uia.LOCK_CONFIRM_BTN_CANCEL or _uia.LOCK_CONFIRM_BTN_UNLOCK_APPLY.
+    expected_a_outcome: '' (CANCEL) or 'ignored' (Unlock & Apply).
+    """
+    print(f"\n=== variant {label}: lock_verdict={lock_verdict!r} ===")
+    win = _scan_setup_lock_a_keep(win)
+    if win is None:
+        return 1
+    pid = win.process_id()
+
+    _multi_remove_drops_no_wait(win)
+
+    # D6 gate: LockedRowsConfirmDialog must fire BEFORE the prune dialog
+    # on the "ask" path when locked_paths is non-empty.
+    print(f"step: lock_confirm_click [{lock_verdict}]")
+    if not _uia.drive_lock_confirm(pid, lock_verdict, timeout=6):
+        print(
+            f"FAIL[{label}]: LockedRowsConfirmDialog did not appear (or "
+            f"button {lock_verdict!r} not found). D6 lock gate regressed?"
+        )
+        return 1
+    time.sleep(0.4)
+
+    # Then the SingletonPruneConfirmDialog fires for the actioned bucket
+    # (B_KEEP). Dismiss with Keep all so the actioned bucket stays intact
+    # and the assertion isolates the lock-gate's effect on A_KEEP.
+    if not _dismiss_prune_dialog_keep_all(pid):
+        return 1
+
+    # Assert the locked-singleton outcome matches the verdict, AND that
+    # the actioned bucket (B_KEEP) stayed intact under Keep all.
+    post_outcome = _read_decisions()  # {basename: outcome}
+    print(f"  outcomes_after_variant={post_outcome}")
+    a_outcome = post_outcome.get(A_KEEP, "")
+    b_outcome = post_outcome.get(B_KEEP, "")
+
+    if a_outcome != expected_a_outcome:
+        print(
+            f"FAIL[{label}]: locked singleton {A_KEEP} outcome — verdict "
+            f"{lock_verdict!r} expected {expected_a_outcome!r}, got {a_outcome!r}"
+        )
+        return 1
+    if b_outcome == "ignored":
+        print(
+            f"FAIL[{label}]: actioned singleton {B_KEEP} was pruned despite "
+            f"the prune dialog being dismissed with Keep all (outcome={b_outcome!r})"
+        )
+        return 1
+    # B_KEEP's pending 'delete' user_decision should also be intact.
+    b_user_decision = _read_user_decisions().get(B_KEEP, "")
+    if b_user_decision != "delete":
+        print(
+            f"FAIL[{label}]: actioned singleton {B_KEEP} lost its 'delete' "
+            f"user_decision (got {b_user_decision!r})"
+        )
+        return 1
+    print(f"  variant_{label}=PASS")
+    return 0
+
+
 def main() -> int:
     print("scenario: s61_actioned_singleton_prune")
     app, win = _uia.connect_main()
@@ -435,6 +594,25 @@ def main() -> int:
 
     # Variant C — Keep all.
     rc = _run_variant(win, "C", "keep_all")
+    if rc != 0:
+        return rc
+    _, win = _uia.connect_main()
+
+    # Variant D-cancel (#589) — A_KEEP locked; lock dialog CANCEL → A_KEEP
+    # outcome stays '' (lock holds). Actioned bucket dismissed with Keep all.
+    rc = _run_locked_variant(
+        win, "D-cancel", _uia.LOCK_CONFIRM_BTN_CANCEL, expected_a_outcome=""
+    )
+    if rc != 0:
+        return rc
+    _, win = _uia.connect_main()
+
+    # Variant D-apply (#589) — A_KEEP locked; lock dialog "Unlock & Apply
+    # to All" → A_KEEP pruned to outcome='ignored' via the locked-bucket
+    # tail in _maybe_offer_singleton_prune.
+    rc = _run_locked_variant(
+        win, "D-apply", _uia.LOCK_CONFIRM_BTN_UNLOCK_APPLY, expected_a_outcome="ignored"
+    )
     if rc != 0:
         return rc
 

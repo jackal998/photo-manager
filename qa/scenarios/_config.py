@@ -251,8 +251,10 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # 2-cluster fixture (4 JPEGs); Remove-from-List collapses both groups
     # to a plain + actioned singleton pair. This scenario OVERRIDES the
     # qa default ui.prune_singletons="never" → "ask" so the prune dialog
-    # actually fires (see PRUNE_OVERRIDE_SCENARIOS below + the
-    # build_settings note). No file deletes — DB-only 'removed' decisions.
+    # actually fires (see PRUNE_PREF_OVERRIDES below + the build_settings
+    # note). #589 (PR following #588) extends s61 with locked-singleton
+    # Variant D — verifies the D6 LockedRowsConfirmDialog gate fires on
+    # the "ask" path. No file deletes — DB-only outcome='ignored' writes.
     "s61_actioned_singleton_prune": ["qa/sandbox/_disposable/s61_source"],
     # s63 (#475) — late-stage cancel + main-window-X #468 guard. The
     # driver builds a large disposable stub source at setup time; the
@@ -275,13 +277,28 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
         "qa/sandbox/passenger-bridge-b",
     ],
     "s66_autotune_read_knee": ["qa/sandbox/near-duplicates"],
+    # s67 (#589) — D6 regression guard for the singleton-prune lock gate
+    # under ui.prune_singletons="always". One disposable cluster of 2 JPEGs;
+    # the driver locks the surviving row, removes its peer, then asserts
+    # LockedRowsConfirmDialog STILL fires (pre-D6 the "always" path swept
+    # locked rows silently). Two variants: CANCEL → outcome=''; Unlock &
+    # Apply → outcome='ignored'. No file deletes — DB-only outcome writes.
+    "s67_locked_singleton_prune_always": ["qa/sandbox/_disposable/s67_source"],
 }
 
-# Scenarios that must see the singleton-prune dialog (the qa default opts
-# OUT via ui.prune_singletons="never"). build_settings flips the key to
-# "ask" for these so the dialog fires. Anticipated by the #426 comment in
-# build_settings ("a future [QA:s60] follow-up can override this key").
-PRUNE_OVERRIDE_SCENARIOS: set[str] = {"s61_actioned_singleton_prune"}
+# Per-scenario overrides for ui.prune_singletons. build_settings maps a
+# scenario name to a non-default pref so the matching dialog fires:
+#   * "ask"    — fires SingletonPruneConfirmDialog (s61 — visible UX path)
+#   * "always" — skips SingletonPruneConfirmDialog BUT D6 still fires the
+#                LockedRowsConfirmDialog on locked singletons (s67 guard)
+# All other scenarios default to "never" so destructive flows in
+# s13/s20/s29/etc. that leave a single-item group don't block on the
+# confirm dialog. Was a set in PR #588 (only "ask" overrides); broadened
+# to a dict in PR #589 to cover the s67 "always" regression-guard slot.
+PRUNE_PREF_OVERRIDES: dict[str, str] = {
+    "s61_actioned_singleton_prune": "ask",
+    "s67_locked_singleton_prune_always": "always",
+}
 
 
 def build_settings(scenario_name: str) -> dict | None:
@@ -299,10 +316,10 @@ def build_settings(scenario_name: str) -> dict | None:
     # #426: opt qa scenarios OUT of the singleton-prune dialog by default.
     # Destructive flows in s13/s20/s29/etc. that happen to leave a
     # single-item group would otherwise block on the confirm dialog and
-    # break the menu/UIA invariants. The prune-flow scenario s61 (#484)
-    # overrides this to "ask" via PRUNE_OVERRIDE_SCENARIOS — the override
-    # this comment historically anticipated.
-    prune_pref = "ask" if scenario_name in PRUNE_OVERRIDE_SCENARIOS else "never"
+    # break the menu/UIA invariants. The prune-flow scenarios s61 (#484)
+    # and s67 (#589) override this via PRUNE_PREF_OVERRIDES — see the
+    # mapping for the per-scenario pref each one needs.
+    prune_pref = PRUNE_PREF_OVERRIDES.get(scenario_name, "never")
     return {
         "_comment": f"Auto-written by qa.scenarios.configure for {scenario_name}.",
         "thumbnail_size": 256,
