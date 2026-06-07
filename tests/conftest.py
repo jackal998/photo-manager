@@ -15,33 +15,26 @@ def qapp():
 
 @pytest.fixture(autouse=True)
 def _isolate_unc_resolution(monkeypatch):
-    """Keep ``device_key``'s device-identity grouping deterministic in tests.
+    """Keep ``device_key``'s NAS-server grouping (#565) deterministic in tests.
 
-    ``device_key`` memoises two real-Win32 resolutions in module-level caches and
-    resolves via the real OS by default:
-    * NAS-server grouping (#565) — ``_unc_cache`` / ``WNetGetConnectionW``.
-    * Durable local volume id (#583) — ``_volid_cache`` /
-      ``GetVolumeNameForVolumeMountPointW``.
+    ``device_key`` memoises drive-letter→UNC-server in a module-level
+    ``_unc_cache`` and, by default, resolves via the real
+    ``WNetGetConnectionW``. On a dev machine where a test drive letter (e.g.
+    ``J:``) is a live NAS mapping, the real call leaks the actual server
+    (``\\\\LINXIAOYUN``) into the bucket key, and the memo persists across
+    tests — so a later test that mocks ``is_remote_drive`` only for ``"J:"``
+    sees a ``\\\\LINXIAOYUN`` key it doesn't recognise and the per-device
+    worker count regresses 8→4. CI never hit this (no mapped drives there),
+    so the suite passed in CI but failed on the dev machine in full-file runs.
 
-    On a dev machine where a test drive letter (e.g. ``J:``) is a live NAS
-    mapping, the real UNC call leaks the actual server (``\\\\LINXIAOYUN``) into
-    the bucket key; likewise the real volume call leaks a local drive's
-    ``{GUID}`` instead of the bare letter. Either memo persists across tests, so
-    the suite passes in CI (no mapped drives, Linux has no Win32) but fails on
-    the dev machine in full-file runs (the PR #578 failure mode).
-
-    Force BOTH default resolvers to a no-op and clear BOTH caches around every
-    test, so grouping resolves to the bare drive letter — matching CI. Tests that
-    exercise the resolution logic itself inject their own resolver via
-    ``device_key(unc_resolver=...)`` / ``device_key(guid_resolver=...)`` and are
-    unaffected by this patch.
+    Force the default resolver to a no-op and clear the cache around every
+    test, so grouping resolves to the bare drive letter — matching CI. Tests
+    that exercise the resolution logic itself inject their own resolver via
+    ``device_key(unc_resolver=...)`` and are unaffected by this patch.
     """
     import scanner.workers as _workers
 
     _workers._unc_cache.clear()
-    _workers._volid_cache.clear()
     monkeypatch.setattr(_workers, "_resolve_unc_via_win32", lambda letter: None)
-    monkeypatch.setattr(_workers, "_resolve_volume_id_via_win32", lambda letter: None)
     yield
     _workers._unc_cache.clear()
-    _workers._volid_cache.clear()

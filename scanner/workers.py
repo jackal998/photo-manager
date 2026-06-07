@@ -22,12 +22,6 @@ from typing import Callable, Iterable
 # shares, mapped network drives, and DFS roots.
 _DRIVE_REMOTE = 4
 
-# DRIVE_FIXED per WinBase.h — a non-removable local volume (internal SSD/HDD).
-# Only fixed disks earn a durable volume-{GUID} device key (#583): a removable's
-# volume GUID can change per insertion (→ read-knee re-probe churn), and a
-# remote drive has no volume GUID (it resolves to its \\SERVER key first).
-_DRIVE_FIXED = 3
-
 # Per-device hash-stage worker counts.
 #   NAS  → 8: SMB request latency dominates, more concurrent reads pay off.
 #   HDD  → 1: single sequential reader on a spinning disk (#552 anti-thrash
@@ -57,11 +51,6 @@ _PROPERTY_STANDARD_QUERY = 0
 # Populated lazily by device_key; one real Win32 call per distinct letter.
 _unc_cache: dict[str, str | None] = {}
 
-# Memoization cache for local drive-letter → durable volume-{GUID} resolution
-# (GetVolumeNameForVolumeMountPointW). device_key runs in several per-record
-# loops, so without this each record would re-do the Win32 call (#583).
-_volid_cache: dict[str, str | None] = {}
-
 
 def _resolve_unc_via_win32(letter: str) -> str | None:
     """Return the UNC path for a drive letter, or None on any failure.
@@ -87,82 +76,6 @@ def _resolve_unc_via_win32(letter: str) -> str | None:
         return None
     except (OSError, AttributeError, ValueError):  # pragma: no cover
         return None
-
-
-def _resolve_volume_id_via_win32(letter: str) -> str | None:
-    """Return a durable ``{GUID}`` token for the volume mounted at ``letter``
-    (a LOCAL FIXED disk), or None for anything else.
-
-    Real Win32 boundary (GetDriveTypeW + GetVolumeNameForVolumeMountPointW),
-    excluded from coverage like ``_resolve_unc_via_win32`` — it can't run on the
-    Linux CI runner, and mocking ctypes is banned as coverage padding. The
-    testable logic (fixed-only gate, GUID normalisation, memoisation, fail-open)
-    is exercised via the injected ``guid_resolver`` in :func:`device_key`.
-
-    Restricted to ``_DRIVE_FIXED`` (#583): removable volume GUIDs can change per
-    insertion, and remote drives have no volume GUID (they take the UNC path
-    before reaching here). The returned token is the BARE ``{GUID}`` — the raw
-    volume mount-point name starts with a double backslash, and
-    :func:`is_remote_drive` treats any such string as remote, which would
-    misclassify every local fixed disk and corrupt device bucketing.
-    """
-    if sys.platform != "win32":
-        return None
-    try:  # pragma: no cover
-        import ctypes
-        from ctypes import wintypes
-
-        k = ctypes.windll.kernel32
-        k.GetDriveTypeW.argtypes = [ctypes.c_wchar_p]
-        k.GetDriveTypeW.restype = ctypes.c_uint
-        k.GetVolumeNameForVolumeMountPointW.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.LPWSTR,
-            wintypes.DWORD,
-        ]
-        k.GetVolumeNameForVolumeMountPointW.restype = wintypes.BOOL
-
-        root = letter + "\\"
-        if k.GetDriveTypeW(root) != _DRIVE_FIXED:
-            return None
-        buf = ctypes.create_unicode_buffer(64)
-        # The mount point needs the trailing backslash; without it the call
-        # returns BOOL False (not an exception) — hence the bool() gate, not an
-        # error-code check.
-        if not bool(k.GetVolumeNameForVolumeMountPointW(root, buf, 64)):
-            return None
-        name = buf.value
-        start = name.find("{")
-        end = name.find("}")
-        if start != -1 and end > start:
-            return name[start : end + 1].upper()
-        return None
-    except (OSError, AttributeError, ValueError):  # pragma: no cover
-        return None
-
-
-def _volume_id_for_letter(
-    letter: str,
-    guid_resolver: Callable[[str], str | None] | None,
-) -> str | None:
-    """Resolve a local drive letter to its durable ``{GUID}`` key, or None to
-    fall back to the bare letter.
-
-    Memoises in ``_volid_cache`` (one Win32 call per distinct letter per
-    process). Fail-open: any resolver exception or a None result → None, so the
-    caller keeps the bare letter (today's behaviour). #583.
-    """
-    if letter in _volid_cache:
-        return _volid_cache[letter]
-    resolver = (
-        guid_resolver if guid_resolver is not None else _resolve_volume_id_via_win32
-    )
-    try:
-        vol = resolver(letter)
-    except Exception:  # noqa: BLE001 — fail-open; device_key must never raise
-        vol = None
-    _volid_cache[letter] = vol
-    return vol
 
 
 def is_remote_drive(path: Path | str) -> bool:
@@ -294,7 +207,6 @@ def device_key(
     path: Path | str,
     *,
     unc_resolver: Callable[[str], str | None] | None = None,
-    guid_resolver: Callable[[str], str | None] | None = None,
 ) -> str:
     """Physical-device grouping key for ``path``.
 
@@ -327,20 +239,6 @@ def device_key(
     ``_resolve_unc_via_win32`` at call time — the real Win32 boundary which
     is behind ``# pragma: no cover``.
 
-    **Durable local identity (#583):** a LOCAL fixed-disk drive letter (not a
-    remote share) resolves to its volume ``{GUID}`` token via
-    ``_volume_id_for_letter`` — durable across drive-letter reassignment, reboot,
-    and Disk-Management relabel — so a cached read-knee (#551) is never inherited
-    by a different physical disk that later reuses the letter. Fail-open: when the
-    volume id is unavailable (non-Windows, removable, any Win32 error) the bare
-    upper-cased letter is returned, exactly as before. A volume mounted as a
-    folder without its own drive letter still collapses to the host letter's
-    GUID (pre-existing, bounded — a stale knee is only ever stale-LOW). The
-    ``{GUID}`` token has no leading ``\\\\`` so ``is_remote_drive`` never
-    mistakes a local disk for a NAS. ``guid_resolver`` is injected like
-    ``unc_resolver`` for Win32-free unit tests; ``None`` uses
-    ``_resolve_volume_id_via_win32`` (behind ``# pragma: no cover``).
-
     #548 — used by the HASH stage to run one ThreadPoolExecutor per physical
     device concurrently, so NAS-latency-bound reads overlap HDD-seek-bound
     reads instead of queueing behind them in one flat pool.
@@ -356,16 +254,6 @@ def device_key(
             # e.g. \\LINXIAOYUN\HOME → split on 3rd backslash → \\LINXIAOYUN
             parts = raw.split("\\", 3)  # ['', '', 'SERVER', 'SHARE...']
             return "\\\\" + parts[2]
-        # #583 — a LOCAL fixed-disk letter resolves to its durable volume
-        # ``{GUID}`` so a cached read-knee (#551) survives drive-letter
-        # reassignment / Disk-Management relabel and is NOT inherited by a
-        # different physical disk that later reuses the letter. Fail-open to the
-        # bare letter when the volume id is unavailable (non-Windows, removable,
-        # any Win32 error). Remote letters are handled above and never reach here.
-        if len(raw) == 2 and raw[1] == ":":
-            vol = _volume_id_for_letter(raw, guid_resolver)
-            if vol:
-                return vol
     except Exception:  # noqa: BLE001 — fail-open; device_key must never raise
         pass
     return raw
