@@ -93,10 +93,15 @@ def test_device_key_drive_letter_uppercased(monkeypatch):
 
     monkeypatch.setattr(wm, "is_remote_drive", lambda p: False)
     wm._unc_cache.clear()
+    wm._volid_cache.clear()
 
-    assert wm.device_key(r"D:\photos\a.jpg") == "D:"
-    assert wm.device_key(r"d:\photos\b.jpg") == "D:"
-    assert wm.device_key(r"J:\nas\c.heic") == "J:"
+    # guid_resolver returning None forces the #583 fail-open fallback to the
+    # bare letter, so the assertion is deterministic on any platform (without it
+    # a Windows dev box would resolve C:/D: to their real volume {GUID}). The
+    # GUID success path is covered by test_device_key_local_volume_id_* below.
+    assert wm.device_key(r"D:\photos\a.jpg", guid_resolver=lambda _l: None) == "D:"
+    assert wm.device_key(r"d:\photos\b.jpg", guid_resolver=lambda _l: None) == "D:"
+    assert wm.device_key(r"J:\nas\c.heic", guid_resolver=lambda _l: None) == "J:"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="UNC splitdrive is Windows-only")
@@ -323,9 +328,97 @@ def test_device_key_local_drive_unchanged(monkeypatch):
 
     monkeypatch.setattr(wm, "is_remote_drive", lambda p: False)
     wm._unc_cache.clear()
+    wm._volid_cache.clear()
 
-    assert wm.device_key("C:\\Users\\J\\photos\\a.jpg") == "C:"
-    assert wm.device_key(r"c:\documents\b.jpg") == "C:"
+    # guid_resolver None → #583 fail-open to the bare letter (deterministic on
+    # Windows too; the GUID success path has its own test below).
+    assert wm.device_key("C:\\Users\\J\\photos\\a.jpg", guid_resolver=lambda _l: None) == "C:"
+    assert wm.device_key(r"c:\documents\b.jpg", guid_resolver=lambda _l: None) == "C:"
+
+
+def test_device_key_local_volume_id_success(monkeypatch):
+    """#583 — a local fixed-disk letter resolves to its durable volume {GUID}
+    so a re-lettered or swapped disk can't inherit the wrong cached read-knee.
+    The injected guid_resolver stands in for the Win32 boundary.
+    """
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda p: False)
+    wm._unc_cache.clear()
+    wm._volid_cache.clear()
+
+    key = wm.device_key(r"D:\photos\a.jpg", guid_resolver=lambda _l: "{VOL-ABC}")
+    assert key == "{VOL-ABC}"
+    # The {GUID} token must NOT look remote, or NAS-mix detection / pool sizing
+    # would misclassify the local disk (the ship-blocker the normalisation fixes).
+    assert wm.is_remote_drive(key) is False
+
+
+def test_device_key_volume_id_memoized(monkeypatch):
+    """The volume-GUID resolver is called at most once per distinct letter —
+    device_key runs in several per-record loops.
+    """
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda p: False)
+    wm._unc_cache.clear()
+    wm._volid_cache.clear()
+
+    calls = {"n": 0}
+
+    def _counting(_letter):
+        calls["n"] += 1
+        return "{VOL-XYZ}"
+
+    k1 = wm.device_key(r"D:\a.jpg", guid_resolver=_counting)
+    k2 = wm.device_key(r"D:\b.jpg", guid_resolver=_counting)
+    assert k1 == k2 == "{VOL-XYZ}"
+    assert calls["n"] == 1  # second call hit _volid_cache
+
+
+def test_device_key_volume_id_fail_open(monkeypatch):
+    """A None result OR a raising volume-GUID resolver falls back to the bare
+    letter — device_key must never raise (#583 fail-open contract).
+    """
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda p: False)
+    wm._unc_cache.clear()
+
+    wm._volid_cache.clear()
+    assert wm.device_key(r"D:\a.jpg", guid_resolver=lambda _l: None) == "D:"
+
+    wm._volid_cache.clear()
+
+    def _raises(_letter):
+        raise OSError("volume probe failed")
+
+    assert wm.device_key(r"D:\a.jpg", guid_resolver=_raises) == "D:"
+
+
+def test_device_key_remote_skips_volume_id(monkeypatch):
+    """A remote drive letter resolves to its UNC server key and NEVER consults
+    the volume-GUID resolver (a remote share has no local volume identity).
+    """
+    from scanner import workers as wm
+
+    monkeypatch.setattr(wm, "is_remote_drive", lambda p: str(p).upper() == "H:")
+    wm._unc_cache.clear()
+    wm._volid_cache.clear()
+
+    guid_calls = {"n": 0}
+
+    def _guid(_letter):
+        guid_calls["n"] += 1
+        return "{SHOULD-NOT-BE-USED}"
+
+    key = wm.device_key(
+        "H:\\photos\\a.jpg",
+        unc_resolver=lambda l: "\\\\LINXIAOYUN\\home",
+        guid_resolver=_guid,
+    )
+    assert key == "\\\\LINXIAOYUN"
+    assert guid_calls["n"] == 0  # remote path short-circuits before the GUID block
 
 
 def test_device_key_resolver_cache_hit(monkeypatch):
