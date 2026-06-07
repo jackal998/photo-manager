@@ -1,0 +1,1 @@
+Key the read-knee autotune cache by durable local volume identity so a re-lettered or swapped disk can't inherit another device's cached knee. (#583)
