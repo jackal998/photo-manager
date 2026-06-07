@@ -1,0 +1,1 @@
+Revert the durable volume-GUID device key (#605/#583) — it broke the spinning-HDD reader cap (4 readers instead of 1), causing seek-thrash on local HDD scans. (#606)
