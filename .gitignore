@@ -185,3 +185,11 @@ temp/
 *.swp
 *.swo
 testdata/
+
+# Scanner-perf bench / probe harness outputs (regeneratable). See
+# scripts/bench_autotune_604.py and scripts/probe_byte_budget_598.py.
+# Summary writeups live under docs/audits/; the raw JSON is local-only.
+bench_604_*.json
+probe_598_*.json
+.bench_604_artifacts/
+.probe_598_artifacts/
