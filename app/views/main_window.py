@@ -787,6 +787,18 @@ class MainWindow(QMainWindow):
         # there's nothing to undo; if the user resizes after Back, the
         # next close-attempt re-saves.
         self._save_geometry()
+        # Dispatch to the close-disposition logic, which sets accept/ignore
+        # on the event. We then check event.isAccepted() ONCE at the end
+        # and force-quit the QApplication on accept (see _force_quit_on_accept).
+        self._dispatch_close(event)
+        self._force_quit_on_accept(event)
+
+    def _dispatch_close(self, event) -> None:
+        """Set accept/ignore on ``event`` based on app state + user choice.
+
+        Pulled out of ``closeEvent`` so the post-hook (``_force_quit_on_accept``)
+        runs at a SINGLE exit point regardless of which close-branch fired.
+        """
         # #468 — defense-in-depth guard against closing the main
         # window while a scan worker is alive. Today the ScanDialog is
         # modal and Qt cascades the close, so ``ScanDialog.closeEvent``
@@ -849,6 +861,52 @@ class MainWindow(QMainWindow):
         else:
             # Back, Esc, or window-X (rejection); stay in the app.
             event.ignore()
+
+    def _force_quit_on_accept(self, event) -> None:
+        """Force ``QApplication.quit()`` when the user accepts the close.
+
+        Why this exists — the user-observable "can't-close" bug
+        (2026-06-08, post-#610): in some launch contexts (Windows session
+        host, RDP, child of cmd.exe etc.), Qt's ``lastWindowClosed``
+        signal does NOT fire when the MainWindow is hidden by
+        ``closeEvent``. Symptom: ``app.exec()`` never returns,
+        ``aboutToQuit`` never fires, the python.exe process stays alive
+        and idle (0 % CPU, ~25 threads, ~40 000 handles) until
+        force-killed. Captured PID 31776 (300 MB RAM, 62 s CPU, 0 visible
+        windows, 24 threads, 41 599 handles) on the user's box mid-saga;
+        all worker / exiftool subprocesses had cleaned up correctly —
+        the leak was the parent itself.
+
+        Mechanism — the MainWindow has no ``Qt::WA_DeleteOnClose``, so a
+        close-accept just hides it. Qt 6's ``lastWindowClosed`` semantics
+        + a residue of internal helper-window top-levels
+        (``QTreeViewThemeHelperWindow``, ``ThemeChangeObserverWindow``,
+        IME helpers) combined with ProcessPoolExecutor internal manager
+        threads sometimes leaves ``app.exec()`` parked. Calling
+        ``QApplication.instance().quit()`` directly is the smallest
+        possible fix: it forces ``quit()`` to fire, which always emits
+        ``aboutToQuit`` and unwinds ``app.exec()`` regardless of
+        ``lastWindowClosed`` state.
+
+        Only quits on accept — ignored close events (Back / Esc /
+        scan-running-No / save-failure) stay in the app as before.
+
+        Gated on ``self._relocalizing`` — the live language switch at
+        ``_handle_language_switch`` calls ``self.close()`` on the OLD
+        window AFTER constructing + showing the new one. That programmatic
+        close also goes through ``closeEvent`` and would otherwise trigger
+        the force-quit, killing the app mid-switch (caught by qa-batch
+        run #612 — s22_language_switch + s58_language_switch_preserves_manifest
+        both failed before this guard was added).
+        """
+        if not event.isAccepted():
+            return
+        if getattr(self, "_relocalizing", False):
+            return
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     # ------------------------------------------------------------------ live language switch
 
@@ -1004,6 +1062,13 @@ class MainWindow(QMainWindow):
         # Close + delete this window. The new one owns the same vm /
         # image_service / settings; nothing of ours needs to outlive
         # the close.
+        #
+        # #612 — flag this as a programmatic close so ``_force_quit_on_accept``
+        # does NOT call ``QApplication.quit()`` here. Without the guard the
+        # old window's closeEvent would force-quit the app mid-language-switch
+        # (s22_language_switch + s58_language_switch_preserves_manifest both
+        # failed on the first attempt of #612's CI).
+        self._relocalizing = True
         self.close()
         self.deleteLater()
 
