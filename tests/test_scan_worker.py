@@ -1043,21 +1043,29 @@ class TestHashPoolCalibration:
             for p, lbl in specs
         ]
 
-    def test_multi_device_with_remote_skips_process_calibration(
+    def test_multi_device_with_remote_forces_process_pool(
         self, qapp, tmp_path, monkeypatch
     ):
-        """#554 — when a scan spans ≥2 devices and at least one is remote
-        (NAS), auto resolves to 'thread' without consulting the flat
-        thread-vs-process calibration. This pins the real bug: before the
-        guard, the flat calibration measured 'thread as 8 threads on a HDD'
-        (slow) and picked process, which ran the OLD flat single pool,
-        bypassing the per-device I/O-overlap win entirely."""
+        """#609 — when a scan spans ≥2 devices and at least one is remote
+        (NAS), auto resolves to **'process'** without consulting the flat
+        thread-vs-process calibration. Inverts the #554 direction based on
+        the 2026-06-08 mixed-workload measurement: the GIL contention on
+        the shared compute_pool dominates over the per-device thread I/O
+        overlap that #554 was protecting (D+J 3400 files: thread 678 s
+        projected vs process 421 s = 1.6× faster). Decision record:
+        ``docs/audits/scanner-perf-mixed-workload-process-pool-2026-06-08.md``.
+
+        The calibration itself is still bypassed on this path — we don't
+        need to measure what we already know about this scan topology —
+        and ProcessPoolExecutor / _time_hash_executor / _profile_process_pool
+        must NOT be invoked at calibration time."""
         import concurrent.futures as _cf
         import app.views.workers.scan_worker as sw
         import scanner.workers as _workers
         from app.views.workers.scan_worker import ScanWorker
 
-        # Two devices: D: local, J: NAS — the exact mixed-scan topology from #554.
+        # Two devices: D: local, J: NAS — the exact mixed-scan topology
+        # the #609 measurement covered.
         records = self._make_records([
             (r"D:\photos\a.jpg", "D"),
             (r"J:\nas\b.jpg", "J"),
@@ -1070,13 +1078,14 @@ class TestHashPoolCalibration:
             lambda path: str(path).upper() == "J:"
         )
 
-        # ProcessPoolExecutor must NEVER be constructed — if the guard fires
-        # correctly the projection is skipped entirely.
+        # Calibration helpers must NEVER be invoked — if the shortcut
+        # fires correctly the projection is skipped entirely. The actual
+        # scan-time ProcessPoolExecutor construction happens later in
+        # _run_pipeline and is not exercised by this unit test.
         def _boom(*args, **kwargs):
             raise AssertionError(
-                "#554 guard must bypass process calibration on multi-device+NAS scan"
+                "#609 shortcut must bypass process calibration on multi-device+NAS scan"
             )
-        monkeypatch.setattr(_cf, "ProcessPoolExecutor", _boom)
         monkeypatch.setattr(sw, "_time_hash_executor", lambda *a: _boom())
         monkeypatch.setattr(sw, "_profile_process_pool", lambda *a: _boom())
 
@@ -1089,8 +1098,10 @@ class TestHashPoolCalibration:
         )
         result = worker._calibrate_hash_pool(records, object(), _cf.ProcessPoolExecutor)
 
-        assert result == "thread", (
-            f"multi-device+NAS scan must resolve to 'thread', not '{result}'"
+        assert result == "process", (
+            f"multi-device+NAS scan must resolve to 'process' (#609 — GIL "
+            f"escape on shared compute_pool > per-device thread I/O overlap "
+            f"on mixed big+small workloads), not '{result}'"
         )
 
     def test_single_device_all_local_still_runs_calibration(
