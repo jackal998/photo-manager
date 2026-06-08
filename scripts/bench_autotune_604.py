@@ -116,28 +116,39 @@ def probe_device(source: str) -> dict:
     }
 
 
-def count_exiftool_procs() -> int:
-    """Return the number of currently-running ``exiftool.exe`` processes,
-    or ``-1`` on any failure. Used as a post-scan smoke check for T7
-    regression: a clean scan teardown leaves zero exiftool behind.
+def snapshot_exiftool_pids() -> set[int]:
+    """Return the set of currently-running ``exiftool.exe`` PIDs, or an
+    empty set on any failure. Used to bracket a scan with before/after
+    snapshots so the orphan check only counts PIDs that appeared during
+    THIS scan and survived past its teardown (a clean T7 fix → zero).
 
-    Windows-only; on POSIX returns 0 (no exiftool zombie regression
-    pattern observed there).
+    Without the snapshot diff, a concurrent process (parallel harness,
+    user's other exiftool, galbum) would false-positive the smoke check.
+
+    Windows-only — on POSIX returns ``set()`` (no exiftool zombie pattern
+    observed there).
     """
     if sys.platform != "win32":
-        return 0
+        return set()
     try:
         out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq exiftool.exe", "/NH"],
+            ["tasklist", "/FI", "IMAGENAME eq exiftool.exe", "/NH", "/FO", "CSV"],
             capture_output=True, text=True, timeout=5,
         )
-        # tasklist prints "INFO: No tasks are running ..." when nothing matches.
         if "INFO:" in out.stdout:
-            return 0
-        return sum(1 for line in out.stdout.splitlines()
-                   if "exiftool.exe" in line.lower())
+            return set()
+        pids: set[int] = set()
+        for line in out.stdout.splitlines():
+            # CSV row: "exiftool.exe","1234","Console","1","12,345 K"
+            cols = [c.strip(' "') for c in line.split(",")]
+            if len(cols) >= 2 and cols[0].lower() == "exiftool.exe":
+                try:
+                    pids.add(int(cols[1]))
+                except ValueError:
+                    continue
+        return pids
     except Exception:
-        return -1
+        return set()
 
 
 def run_one_scan(
@@ -237,6 +248,11 @@ def run_one_scan(
     cancelled = False
     interrupted_on_timeout = False
 
+    # Snapshot exiftool PIDs BEFORE the scan starts so we only count THIS
+    # scan's children in the post-scan orphan check. A concurrent process
+    # (parallel harness, galbum, user's manual exiftool) won't pollute.
+    pre_pids = snapshot_exiftool_pids()
+
     t0 = time.monotonic()
     worker.start()
     deadline = t0 + per_scan_timeout
@@ -259,12 +275,16 @@ def run_one_scan(
     if status == "Scan cancelled.":
         cancelled = True
 
-    # 5) Post-scan exiftool reap smoke test.
-    # Give the OS a moment to clean up file handles before we count.
+    # 5) Post-scan exiftool reap smoke test — snapshot-diff so concurrent
+    # processes don't false-positive. Orphans = PIDs that appeared during
+    # this scan AND are still alive 300 ms after the worker thread exited.
     time.sleep(0.3)
-    n_orphans = count_exiftool_procs()
+    post_pids = snapshot_exiftool_pids()
+    this_scan_orphans = (post_pids - pre_pids)
+    n_orphans = len(this_scan_orphans)
     if n_orphans > 0:
-        print(f"  T7-HIT: {n_orphans} exiftool.exe still running after scan exit")
+        print(f"  T7-HIT: {n_orphans} new exiftool.exe PIDs survived this scan: "
+              f"{sorted(this_scan_orphans)}")
 
     # 6) Hashed-file count from the last "Hashing N,NNN files" / "Hashed" line.
     n_hashed = 0
