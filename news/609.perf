@@ -1,0 +1,1 @@
+Multi-device scans that include a NAS now use the process-pool hash executor instead of thread, escaping Python's GIL contention on shared compute. Real-rig D+J 3400-file measurement: 1.61× faster end-to-end (601s timeout vs 421s complete) and the 70-second compute-freeze episodes during big-DNG decode are gone (#609).
