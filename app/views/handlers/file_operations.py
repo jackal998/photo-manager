@@ -244,6 +244,18 @@ class FileOperationsHandler:
         # exit prompt. Cleared on import, save_silent, save, and
         # successful execute.
         self._is_dirty: bool = False
+        # Path index: file_path → (group_idx, member_idx) for O(1)
+        # lookup in set_decision / set_locked_state.  Option A: version
+        # counter.  vm.groups is REBOUND (not mutated in place) by
+        # remove_from_list, remove_deleted_and_prune, and
+        # remove_group_from_list — all three call self.groups = new_list.
+        # We detect the rebind by comparing the current id(vm.groups)
+        # with the id stored when the index was last built; mismatch
+        # triggers a lazy rebuild on next lookup.  This is more robust
+        # than explicit invalidate() call sites because future rebind
+        # sites can't forget to call it.
+        self._path_index: dict[str, tuple[int, int]] = {}
+        self._path_index_groups_id: int = -1
 
     def is_dirty(self) -> bool:
         """Return True if decisions have been set / changed since the
@@ -255,6 +267,27 @@ class FileOperationsHandler:
 
     def _mark_clean(self) -> None:
         self._is_dirty = False
+
+    def _get_path_index(self) -> dict[str, tuple[int, int]]:
+        """Return the path → (group_idx, member_idx) index, rebuilding if stale.
+
+        Stale = vm.groups was rebound to a new list object since the index
+        was last built (id mismatch).  The three rebind sites are
+        MainVM.remove_from_list, remove_deleted_and_prune, and
+        remove_group_from_list — all assign self.groups = new_list, which
+        changes id(vm.groups) and triggers a rebuild here on next call.
+        """
+        current_id = id(self.vm.groups)
+        if current_id != self._path_index_groups_id:
+            idx: dict[str, tuple[int, int]] = {}
+            for g_i, group in enumerate(self.vm.groups):
+                for m_i, rec in enumerate(getattr(group, "items", [])):
+                    fp = getattr(rec, "file_path", None)
+                    if fp:
+                        idx[fp] = (g_i, m_i)
+            self._path_index = idx
+            self._path_index_groups_id = current_id
+        return self._path_index
 
     def import_manifest(self) -> None:
         """Open a migration_manifest.sqlite in a background worker (non-blocking)."""
@@ -815,26 +848,42 @@ class FileOperationsHandler:
         skip-locked pre-filter lives in the bulk paths
         (``set_decision_by_regex`` / ``set_decision_to_highlighted``)
         that call into here. See photo-manager#164.
+
+        Uses incremental cell update instead of a full model rebuild for
+        performance (#613). set_decision_by_regex stays on the full-rebuild
+        path because it may change the group-level SORT_ROLE aggregates
+        (min-decision across all members) — that requires re-reading all
+        members, which is cheaper via a complete rebuild than per-group
+        aggregate patching.
         """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             return
         batch: dict[str, str] = {}
+        # changes: list of (group_idx, member_idx, new_decision) for incremental update
+        changes: list[tuple[int, int, str]] = []
+        path_index = self._get_path_index()
         for item in items:
             if item.get("type") != "file":
                 continue
             file_path = item["path"]
-            for group in self.vm.groups:
-                for rec in group.items:
-                    if rec.file_path == file_path:
-                        rec.user_decision = new_decision
-                        break
+            coords = path_index.get(file_path)
+            if coords is not None:
+                g_i, m_i = coords
+                self.vm.groups[g_i].items[m_i].user_decision = new_decision
+                changes.append((g_i, m_i, new_decision))
             batch[file_path] = new_decision
         if batch:
             from infrastructure.manifest_repository import ManifestRepository
             ManifestRepository().batch_update_decisions(manifest_path, batch)
             self._mark_dirty()
-        self.ui_updater.refresh_tree(self.vm.groups)
+        # Incremental update: push only changed cells onto the existing model.
+        # Falls back gracefully when tree_controller is not wired (unit tests).
+        tree_controller = getattr(self.parent, "tree_controller", None)
+        if tree_controller is not None and changes:
+            tree_controller.update_decision_cells(changes)
+        elif not changes:
+            pass  # nothing to update
         # #425 — pass the localised label, not the raw internal value:
         # the {decision} placeholder was previously interpolated with
         # "delete" / "" / "keep" verbatim, so zh_TW status reads showed
@@ -850,26 +899,36 @@ class FileOperationsHandler:
         column. This is the dispatcher for both single-row right-click
         Lock/Unlock and bulk regex/multi-select lock/unlock — see
         photo-manager#164.
+
+        Uses incremental cell update instead of a full model rebuild for
+        performance (#613).
         """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
             return
         batch: dict[str, bool] = {}
+        # lock_changes: list of (group_idx, member_idx, locked) for incremental update
+        lock_changes: list[tuple[int, int, bool]] = []
+        path_index = self._get_path_index()
         for item in items:
             if item.get("type") != "file":
                 continue
             file_path = item["path"]
-            for group in self.vm.groups:
-                for rec in group.items:
-                    if rec.file_path == file_path:
-                        rec.is_locked = locked
-                        break
+            coords = path_index.get(file_path)
+            if coords is not None:
+                g_i, m_i = coords
+                self.vm.groups[g_i].items[m_i].is_locked = locked
+                lock_changes.append((g_i, m_i, locked))
             batch[file_path] = locked
         if batch:
             from infrastructure.manifest_repository import ManifestRepository
             ManifestRepository().batch_update_lock_state(manifest_path, batch)
             self._mark_dirty()
-        self.ui_updater.refresh_tree(self.vm.groups)
+        # Incremental update: push only changed cells onto the existing model.
+        # Falls back gracefully when tree_controller is not wired (unit tests).
+        tree_controller = getattr(self.parent, "tree_controller", None)
+        if tree_controller is not None and lock_changes:
+            tree_controller.update_lock_cells(lock_changes)
         report_count(
             self.status_reporter,
             t("file_op.locked_verb") if locked else t("file_op.unlocked_verb"),
@@ -1014,12 +1073,45 @@ class FileOperationsHandler:
 
         if verdict == LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED:
             locked_set = set(locked_paths)
-            locked_items = [it for it in file_items if it["path"] in locked_set]
-            # Unlock first so the subsequent set_decision sees fresh
-            # state (and any UI refresh inside set_locked_state shows
-            # the unlocked rows before the decision toast fires).
-            self.set_locked_state(locked_items, locked=False)
-            self.set_decision(file_items, resolved_decision)
+            # Collapse the two separate DB writes (unlock + set_decision) into a
+            # single transaction via batch_update_decisions_and_lock (#613).
+            batch_decisions = {it["path"]: resolved_decision for it in file_items if it.get("type") == "file"}
+            batch_locks = {p: False for p in locked_paths}
+            manifest_path = getattr(self, "_manifest_path", None)
+            if manifest_path and (batch_decisions or batch_locks):
+                from infrastructure.manifest_repository import ManifestRepository
+                ManifestRepository().batch_update_decisions_and_lock(
+                    manifest_path, batch_decisions, batch_locks
+                )
+            # Apply in-memory updates and collect incremental cell changes.
+            path_index = self._get_path_index()
+            decision_changes: list[tuple[int, int, str]] = []
+            lock_changes: list[tuple[int, int, bool]] = []
+            for it in file_items:
+                if it.get("type") != "file":
+                    continue
+                fp = it["path"]
+                coords = path_index.get(fp)
+                if coords is None:
+                    continue
+                g_i, m_i = coords
+                self.vm.groups[g_i].items[m_i].user_decision = resolved_decision
+                decision_changes.append((g_i, m_i, resolved_decision))
+                if fp in locked_set:
+                    self.vm.groups[g_i].items[m_i].is_locked = False
+                    lock_changes.append((g_i, m_i, False))
+            if batch_decisions or batch_locks:
+                self._mark_dirty()
+            # Single incremental tree-update pass for both COL_ACTION + COL_LOCK.
+            tree_controller = getattr(self.parent, "tree_controller", None)
+            if tree_controller is not None:
+                if decision_changes:
+                    tree_controller.update_decision_cells(decision_changes)
+                if lock_changes:
+                    tree_controller.update_lock_cells(lock_changes)
+            self.status_reporter.show_status(
+                t("file_op.decision_set_status", decision=_decision_display_label(resolved_decision))
+            )
             return
 
         # APPLY_UNLOCKED_ONLY — skip the locked subset, apply to the rest.
@@ -1126,6 +1218,12 @@ class FileOperationsHandler:
         # shared entry point so the dialog flow is identical to
         # single-row right-click and bulk multi-select.
         self.set_decision_with_lock_check(matching, new_decision)
+        # Full rebuild here — the regex path may affect many rows across
+        # many groups, and the group-level SORT_ROLE aggregates (min-decision
+        # per group) can only be updated correctly via a complete rebuild.
+        # The incremental path inside set_decision is intentionally bypassed
+        # for this reason.  See #613 scope boundary comment in set_decision.
+        self.ui_updater.refresh_tree(self.vm.groups)
 
     def _matched_paths_for_pattern(
         self, field: str, pattern: str

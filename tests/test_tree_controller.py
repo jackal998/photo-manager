@@ -463,3 +463,96 @@ class TestLayoutChangeSignalConnection:
             f"refresh_model fired save callback {len(calls)} times; "
             f"signal-blocking around the resize cycle is broken."
         )
+
+
+class TestUpdateDecisionCells:
+    """Incremental cell update path (#613) — set_decision / set_locked_state
+    patch only the changed (group_idx, member_idx) coords on the existing
+    model instead of rebuilding the whole QStandardItemModel.  These tests
+    pin the COL_ACTION text + SORT_ROLE contract that file_operations.py
+    relies on; if the mapping breaks, sorted-by-action views silently
+    re-order on every right-click.
+    """
+
+    def test_updates_action_cell_text_and_sort_role(self, qapp):
+        from app.views.constants import COL_ACTION, COL_GROUP, SORT_ROLE
+        from app.views.tree_model_builder import _DECISION_SORT, _action_display
+
+        controller, _vm = _build(qapp)
+        # Group 0 has a.jpg at member 0, b.jpg at member 1.
+        controller.update_decision_cells([(0, 0, "delete")])
+
+        group_item = controller.model.item(0, COL_GROUP)
+        action_item = group_item.child(0, COL_ACTION)
+        assert action_item.text() == _action_display("delete")
+        assert action_item.data(SORT_ROLE) == _DECISION_SORT["delete"]
+        # Sibling untouched.
+        sibling = group_item.child(1, COL_ACTION)
+        assert sibling.text() == _action_display("")
+        assert sibling.data(SORT_ROLE) == 3  # "" → 3 (between keep and ignore)
+
+    def test_clear_decision_resets_action_cell(self, qapp):
+        """Setting decision back to '' (keep) must clear the text AND reset
+        SORT_ROLE — otherwise a row marked delete then keep stays sorted as
+        if it were still delete."""
+        from app.views.constants import COL_ACTION, COL_GROUP, SORT_ROLE
+        from app.views.tree_model_builder import _action_display
+
+        controller, _vm = _build(qapp)
+        controller.update_decision_cells([(0, 0, "delete")])
+        controller.update_decision_cells([(0, 0, "")])
+
+        group_item = controller.model.item(0, COL_GROUP)
+        action_item = group_item.child(0, COL_ACTION)
+        assert action_item.text() == _action_display("")
+        assert action_item.data(SORT_ROLE) == 3
+
+    def test_empty_changes_list_is_noop(self, qapp):
+        """No changes → no model mutation, no exception."""
+        controller, _vm = _build(qapp)
+        controller.update_decision_cells([])  # must not raise
+
+    def test_out_of_range_group_index_is_skipped(self, qapp):
+        """Bad (group_idx, member_idx) coords from a stale path index
+        must not crash — the early `if … is None` guard logs and continues."""
+        controller, _vm = _build(qapp)
+        # Group 999 does not exist (controller has 2 groups).
+        controller.update_decision_cells([(999, 0, "delete")])  # must not raise
+
+
+class TestUpdateLockCells:
+    """Incremental lock-cell update (#613) — orthogonal to decision; lock
+    glyph + SORT_ROLE on COL_LOCK.  Catches: wrong column index, missing
+    SORT_ROLE update, broken _lock_display mapping.
+    """
+
+    def test_lock_glyph_and_sort_role(self, qapp):
+        from app.views.constants import COL_GROUP, COL_LOCK, SORT_ROLE
+        from app.views.tree_model_builder import _lock_display
+
+        controller, _vm = _build(qapp)
+        controller.update_lock_cells([(0, 0, True)])
+
+        group_item = controller.model.item(0, COL_GROUP)
+        lock_item = group_item.child(0, COL_LOCK)
+        assert lock_item.text() == _lock_display(True)
+        assert lock_item.data(SORT_ROLE) == 1
+
+    def test_unlock_clears_glyph(self, qapp):
+        from app.views.constants import COL_GROUP, COL_LOCK, SORT_ROLE
+        from app.views.tree_model_builder import _lock_display
+
+        controller, _vm = _build(qapp)
+        controller.update_lock_cells([(0, 0, True)])
+        controller.update_lock_cells([(0, 0, False)])
+
+        group_item = controller.model.item(0, COL_GROUP)
+        lock_item = group_item.child(0, COL_LOCK)
+        assert lock_item.text() == _lock_display(False)
+        assert lock_item.data(SORT_ROLE) == 0
+
+    def test_out_of_range_member_index_is_skipped(self, qapp):
+        """Member index past the group's child count must not crash."""
+        controller, _vm = _build(qapp)
+        # Group 0 has 2 members; index 99 is out of range.
+        controller.update_lock_cells([(0, 99, True)])  # must not raise

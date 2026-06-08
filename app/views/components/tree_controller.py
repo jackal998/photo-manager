@@ -9,13 +9,20 @@ from PySide6.QtWidgets import QHeaderView, QTreeView
 from loguru import logger
 
 from app.views.constants import (
+    COL_ACTION,
     COL_GROUP,
+    COL_LOCK,
     COL_NAME,
     NUM_COLUMNS,
     PATH_ROLE,
     SORT_ROLE,
 )
-from app.views.tree_model_builder import build_model
+from app.views.tree_model_builder import (
+    _DECISION_SORT,
+    _action_display,
+    _lock_display,
+    build_model,
+)
 
 
 class TreeController:
@@ -424,6 +431,63 @@ class TreeController:
             Tuple of (column_index, sort_order)
         """
         return self._current_sort_column, self._current_sort_order
+
+    def update_decision_cells(
+        self, changes: list[tuple[int, int, str]]
+    ) -> None:
+        """Update COL_ACTION display text + SORT_ROLE for changed file rows.
+
+        ``changes`` is a list of ``(group_idx, member_idx, new_decision)``
+        tuples — the coords come from FileOperationsHandler's path index
+        and correspond to positions in the source model (not the proxy).
+
+        Skips post-rebuild side effects (restore_column_state,
+        reconnect_selection_handler, expandAll, ResizeToContents) that are
+        only needed when the model is fully replaced.  Group-level
+        SORT_ROLE aggregates are NOT updated here — that would require
+        reading all sibling rows.  set_decision_by_regex stays on the
+        full-rebuild path for exactly this reason.
+        """
+        model = self._model
+        if model is None:
+            return
+        for g_i, m_i, decision in changes:
+            try:
+                group_item = model.item(g_i, COL_GROUP)
+                if group_item is None:
+                    continue
+                action_item = group_item.child(m_i, COL_ACTION)
+                if action_item is None:
+                    continue
+                action_item.setText(_action_display(decision))
+                action_item.setData(_DECISION_SORT.get(decision, 3), SORT_ROLE)
+            except Exception as exc:
+                logger.error("update_decision_cells failed at ({}, {}): {}", g_i, m_i, exc)
+
+    def update_lock_cells(
+        self, changes: list[tuple[int, int, bool]]
+    ) -> None:
+        """Update COL_LOCK display glyph + SORT_ROLE for changed file rows.
+
+        ``changes`` is a list of ``(group_idx, member_idx, locked)`` tuples.
+        Same incremental pattern as :meth:`update_decision_cells` — no full
+        rebuild, no expandAll, no ResizeToContents.
+        """
+        model = self._model
+        if model is None:
+            return
+        for g_i, m_i, locked in changes:
+            try:
+                group_item = model.item(g_i, COL_GROUP)
+                if group_item is None:
+                    continue
+                lock_item = group_item.child(m_i, COL_LOCK)
+                if lock_item is None:
+                    continue
+                lock_item.setText(_lock_display(locked))
+                lock_item.setData(1 if locked else 0, SORT_ROLE)
+            except Exception as exc:
+                logger.error("update_lock_cells failed at ({}, {}): {}", g_i, m_i, exc)
 
     @property
     def model(self):
