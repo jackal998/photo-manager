@@ -1491,27 +1491,131 @@ class TestExitDialogButtonsConstant:
         behaviour version (real QMessageBox, real exec()) would cost
         ~25s per run and need a qapp fixture — far above the value of
         what's being asserted.
+
+        Note: ``closeEvent`` was refactored 2026-06-08 (force-quit fix)
+        to delegate the dirty-prompt logic to ``_dispatch_close``. The
+        constant + ``exit.button_*`` keys live in ``_dispatch_close``
+        now; the assertion checks both functions' combined source.
         """
         import inspect
 
         from app.views.main_window import MainWindow
 
-        source = inspect.getsource(MainWindow.closeEvent)
+        source = (
+            inspect.getsource(MainWindow.closeEvent)
+            + inspect.getsource(MainWindow._dispatch_close)
+        )
         # The pre-#325 body called addButton(t("exit.button_leave"), ...)
         # inline three times. Forbid that exact pattern as a regression
         # tripwire — closeEvent should iterate over the constant.
         assert "EXIT_DIALOG_BUTTONS" in source, (
-            "closeEvent no longer references EXIT_DIALOG_BUTTONS — if you "
-            "removed the constant on purpose, also remove this test and "
-            "update qa/scenarios/_close_window_helper.py's docstring."
+            "closeEvent / _dispatch_close no longer reference EXIT_DIALOG_BUTTONS "
+            "— if you removed the constant on purpose, also remove this test "
+            "and update qa/scenarios/_close_window_helper.py's docstring."
         )
-        # An explicit inline 't(\"exit.button_' call inside closeEvent
+        # An explicit inline 't(\"exit.button_' call inside the close path
         # (beyond the dialog title/body) would mean someone added a
         # button outside the constant — that's the drift we want to
         # block.
         for forbidden_key in ("exit.button_save_leave", "exit.button_leave", "exit.button_back"):
             assert forbidden_key not in source, (
-                f"closeEvent contains a hard-coded reference to "
+                f"closeEvent / _dispatch_close contains a hard-coded reference to "
                 f"{forbidden_key!r}. Move it into EXIT_DIALOG_BUTTONS so "
                 "the qa helper's label-based selector stays in sync."
             )
+
+
+class TestForceQuitOnAccept:
+    """2026-06-08 — pin the "can't-close" bug fix.
+
+    Symptom that motivated this: PID 31776 captured on the user's rig
+    stayed alive after they closed the main window — 0 % CPU, 24
+    threads, 41 599 handles, 0 visible windows. ``aboutToQuit``
+    never fired (verified by 0 hits in app_<date>.log). Workers and
+    exiftool had cleaned up correctly; only the parent python.exe was
+    leaking, because Qt 6's ``lastWindowClosed`` signal failed to
+    fire after MainWindow was hidden (no ``WA_DeleteOnClose`` +
+    residual top-level helper widgets + ProcessPool internals).
+
+    Fix at app/views/main_window.py: ``_force_quit_on_accept`` calls
+    ``QApplication.instance().quit()`` directly when the close event
+    is accepted, bypassing the unreliable ``lastWindowClosed``
+    machinery. These tests pin the contract: quit fires on accept,
+    does NOT fire on ignore (user clicks Back / Esc).
+    """
+
+    def test_force_quit_fires_on_accepted_close(self, qapp, monkeypatch) -> None:
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QCloseEvent
+        from PySide6.QtWidgets import QApplication
+
+        from app.views.main_window import MainWindow
+
+        quit_calls = []
+        # Patch the app instance's quit() so the test doesn't actually
+        # tear down the qapp fixture mid-run.
+        monkeypatch.setattr(QApplication, "instance",
+                            classmethod(lambda cls: _FakeApp(quit_calls)))
+
+        event = QCloseEvent()
+        event.accept()
+        # _force_quit_on_accept is bound on the class; we don't need a
+        # real MainWindow instance for the contract test.
+        MainWindow._force_quit_on_accept(None, event)  # type: ignore[arg-type]
+
+        assert quit_calls == [1], (
+            "_force_quit_on_accept must call QApplication.instance().quit() "
+            "exactly once on an accepted close event; got "
+            f"{quit_calls!r}. This is the load-bearing fix for the "
+            "can't-close bug (PID 31776 evidence, 2026-06-08)."
+        )
+
+    def test_force_quit_does_NOT_fire_on_ignored_close(self, qapp, monkeypatch) -> None:
+        from PySide6.QtGui import QCloseEvent
+        from PySide6.QtWidgets import QApplication
+
+        from app.views.main_window import MainWindow
+
+        quit_calls = []
+        monkeypatch.setattr(QApplication, "instance",
+                            classmethod(lambda cls: _FakeApp(quit_calls)))
+
+        event = QCloseEvent()
+        event.ignore()
+        MainWindow._force_quit_on_accept(None, event)  # type: ignore[arg-type]
+
+        assert quit_calls == [], (
+            "_force_quit_on_accept must NOT call quit() on an ignored close "
+            "(Back / Esc / scan-running-No / save-failed paths); got "
+            f"{quit_calls!r}. Quitting on ignore would close the app even when "
+            "the user explicitly chose to stay."
+        )
+
+    def test_force_quit_safe_when_no_qapp_instance(self, monkeypatch) -> None:
+        """Guard the None-instance path — exec() during teardown, headless,
+        or pre-init contexts where QApplication.instance() is None must
+        not raise."""
+        from PySide6.QtGui import QCloseEvent
+        from PySide6.QtWidgets import QApplication
+
+        from app.views.main_window import MainWindow
+
+        monkeypatch.setattr(QApplication, "instance",
+                            classmethod(lambda cls: None))
+
+        event = QCloseEvent()
+        event.accept()
+        # Must not raise.
+        MainWindow._force_quit_on_accept(None, event)  # type: ignore[arg-type]
+
+
+class _FakeApp:
+    """Records quit() calls so the test can assert without actually
+    quitting the real QApplication (which would tear down the qapp
+    fixture mid-run)."""
+
+    def __init__(self, log: list) -> None:
+        self._log = log
+
+    def quit(self) -> None:
+        self._log.append(1)
