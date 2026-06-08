@@ -191,6 +191,8 @@ testdata/
 # Summary writeups live under docs/audits/; the raw JSON is local-only.
 bench_604_*.json
 probe_*.json
+monitor_*.json
 .bench_604_artifacts/
 .probe_598_artifacts/
 .probe_timeline_artifacts/
+.probe_monitor_artifacts/
