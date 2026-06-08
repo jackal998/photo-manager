@@ -174,15 +174,22 @@ class TestSetDecision:
 
         assert rec.user_decision == ""
 
-    def test_refreshes_tree(self, tmp_path):
+    def test_uses_incremental_update_not_full_rebuild(self, tmp_path):
+        """set_decision must NOT call refresh_tree — it uses incremental cell
+        update via tree_controller.update_decision_cells (#613). A full rebuild
+        on every right-click is the bug this test guards against."""
         rec = _rec("/a.jpg")
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, ui_updater, _ = _make_handler(vm, str(db))
+        # Wire a mock tree_controller so update_decision_cells can be asserted.
+        tree_controller = MagicMock()
+        handler.parent.tree_controller = tree_controller
 
         handler.set_decision([{"type": "file", "path": "/a.jpg"}], "delete")
 
-        ui_updater.refresh_tree.assert_called_once()
+        ui_updater.refresh_tree.assert_not_called()
+        tree_controller.update_decision_cells.assert_called_once()
 
     def test_reports_status(self, tmp_path):
         rec = _rec("/a.jpg")
@@ -224,6 +231,72 @@ class TestSetDecision:
         assert _read_decision(db, "/a.jpg") == "delete"
         assert _read_decision(db, "/b.jpg") == "delete"
 
+    def test_path_index_invalidates_on_vm_groups_rebind(self, tmp_path):
+        """Path index must rebuild after vm.groups is rebound (not mutated in place).
+
+        MainVM.remove_from_list / remove_deleted_and_prune / remove_group_from_list
+        all assign self.groups = new_list (not pop/del on the old list).  The
+        index must detect this via id() change and rebuild so the next
+        set_decision lookup hits the correct (group_idx, member_idx) pair (#613).
+        """
+        from app.viewmodels.main_vm import MainVM
+
+        rec_a = _rec("/a.jpg", group=1)
+        rec_b = _rec("/b.jpg", group=1)
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}, {"source_path": "/b.jpg"}])
+        vm = MainVM(MagicMock())
+        vm.groups = [PhotoGroup(group_number=1, items=[rec_a, rec_b])]
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+
+        # Warm the index — first call builds it.
+        _ = handler._get_path_index()
+        old_id = id(vm.groups)
+
+        # Simulate remove_from_list rebinding vm.groups (like MainVM does).
+        vm.remove_from_list(["/a.jpg"])
+        assert id(vm.groups) != old_id, "rebind must produce a new list object"
+
+        # set_decision on the remaining path must still work correctly.
+        handler.set_decision([{"type": "file", "path": "/b.jpg"}], "delete")
+        assert rec_b.user_decision == "delete"
+
+    def test_apply_all_unlocked_single_transaction(self, tmp_path):
+        """APPLY_ALL_UNLOCKED must issue exactly one batch_update_decisions_and_lock
+        call — not separate batch_update_decisions + batch_update_lock_state calls.
+        One DB transaction = one fsync over SMB/NAS (#613).
+        """
+        from app.views.dialogs.locked_rows_confirm_dialog import LockedRowsConfirmDialog
+
+        rec = _rec("/a.jpg", locked=True)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+
+        with patch("infrastructure.manifest_repository.ManifestRepository.batch_update_decisions_and_lock") as mock_combined, \
+             patch("infrastructure.manifest_repository.ManifestRepository.batch_update_decisions") as mock_dec, \
+             patch("infrastructure.manifest_repository.ManifestRepository.batch_update_lock_state") as mock_lock, \
+             patch.object(LockedRowsConfirmDialog, "ask", return_value=LockedRowsConfirmDialog.APPLY_ALL_UNLOCKED):
+            handler.set_decision_with_lock_check(
+                [{"type": "file", "path": "/a.jpg"}], "delete"
+            )
+
+        mock_combined.assert_called_once()
+        mock_dec.assert_not_called()
+        mock_lock.assert_not_called()
+
+    def test_set_decision_by_regex_still_uses_full_rebuild(self, tmp_path):
+        """set_decision_by_regex must still call ui_updater.refresh_tree — it
+        modifies group-level SORT_ROLE aggregates that require a full rebuild.
+        Regression guard: the incremental path must NOT be taken here (#613).
+        """
+        rec = _rec("/a.jpg", group=1)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+
+        handler.set_decision_by_regex("File Name", r"a\.jpg", "delete")
+
+        ui_updater.refresh_tree.assert_called_once()
 
 
 # ── remove_from_list (DB sync) ─────────────────────────────────────────────
@@ -2095,6 +2168,23 @@ class TestSetLockedState:
         handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
         handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
         assert rec.is_locked is True
+
+    def test_incremental_update_skips_restore_column_state(self, tmp_path):
+        """set_locked_state must NOT call restore_column_state — that helper is
+        only appropriate after a full model replace.  Calling it on a lock-only
+        change would reset user column widths for no reason (#613).
+        """
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+        tree_controller = MagicMock()
+        handler.parent.tree_controller = tree_controller
+
+        handler.set_locked_state([{"type": "file", "path": "/a.jpg"}], True)
+
+        tree_controller.restore_column_state.assert_not_called()
+        tree_controller.update_lock_cells.assert_called_once()
 
 
 class TestSetDecisionIsSilentDispatcher:

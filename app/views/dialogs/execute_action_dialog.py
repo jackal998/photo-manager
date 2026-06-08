@@ -25,7 +25,9 @@ from loguru import logger
 
 from app.views.components.status_messages import report_count
 from app.views.constants import (
+    COL_ACTION,
     COL_GROUP,
+    COL_LOCK,
     COL_NAME,
     IGNORE_DECISION,
     IGNORE_SENTINEL,
@@ -36,7 +38,12 @@ from app.views.constants import (
     settable_decisions,
 )
 from app.views.preview_pane import PreviewPane
-from app.views.tree_model_builder import build_model
+from app.views.tree_model_builder import (
+    _DECISION_SORT,
+    _action_display,
+    _lock_display,
+    build_model,
+)
 from app.views.window_state import (
     QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_GEOM,
     QSETTINGS_KEY_EXECUTE_ACTION_DIALOG_SPLITTER_STATE,
@@ -140,6 +147,14 @@ class ExecuteActionDialog(QDialog):
         # can show "didn't exist" vs "tried and failed" distinctly (#68).
         self._failed_paths: list[tuple[str, str]] = []
         self._src_model = None
+        # Path index for the dialog's own _groups list — same Option A
+        # (id-based) invalidation as FileOperationsHandler._get_path_index.
+        # Keyed on id(self._groups) so that in-place list mutations via
+        # _remove_from_list_paths (self._groups[:] = keep_groups) correctly
+        # invalidate the index (the list object identity changes on slice
+        # assignment because CPython replaces the internal buffer).
+        self._dialog_path_index: dict[str, tuple[int, int]] = {}
+        self._dialog_path_index_groups_id: int = -1
         self._build_ui()
         # #215 — restore last saved geometry. ``setMinimumSize`` above
         # acts as the floor; the off-screen guard inside
@@ -452,6 +467,62 @@ class ExecuteActionDialog(QDialog):
         if hasattr(self, "_btn_box"):
             self._on_selection_changed()
 
+    def _update_decision_cell_incremental(self, path: str, decision: str) -> None:
+        """Update COL_ACTION for ``path`` on the existing dialog tree model.
+
+        Walks the rendered (filtered) source model to find the row by
+        PATH_ROLE so the update is correct even when the type-filter hides
+        some rows.  Falls back silently — a subsequent full rebuild will
+        fix any inconsistency.  Never replaces the model, so
+        selectionModel, expandAll, and column widths are all preserved.
+        """
+        model = self._src_model
+        if model is None:
+            return
+        try:
+            for g_row in range(model.rowCount()):
+                g_item = model.item(g_row, COL_GROUP)
+                if g_item is None:
+                    continue
+                for c_row in range(g_item.rowCount()):
+                    name_item = g_item.child(c_row, COL_NAME)
+                    if name_item is None:
+                        continue
+                    if name_item.data(PATH_ROLE) == path:
+                        action_item = g_item.child(c_row, COL_ACTION)
+                        if action_item is not None:
+                            action_item.setText(_action_display(decision))
+                            action_item.setData(_DECISION_SORT.get(decision, 3), SORT_ROLE)
+                        return
+        except Exception as exc:
+            logger.error("_update_decision_cell_incremental failed for {}: {}", path, exc)
+
+    def _update_lock_cell_incremental(self, path: str, locked: bool) -> None:
+        """Update COL_LOCK for ``path`` on the existing dialog tree model.
+
+        Same incremental pattern as :meth:`_update_decision_cell_incremental`.
+        """
+        model = self._src_model
+        if model is None:
+            return
+        try:
+            for g_row in range(model.rowCount()):
+                g_item = model.item(g_row, COL_GROUP)
+                if g_item is None:
+                    continue
+                for c_row in range(g_item.rowCount()):
+                    name_item = g_item.child(c_row, COL_NAME)
+                    if name_item is None:
+                        continue
+                    if name_item.data(PATH_ROLE) == path:
+                        lock_item = g_item.child(c_row, COL_LOCK)
+                        if lock_item is not None:
+                            lock_item.setText(_lock_display(locked))
+                            lock_item.setData(1 if locked else 0, SORT_ROLE)
+                        return
+        except Exception as exc:
+            logger.error("_update_lock_cell_incremental failed for {}: {}", path, exc)
+
     def _update_summary(self) -> None:
         # #502 — summary reflects the visible-after-type-filter scope,
         # not the global decision set. Matches the "visible = committed"
@@ -726,7 +797,13 @@ class ExecuteActionDialog(QDialog):
         # #444 — single-row lock/unlock mutates rec.is_locked in place
         # on vm.groups; main tree must re-render the lock glyph on close.
         self._decisions_changed = True
-        self._refresh_ui_after_decision_change()
+        # Incremental cell update — no full model rebuild for single-row
+        # lock/unlock (#613).  Non-tree state (summary, banner) still runs.
+        self._update_lock_cell_incremental(path, locked)
+        self._update_summary()
+        self._btn_box.button(QDialogButtonBox.Ok).setEnabled(bool(self._decided_records()))
+        self._refresh_execute_selected_state()
+        self._refresh_warning_banner()
         # #318 — match the main-window route's confirmation. Without
         # this emit, single-row Lock/Unlock from the Execute Action
         # dialog left the status bar at its prior baseline.
@@ -795,7 +872,14 @@ class ExecuteActionDialog(QDialog):
         # #444 — single-row decision change mutates vm.groups in place;
         # main tree must re-render the Action cell on close.
         self._decisions_changed = True
-        self._refresh_ui_after_decision_change()
+        # Incremental cell update — no full model rebuild for single-row
+        # right-click (#613).  _update_summary, button state, and banner
+        # still run via the partial refresh below.
+        self._update_decision_cell_incremental(path, decision)
+        self._update_summary()
+        self._btn_box.button(QDialogButtonBox.Ok).setEnabled(bool(self._decided_records()))
+        self._refresh_execute_selected_state()
+        self._refresh_warning_banner()
         # #318 — match the main-window route's confirmation.
         # #425 — interpolate the localised label, not the raw value.
         from app.views.handlers.file_operations import _decision_display_label
