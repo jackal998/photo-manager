@@ -556,3 +556,77 @@ class TestUpdateLockCells:
         controller, _vm = _build(qapp)
         # Group 0 has 2 members; index 99 is out of range.
         controller.update_lock_cells([(0, 99, True)])  # must not raise
+
+
+class TestRefreshModelTeardown:
+    """Each refresh_model call must release the previous proxy + model (#618).
+
+    Without explicit teardown, every reload leaks the entire prior tree state
+    to Qt's parent-child object tree — ~163k QStandardItem per typical 13k-row
+    reload, accumulating until app close (root cause of #614's 8-10 GB residency
+    report).
+
+    Assertion strategy: we use `tree.children()` membership as the primary
+    observable — if the old proxy remains in tree.children() after refresh, Qt's
+    parent-child relationship keeps it alive along with all its descendant items.
+    After the fix, setParent(None) removes the proxy from tree.children()
+    immediately (synchronous), then deleteLater() schedules the C++ destruction.
+    The PySide6 `destroyed` signal does not fire reliably for deleteLater() in
+    headless tests, so we do not use it here.
+    """
+
+    def test_old_proxy_removed_from_tree_children_after_refresh(self, qapp):
+        """The old proxy must NOT remain in tree.children() after refresh_model.
+
+        Without the #618 fix, old_proxy.setParent(self.tree) was never undone,
+        so every refresh added a new child but kept all prior proxies in
+        tree.children() forever — each proxy kept its full QStandardItemModel
+        alive.
+        """
+        controller, _ = _build(qapp)
+        first_proxy = controller._proxy
+        assert first_proxy is not None
+        assert first_proxy in controller.tree.children(), (
+            "pre-condition: newly built proxy must be a Qt child of the tree view"
+        )
+
+        new_groups = [
+            SimpleNamespace(group_number=99, items=[_rec("/photos/z.jpg")]),
+        ]
+        controller.refresh_model(new_groups)
+
+        assert first_proxy not in controller.tree.children(), (
+            "old proxy must be removed from tree.children() after refresh_model; "
+            "without the #618 fix the proxy lingers as a Qt child of the tree "
+            "view forever, keeping ~163k QStandardItems alive"
+        )
+        # The new proxy should now be in children.
+        assert controller._proxy in controller.tree.children()
+        assert controller._proxy is not first_proxy
+
+    def test_multiple_refreshes_only_current_proxy_in_tree_children(self, qapp):
+        """After N refreshes, exactly the current proxy (and no prior ones)
+        must be in tree.children() — guards against a partial fix where only
+        the first old proxy is removed."""
+        controller, _ = _build(qapp)
+
+        intermediate_proxies = []
+        for i in range(5):
+            intermediate_proxies.append(controller._proxy)
+            new_groups = [
+                SimpleNamespace(
+                    group_number=100 + i,
+                    items=[_rec(f"/photos/r{i}.jpg")],
+                ),
+            ]
+            controller.refresh_model(new_groups)
+
+        tree_children = controller.tree.children()
+        for idx, old_proxy in enumerate(intermediate_proxies):
+            assert old_proxy not in tree_children, (
+                f"intermediate proxy #{idx} from before refresh {idx+1} is "
+                f"still in tree.children() — that proxy keeps its entire "
+                f"QStandardItemModel subtree alive (the #618 leak)"
+            )
+        # Only the final current proxy should be a tree child.
+        assert controller._proxy in tree_children

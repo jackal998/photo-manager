@@ -1,0 +1,1 @@
+TreeController.refresh_model now tears down the prior QStandardItemModel + QSortFilterProxyModel — fixes the ~250 MB/reload leak that caused 8-10 GB residency on close (#618, root cause of #614).
