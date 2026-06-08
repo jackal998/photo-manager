@@ -2242,6 +2242,100 @@ class TestScanTeardownGaps:
         )
         assert out.exists(), "the scan must still complete and write its manifest"
 
+    def test_process_branch_uses_per_device_pools(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """#610 — process branch must spawn ONE ProcessPoolExecutor per device,
+        sized by ``hash_workers_for_root(dev)``. Pins the fix that closes the
+        2026-06-08 D+H+J regression: a flat single ProcessPoolExecutor put
+        all 8 workers onto D:'s HDD simultaneously → seek-thrash redux of
+        #605 in the compute path → 50%+ idle CPU samples on the real-rig
+        D+H+J monitor probe. The per-device shape gives D: HDD = 1 worker
+        + NAS = 8 workers (one pool each) so the HDD never multi-reads.
+
+        Validates by spying on ProcessPoolExecutor construction:
+          • Two pools instantiated (one per device)
+          • D: pool has max_workers=1 (HDD seek-penalty)
+          • NAS pool has max_workers=8 (remote)
+        """
+        import concurrent.futures as _cf
+        import scanner.workers as _workers
+        import scanner.hasher as _hasher
+        from app.views.workers.scan_worker import ScanWorker
+        from scanner.dedup import HashResult
+        from scanner.walker import FileRecord
+
+        # Fake scan_sources → return one D: file + one J: file. Skip
+        # file_type so the reader/compute fast-path returns immediately
+        # without touching the FS (we patch hasher anyway).
+        records = [
+            FileRecord(path=Path(r"D:\photos\d.jpg"),
+                       source_label="d", file_type="jpeg"),
+            FileRecord(path=Path(r"J:\nas\j.jpg"),
+                       source_label="j", file_type="jpeg"),
+        ]
+        import scanner.walker as _walker
+        monkeypatch.setattr(
+            _walker, "scan_sources",
+            lambda sources, **kw: list(records)
+        )
+        # D: → spinning HDD, J: → remote NAS share. is_remote_drive must
+        # also accept the resolved \\SERVER key for the NAS bucket
+        # (device_key collapses J: to \\LINXIAOYUN when WNetGetConnectionW
+        # resolves it; the patched stub returns the letter unchanged so
+        # the bucket key here stays "J:").
+        monkeypatch.setattr(
+            _workers, "is_remote_drive",
+            lambda path: str(path).upper().startswith("J")
+        )
+        monkeypatch.setattr(
+            _workers, "disk_incurs_seek_penalty",
+            lambda root: True if str(root).upper() == "D:" else None
+        )
+        # Stub the hash compute so the spy pool actually completes work.
+        monkeypatch.setattr(
+            _hasher, "run_hash_for_record",
+            lambda idx, record: (idx, HashResult(
+                record=record, sha256=f"sha-{idx}",
+                phash=None, exif_date=None
+            ))
+        )
+
+        real_thread_pool = _cf.ThreadPoolExecutor
+        constructions: list[int] = []
+
+        class SpyProcessPool(real_thread_pool):
+            def __init__(self, *args, max_workers=None, **kwargs):
+                constructions.append(max_workers)
+                # ProcessPoolExecutor's _processes attr is read by the
+                # #549(a) job-assignment helper; provide a stub so it can
+                # iterate without error.
+                self._processes = {}
+                super().__init__(*args, max_workers=max_workers, **kwargs)
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
+
+        worker = ScanWorker(
+            sources={"d": "D:\\", "j": "J:\\"},
+            output_path=str(tmp_path / "m.sqlite"),
+            recursive_map={"d": False, "j": False},
+            workers=8,
+            hash_pool="process",  # force process branch; bypass calibration
+        )
+        worker.run()
+
+        # Two pools, sized per-device. Order isn't guaranteed (OrderedDict
+        # walk-order vs sort), so check as a set.
+        assert len(constructions) == 2, (
+            f"#610 expects one ProcessPoolExecutor PER DEVICE; got "
+            f"{len(constructions)} construction(s) with sizes {constructions!r}"
+        )
+        sizes = sorted(constructions)
+        assert sizes == [1, 8], (
+            f"#610: D: HDD pool must have max_workers=1 (no seek-thrash) and "
+            f"NAS pool must have max_workers=8 (remote default); got {sizes!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # #566 gate tests — two highest-risk invariants for the bounded pipeline

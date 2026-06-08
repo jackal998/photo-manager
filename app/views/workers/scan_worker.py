@@ -1108,39 +1108,79 @@ class ScanWorker(QThread):
         # #486-PR2 — executor selector. Process path submits the picklable
         # run_hash_for_record directly (the child can't touch the
         # thread-only cancel_flag / exif_queue); the parent routes each
-        # outcome in the drain loop. Thread path (default) keeps the
-        # in-worker routing via _hash_one — identical to pre-PR2.
+        # outcome in the drain loop. Thread path keeps the in-worker
+        # routing via _hash_one — identical to pre-PR2.
         use_process = resolved_pool == "process"
         if use_process:
-            # TODO(#548 follow-on): per-device process pools. The
-            # seek-thrash problem #548 targets is I/O-bound, so the
-            # per-device overlap win lives entirely in the thread branch.
-            # Keep the single flat ProcessPoolExecutor here.
+            # #610 — per-device process pools (the #548 follow-on the
+            # original author punted at this site). The flat
+            # ``ProcessPoolExecutor(max_workers=self.workers)`` was a
+            # regression of the #605 seek-thrash bug *in the compute path*:
+            # when #609 flipped multi-device+NAS to process mode, 8 worker
+            # processes all reading from D:'s HDD simultaneously
+            # serialised + thrashed the drive (real-rig monitor: 50% of
+            # samples under 50% CPU, hash rate 3.4 files/s on D+H+J vs 8
+            # f/s on D+J alone — the H: add overwhelmingly hurt because
+            # both H+J point at the same SMB server contending with D:).
+            # Mirror the thread branch's per-device shape: one
+            # ``ProcessPoolExecutor`` per device, sized by
+            # ``hash_workers_for_root(dev)`` — HDD=1, NAS=8, SSD/unknown=
+            # ``min(4, cpu_count)``. Two side effects worth knowing:
+            #   • Workers across pools spawn in parallel, so the wall-time
+            #     spawn cost is unchanged from the flat pool.
+            #   • Each pool's workers go into the #460 KILL_ON_JOB_CLOSE
+            #     job individually via ``_assign_process_pool_to_kill_job``.
             #
-            # #549(b) — explicit pool + try/finally, NOT ``with``. A
+            # Decision record: docs/audits/scanner-perf-per-device-process-pool-2026-06-08.md.
+            #
+            # #549(b) — explicit pools + try/finally, NOT ``with``. A
             # ``with ProcessPoolExecutor() as pool:`` runs shutdown(wait=True)
             # on __exit__, which on a user-cancel blocks until every in-flight
             # worker finishes its current read_bytes() — defeating the
             # requestInterruption()/wait(3000) teardown and leaving the disk
             # grinding after "exit". ``finally: shutdown(wait=False)`` lets the
-            # QThread return promptly; #549(a)'s job assignment reaps any
-            # still-running workers when the parent exits. Mirrors the thread
-            # branch's teardown shape below.
-            pool = ProcessPoolExecutor(max_workers=self.workers)
+            # QThread return promptly; #549(a)'s per-pool job assignment reaps
+            # any still-running workers when the parent exits. Mirrors the
+            # thread branch's teardown shape below.
+            from collections import OrderedDict as _OrderedDict
+            from scanner.workers import device_key, hash_workers_for_root
+            proc_device_records: "_OrderedDict[str, list[tuple[int, object]]]" = (
+                _OrderedDict()
+            )
+            for idx, r in enumerate(records):
+                proc_device_records.setdefault(device_key(r.path), []).append((idx, r))
+            proc_device_workers = {
+                dev: hash_workers_for_root(dev) for dev in proc_device_records
+            }
+            self._emit(
+                f"Hashing {len(records):,} files across"
+                f" {len(proc_device_records)} device(s) [process]: "
+                + ", ".join(
+                    f"{dev or 'local'}={proc_device_workers[dev]}×{len(items)}f"
+                    for dev, items in proc_device_records.items()
+                )
+            )
+            process_pools = {
+                dev: ProcessPoolExecutor(max_workers=proc_device_workers[dev])
+                for dev in proc_device_records
+            }
             try:
-                futures = {
-                    pool.submit(run_hash_for_record, i, r): i
-                    for i, r in enumerate(records)
-                }
-                # #549(a) — workers are spawned by the submit() calls above;
-                # assign them to the #460 KILL_ON_JOB_CLOSE job so a hard
-                # parent-kill reaps them instead of leaving python.exe workers
-                # reading the source disks. No-op off Windows / without pywin32.
-                _assign_process_pool_to_kill_job(pool)
+                futures: dict = {}
+                for dev, items in proc_device_records.items():
+                    pool = process_pools[dev]
+                    for _idx, _r in items:
+                        futures[pool.submit(run_hash_for_record, _idx, _r)] = _idx
+                    # #549(a) — workers are spawned by the submit() calls
+                    # above; assign each pool's workers to the #460
+                    # KILL_ON_JOB_CLOSE job so a hard parent-kill reaps them
+                    # instead of leaving python.exe workers reading the source
+                    # disks. No-op off Windows / without pywin32.
+                    _assign_process_pool_to_kill_job(pool)
                 for future in as_completed(futures):
                     if self.isInterruptionRequested():
                         cancel_flag.set()
-                        pool.shutdown(wait=False, cancel_futures=True)
+                        for _p in process_pools.values():
+                            _p.shutdown(wait=False, cancel_futures=True)
                         # #561 — kill exiftool first so a consumer wedged in a
                         # batch unblocks immediately (execute() hits EOF);
                         # otherwise the join below waits out the whole batch
@@ -1179,7 +1219,8 @@ class ScanWorker(QThread):
                 # wait=False (NOT the ``with``-exit's wait=True) so cancel
                 # doesn't block on in-flight reads; on normal completion every
                 # future is already drained so there is nothing to wait for.
-                pool.shutdown(wait=False)
+                for _p in process_pools.values():
+                    _p.shutdown(wait=False)
         else:
             # #566 — THREAD path: READ stage + COMPUTE stage joined by a
             # bounded queue (#566).  The two-stage split lets I/O-bound reads
