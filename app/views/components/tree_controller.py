@@ -245,6 +245,11 @@ class TreeController:
         Args:
             groups: List of group objects to display in the tree
         """
+        # Capture prior refs before overwriting so we can schedule teardown
+        # after the new model is installed (#618).
+        old_proxy = getattr(self, '_proxy', None)
+        old_model = getattr(self, '_model', None)
+
         model, proxy = build_model(groups)
         if proxy is not None:
             proxy.setParent(self.tree)
@@ -257,6 +262,22 @@ class TreeController:
             self.tree.setModel(model)
             self._proxy = None
             self._model = model
+
+        # Tear down prior model+proxy AFTER setModel detached them from the view.
+        # Order: setSourceModel(None) first to sever the proxy→model reference,
+        # then setParent(None) to remove the proxy from self.tree's Qt children
+        # (without this the proxy stays in tree.children() until the tree is
+        # destroyed, keeping all ~163k QStandardItem alive — the #618 leak).
+        # deleteLater() defers the final C++ destruction to the next event-loop
+        # iteration, safely past any in-flight dataChanged / signal delivery.
+        # See feedback_qt_timer_teardown_uaf for the Qt UAF rationale.
+        # (#618 — root cause of #614's 8-10 GB residency).
+        if old_proxy is not None:
+            old_proxy.setSourceModel(None)
+            old_proxy.setParent(None)
+            old_proxy.deleteLater()
+        if old_model is not None and old_model is not model:
+            old_model.deleteLater()
 
         # Expand all first so content-based width accounts for children
         try:
