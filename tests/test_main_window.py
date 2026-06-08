@@ -1608,6 +1608,46 @@ class TestForceQuitOnAccept:
         # Must not raise.
         MainWindow._force_quit_on_accept(None, event)  # type: ignore[arg-type]
 
+    def test_force_quit_skipped_when_relocalizing(self, qapp, monkeypatch) -> None:
+        """#612 — language switch (``_handle_language_switch``) closes the
+        OLD MainWindow after constructing + showing the NEW one. That
+        programmatic ``self.close()`` would otherwise trigger
+        ``_force_quit_on_accept`` and kill the whole app
+        mid-switch. The guard ``self._relocalizing`` flips ``True`` right
+        before that close so the force-quit is skipped on this path.
+
+        First attempt at #612 SHIPPED WITHOUT this guard — qa-batch
+        s22_language_switch + s58_language_switch_preserves_manifest both
+        failed (rc=1, 'non-zero exit') on the first CI run. This test
+        pins the guard so the regression is caught at unit-test layer
+        before next time.
+        """
+        from PySide6.QtGui import QCloseEvent
+        from PySide6.QtWidgets import QApplication
+
+        from app.views.main_window import MainWindow
+
+        quit_calls = []
+        monkeypatch.setattr(QApplication, "instance",
+                            classmethod(lambda cls: _FakeApp(quit_calls)))
+
+        # Stand-in: a bare object with the flag set is enough since
+        # _force_quit_on_accept reads only ``self._relocalizing``.
+        class _Stub:
+            _relocalizing = True
+        event = QCloseEvent()
+        event.accept()
+        MainWindow._force_quit_on_accept(_Stub(), event)  # type: ignore[arg-type]
+
+        assert quit_calls == [], (
+            "_force_quit_on_accept must NOT call quit() when "
+            "self._relocalizing is True (live language-switch path). "
+            f"Got {quit_calls!r}. Without this guard, language switch "
+            "kills the app mid-rebuild and qa scenarios "
+            "s22_language_switch + s58_language_switch_preserves_manifest "
+            "fail."
+        )
+
 
 class _FakeApp:
     """Records quit() calls so the test can assert without actually

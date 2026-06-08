@@ -890,8 +890,18 @@ class MainWindow(QMainWindow):
 
         Only quits on accept — ignored close events (Back / Esc /
         scan-running-No / save-failure) stay in the app as before.
+
+        Gated on ``self._relocalizing`` — the live language switch at
+        ``_handle_language_switch`` calls ``self.close()`` on the OLD
+        window AFTER constructing + showing the new one. That programmatic
+        close also goes through ``closeEvent`` and would otherwise trigger
+        the force-quit, killing the app mid-switch (caught by qa-batch
+        run #612 — s22_language_switch + s58_language_switch_preserves_manifest
+        both failed before this guard was added).
         """
         if not event.isAccepted():
+            return
+        if getattr(self, "_relocalizing", False):
             return
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
@@ -1052,6 +1062,13 @@ class MainWindow(QMainWindow):
         # Close + delete this window. The new one owns the same vm /
         # image_service / settings; nothing of ours needs to outlive
         # the close.
+        #
+        # #612 — flag this as a programmatic close so ``_force_quit_on_accept``
+        # does NOT call ``QApplication.quit()`` here. Without the guard the
+        # old window's closeEvent would force-quit the app mid-language-switch
+        # (s22_language_switch + s58_language_switch_preserves_manifest both
+        # failed on the first attempt of #612's CI).
+        self._relocalizing = True
         self.close()
         self.deleteLater()
 
