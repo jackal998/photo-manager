@@ -582,19 +582,44 @@ class ScanWorker(QThread):
         adapts the pick if the file count changed. On a cache miss the fresh
         rates are emitted via ``hash_pool_measured`` for the dialog to store.
 
-        #554 — multi-device + NAS guard: when the scan spans ≥2 physical
-        devices AND at least one is a remote (NAS) drive, the flat
-        thread-vs-process projection is skipped and "thread" is returned
-        unconditionally. The flat calibration builds a FLAT
-        ThreadPoolExecutor over the sample — it never learned that #550
-        made thread mode PER-DEVICE. On a mixed HDD+NAS scan it measures
-        "8 threads thrashing the HDD" (slow) and under-credits thread →
-        picks process. But process runs the old flat single pool, bypassing
-        the per-device I/O-overlap win entirely. The per-device overlap is
-        exactly what the flat calibration cannot measure, and on an
-        I/O-bound mixed scan it dominates. The single-device / all-local
-        case is unaffected — calibration still runs there and process can
-        legitimately win.
+        #554 / #609 — multi-device + NAS shortcut: when the scan spans
+        ≥2 physical devices AND at least one is remote (NAS), the flat
+        thread-vs-process projection is skipped and **"process"** is
+        returned unconditionally.
+
+        #554's original direction (force "thread") was a defensive bet
+        that per-device I/O overlap (HDD 1 reader + NAS 8 readers) would
+        dominate over the GIL-escape that process pool offers. The 2026-06-08
+        remediation measured the bet on the real rig (D:\\Takeout-0508 HDD +
+        J: NAS, post-#606 D:=1 reader / J:=8 readers) with full per-second
+        instrumentation (``scripts/probe_pipeline_timeline.py``). What
+        showed up:
+
+          • The shared ``compute_pool`` (thread mode) is GIL-bound. A
+            micro-benchmark (50 small JPEGs, 1→12 thread workers) plateaus
+            at ~2.3-2.8× scaling vs the 12× nominal — effective parallelism
+            is 2-4 GIL slots regardless of pool size.
+          • Mixed big+small file interleave (NAS small JPEGs queueing
+            behind D:\\ 100-130 MB ProRAW DNGs in the shared ``hash_in_q``)
+            triggers **70-second stretches with ZERO compute completions**
+            during real scans — GIL contention pathology.
+          • D+J 3400-file apples-to-apples (same warm cache):
+              thread  → 601 s timeout, 89 % done (projecting to ~678 s
+                        full)
+              process → 421 s complete = **1.6× faster end-to-end**.
+          • The per-device-thread I/O overlap that #554 was protecting is
+            real, but it's downstream-gated by the GIL-bound compute pool;
+            on this workload the GIL escape pays back the spawn cost many
+            times over.
+
+        Decision record:
+        ``docs/audits/scanner-perf-mixed-workload-process-pool-2026-06-08.md``.
+
+        Single-device and all-local scans are unchanged: calibration still
+        runs there (small/medium scans pay process spawn cost without
+        offsetting GIL benefit, so thread legitimately wins). Power-user
+        override via ``settings.json[scan.hash_pool]`` = "thread" still
+        forces the old behaviour verbatim.
         """
         from scanner.workers import device_key, is_remote_drive
 
@@ -603,18 +628,18 @@ class ScanWorker(QThread):
             is_remote_drive(dk) for dk in device_keys if dk
         ):
             self._emit(
-                "  Multi-device + NAS scan → per-device thread path"
-                " (I/O overlap wins; skipping flat process calibration)"
+                "  Multi-device + NAS scan → process pool"
+                " (GIL escape on shared compute > per-device thread I/O overlap; #609)"
             )
             # #554 — still resolve grouping floor from cached rates if
-            # available, so the BK-tree calibration isn't lost on the
-            # thread-fast path. When no cached rates exist the floor
-            # stays None and classify() uses the module default.
+            # available, so the BK-tree calibration isn't lost on the fast
+            # path. When no cached rates exist the floor stays None and
+            # classify() uses the module default.
             if _valid_hash_pool_rates(self.hash_pool_rates):
                 self._calibrated_bktree_floor = self._resolve_grouping_floor(
                     self.hash_pool_rates, len(records)
                 )
-            return "thread"
+            return "process"
 
         n = len(records)
         rates = self.hash_pool_rates

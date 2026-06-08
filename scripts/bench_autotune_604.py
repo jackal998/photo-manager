@@ -161,6 +161,7 @@ def run_one_scan(
     autotune_knees: dict | None,
     per_scan_timeout: float,
     workers: int,
+    hash_pool: str = "thread",
 ) -> ScanResult:
     """One full ScanWorker.run() on the given sources. Returns a ScanResult
     with timing + every load-bearing probe captured at scan-start."""
@@ -201,7 +202,7 @@ def run_one_scan(
         recursive_map=recursive_map,
         limit=limit,
         workers=workers,
-        hash_pool="thread",
+        hash_pool=hash_pool,
         autotune_read_knee=autotune_read_knee,
         autotune_knees=autotune_knees or {},
     )
@@ -340,6 +341,9 @@ def main(argv: list[str]) -> int:
                    help="Pre-seed autotune_knees with a measured knee (skips ramp on ON arm)")
     p.add_argument("--nas-only", action="store_true",
                    help="Run only the NAS sources (drop local-disk sources)")
+    p.add_argument("--hash-pool", choices=("thread", "process", "auto"),
+                   default="thread",
+                   help="Hash-stage executor: thread (GIL-bound), process (escapes GIL), or auto (calibrated). Default thread for back-compat.")
     args = p.parse_args(argv[1:])
 
     # QCoreApplication is required for Qt signal/slot dispatch.
@@ -375,6 +379,7 @@ def main(argv: list[str]) -> int:
             arm="OFF", pair_idx=pair_idx, sources=sources, limit=args.limit,
             autotune_read_knee=False, autotune_knees=None,
             per_scan_timeout=args.per_scan_timeout, workers=args.workers,
+            hash_pool=args.hash_pool,
         )
         all_results.append(r_off)
         r_on = run_one_scan(
@@ -382,6 +387,7 @@ def main(argv: list[str]) -> int:
             autotune_read_knee=True,
             autotune_knees=dict(warm_cache) if warm_cache else None,
             per_scan_timeout=args.per_scan_timeout, workers=args.workers,
+            hash_pool=args.hash_pool,
         )
         all_results.append(r_on)
         # Harvest measured knees into the warm cache for subsequent pairs.
@@ -424,4 +430,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Windows ProcessPoolExecutor (`--hash-pool process`) re-imports this
+    # module in each spawn worker; freeze_support() prevents accidental
+    # recursive worker spawning if the module gets imported with side effects.
+    from multiprocessing import freeze_support
+    freeze_support()
     raise SystemExit(main(sys.argv))
