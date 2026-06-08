@@ -3026,3 +3026,166 @@ class TestByteBudgetPipelineBound:
                 f"all {N} files must eventually be read once compute drains; "
                 f"got {reads['n']}"
             )
+
+
+class TestPostHashCancelKillsExif:
+    """#607 / T7 — closing the scan dialog DURING the post-HASH EXIF drain
+    must hard-kill exiftool so consumers wedged inside ``proc.execute()``
+    can exit promptly.
+
+    Pre-fix the final consumer ``t.join()`` at the bottom of the thread
+    branch was UNBOUNDED and had no ``isInterruptionRequested()`` check.
+    A user-close during the post-HASH stage left the worker blocking on
+    that join while consumer threads were inside a slow exiftool batch
+    (up to 60 s read-timeout). The scan dialog's ``wait(3000)`` timed
+    out, the QThread orphaned, and the live ``ExiftoolProcess``
+    subprocesses survived dialog dismissal. On a job-nested launch
+    context (where #563 skips ``KILL_ON_JOB_CLOSE`` by design — see the
+    ``_process_in_any_job`` gate in ``scanner/exif.py``) those processes
+    survived past app exit too — observed as ``exiftool.exe`` at
+    100 % CPU after the user closed the app.
+
+    The in-loop HASH-cancel branch already calls ``_kill_exif_procs()``
+    before the join (since #562 / #561); this test pins the same
+    behaviour on the post-HASH path, which previously had no cancel
+    checkpoint at all.
+    """
+
+    def test_post_hash_cancel_kills_exiftool_and_exits_promptly(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import threading as _threading
+        import time as _time
+
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.exif as _exif
+
+        # Two source files — HASH completes in two records, then the worker
+        # reaches the post-HASH "send sentinels + join consumers" block.
+        # That's the cancel checkpoint this test pins.
+        for i in range(2):
+            _write_jpeg(tmp_path / f"a{i}.jpg")
+        out = tmp_path / "manifest.sqlite"
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"src": False},
+            workers=2,
+            exif_workers=1,  # one consumer → one wedge surface
+        )
+
+        # ``worker.requestInterruption()`` from another thread doesn't
+        # propagate into the worker.run() thread unless start() is used.
+        # Use the project's standard cancel-flag closure pattern (mirrors
+        # TestCancelStageGates above).
+        cancel_state = {"flag": False}
+
+        def fake_is_interrupt():
+            return cancel_state["flag"]
+
+        monkeypatch.setattr(worker, "isInterruptionRequested", fake_is_interrupt)
+
+        # Replace ExiftoolProcess with one that wedges inside execute()
+        # until kill() arrives. This is the EXACT failure mode #561
+        # described and #607 fixes on the post-HASH path: a real consumer
+        # spends up to 60 s inside a batch call to exiftool that #595
+        # didn't make cancel-aware (only the HASH-drain put-loop was).
+        exif_kill_calls = {"n": 0}
+        wedge_entered = _threading.Event()
+        proc_killed = _threading.Event()
+
+        class WedgingExiftool:
+            def __init__(self):
+                pass
+
+            def execute(self, args, read_timeout=60.0):
+                wedge_entered.set()
+                # Block until kill() arrives. Equivalent to the real
+                # `_stdout_queue.get(timeout=read_timeout)` waiting on a
+                # slow exiftool batch, with kill() landing as EOF.
+                while not proc_killed.is_set():
+                    _time.sleep(0.02)
+                # Returning a valid empty JSON output keeps batch_read_extracts
+                # happy without faking the parse — extracts will just be empty.
+                return "[]"
+
+            def kill(self):
+                exif_kill_calls["n"] += 1
+                proc_killed.set()
+
+            def close(self):
+                # Mirror real ExiftoolProcess.close — graceful path also
+                # falls through to kill on error. Empty after the wedge
+                # is broken, since exec already returned.
+                proc_killed.set()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                self.close()
+
+        monkeypatch.setattr(_exif, "ExiftoolProcess", WedgingExiftool)
+
+        # Watcher: once the consumer has entered execute() (the wedge),
+        # flip the cancel flag — simulating the user clicking the
+        # scan-dialog X mid-EXIF.
+        def watcher():
+            if not wedge_entered.wait(timeout=10.0):
+                return  # never wedged; test will fail at the deadline check
+            cancel_state["flag"] = True
+
+        _threading.Thread(target=watcher, daemon=True).start()
+
+        # DirectConnection so emit() from the background worker thread
+        # delivers to the test thread's list synchronously — without this
+        # the default AutoConnection queues the signal on the test thread's
+        # (non-running) event loop and `failed` stays empty.
+        from PySide6.QtCore import Qt as _Qt
+        failed: list[str] = []
+        finished: list[str] = []
+        worker.failed.connect(failed.append, _Qt.ConnectionType.DirectConnection)
+        worker.finished.connect(finished.append, _Qt.ConnectionType.DirectConnection)
+
+        # Run the worker on a background thread so a deadlock at the
+        # unbounded t.join() is observable as "thread alive after 15 s",
+        # not an indefinite pytest hang.
+        run_done = _threading.Event()
+
+        def run_worker():
+            try:
+                worker.run()
+            finally:
+                run_done.set()
+
+        run_thread = _threading.Thread(target=run_worker, daemon=True)
+        t0 = _time.monotonic()
+        run_thread.start()
+
+        finished_in_time = run_done.wait(timeout=15.0)
+        elapsed = _time.monotonic() - t0
+
+        assert finished_in_time, (
+            f"worker.run() did not exit within 15 s of the cancel signal; "
+            f"the post-HASH t.join() is still unbounded and exiftool would "
+            f"orphan on dialog close (#607). Elapsed: {elapsed:.1f}s."
+        )
+        # With the fix, the cancel path emits "Scan cancelled." and never
+        # reaches finished. (The exact contract from the in-loop branch:
+        # scan_dialog distinguishes this clean-cancel marker from an error
+        # string so it doesn't show a red modal.)
+        assert failed == ["Scan cancelled."], (
+            f"expected exactly ['Scan cancelled.'] from the post-HASH cancel "
+            f"path; got failed={failed!r} finished={finished!r}"
+        )
+        assert finished == [], (
+            f"finished signal must NOT fire on cancel; got {finished!r}"
+        )
+        # And exiftool MUST have been hard-killed — the load-bearing
+        # behaviour that unwedges the consumer.
+        assert exif_kill_calls["n"] >= 1, (
+            "ExiftoolProcess.kill() was never called from the post-HASH "
+            "join — the cancel-aware fix at scan_worker.py is missing or "
+            "broken; consumers would have stayed wedged."
+        )
