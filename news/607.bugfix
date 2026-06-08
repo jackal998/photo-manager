@@ -1,0 +1,1 @@
+Closing the scan dialog after hashing finishes (during the EXIF post-drain) now hard-kills the live exiftool consumer so it doesn't survive dialog dismissal at 100 % CPU — fills the cancel-checkpoint gap that #561 left on the post-HASH path (#607).
