@@ -1520,8 +1520,36 @@ class ScanWorker(QThread):
         # the classify step reads it. One sentinel per consumer.
         for _ in consumer_threads:
             exif_queue.put(None)
+        # #607 — cancel-aware post-HASH consumer join. Mirrors the in-loop
+        # HASH-cancel branch: a user-close (`isInterruptionRequested()`)
+        # during the EXIF post-drain must hard-kill exiftool so consumers
+        # wedged inside ``ExiftoolProcess.execute()`` can exit promptly.
+        # Pre-fix this was an unbounded ``t.join()``: the worker blocked
+        # until the slow batch finished naturally, the dialog's
+        # ``wait(3000)`` timed out, and the QThread orphaned with live
+        # exiftool subprocesses past dialog dismissal.  KILL_ON_JOB_CLOSE
+        # only catches that on *bare-desktop* launch (`not
+        # _process_in_any_job()` per #563); a job-nested launch context
+        # left exiftool spinning at 100% CPU after app exit.
+        while any(t.is_alive() for t in consumer_threads):
+            if self.isInterruptionRequested():
+                cancel_flag.set()
+                _kill_exif_procs()
+                break
+            for t in consumer_threads:
+                if t.is_alive():
+                    t.join(timeout=0.5)
+                    break
+        # Always run a bounded final join so dead threads get reaped
+        # cleanly (post-kill they exit immediately on EOF / sentinel).
         for t in consumer_threads:
-            t.join()
+            t.join(timeout=5.0)
+        if self.isInterruptionRequested():
+            logger.warning(
+                "Scan cancelled by user during EXIF post-HASH drain"
+            )
+            self.failed.emit("Scan cancelled.")
+            return
 
         # Remove any None slots (cancelled futures that didn't run, or skipped files)
         hash_results = [r for r in hash_results if r is not None]
