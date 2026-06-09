@@ -1,0 +1,1 @@
+Memory probe (`scripts/memory_probe.py`) shipped as a permanent regression guard — env-gated (`PHOTO_MANAGER_MEMORY_PROBE=1`), default off, zero overhead on normal launch. Collects RSS / tracemalloc / Qt heap counters at 5 measurement points around DB load; usage in `docs/audits/memory-probe.md` (#627 from #614 follow-up).
