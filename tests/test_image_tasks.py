@@ -157,14 +157,39 @@ class TestRequestSinglePreview:
     """The single-preview dispatch."""
 
     def test_returns_token_in_canonical_format(self):
-        """Side is hard-coded to 0 for single preview."""
+        """Side is viewport-derived (not 0) for single preview.
+
+        The viewport cap is min(2048, screen_width). The token must embed
+        whatever side _compute_viewport_cap() returns so the cache key
+        matches the loaded image's actual pixel dimensions — a mismatch
+        would serve stale images from a previous viewport size.
+        """
+        from app.views.image_tasks import _compute_viewport_cap
+
         runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
-        # Bypass real pool dispatch by replacing it with a fake.
         runner._pool = MagicMock()
 
         token = runner.request_single_preview("photos/a.jpg")
+        expected_side = _compute_viewport_cap()
 
-        assert token == "single|photos/a.jpg|0"
+        assert token == f"single|photos/a.jpg|{expected_side}"
+
+    def test_side_is_positive_viewport_cap(self):
+        """The single-preview side must be > 0 (viewport-bounded, not full-res).
+
+        Failure mode: reverting to side=0 sends a full-resolution decode
+        request to the image service for every single-view update — causes
+        OOM on large DNG libraries (the #622 regression this change prevents).
+        """
+        from app.views.image_tasks import _compute_viewport_cap
+
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        runner.request_single_preview("a.jpg")
+        task = runner._pool.start.call_args.args[0]
+        assert task._side == _compute_viewport_cap()
+        assert task._side > 0
 
     def test_service_none_returns_token_without_starting_task(self):
         """The empty-state path: no service wired yet (e.g. during
@@ -176,16 +201,21 @@ class TestRequestSinglePreview:
         Failure mode: a refactor that dropped the ``None`` guard
         would raise ``AttributeError`` on ``service.get_preview``
         on every preview attempt during the empty-state."""
+        from app.views.image_tasks import _compute_viewport_cap
+
         runner = ImageTaskRunner(service=None, receiver=MagicMock())
         runner._pool = MagicMock()
 
         token = runner.request_single_preview("a.jpg")
+        expected_side = _compute_viewport_cap()
 
-        assert token == "single|a.jpg|0"
+        assert token == f"single|a.jpg|{expected_side}"
         runner._pool.start.assert_not_called()
 
     def test_dispatches_task_to_pool_when_service_present(self):
         """Happy path: a task is created and enqueued."""
+        from app.views.image_tasks import _compute_viewport_cap
+
         service = MagicMock()
         receiver = MagicMock()
         runner = ImageTaskRunner(service=service, receiver=receiver)
@@ -195,13 +225,14 @@ class TestRequestSinglePreview:
 
         runner._pool.start.assert_called_once()
         task = runner._pool.start.call_args.args[0]
+        expected_side = _compute_viewport_cap()
         assert isinstance(task, _ImageTask)
         assert task._path == "a.jpg"
-        assert task._side == 0
+        assert task._side == expected_side
         assert task._is_preview is True
         assert task._service is service
         assert task._receiver is receiver
-        assert task._token == "single|a.jpg|0"
+        assert task._token == f"single|a.jpg|{expected_side}"
 
 
 class TestRequestGridThumbnail:

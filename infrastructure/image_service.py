@@ -38,25 +38,95 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     PIL_HEIF_AVAILABLE = False
 
-
-# Optional rawpy (DNG) support
 try:  # pragma: no cover - optional dependency
     import rawpy  # type: ignore
+    from rawpy import LibRawNoThumbnailError  # type: ignore  # noqa: F401
 
     RAWPY_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency
     RAWPY_AVAILABLE = False
+    LibRawNoThumbnailError = Exception  # type: ignore
+
+
+# Recipe version — bump to invalidate the disk cache namespace.
+PREVIEW_RECIPE_VERSION = "1"
+
+# Size boundary (longest side) separating "thumb" vs "preview" tier at put time.
+_THUMB_SIDE_THRESHOLD = 256
+
+# Default sizes for the two cache tiers (overridden at init from RAM probe).
+_THUMB_CACHE_DEFAULT_BYTES = 64 * 1024 * 1024   # 64 MB
+_PREVIEW_CACHE_DEFAULT_BYTES = 192 * 1024 * 1024  # 192 MB
+
+
+def _probe_total_ram() -> int | None:
+    """Return total physical RAM in bytes, or None on any failure.
+
+    The real-OS code paths are excluded from unit-test coverage — ctypes.windll
+    is unavailable on Linux CI; exercised by monkeypatching this function in
+    unit tests and by Windows local runs.
+    """
+    import sys
+
+    if sys.platform == "win32":
+        return _probe_total_ram_windows()
+    return _probe_total_ram_posix()
+
+
+def _probe_total_ram_windows() -> int | None:  # pragma: no cover
+    try:
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", wintypes.DWORD),
+                ("dwMemoryLoad", wintypes.DWORD),
+                ("ullTotalPhys", ctypes.c_uint64),
+                ("ullAvailPhys", ctypes.c_uint64),
+                ("ullTotalPageFile", ctypes.c_uint64),
+                ("ullAvailPageFile", ctypes.c_uint64),
+                ("ullTotalVirtual", ctypes.c_uint64),
+                ("ullAvailVirtual", ctypes.c_uint64),
+                ("ullAvailExtendedVirtual", ctypes.c_uint64),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+        return int(stat.ullTotalPhys)
+    except Exception:
+        return None
+
+
+def _probe_total_ram_posix() -> int | None:  # pragma: no cover
+    try:
+        page = os.sysconf("SC_PAGE_SIZE")
+        pages = os.sysconf("SC_PHYS_PAGES")
+        if page > 0 and pages > 0:
+            return int(page) * int(pages)
+    except Exception:
+        pass
+    return None
+
+
+def _compute_cache_budgets() -> tuple[int, int]:
+    """Return (thumb_bytes, preview_bytes) based on available RAM.
+
+    Budget = min(256 MB, total_RAM // 32), split 64 MB thumb / 192 MB preview.
+    Falls back to defaults on probe failure.
+    """
+    total = _probe_total_ram()
+    if total and total > 0:
+        combined = min(256 * 1024 * 1024, total // 32)
+    else:
+        combined = _THUMB_CACHE_DEFAULT_BYTES + _PREVIEW_CACHE_DEFAULT_BYTES
+    # Split: 25% thumb, 75% preview, but at least 16 MB each.
+    thumb = max(16 * 1024 * 1024, combined // 4)
+    preview = max(16 * 1024 * 1024, combined - thumb)
+    return thumb, preview
 
 
 def _compute_cache_key(path: str, size_key: int) -> str:
-    """Compute a stable cache key from path, mtime, size, and requested side."""
-    try:
-        st = os.stat(path)
-        sig = f"{path}|{int(st.st_mtime_ns)}|{int(st.st_size)}|{int(size_key)}".encode(
-            "utf-8", errors="ignore"
-        )
-    except OSError:
-        sig = f"{path}|0|0|{int(size_key)}".encode("utf-8", errors="ignore")
+    """Compute a stable cache key from path and requested side."""
+    sig = f"{path}|{int(size_key)}".encode("utf-8", errors="ignore")
     return hashlib.sha1(sig).hexdigest()
 
 
@@ -69,56 +139,113 @@ def _ensure_dir(p: Path) -> None:
 class _MemCacheItem:
     key: str
     image: QImage
+    byte_size: int
 
 
-class _LRUCache:
-    def __init__(self, capacity: int) -> None:
-        self._cap = max(1, int(capacity or 1))
+class _ByteBudgetLRUCache:
+    """LRU cache with a byte-budget capacity instead of item-count capacity.
+
+    Evicts the LRU entry whenever the total byte sum would exceed the budget.
+    """
+
+    def __init__(self, budget_bytes: int) -> None:
+        self._budget = max(1, int(budget_bytes))
         self._data: OrderedDict[str, _MemCacheItem] = OrderedDict()
+        self._total_bytes: int = 0
 
     def get(self, key: str) -> QImage | None:
-        """Return cached QImage for key, moving it to the MRU position."""
         item = self._data.get(key)
         if not item:
             return None
-        # move to end (most recent)
         self._data.move_to_end(key)
         return item.image
 
     def put(self, key: str, image: QImage) -> None:
-        """Insert or update `key` with `image`, evicting LRU when over capacity."""
+        byte_size = image.sizeInBytes() if not image.isNull() else 1
         if key in self._data:
+            old = self._data[key]
+            self._total_bytes -= old.byte_size
             self._data.move_to_end(key)
-            self._data[key] = _MemCacheItem(key, image)
+            self._data[key] = _MemCacheItem(key, image, byte_size)
+            self._total_bytes += byte_size
         else:
-            self._data[key] = _MemCacheItem(key, image)
-        while len(self._data) > self._cap:
-            self._data.popitem(last=False)
+            self._data[key] = _MemCacheItem(key, image, byte_size)
+            self._total_bytes += byte_size
+        # Evict LRU until within budget
+        while self._total_bytes > self._budget and len(self._data) > 1:
+            _, evicted = self._data.popitem(last=False)
+            self._total_bytes -= evicted.byte_size
+
+    @property
+    def total_bytes(self) -> int:
+        return self._total_bytes
 
 
 class ImageService:
     """High-level image service with memory/disk cache and multiple loaders."""
 
-    def __init__(self, settings: object | None = None) -> None:
+    def __init__(self, settings: object | None = None, status_reporter: Any | None = None) -> None:
         """Initialize caches and optional decoder capabilities from settings."""
-        self._mem_cap = 512
-        self._disk_dir = str(Path.home() / "AppData" / "Local" / "PhotoManager" / "thumbs")
+        self._status_reporter = status_reporter
+        self._disk_dir = str(
+            Path.home() / "AppData" / "Local" / "PhotoManager" / "thumbs"
+        )
         if settings is not None:
-            try:
-                self._mem_cap = int(settings.get("thumbnail_mem_cache", 512) or 512)
-            except (ValueError, TypeError):
-                self._mem_cap = 512
             raw_dir = settings.get("thumbnail_disk_cache_dir", self._disk_dir)
             if isinstance(raw_dir, str):
                 self._disk_dir = os.path.expandvars(raw_dir)
         self._disk_path = Path(self._disk_dir)
-        _ensure_dir(self._disk_path)
-        self._mem_cache = _LRUCache(self._mem_cap)
+        # Versioned sub-directory for the disk cache
+        self._versioned_disk_path = self._disk_path / f"v{PREVIEW_RECIPE_VERSION}"
+        _ensure_dir(self._versioned_disk_path)
+
+        # Migrate legacy thumbs: wipe any *.jpg files directly under thumbs/
+        # (i.e., NOT under v1/ or any version sub-dir) on first launch.
+        self._migrate_legacy_disk_cache()
+
+        # Byte-budget caches
+        thumb_bytes, preview_bytes = _compute_cache_budgets()
+        self._thumb_cache = _ByteBudgetLRUCache(thumb_bytes)
+        self._preview_cache = _ByteBudgetLRUCache(preview_bytes)
+
         # Optional: Pillow / pillow-heif
         self._pillow_available = bool(PIL_AVAILABLE)
         self._pillow_heif_available = bool(PIL_HEIF_AVAILABLE)
         # Optional: rawpy for DNG
         self._rawpy_available = bool(RAWPY_AVAILABLE)
+
+    def _migrate_legacy_disk_cache(self) -> None:
+        """Wipe legacy (non-versioned) .jpg files from the thumbs root.
+
+        Files under versioned sub-directories (v1/, v2/, …) are left intact.
+        Fires once at init; the versioned sub-dir is already created above so
+        the wildcard glob only matches root-level files.
+        """
+        try:
+            legacy_jpgs = [
+                f
+                for f in self._disk_path.glob("*.jpg")
+                if f.is_file()
+            ]
+            if not legacy_jpgs:
+                return
+            for f in legacy_jpgs:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+            msg = (
+                "Rebuilding thumbnail cache "
+                f"(version {PREVIEW_RECIPE_VERSION}) — this is a one-time operation."
+            )
+            logger.info(msg)
+            if self._status_reporter is not None:
+                try:
+                    self._status_reporter(msg)
+                except Exception:
+                    pass
+        except Exception as ex:
+            logger.debug("Legacy disk cache migration failed: {}", ex)
 
     # Public API
     def get_thumbnail(self, path: str, size: int) -> Any:
@@ -127,76 +254,67 @@ class ImageService:
 
     def get_preview(self, path: str, max_side: int) -> Any:
         """Return preview image for `path` bounded by `max_side`."""
-        # Preview uses the same pipeline but may request larger size
         return self._get_image(path, max_side)
 
     # Internal helpers
     def _get_image(self, path: str, requested_side: int) -> QImage:
         """Get image via memory/disk cache or load and cache it."""
         key = _compute_cache_key(path, requested_side)
-        img = self._mem_cache.get(key)
+
+        # Determine which cache tier to consult (thumb vs preview)
+        cache = self._thumb_cache if requested_side > 0 and requested_side <= _THUMB_SIDE_THRESHOLD else self._preview_cache
+
+        img = cache.get(key)
         if img is not None and not img.isNull():
             return img
 
-        disk_file = self._disk_path / f"{key}.jpg"
+        disk_file = self._versioned_disk_path / f"{key}.jpg"
         if disk_file.exists():
             img = QImage(str(disk_file))
             if not img.isNull():
-                # Skip obviously invalid cached placeholders
                 if self._looks_like_placeholder(img):
                     try:
                         disk_file.unlink()
                     except OSError:
                         pass
                 else:
-                    self._mem_cache.put(key, img)
+                    cache.put(key, img)
                     return img
 
         # Load from source
         img = self._load_from_source(path, requested_side)
         if img is None or img.isNull():
-            # Create placeholder to avoid UI glitches
             img = QImage(64, 64, QImage.Format_ARGB32)
             img.fill(QColor(220, 220, 220))
         else:
-            # Save to disk cache (best-effort)
             try:
                 img_to_save = img
-                # Ensure JPEG-friendly format
                 if img.format() == QImage.Format_Invalid:
                     img_to_save = img.convertToFormat(QImage.Format_RGB32)
                 img_to_save.save(str(disk_file), "JPEG", quality=85)
             except OSError as ex:
                 logger.debug("Save disk cache failed for {}: {}", disk_file, ex)
 
-        self._mem_cache.put(key, img)
+        cache.put(key, img)
         return img
 
     # pylint: disable=too-many-return-statements,too-many-branches
     def _load_from_source(self, path: str, requested_side: int) -> QImage | None:
-        """Try Pillow-HEIF, then Qt reader or Windows Shell/WIC as applicable.
-
-        Notes:
-        - HEIC/HEIF: prefer Pillow-HEIF if available, then WIC.
-        - DNG: prefer rawpy if available; else try QImageReader, then WIC (Raw Image Extension).
-        - Other still images: QImageReader, then WIC.
-        """
+        """Try Pillow-HEIF, then Qt reader or Windows Shell/WIC as applicable."""
         ext = Path(path).suffix.lower()
         # 0) Prefer Pillow-HEIF for HEIC/HEIF when available
         if ext in {".heic", ".heif"} and self._pillow_available and self._pillow_heif_available:
             img = self._load_via_pillow(path, requested_side)
             if img is not None and not img.isNull():
                 return img
-            # If Pillow-HEIF failed, try Windows Shell/WIC as fallback for HEIC
             try:
                 return self._load_via_shell_thumbnail(path, requested_side)
             except OSError as ex:
                 logger.debug("Shell/WIC thumbnail failed for HEIC {}: {}", path, ex)
                 return None
 
-        # 1) Explicit DNG handling: rawpy (if available) -> QImageReader -> Shell/WIC
+        # 1) Explicit DNG handling: rawpy (embedded JPEG fast path) -> QImageReader -> Shell/WIC
         if ext == ".dng":
-            # rawpy first
             if self._rawpy_available:
                 try:
                     img = self._load_via_rawpy(path, requested_side)
@@ -205,7 +323,6 @@ class ImageService:
                 except (OSError, ValueError) as ex:
                     logger.debug("rawpy load failed for DNG {}: {}", path, ex)
 
-            # then Qt
             try:
                 reader = QImageReader(path)
                 reader.setAutoTransform(True)
@@ -233,7 +350,6 @@ class ImageService:
             except (OSError, ValueError) as ex:
                 logger.debug("QImageReader failed for DNG {}: {}", path, ex)
 
-            # Single preview uses 1024 default inside WIC when requested_side == 0
             try:
                 return self._load_via_shell_thumbnail(path, requested_side)
             except OSError as ex:
@@ -257,7 +373,6 @@ class ImageService:
                     reader.setScaledSize(QSize(nw, nh))
             img = reader.read()
             if img is not None and not img.isNull():
-                # Ensure bounded scaling if reader scaling not applied
                 if requested_side and requested_side > 0:
                     img = img.scaled(
                         requested_side, requested_side, Qt.KeepAspectRatio, Qt.SmoothTransformation
@@ -266,7 +381,7 @@ class ImageService:
         except (OSError, ValueError) as ex:
             logger.debug("QImageReader failed for {}: {}", path, ex)
 
-        # 3) Fallback: Windows Shell/WIC thumbnail (good on Windows, incl. many videos)
+        # 3) Fallback: Windows Shell/WIC thumbnail
         try:
             return self._load_via_shell_thumbnail(path, requested_side)
         except OSError as ex:
@@ -278,8 +393,8 @@ class ImageService:
         if not self._pillow_available:
             return None
         try:
-            assert Image is not None and ImageOps is not None  # for type checkers
-            with Image.open(path) as im:  # pillow-heif registers opener for HEIC
+            assert Image is not None and ImageOps is not None
+            with Image.open(path) as im:
                 try:
                     im = ImageOps.exif_transpose(im)
                 except (OSError, ValueError, AttributeError):
@@ -296,7 +411,6 @@ class ImageService:
     def _pil_to_qimage(self, pil_img: Any) -> QImage | None:
         """Convert a Pillow image to `QImage` and detach from the source buffer."""
         try:
-            # Convert Pillow image to QImage efficiently
             mode = pil_img.mode
             if mode not in ("RGBA", "RGB"):
                 pil_img = pil_img.convert("RGBA")
@@ -321,20 +435,27 @@ class ImageService:
     def _load_via_rawpy(
         self, path: str, requested_side: int
     ) -> QImage | None:  # pylint: disable=W0718
-        """Load DNG via rawpy and return QImage; scale to `requested_side` if > 0.
+        """Load DNG via rawpy.
 
-        Requires `rawpy` to be installed. Returns None on failure.
+        Tries embedded JPEG first (fast path): if extract_thumb() returns an
+        ndarray whose longest side >= requested_side (or requested_side == 0),
+        converts it to QImage directly. Falls through to raw.postprocess() when
+        the embedded thumb is too small or when LibRawNoThumbnailError is raised.
         """
         if not self._rawpy_available:
             return None
         try:
             assert RAWPY_AVAILABLE and rawpy is not None  # type: ignore[name-defined]
-            # Use context manager to ensure resources are freed promptly
             with rawpy.imread(path) as raw:  # type: ignore[attr-defined]
-                # Postprocess tuned for pleasant previews (brightness/WB/highlights)
+                # Fast path: try embedded JPEG thumbnail
+                thumb_img = self._try_rawpy_embedded_thumb(raw, requested_side)
+                if thumb_img is not None:
+                    return thumb_img
+
+                # Full decode fallback
                 rgb = raw.postprocess(  # pylint: disable=no-member
-                    use_auto_wb=True,  # neutral WB across various devices
-                    no_auto_bright=False,  # enable auto-brightness to avoid dark renders
+                    use_auto_wb=True,
+                    no_auto_bright=False,
                     auto_bright_thr=0.01,
                     bright=1.0,
                     output_color=rawpy.ColorSpace.sRGB,  # pylint: disable=no-member
@@ -343,15 +464,12 @@ class ImageService:
                     demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,  # pylint: disable=no-member
                     highlight_mode=rawpy.HighlightMode.Blend,  # pylint: disable=no-member
                 )
-            # Convert numpy array (H, W, 3) uint8 to QImage
             h, w = int(rgb.shape[0]), int(rgb.shape[1])  # type: ignore[attr-defined]
-            # Ensure contiguous bytes
             buf = rgb.tobytes(order="C")  # type: ignore[attr-defined]
             bytes_per_line = w * 3
             qimg = QImage(buf, w, h, bytes_per_line, QImage.Format_RGB888)
             if qimg is None or qimg.isNull():
                 return None
-            # Detach from underlying buffer
             qimg = qimg.copy()
             if requested_side and requested_side > 0:
                 qimg = qimg.scaled(
@@ -360,6 +478,55 @@ class ImageService:
             return qimg
         except Exception as ex:  # pragma: no cover - optional path  # pylint: disable=W0718
             logger.debug("rawpy exception for {}: {}", path, ex)
+            return None
+
+    def _try_rawpy_embedded_thumb(self, raw: Any, viewport_cap: int) -> QImage | None:
+        """Extract the embedded JPEG thumbnail from a rawpy raw file object.
+
+        Returns a QImage if the thumb is large enough (longest side >= viewport_cap,
+        or viewport_cap == 0 meaning full-res is requested).  Returns None when:
+        - LibRawNoThumbnailError is raised (no embedded thumb),
+        - the thumb ndarray is too small,
+        - or any other extraction error occurs.
+        """
+        try:
+            thumb = raw.extract_thumb()  # type: ignore[attr-defined]
+            # thumb.data is a bytes or numpy array of the JPEG bytes
+            # or thumb.format == rawpy.ThumbFormat.JPEG
+            import rawpy as _rawpy  # type: ignore[attr-defined]
+            if thumb.format == _rawpy.ThumbFormat.JPEG:  # type: ignore[attr-defined]
+                # JPEG bytes → decode via QImage
+                qimg = QImage()
+                ok = qimg.loadFromData(bytes(thumb.data))
+                if not ok or qimg.isNull():
+                    return None
+            else:
+                # Bitmap array (H, W, 3)
+                arr = thumb.data
+                h, w = int(arr.shape[0]), int(arr.shape[1])
+                buf = arr.tobytes(order="C")
+                bytes_per_line = w * 3
+                qimg = QImage(buf, w, h, bytes_per_line, QImage.Format_RGB888)
+                if qimg is None or qimg.isNull():
+                    return None
+                qimg = qimg.copy()
+
+            # Check size: if viewport_cap > 0, only use thumb when large enough
+            if viewport_cap > 0:
+                longest = max(qimg.width(), qimg.height())
+                if longest < viewport_cap:
+                    return None  # too small — fall through to postprocess
+
+            # Scale to requested side if needed
+            if viewport_cap > 0:
+                qimg = qimg.scaled(
+                    viewport_cap, viewport_cap, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+            return qimg
+        except LibRawNoThumbnailError:
+            return None
+        except Exception as ex:
+            logger.debug("rawpy extract_thumb failed: {}", ex)
             return None
 
     # Windows Shell/WIC via ctypes, return QImage or None
@@ -573,10 +740,6 @@ class ImageService:
         except OSError as ex:
             logger.debug("_load_via_shell_thumbnail exception: {}", ex)
             return None
-
-    # Note: No video thumbnail extraction via QMediaPlayer in background threads.
-    # For videos, rely on Windows Shell/WIC where available; otherwise, fallback to
-    # placeholder and update thumbnail when the tile starts playing.
 
     def _looks_like_placeholder(self, img: QImage) -> bool:
         """Heuristic to detect grey placeholder images."""

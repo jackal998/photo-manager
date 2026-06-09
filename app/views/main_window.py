@@ -368,6 +368,9 @@ class MainWindow(QMainWindow):
         # Image loading signal
         self.imageLoaded.connect(self._on_image_loaded)
 
+        # Full-res viewer: double-click on a preview tile/image → open modal
+        self._preview.requestFullRes.connect(self.on_open_full_res_viewer)
+
     def _setup_window_properties(self) -> None:
         """Setup window properties and status bar."""
         # Persistent baseline label. Qt's QStatusBar.showMessage shows a
@@ -644,6 +647,17 @@ class MainWindow(QMainWindow):
     def on_open_action_dialog(self) -> None:
         """Handle open Set Action by Field dialog."""
         self.dialog_handler.show_action_dialog()
+
+    def on_open_full_res_viewer(self, path: str) -> None:
+        """Open the full-resolution viewer dialog for `path` (non-modal).
+
+        Connected to ``preview_pane.requestFullRes`` — fires when the user
+        double-clicks a preview tile or the single-view image label.
+        """
+        from app.views.dialogs.full_res_viewer import FullResViewerDialog
+
+        dlg = FullResViewerDialog(path, parent=self)
+        dlg.show()
 
     # PRESERVED: Tree selection change handler
 

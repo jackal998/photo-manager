@@ -70,6 +70,9 @@ for the chore plan.
 | [Set Action dialog — Score / Lock / Resolution fields](#set-action-dialog--score--lock--resolution-fields) | Set Action dialog |
 | [Set Action dialog — geometry persistence](#set-action-dialog--geometry-persistence) | Set Action dialog |
 | [Similarity column](#similarity-column) | Review |
+| [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
+| [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
+| [Preview pane — no-autoplay video default](#preview-pane--no-autoplay-video-default) | Preview pane |
 
 ---
 
@@ -645,6 +648,39 @@ for the chore plan.
 - **Conditions / variants:** The render-time recomputation requires both the displayed Ref's pHash and the row's pHash to be populated. When either is missing (old manifests pre-phash column, video rows, or imagehash not installed), the cell falls back to the scanner's stored `hamming_distance` so old manifests degrade gracefully. The manifest's `hamming_distance` column is still written by the scanner but is no longer the source of truth for the rendered % when phashes are available — the rendered value is always relative to the row the user sees as `Ref`.
 - **Related:** [#253](https://github.com/jackal998/photo-manager/issues/253) (render against displayed Ref); [#241](https://github.com/jackal998/photo-manager/issues/241) (score-aware Ref tie-break); [#536](https://github.com/jackal998/photo-manager/issues/536) (Direction A — passenger shows `N*%` vs the Ref with a nearest-member tooltip, not bare `—`); QA scenarios [`qa/scenarios/s52_similarity_against_displayed_ref.py`](../qa/scenarios/s52_similarity_against_displayed_ref.py); helper module [`scanner/phash_distance.py`](../scanner/phash_distance.py).
 - **Last verified:** 2026-06-03 (#536 Direction-A passenger relabel; #253 displayed-Ref render 2026-05-19)
+
+---
+
+### Preview pane — byte-budget LRU cache
+
+- **Entry point:** `infrastructure/image_service.py` — `ImageService.__init__` and `_ByteBudgetLRUCache`.
+- **Trigger:** Populated automatically as the user navigates the result tree (each row selection or grid display triggers background image loads).
+- **Behaviour:** The in-memory image cache uses a byte-budget eviction policy instead of a fixed item count. Two independent tiers: a thumbnail tier (≈64 MB) for grid thumbnails (longest side ≤ 256 px) and a preview tier (≈192 MB) for single-view previews. Total budget = `min(256 MB, RAM // 32)`. When a tier exceeds its budget the least-recently-used entry is evicted. The on-disk cache writes versioned files under `~/AppData/Local/PhotoManager/thumbs/v1/<sha1>.jpg`; a recipe-version bump invalidates the old namespace. On first launch after upgrade, any unversioned `.jpg` files under `thumbs/` root are automatically deleted and a one-time status-bar notice is shown.
+- **Conditions / variants:** DNG files use the embedded JPEG fast path (rawpy `extract_thumb`) if the embedded thumbnail's longest side ≥ viewport cap (2048 px default); falls through to full `postprocess` decode only when the embedded thumb is too small or absent.
+- **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `infrastructure/image_service.py`; `tests/test_image_service.py`.
+- **Last verified:** 2026-06-09 (#622 Phase 1)
+
+---
+
+### Preview pane — full-resolution viewer
+
+- **Entry point:** Double-click on a single-view image label or a grid image tile — `app/views/preview_pane.py` emits `requestFullRes(path)` signal; `app/views/main_window.py::on_open_full_res_viewer` opens the dialog.
+- **Trigger:** User double-clicks any image tile in the grid view or the single-image label in single-view mode.
+- **Behaviour:** Opens `FullResViewerDialog` — a non-modal window showing the full raw-decoded image (side=0 → bypass viewport cap). Pan: drag with left mouse button. Zoom: Ctrl+scroll-wheel (scale clamped 5%–800%). Esc or window close dismisses it. The dialog's QImage is released on close; it is NOT stored in the byte-budget LRU (the dialog owns its own reference). Window title shows filename + pixel dimensions.
+- **Conditions / variants:** Each double-click opens a new viewer window (non-modal — multiple files can be viewed simultaneously). Video tiles do not trigger the full-res viewer (videos have their own click-to-play behaviour). Double-click before any preview is loaded is a no-op (path is None, signal is not emitted).
+- **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `app/views/dialogs/full_res_viewer.py`; `app/views/preview_pane.py`; `tests/test_dialogs/test_full_res_viewer.py`.
+- **Last verified:** 2026-06-09 (#622 Phase 1)
+
+---
+
+### Preview pane — no-autoplay video default
+
+- **Entry point:** `app/views/preview_pane.py` — `show_single`, `autoplay_all_videos_when_ready`.
+- **Trigger:** Selecting a group row (grid view) or a video file row (single view).
+- **Behaviour:** Videos do NOT auto-play when a row is selected. Single-view video shows the player widget but waits for the user to click Play. Grid video tiles show a thumbnail (Shell/WIC where available) and play only when the user clicks the tile. `autoplay_all_videos_when_ready` is a no-op (kept for API compatibility).
+- **Conditions / variants:** Explicit Play click in the player starts playback normally. The group media controller is still created when videos are present (for coordinated play/pause), but is not auto-triggered.
+- **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `app/views/preview_pane.py`.
+- **Last verified:** 2026-06-09 (#622 Phase 1)
 
 ---
 
