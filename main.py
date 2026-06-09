@@ -267,6 +267,34 @@ def main() -> int:
     win = make_main_window(vm, img, settings)
     win.show()
 
+    # Probe: auto-load manifest from --manifest <path> or PHOTO_MANAGER_PROBE_MANIFEST.
+    # Supports PHOTO_MANAGER_PROBE_RELOAD_COUNT=N for N sequential reload measurements
+    # with 7-second gaps (enough for Point 5 idle snapshot to fire between loads).
+    _probe_manifest: str | None = None
+    for _i, _arg in enumerate(sys.argv[1:], 1):
+        if _arg == "--manifest" and _i < len(sys.argv):
+            _probe_manifest = sys.argv[_i + 1]
+            break
+    if _probe_manifest is None:
+        _probe_manifest = os.environ.get("PHOTO_MANAGER_PROBE_MANIFEST")
+
+    if _probe_manifest:
+        _probe_reload_count = max(1, int(os.environ.get("PHOTO_MANAGER_PROBE_RELOAD_COUNT", "1")))
+
+        def _schedule_loads(remaining: int, delay_ms: int = 500) -> None:
+            from PySide6.QtCore import QTimer
+            from pathlib import Path as _Path
+
+            def _do_load() -> None:
+                win.file_operations._start_manifest_load(str(_Path(_probe_manifest)))
+                if remaining > 1:
+                    # 7 seconds: enough time for Point 5 (5s idle) to fire between loads.
+                    _schedule_loads(remaining - 1, delay_ms=7_000)
+
+            QTimer.singleShot(delay_ms, _do_load)
+
+        _schedule_loads(_probe_reload_count)
+
     return app.exec()
 
 

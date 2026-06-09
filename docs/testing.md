@@ -183,6 +183,8 @@ calls out what would be uncaught even with a green CI.
 |---|---|---|
 | `main.py` | **omit** | qa-explore launches it as a real subprocess for every scenario |
 | `run_all_linters.py` | **omit** | dev tooling, not user-facing |
+| `scripts/memory_probe.py` | **omit** (scripts/*) | `tests/test_memory_probe.py` covers disabled no-op, enabled JSONL schema, Qt counter lifecycle, and ImportError guard pattern; the ctypes Windows memory query and the referrer-dump path require a live Qt event loop and are exercised by manual probe runs against the fixture |
+| `scripts/generate_probe_fixture.py` | **omit** (scripts/*) | dev tool; deterministic output verified by running it and loading the result into `memory_probe` harness |
 
 ---
 

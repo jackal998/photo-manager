@@ -100,6 +100,14 @@ class MainWindow(QMainWindow):
         # missing/corrupt blobs by leaving the defaults in place.
         self._restore_geometry()
 
+        # Point 1: MainWindow fully initialised — baseline before any manifest load.
+        try:
+            from scripts.memory_probe import snapshot, _ENABLED  # type: ignore[import]
+            if _ENABLED:
+                snapshot("mainwindow_init_done", point=1)
+        except ImportError:
+            pass
+
     # ------------------------------------------------------------------ window-state persistence
 
     # QSettings keys — kept as class-level aliases for back-compat with

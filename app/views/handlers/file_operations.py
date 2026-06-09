@@ -323,7 +323,41 @@ class FileOperationsHandler:
     def _on_manifest_loaded(self, groups: list, path: str) -> None:
         self.vm.groups = groups
         self._manifest_path = path
+
+        # Point 3: vm.groups assigned; tree not yet rebuilt.
+        try:
+            from scripts.memory_probe import snapshot, _ENABLED  # type: ignore[import]
+            if _ENABLED:
+                n_groups = len(groups)
+                n_items = sum(len(getattr(g, "items", [])) for g in groups)
+                snapshot("vm_groups_assigned", point=3, n_groups=n_groups, n_items=n_items)
+        except ImportError:
+            pass
+
         self.ui_updater.refresh_tree(groups)
+
+        # Point 4: refresh_tree returned; Qt model is live.
+        try:
+            from scripts.memory_probe import snapshot as _snap4, _ENABLED as _en4, _active_timers  # type: ignore[import]
+            if _en4:
+                _snap4("after_refresh_model", point=4)
+                # Point 5: idle snapshot 5 seconds after the model rebuild.
+                from PySide6.QtCore import QTimer
+
+                def _fire_point5() -> None:
+                    try:
+                        from scripts.memory_probe import snapshot as _s5  # type: ignore[import]
+                        _s5("idle_5s", point=5)
+                    except ImportError:
+                        pass
+
+                _t5 = QTimer()
+                _t5.setSingleShot(True)
+                _t5.timeout.connect(_fire_point5)
+                _t5.start(5_000)
+                _active_timers.append(_t5)
+        except ImportError:
+            pass
         self.ui_updater.show_group_counts(self.vm.group_count)
         self.ui_updater.show_groups_summary(groups)
         self._set_manifest_actions_enabled(True)

@@ -463,6 +463,15 @@ def build_model(
                 QStandardItem(resolution_txt),       # COL_RESOLUTION (10)
             ]
 
+            # Track Qt heap QStandardItem count for memory_probe (no-op when probe disabled).
+            try:
+                from scripts.memory_probe import track_qt_alloc, _ENABLED  # type: ignore[import]
+                if _ENABLED:
+                    for _it in child_row:
+                        track_qt_alloc("QStandardItem", _it)
+            except ImportError:
+                pass
+
             # #536 Direction A — for a passenger row (the starred "N*%" cell,
             # i.e. a Ref-tier non-winner), set a tooltip naming the nearest
             # group member so the strongest actual link behind the star is
