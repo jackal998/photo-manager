@@ -295,6 +295,14 @@ class ImageService:
             except OSError as ex:
                 logger.debug("Save disk cache failed for {}: {}", disk_file, ex)
 
+        # Track Qt heap QImage count for memory_probe (no-op when probe disabled).
+        try:
+            from scripts.memory_probe import track_qt_alloc, _ENABLED  # type: ignore[import]
+            if _ENABLED and img is not None and not img.isNull():
+                track_qt_alloc("QImage", img)
+        except ImportError:
+            pass
+
         cache.put(key, img)
         return img
 

@@ -684,6 +684,15 @@ for the chore plan.
 
 ---
 
+### Developer tool — memory probe
+
+- **Entry point:** `scripts/memory_probe.py`; activated via `PHOTO_MANAGER_MEMORY_PROBE=1`.
+- **Trigger:** Off by default (zero overhead when env var is unset). Enabled by setting `PHOTO_MANAGER_MEMORY_PROBE=1` before launch. CLI arg `--manifest <path>` (or env `PHOTO_MANAGER_PROBE_MANIFEST`) auto-loads a fixture manifest; `PHOTO_MANAGER_PROBE_RELOAD_COUNT=N` fires N reload cycles to measure per-reload growth.
+- **Behaviour:** Captures five in-process memory snapshots (Python `tracemalloc` + Windows ctypes RSS + `gc` typed counts + Qt heap counters via `destroyed` signal) and appends JSONL rows to `~/AppData/Local/PhotoManager/logs/memory_probe_<RUN_ID>.jsonl`. Qt allocation counters track live `QStandardItem` and `QImage` objects across `refresh_model` cycles — the primary regression signal for #619 (`QStandardItem` leak) and #624 (preview LRU byte-budget). Optional TRIM mode (`PHOTO_MANAGER_MEMORY_PROBE_TRIM=1`) fires `SetProcessWorkingSetSize` after the idle snapshot to distinguish H2 (allocator hoarding) from H3 (Qt heap) leaks. Optional referrer dump (`PHOTO_MANAGER_MEMORY_PROBE_REFERRERS=<type,...>`) walks `gc.get_referrers()` for named types and writes a sibling JSONL.
+- **Conditions / variants:** No-op on every code path when the env var is unset — all insertion points are guarded by `try/except ImportError`. Fixture generator at `scripts/generate_probe_fixture.py` produces a reproducible ~13k-row SQLite manifest (seed 42).
+- **Related:** `docs/audits/memory-probe.md` (usage guide, row schema, 4-hypothesis decision table); `tests/test_memory_probe.py`; issues #614, #619, #624.
+- **Last verified:** 2026-06-09 (regression-guard PR)
+
 ## How to update this file
 
 When user-visible behaviour changes (button label, conditional dialog,

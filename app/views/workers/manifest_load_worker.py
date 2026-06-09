@@ -63,6 +63,14 @@ class ManifestLoadWorker(QThread):
         repo = ManifestRepository()
         items: list[PhotoRecord] = list(repo.load(self._path))
 
+        # Point 2: all rows fetched from SQLite, before grouping into PhotoGroup objects.
+        try:
+            from scripts.memory_probe import snapshot, _ENABLED  # type: ignore[import]
+            if _ENABLED:
+                snapshot("worker_post_fetchall", point=2, n_records=len(items))
+        except ImportError:
+            pass
+
         self.progress.emit(f"Grouping {len(items):,} records…")
 
         grouped: dict[int, list[PhotoRecord]] = defaultdict(list)
