@@ -165,18 +165,39 @@ def _stem_lower(row: "ManifestRow") -> str:
     return Path(row.source_path).stem.lower()
 
 
+def _parent_key(row: "ManifestRow") -> str:
+    """Case-folded parent directory path of a row's source_path.
+
+    Critical for Windows NTFS: Path('D:/A').parent != Path('d:/a').parent
+    in Python's path object even when they reference the same NTFS dir.
+    Case-folding the .as_posix() form normalises this.
+    """
+    return Path(row.source_path).parent.as_posix().casefold()
+
+
 def _has_paired_peer_with_suffixes(
     row: "ManifestRow",
     group_rows: Iterable["ManifestRow"],
     suffix_set: frozenset[str],
 ) -> bool:
     """True iff any other row in ``group_rows`` shares this row's stem
-    (case-insensitive) and has a suffix in ``suffix_set``."""
+    (case-insensitive) AND parent directory AND has a suffix in ``suffix_set``.
+
+    Parent comparison is required so cross-folder same-basename MOVs that
+    join a HEIC's group via SHA/pHash edges are not mis-classified as Live
+    Photo passengers (#620). Walker is folder-scoped (walker.py:250); this
+    helper inherits that invariant.
+    """
     stem = _stem_lower(row)
+    row_parent = _parent_key(row)
     for peer in group_rows:
         if peer.source_path == row.source_path:
             continue
-        if _stem_lower(peer) == stem and _suffix(peer) in suffix_set:
+        if (
+            _stem_lower(peer) == stem
+            and _suffix(peer) in suffix_set
+            and _parent_key(peer) == row_parent
+        ):
             return True
     return False
 
