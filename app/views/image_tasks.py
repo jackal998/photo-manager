@@ -7,6 +7,32 @@ from loguru import logger
 
 from app.views.image_tasks_helpers import make_grid_token, make_single_token
 
+# Cached viewport cap — computed once on first call, then reused.
+_VIEWPORT_CAP: int | None = None
+
+
+def _compute_viewport_cap() -> int:
+    """Return the viewport cap for single-image previews.
+
+    Bounded to min(2048, primary-screen width). Falls back to 2048 when no
+    screen is available (e.g. headless test runs). Cached at module level after
+    the first successful probe so repeated requests are O(1).
+    """
+    global _VIEWPORT_CAP
+    if _VIEWPORT_CAP is not None:
+        return _VIEWPORT_CAP
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            _VIEWPORT_CAP = min(2048, screen.geometry().width())
+            return _VIEWPORT_CAP
+    except Exception:
+        pass
+    _VIEWPORT_CAP = 2048
+    return _VIEWPORT_CAP
+
 
 class _ImageTask(QRunnable):
     """QRunnable for background image loading.
@@ -58,7 +84,7 @@ class ImageTaskRunner:
 
     def request_single_preview(self, path: str) -> str:
         """Request a single-image preview. Returns the token string."""
-        side = 0
+        side = _compute_viewport_cap()
         token = make_single_token(path, side)
         if self._service is None:
             return token

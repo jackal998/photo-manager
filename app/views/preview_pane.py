@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import QGridLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 from loguru import logger
@@ -91,6 +91,10 @@ def _read_resolution(path: str) -> str | None:
 class PreviewPane(QWidget):
     """Encapsulates the right-side preview (single image / grid)."""
 
+    # Emitted when the user double-clicks a preview tile or the single-view
+    # image; MainWindow connects this to on_open_full_res_viewer(path).
+    requestFullRes = Signal(str)
+
     def __init__(
         self, parent: QWidget | None, task_runner: ImageTaskRunner, thumb_size: int | None = None
     ) -> None:
@@ -123,6 +127,9 @@ class PreviewPane(QWidget):
         self._single_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._single_label.setMinimumHeight(200)
         self._preview_layout.addWidget(self._single_label)
+        # Wire double-click → requestFullRes signal; path captured per show_single call.
+        self._single_label_path: str | None = None
+        self._single_label.mouseDoubleClickEvent = self._on_single_label_double_click
 
         self.preview_area.setWidget(self._preview_container)
         root.addWidget(self.preview_area)
@@ -152,6 +159,7 @@ class PreviewPane(QWidget):
     # Public API
     def show_single(self, path: str, info: dict | None = None) -> None:
         self.clear()
+        self._single_label_path = path
         self.preview_area.setWidgetResizable(False)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
@@ -179,10 +187,7 @@ class PreviewPane(QWidget):
                 self._single_video_player = VideoPlayerWidget(path, self._preview_container)
                 self._preview_layout.addWidget(self._single_video_player)
                 self._single_label.setVisible(False)
-                try:
-                    self._single_video_player.play()
-                except Exception:
-                    pass
+                # Autoplay is intentionally disabled — user must click Play.
             except Exception as ex:
                 logger.error("Failed to load video {}: {}", path, ex)
                 self._single_info_label.clear()
@@ -343,6 +348,12 @@ class PreviewPane(QWidget):
                 img_lbl = QLabel(t("preview.loading"))
                 img_lbl.setFixedSize(thumb_side, thumb_side)
                 img_lbl.setAlignment(Qt.AlignCenter)
+
+                # Double-click on a grid image tile → open full-res viewer
+                def _make_dblclick_handler(_path=p):
+                    return lambda e: self.requestFullRes.emit(_path)
+
+                img_lbl.mouseDoubleClickEvent = _make_dblclick_handler()
                 v.addWidget(img_lbl)
                 tile_rows = build_info_rows(
                     name=name,
@@ -416,6 +427,7 @@ class PreviewPane(QWidget):
         self._single_label.clear()
         self._single_label.setVisible(False)
         self._single_pm = None
+        self._single_label_path = None
 
     def release_file_handles(self) -> None:
         """Release any open media/file handles held by the preview.
@@ -566,22 +578,12 @@ class PreviewPane(QWidget):
         self._try_group_autoplay()
 
     def autoplay_all_videos_when_ready(self) -> None:
-        """Public API: instantiate players for all visible video tiles, then autoplay."""
-        try:
-            if not self._grid_items or self._grid_layout is None:
-                return
-            # Trigger click handler for each pending video label to create players
-            for it in self._grid_items:
-                p = it[0]
-                if is_video(p) and p in self._grid_pending_video_labels:
-                    lbl = self._grid_pending_video_labels.get(p)
-                    if lbl and hasattr(lbl, "mousePressEvent"):
-                        try:
-                            lbl.mousePressEvent(None)  # synthesize click
-                        except Exception:
-                            pass
-        finally:
-            self._try_group_autoplay()
+        """Public API: no-op — autoplay is disabled (#622 Phase 1).
+
+        Videos require explicit user interaction (click Play) to start.
+        Kept for API compatibility; callers that previously relied on this
+        to bootstrap grid playback will see no effect.
+        """
 
     def _try_group_autoplay(self) -> None:
         """If all visible videos have players, autoplay all via controller."""
@@ -613,6 +615,11 @@ class PreviewPane(QWidget):
     def refit(self) -> None:
         """Public hook to re-apply single-image fit (e.g., on splitterMoved)."""
         self._apply_single_pixmap_fit()
+
+    def _on_single_label_double_click(self, event: Any) -> None:
+        """Double-click on the single-view label → emit requestFullRes."""
+        if self._single_label_path:
+            self.requestFullRes.emit(self._single_label_path)
 
     # Qt events
     def resizeEvent(self, event) -> None:  # type: ignore[override]
