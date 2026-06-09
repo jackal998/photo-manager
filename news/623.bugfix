@@ -1,0 +1,1 @@
+Live Photo passenger detection now requires same-folder match — cross-folder same-basename MOVs no longer mis-classified as a HEIC's passenger (score=None, "—" Similarity); existing manifests self-heal on next rescore (#620).
