@@ -1,0 +1,1 @@
+Preview pane redesigned for dedup workflow — viewport-bounded byte-budget LRU (256 MB total, scaled), DNG embedded JPEG fast path, autoplay killed, double-click opens a modal full-resolution viewer with pan/zoom. Closes the ~35 GB RAM ceiling reported in #621 (#622 Phase 1).
