@@ -33,6 +33,8 @@ from scanner.scoring import (
     FORMAT_PENALTY,
     IMAGE_EXIF_CENSUS_BASELINE,
     VIDEO_EXIF_CENSUS_BASELINE,
+    _has_paired_peer_with_suffixes,
+    _parent_key,
     _score_date_provenance,
     _score_exif_completeness,
     _score_file_size,
@@ -41,6 +43,8 @@ from scanner.scoring import (
     _score_live_photo,
     _score_path,
     _score_resolution,
+    _HEIC_SUFFIXES,
+    _VIDEO_SUFFIXES,
     compute_score,
     score_group,
     validate_weights,
@@ -986,3 +990,79 @@ class TestManifestRepositoryRescore:
         finally:
             conn.close()
         assert tuned["/x/small.jpg"] > tuned["/x/big.jpg"]
+
+
+# ── #620: cross-folder Live Photo collision ─────────────────────────────────
+
+
+class TestLivePhotoCrossFolderCollision:
+    """#620: cross-folder same-basename MOV must NOT be classified as a
+    HEIC's Live Photo passenger. Walker is folder-scoped (walker.py:250),
+    scoring must inherit that invariant — case-folded parent comparison
+    required for Windows NTFS.
+
+    Without the fix: _has_paired_peer_with_suffixes only checks stem+suffix,
+    so B/IMG_1234.MOV matches A/IMG_1234.HEIC → score=None → "—" Similarity
+    → skipped by auto-select.  With the fix: parent mismatch blocks it.
+    """
+
+    def test_cross_folder_mov_keeps_real_score(self):
+        """Two MOVs with the same basename as a HEIC, in two different folders:
+        the same-folder MOV is the Live Photo passenger (score=None),
+        the cross-folder MOV gets a real score (NOT mis-classified as passenger).
+        """
+        heic = _row("/A/IMG_1234.heic")
+        mov_same = _row("/A/IMG_1234.mov")   # same folder → passenger
+        mov_cross = _row("/B/IMG_1234.mov")  # different folder → NOT a passenger
+
+        group = [heic, mov_same, mov_cross]
+        scores = score_group(group)
+
+        # same-folder MOV is the passenger
+        assert scores["/A/IMG_1234.mov"] is None
+
+        # cross-folder MOV must get a real score, not None
+        assert scores["/B/IMG_1234.mov"] is not None
+        assert isinstance(scores["/B/IMG_1234.mov"], float)
+
+        # HEIC still gets a float (scored normally with live-photo bonus)
+        assert isinstance(scores["/A/IMG_1234.heic"], float)
+
+    def test_cross_folder_heic_not_stolen_by_other_folder_mov(self):
+        """Symmetric: a HEIC in folder A is not mis-paired with a MOV in
+        folder B for the live_photo dimension bonus."""
+        heic = _row("/A/IMG_9999.heic")
+        mov_other = _row("/B/IMG_9999.mov")  # different folder
+
+        group = [heic, mov_other]
+
+        # MOV in a different folder must not be classified as the HEIC's passenger
+        assert compute_score(mov_other, group) is not None
+
+        # HEIC without a same-folder MOV peer scores the orphan penalty (0.5)
+        # live_photo dimension — test the dimension directly
+        assert _score_live_photo(heic, group) == 0.5
+
+    def test_case_folded_parent_match_windows(self):
+        """Path('D:/A/IMG.MOV').parent != Path('d:/a/IMG.MOV').parent in
+        Python even when NTFS treats them as the same dir. _parent_key must
+        case-fold so same-folder pairs are not split by drive-letter case.
+        """
+        heic = _row("D:/Photos/IMG_0001.heic")
+        mov_upper = _row("D:/Photos/IMG_0001.mov")
+        mov_lower = _row("d:/photos/IMG_0001.mov")  # same dir, different case
+
+        # _parent_key must treat both paths as the same parent
+        assert _parent_key(heic) == _parent_key(mov_upper)
+        assert _parent_key(heic) == _parent_key(mov_lower)
+
+        # Both should be recognised as same-folder peers (passengers)
+        assert _has_paired_peer_with_suffixes(heic, [heic, mov_upper], _VIDEO_SUFFIXES)
+        assert _has_paired_peer_with_suffixes(heic, [heic, mov_lower], _VIDEO_SUFFIXES)
+
+    def test_parent_key_helper_isolates_by_folder(self):
+        """_parent_key of two rows in genuinely different folders must differ,
+        so cross-folder peers are correctly rejected."""
+        mov_a = _row("/A/IMG_1234.mov")
+        mov_b = _row("/B/IMG_1234.mov")
+        assert _parent_key(mov_a) != _parent_key(mov_b)
