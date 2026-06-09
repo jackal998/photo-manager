@@ -542,8 +542,7 @@ class TestSetDecisionToHighlighted:
         assert _read_decision(db, "/a.jpg") == "delete"
         assert _read_decision(db, "/b.jpg") == ""
 
-    @patch("PySide6.QtWidgets.QMessageBox.information")
-    def test_skips_group_type_items(self, _mock, tmp_path):
+    def test_skips_group_type_items(self, tmp_path):
         recs = [_rec("/a.jpg")]
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
@@ -628,16 +627,26 @@ class TestGetRecordFieldActionMapping:
         assert recs[0].user_decision == ""
         ui_updater.refresh_tree.assert_not_called()
 
-    def test_no_highlighted_files_shows_message(self, tmp_path):
+    def test_no_highlighted_files_shows_toast(self, tmp_path):
+        """No-selection branch (#615): must call status_reporter.show_status,
+        NOT QMessageBox.information. The modal was replaced with a status-bar
+        toast so the keyboard shortcut path doesn't block the user with a
+        dialog they can't reach via right-click on an empty selection.
+
+        Bug: if QMessageBox.information is called here, the keyboard shortcut
+        path pops a blocking modal that the user must dismiss every time they
+        accidentally press 'd'/'k' with nothing selected.
+        """
         recs = [_rec("/a.jpg")]
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=recs)])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         hl_provider = lambda: []
-        handler, _, _ = _make_handler(vm, str(db), highlighted_items=hl_provider)
+        handler, _, status_reporter = _make_handler(vm, str(db), highlighted_items=hl_provider)
 
-        with patch("PySide6.QtWidgets.QMessageBox.information"):
-            handler.set_decision_to_highlighted("delete")
+        handler.set_decision_to_highlighted("delete")
 
+        # Toast must fire, no decision must be written.
+        status_reporter.show_status.assert_called_once()
         assert recs[0].user_decision == ""
 
     def test_provider_with_get_selected_items_method(self, tmp_path):

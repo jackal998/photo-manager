@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QMenu, QTreeView
 
-from app.views.constants import settable_decisions
+from app.views.constants import DECISION_ACCELERATORS, settable_decisions
 from app.views.handlers.file_opener import open_folder_containing
 from infrastructure.i18n import t
 
@@ -109,6 +110,17 @@ class ContextMenuHandler:
             set_action_menu = menu.addMenu(t("context_menu.set_action"))
             for label, value in settable_decisions():
                 a = set_action_menu.addAction(label)
+                accel = DECISION_ACCELERATORS.get(value)
+                if accel:
+                    # Cosmetic hint only — the actual key press is handled by
+                    # the QShortcut in MainWindow._setup_tree_shortcuts (#615).
+                    # Qt.WindowShortcut (the menu-action default) would fire
+                    # whenever the main window is active, conflicting with the
+                    # tree-scoped QShortcut; setting it WindowShortcut here is
+                    # safe because the WidgetWithChildrenShortcut QShortcut wins
+                    # in priority when the tree is focused, and this entry is
+                    # purely display.
+                    a.setShortcut(QKeySequence(accel))
                 a.triggered.connect(
                     lambda checked=False, _v=value, _item=item:
                         self.handlers.set_decision_with_lock_check([_item], _v)
@@ -171,6 +183,10 @@ class ContextMenuHandler:
         file_items = [it for it in selected_items if it.get("type") == "file"]
         for label, value in settable_decisions():
             a = set_action_menu.addAction(label)
+            accel = DECISION_ACCELERATORS.get(value)
+            if accel:
+                # Cosmetic hint only — see single-selection branch comment (#615).
+                a.setShortcut(QKeySequence(accel))
             a.triggered.connect(
                 lambda checked=False, _v=value, _items=file_items:
                     self.handlers.set_decision_with_lock_check(_items, _v)

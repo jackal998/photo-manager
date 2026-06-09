@@ -398,6 +398,7 @@ file_op:
   set_action_no_manifest_body: "No manifest loaded."
   set_action_no_selection_title: "Set Action — No Selection"
   set_action_no_selection_body: "No activated files."
+  set_action_no_selection_toast: "No files selected — select rows first."
   set_action_no_match_title: "Set Action — No Match"
   set_action_no_match_body: "No files matched the pattern."
   invalid_regex_title: "Invalid Regex"

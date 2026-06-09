@@ -355,8 +355,9 @@ for the chore plan.
 - **Trigger:** User presses arrow keys / Home / End / Page Up / Page Down with the tree focused.
 - **Behaviour:** Navigate rows with arrow keys; expand/collapse groups with Left/Right at group-header rows. Selected row is preserved across model rebuilds (e.g. after a decision change) so keyboard-driven review doesn't lose place.
 - **Conditions / variants:** Multi-select works with Shift+arrow and Ctrl+click as in the standard Qt tree behaviour. The selection model is preserved across `setModel` calls so the highlighted row survives a tree refresh.
+- **Decision shortcuts (#615):** `d` marks selected file rows as delete; `k` clears the action (empty/keep). Tree-scoped via `Qt.WidgetWithChildrenShortcut` so the shortcut fires only when focus is on the tree — text-edit widgets elsewhere are immune. Multi-selection writes one batched SQLite transaction (inherited from `set_decision_to_highlighted`). Replaces QTreeView's default first-letter type-ahead navigation for these two letters (acceptable tradeoff because dedup filenames are mostly numeric). Pressing the shortcut with no selection shows a transient status-bar toast. The shortcuts are also shown as cosmetic hints in the context-menu Set Action submenu (`Delete D` / `Keep K`).
 - **Related:** QA scenario [`qa/scenarios/s26_keyboard_navigation.py`](../qa/scenarios/s26_keyboard_navigation.py).
-- **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+- **Last verified:** 2026-06-09
 
 ---
 

@@ -996,10 +996,12 @@ class FileOperationsHandler:
                 items = provider.get_selected_items()
         file_items = [it for it in items if it.get("type") == "file"]
         if not file_items:
-            QMessageBox.information(
-                self.parent,
-                t("file_op.set_action_no_selection_title"),
-                t("file_op.set_action_no_selection_body"),
+            # Keyboard shortcut path hits this silently (no context menu to
+            # prevent it). Use a transient status-bar toast instead of a modal
+            # so the user isn't blocked by a dialog they can't reach via
+            # right-click on empty selection (#615).
+            self.status_reporter.show_status(
+                t("file_op.set_action_no_selection_toast"), 3000
             )
             return
         self.set_decision_with_lock_check(file_items, new_decision)

@@ -312,6 +312,7 @@ file_op:
   set_action_no_manifest_body: "尚未載入清單。"
   set_action_no_selection_title: "設定動作 — 未選取"
   set_action_no_selection_body: "未選取任何啟用中的檔案。"
+  set_action_no_selection_toast: "未選取任何檔案，請先選取列。"
   set_action_no_match_title: "設定動作 — 無相符項目"
   set_action_no_match_body: "沒有檔案符合此正規式。"
   invalid_regex_title: "正規式錯誤"
