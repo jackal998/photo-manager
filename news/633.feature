@@ -1,0 +1,1 @@
+Set Action dialog — Simple section now exposes empty-value selection: pick "Exactly matches" and leave the text input blank to target rows whose field is empty (e.g. rows with no Action set). A tooltip on the text input surfaces the affordance (#633).
