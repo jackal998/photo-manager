@@ -333,6 +333,13 @@ class MainWindow(QMainWindow):
         self._preview = PreviewPane(right_widget, self._runner, thumb_size=self._thumb_size)
         right_layout.addWidget(self._preview)
 
+        # Wire the tree's P key to the preview's play/pause toggle.
+        # PR #624 killed video autoplay; this is the no-mouse path to
+        # control playback while reviewing on the keyboard. Single-view
+        # only — grid-mode P is a defensible no-op (no unambiguous
+        # "focused" player). See decision_tree_view.playPauseRequested.
+        self.tree.playPauseRequested.connect(self._preview.toggle_play_pause)
+
         # Setup main layout with splitter
         central = self.layout_manager.setup_main_layout(center_widget, right_widget)
         self.setCentralWidget(central)

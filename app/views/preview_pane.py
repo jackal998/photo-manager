@@ -429,6 +429,32 @@ class PreviewPane(QWidget):
         self._single_pm = None
         self._single_label_path = None
 
+    def toggle_play_pause(self) -> None:
+        """Toggle playback on the single-view video player, if any.
+
+        Triggered by the P shortcut on the main tree (#615 follow-up
+        for the no-autoplay default introduced in #624). Single-view
+        only — in grid mode there is no unambiguous "focused" player,
+        so the shortcut becomes a no-op rather than picking
+        arbitrarily. Safe to call when no video is currently shown
+        (single video player is None) — also a silent no-op.
+
+        Reads the player's current ``is_playing()`` state and branches
+        to ``pause()`` or ``play()``; the player itself owns the
+        ``QMediaPlayer`` so this method needs no further state.
+        """
+        player = self._single_video_player
+        if player is None:
+            return
+        try:
+            if player.is_playing():
+                player.pause()
+            else:
+                player.play()
+        except Exception:
+            # Best-effort UX; never raise from a keyboard-shortcut slot.
+            pass
+
     def release_file_handles(self) -> None:
         """Release any open media/file handles held by the preview.
 
