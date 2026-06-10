@@ -1,0 +1,1 @@
+Preview pane — DNG embedded-JPEG fast path now honours the embedded EXIF Orientation tag. Portrait-grip iPhone ProRAW DNGs no longer render 90° rotated relative to Lightroom / File Explorer (#632 fixes a #624 regression).

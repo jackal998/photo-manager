@@ -657,9 +657,9 @@ for the chore plan.
 - **Entry point:** `infrastructure/image_service.py` — `ImageService.__init__` and `_ByteBudgetLRUCache`.
 - **Trigger:** Populated automatically as the user navigates the result tree (each row selection or grid display triggers background image loads).
 - **Behaviour:** The in-memory image cache uses a byte-budget eviction policy instead of a fixed item count. Two independent tiers: a thumbnail tier (≈64 MB) for grid thumbnails (longest side ≤ 256 px) and a preview tier (≈192 MB) for single-view previews. Total budget = `min(256 MB, RAM // 32)`. When a tier exceeds its budget the least-recently-used entry is evicted. The on-disk cache writes versioned files under `~/AppData/Local/PhotoManager/thumbs/v1/<sha1>.jpg`; a recipe-version bump invalidates the old namespace. On first launch after upgrade, any unversioned `.jpg` files under `thumbs/` root are automatically deleted and a one-time status-bar notice is shown.
-- **Conditions / variants:** DNG files use the embedded JPEG fast path (rawpy `extract_thumb`) if the embedded thumbnail's longest side ≥ viewport cap (2048 px default); falls through to full `postprocess` decode only when the embedded thumb is too small or absent.
+- **Conditions / variants:** DNG files use the embedded JPEG fast path (rawpy `extract_thumb`) if the embedded thumbnail's longest side ≥ viewport cap (2048 px default); falls through to full `postprocess` decode only when the embedded thumb is too small or absent. **EXIF Orientation is applied** to the embedded JPEG via Pillow's `ImageOps.exif_transpose` before conversion to QImage — without this, portrait-grip iPhone ProRAW DNGs (which store landscape pixels + Orientation=6/8 in the embedded JPEG's EXIF) would render 90° rotated relative to Lightroom / File Explorer (`QImage.loadFromData` does not honour the Orientation tag; only `QImageReader.setAutoTransform` does, and the fast path uses neither). The bitmap (non-JPEG) thumb branch is unaffected — rawpy delivers the array in correct orientation natively.
 - **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `infrastructure/image_service.py`; `tests/test_image_service.py`.
-- **Last verified:** 2026-06-09 (#622 Phase 1)
+- **Last verified:** 2026-06-10 (DNG embedded-JPEG orientation fix)
 
 ---
 

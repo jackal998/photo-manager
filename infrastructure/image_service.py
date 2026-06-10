@@ -503,11 +503,41 @@ class ImageService:
             # or thumb.format == rawpy.ThumbFormat.JPEG
             import rawpy as _rawpy  # type: ignore[attr-defined]
             if thumb.format == _rawpy.ThumbFormat.JPEG:  # type: ignore[attr-defined]
-                # JPEG bytes → decode via QImage
-                qimg = QImage()
-                ok = qimg.loadFromData(bytes(thumb.data))
-                if not ok or qimg.isNull():
-                    return None
+                # JPEG bytes → decode via Pillow so EXIF Orientation is honoured,
+                # then convert to QImage. PR #624's original `QImage.loadFromData`
+                # call ignored the embedded JPEG's Orientation tag (Qt only
+                # auto-rotates via `QImageReader.setAutoTransform`, never via
+                # `loadFromData`), so iPhone ProRAW DNGs shot in portrait grip
+                # rendered 90° rotated relative to Lightroom / File Explorer.
+                # Pillow is already a hard dependency (HEIC support); the
+                # bare-QImage fallback below is purely defensive.
+                qimg: QImage | None = None
+                if self._pillow_available:
+                    import io as _io
+                    assert Image is not None and ImageOps is not None
+                    try:
+                        with Image.open(_io.BytesIO(bytes(thumb.data))) as pil_im:
+                            try:
+                                pil_im = ImageOps.exif_transpose(pil_im)
+                            except (OSError, ValueError, AttributeError):
+                                # exif_transpose only raises on malformed EXIF —
+                                # fall through to the un-rotated image rather
+                                # than failing the whole load.
+                                pass
+                            qimg = self._pil_to_qimage(pil_im)
+                    except Exception as ex:
+                        logger.debug(
+                            "PIL thumb decode failed, falling back to QImage: {}",
+                            ex,
+                        )
+                        qimg = None
+                if qimg is None or qimg.isNull():
+                    # Fallback path: bare QImage.loadFromData (no rotation).
+                    # Reaches here only if Pillow is absent OR PIL decode raised.
+                    qimg = QImage()
+                    ok = qimg.loadFromData(bytes(thumb.data))
+                    if not ok or qimg.isNull():
+                        return None
             else:
                 # Bitmap array (H, W, 3)
                 arr = thumb.data

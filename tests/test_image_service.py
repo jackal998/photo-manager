@@ -195,6 +195,7 @@ class TestDngEmbeddedJpegFastPath:
         """
         svc = ImageService.__new__(ImageService)
         svc._rawpy_available = True
+        svc._pillow_available = True
 
         raw = self._make_raw_mock_jpeg(4000, 3000)
         result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
@@ -214,6 +215,7 @@ class TestDngEmbeddedJpegFastPath:
         """
         svc = ImageService.__new__(ImageService)
         svc._rawpy_available = True
+        svc._pillow_available = True
 
         raw = self._make_raw_mock_jpeg(800, 600)
         result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
@@ -232,6 +234,7 @@ class TestDngEmbeddedJpegFastPath:
         """
         svc = ImageService.__new__(ImageService)
         svc._rawpy_available = True
+        svc._pillow_available = True
 
         raw = self._make_raw_mock_no_thumb()
         result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
@@ -249,12 +252,74 @@ class TestDngEmbeddedJpegFastPath:
         """
         svc = ImageService.__new__(ImageService)
         svc._rawpy_available = True
+        svc._pillow_available = True
 
         raw = self._make_raw_mock_jpeg(400, 300)  # small thumb
         result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=0)
 
         assert result is not None, (
             "With viewport_cap=0 (full-res), even a small embedded JPEG should be used"
+        )
+
+    def _make_raw_mock_jpeg_with_orientation(
+        self, pixel_width: int, pixel_height: int, orientation: int
+    ) -> MagicMock:
+        """Build a rawpy mock whose embedded JPEG carries a real EXIF
+        Orientation tag. Distinct from ``_make_raw_mock_jpeg`` (which
+        uses ``QImage.save`` and writes NO EXIF) — this one uses PIL
+        so ``ImageOps.exif_transpose`` has something to act on.
+        """
+        import io
+        import rawpy as _rawpy
+        from PIL import Image as PILImage
+
+        pil_im = PILImage.new(
+            "RGB", (pixel_width, pixel_height), color=(200, 100, 50)
+        )
+        buf = io.BytesIO()
+        exif = pil_im.getexif()
+        exif[0x0112] = orientation  # TIFF tag 0x0112 = Orientation
+        pil_im.save(buf, format="JPEG", exif=exif.tobytes())
+
+        thumb = SimpleNamespace(
+            format=_rawpy.ThumbFormat.JPEG,
+            data=buf.getvalue(),
+        )
+        raw = MagicMock()
+        raw.extract_thumb.return_value = thumb
+        return raw
+
+    def test_exif_orientation_corrected_for_dng_thumb(self, qapp_m):
+        """Embedded JPEG with Orientation=6 (rotate 90 CW, the iPhone
+        portrait-grip case) must be transposed so the returned QImage
+        comes out landscape (width > height).
+
+        Real failure mode (the bug reported on 2026-06-10): PR #624's
+        fast path called ``QImage.loadFromData`` which never reads the
+        Orientation tag, so portrait-grip ProRAW DNGs displayed 90°
+        rotated relative to Lightroom / File Explorer.
+
+        Pre-fix: ``QImage.loadFromData`` returns a 3000×4000 QImage
+        regardless of orientation → assertion ``width > height`` fails.
+
+        Post-fix: PIL decode + ``ImageOps.exif_transpose`` swaps the
+        dimensions according to the Orientation tag → 4000×3000 → passes.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        # Pixels written as 3000×4000 with Orientation=6.
+        # After exif_transpose, the image should be 4000×3000 (landscape).
+        raw = self._make_raw_mock_jpeg_with_orientation(
+            pixel_width=3000, pixel_height=4000, orientation=6
+        )
+        result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=0)
+
+        assert result is not None and not result.isNull()
+        assert result.width() > result.height(), (
+            f"DNG embedded JPEG with Orientation=6 must come out landscape "
+            f"after exif_transpose; got {result.width()}×{result.height()}"
         )
 
 
