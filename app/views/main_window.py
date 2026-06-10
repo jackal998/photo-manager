@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
+from app.views.components.decision_tree_view import DecisionTreeView
 from app.views.components.empty_state import build_empty_state_widget
 from app.views.components.menu_controller import MenuController
 from app.views.components.status_messages import plural_form, pluralize
@@ -219,8 +219,12 @@ class MainWindow(QMainWindow):
 
     def _setup_components(self) -> None:
         """Setup all extracted components and controllers."""
-        # Create tree view first
-        self.tree = QTreeView()
+        # Create tree view first. DecisionTreeView is a QTreeView subclass that
+        # catches bare 'd' / 'k' presses in keyPressEvent and emits
+        # ``decisionRequested(str)`` — see app/views/components/decision_tree_view.py.
+        # (QShortcut on the tree silently fails to match K under this app's
+        # runtime state; root cause is still open as a #626 follow-up.)
+        self.tree = DecisionTreeView()
 
         # Initialize controllers
         self.tree_controller = TreeController(self.tree)
@@ -247,6 +251,14 @@ class MainWindow(QMainWindow):
             checked_paths_provider=None,
             highlighted_items_provider=self.tree_controller,
             task_runner=self._runner,
+        )
+
+        # Wire the tree's d/k key emit to the existing set-decision path (#615).
+        # set_decision_to_highlighted handles no-manifest / no-selection / locked
+        # rows uniformly, so the keyboard path and the right-click menu path
+        # share one entry point — no new ActionHandlersImpl proxy needed.
+        self.tree.decisionRequested.connect(
+            self.file_operations.set_decision_to_highlighted
         )
 
         # Tree data provider for dialog handler
@@ -336,36 +348,6 @@ class MainWindow(QMainWindow):
 
         # Setup context menu
         self.context_menu_handler.setup_context_menu()
-
-        # Wire 'd' / 'k' decision shortcuts on the tree (#615).
-        self._setup_tree_shortcuts()
-
-    def _setup_tree_shortcuts(self) -> None:
-        """Bare 'd' / 'k' shortcuts on the main tree to mark selected file rows
-        for delete or clear the action (#615). Tree-scoped via
-        Qt.WidgetWithChildrenShortcut — they fire only when focus is on the tree
-        or a descendant; never on text edits elsewhere.
-
-        Tradeoff: replaces QTreeView's default first-letter type-ahead navigation
-        for these two letters. Acceptable because dedup filenames are mostly
-        numeric (IMG_NNNN); type-ahead by 'd'/'k' was rarely useful.
-
-        Note: bypasses ActionHandlersImpl / the context-menu bridge by design —
-        the shortcut path calls file_operations.set_decision_to_highlighted
-        directly from MainWindow. No new ActionHandlersImpl proxy method is
-        needed because the shortcut is MainWindow-owned and always fires in the
-        main-window context.
-        """
-        self._tree_shortcut_delete = QShortcut(QKeySequence("D"), self.tree)
-        self._tree_shortcut_delete.setContext(Qt.WidgetWithChildrenShortcut)
-        self._tree_shortcut_delete.activated.connect(
-            lambda: self.file_operations.set_decision_to_highlighted("delete")
-        )
-        self._tree_shortcut_keep = QShortcut(QKeySequence("K"), self.tree)
-        self._tree_shortcut_keep.setContext(Qt.WidgetWithChildrenShortcut)
-        self._tree_shortcut_keep.activated.connect(
-            lambda: self.file_operations.set_decision_to_highlighted("")
-        )
 
     def _connect_signals(self) -> None:
         """Connect all signal/slot relationships."""

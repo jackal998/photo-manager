@@ -114,12 +114,18 @@ class ContextMenuHandler:
                 if accel:
                     # Cosmetic hint only — the actual key press is handled by
                     # the QShortcut in MainWindow._setup_tree_shortcuts (#615).
-                    # Qt.WindowShortcut (the menu-action default) would fire
-                    # whenever the main window is active, conflicting with the
-                    # tree-scoped QShortcut; setting it WindowShortcut here is
-                    # safe because the WidgetWithChildrenShortcut QShortcut wins
-                    # in priority when the tree is focused, and this entry is
-                    # purely display.
+                    # Qt.WindowShortcut (the menu-action default) is harmless
+                    # HERE because each QAction is parented to the locally-
+                    # constructed QMenu and dies when `menu.exec()` returns —
+                    # no live setShortcut("K") exists between right-click
+                    # sessions to ambiguate with the tree-scoped QShortcut.
+                    # CAVEAT: if Qt resolves two matching shortcuts while a
+                    # menu IS open (which we don't currently exercise), it
+                    # emits `activatedAmbiguously` and neither fires. Bare-
+                    # letter shortcuts here are safe ONLY because of the
+                    # transient-action lifetime, NOT because WidgetWith-
+                    # ChildrenShortcut has scope priority — Qt does not
+                    # define such a priority.
                     a.setShortcut(QKeySequence(accel))
                 a.triggered.connect(
                     lambda checked=False, _v=value, _item=item:
@@ -185,7 +191,9 @@ class ContextMenuHandler:
             a = set_action_menu.addAction(label)
             accel = DECISION_ACCELERATORS.get(value)
             if accel:
-                # Cosmetic hint only — see single-selection branch comment (#615).
+                # Cosmetic hint only — see single-selection branch comment (#615)
+                # for the lifetime caveat about Qt::WindowShortcut on transient
+                # QActions vs the tree-scoped QShortcut.
                 a.setShortcut(QKeySequence(accel))
             a.triggered.connect(
                 lambda checked=False, _v=value, _items=file_items:

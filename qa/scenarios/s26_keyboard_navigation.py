@@ -192,6 +192,12 @@ def main() -> int:
     # tabbing through; the TAB-walk path is exercised by step 6.
     print("step: focus_result_tree")
     tree = _uia._result_tree(win)
+    # d_multi above ends with ctrl_click on ROW_MULTI_B (row 3 of 5). Without
+    # a reset here, Down x 5 starting from row 3 reaches row 4 once and stays
+    # there — distinct_count=1 and the assertion below fails for fixture
+    # geometry reasons, not keyboard-navigation reasons (#626).
+    _uia.left_click_tree_row(win, ROW_D_SHORTCUT)  # ROW_D_SHORTCUT is row 0 (q95)
+    time.sleep(0.15)
     tree.set_focus()
     time.sleep(0.3)
     fe = _focused_element_summary()
@@ -213,9 +219,12 @@ def main() -> int:
               f"name={fe['name'][:40]!r}")
     distinct_count = len(set(seen_focused_names))
     print(f"  distinct_focus_targets={distinct_count}")
-    if distinct_count < 2:
-        # If arrow Down doesn't change the focused element's Name, the
-        # tree is NOT receiving keyboard input — real bug.
+    # 5-row fixture, start at row 0, 5 Downs visit rows 1,2,3,4,4 = 4 distinct.
+    # Threshold 4 (not 2) is the geometry-aware verifier — anything lower
+    # would pass even when nav is broken after the first step.
+    if distinct_count < 4:
+        # If arrow Down doesn't traverse rows, the tree is NOT receiving
+        # keyboard input — real bug.
         failures.append(
             f"arrow Down × 5 produced only {distinct_count} distinct "
             f"focused row name(s); keyboard navigation in result tree is "
