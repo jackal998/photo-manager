@@ -771,17 +771,65 @@ class TestSimpleMode:
         dlg._simple_text.setText("abc")
         assert dlg._build_pattern() == r"^abc$"
 
-    def test_empty_text_returns_empty_pattern(self, qapp):
-        """Empty Simple input must NOT produce ``^$`` etc — we return
-        empty string so the preview pane shows the no-pattern state
-        rather than 'matches everything that's empty', which is
-        confusing."""
+    def test_empty_text_with_contains_returns_empty_pattern(self, qapp):
+        """Empty Simple input with ``contains`` must return an empty
+        pattern, NOT ``""`` interpreted-as-match-everything. The
+        receiver guard in set_decision_by_regex (#397) blocks empty
+        patterns; this safe-fails the dangerous default-op + blank
+        combination so users can't accidentally mass-mark every row.
+        """
         from app.views.dialogs.select_dialog import ActionDialog
 
         match_fn = lambda f, p: (0, 0, [])
         dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._simple_op_combo.setCurrentIndex(0)  # contains (default)
         dlg._simple_text.setText("")
         assert dlg._build_pattern() == ""
+
+    def test_empty_text_with_starts_with_returns_empty_pattern(self, qapp):
+        """``starts_with`` on empty text would naively emit ``"^"`` which
+        matches every string — same foot-gun as ``contains``. Must safe-fail
+        to empty so the receiver guard blocks it.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._simple_op_combo.setCurrentIndex(1)  # starts_with
+        dlg._simple_text.setText("")
+        assert dlg._build_pattern() == ""
+
+    def test_empty_text_with_ends_with_returns_empty_pattern(self, qapp):
+        """``ends_with`` on empty would emit ``"$"`` — also matches every
+        string. Same safe-fail rule.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._simple_op_combo.setCurrentIndex(2)  # ends_with
+        dlg._simple_text.setText("")
+        assert dlg._build_pattern() == ""
+
+    def test_empty_text_with_exact_returns_carat_dollar(self, qapp):
+        """Empty Simple input with ``exact`` is the deliberate escape
+        hatch for selecting rows whose field value is empty (e.g. the
+        "no decision set" Action surfaced by user request 2026-06-11).
+        Must produce ``"^$"`` — the only regex that matches the empty
+        string and nothing else.
+
+        Real failure mode (the bug being fixed): the pre-fix
+        ``if not text: pattern = ""`` short-circuit overrode the exact
+        builder and emitted an empty pattern → blocked by receiver →
+        user couldn't target empty-Action rows via the Simple section.
+        """
+        from app.views.dialogs.select_dialog import ActionDialog
+
+        match_fn = lambda f, p: (0, 0, [])
+        dlg = ActionDialog(fields=["File Name"], match_fn=match_fn)
+        dlg._simple_op_combo.setCurrentIndex(3)  # exact
+        dlg._simple_text.setText("")
+        assert dlg._build_pattern() == "^$"
 
     def test_apply_emits_synthesised_pattern(self, qapp):
         """The signal must carry the SAME regex the live preview built,

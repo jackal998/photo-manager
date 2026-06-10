@@ -99,9 +99,18 @@ MatchFn = Callable[[str, str], tuple[int, int, list[tuple[str, str]]]]
 # the input literal — e.g. typing "IMG_001.jpg (copy)" works without
 # the user needing to know that ()/. are special.
 _SIMPLE_OPS: list[tuple[str, str, Callable[[str], str]]] = [
-    ("contains",    "action_dialog.simple_op_contains",    lambda txt: re.escape(txt)),
-    ("starts_with", "action_dialog.simple_op_starts_with", lambda txt: "^" + re.escape(txt)),
-    ("ends_with",   "action_dialog.simple_op_ends_with",   lambda txt: re.escape(txt) + "$"),
+    # ``contains``/``starts_with``/``ends_with`` return ``""`` for empty text
+    # so the receiver guard in ``set_decision_by_regex`` (#397) blocks the
+    # gesture — without that safe-fail the patterns ``""``/``"^"``/``"$"``
+    # would all silently match every row. ``exact`` is the deliberate
+    # escape hatch for selecting rows whose field value is empty: ``""``
+    # → ``"^$"`` which matches ONLY the empty string (e.g. the
+    # "no decision set" Action). Surfaced by user request — "blank text
+    # + exactly matches" is how empty-Action selection is expressed in
+    # the Simple section.
+    ("contains",    "action_dialog.simple_op_contains",    lambda txt: re.escape(txt) if txt else ""),
+    ("starts_with", "action_dialog.simple_op_starts_with", lambda txt: ("^" + re.escape(txt)) if txt else ""),
+    ("ends_with",   "action_dialog.simple_op_ends_with",   lambda txt: (re.escape(txt) + "$") if txt else ""),
     ("exact",       "action_dialog.simple_op_exact",       lambda txt: "^" + re.escape(txt) + "$"),
 ]
 
@@ -821,6 +830,10 @@ class ActionDialog(QDialog):
         # D2 from #350 (Wave 9a): native "×" clear button — one-click input wipe.
         self._simple_text.setClearButtonEnabled(True)
         self._simple_text.setPlaceholderText(t("action_dialog.simple_text_placeholder"))
+        # Hint that blank + "Exactly matches" selects rows whose field is
+        # empty (e.g. "no decision set" Action) — surfaced by user request.
+        # The Simple section is otherwise opaque about how to target empty.
+        self._simple_text.setToolTip(t("action_dialog.simple_text_empty_match_hint"))
         simple_inputs_row.addWidget(self._simple_text, stretch=1)
         simple_outer.addLayout(simple_inputs_row)
         # C1 (#347, redesigned in #396): informational placeholder note.
@@ -1524,17 +1537,21 @@ class ActionDialog(QDialog):
         if self._match_fn is None:
             return
         text = self._simple_text.text()
-        if not text:
-            pattern = ""
+        op_key = self._simple_op_combo.currentData() or "contains"
+        pattern = ""
+        for k, _label_key, builder in _SIMPLE_OPS:
+            if k == op_key:
+                pattern = builder(text)
+                break
         else:
-            op_key = self._simple_op_combo.currentData() or "contains"
-            pattern = ""
-            for k, _label_key, builder in _SIMPLE_OPS:
-                if k == op_key:
-                    pattern = builder(text)
-                    break
-            if not pattern:
-                pattern = re.escape(text)
+            # Unknown op_key (defensive — shouldn't happen for live UI
+            # since combo items are seeded from _SIMPLE_OPS). Fall back
+            # to a literal-text contains pattern.
+            pattern = re.escape(text)
+        # Note: empty-text + non-exact ops intentionally produce ``""``,
+        # which the receiver guard in set_decision_by_regex rejects so
+        # users don't accidentally mass-match every row. Empty-text +
+        # ``exact`` produces ``"^$"`` — the explicit empty-match path.
         # Avoid a feedback loop: block signals while we replace the
         # canonical text, then refresh validation + preview manually.
         self.regex.blockSignals(True)
