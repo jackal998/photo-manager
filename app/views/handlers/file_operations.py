@@ -535,7 +535,7 @@ class FileOperationsHandler:
                             self.vm.remove_from_list(unlocked)
                             self._sync_removed_to_db(unlocked)
                             self._mark_dirty()
-                            self.ui_updater.refresh_tree(self.vm.groups)
+                            self._refresh_after_remove(unlocked)
                             report_count(
                                 self.status_reporter,
                                 t("status.verb_removed"),
@@ -574,7 +574,7 @@ class FileOperationsHandler:
                 for item in group_items:
                     self.vm.remove_group_from_list(item["group_number"])
 
-                self.ui_updater.refresh_tree(self.vm.groups)
+                self._refresh_after_remove(paths_for_db)
                 self._sync_removed_to_db(paths_for_db)
                 self._mark_dirty()
                 report_count(
@@ -628,7 +628,7 @@ class FileOperationsHandler:
                         self.vm.remove_from_list(unlocked)
                         self._sync_removed_to_db(unlocked)
                         self._mark_dirty()
-                        self.ui_updater.refresh_tree(self.vm.groups)
+                        self._refresh_after_remove(unlocked)
                         report_count(
                             self.status_reporter,
                             t("status.verb_removed"),
@@ -679,7 +679,7 @@ class FileOperationsHandler:
                 for group_num in group_numbers:
                     self.vm.remove_group_from_list(group_num)
 
-            self.ui_updater.refresh_tree(self.vm.groups)
+            self._refresh_after_remove(paths_for_db)
             self._sync_removed_to_db(paths_for_db)
             self._mark_dirty()
 
@@ -703,6 +703,30 @@ class FileOperationsHandler:
                 t("file_op.remove_error_title"),
                 t("file_op.remove_failed_body", error=str(e)),
             )
+
+    def _refresh_after_remove(self, removed_paths) -> None:
+        """Push an incremental row removal to the tree if the controller
+        is wired, otherwise fall back to a full ``refresh_tree`` rebuild.
+
+        Mirrors the dispatch pattern set_decision uses for
+        ``update_decision_cells`` (#617). The ``tree_controller is not None``
+        guard preserves unit-test compatibility — handler tests that
+        construct ``FileOperationsHandler`` with a stub parent (no
+        ``tree_controller`` attribute) continue to use the full-rebuild
+        path. The ``hasattr`` guard is defensive for stub objects that
+        emulate ``tree_controller`` without the full API.
+
+        Args:
+            removed_paths: Iterable of file paths that were removed
+                from ``vm.groups`` and need to disappear from the tree.
+                Passed through ``set(...)`` so the lookup inside
+                ``remove_rows`` is O(1) per row.
+        """
+        tree_controller = getattr(self.parent, "tree_controller", None)
+        if tree_controller is not None and hasattr(tree_controller, "remove_rows"):
+            tree_controller.remove_rows(set(removed_paths))
+        else:
+            self.ui_updater.refresh_tree(self.vm.groups)
 
     def _sync_removed_to_db(self, file_paths: list[str]) -> None:
         """Mark file_paths as removed in the manifest DB (manifest workflow only)."""
@@ -880,7 +904,7 @@ class FileOperationsHandler:
                 return
         self.vm.remove_from_list(paths)
         self._mark_dirty()
-        self.ui_updater.refresh_tree(self.vm.groups)
+        self._refresh_after_remove(paths)
 
     def set_decision(self, items: list[dict], new_decision: str) -> None:
         """Set user_decision for the given file items in memory and in SQLite.
@@ -1399,8 +1423,10 @@ class FileOperationsHandler:
         if not accepted and (dlg.removed_from_list_paths or dlg._decisions_changed):
             self.ui_updater.refresh_tree(self.vm.groups)
         if accepted:
+            executed_paths: list[str] = []
             if dlg.deleted_paths:
                 self.vm.remove_deleted_and_prune(dlg.deleted_paths, prune_singles=False)
+                executed_paths.extend(dlg.deleted_paths)
             if dlg.removed_from_list_paths:
                 # Deferred-remove paths are still in vm.groups (we set
                 # user_decision but didn't drop them in-place). Drop
@@ -1408,7 +1434,19 @@ class FileOperationsHandler:
                 # Immediate-path entries are already gone — vm.remove_from_list
                 # filters by path, so duplicates are harmless.
                 self.vm.remove_from_list(dlg.removed_from_list_paths)
-            self.ui_updater.refresh_tree(self.vm.groups)
+                executed_paths.extend(dlg.removed_from_list_paths)
+            # Both the delete and ignore-remove paths are structural row
+            # removals from the tree's perspective — push them as a
+            # single incremental batch instead of rebuilding the whole
+            # QStandardItemModel (which is what refresh_tree does, ~170k
+            # QStandardItem allocations on a 13k-row manifest).
+            if executed_paths:
+                self._refresh_after_remove(executed_paths)
+            else:
+                # Defensive: if accepted with no removed paths (shouldn't
+                # happen in practice — Execute requires at least one
+                # decision), keep the prior full-refresh behaviour.
+                self.ui_updater.refresh_tree(self.vm.groups)
             # D4: executed_paths is gone (dead "keep" branch removed); count
             # ignored rows via removed_from_list_paths so the status bar
             # reflects the full set of rows resolved this pass.

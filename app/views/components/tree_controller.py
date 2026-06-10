@@ -11,6 +11,7 @@ from loguru import logger
 from app.views.constants import (
     COL_ACTION,
     COL_GROUP,
+    COL_GROUP_COUNT,
     COL_LOCK,
     COL_NAME,
     NUM_COLUMNS,
@@ -509,6 +510,66 @@ class TreeController:
                 lock_item.setData(1 if locked else 0, SORT_ROLE)
             except Exception as exc:
                 logger.error("update_lock_cells failed at ({}, {}): {}", g_i, m_i, exc)
+
+    def remove_rows(self, paths_to_remove: set[str]) -> None:
+        """Incrementally remove file rows whose PATH_ROLE is in ``paths_to_remove``.
+
+        Structural mirror of :meth:`update_decision_cells` (#617) but for
+        row deletion: walks the source model bottom-up, removes matched
+        child rows from their group, and removes the group header
+        entirely once all its children are gone. **No** ``build_model``,
+        ``setSourceModel``, ``expandAll``, or ``doItemsLayout`` —
+        existing ``QStandardItem`` objects for unaffected rows survive
+        in place, so the QTreeView's selection model and expanded-group
+        state are preserved.
+
+        For partial-group removes the COL_GROUP_COUNT display text is
+        updated (so the "Group N (M files)" header doesn't lie about
+        membership). Group-level SORT_ROLE aggregates (min-decision,
+        max-size, etc.) are intentionally left as-is — same trade-off
+        accepted by ``update_decision_cells`` (#617). A click on the
+        column header or any operation that triggers a full
+        ``refresh_model`` rebuilds them from scratch.
+
+        Bottom-up traversal is required so ``removeRow`` calls don't
+        invalidate indices we haven't visited yet.
+
+        Args:
+            paths_to_remove: Set of file paths to drop from the tree.
+                Paths NOT in the model are silently ignored — robust to
+                duplicate removal attempts on a stale set.
+        """
+        if not paths_to_remove:
+            return
+        model = self._model
+        if model is None:
+            return
+        for g_i in range(model.rowCount() - 1, -1, -1):
+            try:
+                group_item = model.item(g_i, COL_GROUP)
+                if group_item is None:
+                    continue
+                # Walk children bottom-up so removeRow doesn't shift
+                # indices we still need to visit.
+                for c_i in range(group_item.rowCount() - 1, -1, -1):
+                    name_item = group_item.child(c_i, COL_NAME)
+                    if name_item is None:
+                        continue
+                    path = name_item.data(PATH_ROLE)
+                    if path in paths_to_remove:
+                        group_item.removeRow(c_i)
+                remaining = group_item.rowCount()
+                if remaining == 0:
+                    model.removeRow(g_i)
+                else:
+                    # Keep the group-header count display honest. SORT_ROLE
+                    # aggregates intentionally NOT updated — same precedent
+                    # as update_decision_cells.
+                    count_item = model.item(g_i, COL_GROUP_COUNT)
+                    if count_item is not None:
+                        count_item.setText(str(remaining))
+            except Exception as exc:
+                logger.error("remove_rows failed at group {}: {}", g_i, exc)
 
     @property
     def model(self):
