@@ -2776,3 +2776,116 @@ class TestExecuteDialogTypeFilter:
             "Execute selected must keep the dialog open (accept not "
             f"called); got {len(accept_calls)} accept calls"
         )
+
+
+# ── _decode_winerror helper ────────────────────────────────────────────────
+
+class TestDecodeWinerror:
+    """The HRESULT decoder turns opaque OLE codes into plain language
+    so the 'Files Failed to Delete' dialog tells the user the actual
+    cause instead of a misleading static three-cause guess. Each test
+    catches a specific bug class.
+    """
+
+    def test_known_sharing_violation_src(self):
+        """0x80270027 (COPYENGINE_E_SHARING_VIOLATION_SRC) was the
+        bug reported — file held open by another process. The dialog
+        used to claim 'permission denied, locked, or path too long'
+        for this code, only the second clause was true.
+        """
+        from app.views.dialogs.execute_action_dialog import _decode_winerror
+        exc = OSError(None, "OLE error 0x80270027", "C:\\foo.MP4")
+        exc.winerror = -2144927705
+        assert _decode_winerror(exc) == "file is in use by another process"
+
+    def test_known_access_denied_src(self):
+        """0x80270021 — distinct from a sharing violation; the
+        dialog should distinguish 'access denied' from 'in use'."""
+        from app.views.dialogs.execute_action_dialog import _decode_winerror
+        exc = OSError(None, "OLE error 0x80270021", "C:\\foo.jpg")
+        exc.winerror = -2144927711
+        assert _decode_winerror(exc) == "access denied (source)"
+
+    def test_unknown_winerror_falls_back_to_str(self):
+        """An HRESULT we don't have a mapping for must still surface
+        SOMETHING — never empty string. Falls back to str(exc) so
+        the user at least sees the raw error.
+        """
+        from app.views.dialogs.execute_action_dialog import _decode_winerror
+        exc = OSError(None, "OLE error 0x80270000", "C:\\foo.jpg")
+        exc.winerror = -2147024896  # arbitrary unmapped HRESULT
+        decoded = _decode_winerror(exc)
+        assert decoded  # non-empty
+        assert "0x80270000" in decoded or "OLE" in decoded  # raw form passed through
+
+    def test_exception_without_winerror_falls_back_to_str(self):
+        """A non-OSError exception (e.g. raised by os.remove fallback
+        when send2trash is missing) must also produce a non-empty
+        reason. The helper guards on getattr(exc, 'winerror', None).
+        """
+        from app.views.dialogs.execute_action_dialog import _decode_winerror
+        exc = RuntimeError("disk full")
+        assert _decode_winerror(exc) == "disk full"
+
+
+# ── release_file_handles + decoded reason wiring ─────────────────────────
+
+class TestExecuteReleaseAndDecode:
+    """End-to-end wiring for the bug fix: ``_on_execute`` releases
+    the preview's media handles before calling ``send2trash``, and
+    a delete failure stores the DECODED reason in ``_failed_paths``
+    (not the opaque ``str(exc)``).
+    """
+
+    def test_on_execute_releases_preview_handles_before_iteration(self, qapp):
+        """Without this guard, send2trash on a previewed MP4 hits
+        COPYENGINE_E_SHARING_VIOLATION_SRC because the VideoPlayerWidget
+        still holds the file handle. release_file_handles must run
+        BEFORE the for-group loop starts deleting.
+        """
+        from unittest.mock import MagicMock
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        groups = [_group(_rec("/x/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._preview = MagicMock()
+        order: list[str] = []
+        dlg._preview.release_file_handles.side_effect = lambda: order.append("release")
+        with patch.object(dlg, "_delete_file", side_effect=lambda p: order.append("delete")):
+            dlg._on_execute()
+        assert order == ["release", "delete"], (
+            f"release_file_handles must run before any _delete_file; got {order}"
+        )
+
+    def test_on_execute_handles_none_preview_without_crash(self, qapp):
+        """The preview attribute is ``None`` when the dialog was
+        constructed without a preview pane (e.g. some test paths /
+        future layouts). The guard ``if self._preview is not None``
+        must prevent an AttributeError.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        groups = [_group(_rec("/x/a.jpg", "delete"))]
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        dlg._preview = None
+        with patch.object(dlg, "_delete_file"):
+            dlg._on_execute()  # would raise if guard missing
+
+    def test_failed_delete_stores_decoded_reason(self, qapp):
+        """The reported #628-shape bug surfaces as 'OLE error 0x80270027'
+        in the failure dialog. After this fix, the dialog shows the
+        decoded reason instead.
+        """
+        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
+
+        groups = []
+        dlg = ExecuteActionDialog(groups, manifest_path=None)
+        exc = OSError(None, "OLE error 0x80270027", "C:\\x\\a.MP4")
+        exc.winerror = -2144927705
+        with patch("os.path.exists", return_value=True):
+            with patch("send2trash.send2trash", side_effect=exc):
+                dlg._delete_file("C:\\x\\a.MP4")
+        assert len(dlg._failed_paths) == 1
+        path, reason = dlg._failed_paths[0]
+        assert path == "C:\\x\\a.MP4"
+        assert reason == "file is in use by another process"
