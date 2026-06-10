@@ -211,7 +211,7 @@ execute_dialog:
   files_not_found_body: "The following files could not be found and were skipped:\n\n{missing}{suffix}"
   files_not_found_more: "\n…and {n} more"
   files_failed_title: "Files Failed to Delete"
-  files_failed_body: "The following files could not be deleted (permission denied, locked, or path too long):\n\n{failed}{suffix}"
+  files_failed_body: "The following files could not be deleted:\n\n{failed}{suffix}"
   files_failed_more: "\n…and {n} more"
 
 # LockedRowsConfirmDialog — unified confirm when an action would touch

@@ -839,12 +839,20 @@ class FileOperationsHandler:
                     self.settings.save()
             except Exception as exc:
                 logger.warning("Failed to persist ui.prune_singletons: {}", exc)
-        if prune_verdict.prune_plain and plain_paths:
-            self._apply_singleton_prune(plain_paths)
-        if prune_verdict.prune_actioned and actioned_paths:
-            self._apply_singleton_prune(actioned_paths)
-        if prunable_locked:
-            self._apply_singleton_prune(prunable_locked)
+        # Merge all opted-in buckets into ONE call instead of up to three
+        # separate ones. _apply_singleton_prune triggers a full QStandardItemModel
+        # rebuild via refresh_tree (~170k QStandardItem on a 13k-row manifest),
+        # so a 3-call cascade was producing 3 consecutive full rebuilds for a
+        # single user gesture. The "always" branch at line 811 already uses
+        # this single-call pattern — this aligns the "ask" branch with it.
+        to_prune: list[str] = []
+        if prune_verdict.prune_plain:
+            to_prune.extend(plain_paths)
+        if prune_verdict.prune_actioned:
+            to_prune.extend(actioned_paths)
+        to_prune.extend(prunable_locked)
+        if to_prune:
+            self._apply_singleton_prune(to_prune)
 
     def _apply_singleton_prune(self, paths: list[str]) -> None:
         """Run the batched prune — DB-first, then vm, then refresh.

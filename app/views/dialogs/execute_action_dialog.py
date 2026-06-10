@@ -81,6 +81,41 @@ _LOCK_CONFIRM_DEFERRED = "deferred"
 _TYPE_FILTER_ALL: str | None = None  # sentinel — show every decision
 
 
+# Decode Windows Shell COPYENGINE_E_* HRESULTs raised by send2trash into
+# plain-language reasons. send2trash wraps the COM error as
+# ``OSError(None, "OLE error 0x80270027", path, winerror=-2144927705)`` —
+# the raw HRESULT string is opaque to users (the documented bug was a
+# misread of 0x80270027 as "permission denied or path too long" when the
+# actual cause is a file-handle sharing violation). Constants from
+# ``win32comext.shell.shellcon``; this maps the codes a user is most
+# likely to hit on a Move-to-Recycle-Bin failure.
+_WINERROR_REASON_TABLE: dict[int, str] = {
+    # Signed-int form of each HRESULT (Python's ``OSError.winerror``).
+    -2144927705: "file is in use by another process",   # 0x80270027 SHARING_VIOLATION_SRC
+    -2144927704: "destination is in use by another process",  # 0x80270028 SHARING_VIOLATION_DEST
+    -2144927711: "access denied (source)",              # 0x80270021 ACCESS_DENIED_SRC
+    -2144927710: "access denied (destination)",         # 0x80270022 ACCESS_DENIED_DEST
+    -2144927688: "path too long for Recycle Bin",       # 0x80270038 RECYCLE_PATH_TOO_LONG
+    -2144927683: "file not found",                      # 0x8027003D (best-known approximation)
+    -2144927684: "destination disk is full",            # 0x8027003C
+}
+
+
+def _decode_winerror(exc: BaseException) -> str:
+    """Return a plain-language reason for a delete-failure ``exc``.
+
+    Looks up ``OSError.winerror`` (the signed HRESULT) in
+    ``_WINERROR_REASON_TABLE``; if unmapped, falls back to ``str(exc)``
+    so the user still sees the raw error rather than nothing.
+    """
+    winerror = getattr(exc, "winerror", None)
+    if isinstance(winerror, int):
+        decoded = _WINERROR_REASON_TABLE.get(winerror)
+        if decoded:
+            return decoded
+    return str(exc)
+
+
 class ExecuteActionDialog(QDialog):
     """Shows groups with decisions for final review; executes file decisions on confirm."""
 
@@ -1482,6 +1517,13 @@ class ExecuteActionDialog(QDialog):
         # kept-open partial-execute dialog.
         deleted_before = len(self.deleted_paths)
         failed_before = len(self._failed_paths)
+        # Release any open media handles BEFORE deleting. Without this,
+        # send2trash on the previewed file hits COPYENGINE_E_SHARING_VIOLATION_SRC
+        # (0x80270027) because the VideoPlayerWidget still holds the OS file
+        # handle for video formats (e.g. .MP4). release_file_handles() is
+        # defensive — it's a no-op when no media is loaded.
+        if self._preview is not None:
+            self._preview.release_file_handles()
         for group in self._groups:
             for rec in getattr(group, "items", []):
                 if not in_scope(rec):
@@ -1612,7 +1654,7 @@ class ExecuteActionDialog(QDialog):
             logger.info("Deleted file: {}", path)
         except Exception as exc:
             logger.warning("Failed to delete {}: {}", path, exc)
-            self._failed_paths.append((path, str(exc)))
+            self._failed_paths.append((path, _decode_winerror(exc)))
             return
         # D7: write outcome='deleted' immediately after the trash succeeds.
         # Fail-loud: on DB failure the row stays outcome='' (reappears on
