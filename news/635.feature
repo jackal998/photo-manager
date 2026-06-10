@@ -1,0 +1,1 @@
+Bare 'p' on the main tree now toggles play/pause on the single-view video player. PR #624 killed video autoplay; this is the no-mouse path to control playback while reviewing on the keyboard. Grid mode is a silent no-op since there is no unambiguous "focused" player (#635).
