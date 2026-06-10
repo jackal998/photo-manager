@@ -96,6 +96,15 @@ LOCK_SENTINEL: str = "__lock__"
 UNLOCK_SENTINEL: str = "__unlock__"
 
 
+# Keyboard accelerators for the two primary decision values, used to hint
+# the context-menu Set Action submenu items so the user sees "Delete  D" /
+# "Keep  K". Stored-value → accelerator-letter mapping (#615).
+DECISION_ACCELERATORS: dict[str, str] = {
+    "delete": "D",
+    "": "K",
+}
+
+
 def settable_decisions(
     include_remove: bool = False,
     include_lock: bool = False,

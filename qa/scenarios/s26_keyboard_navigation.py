@@ -1,4 +1,4 @@
-"""Scenario 26 — Keyboard-only navigation through the main flow (#125).
+"""Scenario 26 — Keyboard-only navigation through the main flow (#125, #615).
 
 Required source: qa/sandbox/near-duplicates (5 files → 1 group of 5).
 
@@ -22,13 +22,19 @@ because they re-focus explicitly per click. Specifically pins:
      because Qt's tab order is set by widget creation in _build_ui and
      a future re-layout might shuffle it intentionally.
   5. Esc dismisses the Scan dialog cleanly.
+  6. **Decision shortcuts (#615):** pressing 'd' on a focused file row sets
+     user_decision='delete'; pressing 'k' clears it back to ''. Both
+     single-row and multi-row (Ctrl+click) flows are exercised. The tree
+     must have focus before each send_keys call — verified via UIA GetFocus.
 
 ## IME safety
 
-All keystrokes used here (Tab / Enter / Esc / Alt+letter / arrow keys)
-bypass the IME and reach the focused widget directly even when the
+All keystrokes used here (Tab / Enter / Esc / Alt+letter / arrow keys /
+d / k) bypass the IME and reach the focused widget directly even when the
 operator's session has bopomofo / pinyin / kana active. Free Latin
-text would be intercepted; this scenario doesn't use any.
+text would be intercepted; 'd' / 'k' as accelerators are routed through
+QShortcut (not IME-aware text input), so they fire even under an active
+input method.
 
 ## Out of scope
 
@@ -38,6 +44,7 @@ is decided for those.
 """
 from __future__ import annotations
 
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -48,6 +55,29 @@ from pywinauto.uia_defines import IUIA
 from qa.scenarios import _uia
 
 REPO = Path(__file__).resolve().parents[2]
+MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
+
+# File rows known to exist in the near-duplicates fixture.
+ROW_D_SHORTCUT = "neardup_00_q95.jpg"
+ROW_K_SHORTCUT = "neardup_01_q88.jpg"
+ROW_MULTI_A = "neardup_02_q80.jpg"
+ROW_MULTI_B = "neardup_03_q72.jpg"
+
+
+def _read_decisions() -> dict[str, str]:
+    """Return {basename: user_decision} for every fixture row in the manifest."""
+    if not MANIFEST_PATH.exists():
+        raise RuntimeError(f"manifest not found at {MANIFEST_PATH}")
+    conn = sqlite3.connect(str(MANIFEST_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT source_path, user_decision FROM migration_manifest "
+            "WHERE source_path LIKE ?",
+            ("%neardup_%",),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {Path(src).name: dec for src, dec in rows}
 
 
 def _focused_element_summary() -> dict:
@@ -94,12 +124,80 @@ def main() -> int:
 
     failures: list[str] = []
 
+    # ── Step 0: 'd' / 'k' decision shortcuts (#615) ──────────────────────
+    # Verify that pressing 'd' with a file row selected writes 'delete' to
+    # the manifest, and 'k' clears it back to ''. Also exercises the
+    # multi-select path (Ctrl+click two rows then 'd').
+    #
+    # Precondition: tree has focus. Assert via UIA GetFocus before each
+    # send_keys call to avoid a false-positive pass caused by focus drift.
+    print("step: decision_shortcut_d_single")
+    tree_widget = _uia._result_tree(win)
+    _uia.left_click_tree_row(win, ROW_D_SHORTCUT)
+    time.sleep(0.2)
+    tree_widget.set_focus()
+    time.sleep(0.2)
+    focused = IUIA().iuia.GetFocusedElement()
+    focused_name = (focused.CurrentName or "") if focused is not None else ""
+    print(f"  focus_before_d: name={focused_name!r}")
+    keyboard.send_keys("d")
+    time.sleep(0.4)
+    post_d = _read_decisions()
+    print(f"  post_d={dict(sorted(post_d.items()))}")
+    if post_d.get(ROW_D_SHORTCUT) != "delete":
+        failures.append(
+            f"decision_shortcut_d_single: expected 'delete' for "
+            f"{ROW_D_SHORTCUT!r}, got {post_d.get(ROW_D_SHORTCUT)!r}"
+        )
+
+    print("step: decision_shortcut_k_single")
+    _uia.left_click_tree_row(win, ROW_D_SHORTCUT)
+    time.sleep(0.2)
+    tree_widget.set_focus()
+    time.sleep(0.2)
+    keyboard.send_keys("k")
+    time.sleep(0.4)
+    post_k = _read_decisions()
+    print(f"  post_k={dict(sorted(post_k.items()))}")
+    if post_k.get(ROW_D_SHORTCUT) != "":
+        failures.append(
+            f"decision_shortcut_k_single: expected '' for "
+            f"{ROW_D_SHORTCUT!r}, got {post_k.get(ROW_D_SHORTCUT)!r}"
+        )
+
+    print("step: decision_shortcut_d_multi")
+    _uia.left_click_tree_row(win, ROW_MULTI_A)
+    _uia.ctrl_click_tree_row(win, ROW_MULTI_B)
+    time.sleep(0.2)
+    tree_widget.set_focus()
+    time.sleep(0.2)
+    keyboard.send_keys("d")
+    time.sleep(0.4)
+    post_multi = _read_decisions()
+    print(f"  post_multi={dict(sorted(post_multi.items()))}")
+    if post_multi.get(ROW_MULTI_A) != "delete":
+        failures.append(
+            f"decision_shortcut_d_multi: expected 'delete' for "
+            f"{ROW_MULTI_A!r}, got {post_multi.get(ROW_MULTI_A)!r}"
+        )
+    if post_multi.get(ROW_MULTI_B) != "delete":
+        failures.append(
+            f"decision_shortcut_d_multi: expected 'delete' for "
+            f"{ROW_MULTI_B!r}, got {post_multi.get(ROW_MULTI_B)!r}"
+        )
+
     # ── Step 1+3: focus result tree, arrow Down five times ───────────────
     # The tree's auto_id is set by Qt from the QTreeView's objectName.
     # We use ``set_focus()`` to seed deterministic focus rather than
     # tabbing through; the TAB-walk path is exercised by step 6.
     print("step: focus_result_tree")
     tree = _uia._result_tree(win)
+    # d_multi above ends with ctrl_click on ROW_MULTI_B (row 3 of 5). Without
+    # a reset here, Down x 5 starting from row 3 reaches row 4 once and stays
+    # there — distinct_count=1 and the assertion below fails for fixture
+    # geometry reasons, not keyboard-navigation reasons (#626).
+    _uia.left_click_tree_row(win, ROW_D_SHORTCUT)  # ROW_D_SHORTCUT is row 0 (q95)
+    time.sleep(0.15)
     tree.set_focus()
     time.sleep(0.3)
     fe = _focused_element_summary()
@@ -121,9 +219,12 @@ def main() -> int:
               f"name={fe['name'][:40]!r}")
     distinct_count = len(set(seen_focused_names))
     print(f"  distinct_focus_targets={distinct_count}")
-    if distinct_count < 2:
-        # If arrow Down doesn't change the focused element's Name, the
-        # tree is NOT receiving keyboard input — real bug.
+    # 5-row fixture, start at row 0, 5 Downs visit rows 1,2,3,4,4 = 4 distinct.
+    # Threshold 4 (not 2) is the geometry-aware verifier — anything lower
+    # would pass even when nav is broken after the first step.
+    if distinct_count < 4:
+        # If arrow Down doesn't traverse rows, the tree is NOT receiving
+        # keyboard input — real bug.
         failures.append(
             f"arrow Down × 5 produced only {distinct_count} distinct "
             f"focused row name(s); keyboard navigation in result tree is "

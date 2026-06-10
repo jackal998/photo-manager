@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 from loguru import logger
 
+from app.views.components.decision_tree_view import DecisionTreeView
 from app.views.components.empty_state import build_empty_state_widget
 from app.views.components.menu_controller import MenuController
 from app.views.components.status_messages import plural_form, pluralize
@@ -218,8 +219,12 @@ class MainWindow(QMainWindow):
 
     def _setup_components(self) -> None:
         """Setup all extracted components and controllers."""
-        # Create tree view first
-        self.tree = QTreeView()
+        # Create tree view first. DecisionTreeView is a QTreeView subclass that
+        # catches bare 'd' / 'k' presses in keyPressEvent and emits
+        # ``decisionRequested(str)`` — see app/views/components/decision_tree_view.py.
+        # (QShortcut on the tree silently fails to match K under this app's
+        # runtime state; root cause is still open as a #626 follow-up.)
+        self.tree = DecisionTreeView()
 
         # Initialize controllers
         self.tree_controller = TreeController(self.tree)
@@ -246,6 +251,14 @@ class MainWindow(QMainWindow):
             checked_paths_provider=None,
             highlighted_items_provider=self.tree_controller,
             task_runner=self._runner,
+        )
+
+        # Wire the tree's d/k key emit to the existing set-decision path (#615).
+        # set_decision_to_highlighted handles no-manifest / no-selection / locked
+        # rows uniformly, so the keyboard path and the right-click menu path
+        # share one entry point — no new ActionHandlersImpl proxy needed.
+        self.tree.decisionRequested.connect(
+            self.file_operations.set_decision_to_highlighted
         )
 
         # Tree data provider for dialog handler
