@@ -2601,10 +2601,15 @@ class TestSingletonPruneOffer:
 
     def test_actioned_singleton_remove_opt_in_via_verdict(self):
         """When the user explicitly opts into removing actioned
-        singletons (``prune_actioned=True`` in the verdict), the
-        actioned paths are applied via their own ``_apply_singleton_prune``
-        call — separate from the plain bucket so the caller can audit
-        per-bucket counts."""
+        singletons (``prune_actioned=True`` in the verdict), BOTH
+        plain and actioned paths are merged into a SINGLE
+        ``_apply_singleton_prune`` call — matches the "always"
+        branch's batched pattern (line 811).
+
+        Pre-fix this fired up to 3 separate calls, each triggering a
+        full ``refresh_tree`` model rebuild — wasted O(N) work for a
+        single user gesture. The merge cuts the cascade.
+        """
         handler, vm, settings, ui = self._build(
             [1, 1], pref="ask", actioned_groups={2}
         )
@@ -2619,12 +2624,9 @@ class TestSingletonPruneOffer:
             ),
         ):
             handler._maybe_offer_singleton_prune()
-        # Two separate _apply_singleton_prune calls — one per bucket —
-        # which translate into two vm.remove_from_list invocations.
-        assert vm.remove_from_list.call_count == 2
-        all_paths = sorted(
-            p for call in vm.remove_from_list.call_args_list for p in call[0][0]
-        )
+        # One merged _apply_singleton_prune call carrying BOTH buckets.
+        vm.remove_from_list.assert_called_once()
+        all_paths = sorted(vm.remove_from_list.call_args[0][0])
         assert all_paths == ["/g1_i0.jpg", "/g2_i0.jpg"]
 
     def test_actioned_singleton_opt_out_keeps_actioned(self):
