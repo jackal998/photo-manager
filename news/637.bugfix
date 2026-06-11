@@ -1,0 +1,1 @@
+Manifest reloads now release in-memory image cache RAM and stop accumulating `ManifestLoadWorker` Qt children, and `PhotoRecord` / `PhotoGroup` use `__slots__` to drop ~200 bytes per instance — three O(N) memory wins across the manifest lifecycle (#637, refs #616).
