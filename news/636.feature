@@ -1,0 +1,1 @@
+Set Action regex no longer pays for a discarded incremental cell update before the unavoidable full tree rebuild — N wasted `setData` calls per Apply on a large manifest are now skipped (#636, closes #629).
