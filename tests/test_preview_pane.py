@@ -516,6 +516,58 @@ def test_clear_resets_all_state_attrs(qapp):
 # ── release_file_handles (cleanup contract) ──────────────────────────────
 
 
+def test_toggle_play_pause_calls_pause_when_playing():
+    """If the single-view video is playing, ``toggle_play_pause`` must
+    call ``pause()`` on the player — that's the P shortcut's contract
+    (PR #624 follow-up).
+    """
+    player = MagicMock()
+    player.is_playing.return_value = True
+    fake_self = SimpleNamespace(_single_video_player=player)
+
+    PreviewPane.toggle_play_pause(fake_self)
+
+    player.pause.assert_called_once_with()
+    player.play.assert_not_called()
+
+
+def test_toggle_play_pause_calls_play_when_paused():
+    """If the single-view video is paused, ``toggle_play_pause`` must
+    call ``play()`` — the other half of the toggle contract.
+    """
+    player = MagicMock()
+    player.is_playing.return_value = False
+    fake_self = SimpleNamespace(_single_video_player=player)
+
+    PreviewPane.toggle_play_pause(fake_self)
+
+    player.play.assert_called_once_with()
+    player.pause.assert_not_called()
+
+
+def test_toggle_play_pause_with_no_single_player_is_noop():
+    """When no video is loaded (grid mode or empty preview), the
+    shortcut must silently no-op — the P key shouldn't crash or beep.
+    """
+    fake_self = SimpleNamespace(_single_video_player=None)
+
+    # Should not raise.
+    PreviewPane.toggle_play_pause(fake_self)
+
+
+def test_toggle_play_pause_swallows_player_exceptions():
+    """A shortcut slot must never raise — if the underlying player
+    crashes (e.g. C++ object already deleted), the toggle is a no-op
+    from the user's perspective and they can try again.
+    """
+    player = MagicMock()
+    player.is_playing.side_effect = RuntimeError("dead C++ object")
+    fake_self = SimpleNamespace(_single_video_player=player)
+
+    # Must not raise.
+    PreviewPane.toggle_play_pause(fake_self)
+
+
 def test_release_file_handles_clears_single_video_player():
     """If a single video player is attached, ``release_file_handles``
     must call cleanup, remove from layout, deleteLater, and reset

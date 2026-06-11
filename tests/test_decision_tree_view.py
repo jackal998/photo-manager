@@ -77,18 +77,42 @@ class TestDecisionTreeViewKeyDispatch:
         assert seen == []
 
     def test_other_letters_fall_through(self, tree):
-        """A non-D/K letter must not emit, and must reach super().keyPressEvent
-        (so the default QTreeView type-ahead search still works for other
-        letters).
+        """A non-D/K/P letter must not emit, and must reach
+        super().keyPressEvent (so the default QTreeView type-ahead
+        search still works for the rest of the alphabet).
 
-        Catches: an override that accidentally consumes every printable key
-        and breaks QAbstractItemView's keyboardSearch.
+        Catches: an override that accidentally consumes every
+        printable key and breaks QAbstractItemView's keyboardSearch.
         """
         seen: list[str] = []
         tree.decisionRequested.connect(seen.append)
-        # Send a letter we know we don't handle. We're not asserting on
-        # what keyboardSearch does (it might match no row), only that our
-        # override didn't emit decisionRequested.
+        # Send letters we know we don't handle.
         QTest.keyClick(tree, Qt.Key_J)
         QTest.keyClick(tree, Qt.Key_X)
         assert seen == []
+
+    def test_p_emits_play_pause_request(self, tree):
+        """Bare 'p' must emit playPauseRequested with no payload.
+
+        Catches: a wiring regression where P is added to the override
+        but the signal definition is missed, or the emit goes to the
+        wrong signal.
+        """
+        fired: list[bool] = []
+        tree.playPauseRequested.connect(lambda: fired.append(True))
+        QTest.keyClick(tree, Qt.Key_P)
+        assert fired == [True]
+
+    def test_p_with_modifier_does_not_fire(self, tree):
+        """Ctrl+P / Shift+P / Alt+P must NOT fire playPauseRequested.
+
+        Catches: a bare-key check that forgets to compare modifiers
+        and accidentally consumes Ctrl+P (some users may bind it to
+        Print) or other modifier combos.
+        """
+        fired: list[bool] = []
+        tree.playPauseRequested.connect(lambda: fired.append(True))
+        QTest.keyClick(tree, Qt.Key_P, Qt.ControlModifier)
+        QTest.keyClick(tree, Qt.Key_P, Qt.ShiftModifier)
+        QTest.keyClick(tree, Qt.Key_P, Qt.AltModifier)
+        assert fired == []

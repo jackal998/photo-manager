@@ -25,21 +25,32 @@ from PySide6.QtWidgets import QTreeView
 
 
 class DecisionTreeView(QTreeView):
-    """Tree view that emits ``decisionRequested`` on bare 'd' / 'k' presses.
+    """Tree view that emits ``decisionRequested`` on bare 'd' / 'k'
+    presses and ``playPauseRequested`` on bare 'p' presses.
 
-    Signal contract: ``decisionRequested(str)`` carries the decision value
-    to apply — ``"delete"`` for D, ``""`` (canonical no-decision / keep per
-    #584) for K. The receiver is responsible for resolving against the
-    current selection, lock state, and SQLite write — see
-    :class:`app.views.handlers.file_operations.FileOperationsHandler.set_decision_to_highlighted`.
+    Signal contracts:
 
-    Modifier-bearing presses (Ctrl+D, Shift+K, Alt+anything) fall through
-    to ``super().keyPressEvent`` so they don't accidentally fire the
-    decision path; this also leaves Ctrl+Shift+arrow selection-extension
-    and any future Ctrl+letter shortcuts unaffected.
+    - ``decisionRequested(str)`` carries the decision value to apply —
+      ``"delete"`` for D, ``""`` (canonical no-decision / keep per
+      #584) for K. The receiver is responsible for resolving against
+      the current selection, lock state, and SQLite write — see
+      :class:`app.views.handlers.file_operations.FileOperationsHandler.set_decision_to_highlighted`.
+    - ``playPauseRequested()`` fires on P. PR #624 killed video
+      autoplay; this shortcut is how the user toggles playback from
+      the focused tree row without reaching for the mouse. The
+      receiver (PreviewPane.toggle_play_pause) decides what's
+      currently focused — no payload needed since the active video
+      player is the PreviewPane's responsibility, not the tree's.
+
+    Modifier-bearing presses (Ctrl+D, Shift+K, Alt+P, ...) fall
+    through to ``super().keyPressEvent`` so they don't accidentally
+    fire the shortcut path; this also leaves Ctrl+Shift+arrow
+    selection-extension and any future Ctrl+letter shortcuts
+    unaffected.
     """
 
     decisionRequested = Signal(str)
+    playPauseRequested = Signal()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         if event.modifiers() == Qt.NoModifier:
@@ -49,6 +60,10 @@ class DecisionTreeView(QTreeView):
                 return
             if event.key() == Qt.Key_K:
                 self.decisionRequested.emit("")
+                event.accept()
+                return
+            if event.key() == Qt.Key_P:
+                self.playPauseRequested.emit()
                 event.accept()
                 return
         super().keyPressEvent(event)
