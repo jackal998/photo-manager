@@ -199,6 +199,16 @@ class UIUpdateCallback(Protocol):
         """
         ...
 
+    def clear_image_cache(self) -> None:
+        """Drop the in-memory image cache on manifest unload (#616).
+
+        Called from ``_on_manifest_loaded`` so RAM from the previous
+        manifest's thumbnails/previews is released before the next
+        manifest's images begin to populate. The disk cache is
+        preserved — it's content-hash-keyed and valid across manifests.
+        """
+        ...
+
 
 class StatusReporter(Protocol):
     """Protocol for status reporting callback."""
@@ -389,6 +399,11 @@ class FileOperationsHandler:
         # for the time clear takes to run, which is still much faster
         # than refresh_tree.
         self.ui_updater.clear_preview()
+        # #616: release in-memory image cache RAM from the previous
+        # manifest. Without this the LRU caches (thumb + preview)
+        # accumulate across reloads. Disk cache is preserved — it's
+        # content-hash-keyed and valid across manifests.
+        self.ui_updater.clear_image_cache()
 
     def _on_manifest_failed(self, error: str) -> None:
         logger.error("Open manifest failed: {}", error)

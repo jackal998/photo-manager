@@ -646,6 +646,45 @@ def test_load_manifest_from_path_loads_refreshes_and_sets_status(monkeypatch):
     fake_self.set_status_baseline.assert_called_once()
 
 
+def test_load_manifest_from_path_clears_image_cache_when_img_wired(monkeypatch):
+    """#616 — the sync load path (post-scan + relocalize) must release
+    the in-memory image cache before swapping vm.groups. The async
+    Open-Manifest path goes through ``_on_manifest_loaded`` which has
+    its own clear; this is the matching cleanup for the sync paths.
+    """
+    import app.views.main_window as mw_mod
+
+    fake_vm = MagicMock()
+    fake_vm.groups = []
+    fake_vm.group_count = 0
+    fake_file_ops = MagicMock()
+    fake_menu = MagicMock()
+    fake_img = MagicMock()
+
+    fake_self = SimpleNamespace(
+        _vm=fake_vm,
+        _img=fake_img,
+        file_operations=fake_file_ops,
+        show_groups_summary=lambda groups: None,
+        refresh_tree=MagicMock(),
+        menu_controller=fake_menu,
+        set_status_baseline=MagicMock(),
+    )
+
+    monkeypatch.setattr(
+        "app.views.main_window_helpers.count_isolated_rows",
+        lambda path, grouped: 0,
+    )
+    monkeypatch.setattr(
+        "infrastructure.manifest_repository.ManifestRepository",
+        lambda: MagicMock(),
+    )
+
+    mw_mod.MainWindow._load_manifest_from_path(fake_self, "/m.sqlite")
+
+    fake_img.clear_cache.assert_called_once_with()
+
+
 # ── _on_header_clicked: sort tracking (#121 territory) ───────────────────
 
 

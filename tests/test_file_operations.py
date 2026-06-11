@@ -1156,6 +1156,47 @@ class TestManifestLoadCallbacks:
         from app.views.handlers.file_operations import UIUpdateCallback
         assert "clear_preview" in dir(UIUpdateCallback)
 
+    def test_ui_update_callback_protocol_has_clear_image_cache(self):
+        """#616 — pin the Protocol entry. The static probe in
+        test_ui_probes.py enforces UIUpdaterImpl mirrors the Protocol,
+        but the Protocol declaration itself is the source of truth and
+        deserves its own drift guard."""
+        from app.views.handlers.file_operations import UIUpdateCallback
+        assert "clear_image_cache" in dir(UIUpdateCallback)
+
+    def test_on_manifest_loaded_calls_clear_image_cache(self, tmp_path):
+        """#616 — _on_manifest_loaded must drop the previous manifest's
+        in-memory image cache so RAM is released before the new
+        manifest's images start populating. Ordering: AFTER
+        set_baseline (qa scenarios poll the baseline), AFTER
+        clear_preview (which closes any pending decode that would
+        re-populate the cache moments later)."""
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[], group_count=1)
+        ui = MagicMock()
+        status = MagicMock()
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=ui, status_reporter=status,
+        )
+
+        groups = [PhotoGroup(group_number=1, items=[_rec("/a.jpg")])]
+        handler._on_manifest_loaded(groups, str(tmp_path / "m.sqlite"))
+
+        ui.clear_image_cache.assert_called_once_with()
+        # Same ordering invariant as clear_preview: cache eviction comes
+        # AFTER refresh_tree. A future refactor that moves it earlier
+        # would risk evicting entries the freshly-rebuilt tree's
+        # eager-prefetch is about to fetch.
+        method_call_order = [c[0] for c in ui.method_calls]
+        assert method_call_order.index("clear_image_cache") > method_call_order.index(
+            "refresh_tree"
+        )
+
     def test_on_manifest_failed_logs_and_disables_actions(self):
         """No prior manifest loaded → failure disables actions (first-load case)."""
         from app.views.handlers.file_operations import FileOperationsHandler
