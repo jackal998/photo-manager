@@ -288,15 +288,89 @@ class TestSetDecision:
         """set_decision_by_regex must still call ui_updater.refresh_tree — it
         modifies group-level SORT_ROLE aggregates that require a full rebuild.
         Regression guard: the incremental path must NOT be taken here (#613).
+        And the inner incremental pass must be SKIPPED (not just discarded) so
+        N wasted setData calls don't precede the rebuild (#629).
         """
         rec = _rec("/a.jpg", group=1)
         vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
         db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
         handler, ui_updater, _ = _make_handler(vm, str(db))
+        # Wire a real-shape tree_controller mock so we can assert the
+        # inner incremental pass is actually skipped (#629), not silently
+        # absent because parent.tree_controller happens to be unwired.
+        tree_controller = MagicMock()
+        handler.parent.tree_controller = tree_controller
 
         handler.set_decision_by_regex("File Name", r"a\.jpg", "delete")
 
         ui_updater.refresh_tree.assert_called_once()
+        tree_controller.update_decision_cells.assert_not_called()
+
+    def test_set_decision_incremental_false_skips_cell_update(self, tmp_path):
+        """set_decision(incremental=False) must mutate state + write SQLite but
+        SKIP the tree_controller.update_decision_cells pass (#629). The kwarg
+        is the lever set_decision_by_regex pulls to avoid the wasted setData
+        round-trip before its unavoidable refresh_tree rebuild.
+        """
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+        tree_controller = MagicMock()
+        handler.parent.tree_controller = tree_controller
+
+        handler.set_decision(
+            [{"type": "file", "path": "/a.jpg"}], "delete", incremental=False
+        )
+
+        # State + persistence still happen.
+        assert rec.user_decision == "delete"
+        assert _read_decision(db, "/a.jpg") == "delete"
+        # Incremental pass skipped; full rebuild not triggered either (that's
+        # the caller's job in the regex path).
+        tree_controller.update_decision_cells.assert_not_called()
+        ui_updater.refresh_tree.assert_not_called()
+
+    def test_set_locked_state_incremental_false_skips_cell_update(self, tmp_path):
+        """set_locked_state(incremental=False) must mutate state + write SQLite
+        but SKIP the tree_controller.update_lock_cells pass (#629). Mirror of
+        the user_decision regex path for LOCK_SENTINEL / UNLOCK_SENTINEL regex
+        applies.
+        """
+        rec = _rec("/a.jpg")
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+        tree_controller = MagicMock()
+        handler.parent.tree_controller = tree_controller
+
+        handler.set_locked_state(
+            [{"type": "file", "path": "/a.jpg"}], locked=True, incremental=False
+        )
+
+        assert rec.is_locked is True
+        tree_controller.update_lock_cells.assert_not_called()
+        ui_updater.refresh_tree.assert_not_called()
+
+    def test_lock_regex_skips_inner_incremental_pass(self, tmp_path):
+        """Regex with LOCK_SENTINEL routes through set_decision_with_lock_check
+        → set_locked_state — and must also skip the inner incremental pass
+        before the regex-path refresh_tree rebuild (#629).
+        """
+        from app.views.constants import LOCK_SENTINEL
+
+        rec = _rec("/a.jpg", group=1)
+        vm = SimpleNamespace(groups=[PhotoGroup(group_number=1, items=[rec])])
+        db = _make_db(tmp_path, [{"source_path": "/a.jpg"}])
+        handler, ui_updater, _ = _make_handler(vm, str(db))
+        tree_controller = MagicMock()
+        handler.parent.tree_controller = tree_controller
+
+        handler.set_decision_by_regex("File Name", r"a\.jpg", LOCK_SENTINEL)
+
+        assert rec.is_locked is True
+        ui_updater.refresh_tree.assert_called_once()
+        tree_controller.update_lock_cells.assert_not_called()
 
 
 # ── remove_from_list (DB sync) ─────────────────────────────────────────────
