@@ -2488,7 +2488,9 @@ class TestSingletonPruneOffer:
     def test_always_preference_prunes_silently(self):
         """``pref="always"`` runs ONE batched prune and does NOT open
         the dialog. Both singleton paths land in the single
-        ``vm.remove_from_list`` call."""
+        ``vm.remove_from_list`` call, and the tree is refreshed
+        incrementally via ``tree_controller.remove_rows`` (not via the
+        full-rebuild ``ui_updater.refresh_tree``)."""
         handler, vm, settings, ui = self._build([1, 1, 3], pref="always")
         with patch(
             "app.views.dialogs.singleton_prune_confirm_dialog.SingletonPruneConfirmDialog.ask"
@@ -2499,7 +2501,15 @@ class TestSingletonPruneOffer:
         passed = vm.remove_from_list.call_args[0][0]
         # The two singletons (groups 1 and 2) get pruned together.
         assert sorted(passed) == ["/g1_i0.jpg", "/g2_i0.jpg"]
-        ui.refresh_tree.assert_called_once()
+        # Incremental tree update (#630), NOT a full rebuild — confirms
+        # the _apply_singleton_prune→_refresh_after_remove path. The
+        # mock parent auto-creates ``tree_controller.remove_rows`` so the
+        # dispatch routes through it instead of falling back to
+        # ``ui_updater.refresh_tree``.
+        ui.refresh_tree.assert_not_called()
+        handler.parent.tree_controller.remove_rows.assert_called_once()
+        called_with = handler.parent.tree_controller.remove_rows.call_args[0][0]
+        assert sorted(called_with) == ["/g1_i0.jpg", "/g2_i0.jpg"]
 
     def test_ask_remove_with_remember_persists_always(self):
         """User picks Remove + checks "don't ask again" → settings

@@ -558,6 +558,111 @@ class TestUpdateLockCells:
         controller.update_lock_cells([(0, 99, True)])  # must not raise
 
 
+class TestRemoveRows:
+    """Incremental row removal (#630) — the structural mirror of
+    update_decision_cells. ``remove_rows`` must drop matched file
+    children from their group, drop the whole group when it becomes
+    empty, leave sibling rows untouched (no model rebuild), and update
+    the group-header COL_GROUP_COUNT text so the visible "(N files)"
+    doesn't lie about membership.
+
+    Catches the exact regressions filed in #630: callers swapping
+    ``ui_updater.refresh_tree`` for the incremental path silently
+    falling back to a no-op or rebuilding the whole model — both would
+    invalidate the QTreeView's selection model + expanded-group state
+    that #617 worked to preserve.
+    """
+
+    def test_removes_single_child_keeping_group(self, qapp):
+        """Removing one of two children: group stays, COL_GROUP_COUNT
+        drops from 2 to 1, sibling row survives unchanged.
+        """
+        from app.views.constants import COL_GROUP, COL_GROUP_COUNT, COL_NAME, PATH_ROLE
+
+        controller, _vm = _build(qapp)
+        model = controller.model
+        # Sanity: group 0 starts with 2 children, group count text is "2".
+        group0 = model.item(0, COL_GROUP)
+        assert group0.rowCount() == 2
+        assert model.item(0, COL_GROUP_COUNT).text() == "2"
+
+        controller.remove_rows({"/photos/a.jpg"})
+
+        assert model.rowCount() == 2  # both groups still present
+        group0 = model.item(0, COL_GROUP)
+        assert group0.rowCount() == 1  # one child dropped
+        # Surviving child is b.jpg (not a.jpg).
+        surviving = group0.child(0, COL_NAME).data(PATH_ROLE)
+        assert surviving == "/photos/b.jpg"
+        # COL_GROUP_COUNT text reflects the new count.
+        assert model.item(0, COL_GROUP_COUNT).text() == "1"
+
+    def test_removes_only_child_drops_group(self, qapp):
+        """Removing the only child of a group must also remove the
+        group header — leaving an empty group would lie about
+        duplicate-set membership and confuse downstream consumers.
+        """
+        from app.views.constants import COL_GROUP
+
+        controller, _vm = _build(qapp)
+        model = controller.model
+        assert model.rowCount() == 2  # 2 groups initially
+        # Group 1 has c.jpg as its only child.
+
+        controller.remove_rows({"/photos/c.jpg"})
+
+        assert model.rowCount() == 1  # group 1 dropped entirely
+        # Surviving group is the original group 0 (with a.jpg + b.jpg).
+        assert model.item(0, COL_GROUP).rowCount() == 2
+
+    def test_removes_paths_across_multiple_groups(self, qapp):
+        """A single call can prune rows from several groups + drop
+        any group that becomes empty.
+        """
+        from app.views.constants import COL_GROUP, COL_NAME, PATH_ROLE
+
+        controller, _vm = _build(qapp)
+        model = controller.model
+
+        # Remove a.jpg from group 0 AND c.jpg (only child of group 1).
+        controller.remove_rows({"/photos/a.jpg", "/photos/c.jpg"})
+
+        assert model.rowCount() == 1  # only group 0 survives
+        surviving_group = model.item(0, COL_GROUP)
+        assert surviving_group.rowCount() == 1
+        assert surviving_group.child(0, COL_NAME).data(PATH_ROLE) == "/photos/b.jpg"
+
+    def test_empty_set_is_noop(self, qapp):
+        """Passing an empty set must not mutate the model at all —
+        defensive guard against callers that compute an empty paths
+        list (e.g. user-confirms-zero-rows flow).
+        """
+        controller, _vm = _build(qapp)
+        before_rows = controller.model.rowCount()
+        controller.remove_rows(set())
+        assert controller.model.rowCount() == before_rows
+
+    def test_unknown_path_is_silently_ignored(self, qapp):
+        """A stale path that no longer exists in the model must not
+        crash — robust to duplicate-removal attempts (e.g. user
+        re-clicks Remove after an undo / reload race).
+        """
+        controller, _vm = _build(qapp)
+        before_rows = controller.model.rowCount()
+        controller.remove_rows({"/nowhere/missing.jpg"})  # must not raise
+        assert controller.model.rowCount() == before_rows
+
+    def test_does_not_rebuild_model(self, qapp):
+        """The incremental path must NOT swap to a new model — the
+        existing model object id must survive. Catches a refactor
+        that accidentally calls build_model again.
+        """
+        controller, _vm = _build(qapp)
+        model_id_before = id(controller.model)
+        controller.remove_rows({"/photos/a.jpg"})
+        assert id(controller.model) == model_id_before
+
+
 class TestRefreshModelTeardown:
     """Each refresh_model call must release the previous proxy + model (#618).
 
