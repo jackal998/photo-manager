@@ -324,6 +324,7 @@ action_dialog:
   simple_op_ends_with: "ends with"
   simple_op_exact: "exactly matches"
   simple_text_placeholder: "type the text to match…"
+  simple_text_empty_match_hint: "Leave blank with 'exactly matches' to select rows whose value is empty (e.g. no Action set)."
   # #396 C1 informational-placeholder note: shown above the disabled
   # Simple inputs when match_fn is None (no live-preview data source).
   # Italic + muted-color in the dialog; this text is the only signal

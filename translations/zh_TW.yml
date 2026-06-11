@@ -249,6 +249,7 @@ action_dialog:
   simple_op_ends_with: "結尾為"
   simple_op_exact: "完全等於"
   simple_text_placeholder: "輸入要比對的文字…"
+  simple_text_empty_match_hint: "留空 + 「完全等於」可選取值為空白的列（例如尚未設定動作的列）。"
   # #396 C1 占位提示:當 match_fn 為 None 時顯示於停用的簡易輸入框上方,
   # 說明此入口無法即時預覽,簡易輸入為唯讀。
   simple_disabled_no_match_fn: "即時預覽不可用 — 此入口的簡易輸入為唯讀。"
