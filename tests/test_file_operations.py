@@ -1261,6 +1261,78 @@ class TestManifestLoadCallbacks:
         # Prior manifest exists — start_manifest_load must NOT pre-emptively disable.
         parent.menu_controller.set_manifest_actions.assert_not_called()
 
+    def test_start_manifest_load_wires_deleteLater_on_finished(self, tmp_path):
+        """#616: worker.finished must be connected to worker.deleteLater so
+        the worker doesn't accumulate as a Qt child of MainWindow across
+        manifest reloads. Lambda-discard form sidesteps the QThread base-class
+        finished() vs custom finished(list) signal-name clash.
+        """
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[], _default_sort=[])
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+
+        with patch("app.views.workers.manifest_load_worker.ManifestLoadWorker") as worker_cls:
+            worker = MagicMock()
+            worker_cls.return_value = worker
+            handler._start_manifest_load(str(tmp_path / "new.sqlite"))
+
+            # Simulate the custom finished(list) signal firing — the lambda
+            # discards the arg and calls worker.deleteLater().
+            finished_connects = worker.finished.connect.call_args_list
+            assert len(finished_connects) >= 2, (
+                "expected at least 2 finished.connect() calls "
+                "(handler + deleteLater)"
+            )
+            # Fire each connected slot with a stub groups list. The
+            # deleteLater lambda must call worker.deleteLater().
+            for call in finished_connects:
+                slot = call.args[0]
+                try:
+                    slot([])
+                except Exception:
+                    pass
+            worker.deleteLater.assert_called()
+
+    def test_start_manifest_load_wires_deleteLater_on_failed(self, tmp_path):
+        """#616: worker.failed must also schedule deleteLater so a failed load
+        doesn't leave the worker as a permanent MainWindow child.
+        """
+        from app.views.handlers.file_operations import FileOperationsHandler
+        from types import SimpleNamespace
+
+        vm = SimpleNamespace(groups=[], _default_sort=[])
+        parent = MagicMock()
+        parent.menu_controller = MagicMock()
+        handler = FileOperationsHandler(
+            vm=vm, settings=MagicMock(),
+            parent_widget=parent, ui_updater=MagicMock(), status_reporter=MagicMock(),
+        )
+
+        with patch("app.views.workers.manifest_load_worker.ManifestLoadWorker") as worker_cls:
+            worker = MagicMock()
+            worker_cls.return_value = worker
+            handler._start_manifest_load(str(tmp_path / "new.sqlite"))
+
+            failed_connects = worker.failed.connect.call_args_list
+            assert len(failed_connects) >= 2, (
+                "expected at least 2 failed.connect() calls "
+                "(handler + deleteLater)"
+            )
+            for call in failed_connects:
+                slot = call.args[0]
+                try:
+                    slot("error message")
+                except Exception:
+                    pass
+            worker.deleteLater.assert_called()
+
     def test_set_manifest_actions_enabled_delegates_to_controller(self):
         """_set_manifest_actions_enabled forwards to MenuController.set_manifest_actions."""
         from app.views.handlers.file_operations import FileOperationsHandler

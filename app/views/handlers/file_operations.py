@@ -316,8 +316,18 @@ class FileOperationsHandler:
         worker.progress.connect(lambda msg: self.status_reporter.show_status(msg, 0))
         worker.finished.connect(lambda groups: self._on_manifest_loaded(groups, path))
         worker.failed.connect(self._on_manifest_failed)
+        # #616: schedule C++ destruction on either terminal signal so the
+        # worker doesn't accumulate as a Qt child of MainWindow across
+        # manifest reloads. The lambda closes over the specific worker so
+        # a subsequent load can't tear down the wrong one. Discards the
+        # signal arg because deleteLater takes none — the worker's custom
+        # ``finished(list)`` would otherwise pass the groups through.
+        worker.finished.connect(lambda _groups: worker.deleteLater())
+        worker.failed.connect(lambda _err: worker.deleteLater())
         worker.start()
-        # Keep reference so the worker is not garbage-collected
+        # Keep reference so the worker is not garbage-collected before
+        # deleteLater fires. The next ``_start_manifest_load`` reassigns
+        # this attribute, releasing the prior Python wrapper to GC.
         self._load_worker = worker
 
     def _on_manifest_loaded(self, groups: list, path: str) -> None:
