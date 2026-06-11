@@ -906,7 +906,12 @@ class FileOperationsHandler:
         self._mark_dirty()
         self._refresh_after_remove(paths)
 
-    def set_decision(self, items: list[dict], new_decision: str) -> None:
+    def set_decision(
+        self,
+        items: list[dict],
+        new_decision: str,
+        incremental: bool = True,
+    ) -> None:
         """Set user_decision for the given file items in memory and in SQLite.
 
         Note: this is the SHARED dispatcher. Single-row right-click calls
@@ -916,11 +921,12 @@ class FileOperationsHandler:
         that call into here. See photo-manager#164.
 
         Uses incremental cell update instead of a full model rebuild for
-        performance (#613). set_decision_by_regex stays on the full-rebuild
-        path because it may change the group-level SORT_ROLE aggregates
-        (min-decision across all members) — that requires re-reading all
-        members, which is cheaper via a complete rebuild than per-group
-        aggregate patching.
+        performance (#613). Pass ``incremental=False`` from callers that
+        will follow up with a full ``refresh_tree`` rebuild
+        (``set_decision_by_regex`` — the regex path mutates group-level
+        SORT_ROLE aggregates that can only be patched via complete
+        rebuild) so the inner ``update_decision_cells`` pass is skipped
+        rather than wasted (#629).
         """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
@@ -945,11 +951,12 @@ class FileOperationsHandler:
             self._mark_dirty()
         # Incremental update: push only changed cells onto the existing model.
         # Falls back gracefully when tree_controller is not wired (unit tests).
-        tree_controller = getattr(self.parent, "tree_controller", None)
-        if tree_controller is not None and changes:
-            tree_controller.update_decision_cells(changes)
-        elif not changes:
-            pass  # nothing to update
+        # Skipped when ``incremental=False`` — caller will do a full rebuild
+        # (#629).
+        if incremental:
+            tree_controller = getattr(self.parent, "tree_controller", None)
+            if tree_controller is not None and changes:
+                tree_controller.update_decision_cells(changes)
         # #425 — pass the localised label, not the raw internal value:
         # the {decision} placeholder was previously interpolated with
         # "delete" / "" / "keep" verbatim, so zh_TW status reads showed
@@ -958,7 +965,12 @@ class FileOperationsHandler:
             t("file_op.decision_set_status", decision=_decision_display_label(new_decision))
         )
 
-    def set_locked_state(self, items: list[dict], locked: bool) -> None:
+    def set_locked_state(
+        self,
+        items: list[dict],
+        locked: bool,
+        incremental: bool = True,
+    ) -> None:
         """Flip ``is_locked`` for the given file items, in memory and SQLite.
 
         Lock state is orthogonal to ``user_decision`` and lives on its own
@@ -967,7 +979,9 @@ class FileOperationsHandler:
         photo-manager#164.
 
         Uses incremental cell update instead of a full model rebuild for
-        performance (#613).
+        performance (#613). Pass ``incremental=False`` from callers that
+        will follow up with a full ``refresh_tree`` rebuild (regex path —
+        same rationale as :meth:`set_decision`, #629).
         """
         manifest_path = getattr(self, "_manifest_path", None)
         if not manifest_path:
@@ -992,9 +1006,12 @@ class FileOperationsHandler:
             self._mark_dirty()
         # Incremental update: push only changed cells onto the existing model.
         # Falls back gracefully when tree_controller is not wired (unit tests).
-        tree_controller = getattr(self.parent, "tree_controller", None)
-        if tree_controller is not None and lock_changes:
-            tree_controller.update_lock_cells(lock_changes)
+        # Skipped when ``incremental=False`` — caller will do a full rebuild
+        # (#629).
+        if incremental:
+            tree_controller = getattr(self.parent, "tree_controller", None)
+            if tree_controller is not None and lock_changes:
+                tree_controller.update_lock_cells(lock_changes)
         report_count(
             self.status_reporter,
             t("file_op.locked_verb") if locked else t("file_op.unlocked_verb"),
@@ -1084,7 +1101,10 @@ class FileOperationsHandler:
         return [p for p in item_paths_in_order if p in locked_paths]
 
     def set_decision_with_lock_check(
-        self, items: list[dict], new_decision: str
+        self,
+        items: list[dict],
+        new_decision: str,
+        incremental: bool = True,
     ) -> None:
         """Apply ``new_decision`` to ``items``, surfacing the unified
         :class:`LockedRowsConfirmDialog` when any item is locked.
@@ -1096,6 +1116,12 @@ class FileOperationsHandler:
         freeze, unlocking IS the explicit escape, neither needs an
         extra confirm. See photo-manager#175 for the prior hybrid
         behavior and #182 for the redesign rationale.
+
+        ``incremental=False`` is threaded down to the inner
+        :meth:`set_decision` / :meth:`set_locked_state` calls (and the
+        inline ``APPLY_ALL_UNLOCKED`` branch) so callers that follow up
+        with a full rebuild — ``set_decision_by_regex`` — don't pay for
+        a discarded incremental pass first (#629).
         """
         file_items = [it for it in items if it.get("type") == "file"]
         if not file_items:
@@ -1103,10 +1129,10 @@ class FileOperationsHandler:
 
         # Lock / unlock — idempotent, applied to all file_items.
         if new_decision == LOCK_SENTINEL:
-            self.set_locked_state(file_items, locked=True)
+            self.set_locked_state(file_items, locked=True, incremental=incremental)
             return
         if new_decision == UNLOCK_SENTINEL:
-            self.set_locked_state(file_items, locked=False)
+            self.set_locked_state(file_items, locked=False, incremental=incremental)
             return
 
         locked_paths = self._locked_paths_in(file_items)
@@ -1122,7 +1148,7 @@ class FileOperationsHandler:
 
         if not locked_paths:
             # Fast path — no locked rows touched, no dialog needed.
-            self.set_decision(file_items, resolved_decision)
+            self.set_decision(file_items, resolved_decision, incremental=incremental)
             return
 
         from app.views.dialogs.locked_rows_confirm_dialog import (
@@ -1171,12 +1197,15 @@ class FileOperationsHandler:
             if batch_decisions or batch_locks:
                 self._mark_dirty()
             # Single incremental tree-update pass for both COL_ACTION + COL_LOCK.
-            tree_controller = getattr(self.parent, "tree_controller", None)
-            if tree_controller is not None:
-                if decision_changes:
-                    tree_controller.update_decision_cells(decision_changes)
-                if lock_changes:
-                    tree_controller.update_lock_cells(lock_changes)
+            # Skipped when ``incremental=False`` — caller will do a full rebuild
+            # (#629).
+            if incremental:
+                tree_controller = getattr(self.parent, "tree_controller", None)
+                if tree_controller is not None:
+                    if decision_changes:
+                        tree_controller.update_decision_cells(decision_changes)
+                    if lock_changes:
+                        tree_controller.update_lock_cells(lock_changes)
             self.status_reporter.show_status(
                 t("file_op.decision_set_status", decision=_decision_display_label(resolved_decision))
             )
@@ -1186,7 +1215,7 @@ class FileOperationsHandler:
         locked_set = set(locked_paths)
         unlocked_items = [it for it in file_items if it["path"] not in locked_set]
         if unlocked_items:
-            self.set_decision(unlocked_items, resolved_decision)
+            self.set_decision(unlocked_items, resolved_decision, incremental=incremental)
         if locked_set:
             self.status_reporter.show_status(
                 t(
@@ -1285,12 +1314,16 @@ class FileOperationsHandler:
         # All destructive + lock/unlock routing now goes through the
         # shared entry point so the dialog flow is identical to
         # single-row right-click and bulk multi-select.
-        self.set_decision_with_lock_check(matching, new_decision)
+        # ``incremental=False`` skips the inner ``update_decision_cells`` /
+        # ``update_lock_cells`` pass — the rebuild below would discard it
+        # anyway (#629).
+        self.set_decision_with_lock_check(matching, new_decision, incremental=False)
         # Full rebuild here — the regex path may affect many rows across
         # many groups, and the group-level SORT_ROLE aggregates (min-decision
         # per group) can only be updated correctly via a complete rebuild.
         # The incremental path inside set_decision is intentionally bypassed
-        # for this reason.  See #613 scope boundary comment in set_decision.
+        # for this reason. See #613 scope boundary comment in set_decision
+        # and #629 for the incremental-pass-skip.
         self.ui_updater.refresh_tree(self.vm.groups)
 
     def _matched_paths_for_pattern(
