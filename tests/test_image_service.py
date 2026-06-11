@@ -112,6 +112,33 @@ class TestByteBudgetLRU:
         cache.put("x", img)
         assert cache.total_bytes >= 0
 
+    def test_clear_evicts_all_entries_and_resets_total_bytes(self, qapp_m):
+        """clear() must drop every entry AND reset _total_bytes to 0 so the
+        budget accountant doesn't drift. #616 — RAM not released across
+        manifest reloads is the user-visible symptom."""
+        cache = _ByteBudgetLRUCache(budget_bytes=100)
+        img = _make_qimage(1, 1)
+        cache.put("a", img)
+        cache.put("b", img)
+        cache.put("c", img)
+        assert cache.total_bytes > 0
+        assert cache.get("a") is not None
+
+        cache.clear()
+
+        assert cache.get("a") is None
+        assert cache.get("b") is None
+        assert cache.get("c") is None
+        assert cache.total_bytes == 0
+
+    def test_clear_is_safe_on_empty_cache(self, qapp_m):
+        """clear() on an empty cache must not raise — it's the default
+        state on first construction, and an unconditional clear() on
+        manifest unload should be a no-op there."""
+        cache = _ByteBudgetLRUCache(budget_bytes=100)
+        cache.clear()
+        assert cache.total_bytes == 0
+
     def test_thumb_vs_preview_split_independent(self, qapp_m):
         """Filling the thumb tier must not evict from the preview tier.
 
@@ -137,6 +164,27 @@ class TestByteBudgetLRU:
         assert svc._preview_cache.get("pv_key") is not None, (
             "preview cache evicted by thumb overflow — caches must be independent"
         )
+
+    def test_image_service_clear_cache_clears_both_tiers(self, qapp_m):
+        """ImageService.clear_cache() must clear both _thumb_cache AND
+        _preview_cache so RAM from the previous manifest is fully
+        released on unload (#616). Clearing only one tier would leak
+        whichever side held the larger working set."""
+        svc = ImageService.__new__(ImageService)
+        svc._thumb_cache = _ByteBudgetLRUCache(1024)
+        svc._preview_cache = _ByteBudgetLRUCache(1024)
+        img = _make_qimage(1, 1)
+        svc._thumb_cache.put("th", img)
+        svc._preview_cache.put("pv", img)
+        assert svc._thumb_cache.get("th") is not None
+        assert svc._preview_cache.get("pv") is not None
+
+        svc.clear_cache()
+
+        assert svc._thumb_cache.get("th") is None
+        assert svc._preview_cache.get("pv") is None
+        assert svc._thumb_cache.total_bytes == 0
+        assert svc._preview_cache.total_bytes == 0
 
 
 # ── DNG embedded JPEG fast path ──────────────────────────────────────────

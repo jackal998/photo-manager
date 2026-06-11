@@ -544,6 +544,17 @@ class MainWindow(QMainWindow):
         from app.views.main_window_helpers import count_isolated_rows
         from infrastructure.manifest_repository import ManifestRepository
         try:
+            # #616: release in-memory image cache RAM from the previous
+            # manifest BEFORE swapping vm.groups. The async
+            # Open-Manifest path goes through ``_on_manifest_loaded``
+            # which clears via the UIUpdateCallback proxy; this sync
+            # path (post-scan + relocalize) doesn't, so it needs an
+            # explicit clear here. Disk cache is preserved. ``getattr``
+            # so test scaffolds that mock MainWindow without ``_img``
+            # don't AttributeError into the broad-except below.
+            img = getattr(self, "_img", None)
+            if img is not None and hasattr(img, "clear_cache"):
+                img.clear_cache()
             self._vm.load_from_repo(ManifestRepository(), manifest_path)
             self.file_operations._manifest_path = manifest_path
             self.show_groups_summary(self._vm.groups)
@@ -1201,6 +1212,19 @@ class UIUpdaterImpl:
         the app. See test_probe_uiupdater_impl_proxies_every_protocol_method.
         """
         self.window.clear_preview()
+
+    def clear_image_cache(self) -> None:
+        """Drop the in-memory image cache on manifest unload (#616).
+
+        Proxies through to ``MainWindow._img.clear_cache()``. Guarded
+        against ``_img is None`` because some test scaffolds construct
+        a MainWindow without the image service wired up. The
+        ``hasattr`` check is belt-and-braces: a stub image service in
+        future tests shouldn't crash this proxy.
+        """
+        img = getattr(self.window, "_img", None)
+        if img is not None and hasattr(img, "clear_cache"):
+            img.clear_cache()
 
 
 class TreeDataProviderImpl:

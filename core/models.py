@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 
-@dataclass
+@dataclass(slots=True)
 class PhotoRecord:
     """A single photo row loaded from a manifest."""
 
@@ -46,7 +46,7 @@ class PhotoRecord:
     score: float | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class PhotoGroup:
     """A collection of photo records grouped by `group_number`."""
 

@@ -199,6 +199,16 @@ class UIUpdateCallback(Protocol):
         """
         ...
 
+    def clear_image_cache(self) -> None:
+        """Drop the in-memory image cache on manifest unload (#616).
+
+        Called from ``_on_manifest_loaded`` so RAM from the previous
+        manifest's thumbnails/previews is released before the next
+        manifest's images begin to populate. The disk cache is
+        preserved — it's content-hash-keyed and valid across manifests.
+        """
+        ...
+
 
 class StatusReporter(Protocol):
     """Protocol for status reporting callback."""
@@ -316,8 +326,18 @@ class FileOperationsHandler:
         worker.progress.connect(lambda msg: self.status_reporter.show_status(msg, 0))
         worker.finished.connect(lambda groups: self._on_manifest_loaded(groups, path))
         worker.failed.connect(self._on_manifest_failed)
+        # #616: schedule C++ destruction on either terminal signal so the
+        # worker doesn't accumulate as a Qt child of MainWindow across
+        # manifest reloads. The lambda closes over the specific worker so
+        # a subsequent load can't tear down the wrong one. Discards the
+        # signal arg because deleteLater takes none — the worker's custom
+        # ``finished(list)`` would otherwise pass the groups through.
+        worker.finished.connect(lambda _groups: worker.deleteLater())
+        worker.failed.connect(lambda _err: worker.deleteLater())
         worker.start()
-        # Keep reference so the worker is not garbage-collected
+        # Keep reference so the worker is not garbage-collected before
+        # deleteLater fires. The next ``_start_manifest_load`` reassigns
+        # this attribute, releasing the prior Python wrapper to GC.
         self._load_worker = worker
 
     def _on_manifest_loaded(self, groups: list, path: str) -> None:
@@ -379,6 +399,11 @@ class FileOperationsHandler:
         # for the time clear takes to run, which is still much faster
         # than refresh_tree.
         self.ui_updater.clear_preview()
+        # #616: release in-memory image cache RAM from the previous
+        # manifest. Without this the LRU caches (thumb + preview)
+        # accumulate across reloads. Disk cache is preserved — it's
+        # content-hash-keyed and valid across manifests.
+        self.ui_updater.clear_image_cache()
 
     def _on_manifest_failed(self, error: str) -> None:
         logger.error("Open manifest failed: {}", error)

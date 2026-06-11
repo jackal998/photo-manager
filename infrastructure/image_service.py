@@ -12,6 +12,7 @@ from ctypes import wintypes
 from dataclasses import dataclass
 import hashlib
 import os
+import threading
 from pathlib import Path
 from typing import Any
 import uuid
@@ -146,35 +147,49 @@ class _ByteBudgetLRUCache:
     """LRU cache with a byte-budget capacity instead of item-count capacity.
 
     Evicts the LRU entry whenever the total byte sum would exceed the budget.
+
+    Thread-safe. ``_ImageTask`` (``app/views/image_tasks.py``) calls
+    ``get``/``put`` from QThreadPool workers; ``clear()`` runs on the
+    main thread on manifest unload. Without the lock the OrderedDict
+    mutation in any of the three would race the others (#616).
     """
 
     def __init__(self, budget_bytes: int) -> None:
         self._budget = max(1, int(budget_bytes))
         self._data: OrderedDict[str, _MemCacheItem] = OrderedDict()
         self._total_bytes: int = 0
+        self._lock = threading.Lock()
 
     def get(self, key: str) -> QImage | None:
-        item = self._data.get(key)
-        if not item:
-            return None
-        self._data.move_to_end(key)
-        return item.image
+        with self._lock:
+            item = self._data.get(key)
+            if not item:
+                return None
+            self._data.move_to_end(key)
+            return item.image
 
     def put(self, key: str, image: QImage) -> None:
         byte_size = image.sizeInBytes() if not image.isNull() else 1
-        if key in self._data:
-            old = self._data[key]
-            self._total_bytes -= old.byte_size
-            self._data.move_to_end(key)
-            self._data[key] = _MemCacheItem(key, image, byte_size)
-            self._total_bytes += byte_size
-        else:
-            self._data[key] = _MemCacheItem(key, image, byte_size)
-            self._total_bytes += byte_size
-        # Evict LRU until within budget
-        while self._total_bytes > self._budget and len(self._data) > 1:
-            _, evicted = self._data.popitem(last=False)
-            self._total_bytes -= evicted.byte_size
+        with self._lock:
+            if key in self._data:
+                old = self._data[key]
+                self._total_bytes -= old.byte_size
+                self._data.move_to_end(key)
+                self._data[key] = _MemCacheItem(key, image, byte_size)
+                self._total_bytes += byte_size
+            else:
+                self._data[key] = _MemCacheItem(key, image, byte_size)
+                self._total_bytes += byte_size
+            # Evict LRU until within budget
+            while self._total_bytes > self._budget and len(self._data) > 1:
+                _, evicted = self._data.popitem(last=False)
+                self._total_bytes -= evicted.byte_size
+
+    def clear(self) -> None:
+        """Evict all entries and reset the byte counter (#616)."""
+        with self._lock:
+            self._data.clear()
+            self._total_bytes = 0
 
     @property
     def total_bytes(self) -> int:
@@ -255,6 +270,18 @@ class ImageService:
     def get_preview(self, path: str, max_side: int) -> Any:
         """Return preview image for `path` bounded by `max_side`."""
         return self._get_image(path, max_side)
+
+    def clear_cache(self) -> None:
+        """Drop all in-memory cached images (thumb + preview tiers).
+
+        Called when a manifest unloads so RAM from the previous library
+        is released before the next manifest's thumbnails begin to
+        populate (#616). The disk cache under the versioned thumbs
+        directory is intentionally preserved — it's keyed by content
+        hash and valid across manifests.
+        """
+        self._thumb_cache.clear()
+        self._preview_cache.clear()
 
     # Internal helpers
     def _get_image(self, path: str, requested_side: int) -> QImage:
