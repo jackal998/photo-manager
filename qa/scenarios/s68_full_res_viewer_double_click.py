@@ -205,21 +205,46 @@ def main() -> int:
     rect = label.rectangle()
     cx = (rect.left + rect.right) // 2
     cy = (rect.top + rect.bottom) // 2
-    print(f"  label_screen_center=({cx},{cy}) rect={rect}")
-    # Diagnostic dumps so a CI failure carries enough state to pick the
-    # next hypothesis without another blind iteration. Cheap and stays in
-    # for the long haul — they help local-vs-CI bisects too.
+    print(f"  label_natural_center=({cx},{cy}) rect={rect}")
+    # Clamp the click target to the intersection of the label's natural
+    # rect and the main window's client rect. UIA reports the QLabel's
+    # natural geometry (which can extend past the QScrollArea viewport
+    # when the splitter is tree-dominant — verified on the CI runner at
+    # 1024x768 even after enlarging the window). Without this clamp the
+    # click lands on whatever Z-ordered widget owns the screen point
+    # outside the window (typically: nothing), Qt sees no press, and
+    # the WM_LBUTTONDBLCLK that follows fires on dead air.
     SM_CXSCREEN, SM_CYSCREEN = 0, 1
     screen_w = _user32.GetSystemMetrics(SM_CXSCREEN)
     screen_h = _user32.GetSystemMetrics(SM_CYSCREEN)
     win_rect = win.rectangle()
     print(f"  screen_dims=({screen_w}x{screen_h}) main_window_rect={win_rect}")
+    isect_left = max(rect.left, win_rect.left)
+    isect_top = max(rect.top, win_rect.top)
+    isect_right = min(rect.right, win_rect.right)
+    isect_bottom = min(rect.bottom, win_rect.bottom)
+    isect_w = isect_right - isect_left
+    isect_h = isect_bottom - isect_top
+    if isect_w <= 0 or isect_h <= 0:
+        print(
+            f"FAIL: label visible region is empty — "
+            f"label_rect={rect} window_rect={win_rect} — the splitter or "
+            f"window size is leaving the preview pane entirely off-screen; "
+            f"enlarging the window further (or moving the splitter) is the "
+            f"only recourse"
+        )
+        return 1
+    cx = (isect_left + isect_right) // 2
+    cy = (isect_top + isect_bottom) // 2
     in_screen = 0 <= cx < screen_w and 0 <= cy < screen_h
     in_window = (
         win_rect.left <= cx < win_rect.right
         and win_rect.top <= cy < win_rect.bottom
     )
-    print(f"  click_in_screen={in_screen} click_in_main_window={in_window}")
+    print(
+        f"  clamped_click=({cx},{cy}) visible_region=({isect_w}x{isect_h}) "
+        f"click_in_screen={in_screen} click_in_main_window={in_window}"
+    )
     # Bring the main window to the foreground so the seed click is
     # delivered to it rather than dispatched to whichever window happens
     # to be active. Windows refuses ``SetForegroundWindow`` from
