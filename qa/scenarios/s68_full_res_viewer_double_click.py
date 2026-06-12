@@ -113,6 +113,42 @@ def main() -> int:
     pid = win.process_id()
     print(f"connected: pid={pid} title={win.window_text()!r}")
 
+    # Enlarge main window only if it's too small to contain the QLabel's
+    # natural rect. The CI runner provisions a 1024x768 display; the
+    # restored main-window state from previous scenarios leaves the
+    # window narrower than the QLabel's natural width (~225 px plus
+    # framing), so the label's screen-center ends up CLIPPED past the
+    # window's right edge — the seed click then lands in the void
+    # outside the client area and Qt never registers a press. Dev rigs
+    # already have a wide enough window so the resize is a no-op there
+    # (and we DON'T want to resize huge — going from ~1600 to ~3800
+    # confuses Qt's focus and the next menu_path hangs).
+    SM_CXSCREEN, SM_CYSCREEN = 0, 1
+    sw = _user32.GetSystemMetrics(SM_CXSCREEN)
+    sh = _user32.GetSystemMetrics(SM_CYSCREEN)
+    cur = win.rectangle()
+    cur_w, cur_h = cur.right - cur.left, cur.bottom - cur.top
+    MIN_W, MIN_H = 900, 700
+    if cur_w < MIN_W or cur_h < MIN_H:
+        margin = 16
+        target_w = min(sw - 2 * margin, max(MIN_W, cur_w))
+        target_h = min(sh - 2 * margin, max(MIN_H, cur_h))
+        target_w = max(target_w, MIN_W)
+        target_h = max(target_h, MIN_H)
+        _user32.MoveWindow(main_hwnd, margin, margin, target_w, target_h, True)
+        time.sleep(0.3)
+        _uia._focus(win)
+        time.sleep(0.2)
+        print(
+            f"step: enlarge_main_window screen=({sw}x{sh}) "
+            f"was=({cur_w}x{cur_h}) new_rect={win.rectangle()}"
+        )
+    else:
+        print(
+            f"step: main_window_size_ok screen=({sw}x{sh}) "
+            f"rect=({cur_w}x{cur_h})"
+        )
+
     print("step: open_scan_dialog")
     dlg, _ = _uia.open_scan_dialog(win)
     print(f"  configured_sources={_uia.read_configured_sources(dlg)!r}")
