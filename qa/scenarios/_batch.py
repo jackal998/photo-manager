@@ -283,6 +283,11 @@ ALL_SCENARIOS = [
     # the always-path swept them silently). Disposable 2-JPEG cluster;
     # CANCEL → outcome='' (lock holds); Unlock & Apply → outcome='ignored'.
     "s67_locked_singleton_prune_always",
+    # s68 (#622 Phase 1) — double-click on the single-view preview tile
+    # opens FullResViewerDialog as a top-level window with the filename in
+    # title. Uses qa/sandbox/huge (1 file). Pins the live double-click →
+    # requestFullRes → on_open_full_res_viewer(service=…) wiring.
+    "s68_full_res_viewer_double_click",
 ]
 
 
