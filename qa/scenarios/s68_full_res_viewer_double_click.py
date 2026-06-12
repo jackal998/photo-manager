@@ -66,6 +66,13 @@ def _post_double_click_at(win_hwnd: int, cx: int, cy: int) -> None:
     ScreenToClient converts the screen point to the main window's client
     coordinates; Qt's QWidget routing then dispatches the event to whichever
     child widget lies at that point.
+
+    A seed click via :func:`pywinauto.mouse.click` MUST be sent immediately
+    before calling this — that's what arms Qt's double-click detector by
+    registering the QLabel's prior press. Verified locally (passing) and
+    in s40's tree-row helper (passing in CI). Without the seed, Qt treats
+    the bare ``WM_LBUTTONDBLCLK`` as a single click and the override never
+    fires.
     """
     pt = ctypes.wintypes.POINT(cx, cy)
     _user32.ScreenToClient(win_hwnd, ctypes.byref(pt))
@@ -163,6 +170,16 @@ def main() -> int:
     cx = (rect.left + rect.right) // 2
     cy = (rect.top + rect.bottom) // 2
     print(f"  label_screen_center=({cx},{cy}) rect={rect}")
+    # Bring the main window to the foreground so the seed click is
+    # delivered to it rather than dispatched to whichever window happens
+    # to be active. Windows refuses ``SetForegroundWindow`` from
+    # non-foreground processes unless either the target process owns the
+    # current foreground or alt-tab semantics allow it; ``_focus`` packages
+    # both attempts (``_focus`` lives in ``qa/scenarios/_uia.py``). Without
+    # this the CI runner's "no active window" state silently routes the
+    # SendInput click into the void.
+    _uia._focus(win)
+    time.sleep(0.2)
     # Seed click — registers Qt's input-tracking state on the target widget
     # so the subsequent WM_LBUTTONDBLCLK is unambiguously a "second click".
     pywinauto.mouse.click(button="left", coords=(cx, cy))
