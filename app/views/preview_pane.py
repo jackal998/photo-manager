@@ -137,6 +137,12 @@ class PreviewPane(QWidget):
         # suffix and drive the double-click → modal full-res viewer flow.
         # Production code never reads the name; it exists for UIA only.
         self._single_label.setObjectName("preview_single_label")
+        # QLabel defaults to Qt.NoFocus; ClickFocus makes the widget a real
+        # mouse-event target so synthetic SendInput presses (qa scenarios on
+        # non-interactive CI runners) are not filtered out by Qt's input
+        # router. s40's QTreeView path works because trees default to
+        # StrongFocus — QLabel needs this explicit opt-in.
+        self._single_label.setFocusPolicy(Qt.ClickFocus)
         self._preview_layout.addWidget(self._single_label)
         # Wire double-click → requestFullRes signal; path captured per show_single call.
         self._single_label_path: str | None = None

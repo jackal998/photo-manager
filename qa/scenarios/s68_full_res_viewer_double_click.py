@@ -170,6 +170,20 @@ def main() -> int:
     cx = (rect.left + rect.right) // 2
     cy = (rect.top + rect.bottom) // 2
     print(f"  label_screen_center=({cx},{cy}) rect={rect}")
+    # Diagnostic dumps so a CI failure carries enough state to pick the
+    # next hypothesis without another blind iteration. Cheap and stays in
+    # for the long haul — they help local-vs-CI bisects too.
+    SM_CXSCREEN, SM_CYSCREEN = 0, 1
+    screen_w = _user32.GetSystemMetrics(SM_CXSCREEN)
+    screen_h = _user32.GetSystemMetrics(SM_CYSCREEN)
+    win_rect = win.rectangle()
+    print(f"  screen_dims=({screen_w}x{screen_h}) main_window_rect={win_rect}")
+    in_screen = 0 <= cx < screen_w and 0 <= cy < screen_h
+    in_window = (
+        win_rect.left <= cx < win_rect.right
+        and win_rect.top <= cy < win_rect.bottom
+    )
+    print(f"  click_in_screen={in_screen} click_in_main_window={in_window}")
     # Bring the main window to the foreground so the seed click is
     # delivered to it rather than dispatched to whichever window happens
     # to be active. Windows refuses ``SetForegroundWindow`` from
@@ -179,6 +193,11 @@ def main() -> int:
     # this the CI runner's "no active window" state silently routes the
     # SendInput click into the void.
     _uia._focus(win)
+    fg_hwnd = _user32.GetForegroundWindow()
+    print(
+        f"  after_focus: foreground_hwnd={fg_hwnd} main_hwnd={main_hwnd} "
+        f"focus_succeeded={fg_hwnd == main_hwnd}"
+    )
     time.sleep(0.2)
     # Seed click — registers Qt's input-tracking state on the target widget
     # so the subsequent WM_LBUTTONDBLCLK is unambiguously a "second click".
