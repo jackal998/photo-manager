@@ -312,9 +312,15 @@ def main() -> int:
 
     print("step: verify_main_window_responsive")
     _, win = _uia.connect_main()
-    rows = _uia.read_result_rows(win)
-    print(f"  total_rows_after_close={len(rows)}")
-    if len(rows) == 0:
+    # Use read_tree_row_order (no y-filter) rather than read_result_rows
+    # (defaults to y_min=600). On the 1024x768 CI runner the main window
+    # tops out at y=708, so every TreeItem has top<600 and read_result_rows
+    # silently returns []; this used to look like "unresponsive" but the
+    # window was actually fine — _uia.py's own read_tree_row_order docstring
+    # flags this exact CI-vs-dev-rig pitfall.
+    basenames = _uia.read_tree_row_order(win)
+    print(f"  total_rows_after_close={len(basenames)}")
+    if len(basenames) == 0:
         print(
             "FAIL: main window appears unresponsive after closing the "
             "full-res viewer — no rows readable via UIA"
