@@ -271,3 +271,142 @@ class TestRequestGridThumbnail:
         task = runner._pool.start.call_args.args[0]
         assert task._is_preview is False
         assert task._side == 128
+
+
+# ── _ResolutionTask + request_resolution (#622 Phase 1) ──────────────────
+
+
+class TestResolutionTask:
+    """The off-thread resolution read dispatch.
+
+    Replaces the synchronous ``_read_resolution(path)`` call in
+    ``PreviewPane.show_single`` (which blocked the UI thread on NAS DNG
+    rawpy reads for 3-5 s) with a QRunnable-dispatched async path.
+    """
+
+    def test_emits_resolution_loaded_with_resolved_string(self):
+        """Happy path: ``_read_resolution`` returns "4000×3000" → receiver
+        gets ``resolutionLoaded.emit(path, "4000×3000")``.
+
+        Failure mode: an emit-with-None or shape-changed payload would
+        break the slot's unpacking, leaving the info label permanently
+        without a resolution row even when the read succeeded.
+        """
+        from unittest.mock import patch as _patch
+
+        from app.views.image_tasks import _ResolutionTask
+
+        receiver = MagicMock()
+        task = _ResolutionTask(path="/photos/raw.dng", receiver=receiver)
+
+        with _patch("app.views.preview_pane._read_resolution", return_value="4000×3000"), \
+             _patch("app.views.media_utils.normalize_windows_path", side_effect=lambda p: p):
+            task.run()
+
+        receiver.resolutionLoaded.emit.assert_called_once_with(
+            "/photos/raw.dng", "4000×3000"
+        )
+
+    def test_emits_empty_string_on_read_failure(self):
+        """Read failure (None return) → emit empty string, not None.
+
+        Failure mode: emitting None would surface as a Qt signal-arg type
+        error (Signal(str, str) rejects None), suppressing the slot call
+        entirely instead of letting it cleanly no-op.
+        """
+        from unittest.mock import patch as _patch
+
+        from app.views.image_tasks import _ResolutionTask
+
+        receiver = MagicMock()
+        task = _ResolutionTask(path="/photos/corrupt.jpg", receiver=receiver)
+
+        with _patch("app.views.preview_pane._read_resolution", return_value=None), \
+             _patch("app.views.media_utils.normalize_windows_path", side_effect=lambda p: p):
+            task.run()
+
+        receiver.resolutionLoaded.emit.assert_called_once_with(
+            "/photos/corrupt.jpg", ""
+        )
+
+    def test_swallows_read_exception_and_emits_empty(self):
+        """An exception during the read (e.g. PIL choke on a truncated TIFF)
+        is logged but does not propagate; the slot still gets an empty string.
+
+        Failure mode: a raise would crash the QThreadPool worker thread,
+        leaving the runner pool in an undefined state — and the info label
+        would never update from "loading" because the slot is never called.
+        """
+        from unittest.mock import patch as _patch
+
+        from app.views.image_tasks import _ResolutionTask
+
+        receiver = MagicMock()
+        task = _ResolutionTask(path="/bad.jpg", receiver=receiver)
+
+        with _patch(
+            "app.views.preview_pane._read_resolution",
+            side_effect=RuntimeError("PIL.UnidentifiedImageError"),
+        ), _patch("app.views.media_utils.normalize_windows_path", side_effect=lambda p: p):
+            task.run()  # must not raise
+
+        receiver.resolutionLoaded.emit.assert_called_once_with("/bad.jpg", "")
+
+
+class TestRequestResolution:
+    """ImageTaskRunner.request_resolution — dispatch + receiver-absent guard."""
+
+    def test_no_receiver_is_silent_no_op(self):
+        """Constructed runner has no resolution receiver until ``set_resolution_receiver``
+        is called. Calling ``request_resolution`` before then must be a silent
+        no-op.
+
+        Failure mode: a missing guard would raise AttributeError on every
+        early-init preview, breaking the show_single path during the brief
+        window before PreviewPane self-registers.
+        """
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        runner.request_resolution("/a.jpg")
+
+        runner._pool.start.assert_not_called()
+
+    def test_dispatches_resolution_task_when_receiver_set(self):
+        """Happy path: receiver registered → task created and started.
+
+        Verifies the task is a ``_ResolutionTask`` with the correct path
+        and receiver — not the path-unrelated dispatch shape from
+        ``_ImageTask``.
+        """
+        from app.views.image_tasks import _ResolutionTask
+
+        recv = MagicMock()
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+        runner.set_resolution_receiver(recv)
+
+        runner.request_resolution("/photos/x.dng")
+
+        runner._pool.start.assert_called_once()
+        task = runner._pool.start.call_args.args[0]
+        assert isinstance(task, _ResolutionTask)
+        assert task._path == "/photos/x.dng"
+        assert task._receiver is recv
+
+    def test_set_resolution_receiver_idempotent_last_wins(self):
+        """Repeated set_resolution_receiver calls overwrite — last wins.
+
+        Failure mode: the runner is a singleton-per-MainWindow, but the
+        PreviewPane may be rebuilt on a live-language switch (see #520).
+        A first-wins setter would leak the old receiver and never deliver
+        resolutions to the new pane.
+        """
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        first = MagicMock()
+        second = MagicMock()
+
+        runner.set_resolution_receiver(first)
+        runner.set_resolution_receiver(second)
+
+        assert runner._resolution_receiver is second

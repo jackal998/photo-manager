@@ -202,6 +202,12 @@ class ImageService:
     def __init__(self, settings: object | None = None, status_reporter: Any | None = None) -> None:
         """Initialize caches and optional decoder capabilities from settings."""
         self._status_reporter = status_reporter
+        # Queue for migration-time messages produced before a reporter is
+        # attached. Production constructs ImageService in main.py BEFORE
+        # MainWindow's StatusReporterImpl exists, so the legacy-cache wipe
+        # has no one to talk to at __init__ time. ``set_status_reporter``
+        # flushes this queue when called.
+        self._pending_status_msg: str | None = None
         self._disk_dir = str(
             Path.home() / "AppData" / "Local" / "PhotoManager" / "thumbs"
         )
@@ -249,18 +255,62 @@ class ImageService:
                     f.unlink()
                 except OSError:
                     pass
-            msg = (
-                "Rebuilding thumbnail cache "
-                f"(version {PREVIEW_RECIPE_VERSION}) — this is a one-time operation."
-            )
+            msg = self._build_rebuilding_cache_message()
             logger.info(msg)
             if self._status_reporter is not None:
                 try:
                     self._status_reporter(msg)
                 except Exception:
                     pass
+            else:
+                # Production case: reporter not wired yet (main.py builds
+                # ImageService before MainWindow). Queue for ``set_status_reporter``.
+                self._pending_status_msg = msg
         except Exception as ex:
             logger.debug("Legacy disk cache migration failed: {}", ex)
+
+    def _build_rebuilding_cache_message(self) -> str:
+        """Return the legacy-cache-wipe status string, i18n if available.
+
+        Lazy-imports the translator so the disk-cache migration also runs
+        cleanly in unit tests that construct ImageService before
+        ``init_translator``. Falls back to the original English string when
+        the translator returns the bare key (catalog miss) or when the i18n
+        module itself can't be imported.
+        """
+        fallback = (
+            "Rebuilding thumbnail cache "
+            f"(version {PREVIEW_RECIPE_VERSION}) — this is a one-time operation."
+        )
+        try:
+            from infrastructure.i18n import t  # lazy import — see docstring
+            translated = t("preview.rebuilding_cache", version=PREVIEW_RECIPE_VERSION)
+            if not translated or translated == "preview.rebuilding_cache":
+                return fallback
+            return translated
+        except Exception:
+            return fallback
+
+    def set_status_reporter(self, reporter: Any) -> None:
+        """Attach a status reporter post-construction.
+
+        Required because ``main.py`` builds the ImageService BEFORE the
+        MainWindow's ``StatusReporterImpl`` exists, so any "rebuilding cache"
+        message produced during ``_migrate_legacy_disk_cache`` would otherwise
+        be silently swallowed (logger-only). The queued message is flushed
+        synchronously here — the reporter's ``showMessage`` is allowed to be
+        called before ``QMainWindow.show()`` (Qt queues the text until the
+        status bar is realised).
+        """
+        self._status_reporter = reporter
+        pending = self._pending_status_msg
+        if pending is not None and reporter is not None:
+            try:
+                reporter(pending)
+            except Exception:
+                pass
+            finally:
+                self._pending_status_msg = None
 
     # Public API
     def get_thumbnail(self, path: str, size: int) -> Any:

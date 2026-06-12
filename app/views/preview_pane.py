@@ -95,6 +95,13 @@ class PreviewPane(QWidget):
     # image; MainWindow connects this to on_open_full_res_viewer(path).
     requestFullRes = Signal(str)
 
+    # Emitted by ``_ResolutionTask`` (app/views/image_tasks.py) when an
+    # off-thread resolution read completes. Carries (path, "W×H") or
+    # (path, "") on read failure. Self-connected to ``_on_resolution_loaded``
+    # in __init__ — the slot's stale-path guard discards results that
+    # arrived after the user already navigated to a different file.
+    resolutionLoaded = Signal(str, str)
+
     def __init__(
         self, parent: QWidget | None, task_runner: ImageTaskRunner, thumb_size: int | None = None
     ) -> None:
@@ -126,10 +133,33 @@ class PreviewPane(QWidget):
         self._single_label = QLabel(t("preview.placeholder"))
         self._single_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._single_label.setMinimumHeight(200)
+        # Object name so qa scenario s68 can locate this label by aid
+        # suffix and drive the double-click → modal full-res viewer flow.
+        # Production code never reads the name; it exists for UIA only.
+        self._single_label.setObjectName("preview_single_label")
         self._preview_layout.addWidget(self._single_label)
         # Wire double-click → requestFullRes signal; path captured per show_single call.
         self._single_label_path: str | None = None
         self._single_label.mouseDoubleClickEvent = self._on_single_label_double_click
+
+        # Async resolution wiring (#622 Phase 1).
+        # The info dict and path most recently passed to show_single are
+        # cached here so ``_on_resolution_loaded`` can rebuild the info
+        # label with the resolution row once the off-thread read returns.
+        # ``None`` means single-view is currently empty (cleared or showing
+        # a video).
+        self._single_info_payload: tuple[str, dict] | None = None
+        self.resolutionLoaded.connect(self._on_resolution_loaded)
+        # Register with the runner so ``_ResolutionTask`` knows where to
+        # deliver. Runner is constructed before PreviewPane (MainWindow
+        # builds it first), so post-construction setter is the only path.
+        try:
+            task_runner.set_resolution_receiver(self)
+        except AttributeError:
+            # Older runners without resolution support (test stubs) silently
+            # skip — the sync ``_read_resolution`` fallback is gone, but the
+            # info label simply renders without a resolution row in that case.
+            pass
 
         self.preview_area.setWidget(self._preview_container)
         root.addWidget(self.preview_area)
@@ -212,20 +242,27 @@ class PreviewPane(QWidget):
             self.preview_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
             self._single_label.setVisible(True)
             if info and isinstance(info, dict):
-                res = _read_resolution(normalize_windows_path(path))
+                # Initial render with no resolution row — the off-thread
+                # ``_ResolutionTask`` fills it in via ``_on_resolution_loaded``
+                # once the (potentially expensive) rawpy/QImageReader/PIL
+                # probe completes. Sync ``_read_resolution`` on the UI thread
+                # used to block 3-5 s on NAS DNGs before the placeholder
+                # painted — see #622 ticket item 6.
                 info_rows = build_info_rows(
                     name=info.get("name") or "",
                     folder=info.get("folder") or "",
                     size_txt=info.get("size") or "",
                     creation_txt=info.get("creation") or "",
                     shot_txt=info.get("shot") or "",
-                    resolution=res or "",
+                    resolution="",
                 )
                 html = format_info_html(info_rows)
                 if html:
                     self._single_info_label.setTextFormat(Qt.RichText)
                     self._single_info_label.setText(html)
                     self._single_info_label.setVisible(True)
+                self._single_info_payload = (path, info)
+                self._runner.request_resolution(path)
             self._single_label.setText(t("preview.loading"))
             self._current_single_token = self._runner.request_single_preview(path)
 
@@ -428,6 +465,7 @@ class PreviewPane(QWidget):
         self._single_label.setVisible(False)
         self._single_pm = None
         self._single_label_path = None
+        self._single_info_payload = None
 
     def toggle_play_pause(self) -> None:
         """Toggle playback on the single-view video player, if any.
@@ -646,6 +684,41 @@ class PreviewPane(QWidget):
         """Double-click on the single-view label → emit requestFullRes."""
         if self._single_label_path:
             self.requestFullRes.emit(self._single_label_path)
+
+    def _on_resolution_loaded(self, path: str, res: str) -> None:
+        """Slot for off-thread resolution arrival (#622 Phase 1).
+
+        Rebuilds the info label with the resolution row once the
+        ``_ResolutionTask`` returns. Two guards:
+        1. ``self._single_label_path != path``: the user navigated to a
+           different file (or cleared the view) while the read was in
+           flight. Discard — splashing a stale "W×H" onto the now-current
+           file is a visible bug.
+        2. payload missing or path-mismatched: ``clear()`` ran between
+           ``show_single`` and arrival. Discard for the same reason.
+
+        Mirrors the token-mismatch guard in ``on_image_loaded`` for the
+        async image path — same staleness class, same defence.
+        """
+        if self._single_label_path != path:
+            return
+        payload = self._single_info_payload
+        if payload is None or payload[0] != path:
+            return
+        _, info = payload
+        info_rows = build_info_rows(
+            name=info.get("name") or "",
+            folder=info.get("folder") or "",
+            size_txt=info.get("size") or "",
+            creation_txt=info.get("creation") or "",
+            shot_txt=info.get("shot") or "",
+            resolution=res or "",
+        )
+        html = format_info_html(info_rows)
+        if html:
+            self._single_info_label.setTextFormat(Qt.RichText)
+            self._single_info_label.setText(html)
+            self._single_info_label.setVisible(True)
 
     # Qt events
     def resizeEvent(self, event) -> None:  # type: ignore[override]

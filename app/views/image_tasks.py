@@ -69,6 +69,43 @@ class _ImageTask(QRunnable):
             pass
 
 
+class _ResolutionTask(QRunnable):
+    """QRunnable for off-thread image resolution reads (#622 Phase 1).
+
+    Emits ``receiver.resolutionLoaded(path, resolution_str)`` upon completion.
+    The receiver is expected to own a Qt ``Signal(str, str)`` named
+    ``resolutionLoaded``. Failed reads emit an empty string rather than
+    raising — matches the pre-async ``_read_resolution`` returning None,
+    so the info-label silently stays without a resolution row rather than
+    surfacing a parser failure to the user.
+
+    The ``_read_resolution`` import is lazy because ``preview_pane`` already
+    imports ``image_tasks`` at module load; a top-level import here would
+    cycle. Inside ``run()`` the cycle is harmless — both modules are fully
+    loaded by the time any QRunnable executes.
+    """
+
+    def __init__(self, *, path: str, receiver: QObject) -> None:
+        super().__init__()
+        self._path = path
+        self._receiver = receiver
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            from app.views.media_utils import normalize_windows_path
+            from app.views.preview_pane import _read_resolution
+            res = _read_resolution(normalize_windows_path(self._path))
+        except Exception as ex:
+            logger.error("Resolution task failed: {}", ex)
+            res = None
+        try:
+            self._receiver.resolutionLoaded.emit(  # type: ignore[attr-defined]
+                self._path, res or ""
+            )
+        except Exception:  # pragma: no cover - best effort
+            pass
+
+
 class ImageTaskRunner:
     """Dispatches image load tasks to the global thread pool.
 
@@ -80,7 +117,35 @@ class ImageTaskRunner:
     def __init__(self, *, service: Any, receiver: QObject) -> None:
         self._service = service
         self._receiver = receiver
+        # Receiver for ``_ResolutionTask`` results. Set later via
+        # ``set_resolution_receiver`` — PreviewPane is constructed AFTER
+        # the runner, so it self-registers in its ``__init__``.
+        self._resolution_receiver: QObject | None = None
         self._pool = QThreadPool.globalInstance()
+
+    def set_resolution_receiver(self, receiver: QObject) -> None:
+        """Register the receiver for off-thread resolution reads.
+
+        PreviewPane owns the ``resolutionLoaded(str, str)`` signal that
+        ``_ResolutionTask`` emits on; the runner has no reason to relay
+        through ``self._receiver`` (MainWindow) since resolution updates
+        are pane-local. Idempotent — last registration wins.
+        """
+        self._resolution_receiver = receiver
+
+    def request_resolution(self, path: str) -> None:
+        """Submit an off-thread resolution read.
+
+        Delivery happens via the registered receiver's ``resolutionLoaded``
+        signal. Silent no-op when no resolution receiver is wired —
+        constructor-time test paths exercise the runner standalone, and
+        the pre-PreviewPane init window has no receiver yet.
+        """
+        recv = self._resolution_receiver
+        if recv is None:
+            return
+        task = _ResolutionTask(path=path, receiver=recv)
+        self._pool.start(task)
 
     def request_single_preview(self, path: str) -> str:
         """Request a single-image preview. Returns the token string."""

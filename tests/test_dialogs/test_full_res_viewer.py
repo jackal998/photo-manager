@@ -281,3 +281,61 @@ class TestPanDrag:
         v_arg = mock_vbar.setValue.call_args[0][0]
         assert h_arg == 200, f"hbar.setValue should be 200, got {h_arg}"
         assert v_arg == 200, f"vbar.setValue should be 200, got {v_arg}"
+
+
+# ── DI service injection (#622 Phase 1) ──────────────────────────────────
+
+
+class TestServiceInjection:
+    """The dialog accepts an optional ``service=`` keyword in its
+    constructor so MainWindow can inject the app-level ImageService
+    instance. Without DI the dialog used to construct a bare
+    ``ImageService()`` on every open, re-running ``_migrate_legacy_disk_cache``
+    each time and bypassing the shared byte-budget LRU.
+    """
+
+    def test_injected_service_is_used_instead_of_constructing_bare(self, qapp_m):
+        """When ``service=mock`` is passed, ``mock.get_preview`` is called
+        and ``ImageService.__init__`` is NEVER invoked at the module level.
+
+        Failure mode: a refactor that ignored the kwarg would silently
+        regress to building a bare ImageService every open — spurious
+        disk-cache migration scans and zero reuse of the warm in-memory
+        cache from the main preview pane.
+        """
+        injected = MagicMock()
+        injected.get_preview.return_value = _make_qimage(100, 100)
+
+        with patch("infrastructure.image_service.ImageService") as MockSvc:
+            dlg = FullResViewerDialog(
+                "/fake/photo.jpg", parent=None, service=injected
+            )
+            try:
+                injected.get_preview.assert_called_once_with("/fake/photo.jpg", 0)
+                # The bare ImageService class must NOT be instantiated by the dialog
+                # when a service was injected.
+                MockSvc.assert_not_called()
+            finally:
+                dlg.deleteLater()
+
+    def test_fallback_to_bare_service_when_no_kwarg(self, qapp_m):
+        """When ``service`` is omitted, the dialog constructs a bare
+        ``ImageService()`` (backward compatibility for callers that don't DI).
+
+        Failure mode: dropping the fallback breaks every existing test that
+        patches ``infrastructure.image_service.ImageService`` and relies on
+        the bare-construction path. That patching pattern is widespread, so
+        this guarantee is load-bearing for the existing test suite.
+        """
+        fake_img = _make_qimage(100, 100)
+        with patch("infrastructure.image_service.ImageService") as MockSvc:
+            instance = MockSvc.return_value
+            instance.get_preview.return_value = fake_img
+
+            dlg = FullResViewerDialog("/fake/photo.jpg", parent=None)
+            try:
+                # Bare-class was constructed (no DI), and its get_preview ran.
+                MockSvc.assert_called_once_with()
+                instance.get_preview.assert_called_once_with("/fake/photo.jpg", 0)
+            finally:
+                dlg.deleteLater()

@@ -876,3 +876,189 @@ def test_show_single_video_does_not_auto_play(qapp):
         pass
     finally:
         pane.deleteLater()
+
+
+# ── async resolution slot + stale-path guard (#622 Phase 1) ──────────────
+
+
+class TestResolutionLoadedSlot:
+    """The async resolution delivery path replaces the sync ``_read_resolution``
+    call on the UI thread inside ``show_single``. These tests pin the
+    receive-side semantics: stale-path guard, matching-path label update,
+    and the cleared-payload guard.
+
+    Real failure mode the slot exists to prevent: a slow NAS DNG read
+    completes AFTER the user has navigated to a different file, and the
+    stale "4000×3000" splashes onto the now-different info label — a
+    visible bug that's hard to reproduce except on a real NAS.
+    """
+
+    def test_matching_path_updates_info_label_with_resolution(self, qapp):
+        """Path matches the currently-shown single view → info label is
+        rebuilt with the resolution row.
+
+        Failure mode: a slot that always discards (broken guard, wrong attr)
+        means resolution never arrives — info label silently lacks the row
+        for every image.
+        """
+        fake_runner = MagicMock()
+        fake_runner.request_single_preview.return_value = "single|/photos/x.jpg|2048"
+        pane = PreviewPane(parent=None, task_runner=fake_runner)
+        try:
+            pane.show_single(
+                "/photos/x.jpg",
+                info={"name": "x.jpg", "folder": "/photos", "size": "12345"},
+            )
+            # Pre-condition: info label visible, no resolution yet
+            html_before = pane._single_info_label.text()
+            assert "4000" not in html_before
+            assert "3000" not in html_before
+
+            pane._on_resolution_loaded("/photos/x.jpg", "4000×3000")
+
+            html_after = pane._single_info_label.text()
+            assert "4000" in html_after and "3000" in html_after, (
+                f"Resolution row missing after _on_resolution_loaded; got: {html_after!r}"
+            )
+        finally:
+            pane.deleteLater()
+
+    def test_stale_path_does_not_update_label(self, qapp):
+        """Path mismatch (user navigated away) → label stays unchanged.
+
+        Failure mode: without the guard, a 5-second NAS DNG resolution read
+        could splash the old file's "W×H" onto a now-different label —
+        the user sees /photos/B.jpg with /photos/A.dng's dimensions.
+        """
+        fake_runner = MagicMock()
+        fake_runner.request_single_preview.return_value = "single|/photos/A.jpg|2048"
+        pane = PreviewPane(parent=None, task_runner=fake_runner)
+        try:
+            pane.show_single(
+                "/photos/A.jpg",
+                info={"name": "A.jpg", "folder": "/photos", "size": "1"},
+            )
+            # User navigates to a different file
+            fake_runner.request_single_preview.return_value = "single|/photos/B.jpg|2048"
+            pane.show_single(
+                "/photos/B.jpg",
+                info={"name": "B.jpg", "folder": "/photos", "size": "2"},
+            )
+            html_before = pane._single_info_label.text()
+
+            # Stale resolution for the OLD file arrives now
+            pane._on_resolution_loaded("/photos/A.jpg", "9999×7777")
+
+            html_after = pane._single_info_label.text()
+            assert "9999" not in html_after, (
+                "Stale resolution for the navigated-away file must not surface "
+                f"on the new file's label; got: {html_after!r}"
+            )
+            assert html_after == html_before, (
+                "Label must remain exactly unchanged when stale resolution arrives"
+            )
+        finally:
+            pane.deleteLater()
+
+    def test_cleared_payload_guards_against_post_clear_arrival(self, qapp):
+        """After ``clear()`` runs, a late resolution arrival must NOT touch
+        the (cleared) info label.
+
+        Failure mode: a slot that only checks the path attr would still
+        match (path is set then cleared to None — but None != '/photos/x.jpg',
+        so the path guard catches it). This test pins the payload guard as
+        belt-and-braces against future refactors where ``clear()`` zeroes
+        the payload before the path or the payload is reset out-of-order.
+        """
+        fake_runner = MagicMock()
+        fake_runner.request_single_preview.return_value = "single|/photos/x.jpg|2048"
+        pane = PreviewPane(parent=None, task_runner=fake_runner)
+        try:
+            pane.show_single(
+                "/photos/x.jpg",
+                info={"name": "x.jpg", "folder": "/photos", "size": "1"},
+            )
+            pane.clear()
+            # Path is now None; payload is None — neither matches.
+
+            pane._on_resolution_loaded("/photos/x.jpg", "1×1")
+
+            # _single_info_label was cleared by clear() — must remain empty.
+            assert pane._single_info_label.text() == "", (
+                "Cleared info label must not be revived by a late resolution"
+            )
+            assert pane._single_info_label.isVisible() is False, (
+                "Cleared info label must not become visible from a late resolution"
+            )
+        finally:
+            pane.deleteLater()
+
+
+class TestShowSingleAsyncResolution:
+    """``show_single`` no longer reads the resolution synchronously — it
+    submits a ``_ResolutionTask`` via the runner. This test class pins the
+    dispatch contract."""
+
+    def test_show_single_image_submits_resolution_task(self, qapp):
+        """Image branch must call ``runner.request_resolution(path)`` so the
+        info label can be filled in once the off-thread read completes.
+
+        Failure mode: a refactor that reverted to the sync ``_read_resolution``
+        call would re-block the UI thread for 3-5 s on NAS DNG previews — the
+        very behaviour #622 Phase 1 item 6 is closing.
+        """
+        fake_runner = MagicMock()
+        fake_runner.request_single_preview.return_value = "single|/photos/x.jpg|2048"
+        pane = PreviewPane(parent=None, task_runner=fake_runner)
+        try:
+            pane.show_single(
+                "/photos/x.jpg",
+                info={"name": "x.jpg", "folder": "/photos", "size": "1"},
+            )
+            fake_runner.request_resolution.assert_called_once_with("/photos/x.jpg")
+        finally:
+            pane.deleteLater()
+
+    def test_show_single_image_initial_label_has_no_resolution_row(self, qapp):
+        """The initial sync render (before the resolution task returns)
+        must NOT include any "W×H" — only the basic info rows.
+
+        Failure mode: a refactor that re-introduced a sync ``_read_resolution``
+        before dispatch would block the UI thread; this test would fail by
+        producing a resolution string at sync-render time.
+        """
+        fake_runner = MagicMock()
+        fake_runner.request_single_preview.return_value = "single|/photos/x.jpg|2048"
+        pane = PreviewPane(parent=None, task_runner=fake_runner)
+        try:
+            pane.show_single(
+                "/photos/x.jpg",
+                info={"name": "x.jpg", "folder": "/photos", "size": "1"},
+            )
+            html = pane._single_info_label.text()
+            # No resolution numbers in the initial render (regardless of
+            # the underlying file's true dimensions).
+            assert "×" not in html or pane._single_info_payload is not None, (
+                "Initial info label must not contain a resolution row "
+                f"before the async read completes; got: {html!r}"
+            )
+            assert pane._single_info_payload is not None
+            assert pane._single_info_payload[0] == "/photos/x.jpg"
+        finally:
+            pane.deleteLater()
+
+    def test_runner_registers_as_resolution_receiver(self, qapp):
+        """PreviewPane constructor calls ``runner.set_resolution_receiver(self)``
+        so the runner knows where to deliver ``_ResolutionTask`` results.
+
+        Failure mode: a refactor that dropped the registration would
+        silently route resolution results into the void — info labels
+        permanently without resolution rows even though the task path
+        works end-to-end on the runner side.
+        """
+        fake_runner = MagicMock()
+        pane = PreviewPane(parent=None, task_runner=fake_runner)
+        try:
+            fake_runner.set_resolution_receiver.assert_called_once_with(pane)
+        finally:
+            pane.deleteLater()

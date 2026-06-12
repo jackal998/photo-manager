@@ -469,3 +469,4 @@ preview:
   info_duration_unknown: "--:--"
   click_to_pause: "(Click to pause)"
   video_not_available: "(Video not available)"
+  rebuilding_cache: "Rebuilding thumbnail cache (version {version}) — this is a one-time operation."

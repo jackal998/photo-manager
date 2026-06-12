@@ -378,3 +378,4 @@ preview:
   info_duration_unknown: "--:--"
   click_to_pause: "(點擊暫停)"
   video_not_available: "(無法使用視訊)"
+  rebuilding_cache: "正在重建縮圖快取(版本 {version})— 這是一次性操作。"

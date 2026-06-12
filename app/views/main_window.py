@@ -235,6 +235,21 @@ class MainWindow(QMainWindow):
         self.status_reporter = StatusReporterImpl(self)
         self.ui_updater = UIUpdaterImpl(self)
 
+        # #622 Phase 1 — flush ImageService's startup-queued status messages.
+        # main.py constructs ImageService BEFORE MainWindow, so the
+        # legacy-thumbs-wipe notice produced during _migrate_legacy_disk_cache
+        # has no reporter to talk to at that point. The setter below attaches
+        # one now and synchronously flushes the queued message. 8 s timeout
+        # gives the user a beat to read it before the status bar reverts.
+        if self._img is not None and hasattr(self._img, "set_status_reporter"):
+            try:
+                reporter = self.status_reporter
+                self._img.set_status_reporter(
+                    lambda msg, _r=reporter: _r.show_status(msg, timeout=8000)
+                )
+            except Exception:
+                pass
+
         # #165 — runner needs to exist before the file operations
         # handler so the handler can forward it to ExecuteActionDialog's
         # embedded PreviewPane. The PreviewPane in the main window
@@ -692,10 +707,14 @@ class MainWindow(QMainWindow):
 
         Connected to ``preview_pane.requestFullRes`` — fires when the user
         double-clicks a preview tile or the single-view image label.
+
+        Passes the app-level ImageService via DI so the dialog reuses the
+        existing disk cache and skips constructing a second bare instance
+        (which would re-run ``_migrate_legacy_disk_cache`` on every open).
         """
         from app.views.dialogs.full_res_viewer import FullResViewerDialog
 
-        dlg = FullResViewerDialog(path, parent=self)
+        dlg = FullResViewerDialog(path, parent=self, service=self._img)
         dlg.show()
 
     # PRESERVED: Tree selection change handler
