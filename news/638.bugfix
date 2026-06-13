@@ -1,0 +1,1 @@
+Single-view preview's resolution row reads off the UI thread (no more 3-5 s NAS-DNG stutter), and the first-launch thumbnail-cache rebuild notice now actually reaches the status bar (#638).

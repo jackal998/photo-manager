@@ -660,7 +660,7 @@ for the chore plan.
 - **Behaviour:** The in-memory image cache uses a byte-budget eviction policy instead of a fixed item count. Two independent tiers: a thumbnail tier (≈64 MB) for grid thumbnails (longest side ≤ 256 px) and a preview tier (≈192 MB) for single-view previews. Total budget = `min(256 MB, RAM // 32)`. When a tier exceeds its budget the least-recently-used entry is evicted. The on-disk cache writes versioned files under `~/AppData/Local/PhotoManager/thumbs/v1/<sha1>.jpg`; a recipe-version bump invalidates the old namespace. On first launch after upgrade, any unversioned `.jpg` files under `thumbs/` root are automatically deleted and a one-time status-bar notice is shown.
 - **Conditions / variants:** DNG files use the embedded JPEG fast path (rawpy `extract_thumb`) if the embedded thumbnail's longest side ≥ viewport cap (2048 px default); falls through to full `postprocess` decode only when the embedded thumb is too small or absent. **EXIF Orientation is applied** to the embedded JPEG via Pillow's `ImageOps.exif_transpose` before conversion to QImage — without this, portrait-grip iPhone ProRAW DNGs (which store landscape pixels + Orientation=6/8 in the embedded JPEG's EXIF) would render 90° rotated relative to Lightroom / File Explorer (`QImage.loadFromData` does not honour the Orientation tag; only `QImageReader.setAutoTransform` does, and the fast path uses neither). The bitmap (non-JPEG) thumb branch is unaffected — rawpy delivers the array in correct orientation natively.
 - **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `infrastructure/image_service.py`; `tests/test_image_service.py`.
-- **Last verified:** 2026-06-10 (DNG embedded-JPEG orientation fix)
+- **Last verified:** 2026-06-13 (#622 Phase 1 status-reporter wiring — the legacy-thumbs-wipe notice now actually reaches the status bar; previously the notice was logger-only because ImageService was constructed before MainWindow's StatusReporterImpl existed, so the queue + `set_status_reporter()` flush was added to bridge the construction-order gap)
 
 ---
 
@@ -670,8 +670,8 @@ for the chore plan.
 - **Trigger:** User double-clicks any image tile in the grid view or the single-image label in single-view mode.
 - **Behaviour:** Opens `FullResViewerDialog` — a non-modal window showing the full raw-decoded image (side=0 → bypass viewport cap). Pan: drag with left mouse button. Zoom: Ctrl+scroll-wheel (scale clamped 5%–800%). Esc or window close dismisses it. The dialog's QImage is released on close; it is NOT stored in the byte-budget LRU (the dialog owns its own reference). Window title shows filename + pixel dimensions.
 - **Conditions / variants:** Each double-click opens a new viewer window (non-modal — multiple files can be viewed simultaneously). Video tiles do not trigger the full-res viewer (videos have their own click-to-play behaviour). Double-click before any preview is loaded is a no-op (path is None, signal is not emitted).
-- **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `app/views/dialogs/full_res_viewer.py`; `app/views/preview_pane.py`; `tests/test_dialogs/test_full_res_viewer.py`.
-- **Last verified:** 2026-06-09 (#622 Phase 1)
+- **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `app/views/dialogs/full_res_viewer.py`; `app/views/preview_pane.py`; `tests/test_dialogs/test_full_res_viewer.py`; QA scenario [`qa/scenarios/s68_full_res_viewer_double_click.py`](../qa/scenarios/s68_full_res_viewer_double_click.py).
+- **Last verified:** 2026-06-13 (#622 Phase 1 — DI-injected ImageService via `main_window.on_open_full_res_viewer(service=self._img)` so the dialog reuses the app-level LRU instead of constructing a bare instance each open; s68 pins the live double-click → modal-viewer flow)
 
 ---
 

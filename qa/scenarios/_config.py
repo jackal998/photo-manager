@@ -284,6 +284,14 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # locked rows silently). Two variants: CANCEL → outcome=''; Unlock &
     # Apply → outcome='ignored'. No file deletes — DB-only outcome writes.
     "s67_locked_singleton_prune_always": ["qa/sandbox/_disposable/s67_source"],
+    # s68 (#622 Phase 1) — double-click on the single-view preview tile
+    # opens the FullResViewerDialog. Pins the live wiring that L1 tests
+    # can't reach: real mouseDoubleClickEvent → requestFullRes.emit →
+    # on_open_full_res_viewer(service=self._img) → dialog appears as a
+    # top-level window. Uses near-duplicates (5 JPEGs clustered into one
+    # group) — huge sandbox is one isolated file which never appears as
+    # a TreeItem (singletons are status-bar-only).
+    "s68_full_res_viewer_double_click": ["qa/sandbox/near-duplicates"],
 }
 
 # Per-scenario overrides for ui.prune_singletons. build_settings maps a

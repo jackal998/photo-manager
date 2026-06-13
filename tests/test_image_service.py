@@ -428,6 +428,7 @@ class TestPreviewRecipeVersion:
 
         svc = ImageService.__new__(ImageService)
         svc._status_reporter = None
+        svc._pending_status_msg = None
         svc._disk_path = tmp_path
         svc._migrate_legacy_disk_cache()
 
@@ -442,3 +443,168 @@ class TestPreviewRecipeVersion:
         changing it without bumping the constant causes stale-cache misses.
         """
         assert PREVIEW_RECIPE_VERSION == "1"
+
+
+# ── status_reporter wiring (#622 Phase 1) ────────────────────────────────
+
+
+class TestStatusReporterWiring:
+    """The migration-notice plumbing — ``main.py`` builds ImageService
+    BEFORE MainWindow's status reporter exists, so the legacy-cache wipe
+    message has to be queueable for later delivery. These tests pin both
+    paths (synchronous reporter present + deferred reporter-attached-later).
+    """
+
+    def test_status_reporter_called_when_reporter_is_set_at_migration_time(
+        self, tmp_path
+    ):
+        """Sync path: a reporter set at construction (or before migration runs)
+        is called with the rebuilding-cache message when legacy files exist.
+
+        Failure mode: the original code path that omitted the reporter call
+        for the migration notice would leave the user staring at a slower-than-
+        normal first launch with no idea that the cache is rebuilding.
+        """
+        legacy = tmp_path / "old.jpg"
+        legacy.write_bytes(b"legacy-thumb")
+
+        reporter = MagicMock()
+        svc = ImageService.__new__(ImageService)
+        svc._status_reporter = reporter
+        svc._pending_status_msg = None
+        svc._disk_path = tmp_path
+
+        svc._migrate_legacy_disk_cache()
+
+        reporter.assert_called_once()
+        msg_arg = reporter.call_args.args[0]
+        assert "cache" in msg_arg.lower(), (
+            f"Reporter call must include 'cache' in the message, got: {msg_arg!r}"
+        )
+        assert svc._pending_status_msg is None, (
+            "Pending msg must not be set when reporter consumed it synchronously"
+        )
+
+    def test_pending_message_queued_when_no_reporter_at_migration_time(
+        self, tmp_path
+    ):
+        """Deferred path: when reporter is None at migration time, the message
+        is queued onto ``_pending_status_msg`` so ``set_status_reporter`` can
+        flush it later.
+
+        Failure mode: without the queue, main.py's pre-MainWindow ImageService
+        construction silently drops the notice — the user sees no status
+        indication of the one-time rebuild.
+        """
+        legacy = tmp_path / "old.jpg"
+        legacy.write_bytes(b"legacy-thumb")
+
+        svc = ImageService.__new__(ImageService)
+        svc._status_reporter = None
+        svc._pending_status_msg = None
+        svc._disk_path = tmp_path
+
+        svc._migrate_legacy_disk_cache()
+
+        assert svc._pending_status_msg is not None, (
+            "Migration must queue a pending message when reporter is None"
+        )
+        assert "cache" in svc._pending_status_msg.lower()
+
+    def test_set_status_reporter_flushes_pending_message(self, tmp_path):
+        """``set_status_reporter`` synchronously delivers any queued message.
+
+        Failure mode: a setter that overrode the reporter but failed to
+        flush the queue would leave the user without the notice for the
+        rest of the session (the migration only fires once).
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._status_reporter = None
+        svc._pending_status_msg = "Rebuilding thumbnail cache (version 1)…"
+
+        reporter = MagicMock()
+        svc.set_status_reporter(reporter)
+
+        reporter.assert_called_once_with("Rebuilding thumbnail cache (version 1)…")
+        assert svc._pending_status_msg is None, (
+            "Pending msg must be cleared after flush so a second "
+            "set_status_reporter call doesn't re-deliver it"
+        )
+
+    def test_set_status_reporter_no_pending_no_call(self, tmp_path):
+        """``set_status_reporter`` without a queued message does NOT call the
+        reporter — first-install or already-migrated launches must stay quiet.
+
+        Failure mode: an unconditional call would spam the status bar with
+        an empty message on every fresh-install launch (no legacy thumbs to
+        wipe → no pending msg → reporter should not be called).
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._status_reporter = None
+        svc._pending_status_msg = None
+
+        reporter = MagicMock()
+        svc.set_status_reporter(reporter)
+
+        reporter.assert_not_called()
+        assert svc._status_reporter is reporter, (
+            "Reporter must still be attached even when no pending msg existed"
+        )
+
+    def test_set_status_reporter_swallows_reporter_exception(self, tmp_path):
+        """A reporter that raises during flush must not propagate.
+
+        Failure mode: a fragile status-bar implementation that raises on a
+        message containing certain characters could bring down the whole
+        MainWindow construction path. The setter's try/except keeps the
+        startup robust.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._status_reporter = None
+        svc._pending_status_msg = "ignored"
+
+        def boom(_msg):
+            raise RuntimeError("status bar exploded")
+
+        svc.set_status_reporter(boom)  # must not raise
+        assert svc._pending_status_msg is None, (
+            "Pending msg cleared even on reporter exception "
+            "(prevents repeated retries)"
+        )
+
+    def test_build_rebuilding_cache_message_uses_translator_when_available(
+        self, tmp_path
+    ):
+        """When ``infrastructure.i18n.t`` resolves the key, the translated
+        string wins. Confirms the i18n path is wired.
+
+        Failure mode: a regression where ``_build_rebuilding_cache_message``
+        ignored the translator would leave Chinese users seeing English on
+        a translated cache-rebuild flow.
+        """
+        svc = ImageService.__new__(ImageService)
+        with patch(
+            "infrastructure.i18n.t",
+            return_value="TRANSLATED-CACHE-MSG",
+        ):
+            msg = svc._build_rebuilding_cache_message()
+        assert msg == "TRANSLATED-CACHE-MSG"
+
+    def test_build_rebuilding_cache_message_falls_back_on_catalog_miss(
+        self, tmp_path
+    ):
+        """When the translator returns the bare key (catalog miss), the
+        fallback English string is returned instead.
+
+        Failure mode: an English-locale user seeing the literal dotted key
+        "preview.rebuilding_cache" in the status bar instead of a sentence —
+        the canonical translator-miss UX bug class.
+        """
+        svc = ImageService.__new__(ImageService)
+        with patch(
+            "infrastructure.i18n.t",
+            return_value="preview.rebuilding_cache",
+        ):
+            msg = svc._build_rebuilding_cache_message()
+        assert "Rebuilding thumbnail cache" in msg
+        assert PREVIEW_RECIPE_VERSION in msg

@@ -68,9 +68,22 @@ class FullResViewerDialog(QDialog):
     brief pause; async loading via ImageTaskRunner is a Phase 2 concern.
     """
 
-    def __init__(self, path: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        path: str,
+        parent: QWidget | None = None,
+        *,
+        service: Any | None = None,
+    ) -> None:
         super().__init__(parent)
         self._path = path
+        # Optional dependency-injected ImageService. Production wires the
+        # app-level instance via ``main_window.on_open_full_res_viewer`` so
+        # the dialog reuses the same disk cache, byte-budget LRU, and
+        # status-reporter wiring. Falls back to constructing a bare instance
+        # when None — the test path patches the class symbol and exercises
+        # both branches (see ``tests/test_dialogs/test_full_res_viewer.py``).
+        self._service: Any | None = service
         self._full_qimage: Any = None  # QImage | None
         self._current_scale: float = 1.0
 
@@ -102,9 +115,14 @@ class FullResViewerDialog(QDialog):
     def _load_image(self) -> None:
         """Load the full-resolution image synchronously."""
         try:
-            from infrastructure.image_service import ImageService
-
-            svc = ImageService()
+            if self._service is not None:
+                svc = self._service
+            else:
+                # Fallback: standalone construction (no DI). Triggers an
+                # extra ``_migrate_legacy_disk_cache`` pass on first open,
+                # which is idempotent once the v1/ sub-dir is populated.
+                from infrastructure.image_service import ImageService
+                svc = ImageService()
             # side=0 → full resolution (bypass viewport cap)
             img = svc.get_preview(self._path, 0)
             if img is None or img.isNull():

@@ -1698,3 +1698,61 @@ class _FakeApp:
 
     def quit(self) -> None:
         self._log.append(1)
+
+
+# ── on_open_full_res_viewer (#622 Phase 1) ───────────────────────────────
+
+
+def test_on_open_full_res_viewer_constructs_dialog_with_di_service_and_shows():
+    """``on_open_full_res_viewer(path)`` must construct ``FullResViewerDialog``
+    with ``path``, ``parent=self``, AND ``service=self._img`` — then call
+    ``dlg.show()`` so the modal actually appears.
+
+    Failure modes pinned here:
+    1. A refactor that drops ``service=self._img`` silently regresses to the
+       pre-Phase-1 behaviour where the dialog built its own bare ImageService
+       each open — re-running ``_migrate_legacy_disk_cache``, missing the
+       warm in-memory LRU, and triggering a fresh disk-cache probe pass.
+    2. A refactor that drops ``dlg.show()`` makes the dialog construct and
+       immediately get GC'd — user double-clicks and nothing visible happens.
+    """
+    instances = []
+
+    class FakeDialog:
+        def __init__(self, path, parent=None, *, service=None):
+            self.path = path
+            self.parent_arg = parent
+            self.service = service
+            self.shown = False
+            instances.append(self)
+
+        def show(self):
+            self.shown = True
+
+    sentinel_service = object()
+    fake_self = SimpleNamespace(_img=sentinel_service)
+
+    # The method does a local import — patch the module-level symbol that
+    # gets bound by the ``from app.views.dialogs.full_res_viewer import
+    # FullResViewerDialog`` inside on_open_full_res_viewer.
+    import app.views.dialogs.full_res_viewer as fvm
+
+    original = fvm.FullResViewerDialog
+    fvm.FullResViewerDialog = FakeDialog
+    try:
+        MainWindow.on_open_full_res_viewer(fake_self, "/photos/a.dng")
+    finally:
+        fvm.FullResViewerDialog = original
+
+    assert len(instances) == 1, "FullResViewerDialog must be constructed exactly once"
+    dlg = instances[0]
+    assert dlg.path == "/photos/a.dng"
+    assert dlg.parent_arg is fake_self
+    assert dlg.service is sentinel_service, (
+        "service kwarg must be ``self._img`` so the dialog reuses the "
+        "app-level ImageService instead of constructing a bare one"
+    )
+    assert dlg.shown is True, (
+        "dlg.show() must be called after construction or the dialog never "
+        "becomes visible — the user double-clicks and nothing happens"
+    )
