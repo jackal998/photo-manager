@@ -468,6 +468,13 @@ status:
 # Preview pane text and inline labels.
 preview:
   header: "Preview"
+  legend:
+    title: "Similarity key"
+    ref: "Reference — the chosen keeper of the group"
+    exact: "Exact, byte-identical duplicate"
+    near: "Near match by visual similarity"
+    passenger: "Linked indirectly (lower confidence)"
+    none: "No comparable image (e.g. a Live Photo video)"
   placeholder: "(preview)"
   loading: "Loading…"
   failed: "(failed)"

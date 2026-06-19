@@ -376,6 +376,13 @@ status:
 
 preview:
   header: "預覽"
+  legend:
+    title: "相似度圖例"
+    ref: "參考 — 群組中選定的保留檔"
+    exact: "完全相同(位元級重複)"
+    near: "視覺相似的近似比對"
+    passenger: "間接關聯(信心較低)"
+    none: "無可比對影像(例如 Live Photo 影片)"
   placeholder: "(預覽)"
   loading: "載入中…"
   failed: "(失敗)"
