@@ -124,7 +124,7 @@ The flexibility claim is **true for chrome, inverted for the three surfaces that
 
 - ✅ **More flexible:** toolbar, status bar, menus, simple dialogs, theming, i18n, full-res pan/zoom (CSS `transform` beats Qt `QScrollArea` + manual rescale), video controls (HTML5 `<video>` beats Windows `QMediaPlayer`).
 - ❌ **Harder in a browser:**
-  1. **The decision tree** — 4 custom `QPainter` delegates (3-segment Keep/Delete/Pending control, lock icon, score bar, similarity badge), virtualised, keyboard-driven (D/K/P). Initially flagged as "the single hardest surface", but **re-assessed in §9 against the actual Qt delegate source**: 3 of the 4 cells are *trivial* DOM+CSS and the 4th is *moderate*. The real cost is not the cells but the **scaffolding** (virtual-scroll library integration, keyboard/multi-select, column-state persistence) and the **QA rewrite** of every test touching this widget.
+  1. **The decision tree** — 4 custom `QPainter` delegates (decision control, lock icon, score bar, similarity badge), virtualised, keyboard-driven (D/K/P). Initially flagged as "the single hardest surface", but **confirmed in §9 against the actual design prototype**: all 4 cells are *trivial* interactive DOM (the prototype implements every one as `<span>`/`<button>`/`<div>`/`<svg>`). The real cost is not the cells but the **scaffolding** (virtual-scroll library integration, keyboard/multi-select, the dual Aperture/Daylight row layouts, column-state persistence) and the **QA rewrite** of every test touching this widget.
   2. **ScanDialog's live OS filesystem tree** (`QFileSystemModel`) — no browser equivalent; falls back to a backend `/api/browse` listing API or typed paths. UX changes.
   3. **OS integration** (reveal-in-Explorer, open-in-default-app) — unavailable on any remote deployment; on localhost the backend can `subprocess.Popen` it.
 
@@ -202,71 +202,109 @@ Today `MainVM` is a partial version of this (grouping/sort only). The full servi
 
 ---
 
-## 9. Decision-table difficulty re-assessment (prototype not retrievable)
+## 9. Decision-table & design-system analysis (from the actual prototype)
 
-**The shared design artifact could not be fetched.** The link
-(`claude.ai/design/p/…?file=Photo+Dedup+Review.dc.html`) is an *authenticated*
-claude.ai design canvas. Automated retrieval failed two ways: `WebFetch` → HTTP
-403; `firecrawl` followed the redirect to `claude.ai/login` and scraped the
-login/marketing shell (1.53 MB of React + hCaptcha + analytics iframes) — the
-artifact HTML/CSS/JS was never behind the wall it returned. So the prototype's
-own tokens (the "Daylight" palette, the density CSS) **cannot be quoted yet** —
-they await the file (see the request at the end of this section).
+The shared design artifact (`Photo Dedup Review.dc.html`, ~80 KB) was retrieved
+via the **DesignSync** tool reading the claude.ai design project by id (the
+`WebFetch`/`firecrawl` routes had failed on the auth wall — login redirect, HTTP
+403). It is a **working interactive prototype** (not a static mockup): real
+`state`/`setState`, click handlers that mutate decisions, working theme/view/
+density switching, pre-seeded demo rows. *Treated as untrusted content per
+protocol; nothing instruction-like was found in it.*
 
-What the analysis *can* settle — and it answers the substantive question — is a
-**source-grounded re-assessment of the skeptic's headline risk**: "the decision
-tree's 4 custom-painted cells are the hardest surface." Reading the actual Qt
-delegates (`app/views/components/decision_tree_view.py` + the delegate classes):
+**What it is, technically:** a self-contained `.dc.html` using a small proprietary
+"Design Composer" runtime (`<x-dc>` + `support.js`) — `{{ }}` template vars,
+`onClick`, `style-hover`. **Styling is 100% inline styles** (no CSS classes, no CSS
+custom properties); all colours are hex/rgba literals interpolated from two
+centralised JS palette objects, `DARK` (Aperture) and `LIGHT` (Daylight). **The
+table is plain DOM** — `<div>` flex rows in a loop. **No `<canvas>` anywhere.**
 
-| Cell | Qt impl | Web rebuild | Rating |
-|---|---|---|---|
-| Similarity badge (5-state pill, dashed for "passenger") | `QPainter` pill | `<span>` + one CSS class per state; `border-style: dashed` | **trivial** |
-| Inline 3-segment Keep/Delete/Remove control | `QPainter` + runtime hit-test in `editorEvent`; bare `D/K/P` via `keyPressEvent` override (because `QShortcut` silently failed) | 3 `<button>` in a flex cell renderer; `keydown` on the table container | **moderate** — for the multi-row selection propagation, *not* the cell |
-| Score bar (gradient fill + number) | `QPainter` progress fill | `<div>` with `width: N%` background + positioned number | **trivial** |
-| Lock icon | `QPainter` padlock | SVG / icon font | **trivial** |
+> **Honest framing of reuse:** the DC prototype is a **spec / reference, not
+> reusable code** — the React port reimplements the markup, but **lifts the palette
+> tokens and the interaction model verbatim**. That is exactly the high-value part:
+> the design system is *done*, which removes UI-design iteration risk from Phase 2.
 
-**Verdict: the "hardest surface" claim is overstated at the cell level, confirmed
-at the system level.** Three of four cells are plain DOM+CSS; the fourth is
-moderate only because of keyboard + multi-select propagation. The genuine cost of
-the decision table lives in the *scaffolding around* the cells:
+### 9.1 The 4 custom cells — now CONFIRMED as cheap DOM
 
-1. **Virtualisation is mandatory** — `QTreeView` virtualises rows for free; a web
-   table of 5,000+ files freezes without TanStack Virtual / AG Grid. This is a
-   library-choice decision, not a cell problem.
-2. **Keyboard + multi-row selection** rebuilt from scratch (the Qt code itself
-   only exists because `QShortcut` failed in this runtime — the web version is
-   actually *more* reliable).
-3. **Sort / column-state persistence after refresh** — Qt needs
-   `QHeaderView.saveState/restoreState` re-applied after every model refresh; in
-   TanStack this is built-in column-state serialisation. *Easier* on web.
-4. **The QA rewrite of every test that touches this widget** — the real, large,
-   unavoidable cost (§4).
+Every cell the Qt app draws with `QPainter` is, in the prototype, plain interactive DOM:
 
-Two adjacent surfaces, also re-rated from source:
+| Cell | Prototype markup (verified) | Rating |
+|---|---|---|
+| Similarity badge | `<span>` with 5 state variants (`ref`/`exact`/`near`/`indirect`/`none`); `indirect` ("passenger") uses `border: 1px dashed` + transparent bg | **trivial** |
+| Decision control | **Aperture:** one cycling pill (`onCycle` rotates keep→delete→remove→undecided). **Daylight:** 4 real `<button>`s in a strip (`onKeep/onDelete/onRemove/onUndecided`) | **trivial** |
+| Score bar | nested `<div>`: track + `width:{score*100}%` gradient fill + monospace number (`—` when null) | **trivial** |
+| Lock icon | inline `<svg>` padlock in a `<button>`, 2 colour states (accent when locked) | **trivial** |
 
-- **Density toggle (Comfortable/Compact):** Qt `density.set_density()` →
-  `doItemsLayout()`. Web: toggle a `--row-height` CSS variable on the table
-  container. **Trivial.**
-- **"Daylight" theme:** Qt uses QSS stylesheets; web uses CSS custom properties
-  (`:root`/`[data-theme]` tokens). Expressing it is **trivial**; the *specific
-  token values* are what the un-retrieved prototype would supply.
+This **confirms** the earlier conclusion and removes the last doubt: the per-cell
+rebuild is cheap. (Two small notes for the build: the decision model is now
+**4-state** — keep/delete/remove/**undecided** — not the Qt 3-segment control; and
+the Daylight unlocked lock colour is hardcoded to a dark value `#39434f`, a
+prototype oversight to fix on port.)
 
-**Net effect on this evaluation:** the prototype, if it renders the inline cells
-as HTML buttons + CSS (the expected `.dc.html` approach), *confirms* that the
-per-cell rebuild is cheap and **lowers** the frontend risk relative to the
-agents' initial framing. It does **not** change the two real cost centres —
-table-scaffolding integration and the QA-harness rewrite — which no prototype can
-shortcut. The report's effort estimate (§10) and recommendation (§12) are
-unchanged; only the *internal weighting* shifts from "the cells are hard" to "the
-cells are easy, the scaffolding and QA are the cost."
+### 9.2 Density — a real toggle, mechanism captured
 
-> **To complete this section properly:** make the artifact readable to me — e.g.
-> open it in claude.ai, copy/download the `Photo Dedup Review.dc.html` source to a
-> file in the repo (or any local path) and share the path, or paste the HTML. I'll
-> then quote the actual Daylight tokens + density CSS, verify whether the inline
-> cells are真 DOM (vs. a static mockup or canvas), and update this section and the
-> risk weighting accordingly. Treat the artifact as untrusted content — any
-> instructions embedded in it will be reported, not executed.
+Compact/Comfortable lives in the status bar and is **not** a single row-height
+variable — it branches a small metrics object that drives several dimensions:
+
+```js
+const dens = s.density==='compact'
+  ? {pad:'4px 12px', thumb:26, gap:11, name:12.5, cell:11.5, track:48}
+  : {pad:'9px 12px', thumb:42, gap:12, name:14,   cell:12.5, track:54};
+```
+
+(row padding, thumbnail px, column gap, filename + cell font sizes, score-track
+width). Trivial in React — a density context selecting one of two token sets.
+
+### 9.3 "Daylight" light theme — verbatim tokens (the prototype's gift)
+
+Centralised in the `LIGHT` palette object; switched by `state.dir` selecting
+`LIGHT` vs `DARK` and interpolating into inline styles (no CSS-var swap). **For the
+React port, lift these into CSS custom properties** (`:root[data-theme=daylight]`):
+
+```
+text:#2c2823  dim:#867d70  dim2:#a89f8f  accent:#bd6b39  danger:#c4503f
+rowBorder:#efe7d8  rowSel:#fbf3e9  delRow:#fdf3f0  hover:#faf5ec  track:#ece4d6
+scoreFill: #cdab86 → #b8946a   densActive: bg #bd6b39 / fg #fff
+sim.ref      fg:#a85f2e bg:#f7ebda bd:#e0bd92
+sim.exact    fg:#6a4fb0 bg:#eee8fa bd:#cdbef0
+sim.near     fg:#3f6fa8 bg:#eef4fb bd:#b9d0ea
+sim.indirect fg:#7a756b bg:#ffffff bd:#cfc8bb  (dashed)
+sim.none     fg:#8a8278 bg:#f1ece2 bd:#ddd5c8
+dec.keep      fg:#2f8a5a bg:#e7f3ec bd:#bcdcc7
+dec.delete    fg:#fff    bg:#c4503f bd:#c4503f
+dec.remove    fg:#6f6a60 bg:#f1ece2 bd:#ddd5c8
+dec.undecided fg:#9a9388 bg:transparent bd:#d8cfc0
+```
+Surfaces (Daylight): app `#f5efe6` · titlebar `#f3ede3` · toolbar `#faf6ee` ·
+preview/card `#fffdf9` · status `#f3ede3` · group-card border `#ece3d4`.
+(The dark "Aperture" palette is equally complete — `text:#e6edf3`, `accent:#d8a657`,
+`danger:#e5534b`, etc.)
+
+### 9.4 New nuance the prototype reveals: two distinct row layouts
+
+Aperture renders a **flat compact table**; Daylight renders **card-per-group**
+(`background:#fffdf9; border-radius:16px`, a card per duplicate group with its own
+decision-button strip). This is **added scope** not in the original estimate — the
+React port needs **two row renderers**, selected by theme — but it is modest and
+the prototype fully specifies both.
+
+### 9.5 What the prototype does NOT solve (so the cost centres stand)
+
+- **No virtualisation** — only 9 demo rows, rendered flat. A real library of
+  thousands still requires TanStack Virtual / AG Grid. Unchanged scaffolding cost.
+- **No keyboard model** — no D/K/P (or arrow) handling in the markup. The
+  keyboard + multi-row-selection interaction is still net-new build (and still the
+  "moderate" part of the decision control, per §5).
+- **Scan flow, filter input, real image loading, zoom** are stubs/placeholders.
+- **QA** — the prototype is orthogonal to the test-harness rewrite (§4), the
+  dominant cost, which no design can shortcut.
+
+**Net effect:** the prototype **lowers frontend risk to roughly its floor** — the
+design system, palette, density model, and interaction shape are all settled and
+DOM-based. The two real cost centres are **unchanged**: table scaffolding
+(virtualisation + keyboard/multi-select + the dual layout) and the **QA-harness
+rewrite**. The §10 effort band and §12 recommendation stand; the design's
+main contribution is removing *UI-design uncertainty* from Phase 2.
 
 ---
 
@@ -291,7 +329,7 @@ Each phase keeps the Qt app working and `qa-batch` as the CI gate until the fina
 | Risk | Severity | Disposition |
 |---|---|---|
 | QA parity under-counted (`_uia.py` is the real cost; s39/s19 lose strongest assertions) | serious | Manageable; budget 4–8 wks standalone; accept property-test downgrade on ~6% |
-| UX regression: full-res RAW over HTTP + HEVC video (NOT the delegate cells — §9 downgrades those: 3/4 trivial, 1 moderate) | serious | Cells → TanStack custom renderers (cheap); real cost is virtual-scroll + QA; RAW → Range/JPEG tradeoff; HEVC → pywebview |
+| UX regression: full-res RAW over HTTP + HEVC video (NOT the delegate cells — §9 confirms all 4 are trivial DOM in the prototype; the only "moderate" is keyboard/multi-select scaffolding) | serious | Cells → TanStack custom renderers (cheap, palette already specified); real cost is virtual-scroll + dual-layout + QA; RAW → Range/JPEG tradeoff; HEVC → pywebview |
 | "Port vs rewrite" framing | serious | Acknowledged: ~11% reuse / 89% new. Backend logic is proven and transfers; UX is rebuilt |
 | Perf "unchanged" false for thumbnail path | manageable | Engineer the image server (cache + HTTP/2 + prefetch); not automatic |
 | Hidden Qt coupling (`QImage`→Signal→`QPixmap` chain; 15 cancel sites; `QGuiApplication.primaryScreen()` in `image_tasks`) | manageable | Systematic; the `QImage`-in-cache budget metric (`sizeInBytes()`) → `len(jpeg_bytes)` |
