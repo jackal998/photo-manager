@@ -95,6 +95,8 @@ class ScoreBarDelegate(QStyledItemDelegate):
         size = super().sizeHint(option, index)
         if index.parent().isValid():
             # Reserve room for the bar + the number so ResizeToContents
-            # doesn't collapse the Score column to just the digits.
-            return QSize(max(size.width(), 96), size.height())
+            # doesn't collapse the Score column to just the digits; row
+            # height follows the active density.
+            from app.views import density
+            return QSize(max(size.width(), 96), density.row_height())
         return size

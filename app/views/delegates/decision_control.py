@@ -129,7 +129,8 @@ class DecisionControlDelegate(QStyledItemDelegate):
         base = super().sizeHint(option, index)
         if not index.parent().isValid():
             return base
+        from app.views import density
         fm = QFontMetrics(option.font)
         seg_w = max(fm.horizontalAdvance(lbl) for _v, lbl in self._segments()) + 16
         total = int(seg_w * 3 + _GAP * 2 + _PAD * 2)
-        return QSize(max(total, base.width()), max(base.height(), 26))
+        return QSize(max(total, base.width()), density.row_height())

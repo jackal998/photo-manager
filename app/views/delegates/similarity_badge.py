@@ -116,6 +116,8 @@ class SimilarityBadgeDelegate(QStyledItemDelegate):
         size = super().sizeHint(option, index)
         if self._badge_for(index) is not None:
             # Reserve room for the pill padding (+ the Ref star) so
-            # ResizeToContents doesn't clip the badge.
-            return QSize(size.width() + 30, max(size.height(), 24))
+            # ResizeToContents doesn't clip the badge; row height follows
+            # the active density.
+            from app.views import density
+            return QSize(size.width() + 30, density.row_height())
         return size

@@ -49,6 +49,10 @@ menu:
     title: "&View"
     language:
       title: "Language"
+    density:
+      title: "Density"
+      comfortable: "Comfortable"
+      compact: "Compact"
 
 main_window:
   title: "Photo Manager"

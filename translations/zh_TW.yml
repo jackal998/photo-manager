@@ -33,6 +33,10 @@ menu:
     title: "檢視(&V)"
     language:
       title: "語言"
+    density:
+      title: "密度"
+      comfortable: "寬鬆"
+      compact: "緊湊"
 
 main_window:
   title: "Photo Manager"

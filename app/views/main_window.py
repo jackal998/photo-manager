@@ -203,6 +203,18 @@ class MainWindow(QMainWindow):
         self._img = image_service
         self._settings = settings
 
+        # Row density (Comfortable / Compact) — set before the tree + its
+        # delegates are built so the first layout uses the right row height.
+        from app.views import density
+        try:
+            density.set_density(
+                self._settings.get("ui.density", density.DEFAULT)
+                if self._settings is not None
+                else density.DEFAULT
+            )
+        except Exception:
+            density.set_density(density.DEFAULT)
+
         # #468 — defense-in-depth flag for closeEvent. Set/cleared by
         # ScanDialog.scan_started / scan_finished signals wired up in
         # :meth:`on_scan_sources`. Stays False whenever no scan dialog
@@ -844,6 +856,23 @@ class MainWindow(QMainWindow):
             image: Loaded image object
         """
         self._preview.on_image_loaded(token, path, image)
+
+    def apply_density(self, code: str) -> None:
+        """Switch row density and relayout the tree (View → Density).
+
+        The delegates read the new row height from
+        :mod:`app.views.density` in their ``sizeHint``; we set it then
+        force the view to recompute item layout (uniform-row-height caches
+        the old height otherwise).
+        """
+        from app.views import density
+        density.set_density(code)
+        try:
+            self.tree.scheduleDelayedItemsLayout()
+            self.tree.doItemsLayout()
+            self.tree.viewport().update()
+        except Exception:
+            pass
 
     def _on_inline_decision(self, index: Any, decision: str) -> None:
         """Apply a Keep/Delete/Remove click from the inline row control.
