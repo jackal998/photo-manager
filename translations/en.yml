@@ -54,6 +54,10 @@ menu:
       comfortable: "Comfortable"
       compact: "Compact"
 
+toolbar:
+  title: "Main"
+  selected_label: "Selected:"
+
 main_window:
   title: "Photo Manager"
   status_ready: "Ready"

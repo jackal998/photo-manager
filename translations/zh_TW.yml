@@ -38,6 +38,10 @@ menu:
       comfortable: "寬鬆"
       compact: "緊湊"
 
+toolbar:
+  title: "主要"
+  selected_label: "已選:"
+
 main_window:
   title: "Photo Manager"
   status_ready: "就緒"

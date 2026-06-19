@@ -380,6 +380,18 @@ class MainWindow(QMainWindow):
         # Setup menus
         self.menu_controller.setup_menus()
 
+        # Toolbar surfacing the core verbs (Scan / Open / bulk decision /
+        # Execute). Built after menus so it can reuse their QActions and
+        # inherit the manifest-load gating on Execute (#audit gap C/5).
+        from app.views.components.toolbar_builder import build_main_toolbar
+        self._toolbar = build_main_toolbar(
+            self,
+            self.menu_controller.actions,
+            on_bulk_keep=self._bulk_keep_selected,
+            on_bulk_delete=self._bulk_delete_selected,
+            on_bulk_remove=self._bulk_remove_selected,
+        )
+
         # Setup context menu
         self.context_menu_handler.setup_context_menu()
 
@@ -873,6 +885,19 @@ class MainWindow(QMainWindow):
             self.tree.viewport().update()
         except Exception:
             pass
+
+    def _bulk_keep_selected(self) -> None:
+        """Toolbar: set every selected file row to Keep (no-action)."""
+        self.file_operations.set_decision_to_highlighted("")
+
+    def _bulk_delete_selected(self) -> None:
+        """Toolbar: mark every selected file row for deletion."""
+        self.file_operations.set_decision_to_highlighted("delete")
+
+    def _bulk_remove_selected(self) -> None:
+        """Toolbar: set every selected file row to Remove-from-list (ignore)."""
+        from app.views.constants import IGNORE_DECISION
+        self.file_operations.set_decision_to_highlighted(IGNORE_DECISION)
 
     def _on_inline_decision(self, index: Any, decision: str) -> None:
         """Apply a Keep/Delete/Remove click from the inline row control.

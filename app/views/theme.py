@@ -191,6 +191,61 @@ QMenu::separator {
     margin: 4px 8px;
 }
 
+/* ===== Toolbar ===== */
+QToolBar {
+    background-color: @bg_toolbar@;
+    border: none;
+    border-bottom: 1px solid @border@;
+    padding: 6px 8px;
+    spacing: 6px;
+}
+QToolBar::separator {
+    background-color: @border@;
+    width: 1px;
+    margin: 4px 6px;
+}
+QToolButton {
+    background-color: @bg_panel@;
+    color: @text@;
+    border: 1px solid @border_input@;
+    border-radius: 8px;
+    padding: 6px 12px;
+}
+QToolButton:hover {
+    background-color: @bg_subtle@;
+}
+QToolButton:pressed {
+    background-color: @select_bg@;
+}
+QToolButton:disabled {
+    color: @text_faint@;
+    border-color: @border_soft@;
+    background-color: @bg_app@;
+}
+QToolButton#primaryAction {
+    background-color: @accent@;
+    color: #ffffff;
+    border: 1px solid @accent@;
+    font-weight: 600;
+}
+QToolButton#primaryAction:hover {
+    background-color: @accent_hover@;
+}
+QToolButton#dangerAction {
+    background-color: @danger@;
+    color: #ffffff;
+    border: 1px solid @danger@;
+    font-weight: 700;
+}
+QToolButton#dangerAction:hover {
+    background-color: #d05f4d;
+}
+QToolButton#dangerAction:disabled {
+    background-color: @bg_app@;
+    color: @text_faint@;
+    border-color: @border_soft@;
+}
+
 /* ===== Status bar ===== */
 QStatusBar {
     background-color: @bg_titlebar@;
