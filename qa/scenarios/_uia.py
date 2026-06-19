@@ -2278,23 +2278,6 @@ def _row_anchor(win: UIAWrapper, basename: str) -> tuple[int, int]:
                 return cx, cy
         except Exception:
             continue
-    try:
-        _tr = tree.rectangle()
-        print(f"DBG_TREE rect=({_tr.left},{_tr.top},{_tr.right},{_tr.bottom})", flush=True)
-    except Exception:
-        pass
-    for _it in items:
-        try:
-            _r = _it.rectangle()
-            print(
-                f"DBG_ITEM text={(_it.window_text() or '')!r} "
-                f"ct={_it.element_info.control_type!r} "
-                f"rect=({_r.left},{_r.top},{_r.right},{_r.bottom})",
-                flush=True,
-            )
-        except Exception as _e:
-            print(f"DBG_ITEM err={_e!r}", flush=True)
-    print(f"DBG_ROW_ANCHOR want={basename!r}", flush=True)
     raise RuntimeError(
         f"row with basename {basename!r} not found in result tree "
         f"(scanned {len(items)} TreeItem(s))"

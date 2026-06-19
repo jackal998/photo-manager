@@ -543,6 +543,11 @@ def run_one(name: str) -> tuple[int, str]:
     env = os.environ.copy()
     env["PHOTO_MANAGER_HOME"] = "qa"
     env["QT_ACCESSIBILITY"] = "1"
+    # Open maximized so the wide results-tree columns (Daylight redesign)
+    # don't push the File Name column off the small CI screen's visible
+    # area — _row_anchor / read helpers need the name cells exposed. Only
+    # affects qa launches (real users keep the normal window).
+    env["PHOTO_MANAGER_MAXIMIZE"] = "1"
     proc = subprocess.Popen(
         [PY, "main.py"], cwd=REPO, env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

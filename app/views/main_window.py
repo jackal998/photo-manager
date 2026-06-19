@@ -6,6 +6,7 @@ and handlers while preserving all existing public interfaces for backward compat
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -1227,6 +1228,10 @@ class MainWindow(QMainWindow):
         new_win = make_main_window(self._vm, self._img, self._settings)
         new_win._apply_relocalize_state(saved)
         new_win.show()
+        # Mirror main.main()'s qa-only maximize so a language switch during
+        # the qa batch keeps the wide results-tree columns on-screen.
+        if os.environ.get("PHOTO_MANAGER_MAXIMIZE") == "1":
+            new_win.showMaximized()
         # Close + delete this window. The new one owns the same vm /
         # image_service / settings; nothing of ours needs to outlive
         # the close.

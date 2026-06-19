@@ -1756,3 +1756,72 @@ def test_on_open_full_res_viewer_constructs_dialog_with_di_service_and_shows():
         "dlg.show() must be called after construction or the dialog never "
         "becomes visible — the user double-clicks and nothing happens"
     )
+
+
+# ── feat/review-ux-daylight — toolbar bulk / inline / lock / density ──────────
+
+
+def test_bulk_keep_selected_sets_empty_decision():
+    fake_ops = MagicMock()
+    MainWindow._bulk_keep_selected(SimpleNamespace(file_operations=fake_ops))
+    fake_ops.set_decision_to_highlighted.assert_called_once_with("")
+
+
+def test_bulk_delete_selected_sets_delete():
+    fake_ops = MagicMock()
+    MainWindow._bulk_delete_selected(SimpleNamespace(file_operations=fake_ops))
+    fake_ops.set_decision_to_highlighted.assert_called_once_with("delete")
+
+
+def test_bulk_remove_selected_sets_ignore():
+    from app.views.constants import IGNORE_DECISION
+    fake_ops = MagicMock()
+    MainWindow._bulk_remove_selected(SimpleNamespace(file_operations=fake_ops))
+    fake_ops.set_decision_to_highlighted.assert_called_once_with(IGNORE_DECISION)
+
+
+def test_on_inline_decision_routes_path_and_value():
+    fake_tc = MagicMock()
+    fake_tc.get_file_path_from_index.return_value = "/p/a.jpg"
+    fake_ops = MagicMock()
+    fake_self = SimpleNamespace(tree_controller=fake_tc, file_operations=fake_ops)
+    MainWindow._on_inline_decision(fake_self, object(), "delete")
+    fake_ops.set_decision.assert_called_once_with([{"type": "file", "path": "/p/a.jpg"}], "delete")
+
+
+def test_on_inline_decision_no_path_is_noop():
+    fake_tc = MagicMock()
+    fake_tc.get_file_path_from_index.return_value = None
+    fake_ops = MagicMock()
+    fake_self = SimpleNamespace(tree_controller=fake_tc, file_operations=fake_ops)
+    MainWindow._on_inline_decision(fake_self, object(), "delete")
+    fake_ops.set_decision.assert_not_called()
+
+
+def test_on_lock_toggled_routes_path_and_state():
+    fake_tc = MagicMock()
+    fake_tc.get_file_path_from_index.return_value = "/p/a.jpg"
+    fake_ops = MagicMock()
+    fake_self = SimpleNamespace(tree_controller=fake_tc, file_operations=fake_ops)
+    MainWindow._on_lock_toggled(fake_self, object(), True)
+    fake_ops.set_locked_state.assert_called_once_with([{"type": "file", "path": "/p/a.jpg"}], True)
+
+
+def test_on_lock_toggled_no_path_is_noop():
+    fake_tc = MagicMock()
+    fake_tc.get_file_path_from_index.return_value = None
+    fake_ops = MagicMock()
+    fake_self = SimpleNamespace(tree_controller=fake_tc, file_operations=fake_ops)
+    MainWindow._on_lock_toggled(fake_self, object(), False)
+    fake_ops.set_locked_state.assert_not_called()
+
+
+def test_apply_density_sets_and_relayouts():
+    from app.views import density
+    fake_tree = MagicMock()
+    try:
+        MainWindow.apply_density(SimpleNamespace(tree=fake_tree), "compact")
+        assert density.current() == "compact"
+        fake_tree.doItemsLayout.assert_called_once()
+    finally:
+        density.set_density("comfortable")
