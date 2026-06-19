@@ -147,3 +147,34 @@ def test_lock_icon_painted_only_when_locked(qapp):
     open_img = _render(delegate, grp.child(1, COL_LOCK).index(), col_w=40)
     assert _count_color(locked_img, accent) > 0
     assert _count_color(open_img, accent) == 0
+
+
+# ── LockIconDelegate — click toggle + header icon (design-review refinements) ──
+
+
+def test_lock_click_emits_toggle(qapp):
+    from PySide6.QtCore import QEvent, QPointF, QRect
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    model = _lock_model()
+    delegate = LockIconDelegate()
+    grp = model.item(0, COL_GROUP)
+    locked_index = grp.child(0, COL_LOCK).index()   # starts locked
+    captured: list[bool] = []
+    delegate.lockToggled.connect(lambda _idx, state: captured.append(state))
+
+    opt = QStyleOptionViewItem()
+    opt.rect = QRect(0, 0, 40, 26)
+    ev = QMouseEvent(
+        QEvent.MouseButtonRelease, QPointF(20, 13),
+        Qt.LeftButton, Qt.NoButton, Qt.NoModifier,
+    )
+    assert delegate.editorEvent(ev, model, opt, locked_index) is True
+    assert captured == [False]   # locked row toggles to unlocked
+
+
+def test_make_lock_icon_renders(qapp):
+    from app.views.delegates.lock_icon import make_lock_icon
+    icon = make_lock_icon("#bd6b39")
+    assert not icon.isNull()

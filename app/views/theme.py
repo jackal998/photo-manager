@@ -56,10 +56,11 @@ DAYLIGHT: dict[str, str] = {
     # Selection (warm accent tint, not the harsh default blue)
     "select_bg": "#f1e3d0",
     "select_text": "#2c2823",
-    # Full-row banding (painted by DecisionTreeView.drawRow, not QSS —
-    # QSS can't target group-header vs file rows in a QTreeView)
-    "group_band": "#f5ecdd",     # warm band behind a group-header row
-    "delete_row_bg": "#f8e6e1",  # red wash behind a row marked for deletion
+    # Full-row banding + group framing (painted by DecisionTreeView.drawRow,
+    # not QSS — QSS can't target group-header vs file rows in a QTreeView)
+    "group_band": "#f3e9d8",     # warm band behind a group-header row
+    "group_border": "#e4d6bd",   # frame line bracketing a group
+    "delete_row_bg": "#fbf1ed",  # soft red wash behind a delete row (kept light)
     # Scrollbar thumb
     "scroll_thumb": "#ddd2bf",
     "scroll_thumb_hover": "#cdbfa6",
@@ -98,9 +99,6 @@ QTreeView::item {
     padding: 4px 6px;
     border: none;
 }
-QTreeView::item:hover {
-    background-color: @bg_subtle@;
-}
 QTreeView::item:selected {
     background-color: @select_bg@;
     color: @select_text@;
@@ -115,9 +113,6 @@ QHeaderView::section {
     border-bottom: 1px solid @border@;
     border-right: 1px solid @border_soft@;
     font-weight: 600;
-}
-QHeaderView::section:hover {
-    background-color: @bg_subtle@;
 }
 
 /* ===== Buttons ===== */

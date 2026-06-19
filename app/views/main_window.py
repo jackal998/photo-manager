@@ -441,6 +441,11 @@ class MainWindow(QMainWindow):
         if delegate is not None:
             delegate.decisionPicked.connect(self._on_inline_decision)
 
+        # Inline lock toggle: clicking a row's padlock flips its lock state.
+        lock_delegate = self.tree_controller.lock_delegate
+        if lock_delegate is not None:
+            lock_delegate.lockToggled.connect(self._on_lock_toggled)
+
         # Image loading signal
         self.imageLoaded.connect(self._on_image_loaded)
 
@@ -914,6 +919,18 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.file_operations.set_decision([{"type": "file", "path": path}], decision)
+
+    def _on_lock_toggled(self, index: Any, locked: bool) -> None:
+        """Apply a lock/unlock click from a row's inline padlock.
+
+        Resolves the proxy index to the row's path and flips its lock via
+        the shared ``set_locked_state`` dispatcher (incremental cell update
+        repaints the padlock). No-op without a loaded manifest.
+        """
+        path = self.tree_controller.get_file_path_from_index(index)
+        if not path:
+            return
+        self.file_operations.set_locked_state([{"type": "file", "path": path}], locked)
 
     # Private methods
 

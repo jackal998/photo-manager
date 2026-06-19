@@ -728,3 +728,20 @@ class TestSemanticRoles:
         assert kinds[3] == SIM_NEAR         # near match
         assert kinds[4] == SIM_PASSENGER    # Ref-tier non-winner, comparable phash → starred
         assert decisions == ["", "", "delete", "delete", "ignore"]
+
+
+class TestDeleteStrikethrough:
+    """Delete rows strike through the file name (design-review refinement)."""
+
+    def test_delete_name_struck_keep_name_not(self):
+        from app.views.constants import COL_GROUP, COL_NAME
+        from app.views.tree_model_builder import build_model
+
+        items = [
+            _rec(file_path="/p/del.jpg", user_decision="delete"),
+            _rec(file_path="/p/keep.jpg", user_decision=""),
+        ]
+        model, _ = build_model([_group(items)])
+        grp = model.item(0, COL_GROUP)
+        assert grp.child(0, COL_NAME).font().strikeOut() is True
+        assert grp.child(1, COL_NAME).font().strikeOut() is False

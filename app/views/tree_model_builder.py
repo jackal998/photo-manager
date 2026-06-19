@@ -31,6 +31,8 @@ from app.views.constants import (
     SORT_ROLE,
     headers,
 )
+from app.views.delegates.lock_icon import make_lock_icon
+from app.views.theme import DAYLIGHT
 from infrastructure.i18n import t
 from scanner.phash_distance import hamming_distance as _phash_hamming
 
@@ -281,6 +283,14 @@ def build_model(
     """
     model = QStandardItemModel()
     model.setHorizontalHeaderLabels(headers())
+    # Show a padlock glyph in the Lock column header instead of the word.
+    try:
+        model.setHeaderData(COL_LOCK, Qt.Horizontal, "", Qt.DisplayRole)
+        model.setHeaderData(
+            COL_LOCK, Qt.Horizontal, make_lock_icon(DAYLIGHT["text_muted"]), Qt.DecorationRole
+        )
+    except Exception:
+        pass
 
     # Bold font for group-header rows so the group reads as the scannable
     # spine of the view (the audit's #2 structural gap). Constructed here
@@ -290,6 +300,10 @@ def build_model(
     # group headers is painted separately by DecisionTreeView.drawRow.
     group_font = QFont()
     group_font.setBold(True)
+    # Strike-through font for the file name of a row marked for deletion —
+    # reinforces the delete state alongside the red row tint.
+    strike_font = QFont()
+    strike_font.setStrikeOut(True)
 
     for g in groups:
         group_number = int(getattr(g, "group_number", 0) or 0)
@@ -590,6 +604,9 @@ def build_model(
                 child_row[COL_NAME].setData(getattr(p, "file_path", ""), PATH_ROLE)
             except Exception:
                 pass
+
+            if item_decision == "delete":
+                child_row[COL_NAME].setFont(strike_font)
 
             for it in child_row:
                 it.setEditable(False)

@@ -81,12 +81,10 @@ class SimilarityBadgeDelegate(QStyledItemDelegate):
 
         painter.save()
         # Background: drawRow already painted the row band / delete tint for
-        # the unselected case, so we only fill for selection / hover to match
-        # what the default delegate paints in the sibling columns.
+        # the unselected case, so we only fill for selection (no hover — the
+        # design has no row-hover state).
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, QColor(DAYLIGHT["select_bg"]))
-        elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(option.rect, QColor(DAYLIGHT["bg_subtle"]))
 
         painter.setRenderHint(QPainter.Antialiasing, True)
         font = QFont(option.font)

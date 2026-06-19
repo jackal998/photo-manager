@@ -22,7 +22,6 @@ _FILL_A = "#cdab86"
 _FILL_B = "#b8946a"
 _BAR_H = 6
 _PAD = 6
-_NUM_W = 34
 
 
 class ScoreBarDelegate(QStyledItemDelegate):
@@ -42,10 +41,9 @@ class ScoreBarDelegate(QStyledItemDelegate):
         return value if value >= 0.0 else None
 
     def _paint_state_bg(self, painter, option) -> None:
+        # Selection only — the design has no row-hover state.
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, QColor(DAYLIGHT["select_bg"]))
-        elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(option.rect, QColor(DAYLIGHT["bg_subtle"]))
 
     def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
         if not index.parent().isValid():
@@ -63,32 +61,35 @@ class ScoreBarDelegate(QStyledItemDelegate):
             return
 
         painter.setRenderHint(QPainter.Antialiasing, True)
-        rect = option.rect
-        bar_left = rect.left() + _PAD
-        bar_right = rect.right() - _NUM_W - _PAD
-        bar_w = max(bar_right - bar_left, 0)
-        bar_y = rect.top() + (rect.height() - _BAR_H) / 2.0
-
-        # Track
-        track = QRectF(bar_left, bar_y, bar_w, _BAR_H)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(_TRACK))
-        painter.drawRoundedRect(track, 3, 3)
-
-        # Fill (warm gradient, clamped to the score fraction)
-        fill_w = bar_w * max(0.0, min(1.0, score))
-        if fill_w > 0:
-            grad = QLinearGradient(bar_left, 0, bar_left + bar_w, 0)
-            grad.setColorAt(0.0, QColor(_FILL_A))
-            grad.setColorAt(1.0, QColor(_FILL_B))
-            painter.setBrush(grad)
-            painter.drawRoundedRect(QRectF(bar_left, bar_y, fill_w, _BAR_H), 3, 3)
-
-        # Number, right-aligned in the reserved area
-        num_rect = QRectF(rect.right() - _NUM_W, rect.top(), _NUM_W - 2, rect.height())
-        painter.setPen(QColor(DAYLIGHT["text_muted"]))
         painter.setFont(option.font)
-        painter.drawText(num_rect, Qt.AlignRight | Qt.AlignVCenter, f"{score:.2f}")
+        rect = option.rect
+        num = f"{score:.2f}"
+        # Number width measured from the actual font so it never clips (a
+        # narrow saved column width was making it vanish). The number is
+        # ALWAYS drawn; the bar is drawn only when there's room left for it.
+        num_w = painter.fontMetrics().horizontalAdvance(num) + 8
+        num_rect = QRectF(rect.right() - _PAD - num_w, rect.top(), num_w, rect.height())
+
+        bar_left = rect.left() + _PAD
+        bar_right = num_rect.left() - _PAD
+        bar_w = bar_right - bar_left
+        if bar_w >= 24:
+            bar_y = rect.top() + (rect.height() - _BAR_H) / 2.0
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(_TRACK))
+            painter.drawRoundedRect(QRectF(bar_left, bar_y, bar_w, _BAR_H), 3, 3)
+            fill_w = bar_w * max(0.0, min(1.0, score))
+            if fill_w > 0:
+                grad = QLinearGradient(bar_left, 0, bar_left + bar_w, 0)
+                grad.setColorAt(0.0, QColor(_FILL_A))
+                grad.setColorAt(1.0, QColor(_FILL_B))
+                painter.setBrush(grad)
+                painter.drawRoundedRect(QRectF(bar_left, bar_y, fill_w, _BAR_H), 3, 3)
+
+        # Number — primary text colour (was muted, which read as "missing"
+        # against the row) and clamped inside the cell so it can't clip.
+        painter.setPen(QColor(DAYLIGHT["text"]))
+        painter.drawText(num_rect, Qt.AlignRight | Qt.AlignVCenter, num)
         painter.restore()
 
     def sizeHint(self, option, index) -> QSize:  # type: ignore[override]

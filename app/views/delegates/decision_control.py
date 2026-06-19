@@ -85,10 +85,9 @@ class DecisionControlDelegate(QStyledItemDelegate):
         decision = index.data(DECISION_ROLE) or ""
 
         painter.save()
+        # Selection only — the design has no row-hover state.
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, QColor(DAYLIGHT["select_bg"]))
-        elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(option.rect, QColor(DAYLIGHT["bg_subtle"]))
 
         painter.setRenderHint(QPainter.Antialiasing, True)
         font = QFont(option.font)

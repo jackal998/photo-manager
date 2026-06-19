@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHeaderView, QTreeView
 from loguru import logger
 
@@ -48,6 +49,7 @@ class TreeController:
         self._model = None
         self._proxy = None
         self._decision_delegate = None
+        self._lock_delegate = None
         self._current_sort_column: int = COL_GROUP
         self._current_sort_order: Qt.SortOrder = Qt.AscendingOrder
 
@@ -70,7 +72,8 @@ class TreeController:
         self._decision_delegate = DecisionControlDelegate(self.tree)
         self.tree.setItemDelegateForColumn(COL_ACTION, self._decision_delegate)
         self.tree.setItemDelegateForColumn(COL_SCORE, ScoreBarDelegate(self.tree))
-        self.tree.setItemDelegateForColumn(COL_LOCK, LockIconDelegate(self.tree))
+        self._lock_delegate = LockIconDelegate(self.tree)
+        self.tree.setItemDelegateForColumn(COL_LOCK, self._lock_delegate)
         # Stop Qt auto-scrolling the viewport to the clicked cell on every
         # selection change. With autoScroll on, clicking a row whose cells
         # extend past the viewport made the view jerk horizontally to "align"
@@ -507,6 +510,13 @@ class TreeController:
                 sim_item = group_item.child(m_i, COL_GROUP)
                 if sim_item is not None:
                     sim_item.setData(decision, DECISION_ROLE)
+                # Strike through the file name for delete rows (clear it when
+                # the decision changes away from delete).
+                name_item = group_item.child(m_i, COL_NAME)
+                if name_item is not None:
+                    strike = QFont()
+                    strike.setStrikeOut(decision == "delete")
+                    name_item.setFont(strike)
             except Exception as exc:
                 logger.error("update_decision_cells failed at ({}, {}): {}", g_i, m_i, exc)
 
@@ -611,3 +621,10 @@ class TreeController:
         before ``setup_tree_properties`` runs). MainWindow connects its
         ``decisionPicked`` signal to apply the click to the row's path."""
         return self._decision_delegate
+
+    @property
+    def lock_delegate(self):
+        """The clickable padlock delegate on COL_LOCK (or None before
+        ``setup_tree_properties`` runs). MainWindow connects its
+        ``lockToggled`` signal to flip the row's lock state."""
+        return self._lock_delegate
