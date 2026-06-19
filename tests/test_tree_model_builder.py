@@ -682,3 +682,49 @@ class TestScoreColumn:
         assert sort_val < 0.0
 
 
+
+
+class TestSemanticRoles:
+    """DECISION_ROLE + SIMILARITY_KIND_ROLE on the col-0 file item.
+
+    These roles are the contract the Daylight delegates + drawRow rely on:
+    the delete-row tint reads DECISION_ROLE, the similarity-badge delegate
+    reads SIMILARITY_KIND_ROLE. A wrong value here = a wrong tint or badge,
+    so this guards the classification against drift.
+    """
+
+    def test_kind_and_decision_roles_cover_all_five_states(self):
+        from app.views.constants import (
+            COL_GROUP,
+            DECISION_ROLE,
+            SIM_EXACT,
+            SIM_NEAR,
+            SIM_NONE,
+            SIM_PASSENGER,
+            SIM_REF,
+            SIMILARITY_KIND_ROLE,
+        )
+        from app.views.tree_model_builder import build_model
+
+        # Row order is preserved from items (sort happens in the proxy).
+        items = [
+            _rec(file_path="/p/ref.jpg", action="", score=0.9, phash="ffffffffffffffff"),
+            _rec(file_path="/p/live.MOV", action="", score=None, phash=None),
+            _rec(file_path="/p/exact.jpg", action="EXACT", score=0.8,
+                 phash="ffffffffffffffff", user_decision="delete"),
+            _rec(file_path="/p/near.jpg", action="REVIEW_DUPLICATE", score=0.7,
+                 phash="fffffffffffffff8", user_decision="delete"),
+            _rec(file_path="/p/raw.jpg", action="", score=0.5,
+                 phash="fffffffffffffff0", user_decision="ignore"),
+        ]
+        model, _ = build_model([_group(items)])
+        grp = model.item(0, COL_GROUP)
+        kinds = [grp.child(r, COL_GROUP).data(SIMILARITY_KIND_ROLE) for r in range(grp.rowCount())]
+        decisions = [grp.child(r, COL_GROUP).data(DECISION_ROLE) for r in range(grp.rowCount())]
+
+        assert kinds[0] == SIM_REF          # highest-score Ref-tier → winner
+        assert kinds[1] == SIM_NONE         # Ref-tier non-winner, no phash (MOV)
+        assert kinds[2] == SIM_EXACT        # 100%
+        assert kinds[3] == SIM_NEAR         # near match
+        assert kinds[4] == SIM_PASSENGER    # Ref-tier non-winner, comparable phash → starred
+        assert decisions == ["", "", "delete", "delete", "ignore"]

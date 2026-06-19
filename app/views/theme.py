@@ -56,6 +56,10 @@ DAYLIGHT: dict[str, str] = {
     # Selection (warm accent tint, not the harsh default blue)
     "select_bg": "#f1e3d0",
     "select_text": "#2c2823",
+    # Full-row banding (painted by DecisionTreeView.drawRow, not QSS —
+    # QSS can't target group-header vs file rows in a QTreeView)
+    "group_band": "#f5ecdd",     # warm band behind a group-header row
+    "delete_row_bg": "#f8e6e1",  # red wash behind a row marked for deletion
     # Scrollbar thumb
     "scroll_thumb": "#ddd2bf",
     "scroll_thumb_hover": "#cdbfa6",

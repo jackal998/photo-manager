@@ -20,8 +20,11 @@ for those two keys. All other letters still fall through to
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QColor, QKeyEvent
 from PySide6.QtWidgets import QTreeView
+
+from app.views.constants import DECISION_ROLE
+from app.views.theme import DAYLIGHT
 
 
 class DecisionTreeView(QTreeView):
@@ -51,6 +54,36 @@ class DecisionTreeView(QTreeView):
 
     decisionRequested = Signal(str)
     playPauseRequested = Signal()
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Pre-build the two full-row band colours once (QColor parse per
+        # paint would be wasteful on a tree with thousands of rows).
+        self._group_band = QColor(DAYLIGHT["group_band"])
+        self._delete_row_bg = QColor(DAYLIGHT["delete_row_bg"])
+
+    def drawRow(self, painter, option, index) -> None:  # type: ignore[override]
+        """Paint a full-row background band before the cells are drawn.
+
+        QSS can't target group-header vs file rows in a QTreeView, so the
+        two structural cues the UX audit asked for live here:
+
+        * **Group-header rows** (no valid parent) get a warm band so the
+          group reads as the scannable spine of the view.
+        * **File rows marked for deletion** get a red wash so the single
+          most consequential state is unmistakable (the audit's top gap).
+
+        ``index`` is always the row's column-0 index, where the model
+        stores :data:`DECISION_ROLE`. We fill *before* ``super().drawRow``
+        so the cell text paints crisply on top (no translucent overlay
+        dimming the text) and Qt's selection highlight still wins for a
+        selected row — selection paints over our fill in ``super``.
+        """
+        if not index.parent().isValid():
+            painter.fillRect(option.rect, self._group_band)
+        elif index.data(DECISION_ROLE) == "delete":
+            painter.fillRect(option.rect, self._delete_row_bg)
+        super().drawRow(painter, option, index)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         if event.modifiers() == Qt.NoModifier:

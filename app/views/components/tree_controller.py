@@ -14,6 +14,7 @@ from app.views.constants import (
     COL_GROUP_COUNT,
     COL_LOCK,
     COL_NAME,
+    DECISION_ROLE,
     NUM_COLUMNS,
     PATH_ROLE,
     SORT_ROLE,
@@ -483,6 +484,11 @@ class TreeController:
                     continue
                 action_item.setText(_action_display(decision))
                 action_item.setData(_DECISION_SORT.get(decision, 3), SORT_ROLE)
+                # Keep DECISION_ROLE on the col-0 item in sync so drawRow's
+                # delete-tint reflects the new decision without a full rebuild.
+                sim_item = group_item.child(m_i, COL_GROUP)
+                if sim_item is not None:
+                    sim_item.setData(decision, DECISION_ROLE)
             except Exception as exc:
                 logger.error("update_decision_cells failed at ({}, {}): {}", g_i, m_i, exc)
 
