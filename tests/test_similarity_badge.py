@@ -77,14 +77,21 @@ def test_every_file_row_resolves_to_a_known_style(qapp):
 
 
 def test_sizehint_reserves_pill_padding(qapp):
+    # Compare against the *default* delegate for the SAME file cell — the
+    # badge reserves extra width for the pill padding. (Comparing file vs
+    # group rows is brittle: a long "Group N" label can out-measure a short
+    # "Ref" badge under offscreen font metrics — the CI-only failure that
+    # motivated this assertion.)
+    from PySide6.QtWidgets import QStyledItemDelegate
+
     model = _model_with_five_states()
     delegate = SimilarityBadgeDelegate()
+    base = QStyledItemDelegate()
     grp = model.item(0, COL_GROUP)
     opt = QStyleOptionViewItem()
     opt.font = QFont()
     file_index = grp.child(2, COL_GROUP).index()   # the EXACT row
-    group_index = model.index(0, COL_GROUP)
-    assert delegate.sizeHint(opt, file_index).width() > delegate.sizeHint(opt, group_index).width()
+    assert delegate.sizeHint(opt, file_index).width() > base.sizeHint(opt, file_index).width()
 
 
 def test_paint_actually_fills_the_pill(qapp):
