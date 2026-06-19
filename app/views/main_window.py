@@ -942,6 +942,17 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ close-with-dirty-check
 
+    def createPopupMenu(self):  # type: ignore[override]
+        """Suppress QMainWindow's built-in toolbar/dock right-click menu.
+
+        Adding the toolbar made QMainWindow offer its default
+        show/hide-toolbars context menu on a right-click anywhere in the
+        menu-bar / toolbar chrome. The app has one fixed toolbar, so that
+        menu is noise — and it regressed s25 (which asserts the chrome
+        hosts no context menu). Returning None removes it.
+        """
+        return None
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         """Prompt the user when there are unsaved decisions before closing.
 

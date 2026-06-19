@@ -1825,3 +1825,9 @@ def test_apply_density_sets_and_relayouts():
         fake_tree.doItemsLayout.assert_called_once()
     finally:
         density.set_density("comfortable")
+
+
+def test_create_popup_menu_is_suppressed():
+    # The toolbar made QMainWindow offer a show/hide-toolbars popup on
+    # chrome right-click (regressed s25); the override returns None.
+    assert MainWindow.createPopupMenu(SimpleNamespace()) is None

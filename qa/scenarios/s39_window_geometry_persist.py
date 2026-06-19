@@ -70,7 +70,14 @@ REPO = Path(__file__).resolve().parents[2]
 # with after the move, then asserts that **the relaunch matches the
 # captured state**. That's the actual #141 round-trip property.
 REQUEST_X, REQUEST_Y = 50, 50
-REQUEST_W, REQUEST_H = 1100, 700
+# REQUEST_H must stay at or above the window's content-driven minimum
+# height, or launch#1's raw MoveWindow forces a sub-minimum height that
+# Qt's restoreGeometry then clamps back UP to the minimum on relaunch —
+# breaking the round-trip. The Daylight redesign's toolbar raised that
+# minimum (~736 px observed in CI), so 700 became sub-minimum; 820 clears
+# it (and if the screen is shorter, both launches clamp equally so the
+# round-trip still matches).
+REQUEST_W, REQUEST_H = 1100, 820
 
 # Tolerance for the round-trip assertion. Two values because position
 # and size drift on different scales:
