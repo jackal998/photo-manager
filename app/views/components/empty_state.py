@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.views.theme import DAYLIGHT
+
 
 def build_empty_state_widget(
     label_text: str,
@@ -70,15 +72,19 @@ def build_empty_state_widget(
 
     label = QLabel(label_text)
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    # Soft-grey hint text — matches the existing pre-#137 styling so
-    # the buttons are the louder element, the hint is the supporting
-    # context.
-    label.setStyleSheet("color: #888; font-size: 14px; padding: 40px;")
+    # Soft muted hint text (theme token) so the buttons are the louder
+    # element and the hint is supporting context.
+    label.setStyleSheet(
+        f"color: {DAYLIGHT['text_muted']}; font-size: 15px; padding: 40px;"
+    )
     layout.addWidget(label)
 
     button_row = QHBoxLayout()
     button_row.addStretch()
     scan_button = QPushButton(scan_button_text)
+    # Scan is the primary call-to-action on the empty screen — themed as
+    # the warm accent button (objectName drives the QSS in theme.py).
+    scan_button.setObjectName("primaryAction")
     scan_button.clicked.connect(scan_handler)
     button_row.addWidget(scan_button)
     open_button = QPushButton(open_button_text)

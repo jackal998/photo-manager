@@ -142,6 +142,30 @@ QPushButton:disabled {
     background-color: @bg_app@;
     border-color: @border_soft@;
 }
+QPushButton#primaryAction {
+    background-color: @accent@;
+    color: #ffffff;
+    border: 1px solid @accent@;
+    font-weight: 600;
+    padding: 8px 18px;
+}
+QPushButton#primaryAction:hover {
+    background-color: @accent_hover@;
+}
+QPushButton#dangerAction {
+    background-color: @danger@;
+    color: #ffffff;
+    border: 1px solid @danger@;
+    font-weight: 700;
+}
+QPushButton#dangerAction:hover {
+    background-color: #d05f4d;
+}
+QPushButton#dangerAction:disabled {
+    background-color: @bg_app@;
+    color: @text_faint@;
+    border-color: @border_soft@;
+}
 
 /* ===== Inputs ===== */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {
