@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from loguru import logger
 
+from core.app_service.cancel_token import _CancelToken
+
 # #424 — rolling throughput sampling window used to compute files/sec.
 # 5s matches the issue's acceptance criterion ("ETA appears once ≥ 5s of
 # throughput samples are available"). Wide enough that an SMB blip
@@ -514,6 +516,30 @@ class ScanWorker(QThread):
         # entry skips the ramp for that device — its Semaphore starts at the
         # cached knee. Empty by default; ignored unless _autotune_read_knee.
         self.autotune_knees = autotune_knees or {}
+        # Single cooperative cancellation token — the sole signal that flows
+        # through the pipeline.  Replaces the dual isInterruptionRequested()/
+        # cancel_flag scheme: requestInterruption() writes to it,
+        # isInterruptionRequested() reads from it, and all intra-pipeline
+        # cancel checks use it directly.
+        self._cancel_token = _CancelToken()
+
+    def requestInterruption(self) -> None:
+        """Set the cooperative _cancel_token in addition to the Qt flag.
+
+        This is the ONLY entry point for cancellation: ScanDialog.closeEvent
+        and the main-window guard both call worker.requestInterruption(), so
+        a single override here is sufficient to propagate the signal.
+        """
+        super().requestInterruption()
+        self._cancel_token.request()
+
+    def isInterruptionRequested(self) -> bool:
+        """Delegate to _cancel_token so the single flag is the source of truth.
+
+        Keeping this method means existing call sites (self.isInterruptionRequested())
+        and test monkeypatches both continue to work without change.
+        """
+        return self._cancel_token.is_set()
 
     def run(self) -> None:
         try:
@@ -870,10 +896,9 @@ class ScanWorker(QThread):
         import queue as _queue
 
         chunk_size = 500
-        cancel_flag = threading.Event()
         skipped: list[tuple[Path, str, str]] = []  # (path, exc type, exc msg)
         # #561 — live ExiftoolProcess instances owned by the consumer threads.
-        # A consumer wedged inside a batch only checks cancel_flag between
+        # A consumer wedged inside a batch only checks _cancel_token between
         # queue gets, so on cancel we kill its exiftool directly to unblock it
         # (see _kill_exif_procs) instead of waiting out the join timeout and
         # orphaning the process. Guarded by a lock — consumers register from
@@ -953,9 +978,8 @@ class ScanWorker(QThread):
             #564 — the put is cancel-safe: uses a cooperative bounded-put
             loop so a slow exiftool consumer with a full queue doesn't
             deadlock the producer on cancel. #594 — the loop also watches
-            ``isInterruptionRequested()`` so a dialog-close (which sets the
-            Qt interruption flag, not ``cancel_flag``) can't wedge the parent
-            drain thread here.
+            ``isInterruptionRequested()`` (which now reads from _cancel_token)
+            so a dialog-close can't wedge the parent drain thread here.
             """
             if isinstance(outcome, HashFailure):
                 # Both raised exceptions and silent decode failures
@@ -973,16 +997,13 @@ class ScanWorker(QThread):
                 # #564 — cooperative bounded put: mirrors the _read_drain
                 # pattern so a full exif_queue (slow exiftool consumer) can't
                 # wedge the producer forever on cancel.
-                # #594 — ALSO break on isInterruptionRequested(). This runs in
-                # the parent drain thread, and cancel_flag is set ONLY by that
-                # same thread's interrupt branch downstream. Watching cancel_flag
-                # alone, a full queue here wedges the parent BEFORE it can reach
-                # that branch — so requestInterruption() (dialog close) could
-                # never tear the worker down (orphaned QThread + the interpreter-
-                # shutdown RuntimeError, #594). Breaking on the Qt interruption
-                # flag lets the parent escape and run the cancel teardown that
-                # then sets cancel_flag for the daemon threads.
-                while not cancel_flag.is_set() and not self.isInterruptionRequested():
+                # #594 — ALSO break on isInterruptionRequested() (which reads
+                # _cancel_token). This runs in the parent drain thread; the
+                # single _cancel_token flag is set by requestInterruption() so
+                # a dialog-close unblocks the parent here and lets it reach the
+                # cancel teardown branch. Pre-#594 this watched cancel_flag ONLY,
+                # which wedged the parent before the teardown branch could set it.
+                while not self.isInterruptionRequested():
                     try:
                         exif_queue.put(outcome, timeout=0.05)
                         break
@@ -996,7 +1017,7 @@ class ScanWorker(QThread):
             """Drain ``exif_queue`` into 500-batches fed to one
             ExiftoolProcess. Sentinel = ``None``.
 
-            Exits early on ``cancel_flag`` (between blocking gets via a
+            Exits early on ``_cancel_token`` (between blocking gets via a
             short ``get(timeout=...)``) so a user-cancel during hashing
             tears down the exiftool process within ~0.5s. If exiftool
             isn't on PATH we drain the queue without processing and
@@ -1013,7 +1034,7 @@ class ScanWorker(QThread):
                     try:
                         item = exif_queue.get(timeout=0.5)
                     except _queue.Empty:
-                        if cancel_flag.is_set():
+                        if self._cancel_token.is_set():
                             return
                         continue
                     if item is None:
@@ -1031,7 +1052,7 @@ class ScanWorker(QThread):
                         try:
                             item = exif_queue.get(timeout=0.5)
                         except _queue.Empty:
-                            if cancel_flag.is_set():
+                            if self._cancel_token.is_set():
                                 return
                             continue
                         if item is None:
@@ -1178,7 +1199,8 @@ class ScanWorker(QThread):
                     _assign_process_pool_to_kill_job(pool)
                 for future in as_completed(futures):
                     if self.isInterruptionRequested():
-                        cancel_flag.set()
+                        # _cancel_token is already set (requestInterruption set it);
+                        # no separate cancel_flag.set() needed.
                         for _p in process_pools.values():
                             _p.shutdown(wait=False, cancel_futures=True)
                         # #561 — kill exiftool first so a consumer wedged in a
@@ -1188,7 +1210,7 @@ class ScanWorker(QThread):
                         _kill_exif_procs()
                         # #564 — drain the bounded exif_queue so any producer
                         # wedged in a cooperative put() unblocks and can exit
-                        # on the cancel_flag check (mirrors hash_in_q drain in
+                        # on the _cancel_token check (mirrors hash_in_q drain in
                         # the thread branch).
                         _drain_queue_nowait(exif_queue)
                         # Tell each consumer to stop — one sentinel per
@@ -1205,7 +1227,7 @@ class ScanWorker(QThread):
                     idx, outcome = future.result()
                     # Process path returns the raw outcome to route here
                     # in the parent (the child can't touch the thread-only
-                    # cancel_flag / exif_queue).
+                    # _cancel_token / exif_queue).
                     result = _route_outcome(records[idx], outcome)
                     if result is not None:
                         hash_results[idx] = result
@@ -1239,7 +1261,8 @@ class ScanWorker(QThread):
             # #538 (lex-min group_id determinism / rescore key).
             #
             # Cancellation contract (#492/#495/#507/#561 scars):
-            #   1. cancel_flag.set() — stops new dispatcher submissions.
+            #   1. _cancel_token already set by requestInterruption(); no
+            #      separate set() needed — stops new dispatcher submissions.
             #   2. _drain_queue_nowait(hash_in_q) — unblocks any reader wedged
             #      in a bounded put() so reader threads can exit.
             #   3. reader_pools + compute_pool.shutdown(wait=False) — abandon
@@ -1325,7 +1348,7 @@ class ScanWorker(QThread):
             # from ITS device's budget and the compute callback releases from the
             # same one (the device is threaded through hash_in_q).
             byte_budgets = per_device_budgets(
-                default_budget_bytes(), list(device_records.keys()), cancel_flag.is_set
+                default_budget_bytes(), list(device_records.keys()), self._cancel_token.is_set
             )
             # out_q carries (idx, outcome) tuples from compute callbacks
             # back to the parent drain loop.
@@ -1350,7 +1373,7 @@ class ScanWorker(QThread):
                 ramping device, else None.
                 """
                 acquired = False
-                while not cancel_flag.is_set():
+                while not self._cancel_token.is_set():
                     if read_permits[dev].acquire(timeout=0.05):
                         acquired = True
                         break
@@ -1414,7 +1437,7 @@ class ScanWorker(QThread):
                                 reader_pools[dev].submit(_budgeted_read, dev, _idx, _r)
                             )
                 for fut in as_completed(reader_futures):
-                    if cancel_flag.is_set():
+                    if self._cancel_token.is_set():
                         break
                     try:
                         if gated:
@@ -1458,11 +1481,11 @@ class ScanWorker(QThread):
                             # Drop the strong reference so the bytes can be GC'd.
                             reader_futures.discard(fut)
                         # Cooperative bounded put: retry with a short timeout so a
-                        # cancel_flag check doesn't leave us stuck forever when
+                        # _cancel_token check doesn't leave us stuck forever when
                         # compute is stopped and the queue is full.
                         # #596 — carry the device key alongside the read so the
                         # compute callback releases from the same per-device budget.
-                        while not cancel_flag.is_set():
+                        while not self._cancel_token.is_set():
                             try:
                                 hash_in_q.put((*read_result, _dev), timeout=0.05)
                                 break
@@ -1474,7 +1497,7 @@ class ScanWorker(QThread):
 
             def _compute_dispatch() -> None:
                 """Pull from hash_in_q, submit compute_from_bytes futures."""
-                while not cancel_flag.is_set():
+                while not self._cancel_token.is_set():
                     try:
                         item = hash_in_q.get(timeout=0.05)
                     except _queue.Empty:
@@ -1505,7 +1528,7 @@ class ScanWorker(QThread):
                         # #594 — shutdown race: the parent cancel branch may have
                         # called compute_pool.shutdown(cancel_futures=True) (or the
                         # interpreter is tearing down) between this loop's
-                        # cancel_flag check and the submit. Stop dispatching — the
+                        # _cancel_token check and the submit. Stop dispatching — the
                         # cancel branch drains hash_in_q and abandons the budget on
                         # teardown. Without this guard the daemon thread raises
                         # "cannot schedule new futures after ... shutdown" — the
@@ -1529,7 +1552,8 @@ class ScanWorker(QThread):
                 for _ in range(len(records)):
                     while True:
                         if self.isInterruptionRequested():
-                            cancel_flag.set()
+                            # _cancel_token is already set (requestInterruption set it);
+                            # no separate cancel_flag.set() needed.
                             # Unblock any reader wedged in a bounded put().
                             _drain_queue_nowait(hash_in_q)
                             for p in reader_pools.values():
@@ -1540,7 +1564,7 @@ class ScanWorker(QThread):
                             _kill_exif_procs()
                             # #564 — drain the bounded exif_queue so any
                             # producer wedged in a cooperative put() unblocks
-                            # and can exit on the cancel_flag check (mirrors
+                            # and can exit on the _cancel_token check (mirrors
                             # hash_in_q drain above).
                             _drain_queue_nowait(exif_queue)
                             for _ in consumer_threads:
@@ -1568,9 +1592,9 @@ class ScanWorker(QThread):
                     # alongside the existing per-100 log line.
                     self._emit_stage(hash_tracker, done, len(records))
             finally:
-                # On cancel the flag was already set in the inner loop;
-                # on normal completion we don't set it (exif consumers
-                # check cancel_flag and must keep running after hashing).
+                # On cancel _cancel_token is already set (requestInterruption
+                # set it before the inner loop detected it); on normal
+                # completion the token stays clear so exif consumers keep running.
                 if cancelled:
                     _drain_queue_nowait(hash_in_q)
                 read_drain_thread.join(timeout=5)
@@ -1599,7 +1623,7 @@ class ScanWorker(QThread):
         # left exiftool spinning at 100% CPU after app exit.
         while any(t.is_alive() for t in consumer_threads):
             if self.isInterruptionRequested():
-                cancel_flag.set()
+                # _cancel_token already set; kill exiftool to unblock consumers.
                 _kill_exif_procs()
                 break
             for t in consumer_threads:

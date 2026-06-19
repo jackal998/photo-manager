@@ -1322,11 +1322,13 @@ class TestScanWorkerLateCancel:
             workers=1,
         )
 
-        # ``worker.requestInterruption()`` doesn't actually set the flag
-        # when ``run()`` is called synchronously instead of via
-        # ``start()`` (no actual QThread thread exists yet). Patch
-        # ``isInterruptionRequested`` on the instance directly via a
-        # state-flag closure so tests don't depend on Qt thread state.
+        # worker._cancel_token.request() / worker.requestInterruption() would
+        # both set the token synchronously, but this test drives cancellation
+        # from INSIDE the hash leaf (cancel_during_hash below) — a moment where
+        # no synchronous caller can be interposed. Monkeypatching
+        # isInterruptionRequested gives the closure the hook it needs without
+        # fighting Python's thread scheduler. The _cancel_token path is covered
+        # by TestCancelTokenWiring.
         cancel_state = {"flag": False}
 
         def fake_is_interrupt():
@@ -1488,18 +1490,30 @@ class TestScanWorkerWalkCancel:
         self, qapp, tmp_path, monkeypatch
     ):
         """Pre-set the interruption flag before ``run()`` starts. The
-        walker's ``cancel_check`` predicate (wired to
-        ``self.isInterruptionRequested``) returns True on the first poll
-        and returns no records. The post-WALK gate then short-circuits
-        the rest of the pipeline:
+        walker's ``cancel_check`` predicate (a bound reference to
+        ``self.isInterruptionRequested``, which delegates to ``_cancel_token``)
+        returns True on the first poll and returns no records. The
+        post-WALK gate then short-circuits the rest of the pipeline:
 
           - ``scanner.hasher.compute_hashes`` MUST NOT be called.
           - ``scanner.manifest.write_manifest`` MUST NOT be called —
             any pre-existing manifest at ``output_path`` survives.
           - ``failed`` emits exactly ``"Scan cancelled."`` so
             scan_dialog distinguishes from a red error modal.
+          - The ``cancel_check`` callable handed to ``scan_sources`` MUST
+            itself return True — proving the predicate is
+            ``self.isInterruptionRequested`` (method ref), not the raw
+            ``_cancel_token`` object (which stays clear when only
+            ``isInterruptionRequested`` is monkeypatched). This is the
+            direct guard for scan_worker.py line 827.
+
+        Note: this test monkeypatches isInterruptionRequested because
+        the cancel is pre-set before run(); the _cancel_token real path
+        is covered by TestCancelTokenWiring and
+        test_requestInterruption_sets_token.
         """
         from app.views.workers.scan_worker import ScanWorker
+        import scanner.walker as _walker
         import scanner.hasher as _hasher
         import scanner.manifest as _manifest
 
@@ -1518,10 +1532,23 @@ class TestScanWorkerWalkCancel:
         )
 
         # Flag the worker as already-interrupted before WALK starts.
-        # The walker polls ``self.isInterruptionRequested`` on every
-        # rglob hit; the first hit returns True, the loop breaks
-        # immediately, and the walker returns ``records == []``.
+        # cancel_check is wired to self.isInterruptionRequested (method ref),
+        # so the monkeypatch ensures the first rglob hit sees True, the loop
+        # breaks, and the walker returns records == [].
         monkeypatch.setattr(worker, "isInterruptionRequested", lambda: True)
+
+        # Spy on scan_sources to capture what cancel_check predicate the
+        # worker actually passes. If line 827 is self.isInterruptionRequested
+        # (correct), cancel_check() returns True (the monkeypatched value).
+        # If line 827 were self._cancel_token (the object, regression), the
+        # clear token would make cancel_check() return False — caught below.
+        captured: dict = {}
+
+        def spy_scan_sources(sources, *args, cancel_check=None, **kwargs):
+            captured["cancel_check_result"] = cancel_check() if cancel_check is not None else None
+            return []  # cancelled walk yields no records
+
+        monkeypatch.setattr(_walker, "scan_sources", spy_scan_sources)
 
         def must_not_run_hash(*args, **kwargs):
             raise AssertionError(
@@ -1554,6 +1581,17 @@ class TestScanWorkerWalkCancel:
         )
         assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
             "destination manifest must be preserved on WALK-stage cancel"
+        )
+        # Direct guard for scan_worker.py line 827: the predicate handed to
+        # scan_sources must reflect the pre-set cancel. With method-ref wiring
+        # (self.isInterruptionRequested) the monkeypatched True propagates here.
+        # With token-object wiring (self._cancel_token) the clear token returns
+        # False and this assertion fails — catching the regression.
+        assert captured.get("cancel_check_result") is True, (
+            "cancel_check passed to scan_sources did not return True despite "
+            "pre-set isInterruptionRequested=True — scan_worker.py line 827 "
+            "must pass self.isInterruptionRequested (method ref), not the "
+            "_cancel_token object"
         )
 
 
@@ -3180,10 +3218,10 @@ class TestPostHashCancelKillsExif:
             exif_workers=1,  # one consumer → one wedge surface
         )
 
-        # ``worker.requestInterruption()`` from another thread doesn't
-        # propagate into the worker.run() thread unless start() is used.
-        # Use the project's standard cancel-flag closure pattern (mirrors
-        # TestCancelStageGates above).
+        # Drive cancellation via the monkeypatch-closure pattern: the real
+        # requestInterruption() / _cancel_token path is covered by
+        # TestCancelTokenWiring; here we need to flip the flag at a
+        # specific point inside run() without a running QThread.
         cancel_state = {"flag": False}
 
         def fake_is_interrupt():
@@ -3293,4 +3331,114 @@ class TestPostHashCancelKillsExif:
             "ExiftoolProcess.kill() was never called from the post-HASH "
             "join — the cancel-aware fix at scan_worker.py is missing or "
             "broken; consumers would have stayed wedged."
+        )
+
+
+class TestCancelTokenWiring:
+    """Verify that _CancelToken is correctly wired into ScanWorker.
+
+    These tests exercise the REAL cancel path — no isInterruptionRequested
+    monkeypatching — so that the daemon threads' self._cancel_token.is_set()
+    reads have genuine layer-1 coverage. They must catch any regression where
+    requestInterruption() stops propagating into the token.
+    """
+
+    def test_requestInterruption_sets_token(self, qapp, tmp_path):
+        """worker.requestInterruption() must set _cancel_token synchronously.
+
+        isInterruptionRequested() returns True immediately after the call
+        (no running QThread needed — requestInterruption is synchronous).
+        If the override is dropped or miswired, both assertions fail.
+        """
+        from app.views.workers.scan_worker import ScanWorker
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+        )
+
+        # Before any cancellation — both must be clear.
+        assert not worker._cancel_token.is_set(), (
+            "_cancel_token must be clear on a fresh ScanWorker"
+        )
+        assert not worker.isInterruptionRequested(), (
+            "isInterruptionRequested() must return False before requestInterruption()"
+        )
+
+        worker.requestInterruption()
+
+        # After cancellation — both must be set.
+        assert worker._cancel_token.is_set(), (
+            "_cancel_token.is_set() must be True after requestInterruption(); "
+            "the requestInterruption override is miswired or missing"
+        )
+        assert worker.isInterruptionRequested(), (
+            "isInterruptionRequested() must return True after requestInterruption(); "
+            "the isInterruptionRequested override is miswired or missing"
+        )
+
+    def test_walk_cancel_via_real_token(self, qapp, tmp_path):
+        """Drive walk-stage cancellation through the REAL _cancel_token path.
+
+        Unlike the monkeypatch-based sibling in TestCancelWalkStage, this
+        test calls worker.requestInterruption() directly (no monkeypatch) so
+        the cancel_check=self.isInterruptionRequested wiring in scan_worker.py
+        is exercised end-to-end. If cancel_check were accidentally changed to
+        self._cancel_token (the object, bypassing the method ref), the
+        monkeypatch-based test would remain green but this one would catch it
+        because requestInterruption() actually sets the token.
+
+        The test adds enough real JPEG files that a non-cancelling walker
+        would start hashing. We pre-set cancellation so the walk returns
+        partial/empty records and the pipeline never reaches HASH.
+        """
+        from app.views.workers.scan_worker import ScanWorker
+        import scanner.hasher as _hasher
+
+        for i in range(5):
+            _write_jpeg(tmp_path / f"img_{i}.jpg")
+
+        worker = ScanWorker(
+            sources={"src": str(tmp_path)},
+            output_path=str(tmp_path / "manifest.sqlite"),
+            recursive_map={"src": False},
+            workers=1,
+        )
+
+        # Pre-set via the REAL requestInterruption override (no monkeypatch).
+        worker.requestInterruption()
+
+        hash_called = {"n": 0}
+
+        def count_hash(*args, **kwargs):
+            hash_called["n"] += 1
+            raise AssertionError(
+                "HASH stage reached after WALK-stage cancel via real token — "
+                "cancel_check wiring broken: the walker did not observe _cancel_token"
+            )
+
+        # Patch at the leaf so any hash attempt surfaces immediately.
+        import scanner.hasher as _hasher_mod
+        real_hashes = _hasher_mod._hashes_from_data
+
+        def guarded_hash(path, file_type, data):
+            hash_called["n"] += 1
+            raise AssertionError(
+                "HASH stage reached after pre-cancel via requestInterruption(); "
+                "cancel_check=self.isInterruptionRequested wiring is broken"
+            )
+
+        _hasher_mod._hashes_from_data = guarded_hash
+        try:
+            failed: list[str] = []
+            worker.failed.connect(failed.append)
+            worker.run()
+        finally:
+            _hasher_mod._hashes_from_data = real_hashes
+
+        assert failed == ["Scan cancelled."], (
+            f"expected ['Scan cancelled.'] via real token; got {failed!r}"
+        )
+        assert hash_called["n"] == 0, (
+            "HASH leaf was reached despite pre-cancel via requestInterruption()"
         )
