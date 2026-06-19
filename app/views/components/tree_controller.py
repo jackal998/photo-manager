@@ -54,6 +54,10 @@ class TreeController:
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
         self.tree.setSelectionMode(QTreeView.ExtendedSelection)
+        # Daylight delegates: column 0 renders the 5-state similarity badge
+        # for file rows (group-header rows fall back to the default painter).
+        from app.views.delegates import SimilarityBadgeDelegate
+        self.tree.setItemDelegateForColumn(COL_GROUP, SimilarityBadgeDelegate(self.tree))
         # Stop Qt auto-scrolling the viewport to the clicked cell on every
         # selection change. With autoScroll on, clicking a row whose cells
         # extend past the viewport made the view jerk horizontally to "align"
