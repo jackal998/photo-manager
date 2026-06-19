@@ -1,24 +1,28 @@
 """Image loading, thumbnailing, and caching utilities.
 
-Includes Qt-based decoding, optional Pillow-HEIF support, and Windows Shell/WIC
-fallback via ctypes for robust HEIC handling on Windows.
+Includes Pillow-based decoding, optional rawpy support for DNG, and Windows
+Shell/WIC fallback via ctypes for robust HEIC handling on Windows.
+
+Qt-free: returns JPEG bytes. The only GUI-side conversion is in
+``app/views/image_tasks._bytes_to_qimage`` which wraps bytes for signal delivery.
 """
 
 from __future__ import annotations
 
+import atexit
 from collections import OrderedDict
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
 import hashlib
+import io
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 import uuid
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QImage, QImageReader
 from loguru import logger
 
 # Optional Pillow and HEIF support (top-level to satisfy linting)
@@ -58,6 +62,80 @@ _THUMB_SIDE_THRESHOLD = 256
 # Default sizes for the two cache tiers (overridden at init from RAM probe).
 _THUMB_CACHE_DEFAULT_BYTES = 64 * 1024 * 1024   # 64 MB
 _PREVIEW_CACHE_DEFAULT_BYTES = 192 * 1024 * 1024  # 192 MB
+
+# Full-res OOM semaphore: caps concurrent rawpy.postprocess() calls (each may
+# transiently allocate 300–800 MB for 60 MP ProRAW). Static value 2 gives an
+# ~1.6 GB ceiling. Phase 1 may expose this as a setting; Phase 0 keeps it fixed.
+_FULLRES_DECODE_SEM = threading.BoundedSemaphore(2)
+
+# Module-level 64×64 grey placeholder JPEG, generated once at import.
+# Used when source load fails so downstream callers always get valid bytes.
+def _make_placeholder_jpeg() -> bytes:
+    """Return a 64×64 grey JPEG (220, 220, 220) generated via Pillow."""
+    try:
+        assert Image is not None
+        pil = Image.new("RGB", (64, 64), color=(220, 220, 220))
+        buf = io.BytesIO()
+        pil.save(buf, "JPEG", quality=85)
+        return buf.getvalue()
+    except Exception:  # pragma: no cover - PIL always available in production
+        # Minimal valid 1×1 JPEG as last-resort fallback
+        return (
+            b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+            b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t"
+            b"\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a"
+            b"\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\x1e"
+            b'\xc3\x80\x01\x01\xff\xd9'
+        )
+
+_PLACEHOLDER_JPEG: bytes = _make_placeholder_jpeg()
+
+
+# ── Windows COM STA executor for WIC/Shell calls ──────────────────────────
+#
+# WIC COM objects must be called from a thread that has called
+# CoInitializeEx(None, COINIT_APARTMENTTHREADED=0x2). Creating a dedicated
+# ThreadPoolExecutor with an STA initializer satisfies this requirement
+# without per-call CoInitialize/CoUninitialize churn.
+#
+# Phase 1 replaces this atexit drain with a FastAPI lifespan hook.
+
+def _sta_init() -> None:
+    """STA initializer for the WIC executor thread pool."""
+    try:
+        ctypes.windll.ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
+    except Exception:  # pragma: no cover - non-Windows or already initialised
+        pass
+
+
+_wic_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="wic-sta",
+    initializer=_sta_init,
+)
+
+
+def _drain_wic_executor() -> None:
+    """Drain the WIC executor on shutdown, calling CoUninitialize on each worker."""
+    try:
+        def _coinit_ex() -> None:
+            try:
+                ctypes.windll.ole32.CoUninitialize()
+            except Exception:  # pragma: no cover
+                pass
+
+        futures = [_wic_executor.submit(_coinit_ex) for _ in range(2)]
+        for f in futures:
+            try:
+                f.result(timeout=5)
+            except Exception:  # pragma: no cover
+                pass
+        _wic_executor.shutdown(wait=False)
+    except Exception:  # pragma: no cover
+        pass
+
+
+atexit.register(_drain_wic_executor)
 
 
 def _probe_total_ram() -> int | None:
@@ -139,7 +217,7 @@ def _ensure_dir(p: Path) -> None:
 @dataclass
 class _MemCacheItem:
     key: str
-    image: QImage
+    data: bytes
     byte_size: int
 
 
@@ -160,25 +238,25 @@ class _ByteBudgetLRUCache:
         self._total_bytes: int = 0
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> QImage | None:
+    def get(self, key: str) -> bytes | None:
         with self._lock:
             item = self._data.get(key)
             if not item:
                 return None
             self._data.move_to_end(key)
-            return item.image
+            return item.data
 
-    def put(self, key: str, image: QImage) -> None:
-        byte_size = image.sizeInBytes() if not image.isNull() else 1
+    def put(self, key: str, data: bytes) -> None:
+        byte_size = len(data) if data else 1
         with self._lock:
             if key in self._data:
                 old = self._data[key]
                 self._total_bytes -= old.byte_size
                 self._data.move_to_end(key)
-                self._data[key] = _MemCacheItem(key, image, byte_size)
+                self._data[key] = _MemCacheItem(key, data, byte_size)
                 self._total_bytes += byte_size
             else:
-                self._data[key] = _MemCacheItem(key, image, byte_size)
+                self._data[key] = _MemCacheItem(key, data, byte_size)
                 self._total_bytes += byte_size
             # Evict LRU until within budget
             while self._total_bytes > self._budget and len(self._data) > 1:
@@ -313,12 +391,12 @@ class ImageService:
                 self._pending_status_msg = None
 
     # Public API
-    def get_thumbnail(self, path: str, size: int) -> Any:
-        """Return thumbnail image for `path` with max side `size`."""
+    def get_thumbnail(self, path: str, size: int) -> bytes:
+        """Return JPEG bytes for thumbnail of `path` with max side `size`."""
         return self._get_image(path, size)
 
-    def get_preview(self, path: str, max_side: int) -> Any:
-        """Return preview image for `path` bounded by `max_side`."""
+    def get_preview(self, path: str, max_side: int) -> bytes:
+        """Return JPEG bytes for preview of `path` bounded by `max_side`."""
         return self._get_image(path, max_side)
 
     def clear_cache(self) -> None:
@@ -334,106 +412,73 @@ class ImageService:
         self._preview_cache.clear()
 
     # Internal helpers
-    def _get_image(self, path: str, requested_side: int) -> QImage:
+    def _get_image(self, path: str, requested_side: int) -> bytes:
         """Get image via memory/disk cache or load and cache it."""
         key = _compute_cache_key(path, requested_side)
 
         # Determine which cache tier to consult (thumb vs preview)
         cache = self._thumb_cache if requested_side > 0 and requested_side <= _THUMB_SIDE_THRESHOLD else self._preview_cache
 
-        img = cache.get(key)
-        if img is not None and not img.isNull():
-            return img
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
 
         disk_file = self._versioned_disk_path / f"{key}.jpg"
         if disk_file.exists():
-            img = QImage(str(disk_file))
-            if not img.isNull():
-                if self._looks_like_placeholder(img):
+            try:
+                jpeg = disk_file.read_bytes()
+                if jpeg and not self._looks_like_placeholder(jpeg):
+                    cache.put(key, jpeg)
+                    return jpeg
+                else:
                     try:
                         disk_file.unlink()
                     except OSError:
                         pass
-                else:
-                    cache.put(key, img)
-                    return img
+            except OSError:
+                pass
 
         # Load from source
-        img = self._load_from_source(path, requested_side)
-        if img is None or img.isNull():
-            img = QImage(64, 64, QImage.Format_ARGB32)
-            img.fill(QColor(220, 220, 220))
+        jpeg = self._load_from_source(path, requested_side)
+        if not jpeg:
+            jpeg = _PLACEHOLDER_JPEG
         else:
             try:
-                img_to_save = img
-                if img.format() == QImage.Format_Invalid:
-                    img_to_save = img.convertToFormat(QImage.Format_RGB32)
-                img_to_save.save(str(disk_file), "JPEG", quality=85)
+                disk_file.write_bytes(jpeg)
             except OSError as ex:
                 logger.debug("Save disk cache failed for {}: {}", disk_file, ex)
 
-        # Track Qt heap QImage count for memory_probe (no-op when probe disabled).
-        try:
-            from scripts.memory_probe import track_qt_alloc, _ENABLED  # type: ignore[import]
-            if _ENABLED and img is not None and not img.isNull():
-                track_qt_alloc("QImage", img)
-        except ImportError:
-            pass
-
-        cache.put(key, img)
-        return img
+        cache.put(key, jpeg)
+        return jpeg
 
     # pylint: disable=too-many-return-statements,too-many-branches
-    def _load_from_source(self, path: str, requested_side: int) -> QImage | None:
-        """Try Pillow-HEIF, then Qt reader or Windows Shell/WIC as applicable."""
+    def _load_from_source(self, path: str, requested_side: int) -> bytes | None:
+        """Try Pillow-HEIF, then Pillow generic or Windows Shell/WIC as applicable."""
         ext = Path(path).suffix.lower()
         # 0) Prefer Pillow-HEIF for HEIC/HEIF when available
         if ext in {".heic", ".heif"} and self._pillow_available and self._pillow_heif_available:
-            img = self._load_via_pillow(path, requested_side)
-            if img is not None and not img.isNull():
-                return img
+            jpeg = self._load_via_pillow(path, requested_side)
+            if jpeg:
+                return jpeg
             try:
                 return self._load_via_shell_thumbnail(path, requested_side)
             except OSError as ex:
                 logger.debug("Shell/WIC thumbnail failed for HEIC {}: {}", path, ex)
                 return None
 
-        # 1) Explicit DNG handling: rawpy (embedded JPEG fast path) -> QImageReader -> Shell/WIC
+        # 1) Explicit DNG handling: rawpy (embedded JPEG fast path) -> Pillow -> Shell/WIC
         if ext == ".dng":
             if self._rawpy_available:
                 try:
-                    img = self._load_via_rawpy(path, requested_side)
-                    if img is not None and not img.isNull():
-                        return img
+                    jpeg = self._load_via_rawpy(path, requested_side)
+                    if jpeg:
+                        return jpeg
                 except (OSError, ValueError) as ex:
                     logger.debug("rawpy load failed for DNG {}: {}", path, ex)
 
-            try:
-                reader = QImageReader(path)
-                reader.setAutoTransform(True)
-                if requested_side and requested_side > 0 and reader.size().isValid():
-                    orig = reader.size()
-                    w, h = orig.width(), orig.height()
-                    if w > 0 and h > 0:
-                        if w >= h:
-                            nw = min(requested_side, w)
-                            nh = int(h * (nw / max(1, w)))
-                        else:
-                            nh = min(requested_side, h)
-                            nw = int(w * (nh / max(1, h)))
-                        reader.setScaledSize(QSize(nw, nh))
-                img = reader.read()
-                if img is not None and not img.isNull():
-                    if requested_side and requested_side > 0:
-                        img = img.scaled(
-                            requested_side,
-                            requested_side,
-                            Qt.KeepAspectRatio,
-                            Qt.SmoothTransformation,
-                        )
-                    return img
-            except (OSError, ValueError) as ex:
-                logger.debug("QImageReader failed for DNG {}: {}", path, ex)
+            jpeg = self._load_via_pillow_generic(path, requested_side)
+            if jpeg:
+                return jpeg
 
             try:
                 return self._load_via_shell_thumbnail(path, requested_side)
@@ -441,30 +486,10 @@ class ImageService:
                 logger.debug("Shell/WIC thumbnail failed for DNG {}: {}", path, ex)
                 return None
 
-        # 2) Other still images: Try QImageReader
-        try:
-            reader = QImageReader(path)
-            reader.setAutoTransform(True)
-            if requested_side and requested_side > 0 and reader.size().isValid():
-                orig = reader.size()
-                w, h = orig.width(), orig.height()
-                if w > 0 and h > 0:
-                    if w >= h:
-                        nw = min(requested_side, w)
-                        nh = int(h * (nw / max(1, w)))
-                    else:
-                        nh = min(requested_side, h)
-                        nw = int(w * (nh / max(1, h)))
-                    reader.setScaledSize(QSize(nw, nh))
-            img = reader.read()
-            if img is not None and not img.isNull():
-                if requested_side and requested_side > 0:
-                    img = img.scaled(
-                        requested_side, requested_side, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                    )
-                return img
-        except (OSError, ValueError) as ex:
-            logger.debug("QImageReader failed for {}: {}", path, ex)
+        # 2) Other still images: Try Pillow generic
+        jpeg = self._load_via_pillow_generic(path, requested_side)
+        if jpeg:
+            return jpeg
 
         # 3) Fallback: Windows Shell/WIC thumbnail
         try:
@@ -473,8 +498,8 @@ class ImageService:
             logger.debug("Shell/WIC thumbnail failed for {}: {}", path, ex)
             return None
 
-    def _load_via_pillow(self, path: str, requested_side: int) -> QImage | None:
-        """Load image with Pillow (HEIF supported if pillow-heif is registered)."""
+    def _load_via_pillow_generic(self, path: str, requested_side: int) -> bytes | None:
+        """Load any image with Pillow, return JPEG bytes or None on failure."""
         if not self._pillow_available:
             return None
         try:
@@ -488,44 +513,32 @@ class ImageService:
                     resampling = getattr(Image, "Resampling", Image)
                     resample = getattr(resampling, "LANCZOS", getattr(resampling, "BICUBIC", 3))
                     im.thumbnail((requested_side, requested_side), resample)
-                return self._pil_to_qimage(im)
+                out = io.BytesIO()
+                im.convert("RGB").save(out, "JPEG", quality=85)
+                return out.getvalue()
         except (OSError, ValueError) as ex:
-            logger.debug("Pillow load failed for {}: {}", path, ex)
+            logger.debug("Pillow generic load failed for {}: {}", path, ex)
             return None
 
-    def _pil_to_qimage(self, pil_img: Any) -> QImage | None:
-        """Convert a Pillow image to `QImage` and detach from the source buffer."""
-        try:
-            mode = pil_img.mode
-            if mode not in ("RGBA", "RGB"):
-                pil_img = pil_img.convert("RGBA")
-                mode = pil_img.mode
-            if mode == "RGB":
-                data = pil_img.tobytes("raw", "RGB")
-                qimg = QImage(
-                    data, pil_img.width, pil_img.height, pil_img.width * 3, QImage.Format_RGB888
-                )
-            else:
-                data = pil_img.tobytes("raw", "RGBA")
-                qimg = QImage(
-                    data, pil_img.width, pil_img.height, pil_img.width * 4, QImage.Format_RGBA8888
-                )
-            if qimg is None or qimg.isNull():
-                return None
-            return qimg.copy()
-        except (ValueError, TypeError) as ex:
-            logger.debug("PIL->QImage convert failed: {}", ex)
-            return None
+    def _load_via_pillow(self, path: str, requested_side: int) -> bytes | None:
+        """Load image with Pillow (HEIF supported if pillow-heif is registered).
+
+        Returns JPEG bytes or None on failure.
+        """
+        return self._load_via_pillow_generic(path, requested_side)
 
     def _load_via_rawpy(
         self, path: str, requested_side: int
-    ) -> QImage | None:  # pylint: disable=W0718
-        """Load DNG via rawpy.
+    ) -> bytes | None:  # pylint: disable=W0718
+        """Load DNG via rawpy, returning JPEG bytes.
 
-        Tries embedded JPEG first (fast path): if extract_thumb() returns an
-        ndarray whose longest side >= requested_side (or requested_side == 0),
-        converts it to QImage directly. Falls through to raw.postprocess() when
-        the embedded thumb is too small or when LibRawNoThumbnailError is raised.
+        Tries embedded JPEG first (fast path): if extract_thumb() returns a
+        thumb whose longest side >= requested_side (or requested_side == 0),
+        returns it directly. Falls through to raw.postprocess() when the
+        embedded thumb is too small or when LibRawNoThumbnailError is raised.
+
+        Full-res decode (requested_side == 0) acquires _FULLRES_DECODE_SEM
+        before calling postprocess() to cap the ~300-800 MB transient RAM peak.
         """
         if not self._rawpy_available:
             return None
@@ -533,123 +546,130 @@ class ImageService:
             assert RAWPY_AVAILABLE and rawpy is not None  # type: ignore[name-defined]
             with rawpy.imread(path) as raw:  # type: ignore[attr-defined]
                 # Fast path: try embedded JPEG thumbnail
-                thumb_img = self._try_rawpy_embedded_thumb(raw, requested_side)
-                if thumb_img is not None:
-                    return thumb_img
+                thumb_jpeg = self._try_rawpy_embedded_thumb(raw, requested_side)
+                if thumb_jpeg is not None:
+                    return thumb_jpeg
 
-                # Full decode fallback
-                rgb = raw.postprocess(  # pylint: disable=no-member
-                    use_auto_wb=True,
-                    no_auto_bright=False,
-                    auto_bright_thr=0.01,
-                    bright=1.0,
-                    output_color=rawpy.ColorSpace.sRGB,  # pylint: disable=no-member
-                    output_bps=8,
-                    gamma=(2.222, 4.5),
-                    demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,  # pylint: disable=no-member
-                    highlight_mode=rawpy.HighlightMode.Blend,  # pylint: disable=no-member
-                )
-            h, w = int(rgb.shape[0]), int(rgb.shape[1])  # type: ignore[attr-defined]
-            buf = rgb.tobytes(order="C")  # type: ignore[attr-defined]
-            bytes_per_line = w * 3
-            qimg = QImage(buf, w, h, bytes_per_line, QImage.Format_RGB888)
-            if qimg is None or qimg.isNull():
-                return None
-            qimg = qimg.copy()
+                # Full decode fallback — gate concurrent full-res decodes
+                full_res = requested_side == 0
+                if full_res:
+                    _FULLRES_DECODE_SEM.acquire()
+                try:
+                    rgb = raw.postprocess(  # pylint: disable=no-member
+                        use_auto_wb=True,
+                        no_auto_bright=False,
+                        auto_bright_thr=0.01,
+                        bright=1.0,
+                        output_color=rawpy.ColorSpace.sRGB,  # pylint: disable=no-member
+                        output_bps=8,
+                        gamma=(2.222, 4.5),
+                        demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,  # pylint: disable=no-member
+                        highlight_mode=rawpy.HighlightMode.Blend,  # pylint: disable=no-member
+                    )
+                finally:
+                    if full_res:
+                        _FULLRES_DECODE_SEM.release()
+
+            assert Image is not None
+            pil = Image.fromarray(rgb, "RGB")  # type: ignore[attr-defined]
             if requested_side and requested_side > 0:
-                qimg = qimg.scaled(
-                    requested_side, requested_side, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-            return qimg
+                resampling = getattr(Image, "Resampling", Image)
+                resample = getattr(resampling, "LANCZOS", getattr(resampling, "BICUBIC", 3))
+                pil.thumbnail((requested_side, requested_side), resample)
+            out = io.BytesIO()
+            quality = 95 if requested_side == 0 else 85
+            pil.save(out, "JPEG", quality=quality)
+            return out.getvalue()
         except Exception as ex:  # pragma: no cover - optional path  # pylint: disable=W0718
             logger.debug("rawpy exception for {}: {}", path, ex)
             return None
 
-    def _try_rawpy_embedded_thumb(self, raw: Any, viewport_cap: int) -> QImage | None:
+    def _try_rawpy_embedded_thumb(self, raw: Any, viewport_cap: int) -> bytes | None:
         """Extract the embedded JPEG thumbnail from a rawpy raw file object.
 
-        Returns a QImage if the thumb is large enough (longest side >= viewport_cap,
-        or viewport_cap == 0 meaning full-res is requested).  Returns None when:
+        Returns JPEG bytes if the thumb is large enough (longest side >= viewport_cap,
+        or viewport_cap == 0 meaning full-res is requested). Returns None when:
         - LibRawNoThumbnailError is raised (no embedded thumb),
-        - the thumb ndarray is too small,
+        - the thumb is too small,
         - or any other extraction error occurs.
         """
         try:
             thumb = raw.extract_thumb()  # type: ignore[attr-defined]
-            # thumb.data is a bytes or numpy array of the JPEG bytes
-            # or thumb.format == rawpy.ThumbFormat.JPEG
             import rawpy as _rawpy  # type: ignore[attr-defined]
             if thumb.format == _rawpy.ThumbFormat.JPEG:  # type: ignore[attr-defined]
-                # JPEG bytes → decode via Pillow so EXIF Orientation is honoured,
-                # then convert to QImage. PR #624's original `QImage.loadFromData`
-                # call ignored the embedded JPEG's Orientation tag (Qt only
-                # auto-rotates via `QImageReader.setAutoTransform`, never via
-                # `loadFromData`), so iPhone ProRAW DNGs shot in portrait grip
-                # rendered 90° rotated relative to Lightroom / File Explorer.
-                # Pillow is already a hard dependency (HEIC support); the
-                # bare-QImage fallback below is purely defensive.
-                qimg: QImage | None = None
-                if self._pillow_available:
-                    import io as _io
-                    assert Image is not None and ImageOps is not None
+                # JPEG bytes → decode via Pillow so EXIF Orientation is honoured.
+                # Raw byte loading via Qt's loadFromData ignores embedded JPEG Orientation
+                # tags (auto-rotate only fires via the reader API); Pillow + exif_transpose
+                # gives correct orientation for portrait-grip ProRAW DNGs.
+                assert Image is not None and ImageOps is not None
+                with Image.open(io.BytesIO(bytes(thumb.data))) as pil_im:
                     try:
-                        with Image.open(_io.BytesIO(bytes(thumb.data))) as pil_im:
-                            try:
-                                pil_im = ImageOps.exif_transpose(pil_im)
-                            except (OSError, ValueError, AttributeError):
-                                # exif_transpose only raises on malformed EXIF —
-                                # fall through to the un-rotated image rather
-                                # than failing the whole load.
-                                pass
-                            qimg = self._pil_to_qimage(pil_im)
-                    except Exception as ex:
-                        logger.debug(
-                            "PIL thumb decode failed, falling back to QImage: {}",
-                            ex,
-                        )
-                        qimg = None
-                if qimg is None or qimg.isNull():
-                    # Fallback path: bare QImage.loadFromData (no rotation).
-                    # Reaches here only if Pillow is absent OR PIL decode raised.
-                    qimg = QImage()
-                    ok = qimg.loadFromData(bytes(thumb.data))
-                    if not ok or qimg.isNull():
-                        return None
+                        pil_im = ImageOps.exif_transpose(pil_im)
+                    except (OSError, ValueError, AttributeError):
+                        # exif_transpose only raises on malformed EXIF —
+                        # fall through to the un-rotated image rather than
+                        # failing the whole load.
+                        pass
+                    # Check size before committing
+                    if viewport_cap > 0:
+                        longest = max(pil_im.width, pil_im.height)
+                        if longest < viewport_cap:
+                            return None  # too small — fall through to postprocess
+
+                    if viewport_cap > 0:
+                        resampling = getattr(Image, "Resampling", Image)
+                        resample = getattr(resampling, "LANCZOS", getattr(resampling, "BICUBIC", 3))
+                        pil_im.thumbnail((viewport_cap, viewport_cap), resample)
+                    out = io.BytesIO()
+                    pil_im.convert("RGB").save(out, "JPEG", quality=85)
+                    return out.getvalue()
             else:
                 # Bitmap array (H, W, 3)
                 arr = thumb.data
-                h, w = int(arr.shape[0]), int(arr.shape[1])
-                buf = arr.tobytes(order="C")
-                bytes_per_line = w * 3
-                qimg = QImage(buf, w, h, bytes_per_line, QImage.Format_RGB888)
-                if qimg is None or qimg.isNull():
-                    return None
-                qimg = qimg.copy()
+                assert Image is not None
+                pil = Image.fromarray(arr, "RGB")
 
-            # Check size: if viewport_cap > 0, only use thumb when large enough
-            if viewport_cap > 0:
-                longest = max(qimg.width(), qimg.height())
-                if longest < viewport_cap:
-                    return None  # too small — fall through to postprocess
+                if viewport_cap > 0:
+                    longest = max(pil.width, pil.height)
+                    if longest < viewport_cap:
+                        return None  # too small — fall through to postprocess
+                    resampling = getattr(Image, "Resampling", Image)
+                    resample = getattr(resampling, "LANCZOS", getattr(resampling, "BICUBIC", 3))
+                    pil.thumbnail((viewport_cap, viewport_cap), resample)
 
-            # Scale to requested side if needed
-            if viewport_cap > 0:
-                qimg = qimg.scaled(
-                    viewport_cap, viewport_cap, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-            return qimg
+                out = io.BytesIO()
+                pil.convert("RGB").save(out, "JPEG", quality=85)
+                return out.getvalue()
         except LibRawNoThumbnailError:
             return None
         except Exception as ex:
             logger.debug("rawpy extract_thumb failed: {}", ex)
             return None
 
-    # Windows Shell/WIC via ctypes, return QImage or None
-    def _load_via_shell_thumbnail(self, path: str, side: int) -> QImage | None:
+    # Windows Shell/WIC via ctypes, returns JPEG bytes or None
+    def _load_via_shell_thumbnail(self, path: str, side: int) -> bytes | None:
         """Windows Shell/WIC thumbnail provider via ctypes.
 
-        Returns a `QImage` or None on failure.
+        Runs synchronously on the calling thread via the module-level STA
+        executor so WIC COM objects are always called from an STA-initialised
+        thread. Returns JPEG bytes or None on failure.
         """
+        fut = _wic_executor.submit(self._shell_thumbnail_sync, path, side)
+        try:
+            return fut.result(timeout=10)
+        except Exception as ex:
+            logger.debug("_load_via_shell_thumbnail future failed for {}: {}", path, ex)
+            return None
+
+    def _shell_thumbnail_sync(self, path: str, side: int) -> bytes | None:
+        """WIC/Shell thumbnail extraction — must run on an STA-initialised thread.
+
+        Called exclusively through _wic_executor so the STA guarantee holds.
+        """
+        assert threading.current_thread().name.startswith("wic-sta"), (
+            f"WIC COM called off-STA thread: {threading.current_thread().name} "
+            f"(RPC_E_WRONG_THREAD risk — use _wic_executor)"
+        )
         try:
 
             class SIZE(ctypes.Structure):
@@ -686,192 +706,191 @@ class ImageService:
 
             # SHCreateItemFromParsingName
             shell32 = ctypes.windll.shell32
-            ole32 = ctypes.windll.ole32
             gdi32 = ctypes.windll.gdi32
 
-            ole32.CoInitialize(None)
-            try:
-                sh_create_item_from_parsing_name = shell32.SHCreateItemFromParsingName
-                sh_create_item_from_parsing_name.argtypes = [
-                    wintypes.LPCWSTR,
-                    ctypes.c_void_p,
-                    ctypes.POINTER(GUID),
-                    ctypes.POINTER(ctypes.c_void_p),
-                ]
-                sh_create_item_from_parsing_name.restype = ctypes.c_long
+            sh_create_item_from_parsing_name = shell32.SHCreateItemFromParsingName
+            sh_create_item_from_parsing_name.argtypes = [
+                wintypes.LPCWSTR,
+                ctypes.c_void_p,
+                ctypes.POINTER(GUID),
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            sh_create_item_from_parsing_name.restype = ctypes.c_long
 
-                ppsi = ctypes.c_void_p()
-                hr = sh_create_item_from_parsing_name(
-                    path, None, ctypes.byref(iid_ishell_item_image_factory), ctypes.byref(ppsi)
+            ppsi = ctypes.c_void_p()
+            hr = sh_create_item_from_parsing_name(
+                path, None, ctypes.byref(iid_ishell_item_image_factory), ctypes.byref(ppsi)
+            )
+            if hr != 0:
+                return None
+
+            # Define vtable for IShellItemImageFactory::GetImage
+            class IShellItemImageFactory(ctypes.Structure):
+                """Partial vtable with single pointer to vtable structure."""
+
+                _fields_ = [("lpVtbl", ctypes.POINTER(ctypes.c_void_p))]
+
+            # vtable layout: QueryInterface, AddRef, Release, GetImage
+            get_image_proto = ctypes.WINFUNCTYPE(
+                ctypes.c_long,
+                ctypes.c_void_p,
+                SIZE,
+                ctypes.c_uint,
+                ctypes.POINTER(wintypes.HBITMAP),
+            )
+            release_proto = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+
+            factory = IShellItemImageFactory.from_address(ppsi.value)
+            vtbl = ctypes.cast(factory.lpVtbl, ctypes.POINTER(ctypes.c_void_p * 4)).contents
+            get_image_fn = get_image_proto(vtbl[3])
+            release_fn = release_proto(vtbl[2])
+
+            # Normalize to stable WIC request sizes (512 or 1024) and try both if needed
+            requested = side if side and side > 0 else 1024
+            size_candidates = [512, 1024] if requested <= 512 else [1024, 512]
+
+            def _try_get_image(request_px: int) -> bytes | None:
+                size = SIZE(request_px, request_px)
+                hbm_local = wintypes.HBITMAP()
+                flags = (
+                    siigbf_resizetofit
+                    | siigbf_thumbnailonly
+                    | siigbf_biggersizeok
+                    | siigbf_scaleup
                 )
-                if hr != 0:
-                    return None
-
-                # Define vtable for IShellItemImageFactory::GetImage
-                class IShellItemImageFactory(ctypes.Structure):
-                    """Partial vtable with single pointer to vtable structure."""
-
-                    _fields_ = [("lpVtbl", ctypes.POINTER(ctypes.c_void_p))]
-
-                # vtable layout: QueryInterface, AddRef, Release, GetImage
-                get_image_proto = ctypes.WINFUNCTYPE(
-                    ctypes.c_long,
-                    ctypes.c_void_p,
-                    SIZE,
-                    ctypes.c_uint,
-                    ctypes.POINTER(wintypes.HBITMAP),
-                )
-                release_proto = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
-
-                factory = IShellItemImageFactory.from_address(ppsi.value)
-                vtbl = ctypes.cast(factory.lpVtbl, ctypes.POINTER(ctypes.c_void_p * 4)).contents
-                get_image_fn = get_image_proto(vtbl[3])
-                release_fn = release_proto(vtbl[2])
-
-                # Normalize to stable WIC request sizes (512 or 1024) and try both if needed
-                requested = side if side and side > 0 else 1024
-                size_candidates = [512, 1024] if requested <= 512 else [1024, 512]
-
-                def _try_get_image(request_px: int) -> QImage | None:
-                    size = SIZE(request_px, request_px)
+                hr_local = get_image_fn(ppsi, size, flags, ctypes.byref(hbm_local))
+                if hr_local != 0 or not hbm_local:
+                    # Fallback attempt without THUMBNAILONLY
                     hbm_local = wintypes.HBITMAP()
-                    flags = (
-                        siigbf_resizetofit
-                        | siigbf_thumbnailonly
-                        | siigbf_biggersizeok
-                        | siigbf_scaleup
-                    )
-                    hr_local = get_image_fn(ppsi, size, flags, ctypes.byref(hbm_local))
-                    if hr_local != 0 or not hbm_local:
-                        # Fallback attempt without THUMBNAILONLY
-                        hbm_local = wintypes.HBITMAP()
-                        flags2 = siigbf_resizetofit | siigbf_biggersizeok | siigbf_scaleup
-                        hr2 = get_image_fn(ppsi, size, flags2, ctypes.byref(hbm_local))
-                        if hr2 != 0 or not hbm_local:
-                            return None
-
-                    # Convert HBITMAP to QImage
-                    class BITMAPINFOHEADER(ctypes.Structure):
-                        """Bitmap header structure."""
-
-                        _fields_ = [
-                            ("biSize", ctypes.c_uint32),
-                            ("biWidth", ctypes.c_long),
-                            ("biHeight", ctypes.c_long),
-                            ("biPlanes", ctypes.c_ushort),
-                            ("biBitCount", ctypes.c_ushort),
-                            ("biCompression", ctypes.c_uint32),
-                            ("biSizeImage", ctypes.c_uint32),
-                            ("biXPelsPerMeter", ctypes.c_long),
-                            ("biYPelsPerMeter", ctypes.c_long),
-                            ("biClrUsed", ctypes.c_uint32),
-                            ("biClrImportant", ctypes.c_uint32),
-                        ]
-
-                    class BITMAPINFO(ctypes.Structure):
-                        """Bitmap info structure."""
-
-                        _fields_ = [
-                            ("bmiHeader", BITMAPINFOHEADER),
-                            ("bmiColors", ctypes.c_uint32 * 3),
-                        ]
-
-                    bi_rgb = 0
-                    dib_rgb_colors = 0
-
-                    class BITMAP(ctypes.Structure):
-                        """Bitmap structure."""
-
-                        _fields_ = [
-                            ("bmType", ctypes.c_long),
-                            ("bmWidth", ctypes.c_long),
-                            ("bmHeight", ctypes.c_long),
-                            ("bmWidthBytes", ctypes.c_long),
-                            ("bmPlanes", ctypes.c_ushort),
-                            ("bmBitsPixel", ctypes.c_ushort),
-                            ("bmBits", ctypes.c_void_p),
-                        ]
-
-                    bmp = BITMAP()
-                    gdi32.GetObjectW(hbm_local, ctypes.sizeof(BITMAP), ctypes.byref(bmp))
-                    width, height = int(bmp.bmWidth), int(bmp.bmHeight)
-                    if width <= 0 or height <= 0:
-                        gdi32.DeleteObject(hbm_local)
+                    flags2 = siigbf_resizetofit | siigbf_biggersizeok | siigbf_scaleup
+                    hr2 = get_image_fn(ppsi, size, flags2, ctypes.byref(hbm_local))
+                    if hr2 != 0 or not hbm_local:
                         return None
 
-                    bmi = BITMAPINFO()
-                    ctypes.memset(ctypes.byref(bmi), 0, ctypes.sizeof(bmi))
-                    bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-                    bmi.bmiHeader.biWidth = width
-                    bmi.bmiHeader.biHeight = -height  # top-down
-                    bmi.bmiHeader.biPlanes = 1
-                    bmi.bmiHeader.biBitCount = 32
-                    bmi.bmiHeader.biCompression = bi_rgb
+                # Convert HBITMAP to PIL Image → JPEG bytes
+                class BITMAPINFOHEADER(ctypes.Structure):
+                    """Bitmap header structure."""
 
-                    hdc_local = gdi32.CreateCompatibleDC(None)
-                    try:
-                        row_bytes = ((width * 32 + 31) // 32) * 4
-                        buf_size = row_bytes * height
-                        buf = (ctypes.c_ubyte * buf_size)()
-                        res_local = gdi32.GetDIBits(
-                            hdc_local,
-                            hbm_local,
-                            0,
-                            height,
-                            ctypes.byref(buf),
-                            ctypes.byref(bmi),
-                            dib_rgb_colors,
-                        )
-                        if res_local == 0:
-                            return None
+                    _fields_ = [
+                        ("biSize", ctypes.c_uint32),
+                        ("biWidth", ctypes.c_long),
+                        ("biHeight", ctypes.c_long),
+                        ("biPlanes", ctypes.c_ushort),
+                        ("biBitCount", ctypes.c_ushort),
+                        ("biCompression", ctypes.c_uint32),
+                        ("biSizeImage", ctypes.c_uint32),
+                        ("biXPelsPerMeter", ctypes.c_long),
+                        ("biYPelsPerMeter", ctypes.c_long),
+                        ("biClrUsed", ctypes.c_uint32),
+                        ("biClrImportant", ctypes.c_uint32),
+                    ]
 
-                        qi = QImage(bytes(buf), width, height, row_bytes, QImage.Format_ARGB32)
-                        if qi.isNull():
-                            return None
-                        img_local = qi.convertToFormat(QImage.Format_RGB32)
-                        return img_local.copy()
-                    finally:
-                        if hdc_local:
-                            gdi32.DeleteDC(hdc_local)
-                        if hbm_local:
-                            gdi32.DeleteObject(hbm_local)
+                class BITMAPINFO(ctypes.Structure):
+                    """Bitmap info structure."""
 
-                for candidate in size_candidates:
-                    img_result = _try_get_image(candidate)
-                    if img_result is not None and not img_result.isNull():
-                        try:
-                            release_fn(ppsi)
-                        except OSError:
-                            pass
-                        return img_result
+                    _fields_ = [
+                        ("bmiHeader", BITMAPINFOHEADER),
+                        ("bmiColors", ctypes.c_uint32 * 3),
+                    ]
 
+                bi_rgb = 0
+                dib_rgb_colors = 0
+
+                class BITMAP(ctypes.Structure):
+                    """Bitmap structure."""
+
+                    _fields_ = [
+                        ("bmType", ctypes.c_long),
+                        ("bmWidth", ctypes.c_long),
+                        ("bmHeight", ctypes.c_long),
+                        ("bmWidthBytes", ctypes.c_long),
+                        ("bmPlanes", ctypes.c_ushort),
+                        ("bmBitsPixel", ctypes.c_ushort),
+                        ("bmBits", ctypes.c_void_p),
+                    ]
+
+                bmp = BITMAP()
+                gdi32.GetObjectW(hbm_local, ctypes.sizeof(BITMAP), ctypes.byref(bmp))
+                width, height = int(bmp.bmWidth), int(bmp.bmHeight)
+                if width <= 0 or height <= 0:
+                    gdi32.DeleteObject(hbm_local)
+                    return None
+
+                bmi = BITMAPINFO()
+                ctypes.memset(ctypes.byref(bmi), 0, ctypes.sizeof(bmi))
+                bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                bmi.bmiHeader.biWidth = width
+                bmi.bmiHeader.biHeight = -height  # top-down
+                bmi.bmiHeader.biPlanes = 1
+                bmi.bmiHeader.biBitCount = 32
+                bmi.bmiHeader.biCompression = bi_rgb
+
+                hdc_local = gdi32.CreateCompatibleDC(None)
                 try:
-                    release_fn(ppsi)
-                except OSError:
-                    pass
-                return None
-            finally:
-                ole32.CoUninitialize()
+                    row_bytes = ((width * 32 + 31) // 32) * 4
+                    buf_size = row_bytes * height
+                    buf = (ctypes.c_ubyte * buf_size)()
+                    res_local = gdi32.GetDIBits(
+                        hdc_local,
+                        hbm_local,
+                        0,
+                        height,
+                        ctypes.byref(buf),
+                        ctypes.byref(bmi),
+                        dib_rgb_colors,
+                    )
+                    if res_local == 0:
+                        return None
+
+                    # BGRA buffer → PIL → JPEG bytes
+                    assert Image is not None
+                    pil = Image.frombytes("RGBA", (width, height), bytes(buf), "raw", "BGRA")
+                    pil = pil.convert("RGB")
+                    out = io.BytesIO()
+                    pil.save(out, "JPEG", quality=85)
+                    return out.getvalue()
+                finally:
+                    if hdc_local:
+                        gdi32.DeleteDC(hdc_local)
+                    if hbm_local:
+                        gdi32.DeleteObject(hbm_local)
+
+            for candidate in size_candidates:
+                jpeg_result = _try_get_image(candidate)
+                if jpeg_result:
+                    try:
+                        release_fn(ppsi)
+                    except OSError:
+                        pass
+                    return jpeg_result
+
+            try:
+                release_fn(ppsi)
+            except OSError:
+                pass
+            return None
         except OSError as ex:
-            logger.debug("_load_via_shell_thumbnail exception: {}", ex)
+            logger.debug("_shell_thumbnail_sync exception: {}", ex)
             return None
 
-    def _looks_like_placeholder(self, img: QImage) -> bool:
-        """Heuristic to detect grey placeholder images."""
+    def _looks_like_placeholder(self, jpeg: bytes) -> bool:
+        """Heuristic to detect grey placeholder images.
+
+        Fast path: byte-identical match against the module-level placeholder.
+        Fallback: open via Pillow and verify 64×64 with pixels near (220, 220, 220).
+        """
+        if jpeg == _PLACEHOLDER_JPEG:
+            return True
         try:
-            if img.width() == 64 and img.height() == 64:
-                c1 = QColor(img.pixel(0, 0))
-                c2 = QColor(img.pixel(img.width() // 2, img.height() // 2))
-                c3 = QColor(img.pixel(img.width() - 1, img.height() - 1))
-
-                def is_grey(c: QColor) -> bool:
-                    return (
-                        abs(c.red() - 220) <= 2
-                        and abs(c.green() - 220) <= 2
-                        and abs(c.blue() - 220) <= 2
-                    )
-
-                return is_grey(c1) and is_grey(c2) and is_grey(c3)
-        except (ValueError, TypeError):
+            assert Image is not None
+            with Image.open(io.BytesIO(jpeg)) as im:
+                if im.width != 64 or im.height != 64:
+                    return False
+                im_rgb = im.convert("RGB")
+                for xy in ((0, 0), (32, 32), (63, 63)):
+                    r, g, b = im_rgb.getpixel(xy)
+                    if not (abs(r - 220) <= 5 and abs(g - 220) <= 5 and abs(b - 220) <= 5):
+                        return False
+                return True
+        except (ValueError, TypeError, OSError):
             return False
-        return False
