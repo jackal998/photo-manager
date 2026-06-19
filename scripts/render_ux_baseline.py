@@ -54,6 +54,7 @@ from app.views.constants import IGNORE_DECISION, headers  # noqa: E402
 from app.views.dialogs.execute_action_dialog import ExecuteActionDialog  # noqa: E402
 from app.views.dialogs.select_dialog import ActionDialog  # noqa: E402
 from app.views.main_window import MainWindow  # noqa: E402
+from app.views.theme import apply_theme  # noqa: E402
 from app.viewmodels.main_vm import MainVM  # noqa: E402
 from core.models import PhotoGroup, PhotoRecord  # noqa: E402
 from infrastructure.i18n import init_translator  # noqa: E402
@@ -217,6 +218,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     app = QApplication.instance() or QApplication([])
+    apply_theme(app)  # Daylight · light — same stylesheet the real app installs.
     settings = JsonSettings(REPO / _SANDBOX_REL / "settings.json")
     init_translator(settings.get("ui.locale", "en") or "en", REPO / "translations")
     img = ImageService(settings)

@@ -11,6 +11,7 @@ from loguru import logger
 
 from app.viewmodels.main_vm import MainVM
 from app.views.main_window import MainWindow
+from app.views.theme import apply_theme
 from infrastructure.i18n import init_translator
 from infrastructure.image_service import ImageService
 from infrastructure.logging import init_logging
@@ -173,6 +174,11 @@ def main() -> int:
     # covers the Qt-detected quit path. Lambda captures ``app`` so the
     # cleanup function gets the right QApplication instance.
     app.aboutToQuit.connect(lambda: _cleanup_on_quit(app))
+
+    # Daylight · light theme (feat/review-ux-daylight Phase 1). App-level so
+    # it cascades to every widget + child dialog. Purely visual — no
+    # behaviour change. The render harness installs the same stylesheet.
+    apply_theme(app)
 
     # Initialize translation catalogs (YAML + Qt's bundled qtbase_*.qm)
     # for the persisted ui.locale. Same helper used by the live
