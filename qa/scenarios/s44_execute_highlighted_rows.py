@@ -164,8 +164,13 @@ def _file_row_centers_in_tree(tree) -> list[tuple[int, int]]:
         if leftmost_text.lower().startswith("group "):
             continue
         lr = leftmost.rectangle()
-        rr = rightmost.rectangle()
-        cx = (lr.left + rr.right) // 2
+        # Click the centre of the LEFTMOST cell (the similarity column),
+        # not the whole-row midpoint: the Daylight redesign puts a clickable
+        # inline Keep/Delete/Remove control in the Action column, which sits
+        # at the row's horizontal centre — clicking there would toggle the
+        # row's decision instead of just selecting it. The similarity cell is
+        # display-only, so a click there is a clean row-select.
+        cx = (lr.left + lr.right) // 2
         cy = (lr.top + lr.bottom) // 2
         rows.append((cx, cy))
     return rows

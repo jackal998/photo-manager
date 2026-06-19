@@ -75,9 +75,11 @@ REQUEST_X, REQUEST_Y = 50, 50
 # Qt's restoreGeometry then clamps back UP to the minimum on relaunch —
 # breaking the round-trip. The Daylight redesign's toolbar raised that
 # minimum (~736 px observed in CI), so 700 became sub-minimum; 820 clears
-# it (and if the screen is shorter, both launches clamp equally so the
-# round-trip still matches).
-REQUEST_W, REQUEST_H = 1100, 820
+# it. Must also stay below the CI screen's work-area height (~788 px
+# observed), or launch#1 gets screen-clamped while restore lands lower
+# and the round-trip breaks the other way — so 760 sits inside the valid
+# [min ~736, screen ~788] band.
+REQUEST_W, REQUEST_H = 1100, 760
 
 # Tolerance for the round-trip assertion. Two values because position
 # and size drift on different scales:
