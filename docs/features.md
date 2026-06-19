@@ -73,6 +73,10 @@ for the chore plan.
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
 | [Preview pane — no-autoplay video default](#preview-pane--no-autoplay-video-default) | Preview pane |
+| [Main window — toolbar (primary verbs)](#main-window--toolbar-primary-verbs) | Main window |
+| [Review — inline decision control](#review--inline-decision-control) | Review |
+| [Review — Daylight theme & similarity encodings](#review--daylight-theme--similarity-encodings) | Review |
+| [View menu — row density (Comfortable / Compact)](#view-menu--row-density-comfortable--compact) | Main window |
 
 ---
 
@@ -694,6 +698,50 @@ for the chore plan.
 - **Conditions / variants:** No-op on every code path when the env var is unset — all insertion points are guarded by `try/except ImportError`. Fixture generator at `scripts/generate_probe_fixture.py` produces a reproducible ~13k-row SQLite manifest (seed 42).
 - **Related:** `docs/audits/memory-probe.md` (usage guide, row schema, 4-hypothesis decision table); `tests/test_memory_probe.py`; issues #614, #619, #624.
 - **Last verified:** 2026-06-09 (regression-guard PR)
+
+### Main window — toolbar (primary verbs)
+
+- **Entry point:** Toolbar above the results tree — [`app/views/components/toolbar_builder.py`](../app/views/components/toolbar_builder.py), built in `MainWindow._setup_ui`.
+- **Trigger:** Always visible once the window opens.
+- **Behaviour:** Surfaces the core verbs as buttons (previously menu-only): **Scan Sources** (warm primary), **Open Manifest**, a **Selected:** group of **Keep / Delete / Remove** that apply that decision to the current tree selection (the toolbar equivalent of the `d`/`k` keys, via `set_decision_to_highlighted`), and **Execute Action** (red, right-aligned). The Scan / Open / Execute buttons reuse the existing File/Action menu `QAction`s.
+- **Conditions / variants:** Execute stays disabled until a manifest loads (shares the `MANIFEST_ACTIONS` gating with the menu). The bulk Keep/Delete/Remove buttons no-op with a status toast when nothing is selected or no manifest is loaded.
+- **Related:** feat/review-ux-daylight Phase 3; tests [`tests/test_toolbar_builder.py`](../tests/test_toolbar_builder.py).
+- **Last verified:** 2026-06-19.
+
+---
+
+### Review — inline decision control
+
+- **Entry point:** The Action column of every file row in the results tree — [`app/views/delegates/decision_control.py`](../app/views/delegates/decision_control.py).
+- **Trigger:** Click the **Keep**, **Delete**, or **Remove** segment in a row.
+- **Behaviour:** Sets that row's `user_decision` immediately (`''` / `'delete'` / `'ignore'`) via the single-row `set_decision` dispatcher — the same path the right-click menu uses, which intentionally bypasses the bulk lock pre-filter (a deliberate per-row click is not a bulk op, #164). The active segment is filled in its state colour (green Keep / red Delete / muted Remove); the cell repaints and the delete-row tint updates incrementally.
+- **Conditions / variants:** Three segments, not four — `''` is keep/no-action, so Keep is the same stored value as "undecided" in this app's model (#584); an unset row shows Keep active. Group-header rows have no control. No-op without a loaded manifest.
+- **Related:** feat/review-ux-daylight Phase 2d; tests [`tests/test_decision_control.py`](../tests/test_decision_control.py).
+- **Last verified:** 2026-06-19.
+
+---
+
+### Review — Daylight theme & similarity encodings
+
+- **Entry point:** App-level stylesheet + results-tree delegates — [`app/views/theme.py`](../app/views/theme.py), [`app/views/delegates/`](../app/views/delegates/), [`app/views/components/similarity_legend.py`](../app/views/components/similarity_legend.py).
+- **Trigger:** Always on.
+- **Behaviour:** A Daylight·light visual theme (warm paper canvas, hairline borders, warm-accent selection) replaces the flat default Qt palette across the window and its dialogs. The results tree gains: colour + shape **similarity badges** for the five states (gold ★ Ref / purple 100% / blue N% / gray-dashed N*% / muted —), a warm **group-header band** with a bold label, a red **delete-row tint** on rows marked for deletion, a **keep-worthiness mini bar** + number in the Score column, and a painted **padlock** (replacing the 🔒 emoji) in the Lock column. The preview pane footer shows an always-visible **similarity legend** decoding the five badge states.
+- **Conditions / variants:** Presentation only — no change to what the app computes or to sort / column behaviour. Grayscale / colour-blind safe: badge text stays distinct without hue, and the passenger state adds a dashed border (a shape cue).
+- **Related:** feat/review-ux-daylight Phases 1, 2a–2c, 4; visual language authored in Claude Design (Daylight·light variant); tests [`tests/test_theme.py`](../tests/test_theme.py), [`tests/test_similarity_badge.py`](../tests/test_similarity_badge.py), [`tests/test_score_lock_delegates.py`](../tests/test_score_lock_delegates.py), [`tests/test_similarity_legend.py`](../tests/test_similarity_legend.py).
+- **Last verified:** 2026-06-19.
+
+---
+
+### View menu — row density (Comfortable / Compact)
+
+- **Entry point:** **View → Density** submenu — [`app/views/components/menu_controller.py`](../app/views/components/menu_controller.py), [`app/views/density.py`](../app/views/density.py).
+- **Trigger:** Pick **Comfortable** (default) or **Compact**.
+- **Behaviour:** Changes the results-tree row height live (30px / 22px) by re-laying-out the tree. The choice persists to `ui.density` in settings and is restored on next launch. No window rebuild and no confirm prompt — the switch is instant and reversible.
+- **Conditions / variants:** Applies to the main results tree's row height; the painted badges / bars cap to the row height so they shrink cleanly in Compact.
+- **Related:** feat/review-ux-daylight Phase 2e; tests [`tests/test_density.py`](../tests/test_density.py).
+- **Last verified:** 2026-06-19.
+
+---
 
 ## How to update this file
 
