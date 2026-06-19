@@ -408,6 +408,15 @@ class MainWindow(QMainWindow):
         from app.views.handlers.file_opener import open_file_in_default_viewer
         self.tree_controller.setup_double_click(open_file_in_default_viewer)
 
+        # Inline decision control (Phase 2d): a click on a row's
+        # Keep/Delete/Remove segment applies that decision to the row's
+        # path via the same single-row set_decision path the right-click
+        # menu uses. Guarded — the delegate only exists after
+        # setup_tree_properties, which _setup_ui already ran.
+        delegate = self.tree_controller.decision_delegate
+        if delegate is not None:
+            delegate.decisionPicked.connect(self._on_inline_decision)
+
         # Image loading signal
         self.imageLoaded.connect(self._on_image_loaded)
 
@@ -835,6 +844,22 @@ class MainWindow(QMainWindow):
             image: Loaded image object
         """
         self._preview.on_image_loaded(token, path, image)
+
+    def _on_inline_decision(self, index: Any, decision: str) -> None:
+        """Apply a Keep/Delete/Remove click from the inline row control.
+
+        ``index`` is the proxy index of the clicked Action cell. We resolve
+        it to the row's file path and route through the shared single-row
+        ``set_decision`` dispatcher — the same path the right-click menu
+        uses (deliberate per-row action, so it bypasses the bulk lock
+        pre-filter by design, #164). ``set_decision`` no-ops cleanly when no
+        manifest is loaded and pushes an incremental cell update that
+        repaints the control's active segment + any delete tint.
+        """
+        path = self.tree_controller.get_file_path_from_index(index)
+        if not path:
+            return
+        self.file_operations.set_decision([{"type": "file", "path": path}], decision)
 
     # Private methods
 

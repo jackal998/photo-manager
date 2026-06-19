@@ -47,6 +47,7 @@ class TreeController:
         self.tree = tree_view
         self._model = None
         self._proxy = None
+        self._decision_delegate = None
         self._current_sort_column: int = COL_GROUP
         self._current_sort_order: Qt.SortOrder = Qt.AscendingOrder
 
@@ -56,14 +57,18 @@ class TreeController:
         self.tree.setSortingEnabled(True)
         self.tree.setSelectionMode(QTreeView.ExtendedSelection)
         # Daylight delegates: column 0 = 5-state similarity badge,
-        # COL_SCORE = mini keep-worthiness bar + number, COL_LOCK = painted
-        # padlock. All defer to the default painter for group-header rows.
+        # COL_ACTION = inline Keep/Delete/Remove control, COL_SCORE = mini
+        # keep-worthiness bar + number, COL_LOCK = painted padlock. All defer
+        # to the default painter for group-header rows.
         from app.views.delegates import (
+            DecisionControlDelegate,
             LockIconDelegate,
             ScoreBarDelegate,
             SimilarityBadgeDelegate,
         )
         self.tree.setItemDelegateForColumn(COL_GROUP, SimilarityBadgeDelegate(self.tree))
+        self._decision_delegate = DecisionControlDelegate(self.tree)
+        self.tree.setItemDelegateForColumn(COL_ACTION, self._decision_delegate)
         self.tree.setItemDelegateForColumn(COL_SCORE, ScoreBarDelegate(self.tree))
         self.tree.setItemDelegateForColumn(COL_LOCK, LockIconDelegate(self.tree))
         # Stop Qt auto-scrolling the viewport to the clicked cell on every
@@ -496,6 +501,7 @@ class TreeController:
                     continue
                 action_item.setText(_action_display(decision))
                 action_item.setData(_DECISION_SORT.get(decision, 3), SORT_ROLE)
+                action_item.setData(decision, DECISION_ROLE)
                 # Keep DECISION_ROLE on the col-0 item in sync so drawRow's
                 # delete-tint reflects the new decision without a full rebuild.
                 sim_item = group_item.child(m_i, COL_GROUP)
@@ -598,3 +604,10 @@ class TreeController:
     def proxy(self):
         """Get the current proxy model."""
         return self._proxy
+
+    @property
+    def decision_delegate(self):
+        """The inline Keep/Delete/Remove delegate on COL_ACTION (or None
+        before ``setup_tree_properties`` runs). MainWindow connects its
+        ``decisionPicked`` signal to apply the click to the row's path."""
+        return self._decision_delegate

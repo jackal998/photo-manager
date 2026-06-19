@@ -9,8 +9,14 @@ re-parsing display text, and pull every colour from the shared
 
 from __future__ import annotations
 
+from app.views.delegates.decision_control import DecisionControlDelegate
 from app.views.delegates.lock_icon import LockIconDelegate
 from app.views.delegates.score_bar import ScoreBarDelegate
 from app.views.delegates.similarity_badge import SimilarityBadgeDelegate
 
-__all__ = ["LockIconDelegate", "ScoreBarDelegate", "SimilarityBadgeDelegate"]
+__all__ = [
+    "DecisionControlDelegate",
+    "LockIconDelegate",
+    "ScoreBarDelegate",
+    "SimilarityBadgeDelegate",
+]

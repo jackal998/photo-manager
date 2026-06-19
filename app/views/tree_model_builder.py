@@ -533,6 +533,9 @@ def build_model(
                 # the delete tint; the badge delegate reads SIMILARITY_KIND_ROLE.
                 child_row[COL_GROUP].setData(item_decision, DECISION_ROLE)
                 child_row[COL_GROUP].setData(similarity_kind, SIMILARITY_KIND_ROLE)
+                # Also on COL_ACTION so the inline decision-control delegate
+                # reads the active segment off its own cell.
+                child_row[COL_ACTION].setData(item_decision, DECISION_ROLE)
             except Exception:
                 pass
             try:

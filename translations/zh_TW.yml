@@ -80,6 +80,11 @@ decision:
   remove_from_list: "從清單移除"
   lock: "鎖定"
   unlock: "解除鎖定"
+  # 內嵌於每列的決策控制(保留 / 刪除 / 移除 分段按鈕)用的精簡標籤,
+  # 讓三個分段塞得進「動作」欄。
+  keep_short: "保留"
+  delete_short: "刪除"
+  remove_short: "移除"
 
 manifest_summary:
   keep: "已保留 (無動作)"
