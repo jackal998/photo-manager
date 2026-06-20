@@ -12,7 +12,7 @@ from __future__ import annotations
 import atexit
 from collections import OrderedDict
 import ctypes
-from ctypes import wintypes
+import sys
 from dataclasses import dataclass
 import hashlib
 import io
@@ -22,6 +22,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 import uuid
+
+# wintypes is a Windows-only ctypes module; guard so the module imports on Linux
+# (the web layer is the cross-platform consumer even though CI is Windows-only today).
+if sys.platform == "win32":
+    from ctypes import wintypes  # type: ignore[attr-defined]
 
 from loguru import logger
 
@@ -99,40 +104,50 @@ _PLACEHOLDER_JPEG: bytes = _make_placeholder_jpeg()
 # without per-call CoInitialize/CoUninitialize churn.
 #
 # Phase 1 replaces this atexit drain with a FastAPI lifespan hook.
+# The executor and drain are Windows-only; on Linux/macOS the Shell/WIC
+# path is never reached so a no-op executor keeps the module importable.
 
-def _sta_init() -> None:
-    """STA initializer for the WIC executor thread pool."""
-    try:
-        ctypes.windll.ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
-    except Exception:  # pragma: no cover - non-Windows or already initialised
+if sys.platform == "win32":
+    def _sta_init() -> None:
+        """STA initializer for the WIC executor thread pool."""
+        try:
+            ctypes.windll.ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
+        except Exception:  # pragma: no cover - already initialised
+            pass
+
+    _wic_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+        max_workers=2,
+        thread_name_prefix="wic-sta",
+        initializer=_sta_init,
+    )
+
+    def _drain_wic_executor() -> None:
+        """Drain the WIC executor on shutdown, calling CoUninitialize on each worker."""
+        try:
+            def _coinit_ex() -> None:
+                try:
+                    ctypes.windll.ole32.CoUninitialize()
+                except Exception:  # pragma: no cover
+                    pass
+
+            futures = [_wic_executor.submit(_coinit_ex) for _ in range(2)]
+            for f in futures:
+                try:
+                    f.result(timeout=5)
+                except Exception:  # pragma: no cover
+                    pass
+            _wic_executor.shutdown(wait=False)
+        except Exception:  # pragma: no cover
+            pass
+
+else:  # pragma: no cover - Linux/macOS; WIC path never reached
+    def _sta_init() -> None:  # type: ignore[misc]
         pass
 
+    _wic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wic-noop")
 
-_wic_executor: ThreadPoolExecutor = ThreadPoolExecutor(
-    max_workers=2,
-    thread_name_prefix="wic-sta",
-    initializer=_sta_init,
-)
-
-
-def _drain_wic_executor() -> None:
-    """Drain the WIC executor on shutdown, calling CoUninitialize on each worker."""
-    try:
-        def _coinit_ex() -> None:
-            try:
-                ctypes.windll.ole32.CoUninitialize()
-            except Exception:  # pragma: no cover
-                pass
-
-        futures = [_wic_executor.submit(_coinit_ex) for _ in range(2)]
-        for f in futures:
-            try:
-                f.result(timeout=5)
-            except Exception:  # pragma: no cover
-                pass
+    def _drain_wic_executor() -> None:  # type: ignore[misc]
         _wic_executor.shutdown(wait=False)
-    except Exception:  # pragma: no cover
-        pass
 
 
 atexit.register(_drain_wic_executor)
@@ -410,6 +425,31 @@ class ImageService:
         """
         self._thumb_cache.clear()
         self._preview_cache.clear()
+
+    # Web API entry points (Phase 1)
+
+    def get_image_bytes(self, path: str, size: int, quality: int = 85) -> bytes:
+        """Return JPEG bytes for the web image endpoint.
+
+        Thin wrapper over ``_get_image`` — reuses the existing mem/disk cache,
+        the _FULLRES_DECODE_SEM (acquired inside _load_via_rawpy for size==0),
+        and the _wic_executor STA dispatch.  No second semaphore or executor.
+
+        ``size == 0`` → full-res (passes requested_side=0 to _get_image which
+        falls through to rawpy.postprocess or Shell/WIC at max WIC size).
+        ``size > 0``  → thumbnail/preview tier (same as get_thumbnail/get_preview).
+        """
+        return self._get_image(path, size)
+
+    def image_disk_cache_path(self, path: str, size: int) -> Path:
+        """Return the disk-cache file path for (path, size).
+
+        Reuses the same versioned key as _get_image so the route can
+        stat() it for an mtime-bearing ETag without re-deriving the key.
+        Returns the path regardless of whether the file exists yet.
+        """
+        key = _compute_cache_key(path, size)
+        return self._versioned_disk_path / f"{key}.jpg"
 
     # Internal helpers
     def _get_image(self, path: str, requested_side: int) -> bytes:
