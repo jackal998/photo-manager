@@ -3,7 +3,21 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool
+from PySide6.QtGui import QImage
 from loguru import logger
+
+
+def _bytes_to_qimage(jpeg: bytes) -> QImage:
+    """Convert JPEG bytes from ImageService to a QImage for Qt signal delivery.
+
+    This is the only QImage construction site allowed outside app/views/ after
+    the Qt-free refactor of infrastructure/image_service.py. EXIF orientation
+    is already baked in by Pillow's exif_transpose during encode, so
+    loadFromData (which ignores Orientation tags) is correct here.
+    """
+    q = QImage()
+    q.loadFromData(jpeg)
+    return q
 
 from app.views.image_tasks_helpers import make_grid_token, make_single_token
 
@@ -56,12 +70,13 @@ class _ImageTask(QRunnable):
     def run(self) -> None:  # type: ignore[override]
         try:
             if self._is_preview:
-                img = self._service.get_preview(self._path, self._side)
+                jpeg = self._service.get_preview(self._path, self._side)
             else:
-                img = self._service.get_thumbnail(self._path, self._side)
+                jpeg = self._service.get_thumbnail(self._path, self._side)
+            img = _bytes_to_qimage(jpeg) if jpeg else QImage()
         except Exception as ex:
             logger.error("Image task failed: {}", ex)
-            img = None
+            img = QImage()
         try:
             # Forward to main receiver (MainWindow) to keep the signal path
             self._receiver.imageLoaded.emit(self._token, self._path, img)  # type: ignore[attr-defined]

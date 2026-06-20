@@ -1044,6 +1044,45 @@ def _count_os_path_get_calls(fn: ast.FunctionDef) -> list[tuple[int, str]]:
     return found
 
 
+def test_probe_image_service_has_zero_pyside6_references():
+    """``infrastructure/image_service.py`` must import ZERO PySide6 symbols.
+
+    Forward-defensive against the Qt-free refactor of PR-C' (web-port Phase 0)
+    being quietly re-coupled to Qt. The service returns JPEG bytes; the only
+    QImage construction site is ``app/views/image_tasks._bytes_to_qimage``.
+
+    Catches: any import of PySide6 (direct or submodule), or any bare use of
+    QImage / QImageReader / QColor / QSize / Qt.* that slipped in through a
+    copy-paste or refactor without an import guard.
+    """
+    image_service_path = REPO / "infrastructure" / "image_service.py"
+    src = image_service_path.read_text(encoding="utf-8")
+
+    # Text-level scan — covers both import lines and attribute accesses.
+    banned_patterns = [
+        "PySide6",
+        "QImage",
+        "QImageReader",
+        "QColor",
+        "QSize",
+        # Qt. is only meaningful in a Qt context; the service must not use it.
+        "Qt.",
+    ]
+    hits: list[tuple[str, int]] = []
+    for lineno, line in enumerate(src.splitlines(), start=1):
+        for pat in banned_patterns:
+            if pat in line:
+                hits.append((pat, lineno))
+
+    assert not hits, (
+        "infrastructure/image_service.py contains Qt references — "
+        "the service must be Qt-free (returns JPEG bytes; QImage lives "
+        "only in app/views/image_tasks._bytes_to_qimage). "
+        "References found:\n  "
+        + "\n  ".join(f"line {ln}: matched {pat!r}" for pat, ln in hits)
+    )
+
+
 def test_probe_make_row_per_row_stat_budget():
     """#474 forward-defensive: ``scanner/dedup.py::_make_row`` MUST NOT
     issue more than 3 ``os.path.get*`` calls.

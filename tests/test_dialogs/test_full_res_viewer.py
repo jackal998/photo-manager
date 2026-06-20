@@ -4,6 +4,8 @@ Covers:
 - QImage freed on dialog close (no leaked memory)
 - Pan via drag changes scroll position
 - Ctrl+wheel zoom scales the pixmap
+- bytes return contract: get_preview returns JPEG bytes post-PR-C';
+  full_res_viewer must convert them before calling QPixmap/isNull/width/height.
 
 Per ``feedback_pyside6_destroyed_signal_unreliable``: teardown tests use
 ``children()`` membership, NOT the ``destroyed`` signal.
@@ -13,9 +15,11 @@ Per ``feedback_no_test_padding``: each test catches a real failure mode.
 
 from __future__ import annotations
 
+import io
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image as PILImage
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QImage, QPixmap, QWheelEvent
@@ -33,10 +37,89 @@ def qapp_m():
     yield app
 
 
+def _make_jpeg(w: int, h: int, color: tuple[int, int, int] = (128, 128, 128)) -> bytes:
+    """Return minimal valid JPEG bytes for a w×h solid-color image.
+
+    Used wherever tests need to stub ImageService.get_preview() with the bytes
+    interface introduced in PR-C' (web-port Phase 0).
+    """
+    pil = PILImage.new("RGB", (w, h), color=color)
+    buf = io.BytesIO()
+    pil.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
 def _make_qimage(w: int, h: int) -> QImage:
+    """Return a valid ARGB32 QImage filled with an opaque pixel.
+
+    Kept for tests that directly construct/inspect QImage objects (zoom tests).
+    """
     img = QImage(w, h, QImage.Format_ARGB32)
     img.fill(0xFF_80_80_80)
     return img
+
+
+# ── bytes contract regression ─────────────────────────────────────────────
+
+
+class TestBytesContractRegression:
+    """PR-C' changed ImageService.get_preview() to return JPEG bytes instead
+    of a QImage. Before the fix in full_res_viewer._load_image, the dialog
+    called img.isNull() on the raw bytes object — raising AttributeError,
+    caught by the outer except, and showing "Load failed" instead of the image.
+
+    The s68 qa scenario caught this: the window title was missing the [W×H]
+    suffix that _load_image sets only on a successful QImage load.
+    """
+
+    def test_load_image_with_jpeg_bytes_sets_resolution_title(self, qapp_m):
+        """When get_preview() returns valid JPEG bytes, _load_image must
+        convert them to a QImage and set the [W×H] title suffix.
+
+        Real failure mode (the s68 regression): calling img.isNull() on bytes
+        raised AttributeError → fell into except → title stayed bare filename,
+        never gained [W×H]. This test would have caught the regression before
+        qa ran.
+        """
+        jpeg = _make_jpeg(320, 240)
+        injected = MagicMock()
+        injected.get_preview.return_value = jpeg
+
+        dlg = FullResViewerDialog("/photos/raw.dng", parent=None, service=injected)
+        try:
+            title = dlg.windowTitle()
+            assert "320" in title and "240" in title, (
+                f"Title '{title}' must contain [W×H] dimensions after successful "
+                f"bytes-to-QImage conversion. 'Load failed' means the conversion "
+                f"path was not reached — the s68 regression."
+            )
+            assert dlg._full_qimage is not None and not dlg._full_qimage.isNull(), (
+                "_full_qimage must be a valid non-null QImage after bytes load"
+            )
+        finally:
+            dlg.deleteLater()
+
+    def test_load_image_null_bytes_shows_error_label(self, qapp_m):
+        """When get_preview() returns empty/None bytes, the dialog shows
+        a 'Could not load' label rather than crashing.
+
+        Real failure mode: bytes falsy path (b"" or None) → loadFromData no-op
+        → img.isNull() True → label text set. Guard stays correct with bytes.
+        """
+        injected = MagicMock()
+        injected.get_preview.return_value = b""  # empty bytes
+
+        dlg = FullResViewerDialog("/photos/corrupt.dng", parent=None, service=injected)
+        try:
+            label_text = dlg._label.text()
+            assert "corrupt.dng" in label_text or "Could not load" in label_text, (
+                f"Label should show error for empty bytes, got: {label_text!r}"
+            )
+            assert dlg._full_qimage is None, (
+                "_full_qimage must remain None when load fails"
+            )
+        finally:
+            dlg.deleteLater()
 
 
 # ── FullResViewerDialog lifecycle ─────────────────────────────────────────
@@ -51,11 +134,9 @@ class TestFullResViewerLifecycle:
         viewer accumulates one full-res QImage per open — typically 30–200 MB
         each for RAW files — causing OOM on the second or third open.
         """
-        # Patch ImageService so no real I/O is performed
-        fake_img = _make_qimage(100, 100)
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             instance = MockSvc.return_value
-            instance.get_preview.return_value = fake_img
+            instance.get_preview.return_value = _make_jpeg(100, 100)
 
             dlg = FullResViewerDialog("/fake/photo.jpg", parent=None)
             assert dlg._full_qimage is not None, "QImage should be set after load"
@@ -75,10 +156,9 @@ class TestFullResViewerLifecycle:
         Real failure mode: an empty or generic title makes the viewer
         indistinguishable from other windows in the taskbar.
         """
-        fake_img = _make_qimage(200, 150)
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             instance = MockSvc.return_value
-            instance.get_preview.return_value = fake_img
+            instance.get_preview.return_value = _make_jpeg(200, 150)
 
             dlg = FullResViewerDialog("/photos/landscape.jpg", parent=None)
             title = dlg.windowTitle()
@@ -92,14 +172,14 @@ class TestFullResViewerLifecycle:
         open file info to verify they're viewing the full-res decode vs a
         cached thumb.
         """
-        fake_img = _make_qimage(4000, 3000)
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             instance = MockSvc.return_value
-            instance.get_preview.return_value = fake_img
+            # Use a JPEG that will decode to known dimensions
+            instance.get_preview.return_value = _make_jpeg(400, 300)
 
             dlg = FullResViewerDialog("/photos/raw.dng", parent=None)
             title = dlg.windowTitle()
-            assert "4000" in title and "3000" in title, (
+            assert "400" in title and "300" in title, (
                 f"Title '{title}' should contain image dimensions"
             )
             dlg.deleteLater()
@@ -116,10 +196,9 @@ class TestCtrlWheelZoom:
         area scrolls normally — no zoom — and the user can't inspect fine detail
         in the full-res image (the whole reason the viewer exists).
         """
-        fake_img = _make_qimage(200, 200)
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             instance = MockSvc.return_value
-            instance.get_preview.return_value = fake_img
+            instance.get_preview.return_value = _make_jpeg(200, 200)
 
             dlg = FullResViewerDialog("/fake/photo.jpg", parent=None)
             initial_pixmap = dlg._label.pixmap()
@@ -127,7 +206,6 @@ class TestCtrlWheelZoom:
             initial_w = initial_pixmap.width()
 
             # Simulate Ctrl+wheel-up (positive angleDelta = zoom in)
-            from PySide6.QtCore import QPoint, QPointF
             wheel_event = QWheelEvent(
                 QPointF(100, 100),  # position
                 QPointF(100, 100),  # globalPosition
@@ -154,10 +232,9 @@ class TestCtrlWheelZoom:
         Real failure mode: same as above — users need both zoom in and out
         to navigate the full-res image.
         """
-        fake_img = _make_qimage(200, 200)
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             instance = MockSvc.return_value
-            instance.get_preview.return_value = fake_img
+            instance.get_preview.return_value = _make_jpeg(200, 200)
 
             dlg = FullResViewerDialog("/fake/photo.jpg", parent=None)
             initial_pixmap = dlg._label.pixmap()
@@ -188,10 +265,9 @@ class TestCtrlWheelZoom:
         Real failure mode: without a floor, repeated scroll-downs eventually
         produce a 0×0 or negative-size pixmap, crashing Qt's scaled() call.
         """
-        fake_img = _make_qimage(100, 100)
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             instance = MockSvc.return_value
-            instance.get_preview.return_value = fake_img
+            instance.get_preview.return_value = _make_jpeg(100, 100)
 
             dlg = FullResViewerDialog("/fake/photo.jpg", parent=None)
 
@@ -304,7 +380,7 @@ class TestServiceInjection:
         cache from the main preview pane.
         """
         injected = MagicMock()
-        injected.get_preview.return_value = _make_qimage(100, 100)
+        injected.get_preview.return_value = _make_jpeg(100, 100)
 
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             dlg = FullResViewerDialog(
@@ -327,10 +403,9 @@ class TestServiceInjection:
         the bare-construction path. That patching pattern is widespread, so
         this guarantee is load-bearing for the existing test suite.
         """
-        fake_img = _make_qimage(100, 100)
         with patch("infrastructure.image_service.ImageService") as MockSvc:
             instance = MockSvc.return_value
-            instance.get_preview.return_value = fake_img
+            instance.get_preview.return_value = _make_jpeg(100, 100)
 
             dlg = FullResViewerDialog("/fake/photo.jpg", parent=None)
             try:

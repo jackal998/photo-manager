@@ -11,14 +11,31 @@ to #185). Pure-logic token format is extracted to
 The actual ``QThreadPool.globalInstance()`` is replaced with a
 fake pool in the runner tests; we don't want to enqueue real
 work into the global pool from a unit test.
+
+Post-PR-C' (web-port Phase 0): ImageService returns JPEG bytes; _ImageTask.run()
+converts bytes → QImage via _bytes_to_qimage before emitting. Tests that inspect
+the emitted ``img`` argument now see a QImage object rather than the raw service
+return value. On service failure the task emits a null QImage() rather than None.
 """
 
 from __future__ import annotations
 
+import io
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from PIL import Image as PILImage
+from PySide6.QtGui import QImage
+
 from app.views.image_tasks import ImageTaskRunner, _ImageTask
+
+
+def _make_jpeg(w: int = 4, h: int = 4) -> bytes:
+    """Return minimal valid JPEG bytes."""
+    pil = PILImage.new("RGB", (w, h), color=(100, 100, 100))
+    buf = io.BytesIO()
+    pil.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
 
 
 # ── _ImageTask.run — the dispatch + emit logic ───────────────────────────
@@ -42,12 +59,16 @@ class TestImageTaskRunPreview:
         service.get_thumbnail.assert_not_called()
 
     def test_emits_imageLoaded_with_token_path_and_image(self):
-        """The signal carries (token, path, img). Failure mode: a
+        """The signal carries (token, path, img:QImage). Failure mode: a
         refactor that reordered the emit args would break the
         slot's ``(token, path, img)`` unpacking and every preview
-        would render at the wrong path."""
+        would render at the wrong path.
+
+        Post-PR-C': service returns JPEG bytes; _ImageTask wraps via
+        _bytes_to_qimage before emit, so the third arg is a QImage.
+        """
         service = MagicMock()
-        service.get_preview.return_value = "IMG"
+        service.get_preview.return_value = _make_jpeg()
         receiver = MagicMock()
         task = _ImageTask(
             path="a.jpg", side=0, is_preview=True,
@@ -56,9 +77,12 @@ class TestImageTaskRunPreview:
 
         task.run()
 
-        receiver.imageLoaded.emit.assert_called_once_with(
-            "single|a.jpg|0", "a.jpg", "IMG"
-        )
+        receiver.imageLoaded.emit.assert_called_once()
+        token_arg, path_arg, img_arg = receiver.imageLoaded.emit.call_args.args
+        assert token_arg == "single|a.jpg|0"
+        assert path_arg == "a.jpg"
+        assert isinstance(img_arg, QImage), f"Expected QImage, got {type(img_arg)}"
+        assert not img_arg.isNull(), "QImage from valid JPEG bytes must not be null"
 
 
 class TestImageTaskRunThumbnail:
@@ -79,8 +103,9 @@ class TestImageTaskRunThumbnail:
         service.get_preview.assert_not_called()
 
     def test_emits_thumbnail_payload(self):
+        """Post-PR-C': service returns JPEG bytes; emitted img is a QImage."""
         service = MagicMock()
-        service.get_thumbnail.return_value = "T"
+        service.get_thumbnail.return_value = _make_jpeg()
         receiver = MagicMock()
         task = _ImageTask(
             path="p.jpg", side=128, is_preview=False,
@@ -89,18 +114,25 @@ class TestImageTaskRunThumbnail:
 
         task.run()
 
-        receiver.imageLoaded.emit.assert_called_once_with(
-            "grid|p.jpg|128", "p.jpg", "T"
-        )
+        receiver.imageLoaded.emit.assert_called_once()
+        token_arg, path_arg, img_arg = receiver.imageLoaded.emit.call_args.args
+        assert token_arg == "grid|p.jpg|128"
+        assert path_arg == "p.jpg"
+        assert isinstance(img_arg, QImage)
 
 
 class TestImageTaskRunServiceFailure:
-    """When the service raises, the task still emits — with img=None."""
+    """When the service raises, the task still emits — with img=null QImage.
 
-    def test_exception_in_get_preview_emits_none(self):
+    Post-PR-C': on exception the task emits a null QImage() (empty, not None).
+    Downstream slots that check ``img.isNull()`` or ``img is None`` should handle
+    both; the signal type annotation (object) accepts QImage.
+    """
+
+    def test_exception_in_get_preview_emits_null_qimage(self):
         """The named real failure mode: a corrupt JPEG (or PIL chokes
         on a HEIC variant) raises during decode. The task must still
-        fire the signal with ``img=None`` so the preview pane can
+        fire the signal with a null QImage so the preview pane can
         render its "unavailable" placeholder. Otherwise the user sees
         a stale image (or nothing) and doesn't know the load failed.
         """
@@ -114,12 +146,15 @@ class TestImageTaskRunServiceFailure:
 
         task.run()
 
-        # The signal still fires with img=None
-        receiver.imageLoaded.emit.assert_called_once_with(
-            "single|bad.jpg|0", "bad.jpg", None
-        )
+        # The signal still fires with a null QImage on failure
+        receiver.imageLoaded.emit.assert_called_once()
+        token_arg, path_arg, img_arg = receiver.imageLoaded.emit.call_args.args
+        assert token_arg == "single|bad.jpg|0"
+        assert path_arg == "bad.jpg"
+        assert isinstance(img_arg, QImage)
+        assert img_arg.isNull(), "On service failure, emitted QImage must be null"
 
-    def test_exception_in_get_thumbnail_emits_none(self):
+    def test_exception_in_get_thumbnail_emits_null_qimage(self):
         """Same contract for the thumbnail branch."""
         service = MagicMock()
         service.get_thumbnail.side_effect = OSError("file truncated")
@@ -131,9 +166,12 @@ class TestImageTaskRunServiceFailure:
 
         task.run()
 
-        receiver.imageLoaded.emit.assert_called_once_with(
-            "grid|bad.jpg|128", "bad.jpg", None
-        )
+        receiver.imageLoaded.emit.assert_called_once()
+        token_arg, path_arg, img_arg = receiver.imageLoaded.emit.call_args.args
+        assert token_arg == "grid|bad.jpg|128"
+        assert path_arg == "bad.jpg"
+        assert isinstance(img_arg, QImage)
+        assert img_arg.isNull(), "On service failure, emitted QImage must be null"
 
 
 # ── ImageTaskRunner — pool dispatch ──────────────────────────────────────
