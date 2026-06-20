@@ -598,20 +598,54 @@ class TestHashPoolCalibration:
     """#486-PR3 — hash_pool="auto" times a sample through both executors at
     scan start, projects each to the real file count, and runs the faster.
 
-    The decision tests drive _calibrate_hash_pool directly with synthetic
-    per-file rates (the projection logic is what matters, not the
+    The decision tests drive scan_runner._calibrate_hash_pool directly with
+    synthetic per-file rates (the projection logic is what matters, not the
     wall-clock); _time_hash_executor and _profile_process_pool are each
     covered by a real-hash test so the measurement paths aren't mock-only.
+
+    All tests call the LIVE scan_runner._calibrate_hash_pool (the function
+    run_pipeline() actually invokes) via a _SpyBus + ScanConfig — the
+    scan_worker method copies were removed in the PR-B de-duplication.
     """
 
-    def _worker(self, tmp_path):
-        from app.views.workers.scan_worker import ScanWorker
+    class _SpyBus:
+        """Minimal ScanProgressBus test double that records bus.hash_pool_measured calls."""
 
-        return ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
+        def __init__(self):
+            self.rates_captured: list = []
+
+        def log(self, msg: str) -> None:
+            pass
+
+        def stage(self, stage_name, completed, total, files_per_sec) -> None:
+            pass
+
+        def failed(self, msg: str) -> None:
+            pass
+
+        def finished(self, output_path: str) -> None:
+            pass
+
+        def completed_empty(self) -> None:
+            pass
+
+        def hash_pool_measured(self, rates: dict) -> None:
+            self.rates_captured.append(rates)
+
+        def read_knee_measured(self, summary: dict) -> None:
+            pass
+
+    def _make_config(self, tmp_path, workers=2, hash_pool="auto", hash_pool_rates=None):
+        """Build a minimal ScanConfig for calibration tests."""
+        from core.app_service.dtos import ScanConfig
+
+        return ScanConfig(
+            sources={"s": Path(tmp_path)},
+            output_path=Path(tmp_path) / "m.sqlite",
             recursive_map={"s": False},
-            workers=2,
+            workers=workers,
+            hash_pool=hash_pool,
+            hash_pool_rates=hash_pool_rates,
         )
 
     def test_auto_value_kept_at_construction(self, qapp, tmp_path):
@@ -628,15 +662,15 @@ class TestHashPoolCalibration:
     def _patch_timings(self, monkeypatch, thread_per_file, spawn, process_per_file):
         """Stub the two measurement helpers with fixed per-file rates so the
         *projection* logic is what's under test, not the wall-clock."""
-        import app.views.workers.scan_worker as sw
+        import core.app_service.scan_runner as scan_runner_mod
 
         monkeypatch.setattr(
-            sw,
+            scan_runner_mod,
             "_time_hash_executor",
             lambda cls, sample, w: thread_per_file * len(sample),
         )
         monkeypatch.setattr(
-            sw,
+            scan_runner_mod,
             "_profile_process_pool",
             lambda cls, sample, w: (spawn, process_per_file),
         )
@@ -646,27 +680,31 @@ class TestHashPoolCalibration:
     ):
         """Catches: the projected-winner comparison inverted. Large N where
         process's lower per-file rate beats its one-time spawn."""
-        import app.views.workers.scan_worker as sw
+        import core.app_service.scan_runner as scan_runner_mod
 
         # thread 2s/file; process 100s spawn + 1s/file. Break-even N=100.
         self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)
         records = list(range(10_000))  # well past break-even → process
 
-        assert self._worker(tmp_path)._calibrate_hash_pool(
-            records, object(), object()
-        ) == "process"
+        pool_type, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path), records, object(), object()
+        )
+        assert pool_type == "process"
 
     def test_calibration_picks_thread_when_projection_favors_it(
         self, qapp, tmp_path, monkeypatch
     ):
         """Catches: process chosen on a scan too small to amortise its spawn
         cost (and ties defaulting to process)."""
+        import core.app_service.scan_runner as scan_runner_mod
+
         self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)
         records = list(range(50))  # below break-even → thread
 
-        assert self._worker(tmp_path)._calibrate_hash_pool(
-            records, object(), object()
-        ) == "thread"
+        pool_type, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path), records, object(), object()
+        )
+        assert pool_type == "thread"
 
     def test_projection_flips_winner_with_file_count(
         self, qapp, tmp_path, monkeypatch
@@ -675,11 +713,17 @@ class TestHashPoolCalibration:
         must depend on the real file count — process's one-time spawn cost
         dominates on a small scan and amortises away on a large one. A flat
         per-sample comparison (the #498 bug) could never flip here."""
-        worker = self._worker(tmp_path)
-        self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)  # break-even N=100
+        import core.app_service.scan_runner as scan_runner_mod
 
-        small = worker._calibrate_hash_pool(list(range(50)), object(), object())
-        large = worker._calibrate_hash_pool(list(range(10_000)), object(), object())
+        self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)  # break-even N=100
+        config = self._make_config(tmp_path)
+
+        small, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), config, list(range(50)), object(), object()
+        )
+        large, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), config, list(range(10_000)), object(), object()
+        )
 
         assert (small, large) == ("thread", "process")
 
@@ -688,28 +732,30 @@ class TestHashPoolCalibration:
     ):
         """Catches: paying the (expensive) process-spawn calibration cost on
         a tiny scan where it can't yield a reliable signal."""
-        import app.views.workers.scan_worker as sw
+        import core.app_service.scan_runner as scan_runner_mod
 
         timed: list = []
         monkeypatch.setattr(
-            sw, "_time_hash_executor", lambda *a: timed.append("thread") or 0.0
+            scan_runner_mod, "_time_hash_executor",
+            lambda *a: timed.append("thread") or 0.0
         )
         monkeypatch.setattr(
-            sw, "_profile_process_pool", lambda *a: timed.append("process") or (0.0, 0.0)
+            scan_runner_mod, "_profile_process_pool",
+            lambda *a: timed.append("process") or (0.0, 0.0)
         )
-        records = list(range(sw._CALIBRATION_MIN - 1))  # one below the floor
+        records = list(range(scan_runner_mod._CALIBRATION_MIN - 1))  # one below the floor
 
-        result = self._worker(tmp_path)._calibrate_hash_pool(
-            records, object(), object()
+        pool_type, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path), records, object(), object()
         )
-        assert result == "thread"
+        assert pool_type == "thread"
         assert timed == [], "below the floor calibration must not time anything"
 
     def test_time_hash_executor_returns_elapsed(self, qapp, tmp_path):
         """Real-hash timing path (no mock): hashes a few real jpegs through a
         ThreadPoolExecutor and returns a non-negative elapsed time."""
         from concurrent.futures import ThreadPoolExecutor
-        import app.views.workers.scan_worker as sw
+        import core.app_service.scan_runner as scan_runner_mod
         from scanner.walker import FileRecord
 
         recs = []
@@ -718,7 +764,7 @@ class TestHashPoolCalibration:
             _write_jpeg(p)
             recs.append(FileRecord(path=p, source_label="s", file_type="jpeg"))
 
-        elapsed = sw._time_hash_executor(ThreadPoolExecutor, recs, 2)
+        elapsed = scan_runner_mod._time_hash_executor(ThreadPoolExecutor, recs, 2)
         assert elapsed >= 0.0
 
     def test_profile_process_pool_returns_spawn_and_rate(self, qapp, tmp_path):
@@ -727,7 +773,7 @@ class TestHashPoolCalibration:
         per_file) pair. Uses ThreadPoolExecutor so CI never spawns a real
         subprocess (the cold/warm split logic is what's exercised here)."""
         from concurrent.futures import ThreadPoolExecutor
-        import app.views.workers.scan_worker as sw
+        import core.app_service.scan_runner as scan_runner_mod
         from scanner.walker import FileRecord
 
         recs = []
@@ -736,7 +782,7 @@ class TestHashPoolCalibration:
             _write_jpeg(p)
             recs.append(FileRecord(path=p, source_label="s", file_type="jpeg"))
 
-        spawn, per_file = sw._profile_process_pool(ThreadPoolExecutor, recs, 2)
+        spawn, per_file = scan_runner_mod._profile_process_pool(ThreadPoolExecutor, recs, 2)
         assert spawn >= 0.0
         assert per_file >= 0.0
 
@@ -801,63 +847,53 @@ class TestHashPoolCalibration:
     def test_cached_rates_skip_measurement_and_reproject(
         self, qapp, tmp_path, monkeypatch
     ):
-        """Cache hit: the worker re-projects the cached rates to the current
+        """Cache hit: the function re-projects the cached rates to the current
         file count WITHOUT re-measuring (the timing helpers would raise), and
         the pick still adapts to N (small→thread, large→process)."""
-        import app.views.workers.scan_worker as sw
-        from app.views.workers.scan_worker import ScanWorker
+        import core.app_service.scan_runner as scan_runner_mod
 
         def boom(*a):
             raise AssertionError("cache hit must not re-measure")
 
-        monkeypatch.setattr(sw, "_time_hash_executor", boom)
-        monkeypatch.setattr(sw, "_profile_process_pool", boom)
+        monkeypatch.setattr(scan_runner_mod, "_time_hash_executor", boom)
+        monkeypatch.setattr(scan_runner_mod, "_profile_process_pool", boom)
         rates = {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0}
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
-            hash_pool_rates=rates,
-        )
+        config = self._make_config(tmp_path, hash_pool_rates=rates)
         # break-even N=100 from the cached rates, no measurement
-        assert worker._calibrate_hash_pool(list(range(50)), object(), object()) == "thread"
-        assert worker._calibrate_hash_pool(
-            list(range(10_000)), object(), object()
-        ) == "process"
+        small, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), config, list(range(50)), object(), object()
+        )
+        assert small == "thread"
+        large, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), config, list(range(10_000)), object(), object()
+        )
+        assert large == "process"
 
     def test_fresh_calibration_emits_measured_rates(
         self, qapp, tmp_path, monkeypatch
     ):
-        """Cache miss: a fresh measurement is emitted via hash_pool_measured
+        """Cache miss: a fresh measurement is dispatched via bus.hash_pool_measured
         so the dialog can persist it (the inbound half of the cache)."""
-        import app.views.workers.scan_worker as sw
-        from app.views.workers.scan_worker import ScanWorker
+        import core.app_service.scan_runner as scan_runner_mod
 
         monkeypatch.setattr(
-            sw, "_time_hash_executor", lambda cls, sample, w: 2.0 * len(sample)
+            scan_runner_mod, "_time_hash_executor",
+            lambda cls, sample, w: 2.0 * len(sample)
         )
         monkeypatch.setattr(
-            sw, "_profile_process_pool", lambda cls, sample, w: (100.0, 1.0)
+            scan_runner_mod, "_profile_process_pool",
+            lambda cls, sample, w: (100.0, 1.0)
         )
         # #526 — stub the grouping micro-benchmark so the emitted schema is
         # deterministic (the real one times a synthetic hash set).
-        monkeypatch.setattr(sw, "_profile_grouping", lambda: (1e-6, 5e-7))
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
+        monkeypatch.setattr(scan_runner_mod, "_profile_grouping", lambda: (1e-6, 5e-7))
+        bus = self._SpyBus()
+        scan_runner_mod._calibrate_hash_pool(
+            bus, self._make_config(tmp_path), list(range(10_000)), object(), object()
         )
-        captured: list = []
-        worker.hash_pool_measured.connect(captured.append)
-
-        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
 
         # #526 — the cache entry now carries the grouping micro-rates too.
-        assert captured == [{
+        assert bus.rates_captured == [{
             "thread_per_file": 2.0,
             "process_per_file": 1.0,
             "spawn": 100.0,
@@ -898,30 +934,27 @@ class TestHashPoolCalibration:
     ):
         """A corrupt/partial cached entry (e.g. hand-edited settings.json) is
         treated as a cache miss and re-measured, not crashed on."""
-        import app.views.workers.scan_worker as sw
-        from app.views.workers.scan_worker import ScanWorker
+        import core.app_service.scan_runner as scan_runner_mod
 
         monkeypatch.setattr(
-            sw, "_time_hash_executor", lambda cls, sample, w: 2.0 * len(sample)
+            scan_runner_mod, "_time_hash_executor",
+            lambda cls, sample, w: 2.0 * len(sample)
         )
         monkeypatch.setattr(
-            sw, "_profile_process_pool", lambda cls, sample, w: (100.0, 1.0)
+            scan_runner_mod, "_profile_process_pool",
+            lambda cls, sample, w: (100.0, 1.0)
         )
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
+        bus = self._SpyBus()
+        config = self._make_config(
+            tmp_path,
             hash_pool_rates={"thread_per_file": 1.0},  # partial → invalid
         )
-        captured: list = []
-        worker.hash_pool_measured.connect(captured.append)
+        pool_type, _ = scan_runner_mod._calibrate_hash_pool(
+            bus, config, list(range(10_000)), object(), object()
+        )
 
-        result = worker._calibrate_hash_pool(list(range(10_000)), object(), object())
-
-        assert result == "process"  # re-measured rates project to process
-        assert len(captured) == 1, "malformed cache must trigger a fresh measurement"
+        assert pool_type == "process"  # re-measured rates project to process
+        assert len(bus.rates_captured) == 1, "malformed cache must trigger a fresh measurement"
 
     # ---- #526 grouping-stage calibration -------------------------------------
 
@@ -947,58 +980,50 @@ class TestHashPoolCalibration:
         self, qapp, tmp_path, monkeypatch
     ):
         """A fresh calibration derives the BK-tree floor from the measured
-        grouping micro-rates and stashes it for the classify() call."""
-        import app.views.workers.scan_worker as sw
-        from app.views.workers.scan_worker import ScanWorker, _derive_bktree_floor
+        grouping micro-rates and returns it as the second element of the tuple."""
+        import core.app_service.scan_runner as scan_runner_mod
+        from app.views.workers.scan_worker import _derive_bktree_floor
 
         monkeypatch.setattr(
-            sw, "_time_hash_executor", lambda cls, sample, w: 2.0 * len(sample)
+            scan_runner_mod, "_time_hash_executor",
+            lambda cls, sample, w: 2.0 * len(sample)
         )
         monkeypatch.setattr(
-            sw, "_profile_process_pool", lambda cls, sample, w: (100.0, 1.0)
+            scan_runner_mod, "_profile_process_pool",
+            lambda cls, sample, w: (100.0, 1.0)
         )
-        monkeypatch.setattr(sw, "_profile_grouping", lambda: (1e-7, 1e-5))
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
+        monkeypatch.setattr(scan_runner_mod, "_profile_grouping", lambda: (1e-7, 1e-5))
+
+        _, calibrated_floor = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path), list(range(10_000)),
+            object(), object()
         )
-        assert worker._calibrated_bktree_floor is None  # not yet calibrated
 
-        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
-
-        assert worker._calibrated_bktree_floor == _derive_bktree_floor(1e-7, 1e-5)
+        assert calibrated_floor == _derive_bktree_floor(1e-7, 1e-5)
 
     def test_cached_group_rates_set_floor_without_measuring(
         self, qapp, tmp_path, monkeypatch
     ):
         """Cache hit carrying grouping micro-rates derives the floor with no
         re-measurement (the timing helpers would raise)."""
-        import app.views.workers.scan_worker as sw
-        from app.views.workers.scan_worker import ScanWorker, _derive_bktree_floor
+        import core.app_service.scan_runner as scan_runner_mod
+        from app.views.workers.scan_worker import _derive_bktree_floor
 
         def boom(*a):
             raise AssertionError("cache hit must not re-measure")
 
-        monkeypatch.setattr(sw, "_time_hash_executor", boom)
-        monkeypatch.setattr(sw, "_profile_process_pool", boom)
-        monkeypatch.setattr(sw, "_profile_grouping", boom)
+        monkeypatch.setattr(scan_runner_mod, "_time_hash_executor", boom)
+        monkeypatch.setattr(scan_runner_mod, "_profile_process_pool", boom)
+        monkeypatch.setattr(scan_runner_mod, "_profile_grouping", boom)
         rates = {
             "thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0,
             "group_per_pair": 1e-7, "group_bk_per_candidate": 1e-5,
         }
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
-            hash_pool_rates=rates,
+        _, calibrated_floor = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path, hash_pool_rates=rates),
+            list(range(10_000)), object(), object()
         )
-        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
-        assert worker._calibrated_bktree_floor == _derive_bktree_floor(1e-7, 1e-5)
+        assert calibrated_floor == _derive_bktree_floor(1e-7, 1e-5)
 
     def test_legacy_cache_without_group_keys_floor_stays_none(
         self, qapp, tmp_path, monkeypatch
@@ -1006,27 +1031,20 @@ class TestHashPoolCalibration:
         """A pre-#526 cache entry (hash rates only, no grouping keys) still
         serves the hash pick, but the grouping floor falls back to None so
         classify() uses the module default — no crash."""
-        import app.views.workers.scan_worker as sw
-        from app.views.workers.scan_worker import ScanWorker
+        import core.app_service.scan_runner as scan_runner_mod
 
         def boom(*a):
             raise AssertionError("cache hit must not re-measure")
 
-        monkeypatch.setattr(sw, "_time_hash_executor", boom)
-        monkeypatch.setattr(sw, "_profile_process_pool", boom)
-        monkeypatch.setattr(sw, "_profile_grouping", boom)
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
-            hash_pool_rates={
-                "thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0,
-            },
+        monkeypatch.setattr(scan_runner_mod, "_time_hash_executor", boom)
+        monkeypatch.setattr(scan_runner_mod, "_profile_process_pool", boom)
+        monkeypatch.setattr(scan_runner_mod, "_profile_grouping", boom)
+        rates = {"thread_per_file": 2.0, "process_per_file": 1.0, "spawn": 100.0}
+        _, calibrated_floor = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path, hash_pool_rates=rates),
+            list(range(10_000)), object(), object()
         )
-        worker._calibrate_hash_pool(list(range(10_000)), object(), object())
-        assert worker._calibrated_bktree_floor is None
+        assert calibrated_floor is None
 
     # ---- #554 multi-device + NAS guard --------------------------------------
 
@@ -1060,9 +1078,8 @@ class TestHashPoolCalibration:
         and ProcessPoolExecutor / _time_hash_executor / _profile_process_pool
         must NOT be invoked at calibration time."""
         import concurrent.futures as _cf
-        import app.views.workers.scan_worker as sw
+        import core.app_service.scan_runner as scan_runner_mod
         import scanner.workers as _workers
-        from app.views.workers.scan_worker import ScanWorker
 
         # Two devices: D: local, J: NAS — the exact mixed-scan topology
         # the #609 measurement covered.
@@ -1081,27 +1098,23 @@ class TestHashPoolCalibration:
         # Calibration helpers must NEVER be invoked — if the shortcut
         # fires correctly the projection is skipped entirely. The actual
         # scan-time ProcessPoolExecutor construction happens later in
-        # _run_pipeline and is not exercised by this unit test.
+        # run_pipeline and is not exercised by this unit test.
         def _boom(*args, **kwargs):
             raise AssertionError(
                 "#609 shortcut must bypass process calibration on multi-device+NAS scan"
             )
-        monkeypatch.setattr(sw, "_time_hash_executor", lambda *a: _boom())
-        monkeypatch.setattr(sw, "_profile_process_pool", lambda *a: _boom())
+        monkeypatch.setattr(scan_runner_mod, "_time_hash_executor", lambda *a: _boom())
+        monkeypatch.setattr(scan_runner_mod, "_profile_process_pool", lambda *a: _boom())
 
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
+        pool_type, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path),
+            records, object(), _cf.ProcessPoolExecutor
         )
-        result = worker._calibrate_hash_pool(records, object(), _cf.ProcessPoolExecutor)
 
-        assert result == "process", (
+        assert pool_type == "process", (
             f"multi-device+NAS scan must resolve to 'process' (#609 — GIL "
             f"escape on shared compute_pool > per-device thread I/O overlap "
-            f"on mixed big+small workloads), not '{result}'"
+            f"on mixed big+small workloads), not '{pool_type}'"
         )
 
     def test_single_device_all_local_still_runs_calibration(
@@ -1110,9 +1123,8 @@ class TestHashPoolCalibration:
         """#554 — a single-device all-local scan must still run the normal
         thread-vs-process calibration (the guard must NOT trigger). Process
         can still be the winner for large single-device local scans."""
-        import app.views.workers.scan_worker as sw
+        import core.app_service.scan_runner as scan_runner_mod
         import scanner.workers as _workers
-        from app.views.workers.scan_worker import ScanWorker
 
         records = self._make_records([
             (r"D:\photos\a.jpg", "D"),
@@ -1125,21 +1137,15 @@ class TestHashPoolCalibration:
         # Rates that project to 'process' on a large N: break-even = 100.
         self._patch_timings(monkeypatch, 2.0, 100.0, 1.0)
 
-        worker = ScanWorker(
-            sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
-            recursive_map={"s": False},
-            workers=2,
-            hash_pool="auto",
-        )
         # Large enough to be past break-even → calibration picks process.
-        result = worker._calibrate_hash_pool(
+        pool_type, _ = scan_runner_mod._calibrate_hash_pool(
+            self._SpyBus(), self._make_config(tmp_path),
             list(range(10_000)), object(), object()
         )
 
-        assert result == "process", (
+        assert pool_type == "process", (
             f"single-device all-local large scan must still run calibration "
-            f"and can pick 'process'; got '{result}'"
+            f"and can pick 'process'; got '{pool_type}'"
         )
 
 
@@ -1322,19 +1328,11 @@ class TestScanWorkerLateCancel:
             workers=1,
         )
 
-        # worker._cancel_token.request() / worker.requestInterruption() would
-        # both set the token synchronously, but this test drives cancellation
-        # from INSIDE the hash leaf (cancel_during_hash below) — a moment where
-        # no synchronous caller can be interposed. Monkeypatching
-        # isInterruptionRequested gives the closure the hook it needs without
-        # fighting Python's thread scheduler. The _cancel_token path is covered
-        # by TestCancelTokenWiring.
-        cancel_state = {"flag": False}
-
-        def fake_is_interrupt():
-            return cancel_state["flag"]
-
-        monkeypatch.setattr(worker, "isInterruptionRequested", fake_is_interrupt)
+        # Cancellation is driven from INSIDE the hash leaf: cancel_during_hash
+        # calls worker._cancel_token.request() after the real hash work
+        # completes so the pipeline sees the cancel at CLASSIFY entry — exactly
+        # the #463 check this test pins. The token is the single source of
+        # truth (run_pipeline polls cancel_token directly).
 
         # #566 — thread branch now calls compute_from_bytes → _hashes_from_data
         # (not compute_hashes directly).  Patch _hashes_from_data so the cancel
@@ -1344,20 +1342,20 @@ class TestScanWorkerLateCancel:
         real_hashes_from_data = _hasher._hashes_from_data
 
         def cancel_during_hash(path, file_type, data):
-            """Run the real hash leaf, then flip the cancel flag. With only
+            """Run the real hash leaf, then request cancel. With only
             one record, the parent drain loop gets the result, increments
             ``done``, and then the next interrupt-check iteration sees True.
             The next check the pipeline hits is at CLASSIFY entry — exactly
             the #463 check this test pins.
             """
             result = real_hashes_from_data(path, file_type, data)
-            cancel_state["flag"] = True
+            worker._cancel_token.request()
             return result
 
         def must_not_run_classify(*args, **kwargs):
             raise AssertionError(
                 "scanner.dedup.classify called after cancel — the "
-                "CLASSIFY-stage check at scan_worker.py did not fire"
+                "CLASSIFY-stage check at scan_runner.py did not fire"
             )
 
         def must_not_run_score(*args, **kwargs):
@@ -1427,26 +1425,20 @@ class TestScanWorkerLateCancel:
             workers=1,
         )
 
-        # See the sibling test for why ``isInterruptionRequested`` is
-        # patched on the instance rather than going through
-        # ``requestInterruption()`` — synchronous ``run()`` doesn't
-        # propagate the real Qt interruption flag.
-        cancel_state = {"flag": False}
-
-        def fake_is_interrupt():
-            return cancel_state["flag"]
-
-        monkeypatch.setattr(worker, "isInterruptionRequested", fake_is_interrupt)
+        # Cancellation is driven from inside the patched print_summary:
+        # hooked_print_summary calls worker._cancel_token.request() so
+        # the WRITE-stage cancel check (which follows immediately after)
+        # sees True — testing it in isolation without the earlier checks.
 
         real_print_summary = _manifest.print_summary
         write_calls: list[tuple] = []
 
         def hooked_print_summary(*args, **kwargs):
-            """Run the real summary, then flip the cancel flag. The
+            """Run the real summary, then request cancel. The
             WRITE check fires on the very next statement after
             print_summary's output is re-emitted to the log."""
             real_print_summary(*args, **kwargs)
-            cancel_state["flag"] = True
+            worker._cancel_token.request()
 
         def boom_write_manifest(*args, **kwargs):
             write_calls.append(args)
@@ -1491,9 +1483,9 @@ class TestScanWorkerWalkCancel:
     ):
         """Pre-set the interruption flag before ``run()`` starts. The
         walker's ``cancel_check`` predicate (a bound reference to
-        ``self.isInterruptionRequested``, which delegates to ``_cancel_token``)
-        returns True on the first poll and returns no records. The
-        post-WALK gate then short-circuits the rest of the pipeline:
+        ``cancel_token``) returns True on the first poll and returns no
+        records. The post-WALK gate then short-circuits the rest of the
+        pipeline:
 
           - ``scanner.hasher.compute_hashes`` MUST NOT be called.
           - ``scanner.manifest.write_manifest`` MUST NOT be called —
@@ -1501,16 +1493,12 @@ class TestScanWorkerWalkCancel:
           - ``failed`` emits exactly ``"Scan cancelled."`` so
             scan_dialog distinguishes from a red error modal.
           - The ``cancel_check`` callable handed to ``scan_sources`` MUST
-            itself return True — proving the predicate is
-            ``self.isInterruptionRequested`` (method ref), not the raw
-            ``_cancel_token`` object (which stays clear when only
-            ``isInterruptionRequested`` is monkeypatched). This is the
-            direct guard for scan_worker.py line 827.
+            itself return True — proving the cancel_token is passed as-is,
+            not a stale copy or wrong object. This is the direct guard
+            for scan_runner.py's cancel_check=cancel_token wiring.
 
-        Note: this test monkeypatches isInterruptionRequested because
-        the cancel is pre-set before run(); the _cancel_token real path
-        is covered by TestCancelTokenWiring and
-        test_requestInterruption_sets_token.
+        Cancel is driven via worker._cancel_token.request() (real token path)
+        rather than monkeypatching, matching the scan_runner.py contract.
         """
         from app.views.workers.scan_worker import ScanWorker
         import scanner.walker as _walker
@@ -1531,17 +1519,15 @@ class TestScanWorkerWalkCancel:
             workers=1,
         )
 
-        # Flag the worker as already-interrupted before WALK starts.
-        # cancel_check is wired to self.isInterruptionRequested (method ref),
-        # so the monkeypatch ensures the first rglob hit sees True, the loop
-        # breaks, and the walker returns records == [].
-        monkeypatch.setattr(worker, "isInterruptionRequested", lambda: True)
+        # Set the cancel token before WALK starts — run_pipeline passes
+        # cancel_token as cancel_check to scan_sources, so the first rglob
+        # hit sees True, the loop breaks, and the walker returns records == [].
+        worker._cancel_token.request()
 
         # Spy on scan_sources to capture what cancel_check predicate the
-        # worker actually passes. If line 827 is self.isInterruptionRequested
-        # (correct), cancel_check() returns True (the monkeypatched value).
-        # If line 827 were self._cancel_token (the object, regression), the
-        # clear token would make cancel_check() return False — caught below.
+        # worker actually passes. cancel_check must be the cancel_token
+        # (Callable[[], bool]) — calling it must return True because the
+        # token was already requested above.
         captured: dict = {}
 
         def spy_scan_sources(sources, *args, cancel_check=None, **kwargs):
@@ -1582,16 +1568,14 @@ class TestScanWorkerWalkCancel:
         assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
             "destination manifest must be preserved on WALK-stage cancel"
         )
-        # Direct guard for scan_worker.py line 827: the predicate handed to
-        # scan_sources must reflect the pre-set cancel. With method-ref wiring
-        # (self.isInterruptionRequested) the monkeypatched True propagates here.
-        # With token-object wiring (self._cancel_token) the clear token returns
-        # False and this assertion fails — catching the regression.
+        # Guard: the predicate handed to scan_sources must be the cancel_token,
+        # and it must return True because worker._cancel_token.request() was
+        # called above. If cancel_token were not passed (or a different predicate
+        # were used), cancel_check() would return False and this fails.
         assert captured.get("cancel_check_result") is True, (
             "cancel_check passed to scan_sources did not return True despite "
-            "pre-set isInterruptionRequested=True — scan_worker.py line 827 "
-            "must pass self.isInterruptionRequested (method ref), not the "
-            "_cancel_token object"
+            "worker._cancel_token.request() — scan_runner.py must pass "
+            "cancel_token as cancel_check to scan_sources"
         )
 
 
@@ -1833,10 +1817,7 @@ class TestScanWorkerPerDeviceHashPools:
             recursive_map={"src": False},
             workers=2,
         )
-        cancel_state = {"flag": True}  # cancel before the first drain check
-        monkeypatch.setattr(
-            worker, "isInterruptionRequested", lambda: cancel_state["flag"]
-        )
+        worker._cancel_token.request()  # cancel before the first drain check
 
         failed: list[str] = []
         finished: list[str] = []
@@ -1896,7 +1877,7 @@ class TestScanWorkerPerDeviceHashPools:
         )
         self._spy_thread_pools(monkeypatch)
 
-        flag = {"v": False}
+        flag = {"v": False}  # True after first compute — guards sleep-only-once
 
         # #566 — thread branch now calls read_for_record + compute_from_bytes.
         # Patch both seams: read returns immediately; compute sleeps briefly on
@@ -1905,22 +1886,24 @@ class TestScanWorkerPerDeviceHashPools:
         def fake_read(idx, record):
             return idx, record, None
 
-        def fake_compute(idx, record, data):
-            if not flag["v"]:
-                time.sleep(0.2)
-                flag["v"] = True
-            return idx, None
-
-        monkeypatch.setattr(_hasher, "read_for_record", fake_read)
-        monkeypatch.setattr(_hasher, "compute_from_bytes", fake_compute)
-
+        # worker is created before fake_compute so the closure can reference it.
         worker = ScanWorker(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
             workers=2,
         )
-        monkeypatch.setattr(worker, "isInterruptionRequested", lambda: flag["v"])
+
+        def fake_compute(idx, record, data):
+            if not flag["v"]:
+                time.sleep(0.2)
+                flag["v"] = True
+                # Request cancel via the real token so run_pipeline sees it.
+                worker._cancel_token.request()
+            return idx, None
+
+        monkeypatch.setattr(_hasher, "read_for_record", fake_read)
+        monkeypatch.setattr(_hasher, "compute_from_bytes", fake_compute)
 
         failed: list[str] = []
         worker.failed.connect(failed.append)
@@ -2038,18 +2021,14 @@ class TestScanWorkerPerDeviceHashPools:
             hash_pool="thread",  # force the thread branch (where _route_outcome runs)
         )
 
-        # Flip the Qt interruption flag only AFTER the parent is blocked inside
-        # _route_outcome (queue full). The synthetic read+compute are instant so
-        # the queue fills in well under the delay; flipping then exercises the
-        # #594 break (vs the drain-loop top-check catching it first).
-        interrupted = {"v": False}
-        monkeypatch.setattr(
-            worker, "isInterruptionRequested", lambda: interrupted["v"]
-        )
+        # Request cancel AFTER the parent is blocked inside _route_outcome
+        # (queue full). The synthetic read+compute are instant so the queue
+        # fills in well under the delay; cancel then exercises the #594 break
+        # (vs the drain-loop top-check catching it first).
 
         def trip():
             time.sleep(0.8)
-            interrupted["v"] = True
+            worker._cancel_token.request()
 
         failed: list[str] = []
         # DirectConnection: run() executes in a sub-thread below so the test can
@@ -2190,17 +2169,9 @@ class TestScanTeardownGaps:
         monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
 
         # Trip the cancel from inside the HASH drain (not the WALK gate): the
-        # first hashed record flips the interruption flag, so walk completes
-        # normally and the process-branch drain loop is the thing that cancels.
-        flag = {"v": False}
-
-        def fake_hash(idx, record):
-            flag["v"] = True
-            return idx, HashResult(record=record, sha256=f"sha-{idx}",
-                                   phash=None, exif_date=None)
-
-        monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
-
+        # first hashed record requests cancel via the real token, so walk
+        # completes normally and the process-branch drain loop is the thing
+        # that cancels.
         worker = ScanWorker(
             sources={"solo": str(tmp_path)},
             output_path=str(out),
@@ -2208,7 +2179,13 @@ class TestScanTeardownGaps:
             workers=1,
             hash_pool="process",
         )
-        monkeypatch.setattr(worker, "isInterruptionRequested", lambda: flag["v"])
+
+        def fake_hash(idx, record):
+            worker._cancel_token.request()
+            return idx, HashResult(record=record, sha256=f"sha-{idx}",
+                                   phash=None, exif_date=None)
+
+        monkeypatch.setattr(_hasher, "run_hash_for_record", fake_hash)
 
         failed: list[str] = []
         worker.failed.connect(failed.append)
@@ -3218,16 +3195,9 @@ class TestPostHashCancelKillsExif:
             exif_workers=1,  # one consumer → one wedge surface
         )
 
-        # Drive cancellation via the monkeypatch-closure pattern: the real
-        # requestInterruption() / _cancel_token path is covered by
-        # TestCancelTokenWiring; here we need to flip the flag at a
-        # specific point inside run() without a running QThread.
-        cancel_state = {"flag": False}
-
-        def fake_is_interrupt():
-            return cancel_state["flag"]
-
-        monkeypatch.setattr(worker, "isInterruptionRequested", fake_is_interrupt)
+        # Cancellation is driven from a watcher thread that waits until the
+        # exiftool consumer enters execute() (the wedge) and then requests
+        # cancel via the real token. run_pipeline polls cancel_token directly.
 
         # Replace ExiftoolProcess with one that wedges inside execute()
         # until kill() arrives. This is the EXACT failure mode #561
@@ -3273,11 +3243,11 @@ class TestPostHashCancelKillsExif:
 
         # Watcher: once the consumer has entered execute() (the wedge),
         # flip the cancel flag — simulating the user clicking the
-        # scan-dialog X mid-EXIF.
+        # scan-dialog X mid-EXIF: request cancel when consumer enters execute().
         def watcher():
             if not wedge_entered.wait(timeout=10.0):
                 return  # never wedged; test will fail at the deadline check
-            cancel_state["flag"] = True
+            worker._cancel_token.request()
 
         _threading.Thread(target=watcher, daemon=True).start()
 

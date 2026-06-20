@@ -1078,3 +1078,115 @@ def test_probe_make_row_per_row_stat_budget():
         "stat is truly necessary, raise the threshold here in the same "
         "PR with a one-line reason."
     )
+
+
+def test_probe_scan_runner_has_no_qthread_method_calls():
+    """T6 — core/app_service/scan_runner.py must contain zero Qt references.
+
+    The pipeline's Qt-free contract enables the Phase 1 web API (FastAPI +
+    SSE) to call run_pipeline() without importing PySide6.  This probe
+    enforces the contract statically so a stray ``.emit(`` or
+    ``QThread`` import can't slip in unnoticed.
+
+    Checked patterns (AST-level):
+    - ``import PySide6``           — top-level or function-body
+    - ``from PySide6 import …``    — ditto
+    - ``QThread``                  — as a name reference anywhere
+    - ``.emit(``                   — attribute-call pattern (Qt signal emission)
+
+    If this probe fires, the change that introduced the Qt coupling should
+    instead add the new signal dispatch to ``_QtBus`` in scan_worker.py and
+    call it via ``bus.<method>()`` in scan_runner.py.
+    """
+    SCAN_RUNNER_PATH = REPO / "core" / "app_service" / "scan_runner.py"
+    source = SCAN_RUNNER_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(SCAN_RUNNER_PATH))
+
+    violations: list[str] = []
+
+    for node in ast.walk(tree):
+        # ``import PySide6`` or ``import PySide6.QtCore``
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if "PySide6" in alias.name:
+                    violations.append(
+                        f"line {node.lineno}: import {alias.name}"
+                    )
+        # ``from PySide6 import …`` or ``from PySide6.QtCore import …``
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and "PySide6" in node.module:
+                violations.append(
+                    f"line {node.lineno}: from {node.module} import …"
+                )
+        # ``QThread`` as a bare name reference
+        elif isinstance(node, ast.Name) and node.id == "QThread":
+            violations.append(
+                f"line {node.lineno}: bare name 'QThread'"
+            )
+        # ``.emit(…)`` — attribute call (Qt signal emission)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "emit"
+        ):
+            violations.append(
+                f"line {node.lineno}: .emit() call"
+            )
+
+    assert violations == [], (
+        f"core/app_service/scan_runner.py must have zero Qt references.\n"
+        f"Violations found ({len(violations)}):\n"
+        + "\n".join(f"  {v}" for v in violations)
+        + "\nFix: dispatch via bus.<method>() and implement the method "
+        "in _QtBus (scan_worker.py) instead."
+    )
+
+
+def test_probe_qtbus_implements_every_scanprogressbus_method():
+    """T7 — _QtBus must implement every method declared on ScanProgressBus.
+
+    ScanProgressBus is a runtime_checkable Protocol; the pipeline dispatches
+    all events through it. _QtBus is the Qt-signal implementation. If a new
+    event method is added to the Protocol but not to _QtBus, the pipeline
+    runs fine in tests (which use _SpyBus) but crashes at runtime when the
+    Qt worker dispatches an unknown attribute.
+
+    This probe asserts SET EQUALITY so both gaps fire:
+      - Protocol method missing from _QtBus → AttributeError at runtime.
+      - Extra method on _QtBus not in Protocol → not wrong but worth
+        knowing (informative, not a hard failure, so we check only Protocol ⊆ _QtBus).
+
+    Current passing set (both sides equal today):
+        {completed_empty, failed, finished, hash_pool_measured, log,
+         read_knee_measured, stage}
+    """
+    import inspect
+    import typing
+
+    from core.app_service.events import ScanProgressBus
+    from app.views.workers.scan_worker import _QtBus
+
+    # Protocol member names (non-dunder methods declared by the Protocol).
+    # typing.get_protocol_members arrived in Python 3.13; on 3.11/3.12 use
+    # the __protocol_attrs__ semi-public attribute instead.
+    if hasattr(typing, "get_protocol_members"):
+        protocol_methods = set(typing.get_protocol_members(ScanProgressBus))
+    else:
+        protocol_methods = set(getattr(ScanProgressBus, "__protocol_attrs__", set()))
+
+    # _QtBus concrete methods (non-dunder, defined directly on the class —
+    # excludes inherited object methods).
+    qtbus_methods = {
+        name for name, _ in inspect.getmembers(_QtBus, predicate=inspect.isfunction)
+        if not name.startswith("_")
+    }
+
+    missing_from_qtbus = protocol_methods - qtbus_methods
+    assert not missing_from_qtbus, (
+        f"_QtBus is missing methods declared on ScanProgressBus: "
+        f"{sorted(missing_from_qtbus)}. "
+        f"Adding a new bus event to the Protocol without implementing it in "
+        f"_QtBus means the Qt scan worker will raise AttributeError at runtime "
+        f"when the pipeline calls bus.<method>(). Implement the method in "
+        f"_QtBus (scan_worker.py) and connect it to the matching Qt signal."
+    )

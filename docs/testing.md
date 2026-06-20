@@ -121,6 +121,15 @@ calls out what would be uncaught even with a green CI.
 | `core/services/interfaces.py` | 100% | dataclasses + protocols |
 | `core/services/auto_select.py` | 100% | pure helper for #212. Picks the top-scored row per duplicate group; consumed by `scan_worker._run_pipeline` when the dialog's "Auto select after scan" checkbox is on. Tie-break + None-handling mirror `select_paths_top_n` (`app/views/dialogs/select_dialog.py`) so manual and auto runs converge on the same keeper. Layer 3: s49 covers the full pipeline including #239's visual-selection step — `MainWindow._load_manifest_after_scan` walks `vm.groups` for `action="KEEP"` and applies the tree selection. |
 
+### `core/app_service/`
+
+| Module | Layer 1 | Notes |
+|---|---|---|
+| `core/app_service/scan_runner.py` | 84% (full suite) | Qt-free pipeline extracted from `ScanWorker._run_pipeline` (PR-B). `run_pipeline(config, cancel_token, bus)` is the single entry point. All module-level helpers (`_time_hash_executor`, `_profile_process_pool`, `_profile_grouping`, `_derive_bktree_floor`, `_stratified_sample`, `_valid_hash_pool_rates`, `hash_pool_fingerprint`, `store_hash_pool_rates`, `_assign_process_pool_to_kill_job`, `_StageTracker`, `_calibrate_hash_pool`, `_resolve_grouping_floor`) live here as the single source of truth; `scan_worker.py` re-exports them for backward-compat. The `TestHashPoolCalibration` tests in `test_scan_worker.py` import from `core.app_service.scan_runner` and call the live functions directly — these are the load-bearing calibration tests (floor crossover/clamp, fresh-vs-cached floor derivation, legacy-cache fallback, version-token cache invalidation, #609 multi-device+NAS shortcut). Happy-path and pre-cancel tests in `tests/test_scan_runner.py`. T6 AST probe in `tests/test_ui_probes.py` statically asserts zero Qt call sites. Uncovered ~16%: the pipeline's HASH+EXIF+CLASSIFY+SCORE+WRITE stages run in all scan-worker tests but coverage is distributed across the full suite; targeted at just `test_scan_runner.py` alone it's lower because those tests drive only the happy-path + cancel. |
+| `core/app_service/events.py` | **omit** | `ScanProgressBus` is a `runtime_checkable` Protocol — its stub method bodies (`...`) cannot be invoked from unit tests. Covered by `_QtBus` (scan_worker.py) and `_SpyBus` (test_scan_runner.py + TestHashPoolCalibration._SpyBus). |
+| `core/app_service/dtos.py` | 100% | plain `@dataclass` — every field exercised by the construction in `test_scan_runner.py` and `TestHashPoolCalibration._make_config`. |
+| `core/app_service/cancel_token.py` | 100% | pinned by `tests/test_cancel_token.py`; also exercised by every cancel test in `test_scan_worker.py` via `worker._cancel_token`. |
+
 ### `infrastructure/`
 
 | Module | Layer 1 | Layer 2 | Layer 3 | Residual risk |
