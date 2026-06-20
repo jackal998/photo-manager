@@ -1,0 +1,352 @@
+# qa/web/scenario_map.yml
+#
+# Mapping from Qt qa-explore scenario names to their Phase-2+ web driver
+# modules.  This file is the single source of truth for which scenarios
+# have been ported to the web harness.
+#
+# Fields per entry
+# ----------------
+# scenario        : key matching ALL_SCENARIOS in qa/scenarios/_batch.py
+# playwright_module: dotted Python module path under qa.web.scenarios, or
+#                    null when not yet ported (Phase 1 default)
+# status          : todo | in_progress | done | skip
+# notes           : free-text, empty string when nothing to say
+#
+# Invariant: the number of rows in this file must equal len(ALL_SCENARIOS).
+# Enforced by scripts/check_qa_parity.py.
+
+scenarios:
+  - scenario: s01_happy_path
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s02_empty_folder
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s03_cancel_scan
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s04_corrupted
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s05_huge_preview
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s06_formats
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s07_format_dup
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s08_exif_edge
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s09_walker_exclusions
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s10_multi_source
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s11_video_live
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s12_save_manifest
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s13_execute_action
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s14_action_by_regex
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s15_context_menu
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s16_open_manifest
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s17_scan_dialog_widgets
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s18_log_menu
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s19_context_menu_open_folder
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s20_multi_remove_from_list
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s21_list_menu_remove
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s22_language_switch
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s23a_set_settings
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s23b_verify_settings
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s24_stale_manifest_paths
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s25_empty_area_context_menu
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s26_keyboard_navigation
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s27_rescan_confirm
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s28_exit_dirty_prompt
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s29_remove_from_list_by_regex
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s30_execute_dialog_regex_right_click
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s31_simple_mode_regex
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s32_lock_confirm_bulk_regex
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s33_execute_dialog_jump_to_all_delete
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s34_lock_confirm_at_execute
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s35_lock_via_context_menu
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s36_lock_confirm_destructive_execute
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s37_status_bar_baseline
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s38_scan_dialog_invalid_path
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s39_window_geometry_persist
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s40_results_tree_double_click
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s41_empty_state_action_buttons
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s42_scoring
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s43_numeric_condition
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s44_execute_highlighted_rows
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s45_sort_persistence
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s47_column_layout_persist
+    playwright_module: null
+    status: todo
+    notes: "s46 intentionally absent from ALL_SCENARIOS"
+
+  - scenario: s48_dialog_geometry_persist
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s49_scan_auto_select
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s50_select_numeric_panel_from_main_window
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s51_execute_dialog_preview
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s52_similarity_against_displayed_ref
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s53_execute_dialog_lock_decision
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s54_execute_dialog_remove_from_list
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s55_action_dialog_no_match_fn
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s56_action_dialog_apply_by_score
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s57_scan_auto_select_aggressive
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s58_language_switch_preserves_manifest
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s59_execute_dialog_select_by_main_tree_sync
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s60_execute_filter_by_action_type
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s61_actioned_singleton_prune
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s63_late_cancel_and_main_window_guard
+    playwright_module: null
+    status: todo
+    notes: "s62 intentionally absent from ALL_SCENARIOS"
+
+  - scenario: s64_execute_selected_partial
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s65_passenger_bridge
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s66_autotune_read_knee
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s67_locked_singleton_prune_always
+    playwright_module: null
+    status: todo
+    notes: ""
+
+  - scenario: s68_full_res_viewer_double_click
+    playwright_module: null
+    status: todo
+    notes: ""
