@@ -9,15 +9,17 @@ from __future__ import annotations
 import atexit
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.web.routes.fs import router as fs_router
 from app.web.routes.health import router as health_router
 from app.web.routes.image import router as image_router
+from app.web.routes.review import router as review_router
 from app.web.routes.scan import router as scan_router
+from app.web.routes.settings import router as settings_router
 
 
 @asynccontextmanager
@@ -97,6 +99,9 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(scan_router)
     app.include_router(image_router)
+    app.include_router(review_router)
+    app.include_router(settings_router)
+    app.include_router(fs_router)
     return app
 
 

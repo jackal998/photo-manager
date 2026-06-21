@@ -15,6 +15,45 @@ from core.app_service.cancel_token import _CancelToken
 from core.app_service.dtos import ScanConfig
 
 
+# ---------------------------------------------------------------------------
+# Phase 2B — review / decision / lock / settings / fs-browse models
+# ---------------------------------------------------------------------------
+
+
+class DecisionItem(BaseModel):
+    """One file-path → decision mapping in a batch decision update."""
+
+    file_path: str
+    decision: str
+
+
+class DecisionUpdate(BaseModel):
+    """Body for PATCH /api/decision."""
+
+    manifest_path: str
+    decisions: list[DecisionItem]
+
+
+class LockItem(BaseModel):
+    """One file-path → locked-bool mapping in a batch lock update."""
+
+    file_path: str
+    locked: bool
+
+
+class LockUpdate(BaseModel):
+    """Body for PATCH /api/lock."""
+
+    manifest_path: str
+    locks: list[LockItem]
+
+
+class SettingsUpdate(BaseModel):
+    """Body for PATCH /api/settings — dotted keys and their new values."""
+
+    updates: dict[str, Any]
+
+
 class WebScanRequest(BaseModel):
     """HTTP boundary model for POST /api/scan.
 
