@@ -283,6 +283,35 @@ CI-runnable subset that catches the most common drift class.
 
 ---
 
+## Frontend tests (vitest / jsdom)
+
+The React frontend has its own test layer living inside `frontend/src/`.
+
+| Layer | What | Where it runs | Catches |
+|---|---|---|---|
+| **vitest / jsdom** | Component render tests, hook logic, pure utility functions | `frontend.yml` CI on every PR that touches `frontend/**` | Testid wiring regressions, broken renders, TypeScript type errors, missing imports |
+
+**Running locally:**
+
+```bash
+npm --prefix frontend run test            # single run
+npm --prefix frontend run test:coverage   # with v8 coverage
+```
+
+**testid parity** (`tests/test_testid_parity.py`)
+
+`frontend/src/testids.ts` is auto-generated from `qa/web/testid_constants.py`
+by `scripts/gen_testid_ts.py`.  The parity test in
+`tests/test_testid_parity.py` runs under the existing `tests.yml` pytest job
+and fails CI if someone edits `testid_constants.py` without regenerating the
+TypeScript mirror.  Regenerate with:
+
+```bash
+python scripts/gen_testid_ts.py
+```
+
+---
+
 ## Authoring new QA scenarios
 
 Read [`qa/scenarios/AUTHORING.md`](../qa/scenarios/AUTHORING.md)

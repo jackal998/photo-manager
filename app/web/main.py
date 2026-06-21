@@ -7,11 +7,13 @@ Phase 1 scope: SCAN API (POST /api/scan + SSE + cancel) + GET /api/health
 from __future__ import annotations
 
 import atexit
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.web.routes.health import router as health_router
 from app.web.routes.image import router as image_router
@@ -80,6 +82,18 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=_lifespan,
     )
+
+    # CORS is enabled only in dev mode so the Vite dev server (port 5173) can
+    # reach the API (port 8765).  Production is same-origin; no CORS needed.
+    if os.environ.get("PHOTO_MANAGER_DEV_MODE") == "1":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+            allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+            allow_headers=["*"],
+            allow_credentials=False,
+        )
+
     app.include_router(health_router)
     app.include_router(scan_router)
     app.include_router(image_router)

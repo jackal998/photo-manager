@@ -14,7 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# `/lib/` is anchored to the repo root (the Python template's top-level
+# setuptools build dir). Left unanchored, `lib/` also matched nested
+# directories like frontend/src/lib/ (home of ShadCN's cn() helper) and
+# silently dropped them from `git add` — see Phase 2 web-port scaffold.
+/lib/
 lib64/
 parts/
 sdist/
