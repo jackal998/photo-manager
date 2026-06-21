@@ -8,10 +8,20 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
+from app.web.routes._path_guard import validate_under_roots
+
 router = APIRouter()
 
 # Default thumbnail side when the caller omits `size`.
 _DEFAULT_THUMB_SIDE = 256
+
+# Maximum on-disk source file size (in bytes) served at full resolution
+# (size=0).  Files larger than this return 413 before any decode is
+# attempted so the server never tries to load a multi-hundred-MB RAW into
+# RAM in a single request.  Default: 40 MiB.  Thumbnails (size > 0) are
+# unaffected — their decode already runs through the ImageService tile path
+# which keeps peak RAM bounded by the requested size.
+_FULLRES_MAX_SOURCE_BYTES: int = 40 * 1024 * 1024  # 40 MiB
 
 
 @router.get("/api/image")
@@ -29,21 +39,13 @@ async def get_image(
     - 403: path resolves outside every allowed root (traversal guard)
     - 404: path is under an allowed root but does not exist on disk
 
-    ``size == 0`` requests the full-resolution decode.
+    ``size == 0`` requests the full-resolution decode.  Source files
+    larger than ``_FULLRES_MAX_SOURCE_BYTES`` return 413 before decoding.
     ``raw == 1`` is not supported in Phase 1 (only decoded JPEG is served).
     ``allowed_roots`` is read from ``app.state.allowed_roots``; an empty list
     means every request is 403 — secure-by-default until Phase 2 wires in
     a manifest-backed root set.
     """
-    # -- 400: empty / malformed ------------------------------------------
-    if not path or not path.strip():
-        raise HTTPException(status_code=400, detail="path must not be empty")
-
-    try:
-        resolved = Path(path).resolve()
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=f"malformed path: {exc}") from exc
-
     # -- 415: raw decode unsupported in Phase 1 --------------------------
     if raw:
         raise HTTPException(
@@ -51,19 +53,33 @@ async def get_image(
             detail="raw=1 is not supported in Phase 1; only decoded JPEG is served",
         )
 
-    # -- 403: traversal / not under any allowed root ---------------------
+    # -- 400 / 403: empty/malformed/traversal guard ----------------------
     allowed_roots: list[Path] = getattr(request.app.state, "allowed_roots", [])
-    if not any(
-        _is_relative_to(resolved, Path(r).resolve()) for r in allowed_roots
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="path is outside all allowed roots",
-        )
+    resolved = validate_under_roots(path, allowed_roots)
 
     # -- 404: does not exist on disk -------------------------------------
     if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"file not found: {path!r}")
+
+    # -- 413: full-res OOM guard (size==0 only) --------------------------
+    # Thumbnails (size > 0) are bounded by the requested tile size and are
+    # unaffected.  For size==0 we gate on the on-disk source size BEFORE
+    # any decode attempt so the server never loads a multi-hundred-MB RAW
+    # file into RAM in one shot.
+    if size == 0:
+        try:
+            file_size = resolved.stat().st_size
+        except OSError:
+            file_size = 0
+        if file_size > _FULLRES_MAX_SOURCE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "file_too_large_for_full_res",
+                    "file_size_bytes": file_size,
+                    "limit_bytes": _FULLRES_MAX_SOURCE_BYTES,
+                },
+            )
 
     # -- Decode JPEG via image service -----------------------------------
     svc = getattr(request.app.state, "image_service", None)
@@ -108,14 +124,3 @@ async def get_image(
     return Response(content=jpeg, media_type="image/jpeg", headers=headers)
 
 
-def _is_relative_to(child: Path, parent: Path) -> bool:
-    """Return True if ``child`` is equal to or under ``parent``.
-
-    Polyfill for Path.is_relative_to() (Python 3.9+); written as a plain
-    function so it's testable without mocking the Path API.
-    """
-    try:
-        child.relative_to(parent)
-        return True
-    except ValueError:
-        return False

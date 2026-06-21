@@ -20,6 +20,91 @@ from core.app_service.dtos import ScanConfig
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Phase 2C1 — file-mutating execute routes models
+# ---------------------------------------------------------------------------
+
+
+class ExecuteRequest(BaseModel):
+    """Body for POST /api/execute."""
+
+    manifest_path: str
+    scope_paths: list[str] | None = None
+    recycle: bool = True
+    force_locked: bool = False
+
+
+class RemoveRequest(BaseModel):
+    """Body for POST /api/remove."""
+
+    manifest_path: str
+    file_paths: list[str]
+    force_locked: bool = False
+
+
+class PruneRequest(BaseModel):
+    """Body for POST /api/prune."""
+
+    manifest_path: str
+    include_actioned: bool = False
+
+
+class SaveRequest(BaseModel):
+    """Body for POST /api/save."""
+
+    manifest_path: str
+    target_path: str | None = None
+
+
+class RevealRequest(BaseModel):
+    """Body for POST /api/reveal."""
+
+    file_path: str
+
+
+class ExecuteResult(BaseModel):
+    """Response for POST /api/execute."""
+
+    success_paths: list[str]
+    failed: list[list[str]]   # list of [path, reason] pairs
+    ignored: list[str]
+    missing: list[str]
+    log_path: str | None = None
+    groups: list[Any]
+    # Paths where the file was deleted from disk but the DB outcome write
+    # failed.  The deletion succeeded (file is gone); the manifest row was
+    # not updated.  These paths also appear in success_paths.
+    db_write_failed: list[str] = []
+
+
+class RemoveResult(BaseModel):
+    """Response for POST /api/remove."""
+
+    removed: int
+    groups: list[Any]
+
+
+class PruneResult(BaseModel):
+    """Response for POST /api/prune."""
+
+    pruned: list[str]
+    locked_skipped: list[str]
+    groups: list[Any]
+
+
+class SaveResult(BaseModel):
+    """Response for POST /api/save."""
+
+    saved_to: str
+    updated: int
+
+
+class RevealResult(BaseModel):
+    """Response for POST /api/reveal."""
+
+    status: str
+
+
 class DecisionItem(BaseModel):
     """One file-path → decision mapping in a batch decision update."""
 

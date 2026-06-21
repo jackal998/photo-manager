@@ -187,6 +187,59 @@ class TestRawUnsupported:
 
 
 # ---------------------------------------------------------------------------
+# Full-res OOM guard: size=0 + large source file → 413
+# ---------------------------------------------------------------------------
+
+class TestFullResOomGuard:
+    def test_large_source_file_returns_413(self, tmp_path, mock_svc, monkeypatch):
+        """A source file exceeding _FULLRES_MAX_SOURCE_BYTES → 413 before decode."""
+        import app.web.routes.image as _img_route
+
+        # Lower the threshold so we don't need a real 40 MB file in tests.
+        monkeypatch.setattr(_img_route, "_FULLRES_MAX_SOURCE_BYTES", 50)
+
+        # Create a file slightly over the patched threshold.
+        big_file = tmp_path / "big.jpg"
+        big_file.write_bytes(b"\x00" * 60)  # 60 bytes > threshold of 50
+
+        app = create_app()
+        with TestClient(app, raise_server_exceptions=True) as client:
+            client.app.state.image_service = mock_svc
+            client.app.state.allowed_roots = [tmp_path]
+            resp = client.get("/api/image", params={"path": str(big_file), "size": 0})
+
+        assert resp.status_code == 413, f"Expected 413 for large file, got {resp.status_code}"
+        detail = resp.json()["detail"]
+        assert detail["code"] == "file_too_large_for_full_res"
+        assert detail["file_size_bytes"] == 60
+
+    def test_small_source_file_not_affected_by_oom_guard(self, client, tmp_image):
+        """Files under the threshold return 200 as normal."""
+        # tmp_image is a small FAKE_JPEG (< 40 MB threshold), so must not 413.
+        resp = client.get("/api/image", params={"path": str(tmp_image), "size": 0})
+        assert resp.status_code == 200
+
+    def test_thumbnail_not_affected_by_oom_guard(self, tmp_path, mock_svc, monkeypatch):
+        """size > 0 (thumbnail) ignores the _FULLRES_MAX_SOURCE_BYTES limit."""
+        import app.web.routes.image as _img_route
+
+        monkeypatch.setattr(_img_route, "_FULLRES_MAX_SOURCE_BYTES", 50)
+
+        big_file = tmp_path / "big.jpg"
+        big_file.write_bytes(b"\x00" * 60)
+
+        app = create_app()
+        with TestClient(app, raise_server_exceptions=True) as client:
+            client.app.state.image_service = mock_svc
+            client.app.state.allowed_roots = [tmp_path]
+            # size=256 (thumbnail) — guard must NOT fire.
+            resp = client.get("/api/image", params={"path": str(big_file), "size": 256})
+
+        # Should return 200 (thumbnail path bypasses the 40MB guard).
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Lifespan: startup/shutdown runs without error; drain is called on shutdown
 # ---------------------------------------------------------------------------
 

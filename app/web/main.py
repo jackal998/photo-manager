@@ -6,6 +6,7 @@ Phase 1 scope: SCAN API (POST /api/scan + SSE + cancel) + GET /api/health
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import os
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ from collections.abc import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.web.routes.execute import router as execute_router
 from app.web.routes.fs import router as fs_router
 from app.web.routes.health import router as health_router
 from app.web.routes.image import router as image_router
@@ -47,6 +49,17 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     image_service = _img_svc_mod.ImageService()
     app.state.image_service = image_service
     app.state.allowed_roots = []
+    # asyncio.Lock for POST /api/execute — prevents concurrent destructive
+    # operations from racing on the same manifest.  Created during startup
+    # (not at import time) so it is always bound to the running event loop.
+    #
+    # SINGLE-WORKER REQUIREMENT: asyncio.Lock is per-process.  If the app
+    # were run with multiple uvicorn workers (workers > 1), each worker
+    # process would have its own independent lock and concurrent executes
+    # across processes would NOT be serialised.  This app MUST run with a
+    # single worker (uvicorn default; no --workers flag).  Do not add a
+    # workers= argument to uvicorn.run() below unless it is kept at 1.
+    app.state.execute_lock = asyncio.Lock()
 
     # Prevent double-drain: we own the drain explicitly in the finally block.
     # The atexit.register in image_service.py is the safety net for the Qt
@@ -102,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(review_router)
     app.include_router(settings_router)
     app.include_router(fs_router)
+    app.include_router(execute_router)
     return app
 
 
