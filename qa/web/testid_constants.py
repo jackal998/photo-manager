@@ -53,6 +53,9 @@ MAIN_MANIFEST_INPUT = "main-manifest-input"
 MAIN_MANIFEST_OPEN = "main-manifest-open-button"
 """Button that opens the filesystem browser to pick a manifest file."""
 
+MAIN_EMPTY_STATE = "main-empty-state"
+"""Placeholder shown in the main content area when no manifest is loaded."""
+
 # ---------------------------------------------------------------------------
 # Scan dialog / progress panel
 # ---------------------------------------------------------------------------

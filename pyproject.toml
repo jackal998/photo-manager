@@ -50,6 +50,7 @@ addopts = "-q --cov=. --cov-report=term-missing --cov-report=json --cov-config=p
 testpaths = ["tests"]
 markers = [
     "integration: layer-2 test needing real timing or binaries; skipped in CI, run locally with PHOTO_MANAGER_RUN_INTEGRATION=1 (see docs/testing.md)",
+    "web_probe: live Playwright probe needing a built frontend + chromium; gated behind PHOTO_MANAGER_RUN_WEB_PROBE=1 (set by the web-eval-gates CI job) so it never pollutes the main suite's asyncio tests; also auto-skips when playwright/dist absent (see docs/testing.md).",
 ]
 
 [tool.coverage.run]

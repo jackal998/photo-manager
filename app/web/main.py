@@ -2,6 +2,7 @@
 
 Phase 1 scope: SCAN API (POST /api/scan + SSE + cancel) + GET /api/health
               + GET /api/image (Phase 1b).
+Phase 3 scope: SPA static mount (frontend/dist) served from "/".
 """
 
 from __future__ import annotations
@@ -11,9 +12,12 @@ import atexit
 import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.web.routes.execute import router as execute_router
 from app.web.routes.fs import router as fs_router
@@ -90,8 +94,30 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _img_svc_mod._drain_wic_executor()
 
 
-def create_app() -> FastAPI:
-    """Return a configured FastAPI application."""
+_DEFAULT_FRONTEND_DIST = (
+    Path(__file__).resolve().parents[2] / "frontend" / "dist"
+)
+
+
+def create_app(frontend_dist: Optional[Path] = None) -> FastAPI:
+    """Return a configured FastAPI application.
+
+    Parameters
+    ----------
+    frontend_dist:
+        Path to the built frontend ``dist/`` directory.  When *None* (the
+        default) the factory resolves the path relative to this file:
+        ``<repo-root>/frontend/dist``.  Pass an explicit path in tests to
+        control whether the SPA static mount is active without relying on the
+        presence of a real build.
+
+        If the resolved dist has no ``index.html`` (the frontend has not been
+        built) the SPA mount is silently skipped, so the factory never raises
+        on a missing or half-built frontend.  API routers are always
+        registered before the mount so ``/api/*`` routes always take precedence.
+    """
+    dist = frontend_dist if frontend_dist is not None else _DEFAULT_FRONTEND_DIST
+
     app = FastAPI(
         title="photo-manager web API",
         version="0.1.0",
@@ -109,6 +135,7 @@ def create_app() -> FastAPI:
             allow_credentials=False,
         )
 
+    # API routers are registered FIRST so /api/* always wins over the SPA mount.
     app.include_router(health_router)
     app.include_router(scan_router)
     app.include_router(image_router)
@@ -116,6 +143,13 @@ def create_app() -> FastAPI:
     app.include_router(settings_router)
     app.include_router(fs_router)
     app.include_router(execute_router)
+
+    # SPA static mount — only when a built dist with an index.html exists.
+    # Guarded on index.html (not just the directory) so a half-built or empty
+    # dist never mounts a non-servable StaticFiles (html=True needs index.html).
+    if (dist / "index.html").exists():
+        app.mount("/", StaticFiles(directory=str(dist), html=True), name="spa")
+
     return app
 
 

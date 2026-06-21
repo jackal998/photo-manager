@@ -8,6 +8,7 @@ export const MAIN_LANG_TOGGLE = "main-lang-toggle";
 export const MAIN_SETTINGS_BUTTON = "main-settings-button";
 export const MAIN_MANIFEST_INPUT = "main-manifest-input";
 export const MAIN_MANIFEST_OPEN = "main-manifest-open-button";
+export const MAIN_EMPTY_STATE = "main-empty-state";
 export const SCAN_ADD_SOURCE = "scan-add-source-button";
 export const SCAN_DIALOG = "scan-dialog";
 export const SCAN_SOURCE_LIST = "scan-source-list";

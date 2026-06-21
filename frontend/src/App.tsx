@@ -22,6 +22,7 @@ import { LockConfirmDialog } from "./components/dialogs/LockConfirmDialog";
 import { PruneConfirmDialog } from "./components/dialogs/PruneConfirmDialog";
 
 import {
+  MAIN_EMPTY_STATE,
   MAIN_EXECUTE_BUTTON,
   MAIN_LANG_TOGGLE,
   MAIN_MANIFEST_INPUT,
@@ -106,6 +107,7 @@ export default function App() {
 
   const scan = useAppStore((s) => s.scan);
   const manifest = useAppStore((s) => s.manifest);
+  const noManifest = manifest.path === null && !manifest.loading;
 
   let statusText: string;
   if (manifest.path !== null) {
@@ -191,7 +193,16 @@ export default function App() {
       <main className="flex-1 overflow-hidden flex flex-row">
         {/* Result tree takes remaining width */}
         <div className="flex-1 min-w-0 overflow-hidden">
-          <ResultTree onContextMenu={handleContextMenu} />
+          {noManifest ? (
+            <div
+              data-testid={MAIN_EMPTY_STATE}
+              className="flex h-full items-center justify-center text-sm text-neutral-400"
+            >
+              No manifest loaded — Scan or Open a manifest to begin.
+            </div>
+          ) : (
+            <ResultTree onContextMenu={handleContextMenu} />
+          )}
         </div>
         {/* Preview pane — fixed 280px right column */}
         <div className="w-72 flex-shrink-0 overflow-hidden border-l border-neutral-200">

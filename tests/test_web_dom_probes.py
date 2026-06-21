@@ -10,6 +10,7 @@ a browser.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -382,3 +383,98 @@ class TestImportIsolation:
         the module must import without raising.
         """
         self._check_module_importable_without_playwright("qa.web.smoke_test")
+
+
+# ---------------------------------------------------------------------------
+# 4. Live Playwright probe — shell testids present in the empty-state DOM
+# ---------------------------------------------------------------------------
+#
+# Marked ``web_probe`` so main CI (no playwright, no frontend build) skips
+# this test automatically.  It runs in the ``web-dom-probe`` job inside
+# ``.github/workflows/web-eval-gates.yml`` and can be run locally via:
+#
+#     pytest tests/test_web_dom_probes.py -m web_probe -v
+#
+# The server is launched once per session by the ``pw_empty_state_page``
+# fixture in tests/conftest.py (see that file for precondition details).
+
+# Only the testids that ALWAYS appear in the no-manifest empty state:
+#   - Header toolbar buttons (unconditional in App.tsx)
+#   - Status bar (unconditional footer in App.tsx)
+#   - Empty-state placeholder (renders when manifest.path is null)
+# Testids that mount only on dialog open or after a manifest is loaded
+# (ResultTree rows, ScanDialog internals, ExecuteDialog, etc.) are NOT
+# listed here — they would cause false failures in the empty state.
+
+from qa.web.testid_constants import (  # noqa: E402
+    MAIN_EMPTY_STATE,
+    MAIN_EXECUTE_BUTTON,
+    MAIN_LANG_TOGGLE,
+    MAIN_MANIFEST_INPUT,
+    MAIN_MANIFEST_OPEN,
+    MAIN_SCAN_BUTTON,
+    MAIN_SETTINGS_BUTTON,
+    MAIN_STATUS_BAR,
+)
+
+REQUIRED_SHELL_TESTIDS: frozenset[str] = frozenset(
+    [
+        MAIN_STATUS_BAR,       # footer — always rendered
+        MAIN_EMPTY_STATE,      # main content area — renders when no manifest
+        MAIN_SCAN_BUTTON,      # toolbar — always rendered
+        MAIN_EXECUTE_BUTTON,   # toolbar — always rendered
+        MAIN_LANG_TOGGLE,      # toolbar — always rendered
+        MAIN_SETTINGS_BUTTON,  # toolbar — always rendered
+        MAIN_MANIFEST_INPUT,   # toolbar — always rendered
+        MAIN_MANIFEST_OPEN,    # toolbar — always rendered
+    ]
+)
+
+
+# The live probe is gated behind PHOTO_MANAGER_RUN_WEB_PROBE so it does NOT run
+# in the normal local suite. Playwright's sync API leaves asyncio event-loop
+# state that pollutes the asyncio-based unit tests (tests/test_web_scan_bus.py,
+# the execute mutex) when they share a process. The probe runs in the dedicated
+# web-eval-gates CI job (which sets the env var) and is opt-in locally — same
+# pattern as the `integration` marker (PHOTO_MANAGER_RUN_INTEGRATION).
+_RUN_WEB_PROBE = os.environ.get("PHOTO_MANAGER_RUN_WEB_PROBE")
+
+
+@pytest.mark.web_probe
+@pytest.mark.skipif(
+    not _RUN_WEB_PROBE,
+    reason="live Playwright probe; set PHOTO_MANAGER_RUN_WEB_PROBE=1 (the web-eval-gates CI job does) to run",
+)
+def test_shell_testids_present(pw_empty_state_page: "object") -> None:  # type: ignore[type-arg]
+    """Verify that all required shell testids render in the no-manifest empty state.
+
+    Uses the session-scoped ``pw_empty_state_page`` fixture which launches a
+    real uvicorn server, opens Chromium headless, and navigates to ``/``.
+
+    Failure message lists the *missing* testids so the engineer knows exactly
+    which element is absent, rather than having to dig through a long set diff.
+
+    Adding testids here:
+        Only add a testid to REQUIRED_SHELL_TESTIDS when it is VERIFIED to
+        render unconditionally in the empty state (no manifest, no dialogs
+        open).  Dialog / row testids belong in later scenario-specific probes.
+    """
+    # pw_empty_state_page is typed as object so this file imports cleanly
+    # without playwright.  At runtime (when the test actually runs) it is a
+    # playwright Page.
+    page = pw_empty_state_page
+
+    # Collect every data-testid currently in the DOM.
+    present_testids: set[str] = set()
+    for el in page.locator("[data-testid]").all():  # type: ignore[union-attr]
+        tid = el.get_attribute("data-testid")
+        if tid:
+            present_testids.add(tid)
+
+    missing = REQUIRED_SHELL_TESTIDS - present_testids
+    assert not missing, (
+        f"The following required shell testids were NOT found in the DOM "
+        f"during the no-manifest empty state:\n"
+        + "\n".join(f"  {t!r}" for t in sorted(missing))
+        + f"\n\nAll testids found in DOM: {sorted(present_testids)}"
+    )

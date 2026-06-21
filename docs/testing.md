@@ -188,6 +188,69 @@ calls out what would be uncaught even with a green CI.
 | `app/views/window_state.py` | 100% | s39 (main-window geometry round-trip across launches); s47 (#214 — column-header state round-trip across launches, same INI); s48 (#215 — three resizable dialogs round-trip across close-and-reopen within one session) | none — the QSettings INI path + off-screen guard + save/restore helpers shared by MainWindow and the three resizable dialogs (#215). Extracted from `main_window.py` so dialogs don't import the QMainWindow assembly (would be a circular import via `DialogHandler`); the off-screen guard (multi-monitor disconnect fallback) is pinned at layer 1 by `tests/test_window_state.py::TestIsRectVisibleOnAnyScreen`. |
 | `app/views/dialogs/select_dialog.py` | 82% | s14 (Regex menu route), s29 (Regex remove-from-list), s30 (Regex right-click from Execute), s31 (Phase B/C Simple mode + regex-sync round-trip), s43 (#209 numeric-condition panel — threshold mode end-to-end via Execute Action route), s48 (#215 — preview-pane layout geometry persists across close-and-reopen; flat layout deliberately skips the save), s50 (#237 — numeric panel reachable from the main-window menu route — sister to s43; #238 — switches to Resolution via expand → End → Enter and asserts the panel toggles back to regex, exercising the new Resolution wiring end-to-end). The dropdown-completeness invariant for #238's added fields is pinned at layer 1 by `test_probe_select_dialog_exposes_every_filterable_tree_column`. | dropped from Phase A's 95% because the file grew through Phase B + Phase C (Simple/Regex toggle, cheatsheet, recent patterns, match-highlight delegate, `_try_parse_simple` reverse-parse) and again with #209 (numeric panel, threshold + Top-N within group, ISO-date threshold parse, pattern-encoding helpers). Layer-1 covers `TestSimpleMode`, `TestCheatsheet`, `TestRecentPatterns`, `TestMatchHighlightDelegate`, `TestTryParseSimple`, `TestRegexSyncAcrossModes`, `TestLegacyModeKeyAlias`, and the new (#209) `TestNumericPanelVisibility`, `TestThresholdEmit`, `TestTopNEmit`, `TestThresholdSelectionLogic`, `TestTopNSelectionLogic`, `TestPatternEncoding`. Uncovered ~18% is mostly `_MatchHighlightDelegate.paint` segments that only fire when an actual painter+option pair is supplied (covered by qa-explore visual paths) plus a few defensive try/except branches in the Recent menu and settings I/O. Action combo offers 5 options (delete / keep / remove / lock / unlock) — pinned by `test_action_combo_count_matches_settable_decisions_with_remove_and_lock` and `test_action_combo_includes_lock_and_unlock_options` (#164). |
 
+### `app/web/`
+
+The web API modules are excluded from the main `[tool.coverage.run] source` list
+in `pyproject.toml` (they live under `app/` which IS in source, but the lifespan
+and `__main__` blocks are marked `# pragma: no cover`).
+
+| Module | Layer 1 | Notes |
+|---|---|---|
+| `app/web/main.py` | `tests/web/test_static_mount.py` (SPA mount contract) | The SPA static-mount branch (`frontend_dist` param, `dist.exists()` guard, `StaticFiles` mount) is covered by `TestStaticMountPresent` and `TestStaticMountAbsent` in `tests/web/test_static_mount.py`. The `_lifespan` context manager and `__main__` block are `# pragma: no cover` (require a live server; covered by the `web-dom-probe` CI job and local runs). The `create_app()` factory shape itself is the contract being tested. |
+| `app/web/routes/*.py` | Various `tests/test_web_*.py` | Each route module has its own test file (e.g. `tests/test_web_scan_api.py`, `tests/test_web_execute_routes.py`). |
+
+### `qa/web/`
+
+`qa/web/` modules are in `[tool.coverage.run] omit` — they are the layer-3 web
+driver harness (Playwright scenario runners, testid constants, invariants) and
+cannot be exercised inside the layer-1 test process.
+
+| Module | Where it IS covered |
+|---|---|
+| `qa/web/testid_constants.py` | Static shape checked by `tests/test_web_dom_probes.py::TestTestidConstants` (CI, no browser); live DOM checked by `test_shell_testids_present` (web-eval-gates CI, `web_probe` marker). |
+| `qa/web/_pw.py` | Import isolation checked by `TestImportIsolation`; runtime usage in `web-dom-probe` CI and local Playwright runs. |
+| `qa/web/_invariants.py` | Import isolation checked by `TestImportIsolation`; runtime usage in `web-dom-probe` CI and local Playwright runs. |
+| `qa/web/scenario_map.yml` | Count/key parity checked by `TestScenarioMapParity` (CI). |
+
+---
+
+### web_probe layer
+
+The `web_probe` pytest marker (`pyproject.toml`) identifies live Playwright
+probes that need a **built frontend** (`frontend/dist/index.html`) and a
+**Chromium installation** (`python -m playwright install chromium`).
+
+- **Where they run:** the `web-dom-probe` job in `.github/workflows/web-eval-gates.yml`
+  (advisory, `continue-on-error: true` until Phase 4 cutover). Not in `tests.yml`.
+- **Env gate (`PHOTO_MANAGER_RUN_WEB_PROBE=1`):** the live probe is `skipif`-gated on
+  this env var — the same opt-in pattern as the `integration` marker. It is **off by
+  default** so the probe does **not** run in the normal local `pytest`. Reason:
+  Playwright's sync API leaves asyncio event-loop state that pollutes the asyncio-based
+  unit tests (`tests/test_web_scan_bus.py`, the execute mutex) when they share a process.
+  The `web-dom-probe` CI job sets the env var; nothing else does.
+- **Auto-skip (defence in depth):** even with the env var set, the `pw_empty_state_page`
+  fixture in `tests/conftest.py` calls `pytest.skip()` with a clear reason when
+  playwright is not installed or `frontend/dist/index.html` is absent. Main CI (which
+  lacks playwright and a built frontend) skips cleanly — no errors.
+- **Running locally:**
+  ```
+  # One-time setup (already done if you followed the dev setup guide):
+  pip install playwright
+  python -m playwright install chromium
+  cd frontend && npm run build && cd ..
+
+  # Then (note the env gate — without it the probe skips):
+  PHOTO_MANAGER_RUN_WEB_PROBE=1 pytest tests/test_web_dom_probes.py -m web_probe -v
+  ```
+- **Current probes:** `test_shell_testids_present` — asserts that the 8
+  unconditional shell testids (`MAIN_STATUS_BAR`, `MAIN_EMPTY_STATE`,
+  `MAIN_SCAN_BUTTON`, `MAIN_EXECUTE_BUTTON`, `MAIN_LANG_TOGGLE`,
+  `MAIN_SETTINGS_BUTTON`, `MAIN_MANIFEST_INPUT`, `MAIN_MANIFEST_OPEN`)
+  all appear in the DOM when the app is in the no-manifest empty state.
+  This grows in later phases as more testids are confirmed unconditional.
+
+---
+
 ### Top-level scripts
 
 | Module | Status | Where it's covered |

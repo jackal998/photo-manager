@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vites
 import App from "./App";
 import { useAppStore } from "./store/useAppStore";
 import {
+  MAIN_EMPTY_STATE,
   MAIN_EXECUTE_BUTTON,
   MAIN_LANG_TOGGLE,
   MAIN_MANIFEST_INPUT,
@@ -183,9 +184,30 @@ describe("App header toolbar", () => {
 describe("App result tree", () => {
   beforeEach(() => resetStore());
 
-  it("renders the result tree container with the correct testid", () => {
+  it("shows the empty-state placeholder when no manifest is loaded", () => {
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_EMPTY_STATE)).toBeInTheDocument();
+    // The result tree is not rendered in the empty state — it appears only
+    // once a manifest is loaded (so main-result-tree is a conditional testid).
+    expect(screen.queryByTestId(MAIN_RESULT_TREE)).not.toBeInTheDocument();
+  });
+
+  it("renders the result tree container once a manifest is loaded", () => {
+    act(() => {
+      useAppStore.setState({
+        manifest: {
+          path: "/tmp/test.sqlite",
+          groups: TEST_GROUPS,
+          totalGroups: 1,
+          totalFiles: 2,
+          loading: false,
+          error: null,
+        },
+      });
+    });
     renderWithProviders(<App />);
     expect(screen.getByTestId(MAIN_RESULT_TREE)).toBeInTheDocument();
+    expect(screen.queryByTestId(MAIN_EMPTY_STATE)).not.toBeInTheDocument();
   });
 });
 
