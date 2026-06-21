@@ -1,0 +1,1 @@
+Add the localhost web "act on decisions" backend: execute (send2trash with per-file crash-consistent outcome writes), remove, prune, save, and reveal routes, plus a full-resolution image OOM guard. Every deleted path is validated against the manifest's allowed roots. (#663)
