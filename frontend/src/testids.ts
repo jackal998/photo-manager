@@ -6,6 +6,9 @@ export const MAIN_SCAN_BUTTON = "main-scan-button";
 export const MAIN_EXECUTE_BUTTON = "main-execute-button";
 export const MAIN_LANG_TOGGLE = "main-lang-toggle";
 export const MAIN_SETTINGS_BUTTON = "main-settings-button";
+export const MAIN_MANIFEST_INPUT = "main-manifest-input";
+export const MAIN_MANIFEST_OPEN = "main-manifest-open-button";
+export const SCAN_ADD_SOURCE = "scan-add-source-button";
 export const SCAN_DIALOG = "scan-dialog";
 export const SCAN_SOURCE_LIST = "scan-source-list";
 export const SCAN_OUTPUT_PATH = "scan-output-path";
@@ -32,4 +35,12 @@ export function rowFileTestid(groupId: string, basename: string): string {
 
 export function rowGroupTestid(groupId: string): string {
   return `row-group-${groupId}`;
+}
+
+export function rowDecisionTestid(groupId: string, basename: string): string {
+  return `row-decision-${groupId}-${basename}`;
+}
+
+export function rowLockTestid(groupId: string, basename: string): string {
+  return `row-lock-${groupId}-${basename}`;
 }

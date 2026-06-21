@@ -40,9 +40,18 @@ MAIN_LANG_TOGGLE = "main-lang-toggle"
 MAIN_SETTINGS_BUTTON = "main-settings-button"
 """Settings / gear button."""
 
+MAIN_MANIFEST_INPUT = "main-manifest-input"
+"""Text input for typing or pasting a manifest (.db) file path."""
+
+MAIN_MANIFEST_OPEN = "main-manifest-open-button"
+"""Button that opens the filesystem browser to pick a manifest file."""
+
 # ---------------------------------------------------------------------------
 # Scan dialog / progress panel
 # ---------------------------------------------------------------------------
+
+SCAN_ADD_SOURCE = "scan-add-source-button"
+"""Button inside the scan dialog that adds a new source path entry."""
 
 SCAN_DIALOG = "scan-dialog"
 """The scan-configuration dialog wrapper."""
@@ -156,3 +165,49 @@ def row_group_testid(group_id: str) -> str:
         ``"row-group-{group_id}"``
     """
     return f"row-group-{group_id}"
+
+
+def row_decision_testid(group_id: str, basename: str) -> str:
+    """Return the ``data-testid`` value for a per-row decision control.
+
+    Each file row in the result tree exposes a decision selector (delete /
+    ignore / keep) whose testid encodes both the group and the filename so
+    Playwright strict-mode never sees duplicate locators.
+
+    Parameters
+    ----------
+    group_id:
+        The string form of ``group_number`` from the manifest Group object
+        (use ``str(group_number)``).
+    basename:
+        The filename component only — *not* the full path.
+
+    Returns
+    -------
+    str
+        ``"row-decision-{group_id}-{basename}"``
+    """
+    return f"row-decision-{group_id}-{basename}"
+
+
+def row_lock_testid(group_id: str, basename: str) -> str:
+    """Return the ``data-testid`` value for a per-row lock toggle.
+
+    Each file row in the result tree exposes a lock checkbox whose testid
+    encodes both the group and the filename so Playwright strict-mode never
+    sees duplicate locators.
+
+    Parameters
+    ----------
+    group_id:
+        The string form of ``group_number`` from the manifest Group object
+        (use ``str(group_number)``).
+    basename:
+        The filename component only — *not* the full path.
+
+    Returns
+    -------
+    str
+        ``"row-lock-{group_id}-{basename}"``
+    """
+    return f"row-lock-{group_id}-{basename}"

@@ -80,6 +80,43 @@ class TestTestidConstants:
         result = row_group_testid("xyz")
         assert result == "row-group-xyz"
 
+    def test_row_decision_testid_format(self) -> None:
+        """row_decision_testid(group_id, basename) must embed both values."""
+        from qa.web.testid_constants import row_decision_testid
+
+        result = row_decision_testid("42", "photo.jpg")
+        assert result == "row-decision-42-photo.jpg"
+
+    def test_row_decision_testid_distinct_groups(self) -> None:
+        """The same basename in two groups must produce different decision testids.
+
+        Playwright strict-mode raises when two elements share a testid, so
+        group_id inclusion is required even for decision controls.
+        """
+        from qa.web.testid_constants import row_decision_testid
+
+        t1 = row_decision_testid("grp1", "shared.jpg")
+        t2 = row_decision_testid("grp2", "shared.jpg")
+        assert t1 != t2
+
+    def test_row_lock_testid_format(self) -> None:
+        """row_lock_testid(group_id, basename) must embed both values."""
+        from qa.web.testid_constants import row_lock_testid
+
+        result = row_lock_testid("7", "archive.png")
+        assert result == "row-lock-7-archive.png"
+
+    def test_row_lock_testid_distinct_groups(self) -> None:
+        """The same basename in two groups must produce different lock testids.
+
+        Lock toggles must be locatable unambiguously across groups.
+        """
+        from qa.web.testid_constants import row_lock_testid
+
+        t1 = row_lock_testid("grp1", "shared.jpg")
+        t2 = row_lock_testid("grp2", "shared.jpg")
+        assert t1 != t2
+
 
 # ---------------------------------------------------------------------------
 # 2. scenario_map.yml — count parity with ALL_SCENARIOS
