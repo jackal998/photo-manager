@@ -13,6 +13,13 @@ import { useScanSSE } from "./hooks/useScanSSE";
 import { ScanDialog } from "./components/ScanDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ResultTree } from "./components/ResultTree";
+import type { ContextMenuTarget } from "./components/ResultTree";
+import { PreviewPane } from "./components/PreviewPane";
+import { FullResViewer } from "./components/FullResViewer";
+import { ExecuteDialog } from "./components/execute/ExecuteDialog";
+import { ContextMenu } from "./components/ContextMenu";
+import { LockConfirmDialog } from "./components/dialogs/LockConfirmDialog";
+import { PruneConfirmDialog } from "./components/dialogs/PruneConfirmDialog";
 
 import {
   MAIN_EXECUTE_BUTTON,
@@ -24,6 +31,26 @@ import {
   MAIN_STATUS_BAR,
 } from "./testids";
 
+// ---------------------------------------------------------------------------
+// Context menu state
+// ---------------------------------------------------------------------------
+
+interface ContextMenuState {
+  open: boolean;
+  x: number;
+  y: number;
+  filePath: string;
+  isLocked: boolean;
+}
+
+const CLOSED_MENU: ContextMenuState = {
+  open: false,
+  x: 0,
+  y: 0,
+  filePath: "",
+  isLocked: false,
+};
+
 export default function App() {
   // ---------------------------------------------------------------------------
   // Dialog open states
@@ -33,11 +60,32 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
+  // Context menu
+  // ---------------------------------------------------------------------------
+
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>(CLOSED_MENU);
+
+  const handleContextMenu = useCallback((target: ContextMenuTarget) => {
+    setContextMenu({
+      open: true,
+      x: target.x,
+      y: target.y,
+      filePath: target.filePath,
+      isLocked: target.isLocked,
+    });
+  }, []);
+
+  const handleContextMenuClose = useCallback(() => {
+    setContextMenu(CLOSED_MENU);
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // Manifest open control
   // ---------------------------------------------------------------------------
 
   const [manifestInputValue, setManifestInputValue] = useState("");
   const loadManifest = useAppStore((s) => s.loadManifest);
+  const openExecuteDialog = useAppStore((s) => s.openExecuteDialog);
 
   const handleManifestOpen = useCallback(() => {
     const path = manifestInputValue.trim();
@@ -93,9 +141,8 @@ export default function App() {
 
         <button
           data-testid={MAIN_EXECUTE_BUTTON}
-          className="px-3 py-1 rounded border text-sm opacity-50 cursor-not-allowed"
-          disabled
-          title="Coming in a later phase"
+          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
+          onClick={openExecuteDialog}
         >
           Execute
         </button>
@@ -139,10 +186,17 @@ export default function App() {
       </header>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Main — result tree (ResultTree owns MAIN_RESULT_TREE testid)         */}
+      {/* Main — result tree + preview pane side by side                       */}
       {/* ------------------------------------------------------------------ */}
-      <main className="flex-1 overflow-hidden p-0">
-        <ResultTree />
+      <main className="flex-1 overflow-hidden flex flex-row">
+        {/* Result tree takes remaining width */}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <ResultTree onContextMenu={handleContextMenu} />
+        </div>
+        {/* Preview pane — fixed 280px right column */}
+        <div className="w-72 flex-shrink-0 overflow-hidden border-l border-neutral-200">
+          <PreviewPane />
+        </div>
       </main>
 
       {/* ------------------------------------------------------------------ */}
@@ -162,6 +216,23 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
       <ScanDialog open={scanOpen} onOpenChange={setScanOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <ExecuteDialog />
+      <FullResViewer />
+      <LockConfirmDialog />
+      <PruneConfirmDialog />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Context menu — rendered at App level so it escapes scroll containers */}
+      {/* ------------------------------------------------------------------ */}
+      {contextMenu.open && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          filePath={contextMenu.filePath}
+          isLocked={contextMenu.isLocked}
+          onClose={handleContextMenuClose}
+        />
+      )}
     </div>
   );
 }

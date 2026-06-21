@@ -3,8 +3,19 @@
 
 import type {
   DecisionValue,
+  ExecuteRequest,
+  ExecuteResult,
   FsBrowseResponse,
+  LockedPathsError,
   ManifestResponse,
+  PruneRequest,
+  PruneResult,
+  RemoveRequest,
+  RemoveResult,
+  RevealRequest,
+  RevealResult,
+  SaveRequest,
+  SaveResult,
   SettingsMap,
   WebScanRequest,
 } from "./types";
@@ -176,4 +187,113 @@ export async function patchSettings(
 export async function browseFs(path?: string): Promise<FsBrowseResponse> {
   const qs = path !== undefined ? `?path=${encodeURIComponent(path)}` : "";
   return getJson<FsBrowseResponse>(`/api/fs/browse${qs}`);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2C1 — file-mutating routes
+// ---------------------------------------------------------------------------
+
+/**
+ * Typed error thrown when the server returns HTTP 409 on the execute/remove
+ * routes.  Two discriminated variants mirror the backend detail shapes:
+ *   code "locked_paths"          — LockedPathsError
+ *   code "execute_already_running" — plain {code}
+ *
+ * Callers check `err instanceof ApiConflictError` and inspect `err.code`.
+ */
+export class ApiConflictError extends Error {
+  readonly code: string;
+  readonly lockedPaths: string[] | null;
+
+  constructor(code: string, lockedPaths: string[] | null = null) {
+    super(`409 Conflict: ${code}`);
+    this.name = "ApiConflictError";
+    this.code = code;
+    this.lockedPaths = lockedPaths;
+  }
+}
+
+/**
+ * POST JSON with special handling for 409 responses:
+ * parses the detail body and throws ApiConflictError instead of a generic Error.
+ */
+async function postJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 409) {
+    let code = "conflict";
+    let lockedPaths: string[] | null = null;
+    try {
+      const errBody = (await res.json()) as { detail?: unknown };
+      const detail = errBody.detail as LockedPathsError | { code: string } | undefined;
+      if (detail && typeof detail === "object" && "code" in detail) {
+        code = detail.code;
+        if (code === "locked_paths" && "locked_paths" in detail) {
+          lockedPaths = (detail as LockedPathsError).locked_paths;
+        }
+      }
+    } catch {
+      // body not JSON; keep defaults
+    }
+    throw new ApiConflictError(code, lockedPaths);
+  }
+
+  await checkResponse(res);
+  return res.json() as Promise<T>;
+}
+
+// POST /api/execute
+
+export async function postExecute(req: ExecuteRequest): Promise<ExecuteResult> {
+  return postJsonOrConflict<ExecuteResult>("/api/execute", req);
+}
+
+// POST /api/remove
+
+export async function postRemove(req: RemoveRequest): Promise<RemoveResult> {
+  return postJsonOrConflict<RemoveResult>("/api/remove", req);
+}
+
+// POST /api/prune
+
+export async function postPrune(req: PruneRequest): Promise<PruneResult> {
+  return postJson<PruneResult>("/api/prune", req);
+}
+
+// POST /api/save
+
+export async function postSave(req: SaveRequest): Promise<SaveResult> {
+  return postJson<SaveResult>("/api/save", req);
+}
+
+// POST /api/reveal
+
+export async function postReveal(req: RevealRequest): Promise<RevealResult> {
+  return postJson<RevealResult>("/api/reveal", req);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/image — URL helpers (not fetch wrappers; caller passes to <img src>)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the URL for a thumbnail image (size > 0).
+ * Mirrors the thumbnail_url field already embedded in FileRow, but useful
+ * when a component needs to construct the URL independently.
+ */
+export function thumbnailUrl(path: string, size: number = 128): string {
+  return `${BASE}/api/image?path=${encodeURIComponent(path)}&size=${size}`;
+}
+
+/**
+ * Returns the full-resolution image URL (size=0).
+ * Callers must handle a 413 response (file_too_large_for_full_res) by
+ * catching the load error on the <img> element.
+ */
+export function fullResUrl(path: string): string {
+  return `${BASE}/api/image?path=${encodeURIComponent(path)}&size=0`;
 }

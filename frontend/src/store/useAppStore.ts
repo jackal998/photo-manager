@@ -6,12 +6,18 @@ import { immer } from "zustand/middleware/immer";
 import type { WritableDraft } from "immer";
 
 import {
+  ApiConflictError,
   cancelScan,
   getManifest,
   getSettings,
   patchDecisions,
   patchLocks,
   patchSettings,
+  postExecute,
+  postPrune,
+  postRemove,
+  postReveal,
+  postSave,
   startScan,
 } from "../api/client";
 import type {
@@ -25,7 +31,9 @@ import type {
 } from "../api/types";
 import type {
   AppStore,
+  ExecuteState,
   ManifestState,
+  PreviewState,
   ScanState,
   SettingsState,
 } from "./types";
@@ -75,6 +83,20 @@ const initialSettings: SettingsState = {
   loading: false,
 };
 
+const initialPreview: PreviewState = {
+  selectedFilePath: null,
+  fullResPath: null,
+};
+
+const initialExecute: ExecuteState = {
+  executeOpen: false,
+  executeRunning: false,
+  executeResult: null,
+  executeError: null,
+  lockConflict: null,
+  prunePrompt: null,
+};
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -84,6 +106,8 @@ export const useAppStore = create<AppStore>()(
     scan: { ...initialScan },
     manifest: { ...initialManifest },
     settings: { ...initialSettings },
+    preview: { ...initialPreview },
+    execute: { ...initialExecute },
 
     // -----------------------------------------------------------------------
     // Scan actions
@@ -295,6 +319,203 @@ export const useAppStore = create<AppStore>()(
       await patchSettings(updates);
       // Reload to get canonical server values.
       await get().loadSettings();
+    },
+
+    // -----------------------------------------------------------------------
+    // Preview actions
+    // -----------------------------------------------------------------------
+
+    setSelectedFile(path) {
+      set((state) => {
+        state.preview.selectedFilePath = path;
+      });
+    },
+
+    openFullRes(path) {
+      set((state) => {
+        state.preview.fullResPath = path;
+      });
+    },
+
+    closeFullRes() {
+      set((state) => {
+        state.preview.fullResPath = null;
+      });
+    },
+
+    // -----------------------------------------------------------------------
+    // Execute dialog actions
+    // -----------------------------------------------------------------------
+
+    openExecuteDialog() {
+      set((state) => {
+        state.execute.executeOpen = true;
+        state.execute.executeError = null;
+        state.execute.lockConflict = null;
+      });
+    },
+
+    closeExecuteDialog() {
+      set((state) => {
+        state.execute.executeOpen = false;
+        state.execute.executeError = null;
+        state.execute.lockConflict = null;
+      });
+    },
+
+    async executeDecisions(opts = {}) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+
+      // Capture the in-scope decided paths BEFORE the request so that if a
+      // locked_paths 409 fires, "Unlocked Only" can filter them correctly.
+      const scopedPaths: string[] = opts.scopePaths
+        ? [...opts.scopePaths]
+        : get().manifest.groups.flatMap((g) =>
+            g.items
+              .filter((f) => f.user_decision !== "")
+              .map((f) => f.file_path)
+          );
+
+      set((state) => {
+        state.execute.executeRunning = true;
+        state.execute.executeError = null;
+        state.execute.lockConflict = null;
+      });
+
+      try {
+        const result = await postExecute({
+          manifest_path: manifestPath,
+          scope_paths: opts.scopePaths ?? null,
+          recycle: true,
+          force_locked: opts.forceLocked ?? false,
+        });
+
+        set((state) => {
+          state.execute.executeRunning = false;
+          state.execute.executeResult = result;
+          // Replace groups from the authoritative server response.
+          state.manifest.groups = result.groups;
+          // Surface prune prompt when singleton groups remain after execute.
+          const singletons = result.groups
+            .filter((g) => g.member_count === 1)
+            .flatMap((g) => g.items.map((f) => f.file_path));
+          if (singletons.length > 0) {
+            state.execute.prunePrompt = { candidates: singletons };
+          }
+        });
+      } catch (err) {
+        if (err instanceof ApiConflictError) {
+          if (err.code === "locked_paths") {
+            set((state) => {
+              state.execute.executeRunning = false;
+              state.execute.lockConflict = {
+                paths: err.lockedPaths ?? [],
+                op: "execute",
+                originalPaths: scopedPaths,
+              };
+            });
+          } else {
+            // execute_already_running or other 409
+            set((state) => {
+              state.execute.executeRunning = false;
+              state.execute.executeError = err.message;
+            });
+          }
+        } else {
+          set((state) => {
+            state.execute.executeRunning = false;
+            state.execute.executeError =
+              err instanceof Error ? err.message : String(err);
+          });
+        }
+      }
+    },
+
+    async removeFromList(paths, forceLocked = false) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+
+      try {
+        const result = await postRemove({
+          manifest_path: manifestPath,
+          file_paths: paths,
+          force_locked: forceLocked,
+        });
+
+        set((state) => {
+          state.manifest.groups = result.groups;
+        });
+      } catch (err) {
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          set((state) => {
+            state.execute.lockConflict = {
+              paths: err.lockedPaths ?? [],
+              op: "remove",
+              // Preserve the original path list so "Unlocked Only" can filter
+              // out the locked paths and remove the rest.
+              originalPaths: [...paths],
+            };
+          });
+        } else {
+          set((state) => {
+            state.manifest.error =
+              err instanceof Error ? err.message : String(err);
+          });
+        }
+      }
+    },
+
+    async pruneSingletons(includeActioned = false) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+
+      try {
+        const result = await postPrune({
+          manifest_path: manifestPath,
+          include_actioned: includeActioned,
+        });
+
+        set((state) => {
+          state.manifest.groups = result.groups;
+          // Clear any stale prune prompt.
+          state.execute.prunePrompt = null;
+        });
+      } catch (err) {
+        set((state) => {
+          state.manifest.error =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    async saveManifest(targetPath) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+
+      try {
+        await postSave({
+          manifest_path: manifestPath,
+          target_path: targetPath ?? null,
+        });
+      } catch (err) {
+        set((state) => {
+          state.manifest.error =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    async revealInExplorer(path) {
+      try {
+        await postReveal({ file_path: path });
+      } catch (err) {
+        // Non-fatal: surface as a transient executeError.
+        set((state) => {
+          state.execute.executeError =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
     },
   }))
 );

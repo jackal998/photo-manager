@@ -6,11 +6,18 @@ no grep-and-replace across driver scripts.
 
 Naming convention
 -----------------
-- ``MAIN_*``  — elements on the main result-list page
-- ``SCAN_*``  — elements in the scan dialog / scan progress panel
-- ``EXEC_*``  — elements in the execute-action dialog
-- ``DLGE_*``  — elements in other dialogs (settings, confirm, etc.)
-- ``ROW_*``   — helpers for per-row locators in the result tree
+- ``MAIN_*``      — elements on the main result-list page
+- ``SCAN_*``      — elements in the scan dialog / scan progress panel
+- ``EXECUTE_*``   — elements in the execute-action dialog (§5 canonical)
+- ``LOCK_*``      — lock-conflict confirmation dialog
+- ``DELETE_*``    — destructive-delete confirmation dialog
+- ``PRUNE_*``     — prune-singletons confirmation dialog
+- ``PREVIEW_*``   — inline preview pane
+- ``FULLRES_*``   — full-resolution image dialog
+- ``CONTEXT_*``   — right-click context menu
+- ``CTX_*``       — individual context-menu items
+- ``DLGE_*``      — other dialogs (settings, etc.)
+- ``ROW_*``       — helpers for per-row locators in the result tree
 
 All constants are strings.  Keep them in sync with the actual
 ``data-testid="..."`` attributes set in the frontend templates.
@@ -78,26 +85,128 @@ SCAN_STATUS_TEXT = "scan-status-text"
 """Short status line above the progress bar (stage name, ETA, …)."""
 
 # ---------------------------------------------------------------------------
-# Execute-action dialog
+# Execute-action dialog (§5 canonical names — Phase 2C2)
 # ---------------------------------------------------------------------------
 
-EXEC_DIALOG = "exec-dialog"
+EXECUTE_DIALOG = "execute-dialog"
 """The execute-action dialog wrapper."""
 
-EXEC_ACTION_SELECT = "exec-action-select"
-"""<select> element for choosing the action (delete / move / …)."""
+EXECUTE_ALL_DELETE_BANNER = "execute-all-delete-banner"
+"""Warning banner shown when every scoped row is a delete."""
 
-EXEC_REGEX_INPUT = "exec-regex-input"
-"""Regex filter input inside the execute dialog."""
+EXECUTE_TYPE_FILTER = "execute-type-filter"
+"""Filter control that restricts the tree to a decision type (all / delete / ignore)."""
 
-EXEC_PREVIEW_TABLE = "exec-preview-table"
-"""Table showing which files will be affected by the current action."""
+EXECUTE_TREE = "execute-tree"
+"""Scrollable file-tree inside the execute dialog showing rows to be actioned."""
 
-EXEC_CONFIRM_BUTTON = "exec-confirm-button"
-"""'Apply' / 'Execute' confirm button inside the execute dialog."""
+EXECUTE_BTN_EXECUTE = "execute-btn-execute"
+"""Primary 'Execute' button that fires POST /api/execute for all rows."""
 
-EXEC_CANCEL_BUTTON = "exec-cancel-button"
-"""'Cancel' button inside the execute dialog."""
+EXECUTE_BTN_EXECUTE_SELECTED = "execute-btn-execute-selected"
+"""'Execute selected' button that fires POST /api/execute with scope_paths."""
+
+EXECUTE_PREVIEW_PANE = "execute-preview-pane"
+"""Thumbnail preview pane on the right side of the execute dialog."""
+
+EXECUTE_PREVIEW_IMAGE = "execute-preview-image"
+"""The <img> element inside the execute preview pane."""
+
+EXECUTE_ALL_DELETE_CONFIRM = "execute-all-delete-confirm"
+"""'All-delete' safety confirmation sheet (shown when every row is a delete)."""
+
+EXECUTE_ALL_DELETE_CONFIRM_YES = "execute-all-delete-confirm-yes"
+"""'Yes, delete all' button inside the all-delete confirmation sheet."""
+
+EXECUTE_ALL_DELETE_CONFIRM_NO = "execute-all-delete-confirm-no"
+"""'Cancel' / 'No' button inside the all-delete confirmation sheet."""
+
+# ---------------------------------------------------------------------------
+# Lock-conflict confirmation dialog
+# ---------------------------------------------------------------------------
+
+LOCK_CONFIRM_DIALOG = "lock-confirm-dialog"
+"""Dialog shown when a delete would affect locked rows."""
+
+LOCK_CONFIRM_BTN_UNLOCK_APPLY = "lock-confirm-btn-unlock-apply"
+"""'Unlock and apply' button — removes locks then re-runs the operation."""
+
+LOCK_CONFIRM_BTN_UNLOCKED_ONLY = "lock-confirm-btn-unlocked-only"
+"""'Apply to unlocked only' button — skips locked rows."""
+
+LOCK_CONFIRM_BTN_CANCEL = "lock-confirm-btn-cancel"
+"""'Cancel' button in the lock-conflict dialog."""
+
+# ---------------------------------------------------------------------------
+# Destructive-delete confirmation dialog
+# ---------------------------------------------------------------------------
+
+DELETE_CONFIRM_DIALOG = "delete-confirm-dialog"
+"""Generic 'Are you sure you want to delete?' confirmation dialog."""
+
+DELETE_CONFIRM_BTN_CONFIRM = "delete-confirm-btn-confirm"
+"""'Confirm delete' button in the delete confirmation dialog."""
+
+DELETE_CONFIRM_BTN_CANCEL = "delete-confirm-btn-cancel"
+"""'Cancel' button in the delete confirmation dialog."""
+
+# ---------------------------------------------------------------------------
+# Prune-singletons confirmation dialog
+# ---------------------------------------------------------------------------
+
+PRUNE_CONFIRM_DIALOG = "prune-confirm-dialog"
+"""Confirmation dialog before pruning singleton groups."""
+
+# ---------------------------------------------------------------------------
+# Inline preview pane
+# ---------------------------------------------------------------------------
+
+PREVIEW_PANE = "preview-pane"
+"""Inline image-preview panel shown to the right of the result tree."""
+
+PREVIEW_SINGLE_IMAGE = "preview-single-image"
+"""The <img> element inside the inline preview pane."""
+
+PREVIEW_INFO = "preview-info"
+"""Metadata / EXIF info section below the preview image."""
+
+# ---------------------------------------------------------------------------
+# Full-resolution image dialog
+# ---------------------------------------------------------------------------
+
+FULLRES_DIALOG = "fullres-dialog"
+"""Full-resolution image viewer dialog."""
+
+FULLRES_IMAGE = "fullres-image"
+"""The <img> element inside the full-res dialog."""
+
+# ---------------------------------------------------------------------------
+# Right-click context menu
+# ---------------------------------------------------------------------------
+
+CONTEXT_MENU = "context-menu"
+"""Context menu shown on right-click over a file row."""
+
+CTX_SET_ACTION_KEEP = "ctx-set-action-keep"
+"""Context-menu item: set decision to 'keep' (clear)."""
+
+CTX_SET_ACTION_DELETE = "ctx-set-action-delete"
+"""Context-menu item: set decision to 'delete'."""
+
+CTX_SET_ACTION_REMOVE = "ctx-set-action-remove"
+"""Context-menu item: set decision to 'remove from list'."""
+
+CTX_OPEN_FOLDER = "ctx-open-folder"
+"""Context-menu item: reveal file in Explorer (POST /api/reveal)."""
+
+CTX_LOCK = "ctx-lock"
+"""Context-menu item: lock the row."""
+
+CTX_UNLOCK = "ctx-unlock"
+"""Context-menu item: unlock the row."""
+
+CTX_APPLY_BEST_COPY = "ctx-apply-best-copy"
+"""Context-menu item: apply 'best copy' auto-selection to the group."""
 
 # ---------------------------------------------------------------------------
 # Settings dialog
@@ -113,11 +222,8 @@ DLGE_SETTINGS_CANCEL = "settings-cancel-button"
 """'Cancel' button inside the settings dialog."""
 
 # ---------------------------------------------------------------------------
-# Confirmation dialogs
+# Generic confirmation dialogs (kept for settings-level confirmations)
 # ---------------------------------------------------------------------------
-
-DLGE_CONFIRM_OK = "confirm-ok-button"
-"""Primary confirm button used in generic confirm dialogs."""
 
 DLGE_CONFIRM_CANCEL = "confirm-cancel-button"
 """Cancel button in generic confirm dialogs."""
@@ -211,3 +317,26 @@ def row_lock_testid(group_id: str, basename: str) -> str:
         ``"row-lock-{group_id}-{basename}"``
     """
     return f"row-lock-{group_id}-{basename}"
+
+
+def execute_all_delete_jump_testid(group_id: str) -> str:
+    """Return the ``data-testid`` value for the jump-to-group link in the
+    all-delete warning banner of the execute dialog.
+
+    The banner lists every group that consists entirely of delete rows and
+    provides an anchor link so the user can scroll to that group in the
+    execute tree.  Each link has a unique testid keyed by ``group_id`` so
+    Playwright can target individual groups without strict-mode errors.
+
+    Parameters
+    ----------
+    group_id:
+        The string form of ``group_number`` from the manifest Group object
+        (use ``str(group_number)``).
+
+    Returns
+    -------
+    str
+        ``"execute-all-delete-jump-{group_id}"``
+    """
+    return f"execute-all-delete-jump-{group_id}"

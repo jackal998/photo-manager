@@ -18,6 +18,85 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
 
+# ---------------------------------------------------------------------------
+# Static testid registry — all non-parameterised testids that must be present
+# in testid_constants.py.  The live Playwright probe (marked web_probe) uses
+# this set to verify they also appear in the rendered DOM.  Here we run the
+# cheaper static check: every name in this set must be a defined UPPERCASE
+# constant in testid_constants.py with the expected string value.
+#
+# Add new names here when §5 or later phases introduce new static testids.
+# Parameterised helpers (rowFileTestid etc.) are NOT listed here — those are
+# covered by the TestTestidConstants unit tests above.
+# ---------------------------------------------------------------------------
+
+REQUIRED_TESTIDS: dict[str, str] = {
+    # Main window
+    "MAIN_RESULT_TREE": "main-result-tree",
+    "MAIN_STATUS_BAR": "main-status-bar",
+    "MAIN_SCAN_BUTTON": "main-scan-button",
+    "MAIN_EXECUTE_BUTTON": "main-execute-button",
+    "MAIN_LANG_TOGGLE": "main-lang-toggle",
+    "MAIN_SETTINGS_BUTTON": "main-settings-button",
+    "MAIN_MANIFEST_INPUT": "main-manifest-input",
+    "MAIN_MANIFEST_OPEN": "main-manifest-open-button",
+    # Scan dialog
+    "SCAN_ADD_SOURCE": "scan-add-source-button",
+    "SCAN_DIALOG": "scan-dialog",
+    "SCAN_SOURCE_LIST": "scan-source-list",
+    "SCAN_OUTPUT_PATH": "scan-output-path",
+    "SCAN_START_BUTTON": "scan-start-button",
+    "SCAN_CANCEL_BUTTON": "scan-cancel-button",
+    "SCAN_PROGRESS_LOG": "scan-progress-log",
+    "SCAN_PROGRESS_BAR": "scan-progress-bar",
+    "SCAN_STATUS_TEXT": "scan-status-text",
+    # Execute dialog (§5 canonical)
+    "EXECUTE_DIALOG": "execute-dialog",
+    "EXECUTE_ALL_DELETE_BANNER": "execute-all-delete-banner",
+    "EXECUTE_TYPE_FILTER": "execute-type-filter",
+    "EXECUTE_TREE": "execute-tree",
+    "EXECUTE_BTN_EXECUTE": "execute-btn-execute",
+    "EXECUTE_BTN_EXECUTE_SELECTED": "execute-btn-execute-selected",
+    "EXECUTE_PREVIEW_PANE": "execute-preview-pane",
+    "EXECUTE_PREVIEW_IMAGE": "execute-preview-image",
+    "EXECUTE_ALL_DELETE_CONFIRM": "execute-all-delete-confirm",
+    "EXECUTE_ALL_DELETE_CONFIRM_YES": "execute-all-delete-confirm-yes",
+    "EXECUTE_ALL_DELETE_CONFIRM_NO": "execute-all-delete-confirm-no",
+    # Lock-conflict dialog
+    "LOCK_CONFIRM_DIALOG": "lock-confirm-dialog",
+    "LOCK_CONFIRM_BTN_UNLOCK_APPLY": "lock-confirm-btn-unlock-apply",
+    "LOCK_CONFIRM_BTN_UNLOCKED_ONLY": "lock-confirm-btn-unlocked-only",
+    "LOCK_CONFIRM_BTN_CANCEL": "lock-confirm-btn-cancel",
+    # Delete confirmation dialog
+    "DELETE_CONFIRM_DIALOG": "delete-confirm-dialog",
+    "DELETE_CONFIRM_BTN_CONFIRM": "delete-confirm-btn-confirm",
+    "DELETE_CONFIRM_BTN_CANCEL": "delete-confirm-btn-cancel",
+    # Prune confirmation dialog
+    "PRUNE_CONFIRM_DIALOG": "prune-confirm-dialog",
+    # Preview pane
+    "PREVIEW_PANE": "preview-pane",
+    "PREVIEW_SINGLE_IMAGE": "preview-single-image",
+    "PREVIEW_INFO": "preview-info",
+    # Full-resolution dialog
+    "FULLRES_DIALOG": "fullres-dialog",
+    "FULLRES_IMAGE": "fullres-image",
+    # Context menu
+    "CONTEXT_MENU": "context-menu",
+    "CTX_SET_ACTION_KEEP": "ctx-set-action-keep",
+    "CTX_SET_ACTION_DELETE": "ctx-set-action-delete",
+    "CTX_SET_ACTION_REMOVE": "ctx-set-action-remove",
+    "CTX_OPEN_FOLDER": "ctx-open-folder",
+    "CTX_LOCK": "ctx-lock",
+    "CTX_UNLOCK": "ctx-unlock",
+    "CTX_APPLY_BEST_COPY": "ctx-apply-best-copy",
+    # Settings dialog
+    "DLGE_SETTINGS_DIALOG": "settings-dialog",
+    "DLGE_SETTINGS_SAVE": "settings-save-button",
+    "DLGE_SETTINGS_CANCEL": "settings-cancel-button",
+    # Generic cancel (kept for settings-level confirmations)
+    "DLGE_CONFIRM_CANCEL": "confirm-cancel-button",
+}
+
 
 # ---------------------------------------------------------------------------
 # 1. testid_constants — shape and naming conventions
@@ -116,6 +195,66 @@ class TestTestidConstants:
         t1 = row_lock_testid("grp1", "shared.jpg")
         t2 = row_lock_testid("grp2", "shared.jpg")
         assert t1 != t2
+
+    def test_execute_all_delete_jump_testid_format(self) -> None:
+        """execute_all_delete_jump_testid(group_id) must embed the group_id."""
+        from qa.web.testid_constants import execute_all_delete_jump_testid
+
+        result = execute_all_delete_jump_testid("42")
+        assert result == "execute-all-delete-jump-42"
+
+    def test_execute_all_delete_jump_testid_distinct(self) -> None:
+        """Different group_ids must produce different jump testids."""
+        from qa.web.testid_constants import execute_all_delete_jump_testid
+
+        t1 = execute_all_delete_jump_testid("grp1")
+        t2 = execute_all_delete_jump_testid("grp2")
+        assert t1 != t2
+
+
+# ---------------------------------------------------------------------------
+# 1b. REQUIRED_TESTIDS — static registry parity with testid_constants
+# ---------------------------------------------------------------------------
+
+
+class TestRequiredTestidsParity:
+    """Every entry in REQUIRED_TESTIDS must exist in testid_constants.py
+    as an UPPERCASE constant with the exact expected string value.
+
+    This is a pure-Python CI probe — no Playwright or live server needed.
+    It catches the class of bug where REQUIRED_TESTIDS drifts from the
+    canonical constants (e.g. after a rename or removal).
+    """
+
+    def test_all_required_testids_defined_in_constants(self) -> None:
+        """Every REQUIRED_TESTIDS entry must be a defined constant with the right value."""
+        import qa.web.testid_constants as mod
+
+        mismatches: list[str] = []
+        for const_name, expected_value in REQUIRED_TESTIDS.items():
+            actual = getattr(mod, const_name, None)
+            if actual is None:
+                mismatches.append(
+                    f"{const_name}: not defined in testid_constants.py"
+                )
+            elif actual != expected_value:
+                mismatches.append(
+                    f"{const_name}: expected {expected_value!r}, got {actual!r}"
+                )
+
+        assert not mismatches, (
+            "REQUIRED_TESTIDS has entries that don't match testid_constants.py:\n"
+            + "\n".join(f"  {m}" for m in mismatches)
+        )
+
+    def test_required_testids_values_are_kebab(self) -> None:
+        """Every value in REQUIRED_TESTIDS must be a non-empty kebab-case string."""
+        _kebab = re.compile(r"^[a-z][a-z0-9-]*$")
+        bad: list[str] = []
+        for const_name, value in REQUIRED_TESTIDS.items():
+            if not isinstance(value, str) or not _kebab.match(value):
+                bad.append(f"{const_name}={value!r}")
+        assert not bad, "Non-kebab values in REQUIRED_TESTIDS:\n" + "\n".join(f"  {b}" for b in bad)
 
 
 # ---------------------------------------------------------------------------

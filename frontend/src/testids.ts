@@ -17,16 +17,41 @@ export const SCAN_CANCEL_BUTTON = "scan-cancel-button";
 export const SCAN_PROGRESS_LOG = "scan-progress-log";
 export const SCAN_PROGRESS_BAR = "scan-progress-bar";
 export const SCAN_STATUS_TEXT = "scan-status-text";
-export const EXEC_DIALOG = "exec-dialog";
-export const EXEC_ACTION_SELECT = "exec-action-select";
-export const EXEC_REGEX_INPUT = "exec-regex-input";
-export const EXEC_PREVIEW_TABLE = "exec-preview-table";
-export const EXEC_CONFIRM_BUTTON = "exec-confirm-button";
-export const EXEC_CANCEL_BUTTON = "exec-cancel-button";
+export const EXECUTE_DIALOG = "execute-dialog";
+export const EXECUTE_ALL_DELETE_BANNER = "execute-all-delete-banner";
+export const EXECUTE_TYPE_FILTER = "execute-type-filter";
+export const EXECUTE_TREE = "execute-tree";
+export const EXECUTE_BTN_EXECUTE = "execute-btn-execute";
+export const EXECUTE_BTN_EXECUTE_SELECTED = "execute-btn-execute-selected";
+export const EXECUTE_PREVIEW_PANE = "execute-preview-pane";
+export const EXECUTE_PREVIEW_IMAGE = "execute-preview-image";
+export const EXECUTE_ALL_DELETE_CONFIRM = "execute-all-delete-confirm";
+export const EXECUTE_ALL_DELETE_CONFIRM_YES = "execute-all-delete-confirm-yes";
+export const EXECUTE_ALL_DELETE_CONFIRM_NO = "execute-all-delete-confirm-no";
+export const LOCK_CONFIRM_DIALOG = "lock-confirm-dialog";
+export const LOCK_CONFIRM_BTN_UNLOCK_APPLY = "lock-confirm-btn-unlock-apply";
+export const LOCK_CONFIRM_BTN_UNLOCKED_ONLY = "lock-confirm-btn-unlocked-only";
+export const LOCK_CONFIRM_BTN_CANCEL = "lock-confirm-btn-cancel";
+export const DELETE_CONFIRM_DIALOG = "delete-confirm-dialog";
+export const DELETE_CONFIRM_BTN_CONFIRM = "delete-confirm-btn-confirm";
+export const DELETE_CONFIRM_BTN_CANCEL = "delete-confirm-btn-cancel";
+export const PRUNE_CONFIRM_DIALOG = "prune-confirm-dialog";
+export const PREVIEW_PANE = "preview-pane";
+export const PREVIEW_SINGLE_IMAGE = "preview-single-image";
+export const PREVIEW_INFO = "preview-info";
+export const FULLRES_DIALOG = "fullres-dialog";
+export const FULLRES_IMAGE = "fullres-image";
+export const CONTEXT_MENU = "context-menu";
+export const CTX_SET_ACTION_KEEP = "ctx-set-action-keep";
+export const CTX_SET_ACTION_DELETE = "ctx-set-action-delete";
+export const CTX_SET_ACTION_REMOVE = "ctx-set-action-remove";
+export const CTX_OPEN_FOLDER = "ctx-open-folder";
+export const CTX_LOCK = "ctx-lock";
+export const CTX_UNLOCK = "ctx-unlock";
+export const CTX_APPLY_BEST_COPY = "ctx-apply-best-copy";
 export const DLGE_SETTINGS_DIALOG = "settings-dialog";
 export const DLGE_SETTINGS_SAVE = "settings-save-button";
 export const DLGE_SETTINGS_CANCEL = "settings-cancel-button";
-export const DLGE_CONFIRM_OK = "confirm-ok-button";
 export const DLGE_CONFIRM_CANCEL = "confirm-cancel-button";
 
 export function rowFileTestid(groupId: string, basename: string): string {
@@ -43,4 +68,8 @@ export function rowDecisionTestid(groupId: string, basename: string): string {
 
 export function rowLockTestid(groupId: string, basename: string): string {
   return `row-lock-${groupId}-${basename}`;
+}
+
+export function executeAllDeleteJumpTestid(groupId: string): string {
+  return `execute-all-delete-jump-${groupId}`;
 }

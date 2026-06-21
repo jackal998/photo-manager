@@ -1,0 +1,138 @@
+// PreviewPane — inline image preview panel.
+//
+// Reads store.preview.selectedFilePath. When set, shows:
+//   - A thumbnail at size=512 (preview-single-image)
+//   - Metadata sidebar (preview-info): name, folder, size, score, dims, dates
+//
+// CRITICAL (#535 fix): the image scroll container uses overflow-y:scroll
+// (always-on, never "auto") to avoid the portrait fit-on-width oscillation
+// loop where adding the content causes the scrollbar to appear, shrinking the
+// viewport, causing the content to reflow, making the scrollbar disappear, …
+// This replicates Qt's ScrollBarAlwaysOn invariant.
+//
+// Double-clicking the image opens the full-resolution overlay via
+// store.openFullRes(path).
+
+import { useCallback } from "react";
+import { useAppStore } from "@/store/useAppStore";
+import { thumbnailUrl } from "@/api/client";
+import { formatBytes, formatScore, formatDims, formatDate } from "@/lib/format";
+import { PREVIEW_PANE, PREVIEW_SINGLE_IMAGE, PREVIEW_INFO } from "@/testids";
+import type { FileRow } from "@/api/types";
+
+// ---------------------------------------------------------------------------
+// Helper — find a FileRow by file_path in the manifest groups
+// ---------------------------------------------------------------------------
+
+function findRow(
+  groups: ReturnType<typeof useAppStore.getState>["manifest"]["groups"],
+  filePath: string
+): FileRow | null {
+  for (const group of groups) {
+    const row = group.items.find((f) => f.file_path === filePath);
+    if (row !== undefined) return row;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Empty state
+// ---------------------------------------------------------------------------
+
+function EmptyState() {
+  return (
+    <div className="flex items-center justify-center h-full text-neutral-400 text-sm select-none">
+      Select a file to preview
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PreviewPane
+// ---------------------------------------------------------------------------
+
+export function PreviewPane() {
+  const selectedFilePath = useAppStore((s) => s.preview.selectedFilePath);
+  const groups = useAppStore((s) => s.manifest.groups);
+  const openFullRes = useAppStore((s) => s.openFullRes);
+
+  const row = selectedFilePath !== null ? findRow(groups, selectedFilePath) : null;
+
+  const handleDoubleClick = useCallback(() => {
+    if (selectedFilePath !== null) {
+      openFullRes(selectedFilePath);
+    }
+  }, [selectedFilePath, openFullRes]);
+
+  return (
+    <div
+      data-testid={PREVIEW_PANE}
+      className="flex flex-col h-full bg-neutral-50 border-l border-neutral-200"
+    >
+      {selectedFilePath === null || row === null ? (
+        <EmptyState />
+      ) : (
+        <>
+          {/* Image area — overflow-y:scroll is ALWAYS-ON (not auto).
+              This is the #535 fix: prevents the portrait oscillation loop
+              where the scrollbar appearance/disappearance thrashes layout. */}
+          <div className="flex-1 overflow-y-scroll overflow-x-hidden flex items-start justify-center bg-neutral-900 min-h-0">
+            <img
+              data-testid={PREVIEW_SINGLE_IMAGE}
+              src={thumbnailUrl(selectedFilePath, 512)}
+              alt={row.basename}
+              className="max-w-full object-contain cursor-zoom-in"
+              onDoubleClick={handleDoubleClick}
+              draggable={false}
+            />
+          </div>
+
+          {/* Metadata sidebar */}
+          <div
+            data-testid={PREVIEW_INFO}
+            className="flex-shrink-0 p-3 border-t border-neutral-200 bg-white text-xs space-y-1 overflow-y-auto max-h-56"
+          >
+            <MetaRow label="Name" value={row.basename} mono />
+            <MetaRow label="Folder" value={row.folder} mono />
+            <MetaRow label="Size" value={formatBytes(row.file_size_bytes)} />
+            <MetaRow label="Score" value={formatScore(row.score)} />
+            <MetaRow
+              label="Dims"
+              value={formatDims(row.pixel_width, row.pixel_height)}
+            />
+            <MetaRow label="Shot" value={formatDate(row.shot_date)} />
+            <MetaRow label="Created" value={formatDate(row.creation_date)} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MetaRow — a label / value pair in the info panel
+// ---------------------------------------------------------------------------
+
+interface MetaRowProps {
+  label: string;
+  value: string;
+  mono?: boolean;
+}
+
+function MetaRow({ label, value, mono = false }: MetaRowProps) {
+  return (
+    <div className="flex gap-1.5">
+      <span className="text-neutral-500 w-14 flex-shrink-0">{label}</span>
+      <span
+        className={
+          mono
+            ? "font-mono text-neutral-800 break-all"
+            : "text-neutral-800 break-all"
+        }
+        title={value}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}

@@ -5,24 +5,48 @@
 //    completed_empty
 //  - setDecision: optimistic apply + revert on PATCH failure
 //  - loadManifest: happy path
+//  - executeDecisions: success / 409 locked_paths / 409 already_running / prunePrompt
+//  - removeFromList: success / 409 locked_paths
+//  - pruneSingletons: success
+//  - saveManifest: success
+//  - revealInExplorer: 403/501 non-fatal surfaced as executeError
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mock api/client so no real network calls are made.
+//
+// The pre-existing stubs (startScan, getManifest, patchDecisions, …) keep their
+// vi.fn() forms so existing tests stay untouched.
+//
+// The Phase-2C2 functions (postExecute, postRemove, postPrune, postSave,
+// postReveal) and ApiConflictError are imported from the real module so the
+// real 409-parsing logic in postJsonOrConflict runs.  Tests for those actions
+// control behaviour by mocking global.fetch with crafted Response objects.
 // ---------------------------------------------------------------------------
 
-vi.mock("../api/client", () => ({
-  startScan: vi.fn(),
-  cancelScan: vi.fn(),
-  getManifest: vi.fn(),
-  patchDecisions: vi.fn(),
-  patchLocks: vi.fn(),
-  getSettings: vi.fn(),
-  patchSettings: vi.fn(),
-  browseFs: vi.fn(),
-  scanEventsUrl: vi.fn((id: string) => `/api/scan/${id}/events`),
-}));
+vi.mock("../api/client", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../api/client")>();
+  return {
+    // Keep stubs for the actions already tested at the vi.fn() boundary.
+    startScan: vi.fn(),
+    cancelScan: vi.fn(),
+    getManifest: vi.fn(),
+    patchDecisions: vi.fn(),
+    patchLocks: vi.fn(),
+    getSettings: vi.fn(),
+    patchSettings: vi.fn(),
+    browseFs: vi.fn(),
+    scanEventsUrl: vi.fn((id: string) => `/api/scan/${id}/events`),
+    // Pass through real implementations so 409 parsing is exercised.
+    postExecute: real.postExecute,
+    postRemove: real.postRemove,
+    postPrune: real.postPrune,
+    postSave: real.postSave,
+    postReveal: real.postReveal,
+    ApiConflictError: real.ApiConflictError,
+  };
+});
 
 import * as client from "../api/client";
 import { useAppStore } from "./useAppStore";
@@ -90,6 +114,18 @@ beforeEach(() => {
         "ui.scan_dialog.autotune_read_knee": null,
       },
       loading: false,
+    },
+    preview: {
+      selectedFilePath: null,
+      fullResPath: null,
+    },
+    execute: {
+      executeOpen: false,
+      executeRunning: false,
+      executeResult: null,
+      executeError: null,
+      lockConflict: null,
+      prunePrompt: null,
     },
   });
   vi.clearAllMocks();
@@ -261,5 +297,319 @@ describe("loadManifest – happy path", () => {
     expect(manifest.totalFiles).toBe(2);
     expect(manifest.loading).toBe(false);
     expect(manifest.error).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2C2 destructive store actions
+//
+// These tests mock global.fetch and let the REAL client (postExecute,
+// postRemove, etc.) parse real Response objects, so that 409-parsing logic in
+// postJsonOrConflict is exercised rather than bypassed.
+// ---------------------------------------------------------------------------
+
+// ---- shared fetch-mock helpers --------------------------------------------
+
+/** Craft a 200 Response with JSON body. */
+function ok200(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Craft a 409 Response with a discriminated detail body. */
+function conflict409(detail: unknown): Response {
+  return new Response(JSON.stringify({ detail }), {
+    status: 409,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Craft a non-2xx Response. */
+function errorResponse(status: number, statusText = "Error"): Response {
+  return new Response(JSON.stringify({ detail: statusText }), {
+    status,
+    statusText,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Seed the store with a manifest so actions that check manifest.path proceed. */
+function seedManifest(groups: Group[] = []): void {
+  useAppStore.setState((s) => ({
+    ...s,
+    manifest: {
+      path: "/data/scan.db",
+      groups,
+      totalGroups: groups.length,
+      totalFiles: groups.reduce((n, g) => n + g.items.length, 0),
+      loading: false,
+      error: null,
+    },
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// executeDecisions
+// ---------------------------------------------------------------------------
+
+describe("executeDecisions – success replaces manifest groups and clears running", () => {
+  it("replaces manifest.groups with result.groups and sets executeResult", async () => {
+    // Seed manifest with two decided files in one group.
+    const initialGroup = makeGroup(1, ["/photos/a.jpg", "/photos/b.jpg"]);
+    initialGroup.items[0].user_decision = "delete";
+    initialGroup.items[1].user_decision = "ignore";
+    seedManifest([initialGroup]);
+
+    // Server returns a reduced groups array (one file was deleted).
+    const afterGroup = makeGroup(1, ["/photos/b.jpg"]);
+    const executeResult = {
+      success_paths: ["/photos/a.jpg"],
+      failed: [],
+      ignored: ["/photos/b.jpg"],
+      missing: [],
+      db_write_failed: [],
+      log_path: null,
+      groups: [afterGroup],
+    };
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(ok200(executeResult));
+
+    await useAppStore.getState().executeDecisions();
+
+    const { manifest, execute } = useAppStore.getState();
+    // Groups must be the server's authoritative list, not the original.
+    expect(manifest.groups).toHaveLength(1);
+    expect(manifest.groups[0].items).toHaveLength(1);
+    expect(manifest.groups[0].items[0].file_path).toBe("/photos/b.jpg");
+    expect(execute.executeResult).toEqual(executeResult);
+    expect(execute.executeRunning).toBe(false);
+    // No conflict surfaced.
+    expect(execute.lockConflict).toBeNull();
+  });
+});
+
+describe("executeDecisions – 409 locked_paths captures originalPaths and op=execute", () => {
+  it("sets lockConflict with op=execute and originalPaths = all decided paths", async () => {
+    // Seed two decided files.
+    const group = makeGroup(1, ["/photos/c.jpg", "/photos/d.jpg"]);
+    group.items[0].user_decision = "delete";
+    group.items[1].user_decision = "delete";
+    seedManifest([group]);
+
+    // Backend reports one of the paths is locked.
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: ["/photos/c.jpg"] })
+    );
+
+    await useAppStore.getState().executeDecisions();
+
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict).not.toBeNull();
+    expect(execute.lockConflict!.op).toBe("execute");
+    expect(execute.lockConflict!.paths).toEqual(["/photos/c.jpg"]);
+    // originalPaths must include ALL decided files so "Unlock Only" can filter.
+    expect(execute.lockConflict!.originalPaths).toContain("/photos/c.jpg");
+    expect(execute.lockConflict!.originalPaths).toContain("/photos/d.jpg");
+    expect(execute.executeRunning).toBe(false);
+  });
+});
+
+describe("executeDecisions – 409 execute_already_running sets executeError, not lockConflict", () => {
+  it("surfaces executeError and leaves lockConflict null", async () => {
+    const group = makeGroup(1, ["/photos/e.jpg"]);
+    group.items[0].user_decision = "delete";
+    seedManifest([group]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "execute_already_running" })
+    );
+
+    await useAppStore.getState().executeDecisions();
+
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict).toBeNull();
+    expect(execute.executeError).toBeTruthy();
+    expect(execute.executeRunning).toBe(false);
+  });
+});
+
+describe("executeDecisions – prunePrompt set when result contains singleton groups", () => {
+  it("populates prunePrompt.candidates with paths from member_count===1 groups", async () => {
+    const group = makeGroup(1, ["/photos/f.jpg", "/photos/g.jpg"]);
+    group.items[0].user_decision = "delete";
+    group.items[1].user_decision = "ignore";
+    seedManifest([group]);
+
+    // After execute, group has only one file left (singleton).
+    const singletonGroup: Group = {
+      group_number: 1,
+      member_count: 1,
+      items: [
+        {
+          file_path: "/photos/g.jpg",
+          basename: "g.jpg",
+          folder: "/photos",
+          action: "",
+          user_decision: "ignore",
+          is_locked: false,
+          is_ref_winner: true,
+          similarity: { kind: "ref", percent: null },
+          score: null,
+          file_size_bytes: 1024,
+          pixel_width: 800,
+          pixel_height: 600,
+          shot_date: null,
+          creation_date: null,
+          phash: null,
+          hamming_distance: null,
+          thumbnail_url: "/api/image?path=%2Fphotos%2Fg.jpg&size=512",
+        },
+      ],
+    };
+
+    const executeResult = {
+      success_paths: ["/photos/f.jpg"],
+      failed: [],
+      ignored: [],
+      missing: [],
+      db_write_failed: [],
+      log_path: null,
+      groups: [singletonGroup],
+    };
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(ok200(executeResult));
+
+    await useAppStore.getState().executeDecisions();
+
+    const { execute } = useAppStore.getState();
+    expect(execute.prunePrompt).not.toBeNull();
+    expect(execute.prunePrompt!.candidates).toContain("/photos/g.jpg");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// removeFromList
+// ---------------------------------------------------------------------------
+
+describe("removeFromList – success replaces manifest groups", () => {
+  it("updates manifest.groups from the server response", async () => {
+    const initialGroup = makeGroup(1, ["/photos/h.jpg", "/photos/i.jpg"]);
+    seedManifest([initialGroup]);
+
+    const afterGroup = makeGroup(1, ["/photos/i.jpg"]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ removed: 1, groups: [afterGroup] })
+    );
+
+    await useAppStore.getState().removeFromList(["/photos/h.jpg"]);
+
+    const { manifest } = useAppStore.getState();
+    expect(manifest.groups).toHaveLength(1);
+    expect(manifest.groups[0].items).toHaveLength(1);
+    expect(manifest.groups[0].items[0].file_path).toBe("/photos/i.jpg");
+  });
+});
+
+describe("removeFromList – 409 locked_paths sets lockConflict op=remove with originalPaths", () => {
+  it("preserves the caller's path list in lockConflict.originalPaths", async () => {
+    const group = makeGroup(1, ["/photos/j.jpg", "/photos/k.jpg"]);
+    group.items[0].is_locked = true;
+    seedManifest([group]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: ["/photos/j.jpg"] })
+    );
+
+    const paths = ["/photos/j.jpg", "/photos/k.jpg"];
+    await useAppStore.getState().removeFromList(paths);
+
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict).not.toBeNull();
+    expect(execute.lockConflict!.op).toBe("remove");
+    expect(execute.lockConflict!.originalPaths).toEqual(paths);
+    expect(execute.lockConflict!.paths).toEqual(["/photos/j.jpg"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pruneSingletons
+// ---------------------------------------------------------------------------
+
+describe("pruneSingletons – success replaces groups and clears prunePrompt", () => {
+  it("updates manifest.groups and nullifies execute.prunePrompt", async () => {
+    const group = makeGroup(1, ["/photos/l.jpg"]);
+    seedManifest([group]);
+
+    // Pre-set a prunePrompt to confirm it gets cleared.
+    useAppStore.setState((s) => ({
+      ...s,
+      execute: {
+        ...s.execute,
+        prunePrompt: { candidates: ["/photos/l.jpg"] },
+      },
+    }));
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ pruned: ["/photos/l.jpg"], locked_skipped: [], groups: [] })
+    );
+
+    await useAppStore.getState().pruneSingletons();
+
+    const { manifest, execute } = useAppStore.getState();
+    expect(manifest.groups).toHaveLength(0);
+    expect(execute.prunePrompt).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// saveManifest
+// ---------------------------------------------------------------------------
+
+describe("saveManifest – success resolves without setting error", () => {
+  it("completes without throwing or marking manifest.error", async () => {
+    seedManifest([]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ saved_to: "/data/scan.db", updated: 0 })
+    );
+
+    await useAppStore.getState().saveManifest();
+
+    expect(useAppStore.getState().manifest.error).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// revealInExplorer
+// ---------------------------------------------------------------------------
+
+describe("revealInExplorer – 403/501 is non-fatal: surfaces executeError, does not throw", () => {
+  it("sets executeError and resolves (does not reject) on a 403 response", async () => {
+    seedManifest([]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(errorResponse(403, "Forbidden"));
+
+    // The action must not throw — a crash here would bubble up to the caller.
+    await expect(
+      useAppStore.getState().revealInExplorer("/photos/m.jpg")
+    ).resolves.toBeUndefined();
+
+    const { execute } = useAppStore.getState();
+    expect(execute.executeError).toBeTruthy();
+  });
+
+  it("sets executeError and resolves (does not reject) on a 501 response", async () => {
+    seedManifest([]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(errorResponse(501, "Not Implemented"));
+
+    await expect(
+      useAppStore.getState().revealInExplorer("/photos/n.jpg")
+    ).resolves.toBeUndefined();
+
+    const { execute } = useAppStore.getState();
+    expect(execute.executeError).toBeTruthy();
   });
 });

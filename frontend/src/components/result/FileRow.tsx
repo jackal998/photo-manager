@@ -1,5 +1,6 @@
 // File row inside a group: thumbnail + metadata columns + decision + lock.
 
+import type { MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import {
   similarityLabel,
@@ -22,20 +23,39 @@ interface FileRowProps {
   groupId: string;
   onDecision: (filePath: string, value: import("@/api/types").DecisionValue) => void;
   onLock: (filePath: string, locked: boolean) => void;
+  onSelect?: (filePath: string) => void;
+  onOpenFullRes?: (filePath: string) => void;
+  onContextMenu?: (filePath: string, isLocked: boolean, x: number, y: number) => void;
 }
 
-export function FileRow({ row, groupId, onDecision, onLock }: FileRowProps) {
+export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu }: FileRowProps) {
   const simLabel = similarityLabel(row.similarity);
   // Passenger rows get a subtle amber highlight on the similarity badge.
   const isPassenger = row.similarity.kind === "passenger";
+
+  function handleClick() {
+    onSelect?.(row.file_path);
+  }
+
+  function handleDoubleClick() {
+    onOpenFullRes?.(row.file_path);
+  }
+
+  function handleContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    onContextMenu?.(row.file_path, row.is_locked, e.clientX, e.clientY);
+  }
 
   return (
     <div
       data-testid={rowFileTestid(groupId, row.basename)}
       className={cn(
-        "flex items-start gap-3 px-4 py-2 border-b border-neutral-100 hover:bg-neutral-50",
+        "flex items-start gap-3 px-4 py-2 border-b border-neutral-100 hover:bg-neutral-50 cursor-pointer",
         row.is_ref_winner && "bg-blue-50 hover:bg-blue-100"
       )}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
+      onContextMenu={handleContextMenu}
     >
       {/* Thumbnail */}
       <div className="flex-shrink-0 w-16 h-16 bg-neutral-200 rounded overflow-hidden flex items-center justify-center">

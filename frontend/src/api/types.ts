@@ -150,3 +150,90 @@ export interface SettingsMap {
   "ui.prune_singletons": unknown;
   "ui.scan_dialog.autotune_read_knee": unknown;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2C1 — file-mutating route request / response types.
+// Mirrors app/web/models.py and app/web/routes/execute.py exactly.
+// ---------------------------------------------------------------------------
+
+// POST /api/execute
+
+export interface ExecuteRequest {
+  manifest_path: string;
+  scope_paths?: string[] | null;
+  recycle?: boolean;
+  force_locked?: boolean;
+}
+
+export interface ExecuteResult {
+  success_paths: string[];
+  /** Each element is a [path, reason] pair. */
+  failed: [string, string][];
+  ignored: string[];
+  missing: string[];
+  db_write_failed: string[];
+  log_path: string | null;
+  groups: Group[];
+}
+
+// POST /api/remove
+
+export interface RemoveRequest {
+  manifest_path: string;
+  file_paths: string[];
+  force_locked?: boolean;
+}
+
+export interface RemoveResult {
+  removed: number;
+  groups: Group[];
+}
+
+// POST /api/prune
+
+export interface PruneRequest {
+  manifest_path: string;
+  include_actioned?: boolean;
+}
+
+export interface PruneResult {
+  pruned: string[];
+  locked_skipped: string[];
+  groups: Group[];
+}
+
+// POST /api/save
+
+export interface SaveRequest {
+  manifest_path: string;
+  target_path?: string | null;
+}
+
+export interface SaveResult {
+  saved_to: string;
+  updated: number;
+}
+
+// POST /api/reveal
+
+export interface RevealRequest {
+  file_path: string;
+}
+
+export interface RevealResult {
+  status: string;
+}
+
+// ---------------------------------------------------------------------------
+// 409 error body shapes from the execute routes.
+// The server returns { detail: { code, locked_paths? } } on 409.
+// ---------------------------------------------------------------------------
+
+export interface LockedPathsError {
+  code: "locked_paths";
+  locked_paths: string[];
+}
+
+export interface ExecuteAlreadyRunningError {
+  code: "execute_already_running";
+}

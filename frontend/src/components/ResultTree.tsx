@@ -12,6 +12,16 @@ import { FileRow } from "./result/FileRow";
 import type { DecisionValue } from "@/api/types";
 
 // ---------------------------------------------------------------------------
+// Context menu state shape — lifted to App level via the callback props
+// ---------------------------------------------------------------------------
+export interface ContextMenuTarget {
+  filePath: string;
+  isLocked: boolean;
+  x: number;
+  y: number;
+}
+
+// ---------------------------------------------------------------------------
 // Virtual row descriptor — flattened from groups + per-group expansion state
 // ---------------------------------------------------------------------------
 
@@ -33,11 +43,17 @@ type VRow = GroupHeaderVRow | FileVRow;
 // Main component
 // ---------------------------------------------------------------------------
 
-export function ResultTree() {
+interface ResultTreeProps {
+  onContextMenu?: (target: ContextMenuTarget) => void;
+}
+
+export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
   const manifest = useAppStore((s) => s.manifest);
   const groups = useAppStore((s) => s.manifest.groups);
   const setDecision = useAppStore((s) => s.setDecision);
   const setLock = useAppStore((s) => s.setLock);
+  const setSelectedFile = useAppStore((s) => s.setSelectedFile);
+  const openFullRes = useAppStore((s) => s.openFullRes);
 
   // Collapse state: Set of group_number values that are collapsed.
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -114,6 +130,28 @@ export function ResultTree() {
       void setLock(filePath, locked);
     },
     [setLock]
+  );
+
+  // Selection / preview callbacks.
+  const handleSelect = useCallback(
+    (filePath: string) => {
+      setSelectedFile(filePath);
+    },
+    [setSelectedFile]
+  );
+
+  const handleOpenFullRes = useCallback(
+    (filePath: string) => {
+      openFullRes(filePath);
+    },
+    [openFullRes]
+  );
+
+  const handleContextMenu = useCallback(
+    (filePath: string, isLocked: boolean, x: number, y: number) => {
+      onContextMenu?.({ filePath, isLocked, x, y });
+    },
+    [onContextMenu]
   );
 
   // ---------------------------------------------------------------------------
@@ -197,6 +235,9 @@ export function ResultTree() {
                       groupId={String(vrow.groupNumber)}
                       onDecision={handleDecision}
                       onLock={handleLock}
+                      onSelect={handleSelect}
+                      onOpenFullRes={handleOpenFullRes}
+                      onContextMenu={handleContextMenu}
                     />
                   );
                 })()

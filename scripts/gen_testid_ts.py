@@ -68,6 +68,12 @@ def render_testids_ts() -> str:
     lines.append("  return `row-lock-${groupId}-${basename}`;")
     lines.append("}")
     lines.append("")
+    lines.append(
+        "export function executeAllDeleteJumpTestid(groupId: string): string {"
+    )
+    lines.append("  return `execute-all-delete-jump-${groupId}`;")
+    lines.append("}")
+    lines.append("")
 
     return "\n".join(lines)
 
