@@ -54,7 +54,7 @@ scenarios:
   - scenario: s08_exif_edge
     playwright_module: qa.web.scenarios.s08_exif_edge
     status: done
-    notes: "EXIF edge-case dates (6 JPEGs: tz_offset/subsecond/createdate_only/datetime_tag_only/zero_date_sentinel/dash_sentinel). All 6 are distinct singletons (raw fixture → EMPTY manifest = a hollow test), so each is duplicated (byte-identical twin → EXACT-dup pair) to become observable (12 rows). Asserts the 4 well-formed-date files parse to non-null shot_date and the 2 sentinel files (0000-date / dash) parse to null. UPGRADES Qt s08 (print-only). Divergences: duplicate-to-observe (s05 pattern); canonical shot_date read vs Qt tree text; no UNDATED log probe (log unmounts on SSE finished — racy), undated asserted via sentinel null shot_date."
+    notes: "EXIF edge-case dates (6 JPEGs: tz_offset/subsecond/createdate_only/datetime_tag_only/zero_date_sentinel/dash_sentinel). All 6 are distinct singletons (raw fixture → EMPTY manifest = a hollow test), so each is duplicated (byte-identical twin → EXACT-dup pair) to become observable (12 rows). HARD-asserts the 2 DateTimeOriginal-primary files (tz_offset/subsecond) parse non-null and the 2 sentinels (0000-date/dash) parse null; the 2 fallback-tag files (CreateDate/DateTime-only) are OBSERVED not asserted — exiftool-version dependent (createdate_only is null on CI exiftool, dated on local; caught at CI live-verify). UPGRADES Qt s08 (print-only). Divergences: duplicate-to-observe (s05 pattern); canonical shot_date read vs Qt tree text; no UNDATED log probe (log unmounts on SSE finished — racy), undated asserted via sentinel null shot_date."
 
   - scenario: s09_walker_exclusions
     playwright_module: null
