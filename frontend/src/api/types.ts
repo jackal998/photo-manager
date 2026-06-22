@@ -248,3 +248,24 @@ export interface LockedPathsError {
 export interface ExecuteAlreadyRunningError {
   code: "execute_already_running";
 }
+
+// ---------------------------------------------------------------------------
+// POST /api/action/bulk-decide request / response types.
+// ---------------------------------------------------------------------------
+
+export interface BulkDecideRequest {
+  manifest_path: string;
+  field: string;
+  pattern: string;
+  action: string;
+  force_locked?: boolean;
+  preview?: boolean;
+}
+
+export interface BulkDecideResult {
+  matched: number;
+  affected_paths: string[];
+  /** "decision" | "lock" | "unlock" — the action that was applied (or would be applied in preview mode). */
+  action_applied: string;
+  groups: Group[];
+}

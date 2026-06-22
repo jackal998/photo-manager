@@ -37,6 +37,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getSettings: vi.fn(),
     patchSettings: vi.fn(),
     browseFs: vi.fn(),
+    bulkDecide: vi.fn(),
     scanEventsUrl: vi.fn((id: string) => `/api/scan/${id}/events`),
     // Pass through real implementations so 409 parsing is exercised.
     postExecute: real.postExecute,
@@ -611,5 +612,56 @@ describe("revealInExplorer – 403/501 is non-fatal: surfaces executeError, does
 
     const { execute } = useAppStore.getState();
     expect(execute.executeError).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// action slice — bulk-decide (the adversarial-review ship-blockers)
+// ---------------------------------------------------------------------------
+
+describe("useAppStore action slice (bulk-decide)", () => {
+  it("applyBulkDecide re-throws a 409 locked_paths conflict (does not swallow it)", async () => {
+    // The component relies on this throw to open the lock-confirm dialog +
+    // retry with force_locked. A swallowed error made that flow dead.
+    useAppStore.setState((s) => ({
+      manifest: { ...s.manifest, path: "/m/test.db" },
+      action: { ...s.action, field: "File Name", pattern: "IMG", action: "delete" },
+    }));
+    const conflict = new client.ApiConflictError("locked_paths", ["/p/a.jpg"]);
+    vi.mocked(client.bulkDecide).mockReset().mockRejectedValueOnce(conflict);
+
+    await expect(
+      useAppStore.getState().applyBulkDecide(false)
+    ).rejects.toBe(conflict);
+  });
+
+  it("previewBulkDecide drops a stale out-of-order response (latest wins)", async () => {
+    // Preview A is issued first but resolves LAST; preview B is issued second
+    // and resolves first. Only B (the latest request) may commit — A's late
+    // arrival must be dropped, or the counter mis-states what Apply touches.
+    useAppStore.setState((s) => ({
+      manifest: { ...s.manifest, path: "/m/test.db" },
+      action: { ...s.action, field: "File Name", pattern: "IMG", action: "delete" },
+    }));
+
+    let resolveA!: (v: unknown) => void;
+    let resolveB!: (v: unknown) => void;
+    const pA = new Promise((r) => { resolveA = r; });
+    const pB = new Promise((r) => { resolveB = r; });
+    vi.mocked(client.bulkDecide)
+      .mockReset()
+      .mockReturnValueOnce(pA as never)
+      .mockReturnValueOnce(pB as never);
+
+    const callA = useAppStore.getState().previewBulkDecide(); // seq N
+    const callB = useAppStore.getState().previewBulkDecide(); // seq N+1 (latest)
+
+    resolveB({ matched: 2, affected_paths: ["b"], action_applied: "decision", groups: [] });
+    await callB;
+    resolveA({ matched: 1, affected_paths: ["a"], action_applied: "decision", groups: [] });
+    await callA;
+
+    // B (the latest issued request) wins; A's stale late arrival is ignored.
+    expect(useAppStore.getState().action.previewMatched).toBe(2);
   });
 });

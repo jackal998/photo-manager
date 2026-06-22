@@ -5,10 +5,13 @@ that match the given field + pattern.
 
 Security model
 --------------
-The manifest path is validated against ``app.state.allowed_roots`` before any
-service call.  The service layer re-validates every resolved ``source_path``
-against ``allowed_roots`` (the 2C1 ship-blocker fix: an in-root manifest
-carrying out-of-root rows cannot mutate those files).
+The manifest ``.db`` itself is NOT roots-gated — it is an output file the user
+may store anywhere, exactly as ``GET /api/manifest`` loads it (a live
+ActionDialog run surfaced that gating it 403'd a perfectly valid db stored
+outside the scanned photo roots). The real boundary is the affected PHOTO
+paths: the service layer filters every resolved ``source_path`` through
+``is_under_roots`` (the 2C1 ship-blocker fix — an in-root manifest carrying
+out-of-root rows cannot mutate those files).
 
 Error map
 ---------
@@ -27,7 +30,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from app.web.models import BulkDecideRequest, BulkDecideResult
-from app.web.routes._path_guard import validate_under_roots
 
 router = APIRouter()
 
@@ -44,13 +46,11 @@ async def post_bulk_decide(body: BulkDecideRequest, request: Request) -> BulkDec
     Returns:
         200 BulkDecideResult
         400 invalid_pattern (bad regex)
-        403 path outside allowed roots
         404 manifest not found
         409 locked_paths (locked rows exist and force_locked=False)
         422 unknown action or other validation error
     """
     roots = _allowed_roots(request)
-    validate_under_roots(body.manifest_path, roots)
 
     if not Path(body.manifest_path).is_file():
         raise HTTPException(

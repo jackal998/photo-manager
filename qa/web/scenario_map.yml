@@ -172,9 +172,9 @@ scenarios:
     notes: ""
 
   - scenario: s31_simple_mode_regex
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s31_simple_mode_regex
+    status: done
+    notes: "Simple-mode write-through (action-simple-op/text → action-regex-input) + bulk-decide apply → delete confirm → asserts user_decision via GET /api/manifest. Qt mode-toggle radio + keyboard probes omitted (no web equivalent)."
 
   - scenario: s32_lock_confirm_bulk_regex
     playwright_module: null

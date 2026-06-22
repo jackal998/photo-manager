@@ -7,6 +7,7 @@ import type { WritableDraft } from "immer";
 
 import {
   ApiConflictError,
+  bulkDecide,
   cancelScan,
   getManifest,
   getSettings,
@@ -30,6 +31,7 @@ import type {
   ScanStageEvent,
 } from "../api/types";
 import type {
+  ActionState,
   AppStore,
   ExecuteState,
   ManifestState,
@@ -48,6 +50,11 @@ type ImmerSetFn = (
     | Partial<AppStore>
     | ((state: WritableDraft<AppStore>) => void)
 ) => void;
+
+// Monotonic sequence for bulk-decide preview ordering. Only the latest
+// preview/apply is allowed to commit its result — out-of-order responses from
+// superseded requests are dropped (see previewBulkDecide / applyBulkDecide).
+let _bulkDecideSeq = 0;
 
 // ---------------------------------------------------------------------------
 // Initial state slices
@@ -97,6 +104,18 @@ const initialExecute: ExecuteState = {
   prunePrompt: null,
 };
 
+const initialAction: ActionState = {
+  actionDialogOpen: false,
+  field: "File Name",
+  pattern: "",
+  action: "delete",
+  previewMatched: -1,
+  previewSample: [],
+  previewTruncated: false,
+  actionError: null,
+  actionRunning: false,
+};
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -108,6 +127,7 @@ export const useAppStore = create<AppStore>()(
     settings: { ...initialSettings },
     preview: { ...initialPreview },
     execute: { ...initialExecute },
+    action: { ...initialAction },
 
     // -----------------------------------------------------------------------
     // Scan actions
@@ -516,6 +536,158 @@ export const useAppStore = create<AppStore>()(
             err instanceof Error ? err.message : String(err);
         });
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // Action dialog actions (Set Action by Field / bulk-decide)
+    // -----------------------------------------------------------------------
+
+    openActionDialog() {
+      set((state) => {
+        state.action = {
+          ...initialAction,
+          actionDialogOpen: true,
+        };
+      });
+    },
+
+    closeActionDialog() {
+      set((state) => {
+        state.action.actionDialogOpen = false;
+        state.action.actionError = null;
+        state.action.actionRunning = false;
+      });
+    },
+
+    setActionField(field) {
+      set((state) => {
+        state.action.field = field;
+        // Clear preview when field changes.
+        state.action.previewMatched = -1;
+        state.action.previewSample = [];
+        state.action.previewTruncated = false;
+        state.action.actionError = null;
+      });
+    },
+
+    setActionPattern(pattern) {
+      set((state) => {
+        state.action.pattern = pattern;
+        // Clear stale preview on every pattern keystroke.
+        state.action.previewMatched = -1;
+        state.action.previewSample = [];
+        state.action.previewTruncated = false;
+        state.action.actionError = null;
+      });
+    },
+
+    setActionAction(action) {
+      set((state) => {
+        state.action.action = action;
+      });
+    },
+
+    async previewBulkDecide() {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+      const { field, pattern, action: actionValue } = get().action;
+
+      // Claim this preview's order. Only the latest preview is allowed to
+      // commit — an out-of-order response from a superseded request must be
+      // dropped, or the displayed count/sample could mis-state what Apply
+      // touches (adversarial-review ship-blocker: the old component-side
+      // seqRef guarded an already-committed store write, i.e. did nothing).
+      const seq = ++_bulkDecideSeq;
+
+      set((state) => {
+        state.action.actionRunning = true;
+        state.action.actionError = null;
+      });
+
+      try {
+        const result = await bulkDecide({
+          manifest_path: manifestPath,
+          field,
+          pattern,
+          action: actionValue,
+          preview: true,
+        });
+
+        if (seq !== _bulkDecideSeq) return; // superseded by a newer request
+        set((state) => {
+          state.action.actionRunning = false;
+          state.action.previewMatched = result.matched;
+          // Server may return up to a bounded sample; show all returned paths.
+          state.action.previewSample = result.affected_paths;
+          // If matched count exceeds the returned sample size, list is truncated.
+          state.action.previewTruncated =
+            result.matched > result.affected_paths.length;
+        });
+      } catch (err) {
+        if (seq !== _bulkDecideSeq) return; // stale error — drop
+        set((state) => {
+          state.action.actionRunning = false;
+          state.action.actionError =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    async applyBulkDecide(forceLocked = false) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+      const { field, pattern, action: actionValue } = get().action;
+
+      // A real apply supersedes any in-flight preview (groups are about to
+      // change), so bump the sequence to invalidate pending preview responses.
+      _bulkDecideSeq++;
+
+      set((state) => {
+        state.action.actionRunning = true;
+        state.action.actionError = null;
+      });
+
+      try {
+        const result = await bulkDecide({
+          manifest_path: manifestPath,
+          field,
+          pattern,
+          action: actionValue,
+          force_locked: forceLocked,
+          preview: false,
+        });
+
+        set((state) => {
+          state.action.actionRunning = false;
+          state.action.previewMatched = result.matched;
+          state.action.previewSample = result.affected_paths;
+          state.action.previewTruncated =
+            result.matched > result.affected_paths.length;
+          // Replace groups from the authoritative server response.
+          state.manifest.groups = result.groups;
+        });
+      } catch (err) {
+        set((state) => {
+          state.action.actionRunning = false;
+        });
+        // RE-THROW the locked-rows conflict so the component can open the
+        // lock-confirm dialog (and retry with force_locked=true). Swallowing
+        // it here made the 409 → Unlock & Apply flow unreachable in production
+        // (adversarial-review ship-blocker, masked by a store-mocking test).
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          throw err;
+        }
+        set((state) => {
+          state.action.actionError =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    clearActionError() {
+      set((state) => {
+        state.action.actionError = null;
+      });
     },
   }))
 );

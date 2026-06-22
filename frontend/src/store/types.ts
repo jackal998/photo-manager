@@ -1,7 +1,7 @@
 // Zustand store STATE + ACTIONS interface — types only, no implementation.
 // The concrete store (useAppStore) imports this and satisfies it.
 
-import type { DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
+import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
 
 // ---------------------------------------------------------------------------
 // State slices
@@ -86,6 +86,41 @@ export interface ExecuteState {
   lockConflict: LockConflict | null;
   /** Set when the UI wants to show a prune confirmation. */
   prunePrompt: PrunePrompt | null;
+}
+
+// ---------------------------------------------------------------------------
+// Action dialog state (Set Action by Field / bulk-decide)
+// ---------------------------------------------------------------------------
+
+export interface ActionState {
+  /** True when the action dialog is open. */
+  actionDialogOpen: boolean;
+  /**
+   * The canonical English field label currently selected in the dialog.
+   * Must match one of the _FIELD_LABEL_KEYS in select_dialog.py.
+   * Default: "File Name".
+   */
+  field: string;
+  /**
+   * The pattern string — plain regex OR "__cmp__:OP:VALUE" OR "__top_n__:N:asc|desc".
+   * Empty string means no pattern entered yet.
+   */
+  pattern: string;
+  /**
+   * The action to apply on match: "" (keep/clear) | "delete" | "__ignore__" | "__lock__" | "__unlock__".
+   * Default: "delete".
+   */
+  action: string;
+  /** Number of rows matched by the last preview call. -1 = no preview run yet. */
+  previewMatched: number;
+  /** Sample affected basenames (or paths) from the last preview call. */
+  previewSample: string[];
+  /** True when the server truncated the affected_paths list in the preview response. */
+  previewTruncated: boolean;
+  /** Error message from a failed bulk-decide call (non-409). Null if none. */
+  actionError: string | null;
+  /** True while POST /api/action/bulk-decide is in flight. */
+  actionRunning: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +229,49 @@ export interface AppActions {
    * Non-fatal: surfaces 403 / 501 as a transient executeError message.
    */
   revealInExplorer(path: string): Promise<void>;
+
+  // -------------------------------------------------------------------------
+  // Action dialog actions (Set Action by Field / bulk-decide)
+  // -------------------------------------------------------------------------
+
+  /** Open the action dialog (resets transient state). */
+  openActionDialog(): void;
+
+  /** Close the action dialog and clear transient state. */
+  closeActionDialog(): void;
+
+  /** Update the selected field label. */
+  setActionField(field: string): void;
+
+  /** Update the pattern string. */
+  setActionPattern(pattern: string): void;
+
+  /** Update the action value. */
+  setActionAction(action: string): void;
+
+  /**
+   * POST /api/action/bulk-decide in preview mode (preview=true).
+   * Populates previewMatched / previewSample / previewTruncated.
+   * Does not modify manifest state.
+   *
+   * - On success: updates preview state.
+   * - On 409 locked_paths: sets actionError with a summary message.
+   * - On other errors: sets actionError.
+   */
+  previewBulkDecide(): Promise<void>;
+
+  /**
+   * POST /api/action/bulk-decide for real (preview=false).
+   * On success: replaces manifest.groups from response.groups.
+   *
+   * - On success: updates manifest.groups and clears actionRunning.
+   * - On 409 locked_paths: sets actionError with locked path count.
+   * - On other errors: sets actionError.
+   */
+  applyBulkDecide(forceLocked?: boolean): Promise<void>;
+
+  /** Clear the actionError field. */
+  clearActionError(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,4 +284,8 @@ export interface AppStore extends AppActions {
   settings: SettingsState;
   preview: PreviewState;
   execute: ExecuteState;
+  action: ActionState;
 }
+
+// Re-export BulkDecideResult so callers can import from store/types.
+export type { BulkDecideResult };

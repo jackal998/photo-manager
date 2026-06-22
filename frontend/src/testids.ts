@@ -50,6 +50,30 @@ export const CTX_OPEN_FOLDER = "ctx-open-folder";
 export const CTX_LOCK = "ctx-lock";
 export const CTX_UNLOCK = "ctx-unlock";
 export const CTX_APPLY_BEST_COPY = "ctx-apply-best-copy";
+export const ACTION_MAIN_BUTTON = "main-action-button";
+export const ACTION_DIALOG = "action-dialog";
+export const ACTION_FIELD_COMBO = "action-field-combo";
+export const ACTION_SIMPLE_ROW = "action-simple-row";
+export const ACTION_SIMPLE_OP = "action-simple-op";
+export const ACTION_SIMPLE_TEXT = "action-simple-text";
+export const ACTION_SIMPLE_DISABLED_NOTE = "action-simple-disabled-note";
+export const ACTION_REGEX_ROW = "action-regex-row";
+export const ACTION_REGEX_INPUT = "action-regex-input";
+export const ACTION_VALIDATION_ICON = "action-validation-icon";
+export const ACTION_VALIDATION_ERROR = "action-validation-error";
+export const ACTION_NUMERIC_ROW = "action-numeric-row";
+export const ACTION_NUMERIC_MODE_THRESHOLD = "action-numeric-mode-threshold";
+export const ACTION_NUMERIC_MODE_TOPN = "action-numeric-mode-topn";
+export const ACTION_NUMERIC_CMP = "action-numeric-cmp";
+export const ACTION_NUMERIC_VALUE = "action-numeric-value";
+export const ACTION_NUMERIC_ERROR = "action-numeric-error";
+export const ACTION_NUMERIC_ORDER = "action-numeric-order";
+export const ACTION_NUMERIC_N = "action-numeric-n";
+export const ACTION_MATCH_COUNTER = "action-match-counter";
+export const ACTION_ACTION_COMBO = "action-action-combo";
+export const ACTION_BTN_APPLY = "action-btn-apply";
+export const ACTION_PREVIEW_LIST = "action-preview-list";
+export const ACTION_PREVIEW_TRUNCATED = "action-preview-truncated";
 export const DLGE_SETTINGS_DIALOG = "settings-dialog";
 export const DLGE_SETTINGS_SAVE = "settings-save-button";
 export const DLGE_SETTINGS_CANCEL = "settings-cancel-button";
@@ -89,4 +113,8 @@ export function scanSourceRecursiveTestid(idx: number): string {
 
 export function executeRowTestid(groupId: string, basename: string): string {
   return `execute-row-${groupId}-${basename}`;
+}
+
+export function actionCheatsheetTestid(token: string): string {
+  return `action-cheatsheet-${token}`;
 }

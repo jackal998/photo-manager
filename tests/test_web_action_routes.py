@@ -95,20 +95,50 @@ def client_with_roots(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-class TestBulkDecideAllowedRootsGuard:
-    """Manifest outside allowed_roots → 403."""
+class TestBulkDecideManifestLocation:
+    """The manifest .db itself is NOT roots-gated — it is an output file the
+    user may store anywhere (exactly as GET /api/manifest loads it). The real
+    security boundary is the affected PHOTO paths (see the out-of-root source
+    filter test below), NOT the manifest's own location.
 
-    def test_manifest_outside_root_returns_403(self, client_with_roots, tmp_path):
-        client, root = client_with_roots
-        outside = tmp_path.parent  # NOT under root
+    Regression guard: a live ActionDialog run 403'd a perfectly valid db that
+    lived in the system temp dir rather than under the scanned photo roots —
+    the old test co-located the db with the photos under one root, which
+    masked the bug.
+    """
 
-        resp = client.post("/api/action/bulk-decide", json={
-            "manifest_path": str(outside / "manifest.sqlite"),
-            "field": "File Name",
-            "pattern": ".*",
-            "action": "delete",
-        })
-        assert resp.status_code == 403, resp.text
+    def test_manifest_outside_photo_roots_still_applies(self, tmp_path):
+        files_dir = tmp_path / "files"
+        files_dir.mkdir()
+        fa = files_dir / "alpha.jpg"
+        fb = files_dir / "beta.jpg"
+        fa.write_bytes(b"\x00" * 64)
+        fb.write_bytes(b"\x00" * 64)
+
+        # Manifest db lives at tmp_path (the PARENT of the photo root) — i.e.
+        # OUTSIDE the allowed photo root below.
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(fa), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(fb), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+        ])
+
+        app = create_app()
+        with TestClient(app, raise_server_exceptions=True) as client:
+            # allowed_roots = the PHOTO dir only; the manifest db (at tmp_path)
+            # is OUTSIDE it. The decision must still apply (db isn't gated),
+            # and the in-root photo is mutated.
+            app.state.allowed_roots = [files_dir]
+            resp = client.post("/api/action/bulk-decide", json={
+                "manifest_path": str(manifest),
+                "field": "File Name",
+                "pattern": "^alpha",
+                "action": "delete",
+            })
+        assert resp.status_code == 200, resp.text
+        assert _read_user_decision(manifest, str(fa)) == "delete"
+        assert _read_user_decision(manifest, str(fb)) == ""
 
 
 # ---------------------------------------------------------------------------

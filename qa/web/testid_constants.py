@@ -9,6 +9,7 @@ Naming convention
 - ``MAIN_*``      — elements on the main result-list page
 - ``SCAN_*``      — elements in the scan dialog / scan progress panel
 - ``EXECUTE_*``   — elements in the execute-action dialog (§5 canonical)
+- ``ACTION_*``    — elements in the action dialog (Set Action by Field, §5.4 contract)
 - ``LOCK_*``      — lock-conflict confirmation dialog
 - ``DELETE_*``    — destructive-delete confirmation dialog
 - ``PRUNE_*``     — prune-singletons confirmation dialog
@@ -212,6 +213,82 @@ CTX_APPLY_BEST_COPY = "ctx-apply-best-copy"
 """Context-menu item: apply 'best copy' auto-selection to the group."""
 
 # ---------------------------------------------------------------------------
+# Action dialog (Set Action by Field — §5.4 contract)
+# ---------------------------------------------------------------------------
+
+ACTION_MAIN_BUTTON = "main-action-button"
+"""Toolbar entry point that opens the action dialog."""
+
+ACTION_DIALOG = "action-dialog"
+"""The action dialog wrapper (Set Action by Field)."""
+
+ACTION_FIELD_COMBO = "action-field-combo"
+"""Combo box for selecting the field to match against (File Name, Score, …)."""
+
+ACTION_SIMPLE_ROW = "action-simple-row"
+"""Container row for the Simple mode inputs (prefix label + op combo + text input)."""
+
+ACTION_SIMPLE_OP = "action-simple-op"
+"""Simple mode operator combo (contains / starts with / ends with / exactly matches)."""
+
+ACTION_SIMPLE_TEXT = "action-simple-text"
+"""Simple mode text input (the literal text to match)."""
+
+ACTION_SIMPLE_DISABLED_NOTE = "action-simple-disabled-note"
+"""Note shown above Simple inputs when write-through preview is unavailable."""
+
+ACTION_REGEX_ROW = "action-regex-row"
+"""Container row for the Regex mode input."""
+
+ACTION_REGEX_INPUT = "action-regex-input"
+"""Regex input field."""
+
+ACTION_VALIDATION_ICON = "action-validation-icon"
+"""Icon (tick / cross) indicating whether the current regex is valid."""
+
+ACTION_VALIDATION_ERROR = "action-validation-error"
+"""Error text shown when the regex or threshold input is invalid."""
+
+ACTION_NUMERIC_ROW = "action-numeric-row"
+"""Container row for the numeric condition panel (shown for numeric fields)."""
+
+ACTION_NUMERIC_MODE_THRESHOLD = "action-numeric-mode-threshold"
+"""Radio / toggle selecting Threshold mode in the numeric panel."""
+
+ACTION_NUMERIC_MODE_TOPN = "action-numeric-mode-topn"
+"""Radio / toggle selecting Top-N per group mode in the numeric panel."""
+
+ACTION_NUMERIC_CMP = "action-numeric-cmp"
+"""Threshold comparison operator combo (> / >= / < / <= / == / !=)."""
+
+ACTION_NUMERIC_VALUE = "action-numeric-value"
+"""Threshold value input (number or YYYY-MM-DD for date fields)."""
+
+ACTION_NUMERIC_ERROR = "action-numeric-error"
+"""Error text shown when the threshold value cannot be parsed."""
+
+ACTION_NUMERIC_ORDER = "action-numeric-order"
+"""Top-N order combo (Top / Bottom)."""
+
+ACTION_NUMERIC_N = "action-numeric-n"
+"""Top-N count input (the N in "Top N per group")."""
+
+ACTION_MATCH_COUNTER = "action-match-counter"
+"""Live match counter showing "{matched} of {total} match" (or Top-N variant)."""
+
+ACTION_ACTION_COMBO = "action-action-combo"
+"""Combo box for selecting the action to apply to each matched row (delete / keep / …)."""
+
+ACTION_BTN_APPLY = "action-btn-apply"
+"""Primary 'Apply' button that fires POST /api/action/bulk-decide."""
+
+ACTION_PREVIEW_LIST = "action-preview-list"
+"""Scrollable list of sample affected filenames / paths from the last preview."""
+
+ACTION_PREVIEW_TRUNCATED = "action-preview-truncated"
+"""Note shown below the preview list when the server truncated the sample."""
+
+# ---------------------------------------------------------------------------
 # Settings dialog
 # ---------------------------------------------------------------------------
 
@@ -401,6 +478,26 @@ def scan_source_recursive_testid(idx: int) -> str:
 # ---------------------------------------------------------------------------
 # Execute file-row helper
 # ---------------------------------------------------------------------------
+
+
+def action_cheatsheet_testid(token: str) -> str:
+    """Return the ``data-testid`` for a cheatsheet chip in the action dialog.
+
+    Each chip in the Regex cheatsheet section has a unique testid that
+    encodes the token it inserts.  The token value is the raw insertion
+    text (e.g. ``".*"``, ``"\\\\d"``, ``"^"``, ``"$"``, ``"\\\\."`` etc.).
+
+    Parameters
+    ----------
+    token:
+        The insertion text for the chip (e.g. ``".*"``, ``"\\\\d"``).
+
+    Returns
+    -------
+    str
+        ``"action-cheatsheet-{token}"``
+    """
+    return f"action-cheatsheet-{token}"
 
 
 def execute_row_testid(group_id: str, basename: str) -> str:

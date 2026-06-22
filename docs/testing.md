@@ -218,6 +218,7 @@ cannot be exercised inside the layer-1 test process.
 | `qa/web/scenario_map.yml` | Count/key parity checked by `TestScenarioMapParity` (CI). |
 | `qa/web/scenarios/s22_language_switch.py` | `web-scenario-batch` CI (advisory) + local Playwright run. Exercises: **en preamble** (forces `ui.locale=en` so the baseline is self-healing after a crashed prior run), English baseline (toolbar text), click `main-lang-toggle` EN→zh_TW, assert `main-scan-button`/`main-execute-button` re-render live, assert persistence after `page.reload()`, restore locale via `PATCH /api/settings`. |
 | `qa/web/scenarios/s58_language_switch_preserves_manifest.py` | `web-scenario-batch` CI (advisory) + local Playwright run. Exercises: en preamble, scan near-duplicates sandbox, capture pre-switch file row order, click `main-lang-toggle`, assert result tree count+order unchanged after switch (#428 regression guard), restore locale. |
+| `qa/web/scenarios/s31_simple_mode_regex.py` | `web-scenario-batch` CI (advisory) + local Playwright run. Exercises: scan near-duplicates sandbox; click `main-action-button` to open `action-dialog`; set `action-field-combo`="File Name"; fill `action-simple-op`="contains" + `action-simple-text`="q9"; assert write-through to `action-regex-input` ("q9"); assert `action-match-counter` shows non-zero count (live preview round-trip); set `action-action-combo`="delete"; click `action-btn-apply`; confirm `execute-all-delete-confirm-yes`; assert via `GET /api/manifest` that `neardup_00_q95.jpg` has `user_decision="delete"` and other four rows unchanged. Web parity: 8 scenarios done (`status: done` in scenario_map.yml). Qt mode-toggle radio and keyboard/mnemonic probes (D9/D10/B12) omitted — no web equivalent. ActionDialog component covered for the first time at layer 3; backend `POST /api/action/bulk-decide` covered at layer 1 by `tests/test_web_action_routes.py`. |
 
 ---
 
@@ -301,7 +302,7 @@ python -m qa.web._batch s01_happy_path --base-url http://127.0.0.1:8765
 
 | Phase | Target | Status |
 |---|---|---|
-| Phase 2 (current) | 5 scenarios ported | 7 ported — `status: done` entries in `scenario_map.yml` |
+| Phase 2 (current) | 5 scenarios ported | 8 ported — `status: done` entries in `scenario_map.yml` |
 | Phase 3 QA foundation | 10 scenarios ported | In progress |
 | Phase 4 cutover | Parity with Qt batch (all ~67 scenarios) | Deferred |
 

@@ -2,6 +2,8 @@
 // Base URL is same-origin in prod; set VITE_API_BASE for dev proxy override.
 
 import type {
+  BulkDecideRequest,
+  BulkDecideResult,
   DecisionValue,
   ExecuteRequest,
   ExecuteResult,
@@ -275,6 +277,12 @@ export async function postSave(req: SaveRequest): Promise<SaveResult> {
 
 export async function postReveal(req: RevealRequest): Promise<RevealResult> {
   return postJson<RevealResult>("/api/reveal", req);
+}
+
+// POST /api/action/bulk-decide
+
+export async function bulkDecide(req: BulkDecideRequest): Promise<BulkDecideResult> {
+  return postJsonOrConflict<BulkDecideResult>("/api/action/bulk-decide", req);
 }
 
 // ---------------------------------------------------------------------------

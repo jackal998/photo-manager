@@ -98,6 +98,12 @@ def render_testids_ts() -> str:
     lines.append("  return `execute-row-${groupId}-${basename}`;")
     lines.append("}")
     lines.append("")
+    lines.append(
+        "export function actionCheatsheetTestid(token: string): string {"
+    )
+    lines.append("  return `action-cheatsheet-${token}`;")
+    lines.append("}")
+    lines.append("")
 
     return "\n".join(lines)
 

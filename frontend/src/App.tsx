@@ -19,11 +19,13 @@ import type { ContextMenuTarget } from "./components/ResultTree";
 import { PreviewPane } from "./components/PreviewPane";
 import { FullResViewer } from "./components/FullResViewer";
 import { ExecuteDialog } from "./components/execute/ExecuteDialog";
+import { ActionDialog } from "./components/action/ActionDialog";
 import { ContextMenu } from "./components/ContextMenu";
 import { LockConfirmDialog } from "./components/dialogs/LockConfirmDialog";
 import { PruneConfirmDialog } from "./components/dialogs/PruneConfirmDialog";
 
 import {
+  ACTION_MAIN_BUTTON,
   MAIN_EMPTY_STATE,
   MAIN_EXECUTE_BUTTON,
   MAIN_LANG_TOGGLE,
@@ -103,6 +105,8 @@ export default function App() {
   const [manifestInputValue, setManifestInputValue] = useState("");
   const loadManifest = useAppStore((s) => s.loadManifest);
   const openExecuteDialog = useAppStore((s) => s.openExecuteDialog);
+  const openActionDialog = useAppStore((s) => s.openActionDialog);
+  const manifestPath = useAppStore((s) => s.manifest.path);
 
   const handleManifestOpen = useCallback(() => {
     const path = manifestInputValue.trim();
@@ -167,6 +171,15 @@ export default function App() {
           onClick={openExecuteDialog}
         >
           {t("web.toolbar.execute", "Execute")}
+        </button>
+
+        <button
+          data-testid={ACTION_MAIN_BUTTON}
+          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={openActionDialog}
+          disabled={manifestPath === null}
+        >
+          {t("web.action_dialog.title", "Set Action")}
         </button>
 
         <button
@@ -252,6 +265,7 @@ export default function App() {
       <ScanDialog open={scanOpen} onOpenChange={setScanOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <ExecuteDialog />
+      <ActionDialog />
       <FullResViewer />
       <LockConfirmDialog />
       <PruneConfirmDialog />

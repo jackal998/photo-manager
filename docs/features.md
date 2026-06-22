@@ -69,6 +69,7 @@ for the chore plan.
 | [Set Action dialog — numeric comparison panel](#set-action-dialog--numeric-comparison-panel) | Set Action dialog |
 | [Set Action dialog — Score / Lock / Resolution fields](#set-action-dialog--score--lock--resolution-fields) | Set Action dialog |
 | [Set Action dialog — geometry persistence](#set-action-dialog--geometry-persistence) | Set Action dialog |
+| [Web — Action dialog (Set Action by Field)](#web--action-dialog-set-action-by-field) | Web UI |
 | [Similarity column](#similarity-column) | Review |
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
@@ -653,6 +654,28 @@ for the chore plan.
 - **Conditions / variants:** Geometry + splitter persistence + the reset affordance only apply when the dialog is opened with `match_fn` supplied (i.e. has a preview pane and a resizable splitter layout). The flat-layout branch (no `match_fn`) has no splitter, no save-on-close, and the **Reset window size** button is parentless (created but never added to a visible layout) — there is nothing user-resizable to persist or reset. If the saved rect would land off-screen (e.g. multi-monitor disconnect — <25% of the rect visible on any connected screen), the helper falls back to widget defaults rather than reopening on a disconnected monitor (same off-screen guard as [Execute Action — dialog geometry persistence](#execute-action--dialog-geometry-persistence)).
 - **Related:** Geometry — [PR #228](https://github.com/jackal998/photo-manager/pull/228) (closes [#215](https://github.com/jackal998/photo-manager/issues/215)), QA scenario [`qa/scenarios/s48_dialog_geometry_persist.py`](../qa/scenarios/s48_dialog_geometry_persist.py). Splitter persistence + handle width + reset affordance — Wave 8 (C13 + D1 + E4 + E5 from #349/#350/#351). [#391](https://github.com/jackal998/photo-manager/issues/391) moved Reset to the preview-header and dropped the explicit Close button (Esc / title-bar X cover dismissal).
 - **Last verified:** 2026-05-24 (#391)
+
+---
+
+### Web — Action dialog (Set Action by Field)
+
+- **Entry point:** Toolbar `main-action-button` ("Set Action") — disabled when `manifest.path === null`; enabled once a scan result is loaded. `onClick` dispatches `store.openActionDialog()`.
+- **Trigger:** User clicks the toolbar "Set Action" button. The `action-dialog` (`<dialog>` / Radix `DialogContent`) mounts when `store.action.actionDialogOpen === true`.
+- **Behaviour:**
+  - **Field selection** (`action-field-combo`) — `<select>` with 11 canonical English options (File Name, Score, Size (Bytes), Group Count, Similarity, Creation Date, Shot Date, …). Default value is "File Name".
+  - **String-field mode** (field NOT in `NUMERIC_FIELDS`): shows `action-simple-row` (op combo + text input) and `action-regex-row` (direct regex). Simple-mode inputs write through to `action-regex-input` (the single source of truth): op "contains" + text "q9" produces the synthesised pattern `q9`; op "starts\_with" produces `^q9`; etc. The validation icon (`action-validation-icon`, span) shows ○ / ✓ / ✗ depending on whether the current pattern is empty / valid / invalid.
+  - **Numeric-field mode** (field in `NUMERIC_FIELDS`: Size (Bytes), Group Count, Similarity, Score, Creation Date, Shot Date): `action-numeric-row` replaces the string rows. Two sub-modes — **Threshold** (`action-numeric-mode-threshold` radio, default): comparison operator (`action-numeric-cmp`) + value (`action-numeric-value`); **Top-N** (`action-numeric-mode-topn` radio): order (`action-numeric-order`: top / bottom) + count (`action-numeric-n`). Threshold / Top-N sub-modes encode to `__cmp__:OP:VALUE` / `__top_n__:N:asc|desc` pseudo-patterns for `POST /api/action/bulk-decide`.
+  - **Action combo** (`action-action-combo`) — `<select>` with 5 options; wire values: `__keep__` (maps to empty string `""`), `delete`, `__ignore__`, `__lock__`, `__unlock__`.
+  - **Live preview** — after any input change, the store calls `previewBulkDecide()` which hits `POST /api/action/bulk-decide` with `preview=true`. The match counter (`action-match-counter`) shows "N of M match". `action-preview-list` (`<ul>`) shows up to 10 sample paths; `action-preview-truncated` appears when the server truncated the list.
+  - **Apply** (`action-btn-apply`) — disabled when `pattern === "" || manifest.path === null || actionRunning`. On click calls `store.applyBulkDecide()`. When `action === "delete"`, the delete-confirm gate (`execute-all-delete-confirm` / `-yes` / `-no` testids) must be accepted before the API call fires. When the server returns 409 `locked_paths`, an inline dialog with "Unlock & Apply" button text appears.
+- **Conditions / variants:**
+  - `main-action-button` is disabled when no manifest is loaded (`manifest.path === null`).
+  - String mode shows both `action-simple-row` and `action-regex-row` side-by-side (no mode toggle — web divergence from early Qt builds; matches Qt's Phase C dual-section view).
+  - Cheatsheet chips (`action-cheatsheet-{token}`) for `.*`, `\d`, `\w`, `^`, `$`, `\.`, `[abc]` insert tokens into the regex input.
+  - The delete-confirm dialog reuses `execute-all-delete-confirm` (same testid set as the execute-dialog all-delete gate) so the flow is consistent across action entry points.
+  - 409 locked-rows response: shows an inline Dialog whose confirm button text is "Unlock & Apply" (no distinct testid — match by button text or by the 409 code path).
+- **Related:** `app/web/routes/action.py` (`POST /api/action/bulk-decide`); `core/app_service/action_service.py` (`bulk_decide`); `core/app_service/action_resolve.py` (`resolve_matched_paths`); Qt analogue [`Set Action dialog — dual-section Simple + Regex view`](#set-action-dialog--dual-section-simple--regex-view); QA scenario [`qa/web/scenarios/s31_simple_mode_regex.py`](../qa/web/scenarios/s31_simple_mode_regex.py).
+- **Last verified:** 2026-06-22 (Phase 2 web port — s31 scenario added; backend `POST /api/action/bulk-decide` already shipped)
 
 ---
 
