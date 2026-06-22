@@ -17,9 +17,9 @@
 
 scenarios:
   - scenario: s01_happy_path
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s01_happy_path
+    status: done
+    notes: "Full happy-path: pre-scan empty-state visible + Action-menu items disabled (Radix data-disabled), scan near-duplicates, post-load asserts status bar 'N groups · M files' + empty-state unmounts + result tree visible + Action-menu items flip enabled. Bundles Qt probes #42/#52/#58. Divergences: web status wording differs from Qt 'Loaded manifest:'; #52 gating asserted on the Action menu (web has no List menu); Radix portals menus lazily so the trigger is clicked before each item-state probe."
 
   - scenario: s02_empty_folder
     playwright_module: qa.web.scenarios.s02_empty_folder
@@ -27,9 +27,9 @@ scenarios:
     notes: "Scans a fresh empty tempdir; asserts 0 file rows and '0 groups · 0 files' status bar."
 
   - scenario: s03_cancel_scan
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s03_cancel_scan
+    status: done
+    notes: "Cancel a scan mid-run; two samples. Sample 1 (post-HASH): scan near-duplicates, wait_log_line 'Hashing', click scan-cancel-button, assert scan-dialog hides + main-empty-state visible + 0 rows (app usable, no manifest auto-loaded). Sample 2 (WALK-stage): make_large_source(6000) stubs, wait_log_line 'Walking' BEFORE cancel (log unmounts on close), click cancel, assert the never-written output .db is absent on disk AND GET /api/manifest 404s (absence-based manifest-untouched). Divergences: web has an explicit Cancel button (Qt used title-bar-X close == cancel); no OS process/window survival check (SPA page persisting is the proof); FAIL-on-fast guards turn a too-fast scan into a clear failure (Qt FAIL-on-Done parity)."
 
   - scenario: s04_corrupted
     playwright_module: qa.web.scenarios.s04_corrupted
@@ -37,9 +37,9 @@ scenarios:
     notes: "Scans corrupted sandbox; asserts 0 file rows (truncated JPEG skipped). Log unavailable post-unmount — see divergence note in module."
 
   - scenario: s05_huge_preview
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s05_huge_preview
+    status: done
+    notes: "Heavy-image (50 MP / 1.48 MB) preview + full-res. The lone huge file is a singleton the scanner drops (dedup len(group)<2), so the port copies it twice into a tmpdir to form a 2-member EXACT-hash group with a selectable row, scans, clicks the row, asserts preview-single-image + preview-info visible (bounded size=512 decode) then double-clicks -> fullres-image visible (native size=0 decode, under the 40 MiB 413 guard). STRENGTHENS Qt s05 (zero asserts, tolerates 'no file row found'). Divergences: duplicated fixture; no rapid-click timing micro-benchmark (Qt printed it, never asserted); testid reads vs Qt automation_id."
 
   - scenario: s06_formats
     playwright_module: null
@@ -137,9 +137,9 @@ scenarios:
     notes: ""
 
   - scenario: s24_stale_manifest_paths
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s24_stale_manifest_paths
+    status: done
+    notes: "Open a valid sqlite manifest whose SOURCE files were deleted. Scans 3 near-dups copied into a tmpdir subdir (db kept beside, not inside), captures basenames, rmtree's the source subdir, reloads + reopens the manifest. Asserts: load doesn't crash, status_stale == status_scan ('N groups · M files'), PRIMARY every scanned basename still present in GET /api/manifest with total_files unchanged (source-existence-agnostic load — rows not silently dropped), Action-menu items stay enabled. Non-destructive (Qt scopes execute-on-stale-row out). Divergences: basenames asserted via authoritative manifest JSON not Qt DOM TreeItem scraping; web status phrasing vs Qt 'Opened manifest:'."
 
   - scenario: s25_empty_area_context_menu
     playwright_module: null
@@ -347,6 +347,6 @@ scenarios:
     notes: ""
 
   - scenario: s68_full_res_viewer_double_click
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s68_full_res_viewer_double_click
+    status: done
+    notes: "Double-click the inline preview tile opens the full-res viewer; Escape closes; main window stays responsive. Scans near-duplicates, selects neardup_00_q95.jpg, waits preview-single-image, double-clicks the TILE (not the row), asserts fullres-dialog + fullres-image visible + the dialog title contains the basename (soft-probes the 'W x H' dims), Escape -> dialog hidden, then asserts result tree + row still present. Divergences: web uses Playwright native dblclick on the tile (Qt synthesized OS WM_LBUTTONDBLCLK with a seed-click); same-document Radix overlay vs Qt top-level OS window; deliberately the preview tile, not the FileRow onDoubleClick shortcut, to match Qt intent."
