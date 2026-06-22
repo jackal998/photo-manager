@@ -42,19 +42,19 @@ scenarios:
     notes: "Heavy-image (50 MP / 1.48 MB) preview + full-res. The lone huge file is a singleton the scanner drops (dedup len(group)<2), so the port copies it twice into a tmpdir to form a 2-member EXACT-hash group with a selectable row, scans, clicks the row, asserts preview-single-image + preview-info visible (bounded size=512 decode) then double-clicks -> fullres-image visible (native size=0 decode, under the 40 MiB 413 guard). STRENGTHENS Qt s05 (zero asserts, tolerates 'no file row found'). Divergences: duplicated fixture; no rapid-click timing micro-benchmark (Qt printed it, never asserted); testid reads vs Qt automation_id."
 
   - scenario: s06_formats
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s06_formats
+    status: done
+    notes: "Multi-format scan (gif/heic/png/tiff/webp). Each format file gets a byte-identical twin so it forms an EXACT-dup pair and survives the manifest singleton-drop — without this only png/heic/webp (which share a pHash) group; gif/tiff get NO pHash from the scanner (verified live) and singleton-drop. Asserts all 5 extensions appear (10 rows). UPGRADES Qt s06 (print-only, no asserts). Divergences: duplicate-to-observe (s05 pattern); manifest file_path read vs Qt tree-cell text; gif/tiff no-pHash surfaced (probe_status) not asserted."
 
   - scenario: s07_format_dup
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s07_format_dup
+    status: done
+    notes: "Format-dup pair (scene_a.heic + scene_a.jpg, same scene). run_scan then GET /api/manifest: 1 group/2 items, HEIC is_ref_winner=True (similarity kind 'ref'), JPG is_ref_winner=False action='REVIEW_DUPLICATE' with near-dup percent in (0,100] (84% live). UPGRADES Qt s07 (print-only). Divergences: HEIC/JPG are near-dup (~10 hamming) not pHash-identical, so REVIEW_DUPLICATE not EXACT (dedup EXACT/format-dup needs hamming==0; the build agent's EXACT/100 assumption was wrong, caught at live-verify); no scan-log probe (ScanProgress unmounts on SSE finished — racy on fast CI), classification asserted from manifest; percent kind+range asserted, not the exact value."
 
   - scenario: s08_exif_edge
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s08_exif_edge
+    status: done
+    notes: "EXIF edge-case dates (6 JPEGs: tz_offset/subsecond/createdate_only/datetime_tag_only/zero_date_sentinel/dash_sentinel). All 6 are distinct singletons (raw fixture → EMPTY manifest = a hollow test), so each is duplicated (byte-identical twin → EXACT-dup pair) to become observable (12 rows). Asserts the 4 well-formed-date files parse to non-null shot_date and the 2 sentinel files (0000-date / dash) parse to null. UPGRADES Qt s08 (print-only). Divergences: duplicate-to-observe (s05 pattern); canonical shot_date read vs Qt tree text; no UNDATED log probe (log unmounts on SSE finished — racy), undated asserted via sentinel null shot_date."
 
   - scenario: s09_walker_exclusions
     playwright_module: null
@@ -67,9 +67,9 @@ scenarios:
     notes: ""
 
   - scenario: s11_video_live
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s11_video_live
+    status: done
+    notes: "Live Photo HEIC+MOV pair (#88 regression guard). Scans the live-photo fixture; asserts both IMG_0001.HEIC and IMG_0001.MOV appear (the MOV-presence check is the pre-#88 regression guard — the MOV was silently dropped before hashing), both share one group_number, and user_decision=='' post-scan. Divergences: GET /api/manifest JSON vs Qt sqlite read; group_number (int) vs Qt group_id; strict user_decision=='' assert (Qt only WARNed)."
 
   - scenario: s12_save_manifest
     playwright_module: null
@@ -227,9 +227,9 @@ scenarios:
     notes: "Fresh page: asserts main-empty-state shows Scan + Open buttons; Scan opens scan-dialog, Open opens fs-browser. No scan needed (pure UI affordance check)."
 
   - scenario: s42_scoring
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s42_scoring
+    status: done
+    notes: "Composite-score pipeline (near-duplicates quality ordering + scoring-mixed penalties). Two sequential scans into separate temp manifests; asserts every grouped item has score in [0,1] (>=1 non-null, guards silent scoring failure), score-DESC array order (neardup_00_q95 before neardup_04_q65), and scoring_clean outscores Copy/Downloads/no_gps variants. COMPOSITE-SCORE SCOPE ONLY — per-dimension signals gps_present/exif_tag_count/xmp_derived are NOT serialised in FileRow (review_view.py:131-149); deferred to #680. Divergences: GET /api/manifest vs Qt sqlite; per-fixture temp manifest for per-group ordering; SQLite-backdoor for per-dimension rejected (API-only principle)."
 
   - scenario: s43_numeric_condition
     playwright_module: null
@@ -272,9 +272,9 @@ scenarios:
     notes: "Opens execute dialog, clicks a row, asserts execute-preview-image visible. Non-destructive (Escape to close). Qt QSplitter + PreviewPane header UIA checks replaced by DOM testid assertions."
 
   - scenario: s52_similarity_against_displayed_ref
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s52_similarity_against_displayed_ref
+    status: done
+    notes: "#253 render-time similarity recompute. Scans near-duplicates; asserts every grouped item has a non-empty phash, exactly one is_ref_winner across all groups, and each REVIEW_DUPLICATE's server-computed similarity.percent == round((64-hamming)/64*100) recomputed (via imagehash) between the Ref's phash and the dup's phash (range-only [0,100] fallback when imagehash is absent). Divergences: asserts the server-computed similarity the user sees vs Qt local imagehash recompute; GET /api/manifest vs Qt sqlite; is_ref_winner read directly vs Qt _pick_displayed_ref replication."
 
   - scenario: s53_execute_dialog_lock_decision
     playwright_module: null
@@ -332,9 +332,9 @@ scenarios:
     notes: "Partial (scoped) execute leaves other rows intact. HONEST partial port: the web execute-tree is single-select so 'Execute selected' scopes exactly 1 file (Qt Ctrl+clicked 2) — same scope_paths server invariant, 1-file subset. Marks all 5 delete, selects 1 row, Execute selected, asserts the target is gone from disk+manifest while the 4 survivors remain on disk with user_decision=='delete' and the dialog stays open; a second full Execute clears the rest (total_files==0). Multi-row select is a separate FE-parity gap."
 
   - scenario: s65_passenger_bridge
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s65_passenger_bridge
+    status: done
+    notes: "#538 passenger-bridge real-photo invariant. Scans passenger-bridge-a (scene_left/scene_right) and passenger-bridge-b (scene_bridge) as TWO ordered FLAT sources — source ORDER encodes priority (bridge-a Ref-tier, bridge-b -> REVIEW_DUPLICATE). Verified live: a single flattened source flips scene_bridge to Ref winner, and a parent-of-subdirs source walks 0 files (web add-source is non-recursive, recursive defaults false). Asserts total_files==3, all in one group_number, 2 Ref-tier (UNDATED: scene_left+scene_right) + 1 REVIEW_DUPLICATE (scene_bridge.jpg), every item has a non-empty phash (passenger renders a real %, not '—'). Divergences: GET /api/manifest vs Qt sqlite; group_number (int) vs Qt group_id; two-source order is load-bearing."
 
   - scenario: s66_autotune_read_knee
     playwright_module: null
