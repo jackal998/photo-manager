@@ -6,6 +6,7 @@ import type {
   ExecuteRequest,
   ExecuteResult,
   FsBrowseResponse,
+  I18nResponse,
   LockedPathsError,
   ManifestResponse,
   PruneRequest,
@@ -274,6 +275,16 @@ export async function postSave(req: SaveRequest): Promise<SaveResult> {
 
 export async function postReveal(req: RevealRequest): Promise<RevealResult> {
   return postJson<RevealResult>("/api/reveal", req);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/i18n/{locale}
+// ---------------------------------------------------------------------------
+
+export { type I18nResponse } from "./types";
+
+export async function getI18n(locale: string): Promise<I18nResponse> {
+  return getJson<I18nResponse>("/api/i18n/" + locale);
 }
 
 // ---------------------------------------------------------------------------

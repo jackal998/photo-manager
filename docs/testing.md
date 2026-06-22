@@ -197,6 +197,8 @@ and `__main__` blocks are marked `# pragma: no cover`).
 | Module | Layer 1 | Notes |
 |---|---|---|
 | `app/web/main.py` | `tests/web/test_static_mount.py` (SPA mount contract) | The SPA static-mount branch (`frontend_dist` param, `dist.exists()` guard, `StaticFiles` mount) is covered by `TestStaticMountPresent` and `TestStaticMountAbsent` in `tests/web/test_static_mount.py`. The `_lifespan` context manager and `__main__` block are `# pragma: no cover` (require a live server; covered by the `web-dom-probe` CI job and local runs). The `create_app()` factory shape itself is the contract being tested. |
+| `app/web/routes/i18n.py` | `tests/test_web_i18n.py` (93%) + `tests/test_web_i18n_callsite_keys.py` (static probe) | `GET /api/i18n/{locale}` returns `{locale, strings, available}`; `strings` is filtered to the **`web.*` namespace only** (the ~300 Qt-only desktop keys are never served — keeps the payload ~1 KB and avoids leaking internal desktop copy). Catalog + available-locales are `lru_cache`-d (static files). 404 for unknown locales; the translations-dir-missing 500 branch is defensive dead-code (the one uncovered line). `test_web_i18n_callsite_keys.py` is a static probe asserting every `t('web.…')` call-site key in `frontend/src` exists in `en.yml` (a typo'd key would otherwise render English forever with no signal). Layer-3: `qa/web/scenarios/s22_language_switch.py` and `s58_language_switch_preserves_manifest.py` exercise the full client-side locale-switch flow (toggle click → PATCH /api/settings → GET /api/i18n/zh_TW → re-render). Frontend store logic (`initI18n`/`setLocale` persist+refetch) is unit-covered in `frontend/src/i18n/useI18nStore.test.ts`. |
+| `app/web/routes/settings.py` | `tests/test_web_settings.py` (if present; see Notes) | `GET /api/settings` returns only the `_WEB_SETTINGS_KEYS` allowlist (prevents future sensitive-key leaks). `PATCH /api/settings` validates all keys before any write (validate-all-then-apply), rejects unknown keys with 400. `PHOTO_MANAGER_HOME` env override controls the settings.json path — see Settings isolation note in the web scenario layer section below. Layer-3: s22 and s58 call `PATCH /api/settings ui.locale` in their restore steps; the round-trip is exercised implicitly. |
 | `app/web/routes/*.py` | Various `tests/test_web_*.py` | Each route module has its own test file (e.g. `tests/test_web_scan_api.py`, `tests/test_web_execute_routes.py`). |
 
 ### `qa/web/`
@@ -211,6 +213,8 @@ cannot be exercised inside the layer-1 test process.
 | `qa/web/_pw.py` | Import isolation checked by `TestImportIsolation`; runtime usage in `web-dom-probe` CI and local Playwright runs. |
 | `qa/web/_invariants.py` | Import isolation checked by `TestImportIsolation`; runtime usage in `web-dom-probe` CI and local Playwright runs. |
 | `qa/web/scenario_map.yml` | Count/key parity checked by `TestScenarioMapParity` (CI). |
+| `qa/web/scenarios/s22_language_switch.py` | `web-scenario-batch` CI (advisory) + local Playwright run. Exercises: **en preamble** (forces `ui.locale=en` so the baseline is self-healing after a crashed prior run), English baseline (toolbar text), click `main-lang-toggle` EN→zh_TW, assert `main-scan-button`/`main-execute-button` re-render live, assert persistence after `page.reload()`, restore locale via `PATCH /api/settings`. |
+| `qa/web/scenarios/s58_language_switch_preserves_manifest.py` | `web-scenario-batch` CI (advisory) + local Playwright run. Exercises: en preamble, scan near-duplicates sandbox, capture pre-switch file row order, click `main-lang-toggle`, assert result tree count+order unchanged after switch (#428 regression guard), restore locale. |
 
 ---
 
@@ -294,9 +298,23 @@ python -m qa.web._batch s01_happy_path --base-url http://127.0.0.1:8765
 
 | Phase | Target | Status |
 |---|---|---|
-| Phase 2 (current) | 5 scenarios ported | 5 ported — `status: done` entries in `scenario_map.yml` |
+| Phase 2 (current) | 5 scenarios ported | 7 ported — `status: done` entries in `scenario_map.yml` |
 | Phase 3 QA foundation | 10 scenarios ported | In progress |
-| Phase 4 cutover | Parity with Qt batch (all ~60 scenarios) | Deferred |
+| Phase 4 cutover | Parity with Qt batch (all ~67 scenarios) | Deferred |
+
+**Settings isolation for web scenarios that write `ui.locale`:**
+`s22` and `s58` both call `PATCH /api/settings` to write `ui.locale`, which
+persists to the server's on-disk `settings.json`.  The server reads settings
+from `<repo_root>/settings.json` by default; if the env var `PHOTO_MANAGER_HOME`
+is set to a relative path it is resolved against the repo root and the settings
+file lives there instead (`app/web/routes/settings.py::_load_settings`).
+To prevent live runs from clobbering the real user settings, the batch runner
+or CI job launching the server **should set `PHOTO_MANAGER_HOME` to a temp
+directory** (e.g. `PHOTO_MANAGER_HOME=/tmp/qa-home uvicorn app.web.main:create_app ...`).
+Both scenarios restore `ui.locale` to `"en"` in their `finally` blocks regardless
+of test outcome, so back-to-back runs in the same server process are safe even
+without the env override — but the override remains the recommended approach for
+CI to avoid touching the real settings.json.
 
 The parity counter is enforced by `scripts/check_qa_parity.py` (CI job
 `qa-parity-counter` in the same workflow); it fails if the ported count drops

@@ -8,6 +8,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
 import App from "./App";
 import { useAppStore } from "./store/useAppStore";
+import { useI18nStore } from "./i18n/useI18nStore";
+import { translate, interpolate } from "./i18n/useT";
 import {
   MAIN_EMPTY_STATE,
   MAIN_EXECUTE_BUTTON,
@@ -140,6 +142,8 @@ function resetStore() {
       prunePrompt: null,
     },
   });
+  // Reset i18n store to defaults so each test starts with empty catalog + "en".
+  useI18nStore.setState({ locale: "en", catalog: {} });
 }
 
 // ---------------------------------------------------------------------------
@@ -372,5 +376,128 @@ describe("Execute button -> locked 409 -> LockConfirmDialog flow", () => {
 
     // LockConfirmDialog should now be visible.
     expect(screen.getByTestId(LOCK_CONFIRM_DIALOG)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// i18n — translate() pure function
+// ---------------------------------------------------------------------------
+
+describe("translate() pure function", () => {
+  it("returns the fallback when catalog is empty", () => {
+    expect(translate({}, "web.toolbar.scan", "Scan")).toBe("Scan");
+  });
+
+  it("returns the catalog value when the key is present", () => {
+    const catalog = { "web.toolbar.scan": "掃描" };
+    expect(translate(catalog, "web.toolbar.scan", "Scan")).toBe("掃描");
+  });
+
+  it("returns the fallback (not undefined) when key is missing from catalog", () => {
+    const catalog = { "web.toolbar.execute": "執行" };
+    expect(translate(catalog, "web.toolbar.scan", "Scan")).toBe("Scan");
+  });
+
+  it("substitutes {name} placeholders using params", () => {
+    const catalog = { "web.status.summary": "{groups} 個群組 · {files} 個檔案" };
+    expect(
+      translate(catalog, "web.status.summary", "{groups} groups · {files} files", {
+        groups: 3,
+        files: 12,
+      })
+    ).toBe("3 個群組 · 12 個檔案");
+  });
+
+  it("uses fallback and substitutes placeholders when catalog is empty", () => {
+    expect(
+      translate({}, "web.status.summary", "{groups} groups · {files} files", {
+        groups: 5,
+        files: 20,
+      })
+    ).toBe("5 groups · 20 files");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// interpolate() — placeholder substitution
+// ---------------------------------------------------------------------------
+
+describe("interpolate()", () => {
+  it("leaves a string without placeholders unchanged", () => {
+    expect(interpolate("Ready")).toBe("Ready");
+  });
+
+  it("leaves unknown placeholders as-is when params is undefined", () => {
+    expect(interpolate("Scanning{stage}")).toBe("Scanning{stage}");
+  });
+
+  it("leaves unknown placeholders as-is when the key is not in params", () => {
+    expect(interpolate("Scanning{stage}", {})).toBe("Scanning{stage}");
+  });
+
+  it("substitutes a known placeholder", () => {
+    expect(interpolate("Scan failed: {error}", { error: "disk full" })).toBe(
+      "Scan failed: disk full"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// i18n — lang toggle in App
+// ---------------------------------------------------------------------------
+
+describe("App lang toggle", () => {
+  beforeEach(() => resetStore());
+
+  it("shows EN label when locale is en (default)", () => {
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_LANG_TOGGLE)).toHaveTextContent("EN");
+  });
+
+  it("shows 中 label when locale is zh_TW", () => {
+    act(() => {
+      useI18nStore.setState({ locale: "zh_TW", catalog: {} });
+    });
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_LANG_TOGGLE)).toHaveTextContent("中");
+  });
+
+  it("clicking the toggle calls setLocale and the label flips EN→中", async () => {
+    const user = userEvent.setup();
+
+    // Stub setLocale to flip the locale in-store without a real fetch.
+    const stubSetLocale = vi.fn(async (code: string) => {
+      useI18nStore.setState({ locale: code, catalog: {} });
+    });
+    act(() => {
+      useI18nStore.setState({ locale: "en", catalog: {}, setLocale: stubSetLocale } as never);
+    });
+
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_LANG_TOGGLE)).toHaveTextContent("EN");
+
+    await user.click(screen.getByTestId(MAIN_LANG_TOGGLE));
+
+    expect(stubSetLocale).toHaveBeenCalledWith("zh_TW");
+    expect(screen.getByTestId(MAIN_LANG_TOGGLE)).toHaveTextContent("中");
+  });
+
+  it("toolbar scan button shows catalog value when catalog is loaded", () => {
+    act(() => {
+      useI18nStore.setState({
+        locale: "zh_TW",
+        catalog: { "web.toolbar.scan": "掃描" },
+      });
+    });
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_SCAN_BUTTON)).toHaveTextContent("掃描");
+  });
+
+  it("toolbar scan button shows English fallback when catalog is empty", () => {
+    act(() => {
+      useI18nStore.setState({ locale: "en", catalog: {} });
+    });
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_SCAN_BUTTON)).toHaveTextContent("Scan");
   });
 });

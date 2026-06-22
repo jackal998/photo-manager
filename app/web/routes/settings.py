@@ -15,6 +15,7 @@ router = APIRouter()
 # UI grows to read/write more settings.
 _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     "sorting.defaults",
+    "ui.locale",
     "ui.prune_singletons",
     "ui.scan_dialog.autotune_read_knee",
 )

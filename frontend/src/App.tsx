@@ -4,11 +4,13 @@
 // survives ScanDialog open/close. ScanDialog does NOT subscribe — it only
 // reads scan state from the store. See ScanDialog.tsx header comment.
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 import { cn } from "./lib/utils";
 import { useAppStore } from "./store/useAppStore";
 import { useScanSSE } from "./hooks/useScanSSE";
+import { useI18nStore } from "./i18n/useI18nStore";
+import { useT } from "./i18n/useT";
 
 import { ScanDialog } from "./components/ScanDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -53,6 +55,20 @@ const CLOSED_MENU: ContextMenuState = {
 };
 
 export default function App() {
+  // ---------------------------------------------------------------------------
+  // i18n — initialise once on boot
+  // ---------------------------------------------------------------------------
+
+  const initI18n = useI18nStore((s) => s.initI18n);
+  const setLocale = useI18nStore((s) => s.setLocale);
+  const locale = useI18nStore((s) => s.locale);
+  const t = useT();
+
+  useEffect(() => {
+    void initI18n();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Dialog open states
   // ---------------------------------------------------------------------------
@@ -111,16 +127,20 @@ export default function App() {
 
   let statusText: string;
   if (manifest.path !== null) {
-    statusText = `${manifest.totalGroups} groups · ${manifest.totalFiles} files`;
+    statusText = t(
+      "web.status.summary",
+      "{groups} groups · {files} files",
+      { groups: manifest.totalGroups, files: manifest.totalFiles }
+    );
   } else if (manifest.loading) {
-    statusText = "Loading manifest…";
+    statusText = t("web.status.loading_manifest", "Loading manifest…");
   } else if (scan.status === "running") {
     const stage = scan.stageName !== "" ? ` — ${scan.stageName}` : "";
-    statusText = `Scanning${stage}`;
+    statusText = t("web.status.scanning", "Scanning{stage}", { stage });
   } else if (scan.status === "failed" && scan.error !== null) {
-    statusText = `Scan failed: ${scan.error}`;
+    statusText = t("web.status.scan_failed", "Scan failed: {error}", { error: scan.error });
   } else {
-    statusText = "Ready";
+    statusText = t("web.status.ready", "Ready");
   }
 
   // ---------------------------------------------------------------------------
@@ -138,7 +158,7 @@ export default function App() {
           className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
           onClick={() => setScanOpen(true)}
         >
-          Scan
+          {t("web.toolbar.scan", "Scan")}
         </button>
 
         <button
@@ -146,14 +166,15 @@ export default function App() {
           className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
           onClick={openExecuteDialog}
         >
-          Execute
+          {t("web.toolbar.execute", "Execute")}
         </button>
 
         <button
           data-testid={MAIN_LANG_TOGGLE}
           className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
+          onClick={() => void setLocale(locale === "en" ? "zh_TW" : "en")}
         >
-          EN
+          {locale === "zh_TW" ? "中" : "EN"}
         </button>
 
         <button
@@ -161,7 +182,7 @@ export default function App() {
           className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
           onClick={() => setSettingsOpen(true)}
         >
-          Settings
+          {t("web.toolbar.settings", "Settings")}
         </button>
 
         {/* Manifest open control */}
@@ -174,16 +195,16 @@ export default function App() {
           onKeyDown={(e) => {
             if (e.key === "Enter") handleManifestOpen();
           }}
-          placeholder="Path to manifest .db…"
+          placeholder={t("web.manifest.input_placeholder", "Path to manifest .db…")}
           className="rounded border border-neutral-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 w-64"
-          aria-label="Manifest path"
+          aria-label={t("web.manifest.input_aria", "Manifest path")}
         />
         <button
           data-testid={MAIN_MANIFEST_OPEN}
           className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
           onClick={handleManifestOpen}
         >
-          Open
+          {t("web.toolbar.open", "Open")}
         </button>
       </header>
 
@@ -198,7 +219,10 @@ export default function App() {
               data-testid={MAIN_EMPTY_STATE}
               className="flex h-full items-center justify-center text-sm text-neutral-400"
             >
-              No manifest loaded — Scan or Open a manifest to begin.
+              {t(
+                "web.empty_state.no_manifest",
+                "No manifest loaded — Scan or Open a manifest to begin."
+              )}
             </div>
           ) : (
             <ResultTree onContextMenu={handleContextMenu} />

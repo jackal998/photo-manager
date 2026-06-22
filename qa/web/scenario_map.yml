@@ -122,9 +122,9 @@ scenarios:
     notes: ""
 
   - scenario: s22_language_switch
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s22_language_switch
+    status: done
+    notes: "Click main-lang-toggle EN→zh_TW; asserts toolbar re-renders live ('掃描'/'執行'), persistence across page.reload(), and restore to 'en' via PATCH /api/settings. No confirm dialog (web divergence from Qt)."
 
   - scenario: s23a_set_settings
     playwright_module: null
@@ -302,9 +302,9 @@ scenarios:
     notes: ""
 
   - scenario: s58_language_switch_preserves_manifest
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s58_language_switch_preserves_manifest
+    status: done
+    notes: "Scans near-duplicates, captures pre-switch row order, clicks lang toggle, asserts result tree count+order unchanged (#428 regression guard). Restore to 'en' via PATCH /api/settings."
 
   - scenario: s59_execute_dialog_select_by_main_tree_sync
     playwright_module: null

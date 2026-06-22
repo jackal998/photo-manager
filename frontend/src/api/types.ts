@@ -144,11 +144,22 @@ export interface FsBrowseResponse {
 // GET /api/settings response / PATCH /api/settings request
 // ---------------------------------------------------------------------------
 
-/** The three server-allowlisted settings keys with their value types. */
+/** The server-allowlisted settings keys with their value types. */
 export interface SettingsMap {
   "sorting.defaults": unknown;
   "ui.prune_singletons": unknown;
   "ui.scan_dialog.autotune_read_knee": unknown;
+  "ui.locale"?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/i18n/{locale}
+// ---------------------------------------------------------------------------
+
+export interface I18nResponse {
+  locale: string;
+  strings: Record<string, string>;
+  available: [string, string][];
 }
 
 // ---------------------------------------------------------------------------

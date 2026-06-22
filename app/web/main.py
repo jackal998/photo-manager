@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from app.web.routes.execute import router as execute_router
 from app.web.routes.fs import router as fs_router
 from app.web.routes.health import router as health_router
+from app.web.routes.i18n import router as i18n_router
 from app.web.routes.image import router as image_router
 from app.web.routes.review import router as review_router
 from app.web.routes.scan import router as scan_router
@@ -143,6 +144,7 @@ def create_app(frontend_dist: Optional[Path] = None) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(fs_router)
     app.include_router(execute_router)
+    app.include_router(i18n_router)
 
     # SPA static mount — only when a built dist with an index.html exists.
     # Guarded on index.html (not just the directory) so a half-built or empty

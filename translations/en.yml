@@ -470,3 +470,23 @@ preview:
   click_to_pause: "(Click to pause)"
   video_not_available: "(Video not available)"
   rebuilding_cache: "Rebuilding thumbnail cache (version {version}) — this is a one-time operation."
+
+# Web UI strings — used by the browser-based port only.
+# Dotted-key prefix: web.*
+web:
+  toolbar:
+    scan: "Scan"
+    execute: "Execute"
+    settings: "Settings"
+    open: "Open"
+  status:
+    summary: "{groups} groups · {files} files"
+    loading_manifest: "Loading manifest…"
+    scanning: "Scanning{stage}"
+    scan_failed: "Scan failed: {error}"
+    ready: "Ready"
+  empty_state:
+    no_manifest: "No manifest loaded — Scan or Open a manifest to begin."
+  manifest:
+    input_placeholder: "Path to manifest .db…"
+    input_aria: "Manifest path"

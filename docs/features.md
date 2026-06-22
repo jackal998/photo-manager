@@ -292,6 +292,20 @@ for the chore plan.
 - **Related:** [PR #157](https://github.com/jackal998/photo-manager/pull/157), [#428](https://github.com/jackal998/photo-manager/issues/428); QA scenarios [`qa/scenarios/s22_language_switch.py`](../qa/scenarios/s22_language_switch.py) and [`qa/scenarios/s58_language_switch_preserves_manifest.py`](../qa/scenarios/s58_language_switch_preserves_manifest.py); translator workflow in [`docs/i18n.md`](i18n.md).
 - **Last verified:** 2026-05-27 (manifest-preservation behaviour landed via [#428](https://github.com/jackal998/photo-manager/issues/428))
 
+#### Web variant — `main-lang-toggle` button
+
+- **Entry point:** Toolbar button `data-testid="main-lang-toggle"` — label is `EN` when English is active, `中` when 繁體中文 is active.
+- **Trigger:** Single click on the toggle button.
+- **Behaviour:** Calls `setLocale(locale === 'en' ? 'zh_TW' : 'en')` in the i18n store.  The store dispatches `patchSettings({'ui.locale': code})` (PATCH `/api/settings`) to persist the choice, then fetches `GET /api/i18n/{code}` to load the catalog.  All toolbar buttons and UI labels rendered via `useT()` / `t()` re-render immediately with no page reload and no confirm dialog.  On the next page load `initI18n()` reads `GET /api/settings` → `ui.locale` → fetches the matching catalog, so the chosen language survives a hard reload.  The manifest and result tree are stored in a separate Zustand store and are **not** affected by the locale change — the #428 regression guard that required the Qt confirm dialog does not apply because React never destroys and recreates the component tree on a locale switch.
+- **Toolbar text in each locale:**
+  - `main-scan-button`: `Scan` (en) / `掃描` (zh_TW)
+  - `main-execute-button`: `Execute` (en) / `執行` (zh_TW)
+  - `main-settings-button`: `Settings` (en) / `設定` (zh_TW)
+  - `main-manifest-open-button`: `Open` (en) / `開啟` (zh_TW)
+- **Conditions / variants:** Toggle cycles only between `en` and `zh_TW` (the two shipped locales). No confirm dialog fires on the web — the click is the confirmation.
+- **Related:** QA web scenarios [`qa/web/scenarios/s22_language_switch.py`](../qa/web/scenarios/s22_language_switch.py) (live switch + persistence) and [`qa/web/scenarios/s58_language_switch_preserves_manifest.py`](../qa/web/scenarios/s58_language_switch_preserves_manifest.py) (#428 manifest-preservation guard); i18n store at `frontend/src/i18n/useI18nStore.ts`; backend catalog at `GET /api/i18n/{locale}` (`app/web/routes/i18n.py`); persistence at `PATCH /api/settings` (`app/web/routes/settings.py`).
+- **Last verified:** 2026-06-22 (web lang toggle functional, scenarios s22+s58 ported)
+
 ---
 
 ### List menu — Remove from List

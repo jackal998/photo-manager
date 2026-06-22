@@ -379,3 +379,23 @@ preview:
   click_to_pause: "(點擊暫停)"
   video_not_available: "(無法使用視訊)"
   rebuilding_cache: "正在重建縮圖快取(版本 {version})— 這是一次性操作。"
+
+# Web UI 字串 — 僅供瀏覽器版使用。
+# 鍵前綴:web.*
+web:
+  toolbar:
+    scan: "掃描"
+    execute: "執行"
+    settings: "設定"
+    open: "開啟"
+  status:
+    summary: "{groups} 個群組 · {files} 個檔案"
+    loading_manifest: "正在載入清單…"
+    scanning: "掃描中{stage}"
+    scan_failed: "掃描失敗：{error}"
+    ready: "就緒"
+  empty_state:
+    no_manifest: "尚未載入清單 — 請掃描或開啟清單以開始。"
+  manifest:
+    input_placeholder: "清單 .db 的路徑…"
+    input_aria: "清單路徑"
