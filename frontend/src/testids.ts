@@ -41,6 +41,7 @@ export const SCAN_PROGRESS_BAR = "scan-progress-bar";
 export const SCAN_STATUS_TEXT = "scan-status-text";
 export const EXECUTE_DIALOG = "execute-dialog";
 export const EXECUTE_ALL_DELETE_BANNER = "execute-all-delete-banner";
+export const EXECUTE_HIDDEN_DESTRUCTIVE_BANNER = "execute-hidden-destructive-banner";
 export const EXECUTE_TYPE_FILTER = "execute-type-filter";
 export const EXECUTE_TREE = "execute-tree";
 export const EXECUTE_BTN_EXECUTE = "execute-btn-execute";

@@ -12,16 +12,19 @@
 //   9. Execute-selected button is disabled when no row is selected.
 
 import { act, render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { ExecuteDialog } from "./ExecuteDialog";
+import { ExecuteDialog, findAllDeleteGroupIds } from "./ExecuteDialog";
 import { useAppStore } from "@/store/useAppStore";
 import {
   EXECUTE_DIALOG,
   EXECUTE_BTN_EXECUTE,
   EXECUTE_BTN_EXECUTE_SELECTED,
   EXECUTE_ALL_DELETE_BANNER,
+  EXECUTE_HIDDEN_DESTRUCTIVE_BANNER,
   EXECUTE_ALL_DELETE_CONFIRM,
+  EXECUTE_TYPE_FILTER,
   EXECUTE_TREE,
   EXECUTE_PREVIEW_PANE,
   executeAllDeleteJumpTestid,
@@ -402,5 +405,118 @@ describe("ExecuteDialog", () => {
     });
     render(<ExecuteDialog />);
     expect(screen.getByTestId(EXECUTE_BTN_EXECUTE)).toBeDisabled();
+  });
+
+  // -------------------------------------------------------------------------
+  // #676 / #502 — filter-scoped execute ("visible = committed") + the
+  // hidden-destructive banner. The data-safety core: a non-"all" filter must
+  // scope the commit to the visible rows so hidden decisions aren't executed.
+  // -------------------------------------------------------------------------
+
+  /** Open the Radix Select TypeFilter and pick the option matching `name`.
+   * Uses user-event (real pointer sequence) — fireEvent.pointerDown alone
+   * does not open a Radix Select in jsdom. */
+  async function selectFilter(
+    user: ReturnType<typeof userEvent.setup>,
+    name: RegExp
+  ) {
+    await user.click(screen.getByTestId(EXECUTE_TYPE_FILTER));
+    await user.click(await screen.findByRole("option", { name }));
+  }
+
+  it("under 'Remove only' filter, Execute scopes the commit to the visible (ignore) rows", async () => {
+    const user = userEvent.setup();
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      openDialog([MIXED_GROUP]); // ref.jpg=delete, dup.jpg=ignore
+    });
+    render(<ExecuteDialog />);
+
+    await selectFilter(user, /remove only/i);
+
+    // (B) hidden-destructive banner surfaces — the 1 delete row is hidden.
+    expect(
+      screen.getByTestId(EXECUTE_HIDDEN_DESTRUCTIVE_BANNER)
+    ).toBeInTheDocument();
+
+    // (A) Execute commits ONLY the visible ignore row — the hidden delete is
+    // NOT in scope (this is the data-safety fix for #676).
+    await user.click(screen.getByTestId(EXECUTE_BTN_EXECUTE));
+    expect(executeDecisionsMock).toHaveBeenCalledOnce();
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/photos/dup.jpg"],
+    });
+  });
+
+  it("hidden-destructive banner is absent under 'all' and 'Delete only' filters", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+    // Default 'all' — deletes are visible, nothing hidden.
+    expect(
+      screen.queryByTestId(EXECUTE_HIDDEN_DESTRUCTIVE_BANNER)
+    ).not.toBeInTheDocument();
+    await selectFilter(user, /delete only/i);
+    // 'Delete only' — deletes ARE the visible subset, nothing hidden.
+    expect(
+      screen.queryByTestId(EXECUTE_HIDDEN_DESTRUCTIVE_BANNER)
+    ).not.toBeInTheDocument();
+  });
+
+  it("under 'Delete only' filter, Execute on a mixed group fires the all-delete confirm (not yet committed)", async () => {
+    const user = userEvent.setup();
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      openDialog([MIXED_GROUP]); // 1 delete + 1 ignore
+    });
+    render(<ExecuteDialog />);
+    await selectFilter(user, /delete only/i);
+    await user.click(screen.getByTestId(EXECUTE_BTN_EXECUTE));
+    // Visible scope = [ref.jpg] (delete) → all-delete gate fires first.
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toBeInTheDocument();
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+  });
+
+  // Pure narrowing logic (change C) — deterministic, no Select driving.
+  describe("findAllDeleteGroupIds (filter-narrowed)", () => {
+    const gAllDelete: Group = {
+      group_number: 1,
+      member_count: 2,
+      items: [
+        makeFile("a", "/p/a", "delete", "1"),
+        makeFile("b", "/p/b", "delete", "1"),
+      ],
+    };
+    const gMixed: Group = {
+      group_number: 2,
+      member_count: 2,
+      items: [
+        makeFile("c", "/p/c", "delete", "2"),
+        makeFile("d", "/p/d", "ignore", "2"),
+      ],
+    };
+    const gDeletePlusUndecided: Group = {
+      group_number: 3,
+      member_count: 2,
+      items: [
+        makeFile("e", "/p/e", "delete", "3"),
+        makeFile("f", "/p/f", "", "3"),
+      ],
+    };
+    const all = [gAllDelete, gMixed, gDeletePlusUndecided];
+
+    it("filter 'all' requires every member (incl. undecided) to be delete", () => {
+      expect(findAllDeleteGroupIds(all, "all")).toEqual(["1"]);
+    });
+    it("filter 'delete' qualifies any group holding >=1 visible delete row", () => {
+      expect(findAllDeleteGroupIds(all, "delete")).toEqual(["1", "2", "3"]);
+    });
+    it("filter 'ignore' never qualifies a group on its (hidden) delete rows", () => {
+      expect(findAllDeleteGroupIds(all, "ignore")).toEqual([]);
+    });
   });
 });

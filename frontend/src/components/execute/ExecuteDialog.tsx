@@ -35,6 +35,7 @@ import {
 } from "@/testids";
 
 import { AllDeleteBanner } from "./AllDeleteBanner";
+import { HiddenDestructiveBanner } from "./HiddenDestructiveBanner";
 import { TypeFilter, type TypeFilterValue } from "./TypeFilter";
 import { ExecuteTree, type ExecuteTreeHandle } from "./ExecuteTree";
 import { DeleteConfirmDialog } from "@/components/dialogs/DeleteConfirmDialog";
@@ -43,17 +44,40 @@ import { DeleteConfirmDialog } from "@/components/dialogs/DeleteConfirmDialog";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Returns the list of group IDs (as strings) where every item is "delete". */
-function findAllDeleteGroupIds(
-  groups: ReturnType<typeof useAppStore.getState>["manifest"]["groups"]
+/** Returns the group IDs (as strings) whose visible scope is entirely "delete".
+ *
+ * The "visible scope" is governed by the active type filter (#676/#502),
+ * mirroring Qt's ``_complete_delete_groups(paths_filter=visible)``:
+ *   - filter "all":    every member (including undecided) must be delete —
+ *     the unfiltered all-delete-group check.
+ *   - filter "delete": narrow to the visible delete rows; any group holding
+ *     ≥1 delete row qualifies (every visible row is delete by definition).
+ *   - filter "ignore": the visible rows are all ignore, so no group qualifies.
+ *
+ * Narrowing matters because the banner's jump anchors scroll the ExecuteTree,
+ * which omits groups with no row matching the filter — an unfiltered banner
+ * would point at groups the user can't see under a non-"all" filter.
+ */
+export function findAllDeleteGroupIds(
+  groups: ReturnType<typeof useAppStore.getState>["manifest"]["groups"],
+  filter: TypeFilterValue
 ): string[] {
   const ids: string[] = [];
   for (const group of groups) {
     if (group.items.length === 0) continue;
-    const allDelete = group.items.every(
-      (item) => item.user_decision === "delete"
+    if (filter === "all") {
+      if (group.items.every((item) => item.user_decision === "delete")) {
+        ids.push(String(group.group_number));
+      }
+      continue;
+    }
+    const visible = group.items.filter(
+      (item) => item.user_decision === filter
     );
-    if (allDelete) {
+    if (
+      visible.length > 0 &&
+      visible.every((item) => item.user_decision === "delete")
+    ) {
       ids.push(String(group.group_number));
     }
   }
@@ -104,9 +128,25 @@ export function ExecuteDialog() {
   }, [groups, filter]);
 
   const allDeleteGroupIds = useMemo(
-    () => findAllDeleteGroupIds(groups),
-    [groups]
+    () => findAllDeleteGroupIds(groups, filter),
+    [groups, filter]
   );
+
+  // #676/#502 — count of pending delete rows HIDDEN by the active filter.
+  // Mirrors Qt's _hidden_pending_delete_count: zero under "all" (deletes
+  // are visible) and "delete" (deletes ARE the visible subset); under
+  // "ignore" the delete rows are hidden, so the user must be told they are
+  // still staged but not part of this filtered Execute's scope.
+  const hiddenDeleteCount = useMemo(() => {
+    if (filter !== "ignore") return 0;
+    let n = 0;
+    for (const group of groups) {
+      for (const item of group.items) {
+        if (item.user_decision === "delete") n++;
+      }
+    }
+    return n;
+  }, [groups, filter]);
 
   // Selected file's thumbnail URL for the preview pane.
   const previewThumbnailUrl = useMemo(() => {
@@ -150,13 +190,28 @@ export function ExecuteDialog() {
   );
 
   const handleExecute = useCallback(() => {
-    if (isAllDeleteScope()) {
-      pendingExecOptsRef.current = {};
+    // #676/#502 "visible = committed": when a non-"all" type filter is
+    // active, scope the commit to the currently-visible rows (decidedPaths)
+    // so the filter can never silently execute — or hide — decisions the
+    // user can't see. The unfiltered path keeps scope_paths=null (commit
+    // every decided row), preserving the original no-argument call.
+    if (filter === "all") {
+      if (isAllDeleteScope()) {
+        pendingExecOptsRef.current = {};
+        setDeleteConfirmOpen(true);
+      } else {
+        void executeDecisions();
+      }
+      return;
+    }
+    const scopePaths = decidedPaths;
+    if (isAllDeleteScope(scopePaths)) {
+      pendingExecOptsRef.current = { scopePaths };
       setDeleteConfirmOpen(true);
     } else {
-      void executeDecisions();
+      void executeDecisions({ scopePaths });
     }
-  }, [executeDecisions, isAllDeleteScope]);
+  }, [executeDecisions, isAllDeleteScope, filter, decidedPaths]);
 
   const handleExecuteSelected = useCallback(() => {
     if (selectedFilePath === null) return;
@@ -238,12 +293,17 @@ export function ExecuteDialog() {
           </span>
         </div>
 
-        {/* All-delete warning banner */}
+        {/* All-delete warning banner (narrowed to the visible filter scope) */}
         {allDeleteGroupIds.length > 0 && (
           <AllDeleteBanner
             allDeleteGroupIds={allDeleteGroupIds}
             onJumpToGroup={handleJumpToGroup}
           />
+        )}
+
+        {/* Hidden-destructive banner — the active filter hides pending deletes */}
+        {hiddenDeleteCount > 0 && (
+          <HiddenDestructiveBanner count={hiddenDeleteCount} />
         )}
 
         {/* Main area: tree + preview */}

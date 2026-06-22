@@ -172,6 +172,12 @@ EXECUTE_DIALOG = "execute-dialog"
 EXECUTE_ALL_DELETE_BANNER = "execute-all-delete-banner"
 """Warning banner shown when every scoped row is a delete."""
 
+EXECUTE_HIDDEN_DESTRUCTIVE_BANNER = "execute-hidden-destructive-banner"
+"""Warning banner shown when the active type filter HIDES pending delete
+rows (filter='ignore').  Mirrors Qt's #502 hidden-destructive line so the
+user is told staged deletes exist but aren't visible/committed under the
+current filter.  See #676."""
+
 EXECUTE_TYPE_FILTER = "execute-type-filter"
 """Filter control that restricts the tree to a decision type (all / delete / ignore)."""
 

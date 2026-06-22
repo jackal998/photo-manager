@@ -312,9 +312,9 @@ scenarios:
     notes: ""
 
   - scenario: s60_execute_filter_by_action_type
-    playwright_module: null
-    status: todo
-    notes: "BLOCKED on FE #676 — the web execute-type-filter is display-only: Execute commits ALL decided rows regardless of the active filter (ExecuteDialog.tsx:152-158 / useAppStore.ts:409 send scope_paths=null), and the Qt 'hidden destructive' warning banner has no web equivalent. s60's load-bearing assertion ('Execute under Delete-only filter leaves ignore-decided rows untouched') can't be expressed until that FE gap closes. An honest port needs the FE change first."
+    playwright_module: qa.web.scenarios.s60_execute_filter_by_action_type
+    status: done
+    notes: "#502/#676 execute type-filter 'visible = committed'. UNBLOCKED by the FE fix shipped in the same PR: handleExecute now scopes the commit to the visible rows (decidedPaths) when filter!='all' — previously it sent scope_paths=null and committed ALL decided rows regardless of filter (the data-safety bug); plus a new HiddenDestructiveBanner (execute-hidden-destructive-banner) when 'Remove only' hides pending deletes, and findAllDeleteGroupIds is filter-narrowed. Fixture: two byte-identical copies each of two DISTINCT exif-edge JPEGs (tz_offset/subsecond — verified non-pairing per s08) → two EXACT-dup groups (A delete via CTX_SET_ACTION_DELETE, B ignore via CTX_SET_ACTION_REMOVE). Asserts Delete-only shows only A + no hidden banner; Remove-only shows only B + hidden banner visible; Execute under Delete-only deletes A on disk while B SURVIVES on disk with decision='ignore' (manifest drops to B's 2 rows). Divergences: 2 rows/group (Qt 4); per-row context-menu marking (Qt regex bulk); banner asserted by testid not text; post-execute read via GET /api/manifest absence (Qt SQLite executed=0)."
 
   - scenario: s61_actioned_singleton_prune
     playwright_module: null
