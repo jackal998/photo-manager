@@ -77,9 +77,9 @@ scenarios:
     notes: ""
 
   - scenario: s13_execute_action
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s13_execute_action
+    status: done
+    notes: "Destructive execute round-trip. Scans disposable tmpdir copies of near-duplicates, marks all 5 rows delete via context menu, Execute -> all-delete confirm -> Yes, then asserts (absence-based) all 5 files gone from disk AND GET /api/manifest total_files==0 — deleted rows are filtered out by WHERE outcome='' in _LOAD_ALL_SQL, so the contract is ABSENCE, not outcome=='deleted'. Qt regex bulk-mark + executed=1 SQLite read have no web equivalent — context-menu marking + absence assertion used instead."
 
   - scenario: s14_action_by_regex
     playwright_module: qa.web.scenarios.s14_action_by_regex
@@ -182,9 +182,9 @@ scenarios:
     notes: "BLOCKED on FE #674 — the ActionDialog's inline lock-conflict dialog (distinct from the execute-flow LockConfirmDialog) has no testids and lacks the 'Apply to Unlocked Only' verdict that this scenario asserts. An honest port needs that FE change first."
 
   - scenario: s33_execute_dialog_jump_to_all_delete
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s33_execute_dialog_jump_to_all_delete
+    status: done
+    notes: "All-delete warning banner + per-group jump link. NON-destructive: marks all 5 delete, opens execute dialog, asserts EXECUTE_ALL_DELETE_BANNER visible + the execute-all-delete-jump-{group_number} button visible, clicks the real <button> (web IMPROVES on Qt, which couldn't click the QLabel <a> on hosted CI), Escape-closes, asserts rows unchanged. No file deletion."
 
   - scenario: s34_lock_confirm_at_execute
     playwright_module: null
@@ -197,9 +197,9 @@ scenarios:
     notes: ""
 
   - scenario: s36_lock_confirm_destructive_execute
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s36_lock_confirm_destructive_execute
+    status: done
+    notes: "Lock-confirm -> Unlock & Apply -> delete fires on the previously-locked row. Locks q95, marks all 5 delete, Execute -> all-delete confirm -> POST returns 409 locked_paths -> LOCK_CONFIRM_DIALOG -> Unlock & Apply (re-POST force_locked=true) -> asserts all 5 gone from disk + total_files==0. Web modal ordering (all-delete confirm BEFORE lock-confirm) differs from Qt; final outcome identical. Uses the EXECUTE-flow LockConfirmDialog (testid'd), distinct from the ActionDialog inline lock dialog that blocks s32."
 
   - scenario: s37_status_bar_baseline
     playwright_module: qa.web.scenarios.s37_status_bar_baseline
@@ -314,7 +314,7 @@ scenarios:
   - scenario: s60_execute_filter_by_action_type
     playwright_module: null
     status: todo
-    notes: ""
+    notes: "BLOCKED on FE #676 — the web execute-type-filter is display-only: Execute commits ALL decided rows regardless of the active filter (ExecuteDialog.tsx:152-158 / useAppStore.ts:409 send scope_paths=null), and the Qt 'hidden destructive' warning banner has no web equivalent. s60's load-bearing assertion ('Execute under Delete-only filter leaves ignore-decided rows untouched') can't be expressed until that FE gap closes. An honest port needs the FE change first."
 
   - scenario: s61_actioned_singleton_prune
     playwright_module: null
@@ -327,9 +327,9 @@ scenarios:
     notes: "s62 intentionally absent from ALL_SCENARIOS"
 
   - scenario: s64_execute_selected_partial
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s64_execute_selected_partial
+    status: done
+    notes: "Partial (scoped) execute leaves other rows intact. HONEST partial port: the web execute-tree is single-select so 'Execute selected' scopes exactly 1 file (Qt Ctrl+clicked 2) — same scope_paths server invariant, 1-file subset. Marks all 5 delete, selects 1 row, Execute selected, asserts the target is gone from disk+manifest while the 4 survivors remain on disk with user_decision=='delete' and the dialog stays open; a second full Execute clears the rest (total_files==0). Multi-row select is a separate FE-parity gap."
 
   - scenario: s65_passenger_bridge
     playwright_module: null
