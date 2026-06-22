@@ -402,26 +402,32 @@ def _close_window() -> None:
     )
 
 
-_user32 = ctypes.windll.user32
-_kernel32 = ctypes.windll.kernel32
-_WNDENUMPROC = ctypes.WINFUNCTYPE(
-    ctypes.c_int, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
-)
+# These Win32 window-enumeration primitives execute at module level via
+# ctypes.windll / WINFUNCTYPE, which exist only on Windows. The Qt qa-batch
+# RUNNER is Windows-only, but this module must stay IMPORTABLE on Linux so the
+# cross-platform web harness (qa/web/_batch.py) and scripts/check_qa_parity.py
+# can import ALL_SCENARIOS. Guard the win32-only definitions; the functions that
+# reference them below are only called during a Windows qa-batch run.
+if sys.platform == "win32":
+    _user32 = ctypes.windll.user32
+    _kernel32 = ctypes.windll.kernel32
+    _WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_int, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
 
-
-class _PROCESSENTRY32(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", ctypes.wintypes.DWORD),
-        ("cntUsage", ctypes.wintypes.DWORD),
-        ("th32ProcessID", ctypes.wintypes.DWORD),
-        ("th32DefaultHeapID", ctypes.c_void_p),
-        ("th32ModuleID", ctypes.wintypes.DWORD),
-        ("cntThreads", ctypes.wintypes.DWORD),
-        ("th32ParentProcessID", ctypes.wintypes.DWORD),
-        ("pcPriClassBase", ctypes.wintypes.LONG),
-        ("dwFlags", ctypes.wintypes.DWORD),
-        ("szExeFile", ctypes.wintypes.WCHAR * 260),
-    ]
+    class _PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.wintypes.DWORD),
+            ("cntUsage", ctypes.wintypes.DWORD),
+            ("th32ProcessID", ctypes.wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", ctypes.wintypes.DWORD),
+            ("cntThreads", ctypes.wintypes.DWORD),
+            ("th32ParentProcessID", ctypes.wintypes.DWORD),
+            ("pcPriClassBase", ctypes.wintypes.LONG),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("szExeFile", ctypes.wintypes.WCHAR * 260),
+        ]
 
 
 def _find_descendants(parent_pid: int) -> set[int]:
