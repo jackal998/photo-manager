@@ -139,6 +139,26 @@ class SettingsUpdate(BaseModel):
     updates: dict[str, Any]
 
 
+class BulkDecideRequest(BaseModel):
+    """Body for POST /api/action/bulk-decide."""
+
+    manifest_path: str
+    field: str
+    pattern: str
+    action: str
+    force_locked: bool = False
+    preview: bool = False
+
+
+class BulkDecideResult(BaseModel):
+    """Response for POST /api/action/bulk-decide."""
+
+    matched: int
+    affected_paths: list[str]
+    action_applied: str
+    groups: list[Any]
+
+
 class WebScanRequest(BaseModel):
     """HTTP boundary model for POST /api/scan.
 
