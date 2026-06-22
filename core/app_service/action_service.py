@@ -81,6 +81,7 @@ def bulk_decide(
     *,
     allowed_roots: list[str] | None = None,
     force_locked: bool = False,
+    skip_locked: bool = False,
     preview: bool = False,
 ) -> dict[str, Any]:
     """Apply a decision or lock mutation to all rows matching ``pattern`` on ``field``.
@@ -105,9 +106,19 @@ def bulk_decide(
         from the affected set (same semantics as execute_service's filter).
     force_locked:
         When False (default), a decision action on rows with ``is_locked=True``
-        raises ``ValueError("locked_paths", [...])`` (two positional args;
-        the route matches ``args[0] == "locked_paths"`` → HTTP 409).
+        raises ``ValueError("locked_paths", locked, matched_total)`` (three
+        positional args; the route matches ``args[0] == "locked_paths"`` → HTTP
+        409 and forwards ``matched_total`` so the FE can derive the unlocked
+        count without a separate preview round-trip).
         When True, locked rows are mutated anyway.
+    skip_locked:
+        When True, a decision action applies only to the UNLOCKED subset of the
+        matched rows; locked rows are left fully untouched (``is_locked`` and
+        ``user_decision`` unchanged) — the "Apply to Unlocked Only" verdict
+        (#674, mirrors Qt ``LockedRowsConfirmDialog.APPLY_UNLOCKED_ONLY``). The
+        returned ``matched`` / ``affected_paths`` report the actually-applied
+        unlocked subset. Mutually exclusive with ``force_locked`` — both True
+        raises a plain ``ValueError`` (route → HTTP 422).
     preview:
         When True, compute ``affected_paths`` but do not write any DB changes.
         Returns the same shape dict with an unchanged manifest.
@@ -128,10 +139,21 @@ def bulk_decide(
         ``pattern`` is an invalid regex (plain-regex branch only).
     ValueError:
         ``action`` is not a recognized sentinel.
-    ValueError("locked_paths", [...]):
-        Decision action would affect locked rows and ``force_locked`` is False.
+    ValueError("locked_paths", [...], matched_total):
+        Decision action would affect locked rows and neither ``force_locked``
+        nor ``skip_locked`` is set.
+    ValueError (plain):
+        ``force_locked`` and ``skip_locked`` are both True (incoherent request).
     """
     _require_manifest(manifest_path)
+
+    # Mutually-exclusive lock verdicts: "apply to all (unlock)" and "apply to
+    # unlocked only" are contradictory write intents. The 3-button FE can never
+    # send both, but POST /api/action/bulk-decide is a public HTTP boundary —
+    # reject an incoherent body here (route → 422), per the validate-at-system-
+    # boundaries rule.
+    if force_locked and skip_locked:
+        raise ValueError("force_locked and skip_locked are mutually exclusive")
 
     vm = _load_vm(manifest_path)
     groups_objs = vm.groups
@@ -176,10 +198,14 @@ def bulk_decide(
             "groups": serialize_groups(groups_objs),
         }
 
-    # Locked-rows gate (decision actions only; real writes only — preview
+    # Locked-rows handling (decision actions only; real writes only — preview
     # returned above). Reads is_locked from the already-loaded record objects,
-    # the same source-of-truth discipline as execute_service.
-    if kind == "decision" and not force_locked:
+    # the same source-of-truth discipline as execute_service. Three modes mirror
+    # the Qt LockedRowsConfirmDialog verdicts:
+    #   force_locked → mutate locked rows too (Unlock & Apply All)
+    #   skip_locked  → apply to the unlocked subset only (Apply to Unlocked Only)
+    #   neither      → refuse with 409 if any matched row is locked
+    if kind == "decision" and (skip_locked or not force_locked):
         path_to_rec: dict[str, Any] = {}
         for group in groups_objs:
             for rec in getattr(group, "items", []):
@@ -187,8 +213,18 @@ def bulk_decide(
         locked: list[str] = [
             p for p in safe if getattr(path_to_rec.get(p), "is_locked", False)
         ]
-        if locked:
-            raise ValueError("locked_paths", locked)
+        if skip_locked:
+            # Narrow `safe` to the unlocked subset IN PLACE so the write set AND
+            # the returned matched/affected_paths both report the actually-
+            # applied subset (mirrors Qt set_count=len(unlocked_items)). Locked
+            # rows keep their is_locked + user_decision untouched.
+            locked_set = set(locked)
+            safe = [p for p in safe if p not in locked_set]
+        elif locked:
+            # 409 carries the FULL matched count (len(safe) BEFORE any narrowing)
+            # so the FE derives unlocked = matched_total - len(locked) without a
+            # separate preview.
+            raise ValueError("locked_paths", locked, len(safe))
 
     # Apply.
     repo = ManifestRepository()

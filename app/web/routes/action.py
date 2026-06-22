@@ -67,6 +67,7 @@ async def post_bulk_decide(body: BulkDecideRequest, request: Request) -> BulkDec
             body.pattern,
             body.action,
             body.force_locked,
+            body.skip_locked,
             body.preview,
             [str(r) for r in roots],
         )
@@ -80,10 +81,13 @@ async def post_bulk_decide(body: BulkDecideRequest, request: Request) -> BulkDec
     except ValueError as exc:
         args = exc.args
         if args and args[0] == "locked_paths":
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "locked_paths", "locked_paths": args[1]},
-            ) from exc
+            detail: dict = {"code": "locked_paths", "locked_paths": args[1]}
+            # bulk_decide raises a 3-tuple ("locked_paths", locked, matched_total);
+            # forward the full matched count so the FE can size the unlocked
+            # subset without a separate preview round-trip (#674).
+            if len(args) > 2:
+                detail["matched_total"] = args[2]
+            raise HTTPException(status_code=409, detail=detail) from exc
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Bulk decide failed: {exc}") from exc
@@ -97,10 +101,17 @@ def _run_bulk_decide(
     pattern: str,
     action: str,
     force_locked: bool,
+    skip_locked: bool,
     preview: bool,
     allowed_roots: list[str],
 ) -> dict:
-    """Blocking worker — runs in the default thread pool."""
+    """Blocking worker — runs in the default thread pool.
+
+    ``skip_locked`` sits between ``force_locked`` and ``preview`` in BOTH this
+    signature and the positional ``run_in_executor`` call above; keep the two in
+    lock-step (a positional mismatch would silently default-False skip_locked —
+    the route test asserts it actually reaches the service).
+    """
     from core.app_service.action_service import bulk_decide
 
     return bulk_decide(
@@ -110,5 +121,6 @@ def _run_bulk_decide(
         action=action,
         allowed_roots=allowed_roots,
         force_locked=force_locked,
+        skip_locked=skip_locked,
         preview=preview,
     )

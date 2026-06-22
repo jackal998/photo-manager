@@ -368,6 +368,25 @@ ACTION_PREVIEW_LIST = "action-preview-list"
 ACTION_PREVIEW_TRUNCATED = "action-preview-truncated"
 """Note shown below the preview list when the server truncated the sample."""
 
+# --- ActionDialog inline lock-conflict dialog (#674) -----------------------
+# Distinct from the execute-flow ``LOCK_CONFIRM_*`` family below: this is the
+# ActionDialog (Set Action by Field) bulk-decide flow's own three-verdict
+# lock dialog (Unlock & Apply All / Apply to Unlocked Only / Cancel). The two
+# dialogs are never open at once; the ``action-`` prefix keeps the wire values
+# unambiguous.
+ACTION_LOCK_CONFIRM_DIALOG = "action-lock-confirm-dialog"
+"""Wrapper for the ActionDialog inline lock-conflict dialog (bulk-decide 409)."""
+
+ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY = "action-lock-confirm-btn-unlock-apply"
+"""'Unlock & Apply' — re-POST bulk-decide with force_locked=true."""
+
+ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY = "action-lock-confirm-btn-unlocked-only"
+"""'Apply to Unlocked Only' — re-POST bulk-decide with skip_locked=true.
+Disabled when every matched row is locked (no unlocked subset)."""
+
+ACTION_LOCK_CONFIRM_BTN_CANCEL = "action-lock-confirm-btn-cancel"
+"""'Cancel' — dismiss the inline lock dialog, write nothing."""
+
 # ---------------------------------------------------------------------------
 # Settings dialog
 # ---------------------------------------------------------------------------

@@ -465,6 +465,7 @@ web:
     lock_conflict_title: "有鎖定的列會受影響"
     lock_conflict_body: "有 {n} 個鎖定的列會受影響。要解鎖並一併套用嗎？"
     unlock_and_apply: "解鎖並套用"
+    unlocked_only: "僅套用至未鎖定"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
     file: "檔案"

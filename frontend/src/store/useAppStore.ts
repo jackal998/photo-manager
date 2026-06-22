@@ -633,7 +633,8 @@ export const useAppStore = create<AppStore>()(
       }
     },
 
-    async applyBulkDecide(forceLocked = false) {
+    async applyBulkDecide(opts = {}) {
+      const { forceLocked = false, skipLocked = false } = opts;
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
       const { field, pattern, action: actionValue } = get().action;
@@ -654,6 +655,7 @@ export const useAppStore = create<AppStore>()(
           pattern,
           action: actionValue,
           force_locked: forceLocked,
+          skip_locked: skipLocked,
           preview: false,
         });
 

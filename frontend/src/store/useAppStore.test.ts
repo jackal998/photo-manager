@@ -631,7 +631,7 @@ describe("useAppStore action slice (bulk-decide)", () => {
     vi.mocked(client.bulkDecide).mockReset().mockRejectedValueOnce(conflict);
 
     await expect(
-      useAppStore.getState().applyBulkDecide(false)
+      useAppStore.getState().applyBulkDecide()
     ).rejects.toBe(conflict);
   });
 

@@ -265,10 +265,14 @@ export interface AppActions {
    * On success: replaces manifest.groups from response.groups.
    *
    * - On success: updates manifest.groups and clears actionRunning.
-   * - On 409 locked_paths: sets actionError with locked path count.
+   * - On 409 locked_paths: re-throws ApiConflictError so the dialog opens.
    * - On other errors: sets actionError.
+   *
+   * Lock verdicts (#674) are mutually exclusive:
+   * - forceLocked: mutate locked rows too (Unlock & Apply All).
+   * - skipLocked: apply to the unlocked subset only (Apply to Unlocked Only).
    */
-  applyBulkDecide(forceLocked?: boolean): Promise<void>;
+  applyBulkDecide(opts?: { forceLocked?: boolean; skipLocked?: boolean }): Promise<void>;
 
   /** Clear the actionError field. */
   clearActionError(): void;

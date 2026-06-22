@@ -35,6 +35,10 @@ import {
   ACTION_MATCH_COUNTER,
   ACTION_PREVIEW_LIST,
   ACTION_PREVIEW_TRUNCATED,
+  ACTION_LOCK_CONFIRM_DIALOG,
+  ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY,
+  ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY,
+  ACTION_LOCK_CONFIRM_BTN_CANCEL,
 } from "@/testids";
 
 import { RegexPanel } from "./RegexPanel";
@@ -115,6 +119,11 @@ export function ActionDialog() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [lockConflictPaths, setLockConflictPaths] = useState<string[]>([]);
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false);
+  // Full matched count from the 409 (#674) — sizes the unlocked subset so the
+  // "Apply to Unlocked Only" button enables/disables without a stale preview.
+  const [lockConfirmMatchedTotal, setLockConfirmMatchedTotal] = useState<
+    number | null
+  >(null);
 
   // Debounce timer ref
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -160,35 +169,48 @@ export function ActionDialog() {
       setDeleteConfirmOpen(true);
       return;
     }
-    await doApply(false);
+    await doApply({});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [action]);
 
-  const doApply = useCallback(async (forceLocked: boolean) => {
-    try {
-      await applyBulkDecide(forceLocked);
-      closeActionDialog();
-    } catch (err) {
-      if (err instanceof ApiConflictError && err.code === "locked_paths") {
-        setLockConflictPaths(err.lockedPaths ?? []);
-        setLockConfirmOpen(true);
+  const doApply = useCallback(
+    async (opts: { forceLocked?: boolean; skipLocked?: boolean }) => {
+      try {
+        await applyBulkDecide(opts);
+        closeActionDialog();
+      } catch (err) {
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          setLockConflictPaths(err.lockedPaths ?? []);
+          // matched_total (#674) sizes the unlocked subset; null when absent.
+          setLockConfirmMatchedTotal(err.matchedTotal);
+          setLockConfirmOpen(true);
+        }
+        // Other errors are handled via store.actionError — no throw needed
       }
-      // Other errors are handled via store.actionError — no throw needed
-    }
-  }, [applyBulkDecide, closeActionDialog]);
+    },
+    [applyBulkDecide, closeActionDialog],
+  );
 
   const handleDeleteConfirmConfirm = useCallback(async () => {
     setDeleteConfirmOpen(false);
-    await doApply(false);
+    await doApply({});
   }, [doApply]);
 
   const handleDeleteConfirmCancel = useCallback(() => {
     setDeleteConfirmOpen(false);
   }, []);
 
+  // Unlock & Apply All — re-run mutating the locked rows too.
   const handleLockConfirmForce = useCallback(async () => {
     setLockConfirmOpen(false);
-    await doApply(true);
+    await doApply({ forceLocked: true });
+  }, [doApply]);
+
+  // Apply to Unlocked Only — re-run applying to the unlocked subset; locked
+  // rows stay locked + undecided (#674, mirrors Qt APPLY_UNLOCKED_ONLY).
+  const handleLockConfirmUnlockedOnly = useCallback(async () => {
+    setLockConfirmOpen(false);
+    await doApply({ skipLocked: true });
   }, [doApply]);
 
   const handleLockConfirmCancel = useCallback(() => {
@@ -274,9 +296,13 @@ export function ActionDialog() {
         onCancel={handleDeleteConfirmCancel}
       />
 
-      {/* Inline lock-conflict dialog for Action dialog (separate from execute flow) */}
+      {/* Inline lock-conflict dialog for Action dialog (separate from execute
+          flow). Three verdicts mirror the Qt LockedRowsConfirmDialog (#674):
+          Cancel / Apply to Unlocked Only / Unlock & Apply All. "Apply to
+          Unlocked Only" is disabled only when the matched total is known AND
+          leaves no unlocked rows (fail OPTIMISTIC when the count is absent). */}
       <Dialog open={lockConfirmOpen} onOpenChange={(o) => !o && handleLockConfirmCancel()}>
-        <DialogContent>
+        <DialogContent data-testid={ACTION_LOCK_CONFIRM_DIALOG}>
           <DialogHeader>
             <DialogTitle>
               {t("web.action_dialog.lock_conflict_title", "Locked rows would be affected")}
@@ -297,10 +323,29 @@ export function ActionDialog() {
             </ul>
           )}
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={handleLockConfirmCancel}>
+            <Button
+              variant="outline"
+              data-testid={ACTION_LOCK_CONFIRM_BTN_CANCEL}
+              onClick={handleLockConfirmCancel}
+            >
               {t("web.action_dialog.cancel", "Cancel")}
             </Button>
-            <Button variant="destructive" onClick={() => void handleLockConfirmForce()}>
+            <Button
+              variant="outline"
+              data-testid={ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY}
+              onClick={() => void handleLockConfirmUnlockedOnly()}
+              disabled={
+                lockConfirmMatchedTotal !== null &&
+                lockConfirmMatchedTotal - lockConflictPaths.length <= 0
+              }
+            >
+              {t("web.action_dialog.unlocked_only", "Apply to Unlocked Only")}
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid={ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY}
+              onClick={() => void handleLockConfirmForce()}
+            >
               {t("web.action_dialog.unlock_and_apply", "Unlock & Apply")}
             </Button>
           </DialogFooter>

@@ -556,6 +556,7 @@ web:
     lock_conflict_title: "Locked rows would be affected"
     lock_conflict_body: "{n} locked row(s) would be affected. Unlock and apply anyway?"
     unlock_and_apply: "Unlock & Apply"
+    unlocked_only: "Apply to Unlocked Only"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
     file: "File"

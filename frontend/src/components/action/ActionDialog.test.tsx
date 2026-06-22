@@ -39,6 +39,9 @@ import {
   ACTION_ACTION_COMBO,
   ACTION_BTN_APPLY,
   ACTION_PREVIEW_LIST,
+  ACTION_LOCK_CONFIRM_DIALOG,
+  ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY,
+  ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY,
   EXECUTE_ALL_DELETE_CONFIRM,
   EXECUTE_ALL_DELETE_CONFIRM_YES,
 } from "@/testids";
@@ -386,7 +389,7 @@ describe("ActionDialog", () => {
     await user.click(screen.getByTestId(ACTION_BTN_APPLY));
     // Delete confirm dialog open — click confirm
     await user.click(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES));
-    expect(applyMock).toHaveBeenCalledWith(false);
+    expect(applyMock).toHaveBeenCalledWith({});
   });
 
   // 14. 409 locked_paths shows lock confirm overlay AND retries with force.
@@ -415,14 +418,14 @@ describe("ActionDialog", () => {
     render(<ActionDialog />);
     await user.click(screen.getByTestId(ACTION_BTN_APPLY));
 
-    const unlockBtn = await screen.findByText(/Unlock & Apply/i);
+    const unlockBtn = await screen.findByTestId(ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY);
     // First attempt was unforced.
-    expect(applyMock).toHaveBeenCalledWith(false);
+    expect(applyMock).toHaveBeenCalledWith({});
 
-    // Click Unlock & Apply → retry WITH force_locked=true.
+    // Click Unlock & Apply → retry WITH forceLocked=true.
     await user.click(unlockBtn);
     await waitFor(() => {
-      expect(applyMock).toHaveBeenCalledWith(true);
+      expect(applyMock).toHaveBeenCalledWith({ forceLocked: true });
     });
   });
 
@@ -447,7 +450,72 @@ describe("ActionDialog", () => {
     await user.click(screen.getByTestId(ACTION_BTN_APPLY));
 
     expect(screen.queryByTestId(EXECUTE_ALL_DELETE_CONFIRM)).not.toBeInTheDocument();
-    expect(applyMock).toHaveBeenCalledWith(false);
+    expect(applyMock).toHaveBeenCalledWith({});
+  });
+
+  // 16. 409 lock-confirm offers "Apply to Unlocked Only" which retries with
+  // skipLocked (the #674 verdict). The 409 carries matched_total=3 (1 locked,
+  // 2 unlocked) so the button is enabled.
+  it("Apply to Unlocked Only retries with skipLocked=true", async () => {
+    const user = userEvent.setup();
+    const conflictError = new ApiConflictError("locked_paths", ["/photos/a.jpg"], 3);
+    applyMock.mockRejectedValueOnce(conflictError);
+    useAppStore.setState({ applyBulkDecide: applyMock } as never);
+
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          pattern: "IMG",
+          action: "__ignore__", // not delete → no delete-confirm step first
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    // The inline lock-confirm dialog (distinct from the execute-flow one) opens.
+    const dialog = await screen.findByTestId(ACTION_LOCK_CONFIRM_DIALOG);
+    expect(dialog).toBeInTheDocument();
+    expect(applyMock).toHaveBeenCalledWith({});
+
+    const unlockedOnlyBtn = screen.getByTestId(ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY);
+    expect(unlockedOnlyBtn).not.toBeDisabled(); // 2 unlocked rows
+    await user.click(unlockedOnlyBtn);
+    await waitFor(() => {
+      expect(applyMock).toHaveBeenCalledWith({ skipLocked: true });
+    });
+  });
+
+  // 17. When every matched row is locked (matched_total === locked count),
+  // "Apply to Unlocked Only" is disabled — there is no unlocked subset.
+  it("Apply to Unlocked Only is disabled when all matched rows are locked", async () => {
+    const user = userEvent.setup();
+    // matched_total=1, one locked path → 0 unlocked → button disabled.
+    const conflictError = new ApiConflictError("locked_paths", ["/photos/a.jpg"], 1);
+    applyMock.mockRejectedValueOnce(conflictError);
+    useAppStore.setState({ applyBulkDecide: applyMock } as never);
+
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          pattern: "IMG",
+          action: "__ignore__",
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    await screen.findByTestId(ACTION_LOCK_CONFIRM_DIALOG);
+    expect(screen.getByTestId(ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY)).toBeDisabled();
   });
 
   // Action combo renders all 5 options

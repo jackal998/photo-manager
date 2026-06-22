@@ -243,6 +243,10 @@ export interface RevealResult {
 export interface LockedPathsError {
   code: "locked_paths";
   locked_paths: string[];
+  // Present on the bulk-decide route (#674): the FULL matched count, so the
+  // ActionDialog can size the unlocked subset (matched_total - locked_paths)
+  // without a separate preview. Absent on the execute/remove 409s.
+  matched_total?: number;
 }
 
 export interface ExecuteAlreadyRunningError {
@@ -259,6 +263,9 @@ export interface BulkDecideRequest {
   pattern: string;
   action: string;
   force_locked?: boolean;
+  // #674 — apply the decision to the unlocked subset only (mutually exclusive
+  // with force_locked). Omitted/false on every other call.
+  skip_locked?: boolean;
   preview?: boolean;
 }
 

@@ -586,6 +586,10 @@ class TestBulkDecideLockedRowGate:
         detail = body.get("detail", {})
         assert detail.get("code") == "locked_paths"
         assert str(fa) in detail.get("locked_paths", [])
+        # #674 — the 409 carries the FULL matched count so the FE can size the
+        # unlocked subset without a preview. Only fa matches "locked", so the
+        # full matched set is 1 (all of it locked → 0 unlocked).
+        assert detail.get("matched_total") == 1
 
         # DB must be UNCHANGED.
         assert _read_user_decision(manifest, str(fa)) == ""
@@ -720,3 +724,112 @@ class TestBulkDecideMalformedSentinel:
         assert resp.status_code == 422, resp.text
         # Nothing mutated.
         assert _read_user_decision(manifest, str(fa)) == ""
+
+
+# ---------------------------------------------------------------------------
+# POST /api/action/bulk-decide — skip_locked (Apply to Unlocked Only, #674)
+# ---------------------------------------------------------------------------
+
+
+class TestBulkDecideSkipLocked:
+    """skip_locked applies the decision to the UNLOCKED subset of matched rows,
+    leaving locked rows fully untouched — the Qt LockedRowsConfirmDialog
+    APPLY_UNLOCKED_ONLY verdict ported to the web (#674). Every test below
+    exercises a real failure mode, not synthetic branch coverage.
+    """
+
+    def _two_row_manifest(self, tmp_path, *, locked_basename: str):
+        """Build a 2-row same-group manifest; lock exactly one row."""
+        files_dir = tmp_path / "files"
+        files_dir.mkdir()
+        fa = files_dir / "shot_01.jpg"
+        fb = files_dir / "shot_02.jpg"
+        fa.write_bytes(b"\x00" * 64)
+        fb.write_bytes(b"\x00" * 64)
+        rows = []
+        for f in (fa, fb):
+            rows.append({
+                "source_path": str(f), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 1 if f.name == locked_basename else 0,
+                "file_size_bytes": 64,
+            })
+        return _make_manifest(tmp_path, rows), fa, fb
+
+    def test_skip_locked_applies_to_unlocked_subset_only(
+        self, client_with_roots, tmp_path
+    ):
+        """Regex matches BOTH a locked and an unlocked row → skip_locked writes
+        the unlocked row only; the locked row keeps is_locked + decision=''.
+
+        Doubles as the route-threading guard: a positional miswire of
+        skip_locked through _run_bulk_decide would 409 here (or mutate the
+        locked row), so a green result proves skip_locked reached the service.
+        """
+        client, root = client_with_roots
+        manifest, fa, fb = self._two_row_manifest(tmp_path, locked_basename="shot_01.jpg")
+
+        resp = client.post("/api/action/bulk-decide", json={
+            "manifest_path": str(manifest),
+            "field": "File Name",
+            "pattern": "shot",          # matches BOTH rows
+            "action": "delete",
+            "skip_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # matched/affected_paths report the ACTUALLY-applied unlocked subset.
+        assert body["matched"] == 1
+        assert str(fb) in body["affected_paths"]
+        assert str(fa) not in body["affected_paths"]
+
+        # The unlocked row got 'delete'; the locked row is untouched.
+        assert _read_user_decision(manifest, str(fb)) == "delete"
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_is_locked(manifest, str(fa)) is True
+
+    def test_skip_locked_all_matched_locked_is_noop(
+        self, client_with_roots, tmp_path
+    ):
+        """Regex matches only the locked row → skip_locked applies to NOTHING
+        (no error, no mutation) — the all-locked degenerate case."""
+        client, root = client_with_roots
+        manifest, fa, fb = self._two_row_manifest(tmp_path, locked_basename="shot_01.jpg")
+
+        resp = client.post("/api/action/bulk-decide", json={
+            "manifest_path": str(manifest),
+            "field": "File Name",
+            "pattern": "shot_01",       # matches ONLY the locked row
+            "action": "delete",
+            "skip_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["matched"] == 0
+        assert body["affected_paths"] == []
+        # Nothing mutated; the locked row stays locked + undecided.
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_is_locked(manifest, str(fa)) is True
+
+    def test_force_and_skip_both_true_returns_422(
+        self, client_with_roots, tmp_path
+    ):
+        """force_locked AND skip_locked are contradictory write intents — the
+        public HTTP boundary rejects the incoherent body with 422 and mutates
+        nothing. (The 3-button FE can never send both; this guards raw clients.)
+        """
+        client, root = client_with_roots
+        manifest, fa, fb = self._two_row_manifest(tmp_path, locked_basename="shot_01.jpg")
+
+        resp = client.post("/api/action/bulk-decide", json={
+            "manifest_path": str(manifest),
+            "field": "File Name",
+            "pattern": "shot",
+            "action": "delete",
+            "force_locked": True,
+            "skip_locked": True,
+        })
+        assert resp.status_code == 422, resp.text
+        # No write on a rejected request.
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_user_decision(manifest, str(fb)) == ""

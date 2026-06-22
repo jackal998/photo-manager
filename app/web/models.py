@@ -147,6 +147,7 @@ class BulkDecideRequest(BaseModel):
     pattern: str
     action: str
     force_locked: bool = False
+    skip_locked: bool = False
     preview: bool = False
 
 

@@ -207,12 +207,21 @@ export async function browseFs(path?: string): Promise<FsBrowseResponse> {
 export class ApiConflictError extends Error {
   readonly code: string;
   readonly lockedPaths: string[] | null;
+  // The FULL matched count carried by the bulk-decide 409 (#674); null on the
+  // execute/remove 409s which don't send it. Lets the ActionDialog size the
+  // unlocked subset without a stale preview.
+  readonly matchedTotal: number | null;
 
-  constructor(code: string, lockedPaths: string[] | null = null) {
+  constructor(
+    code: string,
+    lockedPaths: string[] | null = null,
+    matchedTotal: number | null = null,
+  ) {
     super(`409 Conflict: ${code}`);
     this.name = "ApiConflictError";
     this.code = code;
     this.lockedPaths = lockedPaths;
+    this.matchedTotal = matchedTotal;
   }
 }
 
@@ -230,6 +239,7 @@ async function postJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
   if (res.status === 409) {
     let code = "conflict";
     let lockedPaths: string[] | null = null;
+    let matchedTotal: number | null = null;
     try {
       const errBody = (await res.json()) as { detail?: unknown };
       const detail = errBody.detail as LockedPathsError | { code: string } | undefined;
@@ -237,12 +247,17 @@ async function postJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
         code = detail.code;
         if (code === "locked_paths" && "locked_paths" in detail) {
           lockedPaths = (detail as LockedPathsError).locked_paths;
+          // matched_total is bulk-decide-only (#674); execute/remove omit it.
+          const mt = (detail as LockedPathsError).matched_total;
+          if (typeof mt === "number") {
+            matchedTotal = mt;
+          }
         }
       }
     } catch {
       // body not JSON; keep defaults
     }
-    throw new ApiConflictError(code, lockedPaths);
+    throw new ApiConflictError(code, lockedPaths, matchedTotal);
   }
 
   await checkResponse(res);
