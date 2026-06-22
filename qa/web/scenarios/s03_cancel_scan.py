@@ -1,4 +1,4 @@
-"""Web scenario s03 — Cancel scan mid-run (two samples: post-HASH + WALK-stage).
+"""Web scenario s03 — Cancel scan mid-run (two samples: HASH-stage + WALK-stage).
 
 Ported from qa/scenarios/s03_cancel_scan.py (Qt UIA).
 
@@ -6,19 +6,29 @@ Qt intent:
   - Kick off a scan, cancel it mid-run, and prove the cancel is *clean*:
     the worker stops cooperatively, the app stays usable, and a cancelled
     scan never writes its output manifest.
-  - Two samples in one file (the Qt scenario's #493 precedent):
-      * Sample 1 (post-HASH) — standard small sandbox sources; the WALK stage
-        finishes in <50 ms so the cancel lands in HASH/CLASSIFY.
-      * Sample 2 (WALK-stage) — a large disposable source (thousands of 1-KiB
-        stubs) so the walker is still enumerating when the cancel arrives;
-        the log must show 'Walking …' (WALK started) and the cancel must land
-        before the WRITE gate (output .db never written).
+  - Two samples in one file (the Qt scenario's #493 precedent), cancelling at
+    two distinct pipeline stages so a missing interruption check at a *later*
+    stage can't hide:
+      * Sample 1 (HASH-stage) — cancel after the walker has finished and the
+        HASH pass has begun.
+      * Sample 2 (WALK-stage) — cancel while the walker is still enumerating;
+        additionally asserts the WRITE gate (output .db never written).
+
+Both samples scan the same large disposable source (thousands of valid 1-KiB
+stub JPEGs).  This is a deliberate change from the Qt scenario, which used the
+small sandbox for Sample 1: the tiny near-duplicates fixture scans in well
+under a second on a fast headless CI runner, so the scan finishes — and the
+``isRunning``-gated progress log unmounts — before a mid-run cancel can land
+(observed: Sample 1 timed out waiting for ``scan-progress-log`` to be visible
+on ubuntu CI while passing on the slower Windows dev rig).  The large source
+guarantees a multi-second scan with a reliably observable HASH stage on any
+runner, so the cancel window is robust by construction rather than timing-luck.
 
 Web slice:
-  Sample 1:
-    1. mkdtemp .db output path (never created — the cancel pre-empts the write).
-    2. Open scan dialog → add the read-only near-duplicates fixture → set output
-       → click Start *without* waiting for completion (we must cancel mid-run).
+  Sample 1 (HASH-stage cancel):
+    1. mkdtemp .db output path (never written — the cancel pre-empts the write).
+    2. Open scan dialog → add the large source → set output → click Start
+       *without* waiting for completion (we must cancel mid-run).
     3. wait_log_line("Hashing") to confirm the pipeline reached the HASH pass
        (past WALK), then click scan-cancel-button.
     4. ASSERT clean cancel: scan-dialog transitions to hidden (the store sets
@@ -29,16 +39,15 @@ Web slice:
        (cancel produced no results — loadManifest is only called on the SSE
        'finished' transition, never on 'cancelled').
 
-  Sample 2:
-    1. Build the large source via make_large_source(6000) (idempotent,
-       gitignored).  Use a SECOND db tempfile output2.db that does NOT exist.
+  Sample 2 (WALK-stage cancel):
+    1. Use a SECOND db tempfile output2.db that does NOT exist.
     2. Open scan dialog → reconfigure to the large source → set output2 →
        click Start (non-blocking).
     3. wait_log_line("Walking", timeout=8000) — capture the WALK-started marker
        BEFORE cancelling (the scan-progress-log element unmounts on dialog
-       close, same constraint as s04).  If 6000 stubs walk too fast and the
-       scan finishes first, raise a clear AssertionError mirroring Qt's
-       FAIL-on-Done guard (LEAD can bump the stub count).
+       close, same constraint as s04).  If the stubs walk too fast and the scan
+       finishes first, raise a clear AssertionError mirroring Qt's FAIL-on-Done
+       guard (LEAD can bump the stub count).
     4. Click scan-cancel-button.
     5. ASSERT dialog closed cleanly (worker not stuck): scan-dialog hidden.
     6. ASSERT manifest untouched (absence): output2.db must NOT exist on disk;
@@ -65,14 +74,19 @@ Qt → web divergences:
     the output file is absent from disk and GET /api/manifest 404s — the
     web-native equivalent of 'the manifest was never produced'.
   - D4 (log read before cancel): ``scan-progress-log`` unmounts when the dialog
-    closes, so the 'Walking' marker must be read BEFORE clicking Cancel (the
-    same constraint s04 documents for its log assertions).
+    closes, so the stage marker ('Hashing' / 'Walking') must be read BEFORE
+    clicking Cancel (the same constraint s04 documents for its log assertions).
+  - D5 (large source for BOTH samples): Qt's Sample 1 used the small sandbox
+    because Windows UIA scans run slowly enough to land a post-HASH cancel on a
+    handful of files.  The headless web batch needs the large source for Sample
+    1 too — see the module note above.  Same two-stage coverage (HASH + WALK),
+    different fixture.
 
   Strength note: the Qt scenario's WALK sample tolerates a 'slow-runner
   fallback' (clean cancel + manifest untouched even if 'Walking …' scrolled
   past before capture).  This web port keeps the STRONGER form: it requires the
-  'Walking' marker to be observed in the live log before cancelling, and treats
-  a scan that reaches completion before the cancel as a hard failure (mirroring
+  stage marker to be observed in the live log before cancelling, and treats a
+  scan that reaches completion before the cancel as a hard failure (mirroring
   Qt's FAIL-on-Done guard).  The clean-cancel + absence invariants are asserted
   in both samples.
 """
@@ -102,11 +116,11 @@ from qa.web.testid_constants import (
 )
 
 _REPO = Path(__file__).resolve().parents[3]
-_NEAR_DUPS_DIR = str(_REPO / "qa" / "sandbox" / "near-duplicates")
 
-# Stub count for the WALK-stage source.  Big enough that the walker is still
-# enumerating when the cancel arrives ~immediately after 'Walking' is logged.
-# Mirrors the Qt scenario's WALK_SOURCE_STUB_COUNT.
+# Stub count for the large source.  Big enough that BOTH the walker (Sample 2)
+# and the HASH pass (Sample 1) are still running when the cancel arrives a beat
+# after the stage marker is logged.  Mirrors the Qt scenario's
+# WALK_SOURCE_STUB_COUNT.
 _WALK_SOURCE_STUB_COUNT = 6000
 
 
@@ -132,7 +146,7 @@ def _manifest_status(base_url: str, db_path: str) -> int:
 
 
 def _build_large_source() -> str:
-    """Build the WALK-stage large source on demand and return its path string.
+    """Build the large disposable source on demand and return its path string.
 
     Imports the sibling generator lazily (it pulls PIL), mirroring the Qt
     scenario.  Idempotent: skips the build when the directory already holds
@@ -146,36 +160,38 @@ def _build_large_source() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sample 1 — post-HASH cancel against the read-only near-duplicates fixture
+# Sample 1 — HASH-stage cancel against the large source
 # ---------------------------------------------------------------------------
 
 
-def _sample_post_hash_cancel(page, db_path: str) -> None:
+def _sample_hash_stage_cancel(page, src: str, db_path: str) -> None:
     """Start a scan, wait for the HASH pass, cancel, assert clean + usable.
 
-    The near-duplicates fixture is read-only and never mutated: scanning only
-    *reads* the source files, and the cancel pre-empts the WRITE stage so no
-    output .db is produced — there is nothing to copy-guard.
+    The large source is read-only and never mutated: scanning only *reads* the
+    source files, and the cancel pre-empts the WRITE stage so no output .db is
+    produced.
     """
     open_scan_dialog(page)
-    add_scan_source(page, _NEAR_DUPS_DIR, idx=0)
+    add_scan_source(page, src, idx=0)
     set_output_path(page, db_path)
     # Non-blocking start: start_scan only clicks the button.  We must NOT call
     # run_scan / wait_manifest_loaded here — we need to cancel mid-run.
     start_scan(page)
 
-    # Wait until the pipeline reached the HASH pass (past WALK).  If the scan
-    # raced to completion first, the log unmounts and this raises a timeout —
-    # surface it as a clear FAIL-on-fast guard (mirrors Qt's saw_done check).
+    # Wait until the pipeline reached the HASH pass (past WALK).  Generous
+    # timeout: the walker must finish enumerating all stubs first, then the
+    # 'Hashing N files' marker logs.  If the scan somehow raced to completion,
+    # the log unmounts and this raises a timeout — surface it as a clear
+    # FAIL-on-fast guard (mirrors Qt's saw_done check).
     try:
-        wait_log_line(page, "Hashing", timeout=10_000)
+        wait_log_line(page, "Hashing", timeout=60_000)
     except Exception as exc:  # playwright TimeoutError or unmounted log
         raise AssertionError(
             "Sample 1: never observed the 'Hashing' stage marker before the "
-            "scan finished — the near-duplicates fixture hashed too fast to "
-            "land a post-HASH cancel on this runner.  (If this recurs, LEAD "
-            "can swap in a slightly larger fixture.)  Underlying: "
-            f"{exc!r}"
+            "scan finished — the large source hashed too fast to land a "
+            f"HASH-stage cancel on this runner.  LEAD can bump "
+            f"_WALK_SOURCE_STUB_COUNT (currently {_WALK_SOURCE_STUB_COUNT}).  "
+            f"Underlying: {exc!r}"
         ) from exc
 
     # Cancel.  The button only renders while the scan is running; if the scan
@@ -186,8 +202,8 @@ def _sample_post_hash_cancel(page, db_path: str) -> None:
     except Exception as exc:
         raise AssertionError(
             "Sample 1: scan-cancel-button vanished before it could be clicked "
-            "— the scan finished before the post-HASH cancel landed.  LEAD can "
-            f"bump the fixture size.  Underlying: {exc!r}"
+            "— the scan finished before the HASH-stage cancel landed.  LEAD can "
+            f"bump _WALK_SOURCE_STUB_COUNT.  Underlying: {exc!r}"
         ) from exc
     cancel_btn.click()
 
@@ -208,11 +224,11 @@ def _sample_post_hash_cancel(page, db_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sample 2 — WALK-stage cancel against the large disposable source
+# Sample 2 — WALK-stage cancel against the large source
 # ---------------------------------------------------------------------------
 
 
-def _sample_walk_stage_cancel(page, base_url: str, db_path2: str) -> None:
+def _sample_walk_stage_cancel(page, base_url: str, src: str, db_path2: str) -> None:
     """Start a scan of the large source, cancel during WALK, assert untouched.
 
     ``db_path2`` must NOT exist on disk going in — the absence check at the end
@@ -222,7 +238,6 @@ def _sample_walk_stage_cancel(page, base_url: str, db_path2: str) -> None:
         f"Sample 2 precondition: output2 path {db_path2!r} already exists; the "
         "absence check would be meaningless"
     )
-    src = _build_large_source()
 
     open_scan_dialog(page)
     add_scan_source(page, src, idx=0)
@@ -284,7 +299,7 @@ def _sample_walk_stage_cancel(page, base_url: str, db_path2: str) -> None:
 
 
 def run(*, base_url: str) -> int:
-    """Cancel a scan mid-run twice (post-HASH + WALK) and prove clean cancel.
+    """Cancel a scan mid-run twice (HASH + WALK) and prove clean cancel.
 
     Returns 0 on success; raises AssertionError on any failed invariant.
     """
@@ -295,20 +310,23 @@ def run(*, base_url: str) -> int:
     tmpdir2 = tempfile.mkdtemp(prefix="qa_s03_")
     db_path2 = os.path.join(tmpdir2, "s03_walk_output.db")
     try:
+        # Build the large source once (idempotent); both samples scan it.
+        src = _build_large_source()
+
         with PWContext(base_url=base_url) as ctx:
             page = ctx.new_page()
             page.goto("/")
 
-            # Sample 1 — post-HASH cancel (read-only near-duplicates fixture).
-            _sample_post_hash_cancel(page, db_path)
+            # Sample 1 — HASH-stage cancel.
+            _sample_hash_stage_cancel(page, src, db_path)
 
-            # Sample 2 — WALK-stage cancel (large disposable source).
-            _sample_walk_stage_cancel(page, base_url, db_path2)
+            # Sample 2 — WALK-stage cancel (+ manifest-untouched).
+            _sample_walk_stage_cancel(page, base_url, src, db_path2)
     finally:
-        # Clean up both db tempfiles.  The mkdtemp NamedTemporaryFile created an
-        # empty .db on disk (Sample 1's output that the cancel pre-empted, so it
-        # may be empty or absent); remove it.  Leave the gitignored large source
-        # in place — it is an idempotent cache reused across runs.
+        # Clean up both db tempfiles.  The NamedTemporaryFile created an empty
+        # .db on disk (Sample 1's output that the cancel pre-empted, so it may
+        # be empty or absent); remove it.  Leave the gitignored large source in
+        # place — it is an idempotent cache reused across runs.
         for path in (db_path, db_path2):
             try:
                 os.unlink(path)
