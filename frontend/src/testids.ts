@@ -9,10 +9,31 @@ export const MAIN_SETTINGS_BUTTON = "main-settings-button";
 export const MAIN_MANIFEST_INPUT = "main-manifest-input";
 export const MAIN_MANIFEST_OPEN = "main-manifest-open-button";
 export const MAIN_EMPTY_STATE = "main-empty-state";
+export const MAIN_EMPTY_SCAN = "main-empty-scan";
+export const MAIN_EMPTY_OPEN = "main-empty-open";
+export const MAIN_MENU_BAR = "main-menu-bar";
+export const MENU_FILE = "menu-file";
+export const MENU_FILE_SCAN = "menu-file-scan";
+export const MENU_FILE_OPEN = "menu-file-open";
+export const MENU_ACTION = "menu-action";
+export const MENU_ACTION_SET = "menu-action-set";
+export const MENU_ACTION_EXECUTE = "menu-action-execute";
+export const MENU_VIEW = "menu-view";
+export const MENU_VIEW_LANG_EN = "menu-view-lang-en";
+export const MENU_VIEW_LANG_ZH = "menu-view-lang-zh";
+export const FS_BROWSER = "fs-browser";
+export const FS_BROWSER_UP = "fs-browser-up";
+export const FS_BROWSER_PATH = "fs-browser-path";
+export const FS_BROWSER_ENTRY = "fs-browser-entry";
+export const FS_BROWSER_FILENAME = "fs-browser-filename";
+export const FS_BROWSER_CONFIRM = "fs-browser-confirm";
+export const FS_BROWSER_CANCEL = "fs-browser-cancel";
+export const FS_BROWSER_ERROR = "fs-browser-error";
 export const SCAN_ADD_SOURCE = "scan-add-source-button";
 export const SCAN_DIALOG = "scan-dialog";
 export const SCAN_SOURCE_LIST = "scan-source-list";
 export const SCAN_OUTPUT_PATH = "scan-output-path";
+export const SCAN_OUTPUT_BROWSE = "scan-output-browse";
 export const SCAN_START_BUTTON = "scan-start-button";
 export const SCAN_CANCEL_BUTTON = "scan-cancel-button";
 export const SCAN_PROGRESS_LOG = "scan-progress-log";
@@ -109,6 +130,10 @@ export function scanSourcePathTestid(idx: number): string {
 
 export function scanSourceRecursiveTestid(idx: number): string {
   return `scan-source-${idx}-recursive`;
+}
+
+export function scanSourceBrowseTestid(idx: number): string {
+  return `scan-source-${idx}-browse`;
 }
 
 export function executeRowTestid(groupId: string, basename: string): string {

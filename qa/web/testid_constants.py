@@ -52,10 +52,81 @@ MAIN_MANIFEST_INPUT = "main-manifest-input"
 """Text input for typing or pasting a manifest (.db) file path."""
 
 MAIN_MANIFEST_OPEN = "main-manifest-open-button"
-"""Button that opens the filesystem browser to pick a manifest file."""
+"""Toolbar button that loads the manifest path typed in the adjacent input.
+The filesystem *browser* is a separate affordance (File → Open Manifest and
+the empty-state 'Open Manifest…' button → FsBrowser file mode)."""
 
 MAIN_EMPTY_STATE = "main-empty-state"
 """Placeholder shown in the main content area when no manifest is loaded."""
+
+MAIN_EMPTY_SCAN = "main-empty-scan"
+"""'Scan…' action button inside the empty-state placeholder."""
+
+MAIN_EMPTY_OPEN = "main-empty-open"
+"""'Open Manifest…' action button inside the empty-state placeholder."""
+
+# ---------------------------------------------------------------------------
+# Menu bar (Qt MenuController parity — File / Action / View)
+# ---------------------------------------------------------------------------
+
+MAIN_MENU_BAR = "main-menu-bar"
+"""The top menu bar container (mirrors Qt's QMenuBar)."""
+
+MENU_FILE = "menu-file"
+"""'File' top-level menu trigger."""
+
+MENU_FILE_SCAN = "menu-file-scan"
+"""File → Scan Sources… menu item (opens the scan dialog)."""
+
+MENU_FILE_OPEN = "menu-file-open"
+"""File → Open Manifest… menu item (opens the filesystem file picker)."""
+
+MENU_ACTION = "menu-action"
+"""'Action' top-level menu trigger."""
+
+MENU_ACTION_SET = "menu-action-set"
+"""Action → Set Action by Regex menu item (second ActionDialog entry point)."""
+
+MENU_ACTION_EXECUTE = "menu-action-execute"
+"""Action → Execute… menu item (opens the execute-action dialog)."""
+
+MENU_VIEW = "menu-view"
+"""'View' top-level menu trigger."""
+
+MENU_VIEW_LANG_EN = "menu-view-lang-en"
+"""View → Language → English menu item."""
+
+MENU_VIEW_LANG_ZH = "menu-view-lang-zh"
+"""View → Language → 中文 (zh_TW) menu item."""
+
+# ---------------------------------------------------------------------------
+# Filesystem picker (FsBrowser — directory / file / save modes)
+# ---------------------------------------------------------------------------
+
+FS_BROWSER = "fs-browser"
+"""The filesystem picker dialog wrapper."""
+
+FS_BROWSER_UP = "fs-browser-up"
+"""'Up' button — navigates to the parent directory (or roots)."""
+
+FS_BROWSER_PATH = "fs-browser-path"
+"""Current-directory display in the picker header."""
+
+FS_BROWSER_ENTRY = "fs-browser-entry"
+"""A directory or file row in the picker list (shared testid; filter by text).
+``data-kind`` is ``"dir"`` or ``"file"``."""
+
+FS_BROWSER_FILENAME = "fs-browser-filename"
+"""Filename input shown in save mode (the output .db name)."""
+
+FS_BROWSER_CONFIRM = "fs-browser-confirm"
+"""Confirm button (Select folder / Open / Save depending on mode)."""
+
+FS_BROWSER_CANCEL = "fs-browser-cancel"
+"""Cancel button in the filesystem picker."""
+
+FS_BROWSER_ERROR = "fs-browser-error"
+"""Error text shown when a directory cannot be listed."""
 
 # ---------------------------------------------------------------------------
 # Scan dialog / progress panel
@@ -72,6 +143,9 @@ SCAN_SOURCE_LIST = "scan-source-list"
 
 SCAN_OUTPUT_PATH = "scan-output-path"
 """Output-path input field inside the scan dialog."""
+
+SCAN_OUTPUT_BROWSE = "scan-output-browse"
+"""'Browse…' button next to the output-path field (opens FsBrowser save mode)."""
 
 SCAN_START_BUTTON = "scan-start-button"
 """'Start scan' button inside the scan dialog."""
@@ -473,6 +547,24 @@ def scan_source_recursive_testid(idx: int) -> str:
         ``"scan-source-{idx}-recursive"``
     """
     return f"scan-source-{idx}-recursive"
+
+
+def scan_source_browse_testid(idx: int) -> str:
+    """Return the ``data-testid`` for the 'Browse…' button of the i-th source row.
+
+    Opens the FsBrowser in directory mode to pick the source folder.
+
+    Parameters
+    ----------
+    idx:
+        0-based position of the source row in the ScanDialog source list.
+
+    Returns
+    -------
+    str
+        ``"scan-source-{idx}-browse"``
+    """
+    return f"scan-source-{idx}-browse"
 
 
 # ---------------------------------------------------------------------------

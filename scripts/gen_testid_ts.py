@@ -93,6 +93,12 @@ def render_testids_ts() -> str:
     lines.append("}")
     lines.append("")
     lines.append(
+        "export function scanSourceBrowseTestid(idx: number): string {"
+    )
+    lines.append("  return `scan-source-${idx}-browse`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
         "export function executeRowTestid(groupId: string, basename: string): string {"
     )
     lines.append("  return `execute-row-${groupId}-${basename}`;")

@@ -487,6 +487,8 @@ web:
     ready: "Ready"
   empty_state:
     no_manifest: "No manifest loaded — Scan or Open a manifest to begin."
+    scan: "Scan…"
+    open: "Open Manifest…"
   manifest:
     input_placeholder: "Path to manifest .db…"
     input_aria: "Manifest path"
@@ -554,3 +556,33 @@ web:
     lock_conflict_title: "Locked rows would be affected"
     lock_conflict_body: "{n} locked row(s) would be affected. Unlock and apply anyway?"
     unlock_and_apply: "Unlock & Apply"
+  # Menu bar (Qt MenuController parity — File / Action / View).
+  menu:
+    file: "File"
+    file_scan: "Scan Sources…"
+    file_open: "Open Manifest…"
+    action: "Action"
+    action_set: "Set Action by Regex"
+    action_execute: "Execute…"
+    view: "View"
+    view_language: "Language"
+    lang_en: "English"
+    lang_zh: "中文 (繁體)"
+  # Filesystem picker (FsBrowser).
+  browse:
+    up: "↑ Up"
+    roots: "This PC"
+    loading: "Loading…"
+    empty: "Empty folder"
+    manifest_tag: "manifest"
+    filename: "File name:"
+    cancel: "Cancel"
+    select_folder: "Select folder"
+    select_file: "Open"
+    save: "Save"
+    title_source: "Select source folder"
+    title_output: "Save manifest as"
+    title_manifest: "Open manifest"
+  # Scan dialog — web-only strings added alongside the browse picker.
+  scan:
+    browse: "Browse…"

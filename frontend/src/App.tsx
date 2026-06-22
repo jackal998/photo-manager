@@ -23,10 +23,14 @@ import { ActionDialog } from "./components/action/ActionDialog";
 import { ContextMenu } from "./components/ContextMenu";
 import { LockConfirmDialog } from "./components/dialogs/LockConfirmDialog";
 import { PruneConfirmDialog } from "./components/dialogs/PruneConfirmDialog";
+import { MenuBar } from "./components/MenuBar";
+import { FsBrowser } from "./components/FsBrowser";
 
 import {
   ACTION_MAIN_BUTTON,
   MAIN_EMPTY_STATE,
+  MAIN_EMPTY_SCAN,
+  MAIN_EMPTY_OPEN,
   MAIN_EXECUTE_BUTTON,
   MAIN_LANG_TOGGLE,
   MAIN_MANIFEST_INPUT,
@@ -103,6 +107,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
 
   const [manifestInputValue, setManifestInputValue] = useState("");
+  const [manifestBrowseOpen, setManifestBrowseOpen] = useState(false);
   const loadManifest = useAppStore((s) => s.loadManifest);
   const openExecuteDialog = useAppStore((s) => s.openExecuteDialog);
   const openActionDialog = useAppStore((s) => s.openActionDialog);
@@ -113,6 +118,15 @@ export default function App() {
     if (path === "") return;
     void loadManifest(path);
   }, [manifestInputValue, loadManifest]);
+
+  // Filesystem-picker path for Open Manifest (menu + empty-state affordances).
+  const handleManifestPicked = useCallback(
+    (path: string) => {
+      setManifestInputValue(path);
+      void loadManifest(path);
+    },
+    [loadManifest]
+  );
 
   // ---------------------------------------------------------------------------
   // SSE subscription — single mount at App level
@@ -153,6 +167,19 @@ export default function App() {
 
   return (
     <div className={cn("min-h-screen flex flex-col")}>
+      {/* ------------------------------------------------------------------ */}
+      {/* Menu bar (Qt MenuController parity) — canonical, above the toolbar   */}
+      {/* ------------------------------------------------------------------ */}
+      <MenuBar
+        manifestLoaded={manifestPath !== null}
+        locale={locale}
+        onScan={() => setScanOpen(true)}
+        onOpenManifest={() => setManifestBrowseOpen(true)}
+        onSetAction={openActionDialog}
+        onExecute={openExecuteDialog}
+        onSetLocale={(loc) => void setLocale(loc)}
+      />
+
       {/* ------------------------------------------------------------------ */}
       {/* Header toolbar                                                       */}
       {/* ------------------------------------------------------------------ */}
@@ -230,12 +257,30 @@ export default function App() {
           {noManifest ? (
             <div
               data-testid={MAIN_EMPTY_STATE}
-              className="flex h-full items-center justify-center text-sm text-neutral-400"
+              className="flex h-full flex-col items-center justify-center gap-4 text-sm text-neutral-400"
             >
-              {t(
-                "web.empty_state.no_manifest",
-                "No manifest loaded — Scan or Open a manifest to begin."
-              )}
+              <p>
+                {t(
+                  "web.empty_state.no_manifest",
+                  "No manifest loaded — Scan or Open a manifest to begin."
+                )}
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  data-testid={MAIN_EMPTY_SCAN}
+                  className="rounded border px-4 py-1.5 text-sm text-neutral-700 hover:bg-neutral-100"
+                  onClick={() => setScanOpen(true)}
+                >
+                  {t("web.empty_state.scan", "Scan…")}
+                </button>
+                <button
+                  data-testid={MAIN_EMPTY_OPEN}
+                  className="rounded border px-4 py-1.5 text-sm text-neutral-700 hover:bg-neutral-100"
+                  onClick={() => setManifestBrowseOpen(true)}
+                >
+                  {t("web.empty_state.open", "Open Manifest…")}
+                </button>
+              </div>
             </div>
           ) : (
             <ResultTree onContextMenu={handleContextMenu} />
@@ -264,6 +309,14 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
       <ScanDialog open={scanOpen} onOpenChange={setScanOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <FsBrowser
+        open={manifestBrowseOpen}
+        mode="file"
+        title={t("web.browse.title_manifest", "Open manifest")}
+        initialPath={manifestInputValue.trim() || undefined}
+        onConfirm={handleManifestPicked}
+        onOpenChange={setManifestBrowseOpen}
+      />
       <ExecuteDialog />
       <ActionDialog />
       <FullResViewer />

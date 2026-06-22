@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,21 @@ class TestFsBrowse:
         assert len(txt_entries) == 1
         assert txt_entries[0]["is_manifest"] is False
 
+    def test_db_and_case_variants_are_manifests(self, client, tmp_path):
+        """The app accepts ``.db`` as well as ``.sqlite`` (Qt scan_dialog.py:774;
+        every qa scenario writes ``.db``). Detection is case-insensitive so the
+        picker highlights real manifests regardless of how they were named."""
+        (tmp_path / "scan.db").write_bytes(b"")
+        (tmp_path / "LOUD.DB").write_bytes(b"")
+        (tmp_path / "Mixed.SqLiTe").write_bytes(b"")
+        (tmp_path / "notes.txt").write_text("x")
+        resp = client.get("/api/fs/browse", params={"path": str(tmp_path)})
+        flags = {e["name"]: e["is_manifest"] for e in resp.json()["entries"]}
+        assert flags["scan.db"] is True
+        assert flags["LOUD.DB"] is True
+        assert flags["Mixed.SqLiTe"] is True
+        assert flags["notes.txt"] is False
+
     def test_response_has_path_and_parent(self, client, dir_tree):
         resp = client.get("/api/fs/browse", params={"path": str(dir_tree)})
         body = resp.json()
@@ -92,6 +108,26 @@ class TestFsBrowse:
         f.write_text("x")
         resp = client.get("/api/fs/browse", params={"path": str(f)})
         assert resp.status_code == 400
+
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="bare-drive-letter normalisation is Windows-specific",
+    )
+    def test_bare_drive_letter_normalises_to_drive_root(self, client):
+        """A bare 'C:' is CWD-relative on Windows; the browser must treat it as
+        the drive root, not the process working directory.
+
+        Without normalisation Path('C:') resolves against the CWD, so the
+        picker would silently open at the server's working dir when fed a bare
+        drive (which ``splitPath('C:\\\\out.db')`` produces). The drive root has
+        no parent — the CWD would."""
+        resp = client.get("/api/fs/browse", params={"path": "C:"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["parent"] is None, "drive root must have no parent"
+        assert body["path"].rstrip("\\/").endswith(":"), (
+            f"expected a drive-root path, got {body['path']!r}"
+        )
 
     def test_empty_path_lists_roots(self, client):
         resp = client.get("/api/fs/browse", params={"path": ""})

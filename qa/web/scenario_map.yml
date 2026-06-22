@@ -92,14 +92,14 @@ scenarios:
     notes: "Right-click → delete / keep; asserts user_decision via GET /api/manifest. Multi-select Ctrl+click not yet implemented in web; drives two single-row operations instead."
 
   - scenario: s16_open_manifest
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s16_open_manifest
+    status: done
+    notes: "Scan→reload→reopen the .db manifest through the FsBrowser file picker (empty-state Open); asserts post-reopen status bar equals post-scan. Exercises .db manifest flagging. Qt's native QFileDialog replaced by the in-DOM picker."
 
   - scenario: s17_scan_dialog_widgets
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s17_scan_dialog_widgets
+    status: done
+    notes: "Drives the scan dialog Browse buttons through the NESTED FsBrowser (directory mode for source, save mode for output); asserts the scan dialog survives the nested layer and both fields are written back. Qt native QFileDialog → in-DOM picker."
 
   - scenario: s18_log_menu
     playwright_module: null
@@ -222,9 +222,9 @@ scenarios:
     notes: ""
 
   - scenario: s41_empty_state_action_buttons
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s41_empty_state_action_buttons
+    status: done
+    notes: "Fresh page: asserts main-empty-state shows Scan + Open buttons; Scan opens scan-dialog, Open opens fs-browser. No scan needed (pure UI affordance check)."
 
   - scenario: s42_scoring
     playwright_module: null
@@ -262,9 +262,9 @@ scenarios:
     notes: ""
 
   - scenario: s50_select_numeric_panel_from_main_window
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s50_select_numeric_panel_from_main_window
+    status: done
+    notes: "Menu bar Action menu = 2nd ActionDialog entry point; asserts manifest-gating (disabled pre-scan, enabled post-scan), opens ActionDialog via menu, selects numeric field (Score) → numeric panel visible. Qt keyboard menu nav omitted."
 
   - scenario: s51_execute_dialog_preview
     playwright_module: qa.web.scenarios.s51_execute_dialog_preview

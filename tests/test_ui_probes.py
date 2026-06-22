@@ -384,6 +384,11 @@ _TRANSLATION_EXEMPT_KEYS: frozenset[str] = frozenset({
     # natural-language structure that differs by locale); this one is
     # the format-template degenerate case.
     "action_dialog.pattern_summary_numeric_threshold",
+    # Language autonyms in the web View → Language switcher: each language
+    # is shown in its own name in every locale (standard i18n practice), so
+    # "English" stays "English" in zh_TW. (The zh entry "中文 (繁體)" passes
+    # on its own via the CJK check.)
+    "web.menu.lang_en",
 })
 
 _CJK_RE = re.compile(r"[一-鿿]")

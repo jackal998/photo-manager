@@ -4,10 +4,12 @@
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/useT";
 import {
   scanSourceLabelTestid,
   scanSourcePathTestid,
   scanSourceRecursiveTestid,
+  scanSourceBrowseTestid,
 } from "@/testids";
 
 export interface SourceEntry {
@@ -25,9 +27,12 @@ interface SourceRowProps {
   disabled: boolean;
   onChange: (updated: SourceEntry) => void;
   onRemove: (id: string) => void;
+  /** Open the filesystem folder picker for this row (handled by ScanDialog). */
+  onBrowse: (id: string) => void;
 }
 
-export function SourceRow({ entry, idx, disabled, onChange, onRemove }: SourceRowProps) {
+export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }: SourceRowProps) {
+  const t = useT();
   return (
     <div className={cn("flex items-center gap-2 py-1")} role="group" aria-label={`Source ${entry.label || "unnamed"}`}>
       {/* Label */}
@@ -61,6 +66,19 @@ export function SourceRow({ entry, idx, disabled, onChange, onRemove }: SourceRo
         className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
         aria-label="Source path"
       />
+
+      {/* Browse for folder */}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid={scanSourceBrowseTestid(idx)}
+        disabled={disabled}
+        onClick={() => onBrowse(entry.id)}
+        className="shrink-0"
+      >
+        {t("web.scan.browse", "Browse…")}
+      </Button>
 
       {/* Recursive checkbox */}
       <label className="flex items-center gap-1 text-sm select-none">

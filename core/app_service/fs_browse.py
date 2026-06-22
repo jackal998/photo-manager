@@ -9,6 +9,7 @@ NO PySide6 imports — headless for the FastAPI process.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,14 @@ def browse(path: str | None) -> dict[str, Any]:
     if not path or not path.strip():
         return {"path": "", "parent": None, "entries": _list_roots()}
 
+    path = path.strip()
+    # A bare Windows drive letter ("C:") is CWD-relative, NOT the drive root:
+    # Path("C:") resolves against the process working directory. Normalise it
+    # to "C:\\" so the picker opens at the drive root when a caller passes a
+    # bare drive (e.g. splitPath of "C:\\out.db" yields the dir "C:").
+    if sys.platform == "win32" and re.fullmatch(r"[A-Za-z]:", path):
+        path = path + "\\"
+
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Directory not found: {path!r}")
@@ -91,7 +100,12 @@ def browse(path: str | None) -> dict[str, Any]:
             # entry is already absolute when p is absolute; avoid resolve()
             # which raises OSError on broken symlinks (POSIX).
             entry_path = str(entry)
-            is_manifest = name.endswith(".sqlite")
+            # The app accepts BOTH extensions as manifests: Qt's scan dialog
+            # appends ".sqlite" by default but its file filter accepts ".db"
+            # too (scan_dialog.py:774), and every qa scenario writes ".db".
+            # Match both, case-insensitively, so the picker highlights real
+            # manifests regardless of which extension the user chose.
+            is_manifest = name.lower().endswith((".sqlite", ".db"))
 
             record = {
                 "name": name,

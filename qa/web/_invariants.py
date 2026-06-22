@@ -444,3 +444,48 @@ def load_manifest(page: "Page", db_path: str, *, timeout: float = 30_000) -> str
     page.get_by_test_id("main-manifest-input").fill(db_path)
     page.get_by_test_id("main-manifest-open-button").click()
     return wait_manifest_loaded(page, timeout=timeout)
+
+
+def open_manifest_via_picker(
+    page: "Page",
+    db_path: str,
+    *,
+    open_trigger_testid: str = "main-empty-open",
+    timeout: float = 30_000,
+) -> str:
+    """Open a manifest through the FsBrowser file picker.
+
+    Seeds ``main-manifest-input`` with the manifest's *directory* so the
+    picker opens there (it uses the input value as its initial path), clicks
+    the chosen open affordance (the empty-state ``main-empty-open`` button by
+    default, or ``menu-file-open``), selects the manifest entry, confirms, and
+    waits for the manifest to load.
+
+    Parameters
+    ----------
+    page:
+        The Playwright Page on the app root ``/``.
+    db_path:
+        Absolute path to the ``.db`` / ``.sqlite`` manifest file.
+    open_trigger_testid:
+        The testid of the element that opens the picker. Defaults to the
+        empty-state ``main-empty-open`` button; pass ``"menu-file-open"`` to
+        drive it from the menu bar instead.
+    timeout:
+        Maximum milliseconds to wait at each step.
+
+    Returns
+    -------
+    str
+        The status bar text once the manifest is loaded.
+    """
+    folder = os.path.dirname(db_path)
+    name = os.path.basename(db_path)
+    page.get_by_test_id("main-manifest-input").fill(folder)
+    page.get_by_test_id(open_trigger_testid).click()
+    page.get_by_test_id("fs-browser").wait_for(state="visible", timeout=timeout)
+    entry = page.get_by_test_id("fs-browser-entry").filter(has_text=name)
+    entry.first.wait_for(state="visible", timeout=timeout)
+    entry.first.click()
+    page.get_by_test_id("fs-browser-confirm").click()
+    return wait_manifest_loaded(page, timeout=timeout)

@@ -396,6 +396,8 @@ web:
     ready: "就緒"
   empty_state:
     no_manifest: "尚未載入清單 — 請掃描或開啟清單以開始。"
+    scan: "掃描…"
+    open: "開啟清單…"
   manifest:
     input_placeholder: "清單 .db 的路徑…"
     input_aria: "清單路徑"
@@ -463,3 +465,33 @@ web:
     lock_conflict_title: "有鎖定的列會受影響"
     lock_conflict_body: "有 {n} 個鎖定的列會受影響。要解鎖並一併套用嗎？"
     unlock_and_apply: "解鎖並套用"
+  # Menu bar (Qt MenuController parity — File / Action / View).
+  menu:
+    file: "檔案"
+    file_scan: "掃描來源…"
+    file_open: "開啟清單…"
+    action: "動作"
+    action_set: "以正規表示式設定動作"
+    action_execute: "執行…"
+    view: "檢視"
+    view_language: "語言"
+    lang_en: "English"
+    lang_zh: "中文 (繁體)"
+  # Filesystem picker (FsBrowser).
+  browse:
+    up: "↑ 上一層"
+    roots: "本機"
+    loading: "載入中…"
+    empty: "空資料夾"
+    manifest_tag: "清單"
+    filename: "檔名："
+    cancel: "取消"
+    select_folder: "選擇資料夾"
+    select_file: "開啟"
+    save: "儲存"
+    title_source: "選擇來源資料夾"
+    title_output: "另存清單為"
+    title_manifest: "開啟清單"
+  # Scan dialog — web-only strings added alongside the browse picker.
+  scan:
+    browse: "瀏覽…"
