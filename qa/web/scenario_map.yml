@@ -82,9 +82,9 @@ scenarios:
     notes: ""
 
   - scenario: s14_action_by_regex
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s14_action_by_regex
+    status: done
+    notes: "Field+regex bulk-decide via the Action menu (2nd ActionDialog entry point). Asserts manifest-gating (menu item disabled pre-scan, enabled post-scan), regex q[89]\\d → delete on the 3 matched rows with the 2 non-matched unchanged, via GET /api/manifest. Qt #397 apply-stays-enabled + folder-regex UIA preview probes have no web equivalent — omitted."
 
   - scenario: s15_context_menu
     playwright_module: qa.web.scenarios.s15_context_menu
@@ -162,9 +162,9 @@ scenarios:
     notes: ""
 
   - scenario: s29_remove_from_list_by_regex
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s29_remove_from_list_by_regex
+    status: done
+    notes: "Regex bulk 'remove from list' (action-combo wireValue __ignore__) → asserts the regex-matched rows carry user_decision=='ignore' with non-matched unchanged, via GET /api/manifest. No delete-confirm sheet for ignore (web divergence: only delete confirms). Match partition derived from the regex, not hardcoded."
 
   - scenario: s30_execute_dialog_regex_right_click
     playwright_module: null
@@ -179,7 +179,7 @@ scenarios:
   - scenario: s32_lock_confirm_bulk_regex
     playwright_module: null
     status: todo
-    notes: ""
+    notes: "BLOCKED on FE #674 — the ActionDialog's inline lock-conflict dialog (distinct from the execute-flow LockConfirmDialog) has no testids and lacks the 'Apply to Unlocked Only' verdict that this scenario asserts. An honest port needs that FE change first."
 
   - scenario: s33_execute_dialog_jump_to_all_delete
     playwright_module: null
@@ -292,9 +292,9 @@ scenarios:
     notes: ""
 
   - scenario: s56_action_dialog_apply_by_score
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s56_action_dialog_apply_by_score
+    status: done
+    notes: "ActionDialog field=Score numeric threshold >0.5 → delete; #392 regression guard. Derives the expected split from REAL server-side scores, asserts ≥1 row flipped (the silent-no-op #392 bug) + every score>0.5 row deleted and every ≤0.5 unchanged, via GET /api/manifest. Combines the numeric panel (s50) with the delete-confirm (s31)."
 
   - scenario: s57_scan_auto_select_aggressive
     playwright_module: null
