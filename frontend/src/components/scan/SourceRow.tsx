@@ -4,6 +4,11 @@
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
+import {
+  scanSourceLabelTestid,
+  scanSourcePathTestid,
+  scanSourceRecursiveTestid,
+} from "@/testids";
 
 export interface SourceEntry {
   id: string;
@@ -14,13 +19,15 @@ export interface SourceEntry {
 
 interface SourceRowProps {
   entry: SourceEntry;
+  /** 0-based position of this row in the source list (used for stable testids). */
+  idx: number;
   /** Whether the scan is currently running (disables edits). */
   disabled: boolean;
   onChange: (updated: SourceEntry) => void;
   onRemove: (id: string) => void;
 }
 
-export function SourceRow({ entry, disabled, onChange, onRemove }: SourceRowProps) {
+export function SourceRow({ entry, idx, disabled, onChange, onRemove }: SourceRowProps) {
   return (
     <div className={cn("flex items-center gap-2 py-1")} role="group" aria-label={`Source ${entry.label || "unnamed"}`}>
       {/* Label */}
@@ -30,6 +37,7 @@ export function SourceRow({ entry, disabled, onChange, onRemove }: SourceRowProp
       <input
         id={`source-label-${entry.id}`}
         type="text"
+        data-testid={scanSourceLabelTestid(idx)}
         placeholder="Label"
         value={entry.label}
         disabled={disabled}
@@ -45,6 +53,7 @@ export function SourceRow({ entry, disabled, onChange, onRemove }: SourceRowProp
       <input
         id={`source-path-${entry.id}`}
         type="text"
+        data-testid={scanSourcePathTestid(idx)}
         placeholder="Path"
         value={entry.path}
         disabled={disabled}
@@ -61,6 +70,7 @@ export function SourceRow({ entry, disabled, onChange, onRemove }: SourceRowProp
           onCheckedChange={(checked) =>
             onChange({ ...entry, recursive: checked === true })
           }
+          data-testid={scanSourceRecursiveTestid(idx)}
           aria-label="Recursive"
         />
         <span className="text-neutral-600">Recursive</span>

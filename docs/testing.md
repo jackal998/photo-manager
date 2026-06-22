@@ -251,6 +251,65 @@ probes that need a **built frontend** (`frontend/dist/index.html`) and a
 
 ---
 
+### Web scenario layer (`qa/web/scenarios/`)
+
+The web port has a dedicated layer-3 equivalent for the React/FastAPI surface.
+Each driver in `qa/web/scenarios/<name>.py` exports `def run(*, base_url: str) -> None`
+and is registered in `qa/web/scenario_map.yml` with `status: done` and a
+`playwright_module:` dotted path.  The runner (`qa.web._batch`) iterates
+`ALL_SCENARIOS` from the Qt harness, looks up each entry in the map, and:
+
+- **`status: done`** → imports and calls `run(base_url=…)`.  `AssertionError` → FAIL;
+  uncaught exception → ERROR; normal return → PASS.
+- **`status: todo` or `status: skip`** → SKIP (never FAIL), so the job stays green
+  while scenarios are being ported.
+- Playwright not installed → every entry degrades to SKIP.
+
+**CI job:** `web-scenario-batch` in `.github/workflows/web-eval-gates.yml`
+(advisory, `continue-on-error: true` until Phase 4 cutover).  The job builds
+the frontend, runs `scripts/make_qa_sandbox.py`, starts `uvicorn` on port 8765,
+polls `GET /api/health` for up to 20 s, then calls
+`python -m qa.web._batch --base-url http://127.0.0.1:8765`.
+
+**Running locally** (server must already be running):
+
+```bash
+# One-time setup:
+pip install playwright
+python -m playwright install chromium
+cd frontend && npm run build && cd ..
+python scripts/make_qa_sandbox.py
+
+# Start the server in one terminal:
+python -m app.web.main
+
+# Run the batch in another terminal:
+python -m qa.web._batch --base-url http://127.0.0.1:8765
+
+# Or run a single scenario by name:
+python -m qa.web._batch s01_happy_path --base-url http://127.0.0.1:8765
+```
+
+**Parity target and current status:**
+
+| Phase | Target | Status |
+|---|---|---|
+| Phase 2 (current) | 5 scenarios ported | 5 ported — `status: done` entries in `scenario_map.yml` |
+| Phase 3 QA foundation | 10 scenarios ported | In progress |
+| Phase 4 cutover | Parity with Qt batch (all ~60 scenarios) | Deferred |
+
+The parity counter is enforced by `scripts/check_qa_parity.py` (CI job
+`qa-parity-counter` in the same workflow); it fails if the ported count drops
+below the floor for the current `WEB_PORT_PHASE` repo variable.
+
+A scenario graduates from `status: todo` to `status: done` once its driver is
+written and the CI `web-scenario-batch` job has run it green on the PR that
+introduces it.  The `playwright_module` field must be set at the same time
+(the batch runner silently SKIPs an entry whose `playwright_module` is null
+even when `status: done`).
+
+---
+
 ### Top-level scripts
 
 | Module | Status | Where it's covered |

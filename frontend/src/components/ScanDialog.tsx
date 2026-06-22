@@ -217,10 +217,11 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
             role="list"
             aria-label="Scan source list"
           >
-            {sources.map((entry) => (
+            {sources.map((entry, idx) => (
               <div key={entry.id} role="listitem">
                 <SourceRow
                   entry={entry}
+                  idx={idx}
                   disabled={isRunning}
                   onChange={handleSourceChange}
                   onRemove={handleSourceRemove}

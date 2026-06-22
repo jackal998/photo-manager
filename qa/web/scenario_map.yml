@@ -22,9 +22,9 @@ scenarios:
     notes: ""
 
   - scenario: s02_empty_folder
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s02_empty_folder
+    status: done
+    notes: "Scans a fresh empty tempdir; asserts 0 file rows and '0 groups · 0 files' status bar."
 
   - scenario: s03_cancel_scan
     playwright_module: null
@@ -32,9 +32,9 @@ scenarios:
     notes: ""
 
   - scenario: s04_corrupted
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s04_corrupted
+    status: done
+    notes: "Scans corrupted sandbox; asserts 0 file rows (truncated JPEG skipped). Log unavailable post-unmount — see divergence note in module."
 
   - scenario: s05_huge_preview
     playwright_module: null
@@ -87,9 +87,9 @@ scenarios:
     notes: ""
 
   - scenario: s15_context_menu
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s15_context_menu
+    status: done
+    notes: "Right-click → delete / keep; asserts user_decision via GET /api/manifest. Multi-select Ctrl+click not yet implemented in web; drives two single-row operations instead."
 
   - scenario: s16_open_manifest
     playwright_module: null
@@ -202,9 +202,9 @@ scenarios:
     notes: ""
 
   - scenario: s37_status_bar_baseline
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s37_status_bar_baseline
+    status: done
+    notes: "Asserts idle on startup then 'N groups · M files' after scan. Qt #138 3s-sleep and #140 menu-hover probes have no web equivalent — omitted with divergence note."
 
   - scenario: s38_scan_dialog_invalid_path
     playwright_module: null
@@ -267,9 +267,9 @@ scenarios:
     notes: ""
 
   - scenario: s51_execute_dialog_preview
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s51_execute_dialog_preview
+    status: done
+    notes: "Opens execute dialog, clicks a row, asserts execute-preview-image visible. Non-destructive (Escape to close). Qt QSplitter + PreviewPane header UIA checks replaced by DOM testid assertions."
 
   - scenario: s52_similarity_against_displayed_ref
     playwright_module: null

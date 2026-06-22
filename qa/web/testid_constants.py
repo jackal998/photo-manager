@@ -343,3 +343,84 @@ def execute_all_delete_jump_testid(group_id: str) -> str:
         ``"execute-all-delete-jump-{group_id}"``
     """
     return f"execute-all-delete-jump-{group_id}"
+
+
+# ---------------------------------------------------------------------------
+# Scan source-row helpers (idx = 0-based position in the source list)
+# ---------------------------------------------------------------------------
+
+
+def scan_source_label_testid(idx: int) -> str:
+    """Return the ``data-testid`` for the label input of the i-th source row.
+
+    Parameters
+    ----------
+    idx:
+        0-based position of the source row in the ScanDialog source list.
+
+    Returns
+    -------
+    str
+        ``"scan-source-{idx}-label"``
+    """
+    return f"scan-source-{idx}-label"
+
+
+def scan_source_path_testid(idx: int) -> str:
+    """Return the ``data-testid`` for the path input of the i-th source row.
+
+    Parameters
+    ----------
+    idx:
+        0-based position of the source row in the ScanDialog source list.
+
+    Returns
+    -------
+    str
+        ``"scan-source-{idx}-path"``
+    """
+    return f"scan-source-{idx}-path"
+
+
+def scan_source_recursive_testid(idx: int) -> str:
+    """Return the ``data-testid`` for the recursive checkbox of the i-th source row.
+
+    Parameters
+    ----------
+    idx:
+        0-based position of the source row in the ScanDialog source list.
+
+    Returns
+    -------
+    str
+        ``"scan-source-{idx}-recursive"``
+    """
+    return f"scan-source-{idx}-recursive"
+
+
+# ---------------------------------------------------------------------------
+# Execute file-row helper
+# ---------------------------------------------------------------------------
+
+
+def execute_row_testid(group_id: str, basename: str) -> str:
+    """Return the ``data-testid`` value for a file row in the execute tree.
+
+    Mirrors the inline template used by ExecuteFileRow in ExecuteTree.tsx
+    (``execute-row-{groupId}-{basename}``).  Having a single Python helper
+    means scenario drivers never drift from the emitted HTML attribute.
+
+    Parameters
+    ----------
+    group_id:
+        The string form of ``group_number`` from the manifest Group object
+        (use ``str(group_number)``).
+    basename:
+        The filename component only — *not* the full path.
+
+    Returns
+    -------
+    str
+        ``"execute-row-{group_id}-{basename}"``
+    """
+    return f"execute-row-{group_id}-{basename}"

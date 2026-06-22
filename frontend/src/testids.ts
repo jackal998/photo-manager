@@ -74,3 +74,19 @@ export function rowLockTestid(groupId: string, basename: string): string {
 export function executeAllDeleteJumpTestid(groupId: string): string {
   return `execute-all-delete-jump-${groupId}`;
 }
+
+export function scanSourceLabelTestid(idx: number): string {
+  return `scan-source-${idx}-label`;
+}
+
+export function scanSourcePathTestid(idx: number): string {
+  return `scan-source-${idx}-path`;
+}
+
+export function scanSourceRecursiveTestid(idx: number): string {
+  return `scan-source-${idx}-recursive`;
+}
+
+export function executeRowTestid(groupId: string, basename: string): string {
+  return `execute-row-${groupId}-${basename}`;
+}

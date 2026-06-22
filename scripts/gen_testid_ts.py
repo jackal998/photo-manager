@@ -74,6 +74,30 @@ def render_testids_ts() -> str:
     lines.append("  return `execute-all-delete-jump-${groupId}`;")
     lines.append("}")
     lines.append("")
+    lines.append(
+        "export function scanSourceLabelTestid(idx: number): string {"
+    )
+    lines.append("  return `scan-source-${idx}-label`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
+        "export function scanSourcePathTestid(idx: number): string {"
+    )
+    lines.append("  return `scan-source-${idx}-path`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
+        "export function scanSourceRecursiveTestid(idx: number): string {"
+    )
+    lines.append("  return `scan-source-${idx}-recursive`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
+        "export function executeRowTestid(groupId: string, basename: string): string {"
+    )
+    lines.append("  return `execute-row-${groupId}-${basename}`;")
+    lines.append("}")
+    lines.append("")
 
     return "\n".join(lines)
 

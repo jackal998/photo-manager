@@ -14,7 +14,7 @@ import {
   useImperativeHandle,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { EXECUTE_TREE } from "@/testids";
+import { EXECUTE_TREE, executeRowTestid } from "@/testids";
 import type { Group } from "@/api/types";
 import type { TypeFilterValue } from "./TypeFilter";
 
@@ -232,7 +232,7 @@ function ExecuteFileRow({
   onClick: (filePath: string) => void;
 }) {
   // §5.3 scoped row testid: execute-row-{groupId}-{basename}
-  const testId = `execute-row-${vrow.groupId}-${vrow.basename}`;
+  const testId = executeRowTestid(vrow.groupId, vrow.basename);
 
   return (
     <button
