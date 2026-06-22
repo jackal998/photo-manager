@@ -1,0 +1,1 @@
+Add the web "Set Action by Field" dialog — bulk-apply a decision or lock/unlock to manifest rows by regex, simple text match, or numeric threshold / top-N, with a live server-side preview and a locked-rows confirm. (#671)
