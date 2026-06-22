@@ -13,7 +13,7 @@
 //
 // Mounted prop-less from App.tsx (like ExecuteDialog), driven entirely by store.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   Dialog,
@@ -209,7 +209,7 @@ export function ActionDialog() {
   // ---------------------------------------------------------------------------
 
   const handleFieldChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
+    (e: ChangeEvent<HTMLSelectElement>) => {
       setActionField(e.target.value);
       // Pattern resets when field changes (done in store), so clear preview too
     },
@@ -221,7 +221,7 @@ export function ActionDialog() {
   // ---------------------------------------------------------------------------
 
   const handleActionChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
+    (e: ChangeEvent<HTMLSelectElement>) => {
       const raw = e.target.value;
       setActionAction(raw === KEEP_SENTINEL ? "" : raw);
     },

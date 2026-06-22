@@ -8,7 +8,7 @@
 //   Threshold: "__cmp__:>:1000"
 //   Top-N:     "__top_n__:3:desc"
 
-import { useCallback, useState } from "react";
+import { type ChangeEvent, useCallback, useState } from "react";
 
 import { useT } from "@/i18n/useT";
 import {
@@ -98,7 +98,7 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
   // ---------------------------------------------------------------------------
 
   const handleCmpOpChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
+    (e: ChangeEvent<HTMLSelectElement>) => {
       const op = e.target.value as CmpOp;
       setCmpOp(op);
       if (thresholdValue !== "") {
@@ -109,7 +109,7 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
   );
 
   const handleThresholdValueChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    (e: ChangeEvent<HTMLInputElement>) => {
       const val = e.target.value;
       setThresholdValue(val);
       setThresholdError(null);
@@ -157,7 +157,7 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
   // ---------------------------------------------------------------------------
 
   const handleOrderChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
+    (e: ChangeEvent<HTMLSelectElement>) => {
       const ord = e.target.value as Order;
       setOrder(ord);
       const n = nValue !== "" ? nValue : "3";
@@ -167,7 +167,7 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
   );
 
   const handleNChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    (e: ChangeEvent<HTMLInputElement>) => {
       const val = e.target.value;
       setNValue(val);
       if (val !== "" && !isNaN(Number(val)) && Number(val) >= 1) {

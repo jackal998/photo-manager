@@ -6,7 +6,7 @@
 //
 // Cheatsheet chips insert tokens into the regex input at cursor position.
 
-import { useCallback, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useRef, useState } from "react";
 
 import { useT } from "@/i18n/useT";
 import {
@@ -100,14 +100,14 @@ export function RegexPanel({ pattern, onPatternChange }: RegexPanelProps) {
   );
 
   const handleSimpleOpChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
+    (e: ChangeEvent<HTMLSelectElement>) => {
       handleSimpleChange(e.target.value as SimpleOp, simpleText);
     },
     [handleSimpleChange, simpleText]
   );
 
   const handleSimpleTextChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    (e: ChangeEvent<HTMLInputElement>) => {
       handleSimpleChange(simpleOp, e.target.value);
     },
     [handleSimpleChange, simpleOp]
