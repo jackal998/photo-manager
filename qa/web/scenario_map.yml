@@ -257,9 +257,9 @@ scenarios:
     notes: ""
 
   - scenario: s49_scan_auto_select
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s49_scan_auto_select
+    status: done
+    notes: "Auto-select after scan (#212/#393). Expands the new ScanDialog 'Advanced settings' section (#678 cluster A, built in this PR), asserts the 'Auto select after scan' checkbox defaults OFF, toggles ON, scans near-duplicates, then asserts via GET /api/manifest: keeper q95 action='KEEP' + is_locked + user_decision='' (#425 canonical-keep), exactly 1 KEEP, non-keepers retain their classifier action (EXACT/REVIEW_DUPLICATE) + unlocked + undecided. Qt #239 VISUAL tree-selection of the keeper is NOT ported — the web ResultTree has no post-scan highlight yet (deferred FE follow-up); the manifest state is the load-bearing assertion. Divergence: manifest JSON vs Qt SQLite."
 
   - scenario: s50_select_numeric_panel_from_main_window
     playwright_module: qa.web.scenarios.s50_select_numeric_panel_from_main_window
@@ -297,9 +297,9 @@ scenarios:
     notes: "ActionDialog field=Score numeric threshold >0.5 → delete; #392 regression guard. Derives the expected split from REAL server-side scores, asserts ≥1 row flipped (the silent-no-op #392 bug) + every score>0.5 row deleted and every ≤0.5 unchanged, via GET /api/manifest. Combines the numeric panel (s50) with the delete-confirm (s31)."
 
   - scenario: s57_scan_auto_select_aggressive
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s57_scan_auto_select_aggressive
+    status: done
+    notes: "Auto-select aggressive mode (#393). Expands Advanced settings, asserts the 'Also mark all other files for delete' sub-checkbox defaults OFF (and is disabled until the parent auto-select is on), enables parent auto-select then the sub, scans near-duplicates, then asserts via GET /api/manifest: keeper q95 is_locked + user_decision='', and EVERY non-keeper user_decision='delete' + unlocked (stays editable through the standard Execute flow). FE Advanced Settings built in this PR. Divergence: manifest JSON vs Qt SQLite; no scan-log probe (SSE-finished unmount flake)."
 
   - scenario: s58_language_switch_preserves_manifest
     playwright_module: qa.web.scenarios.s58_language_switch_preserves_manifest
@@ -337,9 +337,9 @@ scenarios:
     notes: "#538 passenger-bridge real-photo invariant. Scans passenger-bridge-a (scene_left/scene_right) and passenger-bridge-b (scene_bridge) as TWO ordered FLAT sources — source ORDER encodes priority (bridge-a Ref-tier, bridge-b -> REVIEW_DUPLICATE). Verified live: a single flattened source flips scene_bridge to Ref winner, and a parent-of-subdirs source walks 0 files (web add-source is non-recursive, recursive defaults false). Asserts total_files==3, all in one group_number, 2 Ref-tier (UNDATED: scene_left+scene_right) + 1 REVIEW_DUPLICATE (scene_bridge.jpg), every item has a non-empty phash (passenger renders a real %, not '—'). Divergences: GET /api/manifest vs Qt sqlite; group_number (int) vs Qt group_id; two-source order is load-bearing."
 
   - scenario: s66_autotune_read_knee
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s66_autotune_read_knee
+    status: done
+    notes: "Read-knee autotune default-ON / opt-out (#551 Phase 4). Expands Advanced settings, asserts the 'Auto-tune reader concurrency' checkbox is checked by DEFAULT (opt-out), scans near-duplicates leaving autotune ON, then asserts grouping is unchanged via GET /api/manifest (total_groups==1, total_files==5, the lone group holds all 5 with a non-null group_number). Reader concurrency must never change group assignment (#526/#538 idx-passthrough). FE Advanced Settings built in this PR. Divergence: manifest JSON group read vs Qt SQLite group_id."
 
   - scenario: s67_locked_singleton_prune_always
     playwright_module: null

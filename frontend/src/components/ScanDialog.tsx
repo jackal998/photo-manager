@@ -19,12 +19,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import type { WebScanRequest } from "@/api/types";
 import {
   SCAN_ADD_SOURCE,
+  SCAN_ADVANCED,
+  SCAN_AGGRESSIVE_DELETE,
+  SCAN_AUTO_SELECT,
+  SCAN_AUTOTUNE,
   SCAN_DIALOG,
   SCAN_OUTPUT_PATH,
   SCAN_OUTPUT_BROWSE,
@@ -90,6 +95,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   const [sources, setSources] = useState<SourceEntry[]>(() => [blankSource()]);
   const [outputPath, setOutputPath] = useState("");
 
+  // Advanced settings (collapsible). Auto-tune defaults ON (opt-out, #551
+  // Phase 4); auto-select + its aggressive sub-option default OFF.
+  const [autoSelect, setAutoSelect] = useState(false);
+  const [aggressiveDelete, setAggressiveDelete] = useState(false);
+  const [autotuneReadKnee, setAutotuneReadKnee] = useState(true);
+
   // Filesystem picker target (null = picker closed).
   const [browseTarget, setBrowseTarget] = useState<BrowseTarget | null>(null);
 
@@ -99,6 +110,9 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       setSources([blankSource()]);
       setOutputPath("");
       setBrowseTarget(null);
+      setAutoSelect(false);
+      setAggressiveDelete(false);
+      setAutotuneReadKnee(true);
     }
   }, [open, scan.status]);
 
@@ -200,10 +214,14 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       sources: sourcesMap,
       output_path: outputPath.trim(),
       recursive_map: recursiveMap,
+      auto_select_enabled: autoSelect,
+      // Aggressive only takes effect under auto-select; never send it alone.
+      auto_select_aggressive_delete: autoSelect && aggressiveDelete,
+      autotune_read_knee: autotuneReadKnee,
     };
 
     void startScan(req);
-  }, [sources, outputPath, startScan]);
+  }, [sources, outputPath, autoSelect, aggressiveDelete, autotuneReadKnee, startScan]);
 
   // ---------------------------------------------------------------------------
   // Cancel
@@ -329,6 +347,67 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
             </Button>
           </div>
         </div>
+
+        {/* Advanced settings (collapsible) */}
+        <details className="mt-4 rounded border border-neutral-200 p-2">
+          <summary
+            data-testid={SCAN_ADVANCED}
+            className="cursor-pointer select-none text-sm font-medium text-neutral-700"
+          >
+            Advanced settings
+          </summary>
+          <div className="mt-3 flex flex-col gap-2 pl-1">
+            {/* Auto-tune reader concurrency — default ON (opt-out, #551 Phase 4) */}
+            <label className="flex items-center gap-2 text-sm select-none">
+              <Checkbox
+                checked={autotuneReadKnee}
+                disabled={isRunning}
+                onCheckedChange={(checked) =>
+                  setAutotuneReadKnee(checked === true)
+                }
+                data-testid={SCAN_AUTOTUNE}
+                aria-label="Auto-tune reader concurrency"
+              />
+              <span className="text-neutral-700">
+                Auto-tune reader concurrency (experimental)
+              </span>
+            </label>
+
+            {/* Auto select after scan — default OFF */}
+            <label className="flex items-center gap-2 text-sm select-none">
+              <Checkbox
+                checked={autoSelect}
+                disabled={isRunning}
+                onCheckedChange={(checked) => {
+                  const on = checked === true;
+                  setAutoSelect(on);
+                  // Disabling the parent also clears the sub-option so a
+                  // stale-true never reaches the scan request.
+                  if (!on) setAggressiveDelete(false);
+                }}
+                data-testid={SCAN_AUTO_SELECT}
+                aria-label="Auto select after scan"
+              />
+              <span className="text-neutral-700">Auto select after scan</span>
+            </label>
+
+            {/* Aggressive sub-option — indented; enabled only when auto-select on */}
+            <label className="flex items-center gap-2 pl-6 text-sm select-none">
+              <Checkbox
+                checked={aggressiveDelete}
+                disabled={isRunning || !autoSelect}
+                onCheckedChange={(checked) =>
+                  setAggressiveDelete(checked === true)
+                }
+                data-testid={SCAN_AGGRESSIVE_DELETE}
+                aria-label="Also mark all other files for delete"
+              />
+              <span className={autoSelect ? "text-neutral-700" : "text-neutral-400"}>
+                Also mark all other files for delete
+              </span>
+            </label>
+          </div>
+        </details>
 
         {/* Error message */}
         {showError && (

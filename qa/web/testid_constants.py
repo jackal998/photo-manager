@@ -162,6 +162,21 @@ SCAN_PROGRESS_BAR = "scan-progress-bar"
 SCAN_STATUS_TEXT = "scan-status-text"
 """Short status line above the progress bar (stage name, ETA, …)."""
 
+SCAN_ADVANCED = "scan-advanced"
+"""Collapsible 'Advanced settings' section summary/toggle in the scan dialog."""
+
+SCAN_AUTO_SELECT = "scan-auto-select"
+"""'Auto select after scan' checkbox (Advanced settings) — promotes the
+top-scored row per group to action=KEEP + is_locked before the manifest write."""
+
+SCAN_AGGRESSIVE_DELETE = "scan-aggressive-delete"
+"""'Also mark all other files for delete' sub-checkbox — enabled only when
+auto-select is on; tags every non-keeper in a scored group user_decision=delete."""
+
+SCAN_AUTOTUNE = "scan-autotune"
+"""'Auto-tune reader concurrency' checkbox (Advanced settings) — default ON
+(opt-out, #551 Phase 4); never changes grouping."""
+
 # ---------------------------------------------------------------------------
 # Execute-action dialog (§5 canonical names — Phase 2C2)
 # ---------------------------------------------------------------------------
