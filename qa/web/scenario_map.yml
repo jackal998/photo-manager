@@ -57,14 +57,14 @@ scenarios:
     notes: "EXIF edge-case dates (6 JPEGs: tz_offset/subsecond/createdate_only/datetime_tag_only/zero_date_sentinel/dash_sentinel). All 6 are distinct singletons (raw fixture → EMPTY manifest = a hollow test), so each is duplicated (byte-identical twin → EXACT-dup pair) to become observable (12 rows). HARD-asserts the 2 DateTimeOriginal-primary files (tz_offset/subsecond) parse non-null and the 2 sentinels (0000-date/dash) parse null; the 2 fallback-tag files (CreateDate/DateTime-only) are OBSERVED not asserted — exiftool-version dependent (createdate_only is null on CI exiftool, dated on local; caught at CI live-verify). UPGRADES Qt s08 (print-only). Divergences: duplicate-to-observe (s05 pattern); canonical shot_date read vs Qt tree text; no UNDATED log probe (log unmounts on SSE finished — racy), undated asserted via sentinel null shot_date."
 
   - scenario: s09_walker_exclusions
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s09_walker_exclusions
+    status: done
+    notes: "Walker exclusion rules. Copies the 2 real photos + a byte-identical twin each (s08 duplicate-to-observe — the raw distinct reals are singletons → empty grouped manifest) plus the excluded non-media files (Thumbs.db/desktop.ini/.json sidecar) into a tmpdir, scans, then asserts the manifest basenames are EXACTLY the 4 real-media files (reals+twins) and each excluded file is absent. The symlink-skip guard is asserted only when os.symlink succeeds (Linux CI); skipped with a probe note on unprivileged Windows. UPGRADES Qt s09 (print-only). Divergences: manifest-JSON basenames vs Qt UIA cell scrape; no scan-log walker-count probe (ScanProgress unmounts on SSE finished — a fast-CI flake per s08 D4)."
 
   - scenario: s10_multi_source
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s10_multi_source
+    status: done
+    notes: "Multi-source priority + cross-source dedup. Scans multi-source-a then multi-source-b in configured order (load-bearing — A first wins ties); shared.jpg is byte-identical across both sources. Asserts via GET /api/manifest: non-empty manifest, >=1 Ref winner, EVERY is_ref_winner item's file_path contains 'multi-source-a' (source-order priority — A's copy is the cross-source keeper), and >=1 group spans both sources (cross-source dedup happened, so the priority assert isn't vacuous). Live: 1 group/3 files, ref=a/shared.jpg. UPGRADES Qt s10 (print-only). Divergences: is_ref_winner+file_path from manifest JSON vs Qt 'Ref' cell scrape; priority asserted by path-marker substring; no scan-log probe."
 
   - scenario: s11_video_live
     playwright_module: qa.web.scenarios.s11_video_live
@@ -232,9 +232,9 @@ scenarios:
     notes: "Composite-score pipeline (near-duplicates quality ordering + scoring-mixed penalties). Two sequential scans into separate temp manifests; asserts every grouped item has score in [0,1] (>=1 non-null, guards silent scoring failure), score-DESC array order (neardup_00_q95 before neardup_04_q65), and scoring_clean outscores Copy/Downloads/no_gps variants. COMPOSITE-SCORE SCOPE ONLY — per-dimension signals gps_present/exif_tag_count/xmp_derived are NOT serialised in FileRow (review_view.py:131-149); deferred to #680. Divergences: GET /api/manifest vs Qt sqlite; per-fixture temp manifest for per-group ordering; SQLite-backdoor for per-dimension rejected (API-only principle)."
 
   - scenario: s43_numeric_condition
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s43_numeric_condition
+    status: done
+    notes: "ActionDialog numeric threshold on Size (Bytes) (#209). Mirrors s56's numeric flow with field=Size. Boundary derived at runtime from the fixture's on-disk sizes (== file_size_bytes the server thresholds on; 2nd-smallest = 17908) so '> boundary' splits the 5 near-dups into exactly 3 matched + 2 unchanged regardless of regen. Drives toolbar ActionDialog → field Size (Bytes) (numeric panel mounts) → cmp '>' + value boundary → counter non-zero (asserted pre-Apply) → action delete → Apply → delete-confirm, then asserts the EXACT 3-vs-2 split via GET /api/manifest (q95/q88/q80 delete, q72/q65 unchanged). Non-destructive. Divergences: counter asserted pre-Apply (the dialog auto-closes post-Apply — s56 precedent); Qt Wave-11 soft probes (A4 threshold icon / B6 Top-N counter / A14 spinbox-5000) omitted (NumericPanel has no validation-icon element)."
 
   - scenario: s44_execute_highlighted_rows
     playwright_module: null
