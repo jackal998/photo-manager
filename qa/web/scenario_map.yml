@@ -167,9 +167,9 @@ scenarios:
     notes: "Regex bulk 'remove from list' (action-combo wireValue __ignore__) → asserts the regex-matched rows carry user_decision=='ignore' with non-matched unchanged, via GET /api/manifest. No delete-confirm sheet for ignore (web divergence: only delete confirms). Match partition derived from the regex, not hardcoded."
 
   - scenario: s30_execute_dialog_regex_right_click
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s30_execute_dialog_regex_right_click
+    status: done
+    notes: "Cluster B. Execute-dialog row menu 'Set Action by Field…' (CTX_SET_ACTION_BY_FIELD) opens the manifest-wide ActionDialog via store.openActionDialog (same dialog the toolbar opens); File Name regex matches 3 of 5 → delete, 2 unchanged. Seeds one decision to expose a row in the decided-rows-only execute tree (#676). Bulk-decide skips the manifest_path root guard, so scans the repo fixture dir directly (s43 precedent)."
 
   - scenario: s31_simple_mode_regex
     playwright_module: qa.web.scenarios.s31_simple_mode_regex
@@ -277,14 +277,14 @@ scenarios:
     notes: "#253 render-time similarity recompute. Scans near-duplicates; asserts every grouped item has a non-empty phash, exactly one is_ref_winner across all groups, and each REVIEW_DUPLICATE's server-computed similarity.percent == round((64-hamming)/64*100) recomputed (via imagehash) between the Ref's phash and the dup's phash (range-only [0,100] fallback when imagehash is absent). Divergences: asserts the server-computed similarity the user sees vs Qt local imagehash recompute; GET /api/manifest vs Qt sqlite; is_ref_winner read directly vs Qt _pick_displayed_ref replication."
 
   - scenario: s53_execute_dialog_lock_decision
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s53_execute_dialog_lock_decision
+    status: done
+    notes: "Cluster B. Lock / Unlock / Set-Action-delete via the execute-dialog row menu (ExecuteContextMenu). Seeds two decisions (delete + ignore) through the result-tree menu to expose rows in the decided-rows-only execute tree (#676), then drives the EXECUTE menu (PATCH /api/lock, PATCH /api/decision); asserts is_locked / user_decision via GET /api/manifest. No multi-row select (web targets the right-clicked row only, s35 precedent)."
 
   - scenario: s54_execute_dialog_remove_from_list
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s54_execute_dialog_remove_from_list
+    status: done
+    notes: "Cluster B. Execute-dialog menu 'Remove from list' FINALIZES the row (outcome='ignored' via store.removeFromList → POST /api/remove) behind RemoveFromListConfirmDialog (default No) — distinct from the result menu's stage-ignore. Uses the s13 db-in-scanned-dir pattern so manifest_path passes the /api/remove allowed-roots guard. Asserts the row is gone from GET /api/manifest and its copied file is still on disk (ignored, not deleted)."
 
   - scenario: s55_action_dialog_no_match_fn
     playwright_module: null

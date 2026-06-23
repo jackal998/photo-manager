@@ -38,7 +38,9 @@ import { AllDeleteBanner } from "./AllDeleteBanner";
 import { HiddenDestructiveBanner } from "./HiddenDestructiveBanner";
 import { TypeFilter, type TypeFilterValue } from "./TypeFilter";
 import { ExecuteTree, type ExecuteTreeHandle } from "./ExecuteTree";
+import { ExecuteContextMenu } from "./ExecuteContextMenu";
 import { DeleteConfirmDialog } from "@/components/dialogs/DeleteConfirmDialog";
+import { RemoveFromListConfirmDialog } from "@/components/dialogs/RemoveFromListConfirmDialog";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,6 +97,7 @@ export function ExecuteDialog() {
   const groups = useAppStore((s) => s.manifest.groups);
   const closeExecuteDialog = useAppStore((s) => s.closeExecuteDialog);
   const executeDecisions = useAppStore((s) => s.executeDecisions);
+  const removeFromList = useAppStore((s) => s.removeFromList);
 
   // -------------------------------------------------------------------------
   // Local dialog state
@@ -108,6 +111,23 @@ export function ExecuteDialog() {
   const pendingExecOptsRef = useRef<{ scopePaths?: string[]; forceLocked?: boolean } | null>(null);
 
   const treeRef = useRef<ExecuteTreeHandle>(null);
+
+  // Row context menu (cluster B). Coordinates are stored RELATIVE to the
+  // menu layer (the dialog content box) so the menu — which lives inside the
+  // Radix modal to dodge its pointer-events/interact-outside traps — lands
+  // under the cursor even though DialogContent is transform-positioned.
+  const menuLayerRef = useRef<HTMLDivElement>(null);
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    x: number;
+    y: number;
+    filePath: string;
+    isLocked: boolean;
+  }>({ open: false, x: 0, y: 0, filePath: "", isLocked: false });
+  // Pending "remove from list" target awaiting confirm (null = closed).
+  const [removeConfirmPath, setRemoveConfirmPath] = useState<string | null>(
+    null
+  );
 
   // -------------------------------------------------------------------------
   // Derived data
@@ -168,6 +188,41 @@ export function ExecuteDialog() {
 
   const handleJumpToGroup = useCallback((groupId: string) => {
     treeRef.current?.scrollToGroup(groupId);
+  }, []);
+
+  // Row right-click → open the execute context menu at the cursor, converting
+  // the viewport click coords to coords relative to the menu layer.
+  const handleRowContextMenu = useCallback(
+    (filePath: string, isLocked: boolean, clientX: number, clientY: number) => {
+      const rect = menuLayerRef.current?.getBoundingClientRect();
+      setCtxMenu({
+        open: true,
+        x: rect ? clientX - rect.left : clientX,
+        y: rect ? clientY - rect.top : clientY,
+        filePath,
+        isLocked,
+      });
+    },
+    []
+  );
+
+  const handleCtxClose = useCallback(() => {
+    setCtxMenu((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  // The menu's "Remove from list" defers the destructive finalize to a confirm.
+  const handleRequestRemove = useCallback((filePath: string) => {
+    setRemoveConfirmPath(filePath);
+  }, []);
+
+  const handleRemoveConfirm = useCallback(() => {
+    const path = removeConfirmPath;
+    setRemoveConfirmPath(null);
+    if (path !== null) void removeFromList([path]);
+  }, [removeConfirmPath, removeFromList]);
+
+  const handleRemoveCancel = useCallback(() => {
+    setRemoveConfirmPath(null);
   }, []);
 
   // Returns true when all decided rows (in the given scope) are "delete".
@@ -316,6 +371,7 @@ export function ExecuteDialog() {
               filter={filter}
               selectedFilePath={selectedFilePath}
               onSelectFile={handleSelectFile}
+              onContextMenu={handleRowContextMenu}
             />
           </div>
 
@@ -374,8 +430,39 @@ export function ExecuteDialog() {
             {executeRunning ? "Executing…" : "Execute"}
           </Button>
         </DialogFooter>
+
+        {/* Row context-menu layer (cluster B). Absolute-fills DialogContent so
+            it is INSIDE the Radix modal (pointer-events:auto, never counts as
+            interact-outside) yet overlays the virtualized tree without being
+            clipped by its scroll container. pointer-events-none on the layer
+            keeps the tree clickable when no menu is open. */}
+        <div
+          ref={menuLayerRef}
+          className="absolute inset-0 pointer-events-none"
+        >
+          {ctxMenu.open && (
+            <ExecuteContextMenu
+              x={ctxMenu.x}
+              y={ctxMenu.y}
+              filePath={ctxMenu.filePath}
+              isLocked={ctxMenu.isLocked}
+              onClose={handleCtxClose}
+              onRequestRemove={handleRequestRemove}
+            />
+          )}
+        </div>
       </DialogContent>
     </Dialog>
+    <RemoveFromListConfirmDialog
+      open={removeConfirmPath !== null}
+      basename={
+        removeConfirmPath !== null
+          ? removeConfirmPath.split(/[\\/]/).pop() ?? ""
+          : ""
+      }
+      onConfirm={handleRemoveConfirm}
+      onCancel={handleRemoveCancel}
+    />
     </>
   );
 }

@@ -45,6 +45,7 @@ type FileVRow = {
   decision: "delete" | "ignore";
   thumbnailUrl: string;
   isSelected: boolean;
+  isLocked: boolean;
 };
 
 type VRow = GroupHeaderVRow | FileVRow;
@@ -58,6 +59,13 @@ interface ExecuteTreeProps {
   filter: TypeFilterValue;
   selectedFilePath: string | null;
   onSelectFile: (filePath: string) => void;
+  /** Right-click a row — opens the execute-dialog context menu (cluster B). */
+  onContextMenu?: (
+    filePath: string,
+    isLocked: boolean,
+    x: number,
+    y: number
+  ) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +74,7 @@ interface ExecuteTreeProps {
 
 export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
   function ExecuteTree(
-    { groups, filter, selectedFilePath, onSelectFile },
+    { groups, filter, selectedFilePath, onSelectFile, onContextMenu },
     ref
   ) {
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -101,6 +109,7 @@ export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
             decision: item.user_decision as "delete" | "ignore",
             thumbnailUrl: item.thumbnail_url,
             isSelected: item.file_path === selectedFilePath,
+            isLocked: item.is_locked,
           });
         }
       }
@@ -192,6 +201,7 @@ export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
                   <ExecuteFileRow
                     vrow={vrow}
                     onClick={handleFileClick}
+                    onContextMenu={onContextMenu}
                   />
                 )}
               </div>
@@ -227,9 +237,16 @@ function GroupHeaderRow({
 function ExecuteFileRow({
   vrow,
   onClick,
+  onContextMenu,
 }: {
   vrow: FileVRow;
   onClick: (filePath: string) => void;
+  onContextMenu?: (
+    filePath: string,
+    isLocked: boolean,
+    x: number,
+    y: number
+  ) => void;
 }) {
   // §5.3 scoped row testid: execute-row-{groupId}-{basename}
   const testId = executeRowTestid(vrow.groupId, vrow.basename);
@@ -239,6 +256,11 @@ function ExecuteFileRow({
       type="button"
       data-testid={testId}
       onClick={() => onClick(vrow.filePath)}
+      onContextMenu={(e) => {
+        if (!onContextMenu) return;
+        e.preventDefault();
+        onContextMenu(vrow.filePath, vrow.isLocked, e.clientX, e.clientY);
+      }}
       className={[
         "flex items-center gap-3 w-full px-3 py-2 text-left border-b border-neutral-100 hover:bg-neutral-50 focus:outline-none focus:ring-inset focus:ring-1 focus:ring-neutral-300",
         vrow.isSelected ? "bg-blue-50 hover:bg-blue-100" : "",

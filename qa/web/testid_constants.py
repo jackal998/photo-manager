@@ -220,6 +220,18 @@ EXECUTE_ALL_DELETE_CONFIRM_YES = "execute-all-delete-confirm-yes"
 EXECUTE_ALL_DELETE_CONFIRM_NO = "execute-all-delete-confirm-no"
 """'Cancel' / 'No' button inside the all-delete confirmation sheet."""
 
+EXECUTE_REMOVE_CONFIRM = "execute-remove-confirm"
+"""Confirmation sheet shown before the execute-dialog row menu's 'Remove from
+list' finalizes a row (outcome='ignored', no disk delete).  Mirrors Qt's
+'Remove from List' QMessageBox (default No) in execute_action_dialog.py."""
+
+EXECUTE_REMOVE_CONFIRM_YES = "execute-remove-confirm-yes"
+"""'Yes, remove' button inside the remove-from-list confirmation sheet."""
+
+EXECUTE_REMOVE_CONFIRM_NO = "execute-remove-confirm-no"
+"""'Cancel' / 'No' button inside the remove-from-list confirmation sheet
+(the default — destructive-ish action requires an explicit Yes)."""
+
 # ---------------------------------------------------------------------------
 # Lock-conflict confirmation dialog
 # ---------------------------------------------------------------------------
@@ -306,6 +318,13 @@ CTX_UNLOCK = "ctx-unlock"
 
 CTX_APPLY_BEST_COPY = "ctx-apply-best-copy"
 """Context-menu item: apply 'best copy' auto-selection to the group."""
+
+CTX_SET_ACTION_BY_FIELD = "ctx-set-action-by-field"
+"""Context-menu item: open the Set Action by Field (ActionDialog) bulk-decide
+flow.  Present on the execute-dialog row menu (and the result-tree menu in a
+future port); maps to ``store.openActionDialog()`` — the same dialog the
+toolbar 'Set Action' button opens.  Mirrors Qt's execute-dialog
+'Set Action by Field…' item (execute_action_dialog.py:810)."""
 
 # ---------------------------------------------------------------------------
 # Action dialog (Set Action by Field — §5.4 contract)
