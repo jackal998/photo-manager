@@ -18,6 +18,7 @@ export const MENU_FILE_OPEN = "menu-file-open";
 export const MENU_ACTION = "menu-action";
 export const MENU_ACTION_SET = "menu-action-set";
 export const MENU_ACTION_EXECUTE = "menu-action-execute";
+export const MENU_ACTION_EXECUTE_SELECTED = "menu-action-execute-selected";
 export const MENU_VIEW = "menu-view";
 export const MENU_VIEW_LANG_EN = "menu-view-lang-en";
 export const MENU_VIEW_LANG_ZH = "menu-view-lang-zh";

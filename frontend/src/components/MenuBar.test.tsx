@@ -19,6 +19,7 @@ import {
   MENU_ACTION,
   MENU_ACTION_SET,
   MENU_ACTION_EXECUTE,
+  MENU_ACTION_EXECUTE_SELECTED,
   MENU_VIEW,
   MENU_VIEW_LANG_ZH,
 } from "@/testids";
@@ -29,11 +30,13 @@ function setup(overrides: Partial<ComponentProps<typeof MenuBar>> = {}) {
     onOpenManifest: vi.fn(),
     onSetAction: vi.fn(),
     onExecute: vi.fn(),
+    onExecuteSelected: vi.fn(),
     onSetLocale: vi.fn(),
   };
   render(
     <MenuBar
       manifestLoaded={false}
+      hasSelection={false}
       locale="en"
       {...handlers}
       {...overrides}
@@ -91,6 +94,35 @@ describe("MenuBar", () => {
     await user.click(screen.getByTestId(MENU_ACTION));
     await user.click(await screen.findByTestId(MENU_ACTION_EXECUTE));
     expect(h.onExecute).toHaveBeenCalledOnce();
+  });
+
+  it("Execute (only selected) is disabled without a main-tree selection", async () => {
+    const user = userEvent.setup();
+    // Manifest loaded but nothing selected → the entry must stay gated.
+    const h = setup({ manifestLoaded: true, hasSelection: false });
+    await user.click(screen.getByTestId(MENU_ACTION));
+    const item = await screen.findByTestId(MENU_ACTION_EXECUTE_SELECTED);
+    expect(item).toHaveAttribute("data-disabled");
+    await user.click(item);
+    expect(h.onExecuteSelected).not.toHaveBeenCalled();
+  });
+
+  it("Execute (only selected) is disabled without a manifest even with a selection", async () => {
+    const user = userEvent.setup();
+    const h = setup({ manifestLoaded: false, hasSelection: true });
+    await user.click(screen.getByTestId(MENU_ACTION));
+    const item = await screen.findByTestId(MENU_ACTION_EXECUTE_SELECTED);
+    expect(item).toHaveAttribute("data-disabled");
+    await user.click(item);
+    expect(h.onExecuteSelected).not.toHaveBeenCalled();
+  });
+
+  it("Execute (only selected) dispatches onExecuteSelected with manifest + selection", async () => {
+    const user = userEvent.setup();
+    const h = setup({ manifestLoaded: true, hasSelection: true });
+    await user.click(screen.getByTestId(MENU_ACTION));
+    await user.click(await screen.findByTestId(MENU_ACTION_EXECUTE_SELECTED));
+    expect(h.onExecuteSelected).toHaveBeenCalledOnce();
   });
 
   it("View → 中文 dispatches onSetLocale('zh_TW')", async () => {

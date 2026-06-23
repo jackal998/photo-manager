@@ -131,7 +131,10 @@ function stubOffsetHeight(height = 3000, width = 1024) {
 // Store seeding helpers
 // ---------------------------------------------------------------------------
 
-function openDialog(groups: Group[] = [MIXED_GROUP]) {
+function openDialog(
+  groups: Group[] = [MIXED_GROUP],
+  scopeGroupNumbers: number[] | null = null
+) {
   useAppStore.setState((s) => ({
     manifest: {
       ...s.manifest,
@@ -144,6 +147,7 @@ function openDialog(groups: Group[] = [MIXED_GROUP]) {
       executeRunning: false,
       executeError: null,
       lockConflict: null,
+      scopeGroupNumbers,
     },
   }));
 }
@@ -165,6 +169,7 @@ function resetStore() {
       executeError: null,
       lockConflict: null,
       prunePrompt: null,
+      scopeGroupNumbers: null,
     },
     preview: s.preview,
   }));
@@ -479,6 +484,65 @@ describe("ExecuteDialog", () => {
     // Visible scope = [ref.jpg] (delete) → all-delete gate fires first.
     expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toBeInTheDocument();
     expect(executeDecisionsMock).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // "Execute (only selected)" — group-pull scope (#430). When the dialog is
+  // opened with scopeGroupNumbers set, every groups-derived view confines to
+  // those groups, and Execute commits ONLY the scoped groups' decided rows
+  // (even under the default 'all' filter). This is the unit-level mirror of
+  // the s44 layer-3 scenario.
+  // -------------------------------------------------------------------------
+
+  it("scoped dialog shows only the scoped group's rows (out-of-scope group hidden)", () => {
+    act(() => {
+      // Group 1 (mixed) in scope; group 2 (all-delete) out of scope.
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP], [1]);
+    });
+    render(<ExecuteDialog />);
+    // In-scope group-1 rows present.
+    expect(screen.getByTestId("execute-row-1-ref.jpg")).toBeInTheDocument();
+    expect(screen.getByTestId("execute-row-1-dup.jpg")).toBeInTheDocument();
+    // Out-of-scope group-2 rows absent — confinement.
+    expect(screen.queryByTestId("execute-row-2-a.jpg")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("execute-row-2-b.jpg")).not.toBeInTheDocument();
+  });
+
+  it("scoped dialog's AllDeleteBanner reflects only the scoped groups", () => {
+    act(() => {
+      // The all-delete group (2) is OUT of scope, so its banner must not show;
+      // the in-scope group (1) is mixed → no all-delete banner.
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP], [1]);
+    });
+    render(<ExecuteDialog />);
+    expect(
+      screen.queryByTestId(EXECUTE_ALL_DELETE_BANNER)
+    ).not.toBeInTheDocument();
+  });
+
+  it("scoped Execute commits ONLY the scoped group's decided rows under the 'all' filter", () => {
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      // Scope to the MIXED group (1). The all-delete group (2) is out of scope
+      // and must neither appear in the commit nor trigger the all-delete gate.
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP], [1]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId(EXECUTE_BTN_EXECUTE));
+    });
+
+    // No all-delete confirm (the in-scope group is mixed) → committed directly,
+    // and scoped to exactly the group-1 decided paths.
+    expect(
+      screen.queryByTestId(EXECUTE_ALL_DELETE_CONFIRM)
+    ).not.toBeInTheDocument();
+    expect(executeDecisionsMock).toHaveBeenCalledOnce();
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/photos/ref.jpg", "/photos/dup.jpg"],
+    });
   });
 
   // Pure narrowing logic (change C) — deterministic, no Select driving.

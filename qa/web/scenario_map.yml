@@ -237,9 +237,9 @@ scenarios:
     notes: "ActionDialog numeric threshold on Size (Bytes) (#209). Mirrors s56's numeric flow with field=Size. Boundary derived at runtime from the fixture's on-disk sizes (== file_size_bytes the server thresholds on; 2nd-smallest = 17908) so '> boundary' splits the 5 near-dups into exactly 3 matched + 2 unchanged regardless of regen. Drives toolbar ActionDialog → field Size (Bytes) (numeric panel mounts) → cmp '>' + value boundary → counter non-zero (asserted pre-Apply) → action delete → Apply → delete-confirm, then asserts the EXACT 3-vs-2 split via GET /api/manifest (q95/q88/q80 delete, q72/q65 unchanged). Non-destructive. Divergences: counter asserted pre-Apply (the dialog auto-closes post-Apply — s56 precedent); Qt Wave-11 soft probes (A4 threshold icon / B6 Top-N counter / A14 spinbox-5000) omitted (NumericPanel has no validation-icon element)."
 
   - scenario: s44_execute_highlighted_rows
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s44_execute_selected_only
+    status: done
+    notes: "Execute (only selected) — main-tree selection scopes the execute dialog to the selected rows' GROUPS (#430 group-pull) + #410 static label (cluster D / PR-D2). Faithful port of the desktop menu-gated, selection-scoped flow (NOT in-dialog multi-select — completing s64's honest-partial single→multi port is tracked separately, see deferred issue). Adds the gated Action → 'Execute (only selected)…' entry (menu-action-execute-selected, disabled until ≥1 main-tree row is selected — web analog of _refresh_execute_selected_only_enabled) + ExecuteState.scopeGroupNumbers. Uses s60's deterministic 2-EXACT-dup-group exif-edge fixture (tz_offset×2 = group A, subsecond×2 = group B) so scope CONFINEMENT is observable: mark all 4 delete, select ONE group-A row, open the entry → dialog shows BOTH group-A rows (group-pull) and ZERO group-B rows (confinement); Execute → all-delete confirm → group A deleted (absent from disk + manifest) while group B survives on disk with user_decision='delete' intact (the load-bearing discriminator the single-group desktop fixture can't make). Divergences: GET /api/manifest JSON vs Qt SQLite; deleted row detected by manifest absence (outcome='deleted') not executed=1; static label is structural on the web (no 'highlighted' variant ever existed) but asserted to guard a future scoped-label regression. Destructive: each run recycles group A's 2 tmpdir copies."
 
   - scenario: s45_sort_persistence
     playwright_module: null

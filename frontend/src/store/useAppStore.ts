@@ -109,6 +109,7 @@ const initialExecute: ExecuteState = {
   executeError: null,
   lockConflict: null,
   prunePrompt: null,
+  scopeGroupNumbers: null,
 };
 
 const initialAction: ActionState = {
@@ -503,11 +504,27 @@ export const useAppStore = create<AppStore>()(
     // Execute dialog actions
     // -----------------------------------------------------------------------
 
-    openExecuteDialog() {
+    openExecuteDialog(scopePaths = null) {
       set((state) => {
         state.execute.executeOpen = true;
         state.execute.executeError = null;
         state.execute.lockConflict = null;
+        // "Execute (only selected)": expand the selected paths to their whole
+        // groups (#430 group-pull) and scope the dialog to those group numbers.
+        // An empty/absent selection opens unscoped (scopeGroupNumbers = null).
+        if (scopePaths && scopePaths.length > 0) {
+          const wanted = new Set(scopePaths);
+          const touched = new Set<number>();
+          for (const group of state.manifest.groups) {
+            if (group.items.some((item) => wanted.has(item.file_path))) {
+              touched.add(group.group_number);
+            }
+          }
+          state.execute.scopeGroupNumbers =
+            touched.size > 0 ? [...touched] : null;
+        } else {
+          state.execute.scopeGroupNumbers = null;
+        }
       });
     },
 
@@ -516,6 +533,7 @@ export const useAppStore = create<AppStore>()(
         state.execute.executeOpen = false;
         state.execute.executeError = null;
         state.execute.lockConflict = null;
+        state.execute.scopeGroupNumbers = null;
       });
     },
 

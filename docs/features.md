@@ -71,6 +71,7 @@ for the chore plan.
 | [Set Action dialog — geometry persistence](#set-action-dialog--geometry-persistence) | Set Action dialog |
 | [Web — Action dialog (Set Action by Field)](#web--action-dialog-set-action-by-field) | Web UI |
 | [Web — main result tree multi-selection](#web--main-result-tree-multi-selection) | Web UI |
+| [Web — Execute (only selected)](#web--execute-only-selected) | Web UI |
 | [Similarity column](#similarity-column) | Review |
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
@@ -693,6 +694,21 @@ for the chore plan.
 - **Conditions / variants:** There is no group-header selection — the web `GroupRow` is collapse-only, so the desktop "select a whole group as one item" sub-branch has no web equivalent. The single-row scenarios ([s15](../qa/web/scenarios/s15_context_menu.py) / [s25](../qa/web/scenarios/s25_empty_area_context_menu.py) / [s35](../qa/web/scenarios/s35_lock_via_context_menu.py)) stay single-target because they right-click a row that was never multi-selected.
 - **Related:** Desktop analogues [Context menu — Set Action (per-file)](#context-menu--set-action-per-file) and [List menu — Remove from List](#list-menu--remove-from-list); [#694](https://github.com/jackal998/photo-manager/issues/694) (stage-vs-finalize parity); [frontend/src/components/ResultTree.tsx](../frontend/src/components/ResultTree.tsx); QA scenario [`qa/web/scenarios/s20_multi_remove_from_list.py`](../qa/web/scenarios/s20_multi_remove_from_list.py) (s21's menu-bar List-menu surface is marked `skip` — covered by this context-menu port).
 - **Last verified:** 2026-06-24 (PR-D1 — main-tree multi-selection + selection-aware context menu; s20 live-run PASS).
+
+---
+
+### Web — Execute (only selected)
+
+- **Entry point:** Menu bar **Action → "Execute (only selected)…"** (`menu-action-execute-selected` → [frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)), wired from [frontend/src/App.tsx](../frontend/src/App.tsx) to the store's `openExecuteDialog(scopePaths)` ([frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)). Web analog of Qt's `Action → Execute Action (only selected)…`.
+- **Trigger:** With ≥1 row selected in the main result tree (cluster-D1 multi-selection), the user opens the entry; it is **disabled** otherwise.
+- **Behaviour:**
+  - **Gating.** The entry is disabled unless a manifest is loaded **and** the main-tree selection is non-empty (the web analog of Qt's `_refresh_execute_selected_only_enabled`). The unscoped **Execute…** entry (and toolbar Execute button) stay always-available and open the dialog over every decided row.
+  - **Group-pull scope (#430).** Opening it snapshots the current selection and scopes the execute dialog to the selected rows' **whole groups** — selecting any one row of a group pulls that group's rows into the dialog (so peer/ref rows stay visible while triaging). The scope is stored as `execute.scopeGroupNumbers` (a set of group numbers, robust across manifest refresh) and confines **every** groups-derived view: the tree, the all-delete + hidden-destructive banners, and the Execute commit. Out-of-scope groups are not shown and not executed.
+  - **Static label.** The Execute button keeps the constant "Execute" / "Executing…" label — there is no scoped-selection label variant (the desktop's removed "Execute Action (highlighted)" string, [#410](https://github.com/jackal998/photo-manager/issues/410), has no web equivalent).
+  - **Scope resets** to null (unscoped) when the dialog closes, and the selection itself clears on the executing manifest mutation.
+- **Conditions / variants:** This ports the desktop *menu-gated, selection-scoped* flow only. The execute dialog's own tree stays single-select ("Execute selected" scopes one row) — completing s64's honest-partial single→multi in-dialog port is tracked as a separate follow-up.
+- **Related:** Desktop analogue [Execute Action — scope to selected groups](#execute-action--scope-to-selected-groups-only-selected-entry-410-430-429) ([#430](https://github.com/jackal998/photo-manager/issues/430) group-pull, [#410](https://github.com/jackal998/photo-manager/issues/410) static label); builds on [Web — main result tree multi-selection](#web--main-result-tree-multi-selection); QA scenario [`qa/web/scenarios/s44_execute_selected_only.py`](../qa/web/scenarios/s44_execute_selected_only.py).
+- **Last verified:** 2026-06-24 (PR-D2 — Execute (only selected) menu entry + group-pull scope; s44 live-run PASS; s54/s60/s64/s20 regressions PASS).
 
 ---
 

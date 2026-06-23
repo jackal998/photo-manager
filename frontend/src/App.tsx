@@ -127,6 +127,17 @@ export default function App() {
   const openExecuteDialog = useAppStore((s) => s.openExecuteDialog);
   const openActionDialog = useAppStore((s) => s.openActionDialog);
   const manifestPath = useAppStore((s) => s.manifest.path);
+  const hasSelection = useAppStore((s) => s.selection.selectedPaths.length > 0);
+
+  // "Execute (only selected)": snapshot the current main-tree selection and
+  // open the execute dialog scoped to those rows' groups (#430 group-pull).
+  // Reads the live selection via getState (the gating subscription above keeps
+  // the menu item enabled/disabled; the click itself needs the latest set).
+  const handleExecuteSelectedOnly = useCallback(() => {
+    const selected = useAppStore.getState().selection.selectedPaths;
+    if (selected.length === 0) return;
+    openExecuteDialog(selected);
+  }, [openExecuteDialog]);
 
   const handleManifestOpen = useCallback(() => {
     const path = manifestInputValue.trim();
@@ -187,11 +198,13 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
       <MenuBar
         manifestLoaded={manifestPath !== null}
+        hasSelection={hasSelection}
         locale={locale}
         onScan={() => setScanOpen(true)}
         onOpenManifest={() => setManifestBrowseOpen(true)}
         onSetAction={openActionDialog}
-        onExecute={openExecuteDialog}
+        onExecute={() => openExecuteDialog()}
+        onExecuteSelected={handleExecuteSelectedOnly}
         onSetLocale={(loc) => void setLocale(loc)}
       />
 
@@ -210,7 +223,7 @@ export default function App() {
         <button
           data-testid={MAIN_EXECUTE_BUTTON}
           className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
-          onClick={openExecuteDialog}
+          onClick={() => openExecuteDialog()}
         >
           {t("web.toolbar.execute", "Execute")}
         </button>

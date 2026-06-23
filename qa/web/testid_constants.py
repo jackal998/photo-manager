@@ -90,6 +90,13 @@ MENU_ACTION_SET = "menu-action-set"
 MENU_ACTION_EXECUTE = "menu-action-execute"
 """Action → Execute… menu item (opens the execute-action dialog)."""
 
+MENU_ACTION_EXECUTE_SELECTED = "menu-action-execute-selected"
+"""Action → Execute (only selected)… menu item.
+
+Gated on a non-empty main-tree multi-selection. Opens the execute-action
+dialog scoped to the selected rows' groups (#430 group-pull: selecting any
+row pulls its whole group into the dialog)."""
+
 MENU_VIEW = "menu-view"
 """'View' top-level menu trigger."""
 

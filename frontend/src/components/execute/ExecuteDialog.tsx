@@ -95,6 +95,7 @@ export function ExecuteDialog() {
   const executeRunning = useAppStore((s) => s.execute.executeRunning);
   const executeError = useAppStore((s) => s.execute.executeError);
   const groups = useAppStore((s) => s.manifest.groups);
+  const scopeGroupNumbers = useAppStore((s) => s.execute.scopeGroupNumbers);
   const closeExecuteDialog = useAppStore((s) => s.closeExecuteDialog);
   const executeDecisions = useAppStore((s) => s.executeDecisions);
   const removeFromList = useAppStore((s) => s.removeFromList);
@@ -133,10 +134,23 @@ export function ExecuteDialog() {
   // Derived data
   // -------------------------------------------------------------------------
 
-  /** All decided rows (across all groups), filtered by current TypeFilter. */
+  /**
+   * The groups this dialog operates on. When the "Execute (only selected)"
+   * entry scoped the dialog (scopeGroupNumbers !== null), restrict every
+   * downstream view — tree, banners, decided-paths, the Execute scope — to the
+   * selected rows' groups (#430 group-pull). When unscoped this is identically
+   * `groups`, so the toolbar/menu "Execute…" path is unchanged.
+   */
+  const scopedGroups = useMemo(() => {
+    if (scopeGroupNumbers === null) return groups;
+    const wanted = new Set(scopeGroupNumbers);
+    return groups.filter((g) => wanted.has(g.group_number));
+  }, [groups, scopeGroupNumbers]);
+
+  /** All decided rows (across scoped groups), filtered by current TypeFilter. */
   const decidedPaths = useMemo(() => {
     const paths: string[] = [];
-    for (const group of groups) {
+    for (const group of scopedGroups) {
       for (const item of group.items) {
         if (item.user_decision === "") continue;
         if (filter === "delete" && item.user_decision !== "delete") continue;
@@ -145,11 +159,11 @@ export function ExecuteDialog() {
       }
     }
     return paths;
-  }, [groups, filter]);
+  }, [scopedGroups, filter]);
 
   const allDeleteGroupIds = useMemo(
-    () => findAllDeleteGroupIds(groups, filter),
-    [groups, filter]
+    () => findAllDeleteGroupIds(scopedGroups, filter),
+    [scopedGroups, filter]
   );
 
   // #676/#502 — count of pending delete rows HIDDEN by the active filter.
@@ -160,23 +174,23 @@ export function ExecuteDialog() {
   const hiddenDeleteCount = useMemo(() => {
     if (filter !== "ignore") return 0;
     let n = 0;
-    for (const group of groups) {
+    for (const group of scopedGroups) {
       for (const item of group.items) {
         if (item.user_decision === "delete") n++;
       }
     }
     return n;
-  }, [groups, filter]);
+  }, [scopedGroups, filter]);
 
   // Selected file's thumbnail URL for the preview pane.
   const previewThumbnailUrl = useMemo(() => {
     if (selectedFilePath === null) return null;
-    for (const group of groups) {
+    for (const group of scopedGroups) {
       const item = group.items.find((f) => f.file_path === selectedFilePath);
       if (item) return item.thumbnail_url;
     }
     return null;
-  }, [selectedFilePath, groups]);
+  }, [selectedFilePath, scopedGroups]);
 
   // -------------------------------------------------------------------------
   // Handlers
@@ -231,7 +245,7 @@ export function ExecuteDialog() {
     (scopePaths?: string[]) => {
       const scope = scopePaths ? new Set(scopePaths) : null;
       let hasDecided = false;
-      for (const group of groups) {
+      for (const group of scopedGroups) {
         for (const item of group.items) {
           if (item.user_decision === "") continue;
           if (scope !== null && !scope.has(item.file_path)) continue;
@@ -241,16 +255,19 @@ export function ExecuteDialog() {
       }
       return hasDecided;
     },
-    [groups]
+    [scopedGroups]
   );
 
   const handleExecute = useCallback(() => {
     // #676/#502 "visible = committed": when a non-"all" type filter is
     // active, scope the commit to the currently-visible rows (decidedPaths)
     // so the filter can never silently execute — or hide — decisions the
-    // user can't see. The unfiltered path keeps scope_paths=null (commit
-    // every decided row), preserving the original no-argument call.
-    if (filter === "all") {
+    // user can't see. The unfiltered, UNSCOPED path keeps scope_paths=null
+    // (commit every decided row), preserving the original no-argument call.
+    // When the dialog is group-scoped ("Execute (only selected)"), decidedPaths
+    // is already confined to the scoped groups, so route through the scoped
+    // branch even under the "all" filter so the commit stays inside the scope.
+    if (filter === "all" && scopeGroupNumbers === null) {
       if (isAllDeleteScope()) {
         pendingExecOptsRef.current = {};
         setDeleteConfirmOpen(true);
@@ -266,7 +283,7 @@ export function ExecuteDialog() {
     } else {
       void executeDecisions({ scopePaths });
     }
-  }, [executeDecisions, isAllDeleteScope, filter, decidedPaths]);
+  }, [executeDecisions, isAllDeleteScope, filter, decidedPaths, scopeGroupNumbers]);
 
   const handleExecuteSelected = useCallback(() => {
     if (selectedFilePath === null) return;
@@ -307,12 +324,12 @@ export function ExecuteDialog() {
   // Count of delete-scoped rows for the DeleteConfirmDialog body.
   const deleteCount = useMemo(
     () =>
-      groups.reduce(
+      scopedGroups.reduce(
         (acc, g) =>
           acc + g.items.filter((i) => i.user_decision === "delete").length,
         0
       ),
-    [groups]
+    [scopedGroups]
   );
 
   return (
@@ -367,7 +384,7 @@ export function ExecuteDialog() {
           <div className="flex-1 min-w-0 flex flex-col">
             <ExecuteTree
               ref={treeRef}
-              groups={groups}
+              groups={scopedGroups}
               filter={filter}
               selectedFilePath={selectedFilePath}
               onSelectFile={handleSelectFile}

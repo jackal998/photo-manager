@@ -131,6 +131,7 @@ beforeEach(() => {
       executeError: null,
       lockConflict: null,
       prunePrompt: null,
+      scopeGroupNumbers: null,
     },
   });
   vi.clearAllMocks();
@@ -861,5 +862,56 @@ describe("selection is cleared whenever manifest.groups is replaced", () => {
     await useAppStore.getState().loadManifest("/data/out.db");
 
     expect(useAppStore.getState().selection.selectedPaths).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openExecuteDialog scope (#430 group-pull — "Execute (only selected)")
+// ---------------------------------------------------------------------------
+
+describe("openExecuteDialog – group-pull scope from a selection", () => {
+  beforeEach(() => {
+    // Two groups: A = {a0,a1}, B = {b0,b1}.
+    seedManifest([
+      makeGroup(1, ["/p/a0.jpg", "/p/a1.jpg"]),
+      makeGroup(2, ["/p/b0.jpg", "/p/b1.jpg"]),
+    ]);
+  });
+
+  it("expands a single selected path to its whole group's number", () => {
+    // Select just ONE row in group A; the dialog must scope to group 1 (both
+    // members pulled in), proving #430 group-pull rather than per-row scope.
+    useAppStore.getState().openExecuteDialog(["/p/a0.jpg"]);
+    expect(useAppStore.getState().execute.executeOpen).toBe(true);
+    expect(useAppStore.getState().execute.scopeGroupNumbers).toEqual([1]);
+  });
+
+  it("unions the groups of a cross-group selection", () => {
+    useAppStore.getState().openExecuteDialog(["/p/a1.jpg", "/p/b0.jpg"]);
+    expect(useAppStore.getState().execute.scopeGroupNumbers).toEqual([1, 2]);
+  });
+
+  it("opens unscoped (null) when called with no argument", () => {
+    useAppStore.getState().openExecuteDialog();
+    expect(useAppStore.getState().execute.executeOpen).toBe(true);
+    expect(useAppStore.getState().execute.scopeGroupNumbers).toBeNull();
+  });
+
+  it("opens unscoped when the selection is empty", () => {
+    useAppStore.getState().openExecuteDialog([]);
+    expect(useAppStore.getState().execute.scopeGroupNumbers).toBeNull();
+  });
+
+  it("opens unscoped when no selected path matches any manifest row", () => {
+    useAppStore.getState().openExecuteDialog(["/p/ghost.jpg"]);
+    expect(useAppStore.getState().execute.scopeGroupNumbers).toBeNull();
+  });
+
+  it("closeExecuteDialog clears the scope back to null", () => {
+    useAppStore.getState().openExecuteDialog(["/p/a0.jpg"]);
+    expect(useAppStore.getState().execute.scopeGroupNumbers).toEqual([1]);
+    useAppStore.getState().closeExecuteDialog();
+    expect(useAppStore.getState().execute.executeOpen).toBe(false);
+    expect(useAppStore.getState().execute.scopeGroupNumbers).toBeNull();
   });
 });

@@ -107,6 +107,16 @@ export interface ExecuteState {
   lockConflict: LockConflict | null;
   /** Set when the UI wants to show a prune confirmation. */
   prunePrompt: PrunePrompt | null;
+  /**
+   * Group numbers the execute dialog is scoped to, or null for "all groups".
+   *
+   * Set by the "Execute (only selected)" entry, which snapshots the main-tree
+   * selection at open time and expands each selected path to its whole group
+   * (#430 group-pull). The dialog restricts every groups-derived view — tree,
+   * banners, decided-paths, the Execute scope — to these groups. Reset to null
+   * by closeExecuteDialog and by the unscoped openExecuteDialog() entry.
+   */
+  scopeGroupNumbers: number[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,8 +254,15 @@ export interface AppActions {
   // Phase 2C2 — execute dialog actions
   // -------------------------------------------------------------------------
 
-  /** Open the execute dialog. */
-  openExecuteDialog(): void;
+  /**
+   * Open the execute dialog.
+   *
+   * Pass `scopePaths` (the main-tree selection) to scope the dialog to those
+   * rows' groups (#430 group-pull — "Execute (only selected)"). Omit it (or
+   * pass null/empty) to open unscoped over every decided row (the toolbar/menu
+   * "Execute…" entry).
+   */
+  openExecuteDialog(scopePaths?: string[] | null): void;
 
   /** Close the execute dialog and clear transient state (error, lockConflict). */
   closeExecuteDialog(): void;

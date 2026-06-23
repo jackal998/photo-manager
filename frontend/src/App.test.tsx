@@ -140,6 +140,7 @@ function resetStore() {
       executeError: null,
       lockConflict: null,
       prunePrompt: null,
+      scopeGroupNumbers: null,
     },
   });
   // Reset i18n store to defaults so each test starts with empty catalog + "en".

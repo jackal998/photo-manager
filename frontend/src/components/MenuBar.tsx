@@ -10,7 +10,6 @@
 //   - Save Manifest: backend IS plumbed (POST /api/save + store.saveManifest),
 //     but the web persists decisions live via PATCH /api/decision, so whether
 //     an explicit "save snapshot" is meaningful needs a product decision.
-//   - Execute Selected Only: needs tree-selection → scoped-execute wiring.
 //   - List → Remove from List: needs a remove-by-regex / selection entry point.
 //   - Log menu: depends on the web OS-integration (reveal/open) story.
 //   - File → Exit: N/A for a browser tab.
@@ -26,6 +25,7 @@ import {
   MENU_ACTION,
   MENU_ACTION_SET,
   MENU_ACTION_EXECUTE,
+  MENU_ACTION_EXECUTE_SELECTED,
   MENU_VIEW,
   MENU_VIEW_LANG_EN,
   MENU_VIEW_LANG_ZH,
@@ -37,11 +37,16 @@ import {
 
 export interface MenuBarProps {
   manifestLoaded: boolean;
+  /** True when ≥1 row is selected in the main result tree (gates the
+   *  "Execute (only selected)" entry). */
+  hasSelection: boolean;
   locale: string;
   onScan: () => void;
   onOpenManifest: () => void;
   onSetAction: () => void;
   onExecute: () => void;
+  /** Open the execute dialog scoped to the current main-tree selection. */
+  onExecuteSelected: () => void;
   onSetLocale: (locale: string) => void;
 }
 
@@ -62,11 +67,13 @@ const ITEM_CLASS =
 
 export function MenuBar({
   manifestLoaded,
+  hasSelection,
   locale,
   onScan,
   onOpenManifest,
   onSetAction,
   onExecute,
+  onExecuteSelected,
   onSetLocale,
 }: MenuBarProps) {
   const t = useT();
@@ -126,6 +133,14 @@ export function MenuBar({
               onSelect={onExecute}
             >
               {t("web.menu.action_execute", "Execute…")}
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              data-testid={MENU_ACTION_EXECUTE_SELECTED}
+              className={ITEM_CLASS}
+              disabled={!manifestLoaded || !hasSelection}
+              onSelect={onExecuteSelected}
+            >
+              {t("web.menu.action_execute_selected", "Execute (only selected)…")}
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
