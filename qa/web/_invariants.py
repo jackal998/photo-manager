@@ -397,6 +397,58 @@ def click_context_item(page: "Page", item_testid: str, *, timeout: float = 5_000
 
 
 # ---------------------------------------------------------------------------
+# Row-selection helpers (main result-tree multi-selection)
+# ---------------------------------------------------------------------------
+
+
+def click_row(
+    page: "Page",
+    row_testid: str,
+    *,
+    modifiers: "list[str] | None" = None,
+    timeout: float = 10_000,
+) -> None:
+    """Scroll a virtualised file row into view and left-click it.
+
+    The result tree is virtualised (``@tanstack/react-virtual``), so off-screen
+    rows are not in the DOM until they scroll into view — this helper forces the
+    render via ``scroll_into_view_if_needed`` before clicking (the same pattern
+    as ``right_click_row``).
+
+    Parameters
+    ----------
+    page:
+        The Playwright Page with a loaded manifest.
+    row_testid:
+        The full ``data-testid`` of the file row (``row_file_testid(...)``).
+    modifiers:
+        Optional Playwright modifier keys held during the click, e.g.
+        ``["Control"]`` (toggle) or ``["Shift"]`` (range).  Playwright maps
+        ``"Control"`` to Ctrl on Windows/Linux and Meta on macOS, matching the
+        app's ``e.ctrlKey || e.metaKey`` check.
+    timeout:
+        Maximum milliseconds to wait for the row to appear.
+    """
+    row = page.get_by_test_id(row_testid)
+    row.wait_for(state="visible", timeout=timeout)
+    row.scroll_into_view_if_needed(timeout=timeout)
+    if modifiers:
+        row.click(modifiers=modifiers)
+    else:
+        row.click()
+
+
+def ctrl_click_row(page: "Page", row_testid: str, *, timeout: float = 10_000) -> None:
+    """Ctrl/Cmd-click a file row to toggle it in the multi-selection."""
+    click_row(page, row_testid, modifiers=["Control"], timeout=timeout)
+
+
+def shift_click_row(page: "Page", row_testid: str, *, timeout: float = 10_000) -> None:
+    """Shift-click a file row to extend the multi-selection to an inclusive range."""
+    click_row(page, row_testid, modifiers=["Shift"], timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
 # Execute dialog helpers
 # ---------------------------------------------------------------------------
 

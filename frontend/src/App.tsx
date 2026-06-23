@@ -50,6 +50,7 @@ interface ContextMenuState {
   y: number;
   filePath: string;
   isLocked: boolean;
+  targetPaths: string[];
 }
 
 const CLOSED_MENU: ContextMenuState = {
@@ -58,6 +59,7 @@ const CLOSED_MENU: ContextMenuState = {
   y: 0,
   filePath: "",
   isLocked: false,
+  targetPaths: [],
 };
 
 export default function App() {
@@ -89,12 +91,25 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(CLOSED_MENU);
 
   const handleContextMenu = useCallback((target: ContextMenuTarget) => {
+    // Target-resolution rule (file-manager standard): when the right-clicked
+    // row is part of the current multi-selection, the menu verbs act on the
+    // whole selection; otherwise they act on just that row, and the selection
+    // resets to it so the highlight matches what will be touched. This keeps
+    // single-row scenarios (s15/s25/s35/s53/s60) single-target.
+    const store = useAppStore.getState();
+    const selected = store.selection.selectedPaths;
+    const inSelection = selected.includes(target.filePath);
+    const targetPaths = inSelection ? selected : [target.filePath];
+    if (!inSelection) {
+      store.setSelection([target.filePath]);
+    }
     setContextMenu({
       open: true,
       x: target.x,
       y: target.y,
       filePath: target.filePath,
       isLocked: target.isLocked,
+      targetPaths,
     });
   }, []);
 
@@ -332,6 +347,7 @@ export default function App() {
           y={contextMenu.y}
           filePath={contextMenu.filePath}
           isLocked={contextMenu.isLocked}
+          targetPaths={contextMenu.targetPaths}
           onClose={handleContextMenuClose}
         />
       )}

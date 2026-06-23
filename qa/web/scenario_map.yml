@@ -112,14 +112,14 @@ scenarios:
     notes: "Context-menu 'Open folder' reveal round-trip. Right-click neardup_00_q95.jpg → CTX_OPEN_FOLDER fires POST /api/reveal {file_path}; asserts exactly one reveal request carrying the target basename + a recognised status. Status is platform-dependent: 200 on Windows (Explorer actually spawns, fire-and-forget) / 501 platform_unsupported on the Linux CI runner — both accepted (each proves menu→store→endpoint wiring + path). Qt's CabinetWClass EnumWindows check has no browser analog; asserted on the intercepted request instead. revealInExplorer swallows the 501 as a non-fatal executeError so nothing crashes off-Windows."
 
   - scenario: s20_multi_remove_from_list
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s20_multi_remove_from_list
+    status: done
+    notes: "Cluster D / PR-D1. Main-tree multi-selection: Ctrl/Cmd+click toggles rows into an ordered selection set; one right-click context-menu verb fans out over the WHOLE selection (App target-resolution rule: right-clicked-in-selection → the selection, else just that row). Branch A: Ctrl-multi-select 3 rows → Remove from list → all 3 staged user_decision='ignore'. Branch B: a fresh 2-row selection → Delete → both 'delete' (proves selection-replace + delete fan-out). Branch C: right-click a row OUTSIDE the selection → Keep clears only that one row (guards the rule that keeps s15/s25/s35/s53/s60 single-target). DIVERGENCES: D1 the web result-tree 'Remove from list' STAGES user_decision='ignore' (commit-at-Execute model) where desktop finalizes outcome='ignored' immediately — #694 tracks the gap, intentionally unchanged here because s53/s60 depend on the staged behaviour; the execute-dialog menu (s54) is the surface that finalizes. D2 the web GroupRow is collapse-only, so the desktop group→file-expansion sub-branch is dropped. /api/decision skips the manifest_path root guard, so the repo fixture dir is scanned directly (s30 precedent)."
 
   - scenario: s21_list_menu_remove
     playwright_module: null
-    status: todo
-    notes: ""
+    status: skip
+    notes: "SKIP — no web equivalent surface. Desktop s21 drives the menu-bar 'List' menu → 'Remove from List' (MainWindow._remove_from_list_toolbar); the web MenuBar is File/Action/View only and has no List menu (a deliberate deferral, MenuBar.tsx). The underlying behaviour — act on the highlighted rows + finalize — is covered by s20's context-menu multi-selection port (PR-D1). Building a top-level List menu solely to host one item the context menu already provides would be over-fitting. The no-selection 'No items selected' QMessageBox and the 'Removed N items from list' status-bar echo are desktop-only surfaces with no web analog."
 
   - scenario: s22_language_switch
     playwright_module: qa.web.scenarios.s22_language_switch

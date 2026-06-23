@@ -22,6 +22,7 @@ import {
   startScan,
 } from "../api/client";
 import type {
+  DecisionValue,
   FileRow,
   ScanFailedEvent,
   ScanFinishedEvent,
@@ -37,6 +38,7 @@ import type {
   ManifestState,
   PreviewState,
   ScanState,
+  SelectionState,
   SettingsState,
 } from "./types";
 
@@ -95,6 +97,11 @@ const initialPreview: PreviewState = {
   fullResPath: null,
 };
 
+const initialSelection: SelectionState = {
+  selectedPaths: [],
+  anchorPath: null,
+};
+
 const initialExecute: ExecuteState = {
   executeOpen: false,
   executeRunning: false,
@@ -126,6 +133,7 @@ export const useAppStore = create<AppStore>()(
     manifest: { ...initialManifest },
     settings: { ...initialSettings },
     preview: { ...initialPreview },
+    selection: { ...initialSelection },
     execute: { ...initialExecute },
     action: { ...initialAction },
 
@@ -234,6 +242,9 @@ export const useAppStore = create<AppStore>()(
           state.manifest.totalGroups = data.total_groups;
           state.manifest.totalFiles = data.total_files;
           state.manifest.loading = false;
+          // A fresh manifest invalidates any prior selection (paths may vanish).
+          state.selection.selectedPaths = [];
+          state.selection.anchorPath = null;
         });
       } catch (err) {
         set((state) => {
@@ -312,6 +323,131 @@ export const useAppStore = create<AppStore>()(
             err instanceof Error ? err.message : String(err);
         });
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // Batch decision / lock actions (multi-selection context menu)
+    // -----------------------------------------------------------------------
+
+    async setDecisions(paths, decision) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null || paths.length === 0) return;
+
+      // Snapshot prior values per path so a failed PATCH reverts every row.
+      const previous = new Map<string, DecisionValue>();
+      for (const p of paths) {
+        const prev = readFileRowField(
+          get().manifest,
+          p,
+          (row) => row.user_decision
+        );
+        if (prev !== null) previous.set(p, prev);
+        applyFileRowPatch(set as ImmerSetFn, p, (row) => {
+          row.user_decision = decision;
+        });
+      }
+
+      try {
+        await patchDecisions(
+          manifestPath,
+          paths.map((p) => ({ file_path: p, decision }))
+        );
+      } catch (err) {
+        for (const [p, prev] of previous) {
+          applyFileRowPatch(set as ImmerSetFn, p, (row) => {
+            row.user_decision = prev;
+          });
+        }
+        set((state) => {
+          state.manifest.error =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    async setLocks(paths, locked) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null || paths.length === 0) return;
+
+      const previous = new Map<string, boolean>();
+      for (const p of paths) {
+        const prev = readFileRowField(
+          get().manifest,
+          p,
+          (row) => row.is_locked
+        );
+        if (prev !== null) previous.set(p, prev);
+        applyFileRowPatch(set as ImmerSetFn, p, (row) => {
+          row.is_locked = locked;
+        });
+      }
+
+      try {
+        await patchLocks(
+          manifestPath,
+          paths.map((p) => ({ file_path: p, locked }))
+        );
+      } catch (err) {
+        for (const [p, prev] of previous) {
+          applyFileRowPatch(set as ImmerSetFn, p, (row) => {
+            row.is_locked = prev;
+          });
+        }
+        set((state) => {
+          state.manifest.error =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // Selection actions (main result-tree multi-selection)
+    // -----------------------------------------------------------------------
+
+    setSelection(paths) {
+      set((state) => {
+        state.selection.selectedPaths = [...paths];
+        state.selection.anchorPath =
+          paths.length > 0 ? paths[paths.length - 1] : null;
+      });
+    },
+
+    toggleSelection(path) {
+      set((state) => {
+        const idx = state.selection.selectedPaths.indexOf(path);
+        if (idx === -1) {
+          state.selection.selectedPaths.push(path);
+        } else {
+          state.selection.selectedPaths.splice(idx, 1);
+        }
+        // Ctrl/Cmd+click re-anchors so a following Shift+click ranges from here.
+        state.selection.anchorPath = path;
+      });
+    },
+
+    extendSelection(toPath, orderedVisiblePaths) {
+      set((state) => {
+        const anchor = state.selection.anchorPath;
+        const ai = anchor === null ? -1 : orderedVisiblePaths.indexOf(anchor);
+        const ti = orderedVisiblePaths.indexOf(toPath);
+        if (ai === -1 || ti === -1) {
+          // No usable anchor (or one scrolled out of the visible order) →
+          // behave like a plain click on toPath.
+          state.selection.selectedPaths = [toPath];
+          state.selection.anchorPath = toPath;
+          return;
+        }
+        const [lo, hi] = ai <= ti ? [ai, ti] : [ti, ai];
+        state.selection.selectedPaths = orderedVisiblePaths.slice(lo, hi + 1);
+        // Anchor stays put — successive Shift+clicks re-range from the origin.
+      });
+    },
+
+    clearSelection() {
+      set((state) => {
+        state.selection.selectedPaths = [];
+        state.selection.anchorPath = null;
+      });
     },
 
     // -----------------------------------------------------------------------
@@ -416,6 +552,9 @@ export const useAppStore = create<AppStore>()(
           state.execute.executeResult = result;
           // Replace groups from the authoritative server response.
           state.manifest.groups = result.groups;
+          // Executed/removed rows leave the manifest — drop the stale selection.
+          state.selection.selectedPaths = [];
+          state.selection.anchorPath = null;
           // Surface prune prompt when singleton groups remain after execute.
           const singletons = result.groups
             .filter((g) => g.member_count === 1)
@@ -465,6 +604,9 @@ export const useAppStore = create<AppStore>()(
 
         set((state) => {
           state.manifest.groups = result.groups;
+          // Removed rows are gone — clear any selection referencing them.
+          state.selection.selectedPaths = [];
+          state.selection.anchorPath = null;
         });
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
@@ -500,6 +642,9 @@ export const useAppStore = create<AppStore>()(
           state.manifest.groups = result.groups;
           // Clear any stale prune prompt.
           state.execute.prunePrompt = null;
+          // Pruned rows leave the manifest — drop the stale selection.
+          state.selection.selectedPaths = [];
+          state.selection.anchorPath = null;
         });
       } catch (err) {
         set((state) => {
@@ -667,6 +812,9 @@ export const useAppStore = create<AppStore>()(
             result.matched > result.affected_paths.length;
           // Replace groups from the authoritative server response.
           state.manifest.groups = result.groups;
+          // Bulk-decide may drop rows (ignore/remove) — clear the selection.
+          state.selection.selectedPaths = [];
+          state.selection.anchorPath = null;
         });
       } catch (err) {
         set((state) => {

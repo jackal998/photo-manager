@@ -4,15 +4,17 @@
 //   1. Renders with CONTEXT_MENU testid and role=menu.
 //   2. All expected item testids are present.
 //   3. Lock/Unlock item shown conditionally based on isLocked prop.
-//   4. Clicking Keep calls store.setDecision with "" and then onClose.
-//   5. Clicking Delete calls store.setDecision with "delete" and onClose.
-//   6. Clicking Remove calls store.setDecision with "ignore" and onClose.
-//   7. Clicking Lock calls store.setLock(filePath, true) and onClose.
-//   8. Clicking Unlock calls store.setLock(filePath, false) and onClose.
-//   9. Clicking Open folder calls store.revealInExplorer and onClose.
+//   4. Clicking Keep calls store.setDecisions(targetPaths, "") and onClose.
+//   5. Clicking Delete calls store.setDecisions(targetPaths, "delete") and onClose.
+//   6. Clicking Remove calls store.setDecisions(targetPaths, "ignore") and onClose.
+//   7. Clicking Lock calls store.setLocks(targetPaths, true) and onClose.
+//   8. Clicking Unlock calls store.setLocks(targetPaths, false) and onClose.
+//   9. Clicking Open folder calls store.revealInExplorer(filePath) and onClose.
 //  10. Clicking Apply best copy (no-op stub) still calls onClose.
 //  11. Pressing Esc calls onClose.
 //  12. Clicking outside the menu calls onClose.
+//  13. Multi-target: the decision/lock verbs act on the WHOLE targetPaths set,
+//      while Open folder stays scoped to the single right-clicked filePath.
 
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -37,7 +39,7 @@ import {
 
 const FILE_PATH = "/photos/test.jpg";
 
-function renderMenu(isLocked = false) {
+function renderMenu(isLocked = false, targetPaths: string[] = [FILE_PATH]) {
   const onClose = vi.fn();
   const result = render(
     <ContextMenu
@@ -45,6 +47,7 @@ function renderMenu(isLocked = false) {
       y={200}
       filePath={FILE_PATH}
       isLocked={isLocked}
+      targetPaths={targetPaths}
       onClose={onClose}
     />
   );
@@ -56,17 +59,17 @@ function renderMenu(isLocked = false) {
 // ---------------------------------------------------------------------------
 
 describe("ContextMenu", () => {
-  let setDecisionMock: ReturnType<typeof vi.fn>;
-  let setLockMock: ReturnType<typeof vi.fn>;
+  let setDecisionsMock: ReturnType<typeof vi.fn>;
+  let setLocksMock: ReturnType<typeof vi.fn>;
   let revealMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    setDecisionMock = vi.fn().mockResolvedValue(undefined);
-    setLockMock = vi.fn().mockResolvedValue(undefined);
+    setDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    setLocksMock = vi.fn().mockResolvedValue(undefined);
     revealMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({
-      setDecision: setDecisionMock,
-      setLock: setLockMock,
+      setDecisions: setDecisionsMock,
+      setLocks: setLocksMock,
       revealInExplorer: revealMock,
     } as never);
   });
@@ -99,43 +102,43 @@ describe("ContextMenu", () => {
     expect(screen.queryByTestId(CTX_LOCK)).not.toBeInTheDocument();
   });
 
-  it("Keep calls setDecision('') and onClose", async () => {
+  it("Keep calls setDecisions([filePath], '') and onClose", async () => {
     const user = userEvent.setup();
     const { onClose } = renderMenu();
     await user.click(screen.getByTestId(CTX_SET_ACTION_KEEP));
-    expect(setDecisionMock).toHaveBeenCalledWith(FILE_PATH, "");
+    expect(setDecisionsMock).toHaveBeenCalledWith([FILE_PATH], "");
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("Delete calls setDecision('delete') and onClose", async () => {
+  it("Delete calls setDecisions([filePath], 'delete') and onClose", async () => {
     const user = userEvent.setup();
     const { onClose } = renderMenu();
     await user.click(screen.getByTestId(CTX_SET_ACTION_DELETE));
-    expect(setDecisionMock).toHaveBeenCalledWith(FILE_PATH, "delete");
+    expect(setDecisionsMock).toHaveBeenCalledWith([FILE_PATH], "delete");
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("Remove calls setDecision('ignore') and onClose", async () => {
+  it("Remove calls setDecisions([filePath], 'ignore') and onClose", async () => {
     const user = userEvent.setup();
     const { onClose } = renderMenu();
     await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
-    expect(setDecisionMock).toHaveBeenCalledWith(FILE_PATH, "ignore");
+    expect(setDecisionsMock).toHaveBeenCalledWith([FILE_PATH], "ignore");
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("Lock calls setLock(filePath, true) and onClose", async () => {
+  it("Lock calls setLocks([filePath], true) and onClose", async () => {
     const user = userEvent.setup();
     const { onClose } = renderMenu(false);
     await user.click(screen.getByTestId(CTX_LOCK));
-    expect(setLockMock).toHaveBeenCalledWith(FILE_PATH, true);
+    expect(setLocksMock).toHaveBeenCalledWith([FILE_PATH], true);
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("Unlock calls setLock(filePath, false) and onClose", async () => {
+  it("Unlock calls setLocks([filePath], false) and onClose", async () => {
     const user = userEvent.setup();
     const { onClose } = renderMenu(true);
     await user.click(screen.getByTestId(CTX_UNLOCK));
-    expect(setLockMock).toHaveBeenCalledWith(FILE_PATH, false);
+    expect(setLocksMock).toHaveBeenCalledWith([FILE_PATH], false);
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -166,5 +169,37 @@ describe("ContextMenu", () => {
     // Simulate a mousedown event on the document body (outside the menu).
     fireEvent.mouseDown(document.body);
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  // -------------------------------------------------------------------------
+  // Multi-target behaviour — the decision/lock verbs act on the whole
+  // selection, Open folder stays scoped to the single right-clicked row.
+  // -------------------------------------------------------------------------
+
+  it("Delete acts on the whole targetPaths set", async () => {
+    const user = userEvent.setup();
+    const many = ["/a.jpg", "/b.jpg", "/c.jpg"];
+    const { onClose } = renderMenu(false, many);
+    await user.click(screen.getByTestId(CTX_SET_ACTION_DELETE));
+    expect(setDecisionsMock).toHaveBeenCalledWith(many, "delete");
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("Lock acts on the whole targetPaths set", async () => {
+    const user = userEvent.setup();
+    const many = ["/a.jpg", "/b.jpg", "/c.jpg"];
+    renderMenu(false, many);
+    await user.click(screen.getByTestId(CTX_LOCK));
+    expect(setLocksMock).toHaveBeenCalledWith(many, true);
+  });
+
+  it("Open folder stays scoped to the single right-clicked filePath", async () => {
+    const user = userEvent.setup();
+    const many = ["/a.jpg", FILE_PATH, "/c.jpg"];
+    renderMenu(false, many);
+    await user.click(screen.getByTestId(CTX_OPEN_FOLDER));
+    // Reveal targets only the right-clicked row, never the whole selection.
+    expect(revealMock).toHaveBeenCalledWith(FILE_PATH);
+    expect(revealMock).toHaveBeenCalledOnce();
   });
 });

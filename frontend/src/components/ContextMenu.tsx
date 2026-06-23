@@ -23,8 +23,16 @@ import {
 export interface ContextMenuProps {
   x: number;
   y: number;
+  /** The single right-clicked row — drives the Lock/Unlock label and Open folder. */
   filePath: string;
   isLocked: boolean;
+  /**
+   * The rows the decision/lock verbs act on. Equals the current multi-selection
+   * when the right-clicked row belongs to it, else just [filePath]. Resolved by
+   * App.handleContextMenu (the file-manager target-resolution rule), so a
+   * right-click outside the selection still acts on just that one row.
+   */
+  targetPaths: string[];
   onClose: () => void;
 }
 
@@ -33,10 +41,11 @@ export function ContextMenu({
   y,
   filePath,
   isLocked,
+  targetPaths,
   onClose,
 }: ContextMenuProps) {
-  const setDecision = useAppStore((s) => s.setDecision);
-  const setLock = useAppStore((s) => s.setLock);
+  const setDecisions = useAppStore((s) => s.setDecisions);
+  const setLocks = useAppStore((s) => s.setLocks);
   const revealInExplorer = useAppStore((s) => s.revealInExplorer);
 
   const menuRef = useRef<HTMLDivElement>(null);
@@ -68,27 +77,31 @@ export function ContextMenu({
   }, [onClose]);
 
   function handleSetKeep() {
-    void setDecision(filePath, "");
+    void setDecisions(targetPaths, "");
     onClose();
   }
 
   function handleSetDelete() {
-    void setDecision(filePath, "delete");
+    void setDecisions(targetPaths, "delete");
     onClose();
   }
 
   function handleSetRemove() {
-    void setDecision(filePath, "ignore");
+    // The result-tree "Remove from list" STAGES user_decision='ignore' (the web's
+    // commit-at-Execute model — distinct from the execute-dialog menu, which
+    // finalizes outcome='ignored'). Desktop finalizes immediately here; that
+    // parity gap is tracked as #694, intentionally not changed in this PR.
+    void setDecisions(targetPaths, "ignore");
     onClose();
   }
 
   function handleLock() {
-    void setLock(filePath, true);
+    void setLocks(targetPaths, true);
     onClose();
   }
 
   function handleUnlock() {
-    void setLock(filePath, false);
+    void setLocks(targetPaths, false);
     onClose();
   }
 

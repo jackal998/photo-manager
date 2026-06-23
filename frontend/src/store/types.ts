@@ -48,6 +48,27 @@ export interface PreviewState {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 4 — main result-tree multi-selection
+// ---------------------------------------------------------------------------
+
+export interface SelectionState {
+  /**
+   * Ordered list of file paths in the current multi-selection.  Empty = nothing
+   * selected.  An array (not a Set) so immer/zustand diff it cleanly and the
+   * Shift-range can preserve visible order.  Distinct from
+   * PreviewState.selectedFilePath, which is the single "focused" row whose
+   * image the preview pane shows.
+   */
+  selectedPaths: string[];
+  /**
+   * The Shift-range anchor — the last plain (un-modified) click.  Shift+click
+   * selects the inclusive range between this anchor and the clicked row.  Null
+   * when nothing has been plain-clicked yet.
+   */
+  anchorPath: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 2C2 — execute state
 // ---------------------------------------------------------------------------
 
@@ -164,6 +185,41 @@ export interface AppActions {
    * then PATCH /api/lock.
    */
   setLock(filePath: string, locked: boolean): Promise<void>;
+
+  /**
+   * Batch variant of setDecision — optimistically apply the same decision to
+   * every path, then PATCH /api/decision once with the whole list (one
+   * round-trip, the desktop's atomic "set action on selection" parity).  On
+   * failure every row reverts to its prior value.  No-op for an empty list.
+   */
+  setDecisions(paths: string[], decision: DecisionValue): Promise<void>;
+
+  /**
+   * Batch variant of setLock — optimistically apply the lock to every path,
+   * then PATCH /api/lock once.  Reverts all on failure.  No-op for empty list.
+   */
+  setLocks(paths: string[], locked: boolean): Promise<void>;
+
+  // -------------------------------------------------------------------------
+  // Phase 4 — main result-tree multi-selection
+  // -------------------------------------------------------------------------
+
+  /** Replace the selection with exactly ``paths`` and set the anchor to its last entry. */
+  setSelection(paths: string[]): void;
+
+  /** Toggle ``path`` in/out of the selection (Ctrl/Cmd+click) and re-anchor to it. */
+  toggleSelection(path: string): void;
+
+  /**
+   * Extend the selection to the inclusive range between the anchor and ``toPath``
+   * over ``orderedVisiblePaths`` (Shift+click).  Falls back to a single-path
+   * selection when there is no usable anchor.  The anchor is left unchanged so
+   * successive Shift+clicks re-range from the same origin.
+   */
+  extendSelection(toPath: string, orderedVisiblePaths: string[]): void;
+
+  /** Clear the selection and anchor. */
+  clearSelection(): void;
 
   /** GET /api/settings and populate settings.values. */
   loadSettings(): Promise<void>;
@@ -287,6 +343,7 @@ export interface AppStore extends AppActions {
   manifest: ManifestState;
   settings: SettingsState;
   preview: PreviewState;
+  selection: SelectionState;
   execute: ExecuteState;
   action: ActionState;
 }

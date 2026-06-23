@@ -23,18 +23,27 @@ interface FileRowProps {
   groupId: string;
   onDecision: (filePath: string, value: import("@/api/types").DecisionValue) => void;
   onLock: (filePath: string, locked: boolean) => void;
-  onSelect?: (filePath: string) => void;
+  onSelect?: (
+    filePath: string,
+    mods: { ctrl: boolean; shift: boolean }
+  ) => void;
   onOpenFullRes?: (filePath: string) => void;
   onContextMenu?: (filePath: string, isLocked: boolean, x: number, y: number) => void;
+  isSelected?: boolean;
 }
 
-export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu }: FileRowProps) {
+export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected }: FileRowProps) {
   const simLabel = similarityLabel(row.similarity);
   // Passenger rows get a subtle amber highlight on the similarity badge.
   const isPassenger = row.similarity.kind === "passenger";
 
-  function handleClick() {
-    onSelect?.(row.file_path);
+  function handleClick(e: MouseEvent) {
+    // Ctrl/Cmd toggles, Shift extends a range; a plain click replaces. The
+    // store interprets the modifiers (ResultTree.handleRowSelect).
+    onSelect?.(row.file_path, {
+      ctrl: e.ctrlKey || e.metaKey,
+      shift: e.shiftKey,
+    });
   }
 
   function handleDoubleClick() {
@@ -51,8 +60,12 @@ export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFull
       data-testid={rowFileTestid(groupId, row.basename)}
       className={cn(
         "flex items-start gap-3 px-4 py-2 border-b border-neutral-100 hover:bg-neutral-50 cursor-pointer",
-        row.is_ref_winner && "bg-blue-50 hover:bg-blue-100"
+        row.is_ref_winner && "bg-blue-50 hover:bg-blue-100",
+        // Multi-selection highlight wins over the ref-winner tint (tailwind-merge
+        // resolves the bg conflict in favour of the later class).
+        isSelected && "bg-sky-100 ring-1 ring-inset ring-sky-400 hover:bg-sky-100"
       )}
+      aria-selected={isSelected}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}

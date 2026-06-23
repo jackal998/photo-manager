@@ -54,6 +54,10 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
   const setLock = useAppStore((s) => s.setLock);
   const setSelectedFile = useAppStore((s) => s.setSelectedFile);
   const openFullRes = useAppStore((s) => s.openFullRes);
+  const selectedPaths = useAppStore((s) => s.selection.selectedPaths);
+  const setSelection = useAppStore((s) => s.setSelection);
+  const toggleSelection = useAppStore((s) => s.toggleSelection);
+  const extendSelection = useAppStore((s) => s.extendSelection);
 
   // Collapse state: Set of group_number values that are collapsed.
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -101,6 +105,18 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
     return map;
   }, [groups]);
 
+  // Ordered list of currently-visible file paths (collapsed groups excluded) —
+  // the domain over which Shift+click computes its inclusive range.
+  const orderedFilePaths = useMemo<string[]>(() => {
+    const paths: string[] = [];
+    for (const vrow of vrows) {
+      if (vrow.kind !== "file") continue;
+      const fileRow = groupByNumber.get(vrow.groupNumber)?.items[vrow.fileIndex];
+      if (fileRow) paths.push(fileRow.file_path);
+    }
+    return paths;
+  }, [vrows, groupByNumber]);
+
   // Virtualizer
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -132,12 +148,27 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
     [setLock]
   );
 
-  // Selection / preview callbacks.
-  const handleSelect = useCallback(
-    (filePath: string) => {
+  // Selection / preview callbacks. A plain click replaces the selection,
+  // Ctrl/Cmd toggles, Shift extends a range; the clicked row is always the
+  // preview/focus target regardless of the modifier.
+  const handleRowSelect = useCallback(
+    (filePath: string, mods: { ctrl: boolean; shift: boolean }) => {
+      if (mods.shift) {
+        extendSelection(filePath, orderedFilePaths);
+      } else if (mods.ctrl) {
+        toggleSelection(filePath);
+      } else {
+        setSelection([filePath]);
+      }
       setSelectedFile(filePath);
     },
-    [setSelectedFile]
+    [
+      extendSelection,
+      toggleSelection,
+      setSelection,
+      setSelectedFile,
+      orderedFilePaths,
+    ]
   );
 
   const handleOpenFullRes = useCallback(
@@ -235,9 +266,10 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
                       groupId={String(vrow.groupNumber)}
                       onDecision={handleDecision}
                       onLock={handleLock}
-                      onSelect={handleSelect}
+                      onSelect={handleRowSelect}
                       onOpenFullRes={handleOpenFullRes}
                       onContextMenu={handleContextMenu}
+                      isSelected={selectedPaths.includes(fileRow.file_path)}
                     />
                   );
                 })()

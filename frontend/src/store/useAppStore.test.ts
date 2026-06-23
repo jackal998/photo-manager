@@ -120,6 +120,10 @@ beforeEach(() => {
       selectedFilePath: null,
       fullResPath: null,
     },
+    selection: {
+      selectedPaths: [],
+      anchorPath: null,
+    },
     execute: {
       executeOpen: false,
       executeRunning: false,
@@ -663,5 +667,199 @@ describe("useAppStore action slice (bulk-decide)", () => {
 
     // B (the latest issued request) wins; A's stale late arrival is ignored.
     expect(useAppStore.getState().action.previewMatched).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selection slice — main result-tree multi-selection (Phase 4)
+// ---------------------------------------------------------------------------
+
+const ORDERED = ["/p/a.jpg", "/p/b.jpg", "/p/c.jpg", "/p/d.jpg"];
+
+describe("selection – setSelection replaces and anchors on the last entry", () => {
+  it("sets selectedPaths verbatim and anchor = last path", () => {
+    useAppStore.getState().setSelection(["/p/a.jpg", "/p/b.jpg"]);
+    const { selection } = useAppStore.getState();
+    expect(selection.selectedPaths).toEqual(["/p/a.jpg", "/p/b.jpg"]);
+    expect(selection.anchorPath).toBe("/p/b.jpg");
+  });
+
+  it("an empty selection clears the anchor", () => {
+    useAppStore.getState().setSelection(["/p/a.jpg"]);
+    useAppStore.getState().setSelection([]);
+    const { selection } = useAppStore.getState();
+    expect(selection.selectedPaths).toEqual([]);
+    expect(selection.anchorPath).toBeNull();
+  });
+});
+
+describe("selection – toggleSelection (Ctrl/Cmd+click) adds, removes, re-anchors", () => {
+  it("adds an absent path, removes a present one, re-anchoring each time", () => {
+    const { toggleSelection } = useAppStore.getState();
+    toggleSelection("/p/a.jpg");
+    expect(useAppStore.getState().selection.selectedPaths).toEqual(["/p/a.jpg"]);
+    toggleSelection("/p/b.jpg");
+    expect(useAppStore.getState().selection.selectedPaths).toEqual([
+      "/p/a.jpg",
+      "/p/b.jpg",
+    ]);
+    expect(useAppStore.getState().selection.anchorPath).toBe("/p/b.jpg");
+    // Toggling an already-selected path removes it (and still re-anchors to it).
+    toggleSelection("/p/a.jpg");
+    expect(useAppStore.getState().selection.selectedPaths).toEqual(["/p/b.jpg"]);
+    expect(useAppStore.getState().selection.anchorPath).toBe("/p/a.jpg");
+  });
+});
+
+describe("selection – extendSelection (Shift+click) ranges over the visible order", () => {
+  it("selects the inclusive forward range from the anchor", () => {
+    useAppStore.getState().setSelection(["/p/b.jpg"]); // anchor = b
+    useAppStore.getState().extendSelection("/p/d.jpg", ORDERED);
+    expect(useAppStore.getState().selection.selectedPaths).toEqual([
+      "/p/b.jpg",
+      "/p/c.jpg",
+      "/p/d.jpg",
+    ]);
+    // Anchor is preserved so a follow-up Shift+click re-ranges from b.
+    expect(useAppStore.getState().selection.anchorPath).toBe("/p/b.jpg");
+  });
+
+  it("selects the inclusive reverse range when the target precedes the anchor", () => {
+    useAppStore.getState().setSelection(["/p/c.jpg"]); // anchor = c
+    useAppStore.getState().extendSelection("/p/a.jpg", ORDERED);
+    expect(useAppStore.getState().selection.selectedPaths).toEqual([
+      "/p/a.jpg",
+      "/p/b.jpg",
+      "/p/c.jpg",
+    ]);
+  });
+
+  it("falls back to a single-path selection when there is no usable anchor", () => {
+    useAppStore.getState().clearSelection(); // anchor = null
+    useAppStore.getState().extendSelection("/p/c.jpg", ORDERED);
+    const { selection } = useAppStore.getState();
+    expect(selection.selectedPaths).toEqual(["/p/c.jpg"]);
+    expect(selection.anchorPath).toBe("/p/c.jpg");
+  });
+
+  it("falls back to a single-path selection when the anchor scrolled out of view", () => {
+    useAppStore.getState().setSelection(["/p/offscreen.jpg"]); // anchor not in ORDERED
+    useAppStore.getState().extendSelection("/p/b.jpg", ORDERED);
+    expect(useAppStore.getState().selection.selectedPaths).toEqual(["/p/b.jpg"]);
+  });
+});
+
+describe("selection – clearSelection empties the slice", () => {
+  it("resets selectedPaths and anchor", () => {
+    useAppStore.getState().setSelection(["/p/a.jpg", "/p/b.jpg"]);
+    useAppStore.getState().clearSelection();
+    const { selection } = useAppStore.getState();
+    expect(selection.selectedPaths).toEqual([]);
+    expect(selection.anchorPath).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// batch decision / lock actions (multi-selection context menu)
+// ---------------------------------------------------------------------------
+
+describe("setDecisions – one PATCH for the whole list, optimistic on all", () => {
+  it("applies the decision to every listed row and PATCHes once", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg", "/p/c.jpg"])]);
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().setDecisions(["/p/a.jpg", "/p/c.jpg"], "delete");
+
+    const items = useAppStore.getState().manifest.groups[0].items;
+    expect(items[0].user_decision).toBe("delete"); // a
+    expect(items[1].user_decision).toBe(""); // b — untouched
+    expect(items[2].user_decision).toBe("delete"); // c
+    expect(client.patchDecisions).toHaveBeenCalledTimes(1);
+    expect(client.patchDecisions).toHaveBeenCalledWith("/data/scan.db", [
+      { file_path: "/p/a.jpg", decision: "delete" },
+      { file_path: "/p/c.jpg", decision: "delete" },
+    ]);
+  });
+
+  it("is a no-op for an empty path list (no PATCH)", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg"])]);
+    await useAppStore.getState().setDecisions([], "delete");
+    expect(client.patchDecisions).not.toHaveBeenCalled();
+  });
+
+  it("reverts every row and records the error when the PATCH fails", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg"])]);
+    vi.mocked(client.patchDecisions).mockRejectedValue(new Error("server error"));
+
+    await useAppStore.getState().setDecisions(["/p/a.jpg", "/p/b.jpg"], "delete");
+
+    const items = useAppStore.getState().manifest.groups[0].items;
+    expect(items[0].user_decision).toBe(""); // reverted
+    expect(items[1].user_decision).toBe(""); // reverted
+    expect(useAppStore.getState().manifest.error).toBe("server error");
+  });
+});
+
+describe("setLocks – one PATCH for the whole list, reverts all on failure", () => {
+  it("locks every listed row and PATCHes once", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg"])]);
+    vi.mocked(client.patchLocks).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().setLocks(["/p/a.jpg", "/p/b.jpg"], true);
+
+    const items = useAppStore.getState().manifest.groups[0].items;
+    expect(items[0].is_locked).toBe(true);
+    expect(items[1].is_locked).toBe(true);
+    expect(client.patchLocks).toHaveBeenCalledTimes(1);
+    expect(client.patchLocks).toHaveBeenCalledWith("/data/scan.db", [
+      { file_path: "/p/a.jpg", locked: true },
+      { file_path: "/p/b.jpg", locked: true },
+    ]);
+  });
+
+  it("reverts the lock on every row when the PATCH fails", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg"])]);
+    vi.mocked(client.patchLocks).mockRejectedValue(new Error("locks failed"));
+
+    await useAppStore.getState().setLocks(["/p/a.jpg", "/p/b.jpg"], true);
+
+    const items = useAppStore.getState().manifest.groups[0].items;
+    expect(items[0].is_locked).toBe(false);
+    expect(items[1].is_locked).toBe(false);
+    expect(useAppStore.getState().manifest.error).toBe("locks failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// clear-on-mutation — a stale selection must never survive a groups replacement
+// ---------------------------------------------------------------------------
+
+describe("selection is cleared whenever manifest.groups is replaced", () => {
+  it("removeFromList success clears the selection", async () => {
+    seedManifest([makeGroup(1, ["/p/h.jpg", "/p/i.jpg"])]);
+    useAppStore.getState().setSelection(["/p/h.jpg", "/p/i.jpg"]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ removed: 1, groups: [makeGroup(1, ["/p/i.jpg"])] })
+    );
+
+    await useAppStore.getState().removeFromList(["/p/h.jpg"]);
+
+    expect(useAppStore.getState().selection.selectedPaths).toEqual([]);
+    expect(useAppStore.getState().selection.anchorPath).toBeNull();
+  });
+
+  it("loadManifest clears any selection from the previous manifest", async () => {
+    useAppStore.getState().setSelection(["/old/x.jpg"]);
+    vi.mocked(client.getManifest).mockResolvedValue({
+      manifest_path: "/data/out.db",
+      groups: [makeGroup(1, ["/p/a.jpg"])],
+      total_groups: 1,
+      total_files: 1,
+    });
+
+    await useAppStore.getState().loadManifest("/data/out.db");
+
+    expect(useAppStore.getState().selection.selectedPaths).toEqual([]);
   });
 });
