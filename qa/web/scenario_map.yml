@@ -107,9 +107,9 @@ scenarios:
     notes: ""
 
   - scenario: s19_context_menu_open_folder
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s19_context_menu_open_folder
+    status: done
+    notes: "Context-menu 'Open folder' reveal round-trip. Right-click neardup_00_q95.jpg → CTX_OPEN_FOLDER fires POST /api/reveal {file_path}; asserts exactly one reveal request carrying the target basename + a recognised status. Status is platform-dependent: 200 on Windows (Explorer actually spawns, fire-and-forget) / 501 platform_unsupported on the Linux CI runner — both accepted (each proves menu→store→endpoint wiring + path). Qt's CabinetWClass EnumWindows check has no browser analog; asserted on the intercepted request instead. revealInExplorer swallows the 501 as a non-fatal executeError so nothing crashes off-Windows."
 
   - scenario: s20_multi_remove_from_list
     playwright_module: null
@@ -142,9 +142,9 @@ scenarios:
     notes: "Open a valid sqlite manifest whose SOURCE files were deleted. Scans 3 near-dups copied into a tmpdir subdir (db kept beside, not inside), captures basenames, rmtree's the source subdir, reloads + reopens the manifest. Asserts: load doesn't crash, status_stale == status_scan ('N groups · M files'), PRIMARY every scanned basename still present in GET /api/manifest with total_files unchanged (source-existence-agnostic load — rows not silently dropped), Action-menu items stay enabled. Non-destructive (Qt scopes execute-on-stale-row out). Divergences: basenames asserted via authoritative manifest JSON not Qt DOM TreeItem scraping; web status phrasing vs Qt 'Opened manifest:'."
 
   - scenario: s25_empty_area_context_menu
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s25_empty_area_context_menu
+    status: done
+    notes: "Context menu only on rows, never on empty surfaces (4 branches). A: right-click empty area below the last row (self-validates the viewport is taller than the rows) → CONTEXT_MENU count==0. B: right-click the far-right menu-bar gap → count==0. C: right-click a row with no prior left-click → menu appears with Delete item (indexAt-driven). D: left-click then right-click same row → menu appears (positive control). The web guard is structural: MAIN_RESULT_TREE viewport + MAIN_MENU_BAR carry no onContextMenu; only FileRow does. C/D overlap s15 and are kept as the detector-sanity controls. Browser-native menus have no testid and are Escaped, so they never confound the absence assertion."
 
   - scenario: s26_keyboard_navigation
     playwright_module: null
@@ -192,9 +192,9 @@ scenarios:
     notes: ""
 
   - scenario: s35_lock_via_context_menu
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s35_lock_via_context_menu
+    status: done
+    notes: "Lock/Unlock a row via the right-click context menu. (a) lock q95 → only q95 is_locked; (b) re-right-click q95 (menu now offers Unlock per the live is_locked) → unlock → all clear; (c) lock q88 then q80 (two sequential single-row ops = web multi-select divergence, s15 precedent) → both locked, q95/q72/q65 stay unlocked; (d) unlock both → all clear. Asserts is_locked via GET /api/manifest with a short poll absorbing the async PATCH /api/lock; is_locked stays orthogonal to user_decision. Uses CTX_LOCK/CTX_UNLOCK (the mutually-exclusive ContextMenu item, also used by s36)."
 
   - scenario: s36_lock_confirm_destructive_execute
     playwright_module: qa.web.scenarios.s36_lock_confirm_destructive_execute
@@ -217,9 +217,9 @@ scenarios:
     notes: ""
 
   - scenario: s40_results_tree_double_click
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s40_results_tree_double_click
+    status: done
+    notes: "Group-header expand/collapse toggle. Asserts the GroupRow button aria-expanded='true' initially + member row visible, clicks to collapse → aria-expanded='false' + member row detaches (hidden), clicks again to re-expand → aria-expanded='true' + member visible. Qt DIVERGENCE: Qt double-clicks the header (its native single-click expand is disabled + a custom dispatcher handles it); the web GroupRow toggles on SINGLE click (onClick, no onDoubleClick) — scenario uses click() not dblclick() for the identical observable outcome. NOT the file-row double-click (that's s68's full-res open)."
 
   - scenario: s41_empty_state_action_buttons
     playwright_module: qa.web.scenarios.s41_empty_state_action_buttons
