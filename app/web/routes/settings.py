@@ -18,6 +18,16 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     "ui.locale",
     "ui.prune_singletons",
     "ui.scan_dialog.autotune_read_knee",
+    # ScanDialog source persistence (#678-E / s23a/s23b). The list value is
+    # [{"path": str, "recursive": bool}, ...] and output is a str — the same
+    # shape the Qt ScanDialog._save_to_settings writes. These only pre-fill the
+    # web ScanDialog on open; the scanner's sources + allowed_roots come from
+    # the scan POST body, so persisting them here widens no execution boundary.
+    # GET echoes these user filesystem paths back to the caller — acceptable on
+    # the loopback-only (127.0.0.1) server; a future expose-beyond-loopback
+    # change must reconsider this path disclosure.
+    "sources.list",
+    "sources.output",
 )
 
 

@@ -23,6 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
+import { getSettings, patchSettings } from "@/api/client";
 import type { WebScanRequest } from "@/api/types";
 import {
   SCAN_ADD_SOURCE,
@@ -64,6 +65,34 @@ function splitPath(p: string): { dir: string | undefined; name: string } {
 
 const DEFAULT_OUTPUT_NAME = "migration_manifest.sqlite";
 
+/**
+ * Map persisted `sources.list` (from GET /api/settings) into SourceEntry rows.
+ *
+ * Mirrors the Qt ScanDialog._load_from_settings malformed-entry guard: only
+ * dict-shaped entries with a non-empty string `path` survive. The label is
+ * derived from the basename (the web SourceRow needs a non-empty label for
+ * `canStart`; the persisted shape carries only {path, recursive}, matching
+ * what _save_to_settings writes). Recursive is taken from the explicit
+ * persisted flag (web always writes it; a missing flag defaults to false,
+ * the web blankSource convention).
+ */
+function sourcesFromSettings(raw: unknown): SourceEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SourceEntry[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== "object") continue;
+    const path = (item as { path?: unknown }).path;
+    if (typeof path !== "string" || path.trim() === "") continue;
+    out.push({
+      id: nextId(),
+      label: splitPath(path).name,
+      path,
+      recursive: (item as { recursive?: unknown }).recursive === true,
+    });
+  }
+  return out;
+}
+
 // Which field the filesystem picker is currently editing.
 type BrowseTarget = { kind: "source"; id: string } | { kind: "output" };
 
@@ -104,16 +133,51 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // Filesystem picker target (null = picker closed).
   const [browseTarget, setBrowseTarget] = useState<BrowseTarget | null>(null);
 
-  // Reset form when the dialog opens fresh (not while a scan is running).
+  // Load persisted sources/output when the dialog opens fresh (not mid-scan).
+  //
+  // Mirrors Qt ScanDialog._load_from_settings: the source list + output path
+  // persist across launches (#678-E / s23a/s23b). We set a blank row + empty
+  // output SYNCHRONOUSLY first (the pre-persistence behaviour), then async-load
+  // from GET /api/settings. The async override fills ONLY a still-PRISTINE
+  // dialog (one blank row / empty output): if the user — or a test driver —
+  // started editing while the fetch was in flight, their input is kept. This
+  // makes load-on-open race-safe BY DESIGN: neither an empty NOR a late
+  // non-empty settings response can clobber in-progress edits (e.g. a scenario
+  // that reopens the dialog after a Start Scan persisted a prior source list).
+  // The advanced-settings checkboxes are NOT persisted by this cluster (s23b
+  // pins thresholds-not-persisted) — they always reset to defaults.
   useEffect(() => {
-    if (open && scan.status === "idle") {
-      setSources([blankSource()]);
-      setOutputPath("");
-      setBrowseTarget(null);
-      setAutoSelect(false);
-      setAggressiveDelete(false);
-      setAutotuneReadKnee(true);
-    }
+    if (!(open && scan.status === "idle")) return;
+    let cancelled = false;
+    setSources([blankSource()]);
+    setOutputPath("");
+    setBrowseTarget(null);
+    setAutoSelect(false);
+    setAggressiveDelete(false);
+    setAutotuneReadKnee(true);
+    void getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        const loaded = sourcesFromSettings(settings["sources.list"]);
+        if (loaded.length > 0) {
+          setSources((prev) =>
+            prev.length === 1 && prev[0].path === "" && prev[0].label === ""
+              ? loaded
+              : prev
+          );
+        }
+        const out = settings["sources.output"];
+        if (typeof out === "string" && out !== "") {
+          setOutputPath((prev) => (prev === "" ? out : prev));
+        }
+      })
+      .catch(() => {
+        // Settings unreadable → keep the blank-row fallback (no trace needed;
+        // the dialog is fully usable, the user just re-enters sources).
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, scan.status]);
 
   // ---------------------------------------------------------------------------
@@ -219,6 +283,21 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       auto_select_aggressive_delete: autoSelect && aggressiveDelete,
       autotune_read_knee: autotuneReadKnee,
     };
+
+    // Persist the source list + output for the next launch (#678-E /
+    // s23a/s23b), mirroring Qt ScanDialog._save_to_settings (called from
+    // _start_scan). Fire-and-forget and non-fatal: a settings-save failure
+    // must never block the scan — same posture as the desktop's swallowed
+    // OSError and the locale-persist console.warn.
+    void patchSettings({
+      "sources.list": validSources.map((s) => ({
+        path: s.path.trim(),
+        recursive: s.recursive,
+      })),
+      "sources.output": outputPath.trim(),
+    }).catch((err) => {
+      console.warn("Failed to persist scan sources; not saved for next launch:", err);
+    });
 
     void startScan(req);
   }, [sources, outputPath, autoSelect, aggressiveDelete, autotuneReadKnee, startScan]);

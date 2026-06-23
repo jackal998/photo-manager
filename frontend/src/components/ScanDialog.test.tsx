@@ -9,12 +9,30 @@
 //      status text, log area, cancel button) is visible and Start button is gone.
 //   6. Cancel button calls store.cancelScan.
 
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { useAppStore } from "@/store/useAppStore";
+import { getSettings, patchSettings } from "@/api/client";
 import { ScanDialog } from "./ScanDialog";
+
+// ScanDialog now loads persisted sources/output from GET /api/settings on open
+// and persists them via PATCH on Start Scan (#678-E / s23a/s23b). Mock just
+// those two client fns (spread the rest so the store's other client imports
+// stay real); default to "no persisted sources" so the existing tests behave
+// exactly as before (the `loaded.length > 0` guard skips any async setState).
+vi.mock("@/api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/client")>();
+  return {
+    ...actual,
+    getSettings: vi.fn().mockResolvedValue({}),
+    patchSettings: vi.fn().mockResolvedValue({ updated: 0 }),
+  };
+});
+
+const mockGetSettings = vi.mocked(getSettings);
+const mockPatchSettings = vi.mocked(patchSettings);
 import {
   SCAN_ADD_SOURCE,
   SCAN_CANCEL_BUTTON,
@@ -51,6 +69,15 @@ function seedScanState(patch: Partial<ReturnType<typeof useAppStore.getState>["s
 
 describe("ScanDialog", () => {
   beforeEach(() => {
+    // Default: no persisted sources (existing tests see the blank-row dialog).
+    // GET always returns the allowlisted keys (null when unset); sources.* are
+    // optional and omitted here so the `loaded.length > 0` guard skips override.
+    mockGetSettings.mockReset().mockResolvedValue({
+      "sorting.defaults": null,
+      "ui.prune_singletons": null,
+      "ui.scan_dialog.autotune_read_knee": null,
+    });
+    mockPatchSettings.mockReset().mockResolvedValue({ updated: 0 } as never);
     // Reset store to idle before each test.
     useAppStore.setState((s) => ({
       scan: {
@@ -244,5 +271,100 @@ describe("ScanDialog", () => {
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(loadManifestMock).toHaveBeenCalledWith("C:/scan.db");
+  });
+
+  // -------------------------------------------------------------------------
+  // Source persistence (#678-E / s23a/s23b)
+  // -------------------------------------------------------------------------
+
+  it("loads persisted sources and output from settings on open", async () => {
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [
+        { path: "C:/photos/alpha", recursive: true },
+        { path: "C:/photos/beta", recursive: false },
+      ],
+      "sources.output": "C:/out/scan.db",
+    } as never);
+
+    renderDialog();
+
+    // Both persisted rows load in (labels derived from basename), replacing the
+    // initial blank row; the output field shows the persisted path.
+    expect(await screen.findByDisplayValue("C:/photos/alpha")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("C:/photos/beta")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("alpha")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("beta")).toBeInTheDocument();
+    expect(screen.getByTestId(SCAN_OUTPUT_PATH)).toHaveValue("C:/out/scan.db");
+    // The first persisted row's recursive flag round-trips (checked).
+    const recursiveBoxes = screen.getAllByRole("checkbox", { name: /recursive/i });
+    expect(recursiveBoxes[0]).toBeChecked();
+    expect(recursiveBoxes[1]).not.toBeChecked();
+  });
+
+  it("persists sources and output via patchSettings when Start is clicked", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ startScan: vi.fn().mockResolvedValue(undefined) } as never);
+
+    renderDialog();
+    await user.type(screen.getByRole("textbox", { name: /source label/i }), "Pics");
+    await user.type(screen.getByRole("textbox", { name: /source path/i }), "D:/pics");
+    await user.type(screen.getByTestId(SCAN_OUTPUT_PATH), "D:/out.db");
+
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    expect(mockPatchSettings).toHaveBeenCalledWith({
+      "sources.list": [{ path: "D:/pics", recursive: false }],
+      "sources.output": "D:/out.db",
+    });
+  });
+
+  it("does not clobber user-typed input when a non-empty settings load resolves late", async () => {
+    // Race-safety by design: if the user (or a test driver) starts editing the
+    // pristine blank row before the async settings load resolves, the load must
+    // NOT overwrite their input. This is the s03-reopen interleaving (a dialog
+    // reopened after a Start Scan persisted a prior source list) — the load
+    // fills only a still-pristine dialog.
+    let resolveSettings!: (v: unknown) => void;
+    mockGetSettings.mockReturnValue(
+      new Promise((r) => {
+        resolveSettings = r;
+      }) as never
+    );
+    const user = userEvent.setup();
+    useAppStore.setState({ startScan: vi.fn().mockResolvedValue(undefined) } as never);
+
+    renderDialog();
+    // User edits the pristine row BEFORE the settings load resolves.
+    await user.type(screen.getByRole("textbox", { name: /source path/i }), "D:/mine");
+    await user.type(screen.getByTestId(SCAN_OUTPUT_PATH), "D:/mine.db");
+
+    // The (late) load resolves with DIFFERENT persisted values.
+    await act(async () => {
+      resolveSettings({
+        "sources.list": [{ path: "C:/stale", recursive: true }],
+        "sources.output": "C:/stale.db",
+      });
+    });
+
+    // The user's in-progress input survives — the load filled nothing.
+    expect(screen.getByRole("textbox", { name: /source path/i })).toHaveValue("D:/mine");
+    expect(screen.getByTestId(SCAN_OUTPUT_PATH)).toHaveValue("D:/mine.db");
+  });
+
+  it("falls back to a single blank row when persisted sources are malformed", async () => {
+    // Malformed settings.json (hand-edited / partial write) must not crash the
+    // dialog or render broken rows — mirrors the Qt _load_from_settings guard.
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [{ recursive: true }, "nope", null, { path: "" }],
+    } as never);
+
+    renderDialog();
+
+    // No valid entries → the initial blank row remains, nothing extra rendered.
+    await waitFor(() => {
+      const labels = screen.getAllByRole("textbox", { name: /source label/i });
+      expect(labels).toHaveLength(1);
+    });
+    expect(screen.getByRole("textbox", { name: /source label/i })).toHaveValue("");
   });
 });

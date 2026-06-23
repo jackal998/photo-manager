@@ -98,6 +98,13 @@ def _run_one(scenario_name: str, entry: dict, base_url: str) -> tuple[str, str]:
         run_fn = getattr(mod, "run", None)
         if run_fn is None:
             return ERROR, f"{module_path} has no run() function"
+        # Per-scenario settings reset (web analog of the Qt batch's per-scenario
+        # `configure`). The web ScanDialog persists sources/output across opens
+        # (#678-E / s23a/s23b); clearing them before each scenario keeps the
+        # "always one blank row" assumption that ~all scan scenarios rely on.
+        # Fail-open — never blocks a scenario.
+        from qa.web._invariants import reset_scan_persistence
+        reset_scan_persistence(base_url)
         run_fn(base_url=base_url)
         return PASS, ""
     except AssertionError as exc:

@@ -345,6 +345,48 @@ def run_scan(
     return wait_manifest_loaded(page, timeout=scan_timeout)
 
 
+def reset_scan_persistence(base_url: str) -> None:
+    """Clear persisted ScanDialog sources/output via PATCH /api/settings.
+
+    The web ScanDialog persists its source list + output path across launches
+    (#678-E / s23a/s23b: the dialog loads ``sources.list`` / ``sources.output``
+    on open and saves them on Start Scan). The web batch runs every scenario
+    against ONE long-lived server with ONE settings.json, so without a
+    per-scenario reset one scenario's persisted sources would pre-fill the next
+    scenario's dialog and break the ``add_scan_source`` "always one blank row"
+    assumption. This is the web analog of the Qt batch runner's per-scenario
+    ``configure`` step, which writes settings.json fresh before each launch.
+
+    Fail-open: any error (server not up yet, route missing on an older build)
+    is swallowed — the reset is a test-isolation convenience, not a correctness
+    assertion. A genuine allowlist regression is caught by the backend unit
+    tests; a reset that silently no-ops surfaces as a clear scenario failure
+    (stale sources → wrong scan), never a confusing batch crash.
+
+    Parameters
+    ----------
+    base_url:
+        Base URL of the running FastAPI server, e.g. ``http://127.0.0.1:8765``.
+    """
+    import json
+    import urllib.request
+
+    payload = json.dumps(
+        {"updates": {"sources.list": [], "sources.output": ""}}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/settings",
+        data=payload,
+        method="PATCH",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5):  # noqa: S310 (loopback only)
+            pass
+    except Exception:  # noqa: BLE001 — fail-open, see docstring
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Context-menu helpers
 # ---------------------------------------------------------------------------

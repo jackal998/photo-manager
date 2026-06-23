@@ -72,6 +72,7 @@ for the chore plan.
 | [Web — Action dialog (Set Action by Field)](#web--action-dialog-set-action-by-field) | Web UI |
 | [Web — main result tree multi-selection](#web--main-result-tree-multi-selection) | Web UI |
 | [Web — Execute (only selected)](#web--execute-only-selected) | Web UI |
+| [Web — ScanDialog source/output persistence](#web--scandialog-sourceoutput-persistence) | Web UI |
 | [Similarity column](#similarity-column) | Review |
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
@@ -709,6 +710,19 @@ for the chore plan.
 - **Conditions / variants:** This ports the desktop *menu-gated, selection-scoped* flow only. The execute dialog's own tree stays single-select ("Execute selected" scopes one row) — completing s64's honest-partial single→multi in-dialog port is tracked as a separate follow-up.
 - **Related:** Desktop analogue [Execute Action — scope to selected groups](#execute-action--scope-to-selected-groups-only-selected-entry-410-430-429) ([#430](https://github.com/jackal998/photo-manager/issues/430) group-pull, [#410](https://github.com/jackal998/photo-manager/issues/410) static label); builds on [Web — main result tree multi-selection](#web--main-result-tree-multi-selection); QA scenario [`qa/web/scenarios/s44_execute_selected_only.py`](../qa/web/scenarios/s44_execute_selected_only.py).
 - **Last verified:** 2026-06-24 (PR-D2 — Execute (only selected) menu entry + group-pull scope; s44 live-run PASS; s54/s60/s64/s20 regressions PASS).
+
+---
+
+### Web — ScanDialog source/output persistence
+
+- **Entry point:** The Scan dialog ([frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx)) reads/writes the allowlisted `sources.list` / `sources.output` keys via `GET` / `PATCH /api/settings` ([app/web/routes/settings.py](../app/web/routes/settings.py)). Web analog of Qt `ScanDialog._load_from_settings` / `_save_to_settings`.
+- **Trigger:** Automatic — the source list + output path are loaded when the dialog opens and saved when the user clicks **Start Scan**.
+- **Behaviour:**
+  - **Load on open.** Opening the dialog fetches `GET /api/settings` and rebuilds the source rows from the persisted `sources.list` (`[{path, recursive}, …]`, label derived from each path's basename) and the output field from `sources.output`. A blank row + empty output show synchronously first; persisted values override only when present, so a freshly-typed row is never clobbered by an empty response. Malformed persisted entries (non-dict, missing `path`) are skipped — the web mirror of the Qt load guard.
+  - **Save on Start Scan.** Clicking **Start Scan** fires `PATCH /api/settings` with the current `sources.list` (path + per-row recursive flag) and `sources.output` **before** the scan worker starts — mirroring Qt's `_save_to_settings`, which runs from `_start_scan`. The save is fire-and-forget and non-fatal: a settings-save failure never blocks the scan (same posture as the Qt swallowed `OSError`).
+- **Conditions / variants:** Only the source list + output path persist. pHash/color thresholds are **not** persisted (the web dialog exposes no threshold inputs, and the `/api/settings` allowlist excludes the threshold keys) — matching the Qt s23b non-persistence contract. The advanced-settings checkboxes (auto-select / aggressive / autotune) are sent per-scan in the scan request and are not persisted by this surface. Per-source **labels** are not durable — like Qt's `_save_to_settings`, only `{path, recursive}` is stored, so a reopened dialog re-derives each row's label from the path basename. The async load fills only a still-pristine dialog, so reopening it while typing never clobbers in-progress edits.
+- **Related:** Desktop analogue [Scan dialog — folder-tree browse + source list](#) (source paths persist to `settings.json` `sources.list`); part of the web-port FE-parity backlog [#678](https://github.com/jackal998/photo-manager/issues/678) (cluster E); QA scenarios [`qa/web/scenarios/s23a_set_settings.py`](../qa/web/scenarios/s23a_set_settings.py) (write side) + [`qa/web/scenarios/s23b_verify_settings.py`](../qa/web/scenarios/s23b_verify_settings.py) (reload round-trip).
+- **Last verified:** 2026-06-24 (cluster E — ScanDialog source persistence; s23a/s23b live-run PASS via batch; full 50-scenario batch PASS confirming per-scenario reset isolation).
 
 ---
 

@@ -150,6 +150,10 @@ export interface SettingsMap {
   "ui.prune_singletons": unknown;
   "ui.scan_dialog.autotune_read_knee": unknown;
   "ui.locale"?: string | null;
+  /** ScanDialog source persistence (#678-E / s23a/s23b): [{path, recursive}, ...]. */
+  "sources.list"?: unknown;
+  /** ScanDialog output-path persistence (#678-E / s23a/s23b). */
+  "sources.output"?: string | null;
 }
 
 // ---------------------------------------------------------------------------

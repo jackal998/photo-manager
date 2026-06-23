@@ -130,3 +130,34 @@ class TestPatchSettings:
         })
         assert resp.status_code == 200
         assert resp.json()["updated"] == 2
+
+    def test_scan_sources_round_trip(self, client, tmp_settings: Path):
+        """sources.list (list-of-dicts) + sources.output round-trip (s23a/s23b).
+
+        This is the ScanDialog source-persistence contract: the web dialog
+        writes the same shape the Qt ScanDialog._save_to_settings does — a
+        list of {"path", "recursive"} entries plus an output string. A scalar
+        round-trip (test_round_trip_allowlisted_key) wouldn't catch a list
+        value being mishandled by JsonSettings.set at a dotted key.
+        """
+        sources = [
+            {"path": "/photos/unique", "recursive": True},
+            {"path": "/photos/near-dups", "recursive": False},
+        ]
+        resp = client.patch("/api/settings", json={
+            "updates": {
+                "sources.list": sources,
+                "sources.output": "out/scan.db",
+            }
+        })
+        assert resp.status_code == 200
+        assert resp.json()["updated"] == 2
+
+        body = client.get("/api/settings").json()
+        assert body["sources.list"] == sources
+        assert body["sources.output"] == "out/scan.db"
+
+        # And the recursive flags survived per-entry (the row-level contract).
+        on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
+        assert on_disk["sources"]["list"] == sources
+        assert on_disk["sources"]["output"] == "out/scan.db"
