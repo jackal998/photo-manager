@@ -1,6 +1,7 @@
 // Unit tests for the result-tree sticky column header (#685): sort clicks +
 // resize-drag wiring. Rendered directly with explicit props + spy callbacks.
 
+import type { ComponentProps } from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 
@@ -9,7 +10,7 @@ import { DEFAULT_COLUMN_WIDTHS } from "@/lib/resultColumns";
 import { colHeaderTestid, colResizeTestid } from "@/testids";
 
 function renderHeader(
-  overrides: Partial<React.ComponentProps<typeof ColumnHeaderRow>> = {}
+  overrides: Partial<ComponentProps<typeof ColumnHeaderRow>> = {}
 ) {
   const onToggleSort = vi.fn();
   const onResize = vi.fn();
