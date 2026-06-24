@@ -349,9 +349,30 @@ scenarios:
       dialog re-open (the dialog auto-closes after each remove).
 
   - scenario: s63_late_cancel_and_main_window_guard
-    playwright_module: null
-    status: todo
-    notes: "s62 intentionally absent from ALL_SCENARIOS"
+    playwright_module: qa.web.scenarios.s63_late_cancel_and_main_window_guard
+    status: done
+    notes: >-
+      #687 late-stage cancel + beforeunload scan-guard. ONE scenario, TWO parts
+      sharing one running scan (the s03 large disposable source so the HASH stage
+      lasts seconds on fast CI). Part 2 (close-guard #468): the web has no
+      interceptable custom close dialog, so the Qt "Scan in progress" Yes/No
+      QMessageBox is ported to useBeforeUnloadGuard (App-mounted) — a native
+      `beforeunload` handler that blocks unload ONLY while scan.status==='running'
+      (idle/finished/failed/cancelled navigate freely). We cannot wire
+      "Leave → cancel the worker" (beforeunload has no async continuation); the
+      guard only warns, and cancellation stays on the ScanDialog Cancel button.
+      Asserted via page.evaluate dispatching a cancelable beforeunload + reading
+      event.defaultPrevented (NOT page.on('dialog')/page.close(run_before_unload)
+      — those test browser chrome and risk a CI hang, playwright#20624). The
+      armed (true-while-running) assertion is bracketed by TWO negatives — idle
+      baseline (false before any scan) and released (false after cancel) — so a
+      broken / always-on / never-on guard cannot pass (non-vacuity). Part 1
+      (late cancel): cancel at the HASH stage → dialog hides cleanly + output .db
+      never written (absent on disk + GET /api/manifest 404, the WRITE gate
+      skips on cancel). Divergences D1 (no custom dialog, assert unload-blocked
+      not button labels) / D2 (Cancel button, not title-bar X) / D3
+      (absence-based untouched) / D4 (large source). "s62 intentionally absent
+      from ALL_SCENARIOS."
 
   - scenario: s64_execute_selected_partial
     playwright_module: qa.web.scenarios.s64_execute_selected_partial
