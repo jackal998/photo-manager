@@ -570,18 +570,73 @@ def shift_click_row(page: "Page", row_testid: str, *, timeout: float = 10_000) -
 # ---------------------------------------------------------------------------
 
 
-def open_execute_dialog(page: "Page", *, timeout: float = 5_000) -> None:
-    """Click the Execute button in the toolbar and wait for the execute dialog.
+def dismiss_modal_overlays(
+    page: "Page", *, max_attempts: int = 12, settle_ms: int = 250
+) -> None:
+    """Best-effort: press Escape until no Radix modal overlay remains in the DOM.
+
+    A modal dialog's overlay (``div.fixed.inset-0.z-50`` backdrop) intercepts
+    pointer events across the whole viewport, so a lingering one blocks toolbar
+    clicks. After a remove/execute the execute dialog auto-closes, but on a fast
+    CI runner the close can lag — or a stacked dialog (its overlay
+    ``data-state="open"`` / ``aria-hidden``, i.e. a dialog behind another) can
+    linger. Radix dialogs close on Escape (they only swallow it while a job runs,
+    which is not the case at an idle open point), so press Escape until every
+    overlay DETACHES from the DOM (not merely flips ``data-state``, since a
+    ``data-state="closed"`` overlay mid-fade still intercepts). Returns as soon
+    as nothing is open (the overwhelmingly common path); best-effort — the caller
+    (``open_execute_dialog``) retries and fails loud if an overlay persists.
+    """
+    overlay = page.locator("div.fixed.inset-0.z-50")
+    open_overlay = page.locator('div.fixed.inset-0.z-50[data-state="open"]')
+    for _ in range(max_attempts):
+        if overlay.count() == 0:
+            return
+        if open_overlay.count() > 0:
+            page.keyboard.press("Escape")
+        page.wait_for_timeout(settle_ms)
+
+
+def open_execute_dialog(
+    page: "Page", *, timeout: float = 5_000, attempts: int = 3
+) -> None:
+    """Click the toolbar Execute button and wait for the execute dialog.
+
+    Robust against a lingering modal overlay intercepting the toolbar click: a
+    prior dialog's backdrop — or a dialog that opens in the race between the
+    dismiss and the click — can cover ``main-execute-button`` on a fast CI runner
+    and hang the click for 30s (the recurring s61/s67 flake). So each attempt
+    first dismisses overlays (``dismiss_modal_overlays``), then clicks with a
+    short per-attempt timeout, and retries — re-dismissing any overlay that raced
+    in — before failing loud with a clear message instead of an opaque
+    "element intercepts pointer events" 30s timeout.
 
     Parameters
     ----------
     page:
         The Playwright Page (must be on the app root ``/`` with a manifest loaded).
     timeout:
-        Maximum milliseconds to wait for the dialog to become visible.
+        Maximum milliseconds to wait for the dialog to become visible per attempt.
+    attempts:
+        How many dismiss+click cycles to try before failing loud.
     """
-    page.get_by_test_id("main-execute-button").click()
-    page.get_by_test_id("execute-dialog").wait_for(state="visible", timeout=timeout)
+    last_exc = None
+    for _ in range(attempts):
+        dismiss_modal_overlays(page)
+        try:
+            page.get_by_test_id("main-execute-button").click(timeout=8_000)
+            page.get_by_test_id("execute-dialog").wait_for(
+                state="visible", timeout=timeout
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 — retry on intercepted click / open race
+            last_exc = exc
+    raise AssertionError(
+        "open_execute_dialog: the toolbar Execute button stayed blocked after "
+        f"{attempts} dismiss+click attempts — a modal overlay is intercepting "
+        "pointer events (a prior execute/confirm/lock/prune dialog did not close "
+        f"on Escape). Last error: {last_exc!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
