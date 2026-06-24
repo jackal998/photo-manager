@@ -15,9 +15,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAppStore } from "@/store/useAppStore";
+import { normalizePrunePref, type PrunePref } from "@/lib/prune";
 import {
   DLGE_SETTINGS_CANCEL,
   DLGE_SETTINGS_DIALOG,
+  DLGE_SETTINGS_PRUNE_SELECT,
   DLGE_SETTINGS_SAVE,
 } from "@/testids";
 
@@ -40,7 +42,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const saveSettings = useAppStore((s) => s.saveSettings);
 
   // Local editable copies of the three keys.
-  const [pruneSingletons, setPruneSingletons] = useState<boolean>(false);
+  const [prunePref, setPrunePref] = useState<PrunePref>("ask");
   const [autotuneReadKnee, setAutotuneReadKnee] = useState<boolean>(false);
   // sorting.defaults is unknown shape — edit as a JSON string.
   const [sortingDefaultsRaw, setSortingDefaultsRaw] = useState<string>("");
@@ -57,7 +59,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   useEffect(() => {
     if (!open) return;
     const v = settings.values;
-    setPruneSingletons(Boolean(v["ui.prune_singletons"]));
+    setPrunePref(normalizePrunePref(v["ui.prune_singletons"]));
     setAutotuneReadKnee(Boolean(v["ui.scan_dialog.autotune_read_knee"]));
     setSortingDefaultsRaw(
       v["sorting.defaults"] !== null
@@ -86,14 +88,14 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       "ui.scan_dialog.autotune_read_knee": unknown;
     }> = {
       "sorting.defaults": sortingDefaults,
-      "ui.prune_singletons": pruneSingletons,
+      "ui.prune_singletons": prunePref,
       "ui.scan_dialog.autotune_read_knee": autotuneReadKnee,
     };
 
     void saveSettings(updates).then(() => {
       onOpenChange(false);
     });
-  }, [sortingDefaultsRaw, pruneSingletons, autotuneReadKnee, saveSettings, onOpenChange]);
+  }, [sortingDefaultsRaw, prunePref, autotuneReadKnee, saveSettings, onOpenChange]);
 
   const handleCancel = useCallback(() => {
     onOpenChange(false);
@@ -107,15 +109,19 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </DialogHeader>
 
         <div className="mt-4 flex flex-col gap-4">
-          {/* ui.prune_singletons */}
+          {/* ui.prune_singletons — 3-value enum (#686) */}
           <label className="flex items-center gap-2 text-sm">
-            <Checkbox
-              checked={pruneSingletons}
-              onCheckedChange={(checked) =>
-                setPruneSingletons(checked === true)
-              }
-            />
-            Prune singletons (ui.prune_singletons)
+            <span className="min-w-0">Prune singletons (ui.prune_singletons)</span>
+            <select
+              data-testid={DLGE_SETTINGS_PRUNE_SELECT}
+              value={prunePref}
+              onChange={(e) => setPrunePref(normalizePrunePref(e.target.value))}
+              className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400"
+            >
+              <option value="ask">Ask each time</option>
+              <option value="always">Always prune</option>
+              <option value="never">Never prune</option>
+            </select>
           </label>
 
           {/* ui.scan_dialog.autotune_read_knee */}

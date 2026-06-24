@@ -47,6 +47,14 @@ class PruneRequest(BaseModel):
 
     manifest_path: str
     include_actioned: bool = False
+    # Explicit-list prune (#686): when provided, prune EXACTLY these paths
+    # (intersected with the current singletons, under-roots, unlocked) instead
+    # of pruning by category. This mirrors the Qt desktop's
+    # ``_apply_singleton_prune(to_prune)`` where the caller (the prune dialog /
+    # lock-gate verdict) computes the precise set — e.g. "prune only this
+    # Unlock&Applied locked singleton, keep the plain bucket". ``None`` keeps the
+    # original category behaviour (all plain + optionally all actioned).
+    paths: list[str] | None = None
 
 
 class SaveRequest(BaseModel):
@@ -90,6 +98,25 @@ class PruneResult(BaseModel):
     pruned: list[str]
     locked_skipped: list[str]
     groups: list[Any]
+
+
+class PruneCandidatesRequest(BaseModel):
+    """Body for POST /api/prune/candidates."""
+
+    manifest_path: str
+
+
+class PruneCandidatesResult(BaseModel):
+    """Response for POST /api/prune/candidates (#686).
+
+    The current singletons classified into the three buckets the prune flow
+    branches on. The web review view drops single-member groups, so the
+    frontend asks the backend (which has the SQL) what singletons exist.
+    """
+
+    plain: list[str]
+    actioned: list[str]
+    locked: list[str]
 
 
 class SaveResult(BaseModel):

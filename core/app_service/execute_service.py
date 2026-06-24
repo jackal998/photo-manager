@@ -333,9 +333,83 @@ def remove_from_review(
     return {"removed": len(safe_paths), "groups": groups}
 
 
+def _fetch_singleton_rows(conn) -> list:
+    """Return (source_path, user_decision, is_locked, group_id) for every row
+    whose group has exactly ONE remaining in-review (outcome='') member.
+
+    Shared by classify_singletons (offer) and prune_singletons (apply) so both
+    agree on what a singleton is.
+    """
+    return conn.execute(
+        """
+        SELECT m.source_path, m.user_decision, m.is_locked, m.group_id
+        FROM migration_manifest m
+        JOIN (
+            SELECT group_id, COUNT(*) as cnt
+            FROM migration_manifest
+            WHERE outcome = '' AND group_id IS NOT NULL
+            GROUP BY group_id
+            HAVING cnt = 1
+        ) singletons ON m.group_id = singletons.group_id
+        WHERE m.outcome = ''
+        """
+    ).fetchall()
+
+
+def classify_singletons(
+    manifest_path: str,
+    allowed_roots: list[str] | None = None,
+) -> dict[str, list[str]]:
+    """Classify the manifest's current singletons into plain / actioned / locked.
+
+    The web review view (load_review → MainVM) drops single-member groups
+    (manifest_repository orphan-skip), so the frontend never *sees* singletons in
+    its groups — unlike the Qt desktop's in-memory vm, which keeps them. This is
+    the backend's authoritative classification the web prune flow offers from,
+    mirroring the Qt ``_maybe_offer_singleton_prune`` bucket loop:
+
+      * locked  — is_locked (regardless of decision); gated via the lock dialog.
+      * actioned — unlocked, user_decision in {'delete', 'ignore'}.
+      * plain   — unlocked, no pending decision.
+
+    Out-of-root singletons are excluded (they can't be pruned, so they aren't
+    offered).
+
+    Returns:
+        {"plain": [...], "actioned": [...], "locked": [...]}.
+    """
+    _require_manifest(manifest_path)
+    repo = ManifestRepository()
+    repo.ensure_schema(manifest_path)
+
+    conn = _connect(manifest_path)
+    try:
+        rows = _fetch_singleton_rows(conn)
+    finally:
+        conn.close()
+
+    plain: list[str] = []
+    actioned: list[str] = []
+    locked: list[str] = []
+    for source_path, user_decision, is_locked_val, _group_id in rows:
+        if allowed_roots and not is_under_roots(source_path, allowed_roots):
+            continue
+        if is_locked_val:
+            locked.append(source_path)
+            continue
+        decision = user_decision or ""
+        if decision in ("delete", "ignore"):
+            actioned.append(source_path)
+        else:
+            plain.append(source_path)
+
+    return {"plain": plain, "actioned": actioned, "locked": locked}
+
+
 def prune_singletons(
     manifest_path: str,
     include_actioned: bool = False,
+    paths: list[str] | None = None,
     allowed_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Remove singleton groups from the review manifest.
@@ -345,17 +419,30 @@ def prune_singletons(
     We detect them differently from the Qt path: we look for group_id values
     that have exactly ONE row with outcome=''.
 
+    Two modes:
+      * **Category** (``paths is None``) — prune all plain singletons, plus all
+        actioned ones when ``include_actioned`` is True.
+      * **Explicit** (``paths`` provided, #686) — prune EXACTLY the singletons
+        named in ``paths``, ignoring ``include_actioned``. The caller (the web
+        prune dialog / lock-gate verdict) computes the precise set, mirroring
+        the Qt desktop's ``_apply_singleton_prune(to_prune)``. The requested
+        paths are still intersected with the *actual* current singletons and
+        filtered by the locked / under-roots guards below — a stray or
+        non-singleton path is silently dropped, never pruned.
+
     Args:
         manifest_path: Absolute path to the manifest sqlite.
         include_actioned: If True, also prune singletons whose remaining row
             has user_decision in {'delete', 'ignore'}.  If False, only prune
-            plain singletons (user_decision == '').
+            plain singletons (user_decision == '').  Ignored in explicit mode.
+        paths: Explicit-mode prune set (#686).  None = category mode.
         allowed_roots: Trusted root directories.  Out-of-root singleton rows
             are silently skipped (not pruned).
 
     Returns:
         Dict with keys: pruned, locked_skipped, groups.
     """
+    requested: set[str] | None = set(paths) if paths is not None else None
     _require_manifest(manifest_path)
     repo = ManifestRepository()
     repo.ensure_schema(manifest_path)
@@ -363,20 +450,7 @@ def prune_singletons(
     conn = _connect(manifest_path)
     try:
         # Find group_ids with exactly one remaining in-review row.
-        rows = conn.execute(
-            """
-            SELECT m.source_path, m.user_decision, m.is_locked, m.group_id
-            FROM migration_manifest m
-            JOIN (
-                SELECT group_id, COUNT(*) as cnt
-                FROM migration_manifest
-                WHERE outcome = '' AND group_id IS NOT NULL
-                GROUP BY group_id
-                HAVING cnt = 1
-            ) singletons ON m.group_id = singletons.group_id
-            WHERE m.outcome = ''
-            """
-        ).fetchall()
+        rows = _fetch_singleton_rows(conn)
     finally:
         conn.close()
 
@@ -384,6 +458,12 @@ def prune_singletons(
     locked_skipped: list[str] = []
 
     for source_path, user_decision, is_locked_val, _group_id in rows:
+        # Explicit mode (#686): consider only the caller-named singletons. A
+        # requested path that is no longer a singleton simply never appears in
+        # `rows`, so it is dropped — never pruned.
+        if requested is not None and source_path not in requested:
+            continue
+
         if is_locked_val:
             locked_skipped.append(source_path)
             continue
@@ -396,7 +476,12 @@ def prune_singletons(
             continue
 
         decision = user_decision or ""
-        if decision == "":
+        if requested is not None:
+            # Explicit mode: the caller already resolved which buckets (plain /
+            # actioned / unlocked-locked) to include, so prune every requested
+            # singleton that survived the locked / under-roots guards above.
+            to_prune.append(source_path)
+        elif decision == "":
             to_prune.append(source_path)
         elif include_actioned and decision in ("delete", "ignore"):
             to_prune.append(source_path)

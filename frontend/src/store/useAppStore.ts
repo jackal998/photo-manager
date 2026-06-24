@@ -16,6 +16,7 @@ import {
   patchSettings,
   postExecute,
   postPrune,
+  postPruneCandidates,
   postRemove,
   postReveal,
   postSave,
@@ -44,6 +45,8 @@ import type {
 } from "./types";
 import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
 import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
+import { normalizePrunePref } from "../lib/prune";
+import type { PrunePref } from "../lib/prune";
 
 // ---------------------------------------------------------------------------
 // Type alias for immer-wrapped set function inside create()
@@ -121,6 +124,7 @@ const initialExecute: ExecuteState = {
   executeError: null,
   lockConflict: null,
   prunePrompt: null,
+  prunePending: null,
   scopeGroupNumbers: null,
 };
 
@@ -622,14 +626,10 @@ export const useAppStore = create<AppStore>()(
           // Executed/removed rows leave the manifest — drop the stale selection.
           state.selection.selectedPaths = [];
           state.selection.anchorPath = null;
-          // Surface prune prompt when singleton groups remain after execute.
-          const singletons = result.groups
-            .filter((g) => g.member_count === 1)
-            .flatMap((g) => g.items.map((f) => f.file_path));
-          if (singletons.length > 0) {
-            state.execute.prunePrompt = { candidates: singletons };
-          }
         });
+        // Offer / auto-run a singleton prune now the groups reflect the execute
+        // (the Qt `_maybe_offer_singleton_prune` tail).
+        await get().maybeOfferPrune();
       } catch (err) {
         if (err instanceof ApiConflictError) {
           if (err.code === "locked_paths") {
@@ -675,6 +675,9 @@ export const useAppStore = create<AppStore>()(
           state.selection.selectedPaths = [];
           state.selection.anchorPath = null;
         });
+        // #686 — a finalizing remove can collapse groups to singletons, so
+        // offer / auto-run a prune (the desktop "Remove from List" parity).
+        await get().maybeOfferPrune();
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
           set((state) => {
@@ -695,20 +698,95 @@ export const useAppStore = create<AppStore>()(
       }
     },
 
-    async pruneSingletons(includeActioned = false) {
+    async maybeOfferPrune() {
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
+
+      // The web review view drops single-member groups (manifest_repository
+      // orphan-skip), so the FE never sees singletons in its own groups (unlike
+      // the Qt in-memory vm). Ask the backend, which classifies via SQL. Fail
+      // safe — no offer if the classification can't be fetched.
+      let plain: string[];
+      let actioned: string[];
+      let locked: string[];
+      try {
+        const candidates = await postPruneCandidates({ manifest_path: manifestPath });
+        ({ plain, actioned, locked } = candidates);
+      } catch {
+        return;
+      }
+      if (plain.length === 0 && actioned.length === 0 && locked.length === 0) {
+        return; // no singletons — nothing to offer
+      }
+
+      // Authoritative pref: fetch fresh (mirrors Qt reading settings.json each
+      // time). The store's settings.values can be stale — the in-app
+      // SettingsDialog is the only writer and QA PATCHes the server out-of-band.
+      let pref: PrunePref;
+      try {
+        const values = await getSettings();
+        pref = normalizePrunePref(values["ui.prune_singletons"]);
+        set((state) => {
+          state.settings.values = values;
+        });
+      } catch {
+        pref = normalizePrunePref(get().settings.values["ui.prune_singletons"]);
+      }
+      if (pref === "never") return;
+
+      // D6: locked singletons must pass the LockConfirmDialog gate FIRST, on
+      // BOTH the "ask" and "always" paths — the standing "always" instruction
+      // does not bypass the lock confirmation.
+      if (locked.length > 0) {
+        set((state) => {
+          state.execute.prunePending = { plain, actioned, pref };
+          state.execute.lockConflict = {
+            paths: locked,
+            op: "prune",
+            originalPaths: null,
+          };
+        });
+        return;
+      }
+
+      if (pref === "always") {
+        // Sweep both unlocked buckets in one explicit-paths call.
+        await get().applyPrune([...plain, ...actioned]);
+        return;
+      }
+
+      // "ask" with no locked singletons — open the prune dialog for the
+      // unlocked buckets (guaranteed non-empty: we returned early if all three
+      // buckets were empty, and locked is empty on this branch).
+      set((state) => {
+        state.execute.prunePrompt = { plain, actioned, lockedToPrune: [] };
+      });
+    },
+
+    async applyPrune(paths) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+
+      if (paths.length === 0) {
+        // Nothing to prune (e.g. Keep-all with no lock-confirmed locked) —
+        // just clear the transient prune state.
+        set((state) => {
+          state.execute.prunePrompt = null;
+          state.execute.prunePending = null;
+        });
+        return;
+      }
 
       try {
         const result = await postPrune({
           manifest_path: manifestPath,
-          include_actioned: includeActioned,
+          paths,
         });
 
         set((state) => {
           state.manifest.groups = result.groups;
-          // Clear any stale prune prompt.
           state.execute.prunePrompt = null;
+          state.execute.prunePending = null;
           // Pruned rows leave the manifest — drop the stale selection.
           state.selection.selectedPaths = [];
           state.selection.anchorPath = null;
@@ -717,8 +795,52 @@ export const useAppStore = create<AppStore>()(
         set((state) => {
           state.manifest.error =
             err instanceof Error ? err.message : String(err);
+          state.execute.prunePrompt = null;
+          state.execute.prunePending = null;
         });
       }
+    },
+
+    async resolvePruneLock(verdict) {
+      const pending = get().execute.prunePending;
+      const locked = get().execute.lockConflict?.paths ?? [];
+      // Close the lock dialog.
+      set((state) => {
+        state.execute.lockConflict = null;
+      });
+      if (pending === null) return; // defensive — gate resolved without context
+
+      let lockedToPrune: string[] = [];
+      if (verdict === "unlock-apply") {
+        // Unlock the locked singletons so the backend prune won't skip them,
+        // then commit them to the prune set (the Qt to_prune.extend tail — they
+        // prune regardless of any later "Keep all" on the prune dialog).
+        await get().setLocks(locked, false);
+        lockedToPrune = locked;
+      }
+      // "unlocked-only" / "cancel": hold the locked singletons (lockedToPrune=[]).
+
+      const { plain, actioned, pref } = pending;
+      set((state) => {
+        state.execute.prunePending = null;
+      });
+
+      if (pref === "always") {
+        await get().applyPrune([...plain, ...actioned, ...lockedToPrune]);
+        return;
+      }
+
+      // "ask": if there are unlocked buckets to confirm, open the dialog (the
+      // lock-confirmed locked fold in on Remove OR Keep). If the unlocked
+      // buckets are empty there is nothing to ask — prune the already-decided
+      // set (just lockedToPrune, possibly empty) directly.
+      if (plain.length === 0 && actioned.length === 0) {
+        await get().applyPrune(lockedToPrune);
+        return;
+      }
+      set((state) => {
+        state.execute.prunePrompt = { plain, actioned, lockedToPrune };
+      });
     },
 
     async saveManifest(targetPath) {

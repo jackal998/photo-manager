@@ -345,35 +345,12 @@ def run_scan(
     return wait_manifest_loaded(page, timeout=scan_timeout)
 
 
-def reset_scan_persistence(base_url: str) -> None:
-    """Clear persisted ScanDialog sources/output via PATCH /api/settings.
-
-    The web ScanDialog persists its source list + output path across launches
-    (#678-E / s23a/s23b: the dialog loads ``sources.list`` / ``sources.output``
-    on open and saves them on Start Scan). The web batch runs every scenario
-    against ONE long-lived server with ONE settings.json, so without a
-    per-scenario reset one scenario's persisted sources would pre-fill the next
-    scenario's dialog and break the ``add_scan_source`` "always one blank row"
-    assumption. This is the web analog of the Qt batch runner's per-scenario
-    ``configure`` step, which writes settings.json fresh before each launch.
-
-    Fail-open: any error (server not up yet, route missing on an older build)
-    is swallowed — the reset is a test-isolation convenience, not a correctness
-    assertion. A genuine allowlist regression is caught by the backend unit
-    tests; a reset that silently no-ops surfaces as a clear scenario failure
-    (stale sources → wrong scan), never a confusing batch crash.
-
-    Parameters
-    ----------
-    base_url:
-        Base URL of the running FastAPI server, e.g. ``http://127.0.0.1:8765``.
-    """
+def _patch_settings(base_url: str, updates: dict) -> None:
+    """PATCH /api/settings with ``updates``. Fail-open (loopback only)."""
     import json
     import urllib.request
 
-    payload = json.dumps(
-        {"updates": {"sources.list": [], "sources.output": ""}}
-    ).encode("utf-8")
+    payload = json.dumps({"updates": updates}).encode("utf-8")
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/api/settings",
         data=payload,
@@ -383,8 +360,65 @@ def reset_scan_persistence(base_url: str) -> None:
     try:
         with urllib.request.urlopen(req, timeout=5):  # noqa: S310 (loopback only)
             pass
-    except Exception:  # noqa: BLE001 — fail-open, see docstring
+    except Exception:  # noqa: BLE001 — fail-open, see reset_scan_persistence docstring
         pass
+
+
+def reset_scan_persistence(base_url: str) -> None:
+    """Reset per-scenario persisted UI prefs via PATCH /api/settings.
+
+    The web batch runs every scenario against ONE long-lived server with ONE
+    settings.json, so any pref a scenario writes leaks into the next unless it
+    is reset here. This is the web analog of the Qt batch runner's per-scenario
+    ``configure`` step, which writes settings.json fresh before each launch.
+
+    Two prefs are reset:
+
+    * ``sources.list`` / ``sources.output`` — the ScanDialog persists its source
+      list + output path (#678-E / s23a/s23b). Without the reset, a prior
+      scenario's sources pre-fill the next dialog and break the
+      ``add_scan_source`` "always one blank row" assumption.
+    * ``ui.prune_singletons`` → ``"never"`` — the #686 prune flow reads this on
+      every destructive op. ``"never"`` is the QA default (mirrors the Qt
+      ``PRUNE_PREF_OVERRIDES`` default), so no scenario sees a surprise prune
+      dialog. s61 (``"ask"``) and s67 (``"always"``) opt in explicitly via
+      :func:`set_prune_pref` at the top of their run.
+
+    Fail-open: any error (server not up yet, route missing on an older build)
+    is swallowed — the reset is a test-isolation convenience, not a correctness
+    assertion. A genuine allowlist regression is caught by the backend unit
+    tests; a reset that silently no-ops surfaces as a clear scenario failure
+    (stale sources → wrong scan, or a leaked prune pref → unexpected dialog),
+    never a confusing batch crash.
+
+    Parameters
+    ----------
+    base_url:
+        Base URL of the running FastAPI server, e.g. ``http://127.0.0.1:8765``.
+    """
+    _patch_settings(
+        base_url,
+        {
+            "sources.list": [],
+            "sources.output": "",
+            "ui.prune_singletons": "never",
+        },
+    )
+
+
+def set_prune_pref(base_url: str, pref: str) -> None:
+    """Set ``ui.prune_singletons`` to ``pref`` (#686).
+
+    Used by s61 (``"ask"``) and s67 (``"always"``) to opt into the prune flow
+    before driving it — the web analog of the Qt ``PRUNE_PREF_OVERRIDES``. The
+    per-scenario :func:`reset_scan_persistence` resets it back to ``"never"``
+    before the next scenario, so the opt-in never leaks. The store reads the
+    pref authoritatively (GET /api/settings) on each destructive op, so setting
+    it before the page triggers the flow is sufficient — no reload needed.
+
+    ``pref`` must be one of ``"ask"`` / ``"always"`` / ``"never"``.
+    """
+    _patch_settings(base_url, {"ui.prune_singletons": pref})
 
 
 # ---------------------------------------------------------------------------

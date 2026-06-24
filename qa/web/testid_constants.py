@@ -275,6 +275,20 @@ DELETE_CONFIRM_BTN_CANCEL = "delete-confirm-btn-cancel"
 PRUNE_CONFIRM_DIALOG = "prune-confirm-dialog"
 """Confirmation dialog before pruning singleton groups."""
 
+PRUNE_BTN_REMOVE = "prune-btn-remove"
+"""'Remove {N}' — confirm the prune (#686). Label count is dynamic."""
+
+PRUNE_BTN_KEEP = "prune-btn-keep"
+"""'Keep all' — dismiss the prune dialog without pruning the unlocked buckets."""
+
+PRUNE_INCLUDE_ACTIONED = "prune-include-actioned"
+"""Actioned-bucket opt-in checkbox — only rendered in the MIXED layout
+(both plain and actioned singletons present), default unchecked (#686)."""
+
+PRUNE_REMEMBER = "prune-remember"
+"""'Don't ask again' checkbox — Remove+remember flips the pref to 'always',
+Keep+remember flips it to 'never' (#686)."""
+
 # ---------------------------------------------------------------------------
 # Inline preview pane
 # ---------------------------------------------------------------------------
@@ -440,6 +454,9 @@ DLGE_SETTINGS_SAVE = "settings-save-button"
 
 DLGE_SETTINGS_CANCEL = "settings-cancel-button"
 """'Cancel' button inside the settings dialog."""
+
+DLGE_SETTINGS_PRUNE_SELECT = "settings-prune-select"
+"""3-value ui.prune_singletons control (ask / always / never) (#686)."""
 
 # ---------------------------------------------------------------------------
 # Generic confirmation dialogs (kept for settings-level confirmations)

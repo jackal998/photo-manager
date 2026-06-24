@@ -39,6 +39,9 @@ vi.mock("../api/client", async (importOriginal) => {
     browseFs: vi.fn(),
     bulkDecide: vi.fn(),
     scanEventsUrl: vi.fn((id: string) => `/api/scan/${id}/events`),
+    // postPruneCandidates is the backend singleton classifier maybeOfferPrune
+    // calls — stubbed so tests control which buckets it returns.
+    postPruneCandidates: vi.fn(),
     // Pass through real implementations so 409 parsing is exercised.
     postExecute: real.postExecute,
     postRemove: real.postRemove,
@@ -131,10 +134,27 @@ beforeEach(() => {
       executeError: null,
       lockConflict: null,
       prunePrompt: null,
+      prunePending: null,
       scopeGroupNumbers: null,
     },
   });
   vi.clearAllMocks();
+  // Default the authoritative prune pref to "never" so the maybeOfferPrune tail
+  // (now run by executeDecisions / removeFromList) is a benign no-op in tests
+  // that don't opt into the prune flow. clearAllMocks keeps implementations, so
+  // re-establish this each test to neutralise any per-test override that bled.
+  vi.mocked(client.getSettings).mockResolvedValue({
+    "sorting.defaults": null,
+    "ui.prune_singletons": "never",
+    "ui.scan_dialog.autotune_read_knee": null,
+  });
+  // Default: no singletons, so maybeOfferPrune is a clean no-op in tests that
+  // don't opt into the prune flow.
+  vi.mocked(client.postPruneCandidates).mockResolvedValue({
+    plain: [],
+    actioned: [],
+    locked: [],
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -441,39 +461,9 @@ describe("executeDecisions – 409 execute_already_running sets executeError, no
   });
 });
 
-describe("executeDecisions – prunePrompt set when result contains singleton groups", () => {
-  it("populates prunePrompt.candidates with paths from member_count===1 groups", async () => {
-    const group = makeGroup(1, ["/photos/f.jpg", "/photos/g.jpg"]);
-    group.items[0].user_decision = "delete";
-    group.items[1].user_decision = "ignore";
-    seedManifest([group]);
-
-    // After execute, group has only one file left (singleton).
-    const singletonGroup: Group = {
-      group_number: 1,
-      member_count: 1,
-      items: [
-        {
-          file_path: "/photos/g.jpg",
-          basename: "g.jpg",
-          folder: "/photos",
-          action: "",
-          user_decision: "ignore",
-          is_locked: false,
-          is_ref_winner: true,
-          similarity: { kind: "ref", percent: null },
-          score: null,
-          file_size_bytes: 1024,
-          pixel_width: 800,
-          pixel_height: 600,
-          shot_date: null,
-          creation_date: null,
-          phash: null,
-          hamming_distance: null,
-          thumbnail_url: "/api/image?path=%2Fphotos%2Fg.jpg&size=512",
-        },
-      ],
-    };
+describe("executeDecisions – offers a prune when the backend reports singletons", () => {
+  it("opens the prune dialog with the backend's buckets (pref=ask)", async () => {
+    seedManifest([makeGroup(1, ["/photos/f.jpg", "/photos/g.jpg"])]);
 
     const executeResult = {
       success_paths: ["/photos/f.jpg"],
@@ -482,16 +472,28 @@ describe("executeDecisions – prunePrompt set when result contains singleton gr
       missing: [],
       db_write_failed: [],
       log_path: null,
-      groups: [singletonGroup],
+      groups: [], // web review view drops singletons; the FE never sees them
     };
 
+    // maybeOfferPrune asks the backend for candidates, then reads the pref.
+    vi.mocked(client.postPruneCandidates).mockResolvedValue({
+      plain: [],
+      actioned: ["/photos/g.jpg"],
+      locked: [],
+    });
+    vi.mocked(client.getSettings).mockResolvedValue({
+      "sorting.defaults": null,
+      "ui.prune_singletons": "ask",
+      "ui.scan_dialog.autotune_read_knee": null,
+    });
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(ok200(executeResult));
 
     await useAppStore.getState().executeDecisions();
 
     const { execute } = useAppStore.getState();
     expect(execute.prunePrompt).not.toBeNull();
-    expect(execute.prunePrompt!.candidates).toContain("/photos/g.jpg");
+    expect(execute.prunePrompt!.actioned).toEqual(["/photos/g.jpg"]);
+    expect(execute.prunePrompt!.lockedToPrune).toEqual([]);
   });
 });
 
@@ -540,32 +542,237 @@ describe("removeFromList – 409 locked_paths sets lockConflict op=remove with o
 });
 
 // ---------------------------------------------------------------------------
-// pruneSingletons
+// applyPrune
 // ---------------------------------------------------------------------------
 
-describe("pruneSingletons – success replaces groups and clears prunePrompt", () => {
-  it("updates manifest.groups and nullifies execute.prunePrompt", async () => {
+describe("applyPrune – success replaces groups and clears prune state", () => {
+  it("updates manifest.groups and nullifies prunePrompt + prunePending", async () => {
     const group = makeGroup(1, ["/photos/l.jpg"]);
     seedManifest([group]);
 
-    // Pre-set a prunePrompt to confirm it gets cleared.
+    // Pre-set prune state to confirm both get cleared.
     useAppStore.setState((s) => ({
       ...s,
       execute: {
         ...s.execute,
-        prunePrompt: { candidates: ["/photos/l.jpg"] },
+        prunePrompt: { plain: ["/photos/l.jpg"], actioned: [], lockedToPrune: [] },
       },
     }));
 
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       ok200({ pruned: ["/photos/l.jpg"], locked_skipped: [], groups: [] })
     );
 
-    await useAppStore.getState().pruneSingletons();
+    await useAppStore.getState().applyPrune(["/photos/l.jpg"]);
 
     const { manifest, execute } = useAppStore.getState();
     expect(manifest.groups).toHaveLength(0);
     expect(execute.prunePrompt).toBeNull();
+    expect(execute.prunePending).toBeNull();
+    // The explicit-paths body must carry `paths`, not include_actioned.
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as { body: string }).body);
+    expect(body.paths).toEqual(["/photos/l.jpg"]);
+  });
+
+  it("an empty set is a no-op that still clears the prune state (no fetch)", async () => {
+    seedManifest([makeGroup(1, ["/photos/m.jpg"])]);
+    useAppStore.setState((s) => ({
+      ...s,
+      execute: {
+        ...s.execute,
+        prunePrompt: { plain: [], actioned: [], lockedToPrune: [] },
+      },
+    }));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await useAppStore.getState().applyPrune([]);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(useAppStore.getState().execute.prunePrompt).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// maybeOfferPrune — the post-destructive-op orchestrator (the Qt decision tree)
+// ---------------------------------------------------------------------------
+
+function mockPref(pref: string) {
+  vi.mocked(client.getSettings).mockResolvedValue({
+    "sorting.defaults": null,
+    "ui.prune_singletons": pref,
+    "ui.scan_dialog.autotune_read_knee": null,
+  });
+}
+
+describe("maybeOfferPrune", () => {
+  function mockCandidates(c: {
+    plain?: string[];
+    actioned?: string[];
+    locked?: string[];
+  }) {
+    vi.mocked(client.postPruneCandidates).mockResolvedValue({
+      plain: c.plain ?? [],
+      actioned: c.actioned ?? [],
+      locked: c.locked ?? [],
+    });
+  }
+
+  it("no singletons → never even fetches the pref", async () => {
+    seedManifest([]);
+    mockCandidates({}); // backend reports no singletons
+    await useAppStore.getState().maybeOfferPrune();
+    expect(client.getSettings).not.toHaveBeenCalled();
+    expect(useAppStore.getState().execute.prunePrompt).toBeNull();
+  });
+
+  it("pref=never → reads candidates+pref, then no offer / no prune call", async () => {
+    seedManifest([]);
+    mockCandidates({ plain: ["/p/plain.jpg"] });
+    mockPref("never");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await useAppStore.getState().maybeOfferPrune();
+    // The full path ran (candidates fetched, pref read) — and correctly resolved
+    // to no action. Asserting the client mocks fired makes this non-hollow: a
+    // dead maybeOfferPrune that never reached the pref read would fail here.
+    expect(client.postPruneCandidates).toHaveBeenCalled();
+    expect(client.getSettings).toHaveBeenCalled();
+    expect(useAppStore.getState().execute.prunePrompt).toBeNull();
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled(); // no /api/prune
+  });
+
+  it("pref=ask, no locked → opens the dialog with the backend buckets", async () => {
+    seedManifest([]);
+    mockCandidates({ plain: ["/p/plain.jpg"], actioned: ["/p/act.jpg"] });
+    mockPref("ask");
+    await useAppStore.getState().maybeOfferPrune();
+    const p = useAppStore.getState().execute.prunePrompt;
+    expect(p).not.toBeNull();
+    expect(p!.plain).toEqual(["/p/plain.jpg"]);
+    expect(p!.actioned).toEqual(["/p/act.jpg"]);
+    expect(p!.lockedToPrune).toEqual([]);
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+  });
+
+  it("pref=always, no locked → auto-prunes both buckets via explicit paths", async () => {
+    seedManifest([]);
+    mockCandidates({ plain: ["/p/plain.jpg"], actioned: ["/p/act.jpg"] });
+    mockPref("always");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ pruned: [], locked_skipped: [], groups: [] }));
+    await useAppStore.getState().maybeOfferPrune();
+    expect(useAppStore.getState().execute.prunePrompt).toBeNull();
+    const body = JSON.parse(
+      (fetchSpy.mock.calls[0][1] as { body: string }).body
+    );
+    expect([...body.paths].sort()).toEqual(["/p/act.jpg", "/p/plain.jpg"]);
+  });
+
+  it("locked present → opens the prune LOCK gate first (no prune yet), on BOTH paths", async () => {
+    seedManifest([]);
+    mockCandidates({
+      plain: ["/p/plain.jpg"],
+      actioned: ["/p/act.jpg"],
+      locked: ["/p/lock.jpg"],
+    });
+    mockPref("always"); // even "always" gates locked singletons (D6)
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await useAppStore.getState().maybeOfferPrune();
+    const { lockConflict, prunePending, prunePrompt } =
+      useAppStore.getState().execute;
+    expect(lockConflict).not.toBeNull();
+    expect(lockConflict!.op).toBe("prune");
+    expect(lockConflict!.paths).toEqual(["/p/lock.jpg"]);
+    expect(prunePending).not.toBeNull();
+    expect(prunePending!.pref).toBe("always");
+    expect(prunePrompt).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled(); // gate first
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePruneLock — the lock-gate continuation
+// ---------------------------------------------------------------------------
+
+describe("resolvePruneLock", () => {
+  function seedGate(
+    pref: "ask" | "always",
+    pending: { plain: string[]; actioned: string[] }
+  ) {
+    // The locked row sits in a real (≥2-member) group; resolvePruneLock unlocks
+    // it by path via setLocks, which just needs the row present in the manifest.
+    const lockGroup = makeGroup(1, ["/p/lock.jpg", "/p/sibling.jpg"]);
+    lockGroup.items[0].is_locked = true;
+    seedManifest([lockGroup]);
+    useAppStore.setState((s) => ({
+      execute: {
+        ...s.execute,
+        prunePending: { plain: pending.plain, actioned: pending.actioned, pref },
+        lockConflict: { paths: ["/p/lock.jpg"], op: "prune", originalPaths: null },
+      },
+    }));
+  }
+
+  it("cancel on ask → holds locked, opens the dialog for unlocked buckets", async () => {
+    seedGate("ask", { plain: [], actioned: ["/p/x.jpg"] });
+    await useAppStore.getState().resolvePruneLock("cancel");
+    const { prunePrompt, lockConflict, prunePending } =
+      useAppStore.getState().execute;
+    expect(lockConflict).toBeNull();
+    expect(prunePending).toBeNull();
+    expect(prunePrompt!.actioned).toEqual(["/p/x.jpg"]);
+    expect(prunePrompt!.lockedToPrune).toEqual([]); // locked held
+    expect(client.patchLocks).not.toHaveBeenCalled();
+  });
+
+  it("unlocked-only on ask → holds locked (like cancel), no unlock", async () => {
+    // The prune-context lock gate's "Unlocked only" verdict: hold the locked
+    // singleton, continue with the unlocked buckets (lockedToPrune empty). Pins
+    // that the store does NOT unlock — a mis-wire to unlock-apply would unlock.
+    seedGate("ask", { plain: [], actioned: ["/p/x.jpg"] });
+    await useAppStore.getState().resolvePruneLock("unlocked-only");
+    const p = useAppStore.getState().execute.prunePrompt;
+    expect(p!.actioned).toEqual(["/p/x.jpg"]);
+    expect(p!.lockedToPrune).toEqual([]); // locked held
+    expect(client.patchLocks).not.toHaveBeenCalled();
+  });
+
+  it("unlock-apply on ask → unlocks, then the dialog carries lockedToPrune", async () => {
+    seedGate("ask", { plain: [], actioned: ["/p/x.jpg"] });
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+    expect(client.patchLocks).toHaveBeenCalledWith("/data/scan.db", [
+      { file_path: "/p/lock.jpg", locked: false },
+    ]);
+    const p = useAppStore.getState().execute.prunePrompt;
+    expect(p!.lockedToPrune).toEqual(["/p/lock.jpg"]);
+  });
+
+  it("unlock-apply on always → unlocks, then auto-prunes buckets + locked", async () => {
+    seedGate("always", { plain: ["/p/a.jpg"], actioned: [] });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ pruned: [], locked_skipped: [], groups: [] }));
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+    expect(client.patchLocks).toHaveBeenCalled();
+    const body = JSON.parse(
+      (fetchSpy.mock.calls[0][1] as { body: string }).body
+    );
+    expect([...body.paths].sort()).toEqual(["/p/a.jpg", "/p/lock.jpg"]);
+    expect(useAppStore.getState().execute.prunePrompt).toBeNull();
+  });
+
+  it("cancel on always → holds locked, sweeps only the unlocked buckets", async () => {
+    seedGate("always", { plain: ["/p/a.jpg"], actioned: [] });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ pruned: [], locked_skipped: [], groups: [] }));
+    await useAppStore.getState().resolvePruneLock("cancel");
+    expect(client.patchLocks).not.toHaveBeenCalled();
+    const body = JSON.parse(
+      (fetchSpy.mock.calls[0][1] as { body: string }).body
+    );
+    expect(body.paths).toEqual(["/p/a.jpg"]); // locked NOT included
   });
 });
 

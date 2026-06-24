@@ -836,6 +836,65 @@ class TestPostPrune:
         # outcome must be unchanged.
         assert _read_outcome(manifest, str(f1)) == ""
 
+    def test_explicit_paths_prunes_only_named(self, client_with_roots, tmp_path):
+        """`paths` in the request body threads through to explicit-mode prune
+        (#686): only the named singleton is pruned, not every plain one."""
+        client, root = client_with_roots
+        f1, f2, f3, f4 = _make_real_files(tmp_path, 4)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 128},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 4, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 128},
+            {"source_path": str(f3), "action": "", "group_id": "g2",
+             "outcome": "", "user_decision": "", "file_size_bytes": 128},
+            {"source_path": str(f4), "action": "REVIEW_DUPLICATE", "group_id": "g2",
+             "hamming_distance": 4, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 128},
+        ])
+
+        resp = client.post("/api/prune", json={
+            "manifest_path": str(manifest),
+            "paths": [str(f3)],
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["pruned"] == [str(f3)]
+        assert _read_outcome(manifest, str(f3)) == "ignored"
+        assert _read_outcome(manifest, str(f1)) == ""  # the other plain singleton survives
+
+
+class TestPostPruneCandidates:
+    def test_classifies_singletons_into_buckets(self, client_with_roots, tmp_path):
+        """POST /api/prune/candidates (#686) returns plain/actioned/locked."""
+        client, root = client_with_roots
+        f1, f2, f3, f4, f5, f6 = _make_real_files(tmp_path, 6)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+            {"source_path": str(f3), "action": "", "group_id": "g2",
+             "outcome": "", "user_decision": "delete", "file_size_bytes": 64},
+            {"source_path": str(f4), "action": "REVIEW_DUPLICATE", "group_id": "g2",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+            {"source_path": str(f5), "action": "", "group_id": "g3",
+             "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 64},
+            {"source_path": str(f6), "action": "REVIEW_DUPLICATE", "group_id": "g3",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+
+        resp = client.post("/api/prune/candidates", json={"manifest_path": str(manifest)})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["plain"] == [str(f1)]
+        assert body["actioned"] == [str(f3)]
+        assert body["locked"] == [str(f5)]
+
 
 # ---------------------------------------------------------------------------
 # POST /api/save

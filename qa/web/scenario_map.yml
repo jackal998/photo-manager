@@ -328,9 +328,25 @@ scenarios:
     notes: "#502/#676 execute type-filter 'visible = committed'. UNBLOCKED by the FE fix shipped in the same PR: handleExecute now scopes the commit to the visible rows (decidedPaths) when filter!='all' — previously it sent scope_paths=null and committed ALL decided rows regardless of filter (the data-safety bug); plus a new HiddenDestructiveBanner (execute-hidden-destructive-banner) when 'Remove only' hides pending deletes, and findAllDeleteGroupIds is filter-narrowed. Fixture: two byte-identical copies each of two DISTINCT exif-edge JPEGs (tz_offset/subsecond — verified non-pairing per s08) → two EXACT-dup groups (A delete via CTX_SET_ACTION_DELETE, B ignore via CTX_SET_ACTION_REMOVE). Asserts Delete-only shows only A + no hidden banner; Remove-only shows only B + hidden banner visible; Execute under Delete-only deletes A on disk while B SURVIVES on disk with decision='ignore' (manifest drops to B's 2 rows). Divergences: 2 rows/group (Qt 4); per-row context-menu marking (Qt regex bulk); banner asserted by testid not text; post-execute read via GET /api/manifest absence (Qt SQLite executed=0)."
 
   - scenario: s61_actioned_singleton_prune
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s61_actioned_singleton_prune
+    status: done
+    notes: >-
+      #686 mixed-bucket singleton prune on the "ask" path. Five variants
+      (remove_plain / remove_both / keep / lock_cancel / lock_apply). The web
+      execute-tree + remove are single-select, so the mixed (plain+actioned)
+      offer is built by ACCUMULATION: under prune="never" finalize-remove A_drop
+      (collapses cluster A to the plain/locked A_keep singleton, silently), then
+      flip to "ask" and finalize-remove B_drop (collapses cluster B to the
+      actioned B_keep) — maybeOfferPrune classifies ALL current singletons via
+      the backend POST /api/prune/candidates (the web review view drops
+      single-member groups, so the FE can't classify them itself). Asserts the
+      actioned opt-in checkbox + dynamic "Remove N" label in the mixed layout,
+      and the D6 lock gate (lock_cancel/lock_apply) routes locked A_keep through
+      LockConfirmDialog op="prune" before the actioned-only prune dialog.
+      Outcomes read via sqlite (a held singleton is invisible to the manifest
+      API). Two generated clusters (qa/web/_prune_fixtures). Removes finalize to
+      outcome='ignored' (no file delete). Divergence: accumulation + execute-
+      dialog re-open (the dialog auto-closes after each remove).
 
   - scenario: s63_late_cancel_and_main_window_guard
     playwright_module: null
@@ -353,9 +369,20 @@ scenarios:
     notes: "Read-knee autotune default-ON / opt-out (#551 Phase 4). Expands Advanced settings, asserts the 'Auto-tune reader concurrency' checkbox is checked by DEFAULT (opt-out), scans near-duplicates leaving autotune ON, then asserts grouping is unchanged via GET /api/manifest (total_groups==1, total_files==5, the lone group holds all 5 with a non-null group_number). Reader concurrency must never change group assignment (#526/#538 idx-passthrough). FE Advanced Settings built in this PR. Divergence: manifest JSON group read vs Qt SQLite group_id."
 
   - scenario: s67_locked_singleton_prune_always
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s67_locked_singleton_prune_always
+    status: done
+    notes: >-
+      #686 D6 regression guard: a locked singleton under prune="always" must
+      STILL pass the lock gate before pruning (the "always" instruction never
+      silently sweeps locked rows). One generated cluster; lock KEEP, stage DROP
+      delete, set prune="always", finalize-remove DROP via the execute dialog →
+      group collapses to the locked KEEP singleton → maybeOfferPrune("always")
+      fires the LockConfirmDialog op="prune". V1 Cancel holds KEEP (outcome='');
+      V2 Unlock&Apply prunes it (outcome='ignored'). In BOTH, the
+      PruneConfirmDialog must NEVER appear (absence-checked) — the "always" path
+      skips it. Outcomes via sqlite (held singleton invisible to the manifest
+      API); KEEP stays on disk (ignored, not deleted). Sister of s61's "ask"
+      path.
 
   - scenario: s68_full_res_viewer_double_click
     playwright_module: qa.web.scenarios.s68_full_res_viewer_double_click

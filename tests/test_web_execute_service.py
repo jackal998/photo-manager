@@ -506,9 +506,168 @@ class TestPruneSingletons:
         result = prune_singletons(str(manifest), include_actioned=True)
         assert str(f1) in result["pruned"]
 
+    # -- explicit-paths mode (#686) ------------------------------------------
+
+    def _two_singletons_manifest(self, tmp_path: Path) -> tuple[Path, Path, Path]:
+        """Two singleton groups: g1 has a PLAIN survivor f1, g2 an ACTIONED
+        survivor f3 (decision='delete'). Returns (manifest, f1_plain, f3_actioned).
+        """
+        f1, f2, f3, f4 = _make_real_files(tmp_path, 4)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+            {"source_path": str(f3), "action": "", "group_id": "g2",
+             "outcome": "", "user_decision": "delete", "file_size_bytes": 64},
+            {"source_path": str(f4), "action": "REVIEW_DUPLICATE", "group_id": "g2",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+        return manifest, f1, f3
+
+    def test_explicit_paths_prunes_only_named_singleton(self, tmp_path):
+        """paths=[f3] prunes ONLY f3 — the plain f1 is left even though
+        category mode (paths=None) would have pruned it. This is the whole
+        point of explicit mode: the caller picks the exact set."""
+        manifest, f1, f3 = self._two_singletons_manifest(tmp_path)
+        result = prune_singletons(str(manifest), paths=[str(f3)])
+        assert result["pruned"] == [str(f3)]
+        assert _read_col(manifest, str(f3), "outcome") == "ignored"
+        assert _read_col(manifest, str(f1), "outcome") == ""  # untouched
+
+    def test_explicit_paths_ignores_include_actioned_flag(self, tmp_path):
+        """Explicit mode prunes a named actioned singleton even with
+        include_actioned=False — the caller already resolved the bucket."""
+        manifest, f1, f3 = self._two_singletons_manifest(tmp_path)
+        result = prune_singletons(
+            str(manifest), include_actioned=False, paths=[str(f1), str(f3)]
+        )
+        assert set(result["pruned"]) == {str(f1), str(f3)}
+
+    def test_explicit_paths_skips_locked(self, tmp_path):
+        """A named path that is still locked is NOT pruned — it lands in
+        locked_skipped (the FE unlocks before requesting, but a race must
+        never silently prune a locked row)."""
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+        result = prune_singletons(str(manifest), paths=[str(f1)])
+        assert result["pruned"] == []
+        assert str(f1) in result["locked_skipped"]
+        assert _read_col(manifest, str(f1), "outcome") == ""  # untouched
+
+    def test_explicit_paths_drops_non_singleton(self, tmp_path):
+        """A named path that is no longer a singleton (still has live partners)
+        is silently dropped — never pruned."""
+        # Two live (outcome='') rows in g1 → NOT a singleton.
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "", "user_decision": "",
+             "file_size_bytes": 64},
+        ])
+        result = prune_singletons(str(manifest), paths=[str(f1)])
+        assert result["pruned"] == []
+        assert _read_col(manifest, str(f1), "outcome") == ""  # untouched
+
     def test_missing_manifest_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             prune_singletons(str(tmp_path / "no.sqlite"))
+
+
+# ---------------------------------------------------------------------------
+# classify_singletons (#686 — the prune-offer classifier the web flow reads,
+# because the review view drops single-member groups)
+# ---------------------------------------------------------------------------
+
+
+class TestClassifySingletons:
+    def test_buckets_plain_actioned_locked(self, tmp_path):
+        """Three singleton groups → plain / actioned / locked; locked wins over
+        decision (a locked row with a decision lands in `locked`)."""
+        from core.app_service.execute_service import classify_singletons
+
+        f1, f2, f3, f4, f5, f6 = _make_real_files(tmp_path, 6)
+        manifest = _make_manifest(tmp_path, [
+            # g1: plain survivor f1 (partner f2 deleted)
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+            # g2: actioned survivor f3 (un-executed delete)
+            {"source_path": str(f3), "action": "", "group_id": "g2",
+             "outcome": "", "user_decision": "delete", "file_size_bytes": 64},
+            {"source_path": str(f4), "action": "REVIEW_DUPLICATE", "group_id": "g2",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+            # g3: locked survivor f5 — locked wins even though it has a decision
+            {"source_path": str(f5), "action": "", "group_id": "g3",
+             "outcome": "", "user_decision": "delete", "is_locked": 1, "file_size_bytes": 64},
+            {"source_path": str(f6), "action": "REVIEW_DUPLICATE", "group_id": "g3",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+
+        result = classify_singletons(str(manifest))
+        assert result["plain"] == [str(f1)]
+        assert result["actioned"] == [str(f3)]
+        assert result["locked"] == [str(f5)]
+
+    def test_ignore_decision_is_actioned(self, tmp_path):
+        from core.app_service.execute_service import classify_singletons
+
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "ignore", "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+        result = classify_singletons(str(manifest))
+        assert result["actioned"] == [str(f1)]
+        assert result["plain"] == []
+
+    def test_non_singleton_excluded(self, tmp_path):
+        """A group with two live (outcome='') rows is NOT a singleton."""
+        from core.app_service.execute_service import classify_singletons
+
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "", "user_decision": "",
+             "file_size_bytes": 64},
+        ])
+        result = classify_singletons(str(manifest))
+        assert result == {"plain": [], "actioned": [], "locked": []}
+
+    def test_out_of_root_excluded(self, tmp_path):
+        """An out-of-root singleton is not offered (can't be pruned)."""
+        from core.app_service.execute_service import classify_singletons
+
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+        # Roots that do NOT contain f1 → f1 excluded.
+        result = classify_singletons(str(manifest), allowed_roots=[str(tmp_path / "elsewhere")])
+        assert result == {"plain": [], "actioned": [], "locked": []}
 
 
 # ---------------------------------------------------------------------------

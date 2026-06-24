@@ -140,6 +140,7 @@ function resetStore() {
       executeError: null,
       lockConflict: null,
       prunePrompt: null,
+      prunePending: null,
       scopeGroupNumbers: null,
     },
   });

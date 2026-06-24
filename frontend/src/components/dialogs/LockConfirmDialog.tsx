@@ -15,6 +15,8 @@
 //   op === "execute" → "About to DELETE N locked files"  (IMMEDIATE danger)
 //   op === "remove"  → "N locked files will be skipped or force-unlocked"
 //                      (DEFERRED — remove doesn't delete)
+//   op === "prune"   → "N locked singleton groups would be pruned" (#686 D6 gate;
+//                      verdicts route to resolvePruneLock, NOT a re-run of an op)
 
 import {
   Dialog,
@@ -37,6 +39,7 @@ export function LockConfirmDialog() {
   const lockConflict = useAppStore((s) => s.execute.lockConflict);
   const executeDecisions = useAppStore((s) => s.executeDecisions);
   const removeFromList = useAppStore((s) => s.removeFromList);
+  const resolvePruneLock = useAppStore((s) => s.resolvePruneLock);
   const set = useAppStore.setState;
 
   const isOpen = lockConflict !== null;
@@ -52,6 +55,12 @@ export function LockConfirmDialog() {
   }
 
   function handleUnlockApply() {
+    // Prune-context gate (#686): resolvePruneLock reads lockConflict.paths then
+    // clears it — must NOT pre-clear here, or it would see an empty locked set.
+    if (op === "prune") {
+      void resolvePruneLock("unlock-apply");
+      return;
+    }
     // Capture the ORIGINAL scope before clearConflict() nulls the store field.
     // "Unlock & Apply" must re-run the SAME scope the user originally acted on
     // (force-unlocking the locked rows), NOT broaden or narrow it:
@@ -69,6 +78,11 @@ export function LockConfirmDialog() {
   }
 
   function handleUnlockedOnly() {
+    if (op === "prune") {
+      // Hold the locked singletons; continue pruning the unlocked buckets.
+      void resolvePruneLock("unlocked-only");
+      return;
+    }
     // Capture before clearConflict() nulls the store field.
     const lockedSet = new Set(lockedPaths);
     const original = lockConflict?.originalPaths ?? [];
@@ -85,16 +99,27 @@ export function LockConfirmDialog() {
   }
 
   function handleCancel() {
+    if (op === "prune") {
+      // Cancel does NOT abort the prune (Qt parity) — it holds the locked
+      // singletons and still offers/sweeps the unlocked buckets.
+      void resolvePruneLock("cancel");
+      return;
+    }
     clearConflict();
   }
 
-  const isExecuteOp = op === "execute";
-  const title = isExecuteOp
-    ? "Locked files in delete scope"
-    : "Locked files in remove scope";
-  const description = isExecuteOp
-    ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be permanently DELETED. Unlock and proceed, or skip locked files only.`
-    : `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} in the remove list. Unlock and remove, or remove unlocked files only.`;
+  const title =
+    op === "execute"
+      ? "Locked files in delete scope"
+      : op === "remove"
+        ? "Locked files in remove scope"
+        : "Locked singleton groups";
+  const description =
+    op === "execute"
+      ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be permanently DELETED. Unlock and proceed, or skip locked files only.`
+      : op === "remove"
+        ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} in the remove list. Unlock and remove, or remove unlocked files only.`
+        : `${n} locked singleton ${n === 1 ? "group" : "groups"} would be pruned. Unlock and prune ${n === 1 ? "it" : "them"}, or keep ${n === 1 ? "it" : "them"} in the list.`;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleCancel()}>

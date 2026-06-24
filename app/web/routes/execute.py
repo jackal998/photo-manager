@@ -29,6 +29,8 @@ from fastapi import APIRouter, HTTPException, Request
 from app.web.models import (
     ExecuteRequest,
     ExecuteResult,
+    PruneCandidatesRequest,
+    PruneCandidatesResult,
     PruneRequest,
     PruneResult,
     RemoveRequest,
@@ -235,6 +237,7 @@ async def post_prune(body: PruneRequest, request: Request) -> PruneResult:
             _run_prune,
             body.manifest_path,
             body.include_actioned,
+            body.paths,
             [str(r) for r in roots],
         )
     except FileNotFoundError as exc:
@@ -248,14 +251,60 @@ async def post_prune(body: PruneRequest, request: Request) -> PruneResult:
 def _run_prune(
     manifest_path: str,
     include_actioned: bool,
+    paths: list[str] | None,
     allowed_roots: list[str],
 ) -> dict:
     from core.app_service.execute_service import prune_singletons
     return prune_singletons(
         manifest_path=manifest_path,
         include_actioned=include_actioned,
+        paths=paths,
         allowed_roots=allowed_roots,
     )
+
+
+@router.post("/api/prune/candidates")
+async def post_prune_candidates(
+    body: PruneCandidatesRequest, request: Request
+) -> PruneCandidatesResult:
+    """Classify the manifest's current singletons into plain/actioned/locked (#686).
+
+    The web review view drops single-member groups, so the frontend cannot see
+    singletons in its own groups (unlike the Qt in-memory vm). This read-only
+    endpoint hands the frontend the authoritative bucket classification it offers
+    the prune dialog / lock gate from.
+
+    Returns:
+        200 PruneCandidatesResult
+        400/403 bad/out-of-root path
+        404 manifest not found
+        422 on unexpected error
+    """
+    roots = _allowed_roots(request)
+    _validate_manifest(body.manifest_path, roots)
+
+    if not Path(body.manifest_path).is_file():
+        raise HTTPException(status_code=404, detail=f"Manifest not found: {body.manifest_path!r}")
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            _run_classify_singletons,
+            body.manifest_path,
+            [str(r) for r in roots],
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Classify failed: {exc}") from exc
+
+    return PruneCandidatesResult(**result)
+
+
+def _run_classify_singletons(manifest_path: str, allowed_roots: list[str]) -> dict:
+    from core.app_service.execute_service import classify_singletons
+    return classify_singletons(manifest_path=manifest_path, allowed_roots=allowed_roots)
 
 
 @router.post("/api/save")

@@ -67,6 +67,10 @@ export const DELETE_CONFIRM_DIALOG = "delete-confirm-dialog";
 export const DELETE_CONFIRM_BTN_CONFIRM = "delete-confirm-btn-confirm";
 export const DELETE_CONFIRM_BTN_CANCEL = "delete-confirm-btn-cancel";
 export const PRUNE_CONFIRM_DIALOG = "prune-confirm-dialog";
+export const PRUNE_BTN_REMOVE = "prune-btn-remove";
+export const PRUNE_BTN_KEEP = "prune-btn-keep";
+export const PRUNE_INCLUDE_ACTIONED = "prune-include-actioned";
+export const PRUNE_REMEMBER = "prune-remember";
 export const PREVIEW_PANE = "preview-pane";
 export const PREVIEW_SINGLE_IMAGE = "preview-single-image";
 export const PREVIEW_INFO = "preview-info";
@@ -112,6 +116,7 @@ export const ACTION_LOCK_CONFIRM_BTN_CANCEL = "action-lock-confirm-btn-cancel";
 export const DLGE_SETTINGS_DIALOG = "settings-dialog";
 export const DLGE_SETTINGS_SAVE = "settings-save-button";
 export const DLGE_SETTINGS_CANCEL = "settings-cancel-button";
+export const DLGE_SETTINGS_PRUNE_SELECT = "settings-prune-select";
 export const DLGE_CONFIRM_CANCEL = "confirm-cancel-button";
 
 export function rowFileTestid(groupId: string, basename: string): string {

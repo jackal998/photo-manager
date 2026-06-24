@@ -3,6 +3,7 @@
 
 import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
 import type { ColumnId, SortDirection } from "../lib/resultColumns";
+import type { PrunePref } from "../lib/prune";
 
 // ---------------------------------------------------------------------------
 // State slices
@@ -101,23 +102,49 @@ export interface ResultViewState {
 export interface LockConflict {
   /** The paths the server reported as locked. */
   paths: string[];
-  op: "execute" | "remove";
+  op: "execute" | "remove" | "prune";
   /**
    * The original path list that triggered the conflict.
    * - execute: all decided paths that were in scope at call time (null means
    *   "all decided" — the store derives the list from manifest.groups).
    * - remove: the file_paths array that was passed to removeFromList.
+   * - prune: unused (null) — the prune-context gate reads `execute.prunePending`
+   *   to continue, not a re-runnable original scope.
    * Used by "Unlocked Only" to compute the filtered scope without re-hitting the
    * locked files.
    */
   originalPaths: string[] | null;
 }
 
-/** Prune prompt state (candidates to show in the prune confirmation). */
+/** Prune prompt state — the unlocked buckets shown in the confirmation dialog. */
 export interface PrunePrompt {
-  /** Paths that would be pruned — shown in the confirmation dialog. */
-  candidates: string[];
+  /** Unlocked plain singletons (no pending decision). */
+  plain: string[];
+  /** Unlocked actioned singletons (un-executed delete/ignore decision). */
+  actioned: string[];
+  /**
+   * Lock-confirmed locked singletons to prune REGARDLESS of the dialog verdict
+   * (the Qt `to_prune.extend(prunable_locked)` tail — Unlock&Apply commits them
+   * even if the user then clicks "Keep all"). Empty unless a lock gate ran with
+   * Unlock&Apply on the "ask" path.
+   */
+  lockedToPrune: string[];
 }
+
+/** Pending prune state held while the locked-singleton lock gate is open. */
+export interface PrunePending {
+  plain: string[];
+  actioned: string[];
+  /**
+   * The standing pref that triggered this gate (never "never"). After the lock
+   * gate resolves: "always" auto-sweeps the unlocked buckets + lock-confirmed
+   * locked; "ask" opens the prune dialog for the unlocked buckets.
+   */
+  pref: PrunePref;
+}
+
+/** User verdict on the prune-context lock gate (LockConfirmDialog op="prune"). */
+export type PruneLockVerdict = "unlock-apply" | "unlocked-only" | "cancel";
 
 export interface ExecuteState {
   /** True when the execute dialog is open. */
@@ -130,8 +157,10 @@ export interface ExecuteState {
   executeError: string | null;
   /** Set when a 409 locked_paths is returned by /api/execute or /api/remove. */
   lockConflict: LockConflict | null;
-  /** Set when the UI wants to show a prune confirmation. */
+  /** Set when the UI wants to show a prune confirmation (the "ask" path). */
   prunePrompt: PrunePrompt | null;
+  /** Set while the prune-context locked-singleton lock gate is open (D6). */
+  prunePending: PrunePending | null;
   /**
    * Group numbers the execute dialog is scoped to, or null for "all groups".
    *
@@ -333,10 +362,33 @@ export interface AppActions {
   removeFromList(paths: string[], forceLocked?: boolean): Promise<void>;
 
   /**
-   * POST /api/prune to remove singleton groups from the manifest.
-   * Replaces manifest.groups from response.groups on success.
+   * After a destructive op (execute / finalizing remove) updates the groups,
+   * decide whether to offer / auto-run a singleton prune. Reads the AUTHORITATIVE
+   * `ui.prune_singletons` pref from the server (GET /api/settings — the in-app
+   * SettingsDialog is the only writer, and QA PATCHes the server out-of-band, so
+   * the store value can be stale), classifies the post-op singletons into
+   * plain/actioned/locked, and branches: never→noop; locked→open the lock gate;
+   * always→auto-prune; ask→open the prune dialog. The web port of Qt's
+   * `_maybe_offer_singleton_prune`.
    */
-  pruneSingletons(includeActioned?: boolean): Promise<void>;
+  maybeOfferPrune(): Promise<void>;
+
+  /**
+   * POST /api/prune with an explicit `paths` set (#686) to finalize exactly those
+   * singletons (outcome='ignored'). Replaces manifest.groups from the response and
+   * clears the transient prune state. A no-op (clears state only) for an empty set.
+   */
+  applyPrune(paths: string[]): Promise<void>;
+
+  /**
+   * Resolve the prune-context lock gate (LockConfirmDialog op="prune").
+   * - "unlock-apply": unlock the locked singletons, then fold them into the prune.
+   * - "unlocked-only" / "cancel": hold the locked singletons; continue with the
+   *   unlocked buckets only (faithful to Qt — Cancel does NOT abort the prune).
+   * Then continues per the stashed pref: "always" auto-prunes; "ask" opens the
+   * prune dialog for the unlocked buckets (lock-confirmed locked fold in either way).
+   */
+  resolvePruneLock(verdict: PruneLockVerdict): Promise<void>;
 
   /**
    * POST /api/save to persist manifest decisions in-place or to a new path.

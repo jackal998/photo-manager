@@ -209,12 +209,32 @@ export interface RemoveResult {
 export interface PruneRequest {
   manifest_path: string;
   include_actioned?: boolean;
+  /**
+   * Explicit-list prune (#686): when set, prune EXACTLY these paths (intersected
+   * server-side with the actual singletons, under-roots, unlocked) instead of by
+   * category. Mirrors the Qt desktop's `_apply_singleton_prune(to_prune)`. When
+   * omitted, the server keeps the category behaviour (all plain + optionally all
+   * actioned via `include_actioned`).
+   */
+  paths?: string[];
 }
 
 export interface PruneResult {
   pruned: string[];
   locked_skipped: string[];
   groups: Group[];
+}
+
+// POST /api/prune/candidates (#686)
+
+export interface PruneCandidatesRequest {
+  manifest_path: string;
+}
+
+export interface PruneCandidatesResult {
+  plain: string[];
+  actioned: string[];
+  locked: string[];
 }
 
 // POST /api/save

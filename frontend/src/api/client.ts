@@ -11,6 +11,8 @@ import type {
   I18nResponse,
   LockedPathsError,
   ManifestResponse,
+  PruneCandidatesRequest,
+  PruneCandidatesResult,
   PruneRequest,
   PruneResult,
   RemoveRequest,
@@ -280,6 +282,14 @@ export async function postRemove(req: RemoveRequest): Promise<RemoveResult> {
 
 export async function postPrune(req: PruneRequest): Promise<PruneResult> {
   return postJson<PruneResult>("/api/prune", req);
+}
+
+// POST /api/prune/candidates (#686)
+
+export async function postPruneCandidates(
+  req: PruneCandidatesRequest
+): Promise<PruneCandidatesResult> {
+  return postJson<PruneCandidatesResult>("/api/prune/candidates", req);
 }
 
 // POST /api/save
