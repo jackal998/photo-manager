@@ -70,6 +70,7 @@ from qa.web.testid_constants import (
     CTX_LOCK,
     CTX_SET_ACTION_DELETE,
     CTX_SET_ACTION_REMOVE,
+    EXECUTE_DIALOG,
     EXECUTE_REMOVE_CONFIRM,
     EXECUTE_REMOVE_CONFIRM_YES,
     LOCK_CONFIRM_BTN_CANCEL,
@@ -132,11 +133,32 @@ def _stage(page, base_url, db_path, basename, item_testid):
     click_context_item(page, item_testid)
 
 
+def _close_execute_dialog_if_open(page) -> None:
+    """Close any lingering execute dialog before re-opening one.
+
+    The execute dialog's close after a remove is timing-dependent — it
+    auto-closes on a local Windows run but can stay OPEN on the faster CI
+    runner. Either way its Radix modal overlay (data-state="open") intercepts the
+    click on the toolbar's main-execute-button, so the next open_execute_dialog
+    hangs 30s and fails. We deterministically close-then-open: if the dialog is
+    (still) visible, press Escape and wait for it to fully unmount (overlay gone)
+    before the caller re-opens a fresh one with the renumbered groups."""
+    dlg = page.get_by_test_id(EXECUTE_DIALOG)
+    try:
+        dlg.wait_for(state="visible", timeout=800)
+    except Exception:  # noqa: BLE001 — already gone, nothing to close
+        return
+    page.keyboard.press("Escape")
+    dlg.wait_for(state="hidden", timeout=5_000)
+
+
 def _execute_remove(page, base_url, db_path, basename):
     """Finalize-remove one row via the EXECUTE-dialog menu (the removeFromList
-    path). Opens the execute dialog fresh first — it auto-CLOSES after each
-    remove, and a re-open also re-reads the renumbered groups (after one group
-    collapses to a hidden singleton, the survivor is renumbered)."""
+    path). Closes any lingering execute dialog then opens a fresh one (the close
+    after a remove is timing-dependent — see _close_execute_dialog_if_open); the
+    fresh open re-reads the renumbered groups (after one group collapses to a
+    hidden singleton, the survivor is renumbered)."""
+    _close_execute_dialog_if_open(page)
     open_execute_dialog(page)
     gid = _gid_of(base_url, db_path, basename)
     right_click_row(page, execute_row_testid(gid, basename))
