@@ -45,6 +45,7 @@ export function ContextMenu({
   onClose,
 }: ContextMenuProps) {
   const setDecisions = useAppStore((s) => s.setDecisions);
+  const removeFromList = useAppStore((s) => s.removeFromList);
   const setLocks = useAppStore((s) => s.setLocks);
   const revealInExplorer = useAppStore((s) => s.revealInExplorer);
 
@@ -87,11 +88,18 @@ export function ContextMenu({
   }
 
   function handleSetRemove() {
-    // The result-tree "Remove from list" STAGES user_decision='ignore' (the web's
-    // commit-at-Execute model — distinct from the execute-dialog menu, which
-    // finalizes outcome='ignored'). Desktop finalizes immediately here; that
-    // parity gap is tracked as #694, intentionally not changed in this PR.
-    void setDecisions(targetPaths, "ignore");
+    // The result-tree "Remove from list" FINALIZES outcome='ignored' — the rows
+    // leave the review tree immediately, no Execute step — matching the desktop
+    // result-tree "Remove from List" (remove_from_review → finalize_outcome).
+    // This closes the #694 parity gap (the web previously only STAGED
+    // user_decision='ignore' here). removeFromList does the rest the desktop
+    // does: on a 409 locked-paths conflict it feeds the LockConfirmDialog (the
+    // web analog of Qt's LockedRowsConfirmDialog), and on success it calls
+    // maybeOfferPrune (the singleton-prune offer). Like desktop, there is NO
+    // confirmation dialog on this path — that belongs to the execute-dialog
+    // remove. Staging a reversible 'ignore' decision stays available via the
+    // per-row decision dropdown (DecisionControl).
+    void removeFromList(targetPaths);
     onClose();
   }
 

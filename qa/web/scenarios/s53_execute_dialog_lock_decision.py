@@ -47,13 +47,14 @@ from qa.web._invariants import (
     open_execute_dialog,
     right_click_row,
     run_scan,
+    set_row_decision,
 )
 from qa.web.testid_constants import (
     CTX_LOCK,
     CTX_SET_ACTION_DELETE,
-    CTX_SET_ACTION_REMOVE,
     CTX_UNLOCK,
     execute_row_testid,
+    row_decision_testid,
     row_file_testid,
 )
 
@@ -131,12 +132,14 @@ def run(*, base_url: str) -> None:
 
             gid = _first_group_id(base_url, db_path)
 
-            # ── Seed two decisions via the RESULT-tree menu (s35/s40 surface) ──
-            # q88 → delete (lock/unlock target), q80 → ignore (set-delete target).
+            # ── Seed two decisions on the RESULT tree ──────────────────────────
+            # q88 → delete via the context menu (lock/unlock target); q80 → ignore
+            # via the per-row decision dropdown (set-delete target).  Since #694
+            # the context-menu "Remove from list" FINALIZES outcome='ignored', so
+            # staging a reversible 'ignore' decision uses the DecisionControl.
             right_click_row(page, row_file_testid(gid, _Q88))
             click_context_item(page, CTX_SET_ACTION_DELETE)
-            right_click_row(page, row_file_testid(gid, _Q80))
-            click_context_item(page, CTX_SET_ACTION_REMOVE)  # web result menu: stage ignore
+            set_row_decision(page, row_decision_testid(gid, _Q80), "Ignore")
             seeded = _await(
                 base_url,
                 db_path,

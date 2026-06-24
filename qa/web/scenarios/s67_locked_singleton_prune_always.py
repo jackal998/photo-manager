@@ -26,9 +26,10 @@ In BOTH the PruneConfirmDialog must NEVER appear (the "always" path skips it) â€
 asserted by a short-timeout absence check after the lock gate is dismissed.
 
 Web divergences vs Qt
-  D1. Finalizing remove is the EXECUTE-dialog menu (web result-tree "Remove from
-      list" only STAGES â€” s20/s54 divergence), so DROP is staged 'delete' first
-      to appear in the execute tree, then removed there.
+  D1. Finalizing remove is driven via the EXECUTE-dialog menu (single-row +
+      confirm); DROP is staged 'delete' first to appear in the execute tree,
+      then removed there. (Since #694 the result-tree "Remove from list" also
+      finalizes, but this scenario keeps the single-row execute-dialog path.)
   D2. The held/pruned outcome is asserted via a DIRECT sqlite read of the
       ``outcome`` column, NOT GET /api/manifest. A HELD locked singleton has
       outcome='' but is a single-member group, which the web review view

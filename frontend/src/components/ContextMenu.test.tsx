@@ -6,7 +6,8 @@
 //   3. Lock/Unlock item shown conditionally based on isLocked prop.
 //   4. Clicking Keep calls store.setDecisions(targetPaths, "") and onClose.
 //   5. Clicking Delete calls store.setDecisions(targetPaths, "delete") and onClose.
-//   6. Clicking Remove calls store.setDecisions(targetPaths, "ignore") and onClose.
+//   6. Clicking Remove calls store.removeFromList(targetPaths) and onClose (#694
+//      finalize — NOT a staged setDecisions(..., "ignore")).
 //   7. Clicking Lock calls store.setLocks(targetPaths, true) and onClose.
 //   8. Clicking Unlock calls store.setLocks(targetPaths, false) and onClose.
 //   9. Clicking Open folder calls store.revealInExplorer(filePath) and onClose.
@@ -60,15 +61,18 @@ function renderMenu(isLocked = false, targetPaths: string[] = [FILE_PATH]) {
 
 describe("ContextMenu", () => {
   let setDecisionsMock: ReturnType<typeof vi.fn>;
+  let removeFromListMock: ReturnType<typeof vi.fn>;
   let setLocksMock: ReturnType<typeof vi.fn>;
   let revealMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     setDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    removeFromListMock = vi.fn().mockResolvedValue(undefined);
     setLocksMock = vi.fn().mockResolvedValue(undefined);
     revealMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({
       setDecisions: setDecisionsMock,
+      removeFromList: removeFromListMock,
       setLocks: setLocksMock,
       revealInExplorer: revealMock,
     } as never);
@@ -118,11 +122,15 @@ describe("ContextMenu", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("Remove calls setDecisions([filePath], 'ignore') and onClose", async () => {
+  it("Remove calls removeFromList([filePath]) (finalize, #694) and onClose", async () => {
     const user = userEvent.setup();
     const { onClose } = renderMenu();
     await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
-    expect(setDecisionsMock).toHaveBeenCalledWith([FILE_PATH], "ignore");
+    // #694: the result-tree "Remove from list" FINALIZES (outcome='ignored') —
+    // it must NOT stage a 'ignore' decision. So removeFromList fires and
+    // setDecisions must NOT be called.
+    expect(removeFromListMock).toHaveBeenCalledWith([FILE_PATH]);
+    expect(setDecisionsMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -182,6 +190,15 @@ describe("ContextMenu", () => {
     const { onClose } = renderMenu(false, many);
     await user.click(screen.getByTestId(CTX_SET_ACTION_DELETE));
     expect(setDecisionsMock).toHaveBeenCalledWith(many, "delete");
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("Remove (finalize) acts on the whole targetPaths set", async () => {
+    const user = userEvent.setup();
+    const many = ["/a.jpg", "/b.jpg", "/c.jpg"];
+    const { onClose } = renderMenu(false, many);
+    await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
+    expect(removeFromListMock).toHaveBeenCalledWith(many);
     expect(onClose).toHaveBeenCalledOnce();
   });
 

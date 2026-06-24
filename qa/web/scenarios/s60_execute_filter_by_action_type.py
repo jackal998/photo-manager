@@ -55,10 +55,13 @@ Qt divergences:
       which is deterministic and dependency-free.  Two rows per group (vs Qt's
       four) — the per-group COUNT is a fixture detail, not the contract.
   D2. MARKING: Qt marks via the Set-Action-by-Field regex bulk-apply
-      (^s60_groupA_ → delete, ^s60_groupB_ → remove).  The web port marks each
-      row via the right-click context menu (CTX_SET_ACTION_DELETE /
-      CTX_SET_ACTION_REMOVE) — the same PATCH /api/decisions write-path,
-      reached row-by-row instead of by regex.
+      (^s60_groupA_ → delete, ^s60_groupB_ → remove).  The web port marks
+      group-A 'delete' via the right-click context menu (CTX_SET_ACTION_DELETE)
+      and stages group-B 'ignore' via the per-row decision dropdown
+      (DecisionControl) — both the same PATCH /api/decisions write-path, reached
+      row-by-row instead of by regex.  (Since #694 the result-tree "Remove from
+      list" FINALIZES outcome='ignored', so staging an ignore decision uses the
+      dropdown, not the context menu.)
   D3. BANNER READ: Qt scrapes the banner QLabel text for "hidden"/"隱藏" + the
       count.  The web port asserts the dedicated testid
       EXECUTE_HIDDEN_DESTRUCTIVE_BANNER (locale-independent, no text coupling).
@@ -95,10 +98,10 @@ from qa.web._invariants import (
     right_click_row,
     click_context_item,
     open_execute_dialog,
+    set_row_decision,
 )
 from qa.web.testid_constants import (
     CTX_SET_ACTION_DELETE,
-    CTX_SET_ACTION_REMOVE,
     EXECUTE_DIALOG,
     EXECUTE_TYPE_FILTER,
     EXECUTE_HIDDEN_DESTRUCTIVE_BANNER,
@@ -106,6 +109,7 @@ from qa.web.testid_constants import (
     EXECUTE_ALL_DELETE_CONFIRM,
     EXECUTE_ALL_DELETE_CONFIRM_YES,
     row_file_testid,
+    row_decision_testid,
     execute_row_testid,
 )
 
@@ -224,13 +228,14 @@ def run(*, base_url: str) -> None:
                 f"the two source images unexpectedly paired by pHash."
             )
 
-            # ── Mark group A delete, group B ignore (per-row context menu) ────
+            # ── Mark group A delete (context menu), group B ignore (dropdown) ──
+            # group-B stages 'ignore' via the DecisionControl dropdown — since
+            # #694 the context-menu "Remove from list" finalizes, not stages.
             for name in _GROUP_A_BASENAMES:
                 right_click_row(page, row_file_testid(group_a_id, name))
                 click_context_item(page, CTX_SET_ACTION_DELETE)
             for name in _GROUP_B_BASENAMES:
-                right_click_row(page, row_file_testid(group_b_id, name))
-                click_context_item(page, CTX_SET_ACTION_REMOVE)
+                set_row_decision(page, row_decision_testid(group_b_id, name), "Ignore")
 
             # ── Assertion 2: decisions persisted as marked ───────────────────
             decisions = _basename_to_decision(_get_manifest(base_url, db_path))

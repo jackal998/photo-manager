@@ -9,11 +9,12 @@ Qt intent:
   outcome='ignored' (the row leaves the review list; no file is deleted).
 
 Web slice — cluster B (ExecuteContextMenu + RemoveFromListConfirmDialog):
-  Unlike the result-tree menu's "Remove from list" (which STAGES
-  user_decision='ignore'), the EXECUTE-dialog menu's "Remove from list"
-  FINALIZES the row (outcome='ignored' via store.removeFromList → POST
-  /api/remove), exactly like Qt's execute-dialog single-row path. A confirm
-  sheet (EXECUTE_REMOVE_CONFIRM, default = No) gates it. After Yes the row
+  The EXECUTE-dialog menu's "Remove from list" FINALIZES the row
+  (outcome='ignored' via store.removeFromList → POST /api/remove), exactly like
+  Qt's execute-dialog single-row path, gated by a confirm sheet
+  (EXECUTE_REMOVE_CONFIRM, default = No). (The result-tree menu's "Remove from
+  list" also finalizes since #694, but without a confirm and over the whole
+  multi-selection — see s20.) After Yes the row
   disappears from the manifest entirely (load() filters WHERE outcome=''),
   while the file stays untouched on disk — the 'ignored' (not 'deleted')
   contract.

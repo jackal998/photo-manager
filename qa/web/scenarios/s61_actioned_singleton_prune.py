@@ -13,10 +13,12 @@ the LockConfirmDialog before the prune dialog.
 
 Web adaptation — accumulation (the single-select reality)
 ---------------------------------------------------------
-The desktop collapses two groups with ONE multi-row "Remove from List". The web
-result-tree "Remove from list" only STAGES (s20 divergence); the FINALIZING
-remove is the EXECUTE-dialog menu (s54), which is SINGLE-row. So a single
-gesture can only collapse ONE group. To assemble a MIXED offer we ACCUMULATE:
+The desktop collapses two groups with ONE multi-row "Remove from List". This
+scenario instead drives the EXECUTE-dialog menu's FINALIZING remove (s54), which
+is SINGLE-row, so a single gesture collapses ONE group. (Since #694 the
+result-tree "Remove from list" also finalizes and is multi-row, but the
+single-row execute path is what lets us ACCUMULATE a mixed offer one group at a
+time.) To assemble a MIXED offer we ACCUMULATE:
 
   1. Under ``prune="never"`` finalize-remove A_drop → A collapses to the plain
      (or locked) A_keep singleton, silently (no dialog on the "never" path).

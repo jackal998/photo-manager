@@ -472,6 +472,47 @@ def click_context_item(page: "Page", item_testid: str, *, timeout: float = 5_000
     page.get_by_test_id("context-menu").wait_for(state="hidden", timeout=timeout)
 
 
+def set_row_decision(
+    page: "Page", decision_testid: str, label: str, *, timeout: float = 5_000
+) -> None:
+    """Stage a per-row decision via the result-tree DecisionControl dropdown.
+
+    The DecisionControl is a Radix ``Select``: clicking its trigger opens a
+    portalled listbox whose options are the visible labels ``None`` / ``Delete``
+    / ``Ignore``.  This is the affordance for STAGING a reversible
+    ``user_decision`` (PATCH /api/decisions) — distinct from the context-menu
+    "Remove from list", which FINALIZES ``outcome='ignored'`` since #694.
+
+    Mirrors the s60 ``_select_type_filter`` Radix-select pattern (click trigger →
+    ``get_by_role("option", name=...)`` → click), with a scroll-into-view first
+    because the tree is virtualised.
+
+    Requires an UNLOCKED row: ``FileRow`` disables the DecisionControl when the
+    row is locked (``disabled={row.is_locked}``), so calling this on a locked row
+    swallows the trigger click and times out on the option locator (fail-loud,
+    but with an opaque message) — stage decisions BEFORE locking.
+
+    Parameters
+    ----------
+    page:
+        The Playwright Page with a loaded manifest.
+    decision_testid:
+        The DecisionControl trigger testid, e.g.
+        ``row_decision_testid(group_id, basename)`` from ``testid_constants``.
+    label:
+        The visible option label: ``"None"``, ``"Delete"`` or ``"Ignore"``.
+    timeout:
+        Maximum milliseconds to wait for the trigger and option.
+    """
+    trigger = page.get_by_test_id(decision_testid)
+    trigger.wait_for(state="visible", timeout=timeout)
+    trigger.scroll_into_view_if_needed(timeout=timeout)
+    trigger.click()
+    option = page.get_by_role("option", name=label, exact=True)
+    option.wait_for(state="visible", timeout=timeout)
+    option.click()
+
+
 # ---------------------------------------------------------------------------
 # Row-selection helpers (main result-tree multi-selection)
 # ---------------------------------------------------------------------------
