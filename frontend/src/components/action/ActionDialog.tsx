@@ -406,6 +406,7 @@ export function ActionDialog() {
                 key={field}
                 pattern={pattern}
                 onPatternChange={setActionPattern}
+                hasGroups={totalGroups > 0}
               />
             )}
           </div>

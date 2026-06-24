@@ -17,6 +17,7 @@ import {
   ACTION_SIMPLE_ROW,
   ACTION_SIMPLE_OP,
   ACTION_SIMPLE_TEXT,
+  ACTION_SIMPLE_DISABLED_NOTE,
   actionCheatsheetTestid,
 } from "@/testids";
 
@@ -65,13 +66,22 @@ const CHEATSHEET_TOKENS = [".*", "\\d", "\\w", "^", "$", "\\.", "[abc]"];
 export interface RegexPanelProps {
   pattern: string;
   onPatternChange: (pattern: string) => void;
+  /** When false (0 dedup groups → no match_fn), the Simple write-through
+   *  inputs are disabled and an explanatory note is shown; the Regex input
+   *  stays interactive as the only usable path. Mirrors the desktop
+   *  select_dialog.py match_fn=None branch (#689 / s55). Defaults true. */
+  hasGroups?: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function RegexPanel({ pattern, onPatternChange }: RegexPanelProps) {
+export function RegexPanel({
+  pattern,
+  onPatternChange,
+  hasGroups = true,
+}: RegexPanelProps) {
   const t = useT();
   const regexInputRef = useRef<HTMLInputElement>(null);
 
@@ -144,6 +154,22 @@ export function RegexPanel({ pattern, onPatternChange }: RegexPanelProps) {
 
   return (
     <div className="space-y-3">
+      {/* No-match_fn placeholder note (0 dedup groups): the Simple inputs
+          below are disabled and this explains why; the Regex row stays
+          interactive. Mirrors the desktop select_dialog.py match_fn=None
+          branch (#689 / s55). */}
+      {!hasGroups && (
+        <p
+          data-testid={ACTION_SIMPLE_DISABLED_NOTE}
+          className="text-xs italic text-neutral-500"
+        >
+          {t(
+            "web.action_dialog.simple_disabled_no_match_fn",
+            "Write-through preview unavailable — Simple inputs are read-only on this entry point."
+          )}
+        </p>
+      )}
+
       {/* Simple row */}
       <div
         data-testid={ACTION_SIMPLE_ROW}
@@ -156,7 +182,8 @@ export function RegexPanel({ pattern, onPatternChange }: RegexPanelProps) {
           data-testid={ACTION_SIMPLE_OP}
           value={simpleOp}
           onChange={handleSimpleOpChange}
-          className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400"
+          disabled={!hasGroups}
+          className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
         >
           <option value="contains">
             {t("web.action_dialog.simple_op_contains", "contains")}
@@ -176,11 +203,12 @@ export function RegexPanel({ pattern, onPatternChange }: RegexPanelProps) {
           type="text"
           value={simpleText}
           onChange={handleSimpleTextChange}
+          disabled={!hasGroups}
           placeholder={t(
             "web.action_dialog.simple_text_placeholder",
             "type the text to match…"
           )}
-          className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1"
+          className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
         />
       </div>
 

@@ -298,9 +298,9 @@ scenarios:
     notes: "Cluster B. Execute-dialog menu 'Remove from list' FINALIZES the row (outcome='ignored' via store.removeFromList → POST /api/remove) behind RemoveFromListConfirmDialog (default No) — distinct from the result menu's stage-ignore. Uses the s13 db-in-scanned-dir pattern so manifest_path passes the /api/remove allowed-roots guard. Asserts the row is gone from GET /api/manifest and its copied file is still on disk (ignored, not deleted)."
 
   - scenario: s55_action_dialog_no_match_fn
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s55_action_dialog_no_match_fn
+    status: done
+    notes: "ActionDialog C1 no-match_fn placeholder (#689). Scan qa/sandbox/unique (10 unique JPEGs) → 0 dedup groups; RegexPanel hasGroups=false disables ACTION_SIMPLE_OP/TEXT + shows ACTION_SIMPLE_DISABLED_NOTE while ACTION_REGEX_INPUT stays enabled (mirrors select_dialog.py:854-861 match_fn=None). Divergence: web orphan-drops singletons so GET /api/manifest total_groups==0 (10 SQLite rows invisible); precondition asserted via total_groups==0, not a row count. ActionDialog stays reachable (manifest.path set — a real scan, not completed_empty). Out of scope: web cheatsheet chips are always shown (desktop hides them when match_fn is None, select_dialog.py:910) — a pre-existing minor divergence."
 
   - scenario: s56_action_dialog_apply_by_score
     playwright_module: qa.web.scenarios.s56_action_dialog_apply_by_score

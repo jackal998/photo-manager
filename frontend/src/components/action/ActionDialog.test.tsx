@@ -29,7 +29,9 @@ import {
   ACTION_SIMPLE_ROW,
   ACTION_SIMPLE_OP,
   ACTION_SIMPLE_TEXT,
+  ACTION_SIMPLE_DISABLED_NOTE,
   ACTION_REGEX_ROW,
+  ACTION_REGEX_INPUT,
   ACTION_NUMERIC_ROW,
   ACTION_NUMERIC_MODE_THRESHOLD,
   ACTION_NUMERIC_MODE_TOPN,
@@ -524,5 +526,38 @@ describe("ActionDialog", () => {
     render(<ActionDialog />);
     const combo = screen.getByTestId(ACTION_ACTION_COMBO) as HTMLSelectElement;
     expect(combo.options.length).toBe(5);
+  });
+
+  // 18. No dedup groups (totalGroups=0 → no match_fn): the Simple write-through
+  // inputs are disabled and the explanatory note is shown, while the Regex input
+  // stays interactive (the only usable path). Mirrors the desktop match_fn=None
+  // branch (select_dialog.py:854-861, #689 / s55). The disabled-Simple +
+  // enabled-Regex pair is the non-vacuity bracket — a broken always-enabled OR
+  // always-disabled wiring fails here; the enabled-at-20-groups case is already
+  // guarded by the write-through tests (4-7) which type into the Simple input.
+  it("disables Simple inputs and shows the note at 0 groups, Regex stays enabled", () => {
+    act(() => {
+      useAppStore.setState((s) => ({
+        manifest: {
+          ...s.manifest,
+          path: "/manifests/test.db",
+          totalFiles: 0,
+          totalGroups: 0,
+        },
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          field: "File Name",
+        },
+      }));
+    });
+
+    render(<ActionDialog />);
+
+    expect(screen.getByTestId(ACTION_SIMPLE_OP)).toBeDisabled();
+    expect(screen.getByTestId(ACTION_SIMPLE_TEXT)).toBeDisabled();
+    expect(screen.getByTestId(ACTION_SIMPLE_DISABLED_NOTE)).toBeInTheDocument();
+    // The Regex input must remain the interactive escape hatch.
+    expect(screen.getByTestId(ACTION_REGEX_INPUT)).not.toBeDisabled();
   });
 });
