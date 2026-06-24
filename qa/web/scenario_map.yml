@@ -242,14 +242,25 @@ scenarios:
     notes: "Execute (only selected) — main-tree selection scopes the execute dialog to the selected rows' GROUPS (#430 group-pull) + #410 static label (cluster D / PR-D2). Faithful port of the desktop menu-gated, selection-scoped flow (NOT in-dialog multi-select — completing s64's honest-partial single→multi port is tracked separately, see deferred issue). Adds the gated Action → 'Execute (only selected)…' entry (menu-action-execute-selected, disabled until ≥1 main-tree row is selected — web analog of _refresh_execute_selected_only_enabled) + ExecuteState.scopeGroupNumbers. Uses s60's deterministic 2-EXACT-dup-group exif-edge fixture (tz_offset×2 = group A, subsecond×2 = group B) so scope CONFINEMENT is observable: mark all 4 delete, select ONE group-A row, open the entry → dialog shows BOTH group-A rows (group-pull) and ZERO group-B rows (confinement); Execute → all-delete confirm → group A deleted (absent from disk + manifest) while group B survives on disk with user_decision='delete' intact (the load-bearing discriminator the single-group desktop fixture can't make). Divergences: GET /api/manifest JSON vs Qt SQLite; deleted row detected by manifest absence (outcome='deleted') not executed=1; static label is structural on the web (no 'highlighted' variant ever existed) but asserted to guard a future scoped-label regression. Destructive: each run recycles group A's 2 tmpdir copies."
 
   - scenario: s45_sort_persistence
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s45_sort_persistence
+    status: done
+    notes: >-
+      #685 column model. Sticky header File Name / Size cells toggle a
+      per-group client-side sort; File Name = case-folded string, Size =
+      numeric (verified vs a SQL oracle on the manifest .db). Sort lives in
+      the resultView store slice so it survives an in-session manifest reopen
+      (Qt refresh_model replay analog). near-duplicates fixture (q95→q65): one
+      group, name-ASC differs from size-ASC.
 
   - scenario: s47_column_layout_persist
-    playwright_module: null
-    status: todo
-    notes: "s46 intentionally absent from ALL_SCENARIOS"
+    playwright_module: qa.web.scenarios.s47_column_layout_persist
+    status: done
+    notes: >-
+      #685 column model. Real mouse-drag of the File Name resize handle →
+      localStorage persist → page.reload() (web cross-launch) → re-load
+      manifest → width restores. localStorage is the per-browser analog of the
+      desktop window_state.ini; auto-isolated per Playwright context (no
+      server reset). s46 intentionally absent from ALL_SCENARIOS.
 
   - scenario: s48_dialog_geometry_persist
     playwright_module: null

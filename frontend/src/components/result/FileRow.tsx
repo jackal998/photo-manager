@@ -10,6 +10,7 @@ import {
   formatDims,
 } from "@/lib/format";
 import type { FileRow as FileRowData } from "@/api/types";
+import type { ColumnId } from "@/lib/resultColumns";
 import { DecisionControl } from "./DecisionControl";
 import { LockToggle } from "./LockToggle";
 import {
@@ -21,6 +22,9 @@ import {
 interface FileRowProps {
   row: FileRowData;
   groupId: string;
+  /** Per-column widths from the result-view store — keeps each cell aligned
+   *  with the ColumnHeaderRow above and honours user resizes (#685 / s47). */
+  columnWidths: Record<ColumnId, number>;
   onDecision: (filePath: string, value: import("@/api/types").DecisionValue) => void;
   onLock: (filePath: string, locked: boolean) => void;
   onSelect?: (
@@ -32,7 +36,7 @@ interface FileRowProps {
   isSelected?: boolean;
 }
 
-export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected }: FileRowProps) {
+export function FileRow({ row, groupId, columnWidths, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected }: FileRowProps) {
   const simLabel = similarityLabel(row.similarity);
   // Passenger rows get a subtle amber highlight on the similarity badge.
   const isPassenger = row.similarity.kind === "passenger";
@@ -83,7 +87,7 @@ export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFull
       </div>
 
       {/* Name + folder */}
-      <div className="flex-shrink-0 w-40 min-w-0">
+      <div className="flex-shrink-0 min-w-0 overflow-hidden" style={{ width: columnWidths.name }}>
         <div className="flex items-center gap-1 flex-wrap">
           {row.is_ref_winner && (
             <span className="inline-block text-xs font-semibold bg-blue-100 text-blue-700 rounded px-1 py-0.5 leading-none">
@@ -98,7 +102,7 @@ export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFull
       </div>
 
       {/* Similarity */}
-      <div className="w-16 flex-shrink-0 text-sm">
+      <div className="flex-shrink-0 text-sm overflow-hidden" style={{ width: columnWidths.similarity }}>
         <span
           className={cn(
             "inline-block text-xs rounded px-1 py-0.5",
@@ -112,27 +116,27 @@ export function FileRow({ row, groupId, onDecision, onLock, onSelect, onOpenFull
       </div>
 
       {/* Action */}
-      <div className="w-24 flex-shrink-0 text-xs text-neutral-600 truncate" title={row.action}>
+      <div className="flex-shrink-0 text-xs text-neutral-600 truncate" style={{ width: columnWidths.action }} title={row.action}>
         {row.action || "—"}
       </div>
 
       {/* Score */}
-      <div className="w-12 flex-shrink-0 text-xs text-right text-neutral-600">
+      <div className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.score }}>
         {formatScore(row.score)}
       </div>
 
       {/* Dimensions */}
-      <div className="w-20 flex-shrink-0 text-xs text-neutral-600">
+      <div className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.dims }}>
         {formatDims(row.pixel_width, row.pixel_height)}
       </div>
 
       {/* File size */}
-      <div className="w-16 flex-shrink-0 text-xs text-right text-neutral-600">
+      <div className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.size }}>
         {formatBytes(row.file_size_bytes)}
       </div>
 
       {/* Shot date */}
-      <div className="w-24 flex-shrink-0 text-xs text-neutral-600">
+      <div className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.date }}>
         {formatDate(row.shot_date)}
       </div>
 

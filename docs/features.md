@@ -73,6 +73,7 @@ for the chore plan.
 | [Web — main result tree multi-selection](#web--main-result-tree-multi-selection) | Web UI |
 | [Web — Execute (only selected)](#web--execute-only-selected) | Web UI |
 | [Web — ScanDialog source/output persistence](#web--scandialog-sourceoutput-persistence) | Web UI |
+| [Web — result-tree column sort and resize persistence](#web--result-tree-column-sort-and-resize-persistence) | Web UI |
 | [Similarity column](#similarity-column) | Review |
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
@@ -723,6 +724,19 @@ for the chore plan.
 - **Conditions / variants:** Only the source list + output path persist. pHash/color thresholds are **not** persisted (the web dialog exposes no threshold inputs, and the `/api/settings` allowlist excludes the threshold keys) — matching the Qt s23b non-persistence contract. The advanced-settings checkboxes (auto-select / aggressive / autotune) are sent per-scan in the scan request and are not persisted by this surface. Per-source **labels** are not durable — like Qt's `_save_to_settings`, only `{path, recursive}` is stored, so a reopened dialog re-derives each row's label from the path basename. The async load fills only a still-pristine dialog, so reopening it while typing never clobbers in-progress edits.
 - **Related:** Desktop analogue [Scan dialog — folder-tree browse + source list](#) (source paths persist to `settings.json` `sources.list`); part of the web-port FE-parity backlog [#678](https://github.com/jackal998/photo-manager/issues/678) (cluster E); QA scenarios [`qa/web/scenarios/s23a_set_settings.py`](../qa/web/scenarios/s23a_set_settings.py) (write side) + [`qa/web/scenarios/s23b_verify_settings.py`](../qa/web/scenarios/s23b_verify_settings.py) (reload round-trip).
 - **Last verified:** 2026-06-24 (cluster E — ScanDialog source persistence; s23a/s23b live-run PASS via batch; full 50-scenario batch PASS confirming per-scenario reset isolation).
+
+---
+
+### Web — result-tree column sort and resize persistence
+
+- **Entry point:** The main result tree ([frontend/src/components/ResultTree.tsx](../frontend/src/components/ResultTree.tsx)) gained a sticky column-header row ([frontend/src/components/result/ColumnHeaderRow.tsx](../frontend/src/components/result/ColumnHeaderRow.tsx)) with clickable **File Name** / **Size** sort cells and a right-edge resize handle on every metadata column. The column registry + sort comparators live in [frontend/src/lib/resultColumns.ts](../frontend/src/lib/resultColumns.ts). Web analog of the Qt `QSortFilterProxyModel` sort headers + `QHeaderView`-persisted widths.
+- **Trigger:** User clicks a sortable column header (sort) or drags a column's right-edge resize handle (width).
+- **Behaviour:**
+  - **Sort.** The default is server response order (no sort) — so every existing row-reading scenario is unaffected. Clicking **File Name** sorts each group's rows case-folded ascending; a repeat click toggles to descending; clicking **Size** sorts numerically on the raw byte count (not the human-readable label). Only File Name + Size are sortable. Sort is applied **per group** (group order itself is unchanged), mirroring the Qt tree proxy sorting children within each parent. The chosen sort is held in the `resultView` store slice, so it survives an in-session manifest reopen (re-loading the same `.db` without a page reload) — the web analog of the Qt `refresh_model → sortByColumn` replay.
+  - **Resize + persist.** Dragging a column's right-edge handle resizes it (floor 40px); the new width is written to `localStorage` (`pm.result-tree.column-widths.v1`) and restored on the next launch (`page.reload()` / cross-launch). localStorage is the per-browser analog of the desktop's per-machine `window_state.ini`; widths hydrate at store creation so a manifest load never resets them.
+- **Conditions / variants:** Sort persistence is **in-session only** (matches the Qt s45 contract — cross-launch sort is explicitly out of scope); width persistence **is** cross-launch. No backend change — sort/resize is a pure client proxy-model concern; `GET /api/manifest` order stays the service-layer default. Header labels resolve from the `web.column.*` i18n catalog (so they translate in zh_TW); the Size header reads **"Size"** (human-readable) rather than the desktop's raw-byte **"Size (Bytes)"**.
+- **Related:** Desktop analogue [Similarity column](#similarity-column) (Qt sort headers + `window_state.ini` widths); part of the web-port FE-parity backlog [#678](https://github.com/jackal998/photo-manager/issues/678) ([#685](https://github.com/jackal998/photo-manager/issues/685)); QA scenarios [`qa/web/scenarios/s45_sort_persistence.py`](../qa/web/scenarios/s45_sort_persistence.py) (sort + in-session persistence) + [`qa/web/scenarios/s47_column_layout_persist.py`](../qa/web/scenarios/s47_column_layout_persist.py) (width persist across reload).
+- **Last verified:** 2026-06-24 (#685 — result-tree column model; s45/s47 live-run PASS via batch; full 52-scenario batch PASS confirming the default-order isolation held across the 21 row-reading scenarios; 279 vitest).
 
 ---
 

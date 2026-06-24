@@ -110,6 +110,18 @@ def render_testids_ts() -> str:
     lines.append("  return `action-cheatsheet-${token}`;")
     lines.append("}")
     lines.append("")
+    lines.append(
+        "export function colHeaderTestid(colId: string): string {"
+    )
+    lines.append("  return `col-header-${colId}`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
+        "export function colResizeTestid(colId: string): string {"
+    )
+    lines.append("  return `col-resize-${colId}`;")
+    lines.append("}")
+    lines.append("")
 
     return "\n".join(lines)
 

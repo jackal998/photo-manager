@@ -658,6 +658,46 @@ def action_cheatsheet_testid(token: str) -> str:
     return f"action-cheatsheet-{token}"
 
 
+def col_header_testid(col_id: str) -> str:
+    """Return the ``data-testid`` for a result-tree column header cell.
+
+    The sticky column-header row (#685) renders one cell per metadata column
+    (``name`` / ``similarity`` / ``action`` / ``score`` / ``dims`` / ``size`` /
+    ``date`` — the ids from ``frontend/src/lib/resultColumns.ts``). Sortable
+    cells (``name`` / ``size``) toggle the sort when clicked; s45 drives them.
+
+    Parameters
+    ----------
+    col_id:
+        The column id (e.g. ``"name"``, ``"size"``).
+
+    Returns
+    -------
+    str
+        ``"col-header-{col_id}"``
+    """
+    return f"col-header-{col_id}"
+
+
+def col_resize_testid(col_id: str) -> str:
+    """Return the ``data-testid`` for a column's right-edge resize handle.
+
+    Each header cell exposes a resize grab strip; s47 drags ``name``'s handle
+    to a known width and asserts the width restores after a reload.
+
+    Parameters
+    ----------
+    col_id:
+        The column id whose resize handle this is (e.g. ``"name"``).
+
+    Returns
+    -------
+    str
+        ``"col-resize-{col_id}"``
+    """
+    return f"col-resize-{col_id}"
+
+
 def execute_row_testid(group_id: str, basename: str) -> str:
     """Return the ``data-testid`` value for a file row in the execute tree.
 

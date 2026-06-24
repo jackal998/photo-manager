@@ -157,3 +157,11 @@ export function executeRowTestid(groupId: string, basename: string): string {
 export function actionCheatsheetTestid(token: string): string {
   return `action-cheatsheet-${token}`;
 }
+
+export function colHeaderTestid(colId: string): string {
+  return `col-header-${colId}`;
+}
+
+export function colResizeTestid(colId: string): string {
+  return `col-resize-${colId}`;
+}

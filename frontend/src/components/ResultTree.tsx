@@ -9,7 +9,9 @@ import { useAppStore } from "@/store/useAppStore";
 import { MAIN_RESULT_TREE } from "@/testids";
 import { GroupRow } from "./result/GroupRow";
 import { FileRow } from "./result/FileRow";
-import type { DecisionValue } from "@/api/types";
+import { ColumnHeaderRow } from "./result/ColumnHeaderRow";
+import { makeRowComparator } from "@/lib/resultColumns";
+import type { DecisionValue, FileRow as FileRowData } from "@/api/types";
 
 // ---------------------------------------------------------------------------
 // Context menu state shape — lifted to App level via the callback props
@@ -59,6 +61,13 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
   const toggleSelection = useAppStore((s) => s.toggleSelection);
   const extendSelection = useAppStore((s) => s.extendSelection);
 
+  // #685 — column model: sort state + per-column widths.
+  const sortColumn = useAppStore((s) => s.resultView.sortColumn);
+  const sortDirection = useAppStore((s) => s.resultView.sortDirection);
+  const columnWidths = useAppStore((s) => s.resultView.columnWidths);
+  const toggleSort = useAppStore((s) => s.toggleSort);
+  const setColumnWidth = useAppStore((s) => s.setColumnWidth);
+
   // Collapse state: Set of group_number values that are collapsed.
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
 
@@ -74,6 +83,21 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
     });
   }, []);
 
+  // Per-group item order. When a sort is active each group's items are a
+  // SORTED COPY (the Qt tree proxy sorts children within each parent — group
+  // order itself is unchanged). With no sort (the default) the original
+  // server-order array is reused by identity, so the unsorted render is
+  // byte-identical to before #685 — zero churn for the ~21 scenarios that read
+  // rows by testid. fileIndex on each FileVRow indexes INTO this ordered array.
+  const orderedItemsByGroup = useMemo(() => {
+    const map = new Map<number, FileRowData[]>();
+    const cmp = makeRowComparator(sortColumn, sortDirection);
+    for (const g of groups) {
+      map.set(g.group_number, cmp ? [...g.items].sort(cmp) : g.items);
+    }
+    return map;
+  }, [groups, sortColumn, sortDirection]);
+
   // Flatten all groups into a single list of virtual rows.
   const vrows = useMemo<VRow[]>(() => {
     const rows: VRow[] = [];
@@ -84,7 +108,8 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
         memberCount: group.member_count,
       });
       if (!collapsed.has(group.group_number)) {
-        for (let i = 0; i < group.items.length; i++) {
+        const items = orderedItemsByGroup.get(group.group_number) ?? group.items;
+        for (let i = 0; i < items.length; i++) {
           rows.push({
             kind: "file",
             groupNumber: group.group_number,
@@ -94,28 +119,20 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
       }
     }
     return rows;
-  }, [groups, collapsed]);
-
-  // Build a lookup map for O(1) group access by group_number.
-  const groupByNumber = useMemo(() => {
-    const map = new Map<number, (typeof groups)[number]>();
-    for (const g of groups) {
-      map.set(g.group_number, g);
-    }
-    return map;
-  }, [groups]);
+  }, [groups, collapsed, orderedItemsByGroup]);
 
   // Ordered list of currently-visible file paths (collapsed groups excluded) —
-  // the domain over which Shift+click computes its inclusive range.
+  // the domain over which Shift+click computes its inclusive range. Reads from
+  // the sort-ordered items so the range matches the on-screen order.
   const orderedFilePaths = useMemo<string[]>(() => {
     const paths: string[] = [];
     for (const vrow of vrows) {
       if (vrow.kind !== "file") continue;
-      const fileRow = groupByNumber.get(vrow.groupNumber)?.items[vrow.fileIndex];
+      const fileRow = orderedItemsByGroup.get(vrow.groupNumber)?.[vrow.fileIndex];
       if (fileRow) paths.push(fileRow.file_path);
     }
     return paths;
-  }, [vrows, groupByNumber]);
+  }, [vrows, orderedItemsByGroup]);
 
   // Virtualizer
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -229,6 +246,15 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
       className="h-full overflow-auto border border-neutral-200 rounded"
       style={{ contain: "strict" }}
     >
+      {/* Sticky sort/resize column header (#685). Inside the scroll container so
+          it scrolls horizontally with the body but stays pinned vertically. */}
+      <ColumnHeaderRow
+        columnWidths={columnWidths}
+        sortColumn={sortColumn}
+        sortDirection={sortDirection}
+        onToggleSort={toggleSort}
+        onResize={setColumnWidth}
+      />
       {/* Total height spacer for the virtualizer */}
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((virtualItem) => {
@@ -256,14 +282,14 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
                 />
               ) : (
                 (() => {
-                  const group = groupByNumber.get(vrow.groupNumber);
-                  if (!group) return null;
-                  const fileRow = group.items[vrow.fileIndex];
+                  const items = orderedItemsByGroup.get(vrow.groupNumber);
+                  const fileRow = items?.[vrow.fileIndex];
                   if (!fileRow) return null;
                   return (
                     <FileRow
                       row={fileRow}
                       groupId={String(vrow.groupNumber)}
+                      columnWidths={columnWidths}
                       onDecision={handleDecision}
                       onLock={handleLock}
                       onSelect={handleRowSelect}

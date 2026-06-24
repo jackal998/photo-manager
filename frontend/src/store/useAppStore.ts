@@ -37,10 +37,13 @@ import type {
   ExecuteState,
   ManifestState,
   PreviewState,
+  ResultViewState,
   ScanState,
   SelectionState,
   SettingsState,
 } from "./types";
+import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
+import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
 
 // ---------------------------------------------------------------------------
 // Type alias for immer-wrapped set function inside create()
@@ -102,6 +105,15 @@ const initialSelection: SelectionState = {
   anchorPath: null,
 };
 
+// sortColumn null = no sort = server order (the default every result-tree
+// scenario relies on). columnWidths hydrate from localStorage (s47 cross-launch
+// persistence) merged over the defaults — read once at store creation.
+const initialResultView: ResultViewState = {
+  sortColumn: null,
+  sortDirection: "asc",
+  columnWidths: loadColumnWidths(),
+};
+
 const initialExecute: ExecuteState = {
   executeOpen: false,
   executeRunning: false,
@@ -135,6 +147,10 @@ export const useAppStore = create<AppStore>()(
     settings: { ...initialSettings },
     preview: { ...initialPreview },
     selection: { ...initialSelection },
+    resultView: {
+      ...initialResultView,
+      columnWidths: { ...initialResultView.columnWidths },
+    },
     execute: { ...initialExecute },
     action: { ...initialAction },
 
@@ -449,6 +465,39 @@ export const useAppStore = create<AppStore>()(
         state.selection.selectedPaths = [];
         state.selection.anchorPath = null;
       });
+    },
+
+    // -----------------------------------------------------------------------
+    // #685 — result-tree column model (sort + widths)
+    // -----------------------------------------------------------------------
+
+    toggleSort(column: ColumnId) {
+      set((state) => {
+        if (state.resultView.sortColumn === column) {
+          // Repeat click on the active column flips direction (asc <-> desc).
+          state.resultView.sortDirection =
+            state.resultView.sortDirection === "asc" ? "desc" : "asc";
+        } else {
+          // New column always starts ascending (Qt first-click semantics).
+          state.resultView.sortColumn = column;
+          state.resultView.sortDirection = "asc";
+        }
+      });
+    },
+
+    setColumnWidth(column: ColumnId, width: number, persist = true) {
+      // Clamp defensively so a fast/overshooting drag can never persist a
+      // 0 / negative width that would make the column un-grabbable.
+      const clamped = Math.max(MIN_COLUMN_WIDTH, Math.round(width));
+      set((state) => {
+        state.resultView.columnWidths[column] = clamped;
+      });
+      // A resize drag passes persist=false per mousemove (live feedback only) and
+      // persist=true once on mouseup — avoids a synchronous localStorage write per
+      // move. Read back the committed state so the blob matches the store exactly.
+      if (persist) {
+        saveColumnWidths({ ...get().resultView.columnWidths });
+      }
     },
 
     // -----------------------------------------------------------------------

@@ -505,6 +505,9 @@ web:
     shot_date: "Shot Date"
     resolution: "Resolution"
     score: "Score"
+    # Web result tree shows a human-readable size (e.g. "1.2 MB"), so its
+    # header reads "Size" — distinct from the desktop's raw-byte "Size (Bytes)".
+    size: "Size"
   # Mirror of decision.* keys for web-only usage.
   decision:
     delete: "delete"

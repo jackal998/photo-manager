@@ -2,6 +2,7 @@
 // The concrete store (useAppStore) imports this and satisfies it.
 
 import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
+import type { ColumnId, SortDirection } from "../lib/resultColumns";
 
 // ---------------------------------------------------------------------------
 // State slices
@@ -66,6 +67,30 @@ export interface SelectionState {
    * when nothing has been plain-clicked yet.
    */
   anchorPath: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// #685 — result-tree column model (sort + per-column widths)
+// ---------------------------------------------------------------------------
+
+export interface ResultViewState {
+  /**
+   * Column currently driving the sort, or null for "no sort" — the DEFAULT.
+   * Null means rows render in server response order, which every existing
+   * result-tree scenario relies on (sort only engages after a header click,
+   * which only s45 performs). Held here (not in ManifestState) so loadManifest
+   * never resets it — the Qt s45 contract is that a chosen sort survives an
+   * in-session manifest reopen (TreeController stashes it across refresh_model).
+   */
+  sortColumn: ColumnId | null;
+  /** asc / desc for the active sort column. Toggles on a repeat header click. */
+  sortDirection: SortDirection;
+  /**
+   * Per-column width in px. Hydrated from localStorage at store creation
+   * (cross-launch persistence, s47) and merged over the defaults; mutated by
+   * setColumnWidth on a resize drag, which also writes back to localStorage.
+   */
+  columnWidths: Record<ColumnId, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +256,27 @@ export interface AppActions {
   /** Clear the selection and anchor. */
   clearSelection(): void;
 
+  // -------------------------------------------------------------------------
+  // #685 — result-tree column model (sort + widths)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Toggle the sort on ``column``. First click on a column sorts ascending;
+   * a repeat click on the same column flips to descending. Switching columns
+   * resets to ascending. The result tree re-sorts each group's rows by the
+   * new (column, direction); group order is unchanged.
+   */
+  toggleSort(column: ColumnId): void;
+
+  /**
+   * Set the width (px) of ``column``. During a resize drag this is called per
+   * mousemove with ``persist: false`` (live in-memory feedback only); on mouseup
+   * it is called once with ``persist: true`` to write the full width map to
+   * localStorage (cross-launch). ``persist`` defaults to true so a one-shot
+   * programmatic set still persists.
+   */
+  setColumnWidth(column: ColumnId, width: number, persist?: boolean): void;
+
   /** GET /api/settings and populate settings.values. */
   loadSettings(): Promise<void>;
 
@@ -361,6 +407,7 @@ export interface AppStore extends AppActions {
   settings: SettingsState;
   preview: PreviewState;
   selection: SelectionState;
+  resultView: ResultViewState;
   execute: ExecuteState;
   action: ActionState;
 }

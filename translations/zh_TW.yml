@@ -414,6 +414,7 @@ web:
     shot_date: "拍攝日期"
     resolution: "解析度"
     score: "分數"
+    size: "大小"
   # Mirror of decision.* keys for web-only usage.
   decision:
     delete: "刪除"
