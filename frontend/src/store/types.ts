@@ -68,6 +68,15 @@ export interface SelectionState {
    * when nothing has been plain-clicked yet.
    */
   anchorPath: string | null;
+  /**
+   * One-shot scroll target.  When non-null the ResultTree scrolls this file
+   * path into view on its next render, then clears it via clearScrollTarget().
+   * Set by loadManifest({ selectKeepers }) to bring the first auto-select
+   * keeper into view after a scan (Qt #239 parity — main_window scrolls to the
+   * first KEEP row).  Kept distinct from selectedPaths so a plain user click —
+   * which changes the selection but must NOT yank the viewport — never scrolls.
+   */
+  scrollToPath: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,8 +244,14 @@ export interface AppActions {
   /**
    * GET /api/manifest?path=<path>, set manifest state.
    * Side effect: server registers manifest roots so thumbnails resolve.
+   *
+   * ``opts.selectKeepers`` (the post-scan auto-select call site only) selects
+   * the ``action === "KEEP"`` rows and scrolls the first into view instead of
+   * clearing the selection — the web port of Qt #239 (main_window selects the
+   * auto-selected keepers after a scan).  The manifest-OPEN call sites pass
+   * nothing, so opening an existing manifest still clears the selection.
    */
-  loadManifest(path: string): Promise<void>;
+  loadManifest(path: string, opts?: { selectKeepers?: boolean }): Promise<void>;
 
   /**
    * Optimistically apply a decision to the matching FileRow in manifest.groups,
@@ -288,6 +303,9 @@ export interface AppActions {
 
   /** Clear the selection and anchor. */
   clearSelection(): void;
+
+  /** Clear the one-shot scrollToPath once the ResultTree has consumed it. */
+  clearScrollTarget(): void;
 
   // -------------------------------------------------------------------------
   // #685 — result-tree column model (sort + widths)

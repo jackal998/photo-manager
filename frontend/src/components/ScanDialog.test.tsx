@@ -9,7 +9,7 @@
 //      status text, log area, cancel button) is visible and Start button is gone.
 //   6. Cancel button calls store.cancelScan.
 
-import { render, screen, act, waitFor } from "@testing-library/react";
+import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -35,6 +35,7 @@ const mockGetSettings = vi.mocked(getSettings);
 const mockPatchSettings = vi.mocked(patchSettings);
 import {
   SCAN_ADD_SOURCE,
+  SCAN_AUTO_SELECT,
   SCAN_CANCEL_BUTTON,
   SCAN_DIALOG,
   SCAN_OUTPUT_PATH,
@@ -260,6 +261,7 @@ describe("ScanDialog", () => {
 
   it("auto-closes dialog and loads manifest when scan finishes with an output path", () => {
     // Complementary case: finished with real output_path must also close + loadManifest.
+    // Auto-select defaults OFF, so the post-scan load opts out of keeper selection.
     const loadManifestMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ loadManifest: loadManifestMock } as never);
 
@@ -270,7 +272,32 @@ describe("ScanDialog", () => {
     });
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(loadManifestMock).toHaveBeenCalledWith("C:/scan.db");
+    expect(loadManifestMock).toHaveBeenCalledWith("C:/scan.db", {
+      selectKeepers: false,
+    });
+  });
+
+  it("passes selectKeepers:true to loadManifest when auto-select is enabled (#692)", () => {
+    // When the user turned on "Auto select after scan", the post-scan load must
+    // select + scroll to the auto-selected keepers (Qt #239 parity). The flag is
+    // read at the scan-finish call site from the (frozen) checkbox state.
+    const loadManifestMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ loadManifest: loadManifestMock } as never);
+
+    renderDialog();
+
+    // Turn the checkbox on (it lives in the always-mounted <details> section).
+    act(() => {
+      fireEvent.click(screen.getByTestId(SCAN_AUTO_SELECT));
+    });
+
+    act(() => {
+      seedScanState({ status: "finished", outputPath: "C:/scan.db" });
+    });
+
+    expect(loadManifestMock).toHaveBeenCalledWith("C:/scan.db", {
+      selectKeepers: true,
+    });
   });
 
   // -------------------------------------------------------------------------

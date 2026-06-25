@@ -18,11 +18,12 @@ Web slice:
     serialised on FileRow).
 
 Qt divergence:
-  D1. The Qt #239 assertion that the keeper is VISUALLY selected in the result
-      tree is NOT ported — the web ResultTree has no post-scan selection-highlight
-      yet (deferred FE follow-up). The web port asserts the manifest-level
-      contract (action=KEEP + is_locked on the keeper; non-keepers untouched),
-      which is the load-bearing data signal; the highlight is a UX nicety.
+  D1. The Qt #239 visual-selection assertion IS NOW PORTED (#692): after an
+      auto-select scan the keeper FileRow carries aria-selected="true" (the web
+      port of main_window's post-scan tree selection), and a non-keeper row does
+      not. The manifest-level contract (action=KEEP + is_locked on the keeper;
+      non-keepers untouched) remains the load-bearing data signal; the highlight
+      is the UX parity layer on top.
   D2. Manifest read via GET /api/manifest JSON vs Qt SQLite.
 
 Desktop source: qa/scenarios/s49_scan_auto_select.py
@@ -46,7 +47,11 @@ from qa.web._invariants import (
     start_scan,
     wait_manifest_loaded,
 )
-from qa.web.testid_constants import SCAN_ADVANCED, SCAN_AUTO_SELECT
+from qa.web.testid_constants import (
+    SCAN_ADVANCED,
+    SCAN_AUTO_SELECT,
+    row_file_testid,
+)
 
 _REPO = Path(__file__).resolve().parents[3]
 _NEAR_DUPS_DIR = str(_REPO / "qa" / "sandbox" / "near-duplicates")
@@ -99,7 +104,8 @@ def run(*, base_url: str) -> None:
             start_scan(page)
             wait_manifest_loaded(page, timeout=120_000)
 
-            rows = _collect(_get_manifest(base_url, db_path))
+            manifest = _get_manifest(base_url, db_path)
+            rows = _collect(manifest)
             print(f"probe_status: s49 rows={ {k: rows[k] for k in sorted(rows)} }")
 
             assert len(rows) == 5, f"Expected 5 near-dup rows, got {sorted(rows)}"
@@ -144,5 +150,32 @@ def run(*, base_url: str) -> None:
                     f"Non-keeper {name}.user_decision={r['user_decision']!r}, "
                     f"expected '' (non-aggressive mode must not touch non-keepers)."
                 )
+
+            # D1 (#239 / #692 parity): the auto-select keeper must be VISUALLY
+            # selected in the result tree — Qt main_window applies a tree
+            # selection to the action=KEEP rows after a scan. The web port sets
+            # aria-selected on the keeper FileRow (loadManifest({selectKeepers})).
+            group_id = str(manifest["groups"][0]["group_number"])
+            keeper_row = page.get_by_test_id(
+                row_file_testid(group_id, _EXPECTED_KEEPER)
+            )
+            keeper_row.wait_for(state="visible", timeout=10_000)
+            assert keeper_row.get_attribute("aria-selected") == "true", (
+                f"{_EXPECTED_KEEPER} is not visually selected after an auto-select "
+                f"scan (aria-selected={keeper_row.get_attribute('aria-selected')!r}); "
+                f"the action=KEEP keeper must be highlighted in the result tree — "
+                f"see #239/#692."
+            )
+
+            # The highlight is keeper-scoped, not a blanket select-all: a
+            # non-keeper row must NOT be selected.
+            non_keeper = next(n for n in rows if n != _EXPECTED_KEEPER)
+            non_keeper_row = page.get_by_test_id(
+                row_file_testid(group_id, non_keeper)
+            )
+            assert non_keeper_row.get_attribute("aria-selected") != "true", (
+                f"Non-keeper {non_keeper} is selected after auto-select; only the "
+                f"action=KEEP keeper should be highlighted (#692)."
+            )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

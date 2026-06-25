@@ -191,11 +191,15 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   useEffect(() => {
     if (scan.status === "finished") {
       if (scan.outputPath !== null) {
-        void loadManifest(scan.outputPath);
+        // Post-scan auto-load. When the user enabled "Auto select after scan",
+        // select + scroll to the auto-selected KEEP keepers (Qt #239 parity).
+        // autoSelect is frozen during a run (the checkbox is disabled while
+        // running), so its value here is the one the scan actually used.
+        void loadManifest(scan.outputPath, { selectKeepers: autoSelect });
       }
       onOpenChange(false);
     }
-  }, [scan.status, scan.outputPath, loadManifest, onOpenChange]);
+  }, [scan.status, scan.outputPath, autoSelect, loadManifest, onOpenChange]);
 
   // Transition: cancelled → close dialog cleanly
   useEffect(() => {

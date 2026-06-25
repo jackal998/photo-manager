@@ -106,6 +106,7 @@ const initialPreview: PreviewState = {
 const initialSelection: SelectionState = {
   selectedPaths: [],
   anchorPath: null,
+  scrollToPath: null,
 };
 
 // sortColumn null = no sort = server order (the default every result-tree
@@ -250,7 +251,7 @@ export const useAppStore = create<AppStore>()(
     // Manifest actions
     // -----------------------------------------------------------------------
 
-    async loadManifest(path) {
+    async loadManifest(path, opts) {
       set((state) => {
         state.manifest.loading = true;
         state.manifest.error = null;
@@ -263,9 +264,23 @@ export const useAppStore = create<AppStore>()(
           state.manifest.totalGroups = data.total_groups;
           state.manifest.totalFiles = data.total_files;
           state.manifest.loading = false;
-          // A fresh manifest invalidates any prior selection (paths may vanish).
-          state.selection.selectedPaths = [];
-          state.selection.anchorPath = null;
+          // A fresh manifest invalidates any prior selection (paths may vanish),
+          // so by default we clear it. The post-scan auto-select call site
+          // (opts.selectKeepers) instead selects the action==="KEEP" rows and
+          // scrolls the first into view — Qt #239 parity. When auto-select was
+          // off there are no KEEP rows, so keeperPaths is empty and this still
+          // clears, matching the default.
+          const keeperPaths = opts?.selectKeepers
+            ? data.groups
+                .flatMap((g) => g.items)
+                .filter((row) => row.action === "KEEP")
+                .map((row) => row.file_path)
+            : [];
+          state.selection.selectedPaths = keeperPaths;
+          state.selection.anchorPath =
+            keeperPaths.length > 0 ? keeperPaths[keeperPaths.length - 1] : null;
+          state.selection.scrollToPath =
+            keeperPaths.length > 0 ? keeperPaths[0] : null;
         });
       } catch (err) {
         set((state) => {
@@ -472,6 +487,12 @@ export const useAppStore = create<AppStore>()(
       set((state) => {
         state.selection.selectedPaths = [];
         state.selection.anchorPath = null;
+      });
+    },
+
+    clearScrollTarget() {
+      set((state) => {
+        state.selection.scrollToPath = null;
       });
     },
 

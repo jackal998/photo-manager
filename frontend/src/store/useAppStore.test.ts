@@ -126,6 +126,7 @@ beforeEach(() => {
     selection: {
       selectedPaths: [],
       anchorPath: null,
+      scrollToPath: null,
     },
     execute: {
       executeOpen: false,
@@ -323,6 +324,101 @@ describe("loadManifest – happy path", () => {
     expect(manifest.totalFiles).toBe(2);
     expect(manifest.loading).toBe(false);
     expect(manifest.error).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadManifest – post-scan keeper selection (#692, Qt #239 parity)
+//
+// Only the post-scan auto-load passes { selectKeepers: true }; the
+// manifest-OPEN call sites pass nothing. So opening a manifest must keep the
+// old "clear the selection" behaviour even when KEEP rows are present, while
+// the post-scan path selects the action==="KEEP" rows across all groups and
+// arms the one-shot scrollToPath at the first keeper.
+// ---------------------------------------------------------------------------
+
+describe("loadManifest – selectKeepers (#692)", () => {
+  it("selects every KEEP row across groups and scrolls to the first", async () => {
+    const g1 = makeGroup(1, ["/p/k1.jpg", "/p/d1.jpg"]);
+    g1.items[0].action = "KEEP";
+    const g2 = makeGroup(2, ["/p/k2.jpg", "/p/d2.jpg"]);
+    g2.items[0].action = "KEEP";
+    vi.mocked(client.getManifest).mockResolvedValue({
+      manifest_path: "/data/out.db",
+      groups: [g1, g2],
+      total_groups: 2,
+      total_files: 4,
+    });
+
+    await useAppStore
+      .getState()
+      .loadManifest("/data/out.db", { selectKeepers: true });
+
+    const { selection } = useAppStore.getState();
+    expect(selection.selectedPaths).toEqual(["/p/k1.jpg", "/p/k2.jpg"]);
+    expect(selection.scrollToPath).toBe("/p/k1.jpg"); // first keeper into view
+    expect(selection.anchorPath).toBe("/p/k2.jpg"); // anchor = last, like setSelection
+  });
+
+  it("the manifest-OPEN path (no opts) clears the selection even with KEEP rows", async () => {
+    const g = makeGroup(1, ["/p/k.jpg", "/p/d.jpg"]);
+    g.items[0].action = "KEEP";
+    // A stale selection that opening a manifest must wipe.
+    useAppStore.setState({
+      selection: {
+        selectedPaths: ["/p/old.jpg"],
+        anchorPath: "/p/old.jpg",
+        scrollToPath: null,
+      },
+    });
+    vi.mocked(client.getManifest).mockResolvedValue({
+      manifest_path: "/data/out.db",
+      groups: [g],
+      total_groups: 1,
+      total_files: 2,
+    });
+
+    await useAppStore.getState().loadManifest("/data/out.db");
+
+    const { selection } = useAppStore.getState();
+    expect(selection.selectedPaths).toEqual([]); // NOT auto-selected on open
+    expect(selection.anchorPath).toBeNull();
+    expect(selection.scrollToPath).toBeNull();
+  });
+
+  it("selectKeepers with no KEEP rows is a no-op (auto-select was off)", async () => {
+    const g = makeGroup(1, ["/p/a.jpg", "/p/b.jpg"]); // all action=""
+    vi.mocked(client.getManifest).mockResolvedValue({
+      manifest_path: "/data/out.db",
+      groups: [g],
+      total_groups: 1,
+      total_files: 2,
+    });
+
+    await useAppStore
+      .getState()
+      .loadManifest("/data/out.db", { selectKeepers: true });
+
+    const { selection } = useAppStore.getState();
+    expect(selection.selectedPaths).toEqual([]);
+    expect(selection.scrollToPath).toBeNull();
+    expect(selection.anchorPath).toBeNull();
+  });
+
+  it("clearScrollTarget consumes the one-shot without touching the selection", () => {
+    useAppStore.setState({
+      selection: {
+        selectedPaths: ["/p/k.jpg"],
+        anchorPath: "/p/k.jpg",
+        scrollToPath: "/p/k.jpg",
+      },
+    });
+
+    useAppStore.getState().clearScrollTarget();
+
+    const { selection } = useAppStore.getState();
+    expect(selection.scrollToPath).toBeNull();
+    expect(selection.selectedPaths).toEqual(["/p/k.jpg"]); // selection untouched
   });
 });
 

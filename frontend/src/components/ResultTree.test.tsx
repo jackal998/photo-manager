@@ -143,6 +143,11 @@ function resetStore() {
       loading: false,
       error: null,
     },
+    selection: {
+      selectedPaths: [],
+      anchorPath: null,
+      scrollToPath: null,
+    },
   });
 }
 
@@ -400,6 +405,31 @@ describe("ResultTree", () => {
         // The real interaction is covered by Playwright E2E.
         expect(trigger).not.toBeDisabled();
       }
+    });
+
+    it("highlights the keeper and consumes the one-shot scroll signal (#692)", () => {
+      // Simulate loadManifest({ selectKeepers }) having selected the group-1
+      // keeper and armed scrollToPath at it.
+      useAppStore.setState({
+        selection: {
+          selectedPaths: ["/photos/ref.jpg"],
+          anchorPath: "/photos/ref.jpg",
+          scrollToPath: "/photos/ref.jpg",
+        },
+      });
+
+      render(<ResultTree />);
+
+      // The keeper row renders highlighted — the visible #239 / #239-parity cue.
+      const keeperRow = screen.getByTestId(
+        rowFileTestid(String(GROUP_1_NUM), "ref.jpg")
+      );
+      expect(keeperRow).toHaveAttribute("aria-selected", "true");
+
+      // The one-shot scroll signal is consumed on mount (the effect ran and
+      // scrollToIndex did not throw in jsdom) so it can't re-fire on a later
+      // unrelated render.
+      expect(useAppStore.getState().selection.scrollToPath).toBeNull();
     });
   });
 });

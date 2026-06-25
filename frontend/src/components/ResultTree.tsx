@@ -3,7 +3,7 @@
 // (thousands of files). Rows are heterogeneous: a group header row
 // followed by the group's file rows (hidden when collapsed).
 
-import { useRef, useMemo, useCallback, useState } from "react";
+import { useRef, useMemo, useCallback, useState, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAppStore } from "@/store/useAppStore";
 import { MAIN_RESULT_TREE } from "@/testids";
@@ -60,6 +60,8 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
   const setSelection = useAppStore((s) => s.setSelection);
   const toggleSelection = useAppStore((s) => s.toggleSelection);
   const extendSelection = useAppStore((s) => s.extendSelection);
+  const scrollToPath = useAppStore((s) => s.selection.scrollToPath);
+  const clearScrollTarget = useAppStore((s) => s.clearScrollTarget);
 
   // #685 — column model: sort state + per-column widths.
   const sortColumn = useAppStore((s) => s.resultView.sortColumn);
@@ -149,6 +151,27 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
     // ResizeObserver and getBoundingClientRect both return zeroes.
     initialRect: { width: 1024, height: 4000 },
   });
+
+  // Post-scan keeper scroll (Qt #239 parity). loadManifest({ selectKeepers })
+  // sets selection.scrollToPath to the first auto-selected KEEP row; bring it
+  // into view once, then clear the one-shot signal. A plain user click never
+  // sets scrollToPath, so the viewport is only re-positioned right after a scan.
+  useEffect(() => {
+    if (scrollToPath === null) return;
+    const idx = vrows.findIndex(
+      (vrow) =>
+        vrow.kind === "file" &&
+        orderedItemsByGroup.get(vrow.groupNumber)?.[vrow.fileIndex]
+          ?.file_path === scrollToPath
+    );
+    if (idx >= 0) {
+      // "center" keeps the row clear of the sticky column header.
+      virtualizer.scrollToIndex(idx, { align: "center" });
+    }
+    // Clear even when the target isn't currently in vrows (e.g. its group is
+    // collapsed) so a stale signal can't fire on a later unrelated render.
+    clearScrollTarget();
+  }, [scrollToPath, vrows, orderedItemsByGroup, virtualizer, clearScrollTarget]);
 
   // Decision + lock callbacks — stable references via the store.
   const handleDecision = useCallback(

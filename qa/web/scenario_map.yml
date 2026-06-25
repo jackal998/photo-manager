@@ -270,7 +270,7 @@ scenarios:
   - scenario: s49_scan_auto_select
     playwright_module: qa.web.scenarios.s49_scan_auto_select
     status: done
-    notes: "Auto-select after scan (#212/#393). Expands the new ScanDialog 'Advanced settings' section (#678 cluster A, built in this PR), asserts the 'Auto select after scan' checkbox defaults OFF, toggles ON, scans near-duplicates, then asserts via GET /api/manifest: keeper q95 action='KEEP' + is_locked + user_decision='' (#425 canonical-keep), exactly 1 KEEP, non-keepers retain their classifier action (EXACT/REVIEW_DUPLICATE) + unlocked + undecided. Qt #239 VISUAL tree-selection of the keeper is NOT ported — the web ResultTree has no post-scan highlight yet (deferred FE follow-up); the manifest state is the load-bearing assertion. Divergence: manifest JSON vs Qt SQLite."
+    notes: "Auto-select after scan (#212/#393). Expands the ScanDialog 'Advanced settings' section, asserts the 'Auto select after scan' checkbox defaults OFF, toggles ON, scans near-duplicates, then asserts via GET /api/manifest: keeper q95 action='KEEP' + is_locked + user_decision='' (#425 canonical-keep), exactly 1 KEEP, non-keepers retain their classifier action (EXACT/REVIEW_DUPLICATE) + unlocked + undecided. Qt #239 VISUAL tree-selection IS NOW PORTED (#692): after the auto-select scan the keeper FileRow carries aria-selected='true' and a non-keeper does not (loadManifest({selectKeepers}) selects the action='KEEP' rows + scrolls the first into view — the web port of main_window's post-scan tree selection). Manifest state remains the load-bearing data assertion. Divergence: manifest JSON vs Qt SQLite."
 
   - scenario: s50_select_numeric_panel_from_main_window
     playwright_module: qa.web.scenarios.s50_select_numeric_panel_from_main_window
