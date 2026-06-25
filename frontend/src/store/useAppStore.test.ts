@@ -774,6 +774,47 @@ describe("resolvePruneLock", () => {
     );
     expect(body.paths).toEqual(["/p/a.jpg"]); // locked NOT included
   });
+
+  it("unlock-apply on ask with a failing unlock holds the locked row OUT of the prune set", async () => {
+    // #702: when the unlock PATCH rejects, setLocks reverts the row (still
+    // locked). resolvePruneLock must NOT fold the still-locked path into the
+    // prune set — it holds it back (lockedToPrune stays []) yet still offers the
+    // unrelated unlocked buckets, surfacing a prune-context error. This is the
+    // mirror of the success test above (which folds /p/lock.jpg into
+    // lockedToPrune); RED against the pre-fix source, which folded it regardless.
+    seedGate("ask", { plain: [], actioned: ["/p/x.jpg"] });
+    vi.mocked(client.patchLocks).mockRejectedValueOnce(new Error("locks failed"));
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+    const p = useAppStore.getState().execute.prunePrompt;
+    expect(p!.actioned).toEqual(["/p/x.jpg"]); // unlocked bucket still offered
+    expect(p!.lockedToPrune).toEqual([]); // still-locked path NOT folded (the bug)
+    // setLocks reverted the optimistic unlock — the row stays locked.
+    expect(useAppStore.getState().manifest.groups[0].items[0].is_locked).toBe(
+      true
+    );
+    // A prune-context error surfaced (not just the generic PATCH message).
+    expect(useAppStore.getState().manifest.error).toContain("held back");
+  });
+
+  it("unlock-apply on always with a failing unlock prunes only the unlocked buckets", async () => {
+    // The 'always' counterpart: the unrelated unlocked bucket still auto-prunes,
+    // but the still-locked path is NOT folded into the POST. RED against the
+    // pre-fix source, which posted /p/a.jpg AND the still-locked /p/lock.jpg.
+    seedGate("always", { plain: ["/p/a.jpg"], actioned: [] });
+    vi.mocked(client.patchLocks).mockRejectedValueOnce(new Error("locks failed"));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ pruned: [], locked_skipped: [], groups: [] }));
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+    const pruneCall = fetchSpy.mock.calls.find(([url]) =>
+      String(url).includes("/api/prune")
+    );
+    expect(pruneCall).toBeDefined();
+    const body = JSON.parse((pruneCall![1] as { body: string }).body);
+    expect(body.paths).toEqual(["/p/a.jpg"]); // locked NOT folded into the POST
+    // A prune-context error surfaced for the held locked item.
+    expect(useAppStore.getState().manifest.error).toContain("held back");
+  });
 });
 
 // ---------------------------------------------------------------------------

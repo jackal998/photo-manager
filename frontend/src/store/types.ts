@@ -261,8 +261,12 @@ export interface AppActions {
   /**
    * Batch variant of setLock — optimistically apply the lock to every path,
    * then PATCH /api/lock once.  Reverts all on failure.  No-op for empty list.
+   * Resolves ``true`` when the PATCH succeeded (or there was nothing to do),
+   * ``false`` when it was rejected and every row was reverted — callers that
+   * chain a follow-up mutation (e.g. the prune unlock-then-apply path) must
+   * branch on this so they don't act on rows that are still locked.
    */
-  setLocks(paths: string[], locked: boolean): Promise<void>;
+  setLocks(paths: string[], locked: boolean): Promise<boolean>;
 
   // -------------------------------------------------------------------------
   // Phase 4 — main result-tree multi-selection

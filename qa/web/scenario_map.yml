@@ -331,9 +331,13 @@ scenarios:
     playwright_module: qa.web.scenarios.s61_actioned_singleton_prune
     status: done
     notes: >-
-      #686 mixed-bucket singleton prune on the "ask" path. Five variants
-      (remove_plain / remove_both / keep / lock_cancel / lock_apply). The web
-      execute-tree + remove are single-select, so the mixed (plain+actioned)
+      #686 mixed-bucket singleton prune on the "ask" path. Six variants
+      (remove_plain / remove_both / keep / lock_cancel / lock_unlocked_only /
+      lock_apply). #702 Cancel-discriminator: lock_cancel and lock_unlocked_only
+      both HOLD the locked A_keep (identical sqlite state); the discriminating
+      assertion is a POST /api/prune/candidates read confirming A_keep stays in
+      the `locked` bucket (an accidental unlock is caught there, not by sqlite).
+      The web execute-tree + remove are single-select, so the mixed (plain+actioned)
       offer is built by ACCUMULATION: under prune="never" finalize-remove A_drop
       (collapses cluster A to the plain/locked A_keep singleton, silently), then
       flip to "ask" and finalize-remove B_drop (collapses cluster B to the
@@ -401,9 +405,11 @@ scenarios:
       fires the LockConfirmDialog op="prune". V1 Cancel holds KEEP (outcome='');
       V2 Unlock&Apply prunes it (outcome='ignored'). In BOTH, the
       PruneConfirmDialog must NEVER appear (absence-checked) — the "always" path
-      skips it. Outcomes via sqlite (held singleton invisible to the manifest
-      API); KEEP stays on disk (ignored, not deleted). Sister of s61's "ask"
-      path.
+      skips it; that absence check is forward-defensive (#702): the "always" path
+      provably never builds a prunePrompt, so the dialog can only appear via a
+      future regression. Outcomes via sqlite (held singleton invisible to the
+      manifest API); KEEP stays on disk (ignored, not deleted). Sister of s61's
+      "ask" path.
 
   - scenario: s68_full_res_viewer_double_click
     playwright_module: qa.web.scenarios.s68_full_res_viewer_double_click

@@ -23,7 +23,14 @@ Two variants:
   * V2 — Unlock & Apply → KEEP is unlocked then pruned (gone from the manifest).
 
 In BOTH the PruneConfirmDialog must NEVER appear (the "always" path skips it) —
-asserted by a short-timeout absence check after the lock gate is dismissed.
+asserted by a short-timeout absence check after the lock gate is dismissed. That
+absence check is FORWARD-DEFENSIVE, not a wait for a possibly-slow dialog: the
+"always" path provably never constructs a prunePrompt (resolvePruneLock applies
+the prune directly and returns — useAppStore.ts), so the PruneConfirmDialog can
+only materialise via a FUTURE regression that wires a prunePrompt under "always".
+The short _PRUNE_ABSENCE_MS timeout guards against that future change; the LIVE D6
+correctness on this path is carried by the lock-gate wait_for + the sqlite outcome
+assertion below, which have real (non-forward) failure modes.
 
 Web divergences vs Qt
   D1. Finalizing remove is driven via the EXECUTE-dialog menu (single-row +

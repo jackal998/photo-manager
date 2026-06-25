@@ -388,7 +388,9 @@ export const useAppStore = create<AppStore>()(
 
     async setLocks(paths, locked) {
       const manifestPath = get().manifest.path;
-      if (manifestPath === null || paths.length === 0) return;
+      // A no-op (nothing to lock) is a success, not a failure — callers that
+      // branch on the result must not treat an empty list as a rejection.
+      if (manifestPath === null || paths.length === 0) return true;
 
       const previous = new Map<string, boolean>();
       for (const p of paths) {
@@ -408,6 +410,7 @@ export const useAppStore = create<AppStore>()(
           manifestPath,
           paths.map((p) => ({ file_path: p, locked }))
         );
+        return true;
       } catch (err) {
         for (const [p, prev] of previous) {
           applyFileRowPatch(set as ImmerSetFn, p, (row) => {
@@ -418,6 +421,7 @@ export const useAppStore = create<AppStore>()(
           state.manifest.error =
             err instanceof Error ? err.message : String(err);
         });
+        return false;
       }
     },
 
@@ -810,20 +814,37 @@ export const useAppStore = create<AppStore>()(
       });
       if (pending === null) return; // defensive — gate resolved without context
 
+      // Close the gate now: the verdict is being resolved, so prunePending must
+      // not survive any early return below (a failed unlock) and re-fire later.
+      const { plain, actioned, pref } = pending;
+      set((state) => {
+        state.execute.prunePending = null;
+      });
+
       let lockedToPrune: string[] = [];
       if (verdict === "unlock-apply") {
         // Unlock the locked singletons so the backend prune won't skip them,
         // then commit them to the prune set (the Qt to_prune.extend tail — they
         // prune regardless of any later "Keep all" on the prune dialog).
-        await get().setLocks(locked, false);
-        lockedToPrune = locked;
+        const unlocked = await get().setLocks(locked, false);
+        if (unlocked) {
+          lockedToPrune = locked;
+        } else {
+          // The unlock PATCH failed and setLocks reverted the rows, so they are
+          // still locked and can't be pruned — hold them back (lockedToPrune
+          // stays []) rather than fold a still-locked path the backend would
+          // only skip. The unrelated unlocked buckets still prune as the user
+          // asked; surface a prune-context error for the held items. (PATCH
+          // /api/lock and POST /api/prune are independent endpoints — a failed
+          // unlock does not imply the prune would fail, so we don't abort the
+          // whole gesture, only drop the rows we couldn't unlock.)
+          set((state) => {
+            state.manifest.error =
+              "Couldn't unlock the locked items — they were held back from pruning.";
+          });
+        }
       }
       // "unlocked-only" / "cancel": hold the locked singletons (lockedToPrune=[]).
-
-      const { plain, actioned, pref } = pending;
-      set((state) => {
-        state.execute.prunePending = null;
-      });
 
       if (pref === "always") {
         await get().applyPrune([...plain, ...actioned, ...lockedToPrune]);

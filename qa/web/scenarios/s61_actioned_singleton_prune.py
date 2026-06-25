@@ -30,13 +30,18 @@ time.) To assemble a MIXED offer we ACCUMULATE:
 This exercises the SAME behaviour the desktop pins — the dialog offers every
 current singleton, not just the one the last op collapsed.
 
-Five variants:
+Six variants:
   * remove_plain — mixed, checkbox UNCHECKED, Remove → only A_keep (plain)
     pruned; B_keep (actioned) held with its 'delete' decision intact.
   * remove_both  — mixed, checkbox CHECKED, Remove → both pruned.
   * keep         — mixed, Keep all → neither pruned.
   * lock_cancel  — A_keep LOCKED; lock gate Cancel → A_keep held; the prune
-    dialog (actioned-only B_keep) is dismissed with Keep → B_keep held.
+    dialog (actioned-only B_keep) is dismissed with Keep → B_keep held. Also
+    confirms A_keep stays a LOCKED prune candidate via POST /api/prune/candidates.
+  * lock_unlocked_only — A_keep LOCKED; lock gate "Unlocked only" → A_keep held
+    (the held outcome is identical to Cancel, since resolvePruneLock treats the
+    two verdicts the same); the candidates read is the discriminator that the
+    distinct button still HELD the lock rather than unlocking it.
   * lock_apply   — lock gate Unlock&Apply → A_keep pruned; prune dialog Keep →
     B_keep held (the Qt to_prune.extend(prunable_locked) tail: A_keep prunes
     regardless of the prune-dialog verdict).
@@ -76,6 +81,7 @@ from qa.web.testid_constants import (
     EXECUTE_REMOVE_CONFIRM_YES,
     LOCK_CONFIRM_BTN_CANCEL,
     LOCK_CONFIRM_BTN_UNLOCK_APPLY,
+    LOCK_CONFIRM_BTN_UNLOCKED_ONLY,
     LOCK_CONFIRM_DIALOG,
     PRUNE_BTN_KEEP,
     PRUNE_BTN_REMOVE,
@@ -95,6 +101,27 @@ def _manifest(base_url: str, db_path: str) -> dict:
     encoded = urllib.parse.quote(db_path, safe="")
     with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/manifest?path={encoded}", timeout=15) as resp:  # noqa: S310
         return json.loads(resp.read())
+
+
+def _locked_candidates(base_url: str, db_path: str) -> set[str]:
+    """Basenames in the ``locked`` bucket of POST /api/prune/candidates — the
+    authoritative classification the prune flow / lock gate branch on (#686).
+
+    This is the SAME endpoint maybeOfferPrune reads, so it independently confirms
+    how the backend would re-classify the held singleton: a regression that
+    accidentally UNLOCKED the row (e.g. a mis-wired Cancel/Unlocked-only verdict)
+    would move it out of ``locked`` and be caught here even though the raw sqlite
+    is_locked/outcome read still looked plausible. Read-only."""
+    payload = json.dumps({"manifest_path": db_path}).encode()
+    req = urllib.request.Request(  # noqa: S310
+        f"{base_url.rstrip('/')}/api/prune/candidates",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+        data = json.loads(resp.read())
+    return {Path(p).name for p in data.get("locked", [])}
 
 
 def _gid_of(base_url: str, db_path: str, basename: str) -> str:
@@ -224,7 +251,12 @@ def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) ->
             if lock:
                 # D6 gate fires first for the locked A_keep.
                 page.get_by_test_id(LOCK_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
-                lock_btn = LOCK_CONFIRM_BTN_CANCEL if label == "lock_cancel" else LOCK_CONFIRM_BTN_UNLOCK_APPLY
+                if label == "lock_cancel":
+                    lock_btn = LOCK_CONFIRM_BTN_CANCEL
+                elif label == "lock_unlocked_only":
+                    lock_btn = LOCK_CONFIRM_BTN_UNLOCKED_ONLY
+                else:  # lock_apply
+                    lock_btn = LOCK_CONFIRM_BTN_UNLOCK_APPLY
                 page.get_by_test_id(lock_btn).click()
                 # Then the prune dialog (actioned-only B_keep) — dismiss with Keep.
                 page.get_by_test_id(PRUNE_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
@@ -257,10 +289,23 @@ def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) ->
                 assert _sqlite(db, A_KEEP)[0] == "", "Keep all must prune nothing (A_keep)"
                 assert _sqlite(db, B_KEEP)[0] == "", "Keep all must prune nothing (B_keep)"
                 assert _sqlite(db, B_KEEP)[1] == "delete", "B_keep must keep its decision on Keep all"
-            elif label == "lock_cancel":
-                assert _sqlite(db, A_KEEP)[0] == "", "Cancel must HOLD the locked A_keep"
+            elif label in ("lock_cancel", "lock_unlocked_only"):
+                # Both verdicts HOLD the locked A_keep — resolvePruneLock treats
+                # "unlocked-only" identically to "cancel" (lockedToPrune=[]), so
+                # their raw sqlite state is the same. The DISCRIMINATING check is
+                # the candidates read: it proves the held row is STILL a LOCKED
+                # prune candidate (the button did NOT unlock it). A mis-wire of
+                # either button to the unlock-apply verdict would unlock A_keep
+                # and drop it out of the `locked` bucket — caught here, not by
+                # the sqlite read above.
+                verb = "Cancel" if label == "lock_cancel" else "Unlocked-only"
+                assert _sqlite(db, A_KEEP)[0] == "", f"{verb} must HOLD the locked A_keep"
                 assert _sqlite(db, A_KEEP)[2] == 1, "A_keep should still be locked"
                 assert _sqlite(db, B_KEEP)[0] == "", "B_keep held under Keep"
+                assert _await(lambda: A_KEEP in _locked_candidates(base_url, db)), (
+                    f"{A_KEEP} must remain a LOCKED prune candidate after {verb} — "
+                    f"buckets: locked={sorted(_locked_candidates(base_url, db))}"
+                )
             else:  # lock_apply
                 _await(lambda: _sqlite(db, A_KEEP)[0] == "ignored")
                 assert _sqlite(db, A_KEEP)[0] == "ignored", "Unlock&Apply must prune the locked A_keep"
@@ -276,4 +321,5 @@ def run(*, base_url: str) -> None:
     _run_variant(base_url, label="remove_both", lock=False, prune_action="remove_both")
     _run_variant(base_url, label="keep", lock=False, prune_action="keep")
     _run_variant(base_url, label="lock_cancel", lock=True, prune_action="keep")
+    _run_variant(base_url, label="lock_unlocked_only", lock=True, prune_action="keep")
     _run_variant(base_url, label="lock_apply", lock=True, prune_action="keep")
