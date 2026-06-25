@@ -158,8 +158,8 @@ scenarios:
 
   - scenario: s28_exit_dirty_prompt
     playwright_module: null
-    status: todo
-    notes: ""
+    status: skip
+    notes: "SKIP — desktop-only (#688). Qt MainWindow.closeEvent fires a 3-button QMessageBox (Save / Leave / Back) on dirty-exit, read via pywinauto UIA accessible names. A browser tab has no interceptable OS close with a custom dialog — the only close-time hook is the native beforeunload, which can ARM the browser's own Leave/Stay prompt but cannot replicate a 3-button Save/Leave/Back. The web close-during-scan guard + Leave→cancel are covered by s63 (#687/#703, done); there is no web analog for the Save / Back branches."
 
   - scenario: s29_remove_from_list_by_regex
     playwright_module: qa.web.scenarios.s29_remove_from_list_by_regex
@@ -213,8 +213,8 @@ scenarios:
 
   - scenario: s39_window_geometry_persist
     playwright_module: null
-    status: todo
-    notes: ""
+    status: skip
+    notes: "SKIP — desktop-only (#688). Qt window-geometry round-trip: ctypes MoveWindow / GetWindowRect + QSettings INI persistence across a subprocess relaunch. A browser tab has no OS-controlled window position/size and no per-app geometry-persistence contract (the window chrome belongs to the browser, not the app). The web's per-machine UI-chrome analog — result-tree column widths via localStorage — is covered by s47 (#685, done)."
 
   - scenario: s40_results_tree_double_click
     playwright_module: qa.web.scenarios.s40_results_tree_double_click
@@ -264,8 +264,8 @@ scenarios:
 
   - scenario: s48_dialog_geometry_persist
     playwright_module: null
-    status: todo
-    notes: ""
+    status: skip
+    notes: "SKIP — desktop-only (#688). Qt dialog-geometry persistence: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. Web dialogs are Radix / DOM overlays with no user-resizable geometry and no persistence contract, so there is nothing to round-trip. NOTE: s47 (#685) IS a real web feature (column-width persistence) — it is NOT a skip; only window/dialog OS-geometry (s39/s48) is desktop-only."
 
   - scenario: s49_scan_auto_select
     playwright_module: qa.web.scenarios.s49_scan_auto_select
