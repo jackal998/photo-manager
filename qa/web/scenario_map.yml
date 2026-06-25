@@ -147,9 +147,9 @@ scenarios:
     notes: "Context menu only on rows, never on empty surfaces (4 branches). A: right-click empty area below the last row (self-validates the viewport is taller than the rows) → CONTEXT_MENU count==0. B: right-click the far-right menu-bar gap → count==0. C: right-click a row with no prior left-click → menu appears with Delete item (indexAt-driven). D: left-click then right-click same row → menu appears (positive control). The web guard is structural: MAIN_RESULT_TREE viewport + MAIN_MENU_BAR carry no onContextMenu; only FileRow does. C/D overlap s15 and are kept as the detector-sanity controls. Browser-native menus have no testid and are Escaped, so they never confound the absence assertion."
 
   - scenario: s26_keyboard_navigation
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s26_keyboard_navigation
+    status: done
+    notes: "HONEST PARTIAL — the DECISION shortcuts (Qt step 0, #615) only. Ports app/views/components/decision_tree_view.py (bare 'd' → user_decision='delete', bare 'k' → '' / no-decision per #584; modifier-bearing presses fall through, Qt NoModifier guard) onto a document-level hook (frontend/src/hooks/useDecisionShortcuts.ts) that drives the SAME store.setDecisions the multi-select context menu uses — true parity, no new mutation path. Three branches over the near-duplicates group: A 'd' single (q95 → 'delete', others clean), B 'k' single (same selection → clears q95 back to '' — the d-vs-k discriminator: a stuck-on-delete/no-op handler fails B, a stuck-on-keep handler fails A), C 'd' multi (q80 + Ctrl+q72 → both 'delete', fan-out over the whole selection). Asserted by user_decision VALUE via GET /api/manifest (a staged 'delete' keeps outcome='' so the row stays visible, no Execute). /api/decision skips the allowed-roots guard so the repo fixture dir is scanned directly with a temp db (s30/s53 precedent). HONEST OMITS (no web equivalent / separate item): ArrowDown roving focus through the virtualizer = a separate FE item (D3b); Alt+F menu mnemonic + Tab-cycle + Esc-dismiss = Qt-native UIA menu/dialog keyboard traversal (Radix owns dialog focus + Esc, the browser owns Tab order); 'p' play/pause = a PreviewPane concern. The hook's guards (modifier held / editable-field target / open-modal inertness) are covered by useDecisionShortcuts.test.ts."
 
   - scenario: s27_rescan_confirm
     playwright_module: null

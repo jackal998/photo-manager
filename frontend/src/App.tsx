@@ -10,6 +10,7 @@ import { cn } from "./lib/utils";
 import { useAppStore } from "./store/useAppStore";
 import { useScanSSE } from "./hooks/useScanSSE";
 import { useBeforeUnloadGuard } from "./hooks/useBeforeUnloadGuard";
+import { useDecisionShortcuts } from "./hooks/useDecisionShortcuts";
 import { useI18nStore } from "./i18n/useI18nStore";
 import { useT } from "./i18n/useT";
 
@@ -164,6 +165,9 @@ export default function App() {
 
   // Warn before the tab unloads while a scan is running (Qt close-guard #468).
   useBeforeUnloadGuard();
+
+  // Bare 'd' / 'k' decision shortcuts over the main-tree selection (#615 parity).
+  useDecisionShortcuts();
 
   // ---------------------------------------------------------------------------
   // Status bar text
