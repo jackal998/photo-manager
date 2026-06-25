@@ -26,6 +26,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { useAppStore } from "@/store/useAppStore";
+import { nextSelection, type SelectionResult } from "@/lib/multiSelect";
 import {
   EXECUTE_DIALOG,
   EXECUTE_BTN_EXECUTE,
@@ -105,7 +106,15 @@ export function ExecuteDialog() {
   // -------------------------------------------------------------------------
 
   const [filter, setFilter] = useState<TypeFilterValue>("all");
+  // selectedFilePath is the preview/focus target (the last-clicked row).
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  // Multi-selection for "Execute selected" (#697 — Ctrl/Cmd toggle, Shift
+  // range). Held LOCAL so the execute dialog's selection is independent of the
+  // main result tree's store.selection. Resolved via lib/multiSelect.
+  const [sel, setSel] = useState<SelectionResult>({
+    selectedPaths: [],
+    anchorPath: null,
+  });
   // Pre-execute all-delete confirmation gate (§5.5).
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   // Pending execute opts queued while the delete-confirm dialog is open.
@@ -196,9 +205,27 @@ export function ExecuteDialog() {
   // Handlers
   // -------------------------------------------------------------------------
 
-  const handleSelectFile = useCallback((filePath: string) => {
-    setSelectedFilePath(filePath);
-  }, []);
+  const handleRowSelect = useCallback(
+    (
+      filePath: string,
+      mods: { ctrl: boolean; shift: boolean },
+      orderedFilePaths: string[]
+    ) => {
+      // The clicked row is always the preview/focus target (even a Ctrl+click
+      // that toggles it OUT of the selection — mirrors the main tree).
+      setSelectedFilePath(filePath);
+      setSel((prev) =>
+        nextSelection(
+          prev.selectedPaths,
+          prev.anchorPath,
+          filePath,
+          mods,
+          orderedFilePaths
+        )
+      );
+    },
+    []
+  );
 
   const handleJumpToGroup = useCallback((groupId: string) => {
     treeRef.current?.scrollToGroup(groupId);
@@ -286,15 +313,15 @@ export function ExecuteDialog() {
   }, [executeDecisions, isAllDeleteScope, filter, decidedPaths, scopeGroupNumbers]);
 
   const handleExecuteSelected = useCallback(() => {
-    if (selectedFilePath === null) return;
-    const scopePaths = [selectedFilePath];
+    if (sel.selectedPaths.length === 0) return;
+    const scopePaths = sel.selectedPaths;
     if (isAllDeleteScope(scopePaths)) {
       pendingExecOptsRef.current = { scopePaths };
       setDeleteConfirmOpen(true);
     } else {
       void executeDecisions({ scopePaths });
     }
-  }, [executeDecisions, selectedFilePath, isAllDeleteScope]);
+  }, [executeDecisions, sel.selectedPaths, isAllDeleteScope]);
 
   const handleDeleteConfirmConfirm = useCallback(() => {
     setDeleteConfirmOpen(false);
@@ -386,8 +413,8 @@ export function ExecuteDialog() {
               ref={treeRef}
               groups={scopedGroups}
               filter={filter}
-              selectedFilePath={selectedFilePath}
-              onSelectFile={handleSelectFile}
+              selectedPaths={sel.selectedPaths}
+              onSelectFile={handleRowSelect}
               onContextMenu={handleRowContextMenu}
             />
           </div>
@@ -434,7 +461,7 @@ export function ExecuteDialog() {
             variant="outline"
             data-testid={EXECUTE_BTN_EXECUTE_SELECTED}
             onClick={handleExecuteSelected}
-            disabled={executeRunning || selectedFilePath === null}
+            disabled={executeRunning || sel.selectedPaths.length === 0}
           >
             Execute selected
           </Button>

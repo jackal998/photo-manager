@@ -12,35 +12,30 @@ Qt intent:
     4 files present with decisions still 'delete', then full Execute finishes.
 
 Web-observable assertions (this port):
-  1. After context-menu loop all 5 rows have user_decision=='delete'.
-  2. execute-btn-execute-selected is visible and not disabled after clicking
-     a single execute-tree row (selectedFilePath is set).
-  3. Clicking execute-btn-execute-selected (scope_paths=[target]) does NOT
-     trigger execute-all-delete-confirm (5-file group is not fully-execute-
-     selected; the confirm fires only when every remaining row is in scope).
-  4. After the partial execute completes (target absent from manifest), the
-     target file is absent from disk.
-  5. The other 4 files are still present on disk AND still appear in the
+  1. After the context-menu loop all 5 rows have user_decision=='delete'.
+  2. Plain-click row[0], then Ctrl+click row[1] → BOTH rows carry
+     aria-selected='true' (the #697 in-dialog multi-select) and
+     execute-btn-execute-selected is enabled.
+  3. Clicking execute-btn-execute-selected scopes scope_paths=[row0, row1];
+     all selected rows are 'delete' so the all-delete confirm fires and is
+     accepted (the same safety gate Qt shows).
+  4. After the partial execute completes BOTH targets are absent from the
+     manifest AND from disk.
+  5. The other 3 files are still present on disk AND still appear in the
      manifest with user_decision=='delete' (outcome='' so still visible).
   6. execute-dialog is still visible (web never auto-closes on partial execute
      — same invariant as Qt's "dialog stays open after Execute selected").
   7. Second-pass full Execute: click execute-btn-execute; since all remaining
-     4 rows are 'delete', execute-all-delete-confirm appears; confirm and wait
+     3 rows are 'delete', execute-all-delete-confirm appears; confirm and wait
      until GET /api/manifest total_files==0; all 5 files absent from disk.
 
-Single-vs-multi divergence (HONEST PARTIAL PORT):
-  Qt Ctrl+clicks TWO rows before hitting "Execute selected", creating a 2-item
-  multi-selection.  The web execute tree implements SINGLE-select:
-  ``selectedFilePath`` is one path; EXECUTE_BTN_EXECUTE_SELECTED scopes exactly
-  1 file (POST /api/execute with scope_paths=[target_path]).  Clicking a
-  different execute-tree row replaces the single selection; there is no
-  Ctrl+click multi-select in the current React implementation.
-
-  The port uses a 1-file subset.  It fully exercises the SAME scope_paths
-  invariant: scoped delete fires only for the scoped row and all others are
-  untouched.  The test is not weaker on the server side — scope_paths is a
-  list and POST /api/execute filters by that list regardless of whether the
-  list has 1 or N entries.  The UI's single-select constraint is the delta.
+Multi-select parity (#697):
+  The web execute tree now supports Ctrl/Cmd+click toggle and Shift+click range
+  selection (lib/multiSelect), so this port matches Qt's two-row Ctrl+click
+  multi-selection exactly — it is no longer an honest-partial 1-file port.
+  scope_paths on POST /api/execute handles 1-or-N rows identically; the
+  invariant is that the SELECTED rows execute and the unselected rows are
+  untouched.
 
 Post-execute manifest contract (corrected):
   infrastructure/manifest_repository.py:60 uses "WHERE outcome = ''" as the
@@ -71,6 +66,7 @@ from qa.web._pw import PWContext
 from qa.web._invariants import (
     run_scan,
     right_click_row,
+    ctrl_click_row,
     click_context_item,
     open_execute_dialog,
 )
@@ -194,7 +190,7 @@ def _poll_until_empty(
 
 
 def run(*, base_url: str) -> None:
-    """Scan near-dup copies; partial-execute 1 file; assert survivors intact."""
+    """Scan near-dup copies; partial-execute 2 files; assert survivors intact."""
     # Copy fixture JPEGs into a fresh tmpdir so real deletes hit the copies,
     # not the checked-in qa/sandbox/near-duplicates/ files.
     tmpdir = tempfile.mkdtemp(prefix="qa_s64_")
@@ -256,38 +252,48 @@ def run(*, base_url: str) -> None:
             open_execute_dialog(page)
             page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="visible", timeout=10_000)
 
-            # ── Step 5: pick ONE target row in the execute tree ───────────────
-            # Web single-select: clicking an execute-tree row sets selectedFilePath
-            # to that one file's path, enabling execute-btn-execute-selected.
-            # (Qt Ctrl+clicked 2 rows; web has no multi-select — see docstring.)
-            target = _ALL_BASENAMES[0]  # "neardup_00_q95.jpg"
-            exec_row_tid = execute_row_testid(group_id, target)
-            exec_row = page.get_by_test_id(exec_row_tid)
-            exec_row.wait_for(state="attached", timeout=10_000)
+            # ── Step 5: build a 2-row multi-selection in the execute tree ─────
+            # Plain-click row[0], then Ctrl+click row[1] (#697 in-dialog
+            # multi-select — lib/multiSelect). Qt does the same Ctrl+click
+            # pairing; the web port now matches it instead of single-select.
+            targets = [_ALL_BASENAMES[0], _ALL_BASENAMES[1]]
+            target0_tid = execute_row_testid(group_id, targets[0])
+            exec_row0 = page.get_by_test_id(target0_tid)
+            exec_row0.wait_for(state="attached", timeout=10_000)
             try:
-                exec_row.scroll_into_view_if_needed(timeout=10_000)
+                exec_row0.scroll_into_view_if_needed(timeout=10_000)
             except Exception:  # noqa: BLE001 — virtualised row may not need scrolling
                 pass
-            exec_row.wait_for(state="visible", timeout=10_000)
-            exec_row.click()
+            exec_row0.wait_for(state="visible", timeout=10_000)
+            exec_row0.click()  # plain click → selects exactly row[0]
+            ctrl_click_row(page, execute_row_testid(group_id, targets[1]))
+
+            # BOTH selected rows must be visually selected (the #697 highlight).
+            for t in targets:
+                row = page.get_by_test_id(execute_row_testid(group_id, t))
+                assert row.get_attribute("aria-selected") == "true", (
+                    f"execute row {t!r} is not aria-selected after the plain-click "
+                    f"+ Ctrl+click multi-select (#697 regressed); "
+                    f"aria-selected={row.get_attribute('aria-selected')!r}."
+                )
 
             # ── Step 6: assert execute-btn-execute-selected is enabled ────────
             exec_sel_btn = page.get_by_test_id(EXECUTE_BTN_EXECUTE_SELECTED)
             exec_sel_btn.wait_for(state="visible", timeout=10_000)
             assert not exec_sel_btn.is_disabled(), (
-                "execute-btn-execute-selected is disabled after clicking an "
-                "execute-tree row — selectedFilePath wiring may have regressed"
+                "execute-btn-execute-selected is disabled after building a 2-row "
+                "multi-selection — the selection wiring may have regressed"
             )
 
-            # ── Step 7: click Execute selected (scope_paths=[target]) ─────────
-            # Scoping 1 of 5 rows → isAllDeleteScope=False → NO confirm sheet.
-            # If a confirm appears anyway (edge case: group collapsed to 1 row)
-            # we dismiss it to stay robust, as Qt does in the matching step.
+            # ── Step 7: click Execute selected (scope_paths=[row0, row1]) ─────
+            # Both selected rows are 'delete', so the scope is all-delete and the
+            # confirm sheet is EXPECTED — accept it. We keep the tolerant
+            # sniff-and-dismiss so the scenario is robust to the gate's exact
+            # firing rule (governed by isAllDeleteScope, not by #697).
             exec_sel_btn.click()
 
-            # Wait a short time for any confirm sheet to appear, then dismiss.
-            # With 5 rows and 1 selected, the confirm SHOULD NOT appear.  We
-            # give it 2 s to be safe, matching Qt's confirm-sniff window.
+            # Wait a short time for the confirm sheet to appear, then accept it.
+            # We give it 2 s, matching Qt's confirm-sniff window.
             confirm_appeared = False
             try:
                 page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM).wait_for(
@@ -304,44 +310,43 @@ def run(*, base_url: str) -> None:
             # Record whether it appeared (informational — not a failure by itself).
             _ = confirm_appeared  # suppress "unused variable" lint
 
-            # ── Step 8: wait until target is absent from the manifest ──────────
+            # ── Step 8: wait until BOTH targets are absent from the manifest ──
             # Absence = outcome was set to 'deleted' and the row dropped from
             # _LOAD_ALL_SQL (WHERE outcome = '').  We poll the HTTP API, not
             # the Playwright DOM — the DOM tree may not update synchronously.
-            _poll_until_absent(base_url, db_path, target, timeout_s=30.0)
+            for t in targets:
+                _poll_until_absent(base_url, db_path, t, timeout_s=30.0)
 
             # ── Step 9: ASSERT absence-based invariants ───────────────────────
-            # 9a. Target absent from disk (send2trash moved it out of tmpdir).
-            target_path = os.path.join(tmpdir, target)
-            assert not os.path.exists(target_path), (
-                f"FAIL: {target!r} still exists on disk after partial execute — "
-                f"POST /api/execute with scope_paths did not fire or send2trash "
-                f"did not move the file."
-            )
-
-            # 9b. Target absent from manifest (already confirmed by _poll_until_absent,
-            #     but re-assert with a fresh read so the error message is clear).
             manifest_mid = _get_manifest(base_url, db_path)
             visible_mid = _extract_visible_basenames(manifest_mid)
-            assert target not in visible_mid, (
-                f"FAIL: {target!r} still appears in manifest items after partial "
-                f"execute (expected absence — outcome='deleted' filters it out)."
-            )
+            decisions_mid = _extract_decisions(manifest_mid)
 
-            # 9c. The other 4 files must still be present on disk.
-            survivors = [bn for bn in _ALL_BASENAMES if bn != target]
+            # 9a/9b. BOTH targets absent from disk (send2trash) AND from manifest
+            #        (outcome='deleted' filters them out of _LOAD_ALL_SQL).
+            for t in targets:
+                target_path = os.path.join(tmpdir, t)
+                assert not os.path.exists(target_path), (
+                    f"FAIL: {t!r} still exists on disk after partial execute — "
+                    f"POST /api/execute with scope_paths did not fire or "
+                    f"send2trash did not move the file."
+                )
+                assert t not in visible_mid, (
+                    f"FAIL: {t!r} still appears in manifest items after partial "
+                    f"execute (expected absence — outcome='deleted' filters it out)."
+                )
+
+            # 9c/9d. The other 3 files must still be present on disk AND in the
+            #        manifest with user_decision=='delete' (outcome='' visible) —
+            #        scope_paths must confine the delete to the SELECTED rows.
+            survivors = [bn for bn in _ALL_BASENAMES if bn not in targets]
             for basename in survivors:
                 survivor_path = os.path.join(tmpdir, basename)
                 assert os.path.exists(survivor_path), (
                     f"FAIL: non-targeted {basename!r} was deleted by partial "
                     f"execute — scope_paths must confine the delete to the "
-                    f"selected row only."
+                    f"selected rows only."
                 )
-
-            # 9d. The other 4 files must still appear in the manifest with
-            #     user_decision=='delete' (outcome='' → still visible).
-            decisions_mid = _extract_decisions(manifest_mid)
-            for basename in survivors:
                 assert basename in visible_mid, (
                     f"FAIL: survivor {basename!r} is missing from manifest after "
                     f"partial execute (expected outcome='' so still visible)."
@@ -356,10 +361,10 @@ def run(*, base_url: str) -> None:
             #     auto-close the dialog — web mirrors Qt's invariant exactly).
             assert page.get_by_test_id(EXECUTE_DIALOG).is_visible(), (
                 "FAIL: execute-dialog closed after Execute selected — partial "
-                "execute must keep the dialog open for the remaining 4 rows."
+                "execute must keep the dialog open for the remaining 3 rows."
             )
 
-            # ── Step 10: second-pass full Execute (remaining 4 rows) ──────────
+            # ── Step 10: second-pass full Execute (remaining 3 rows) ──────────
             # NOTE: if the execute tree does not refresh its row list after the
             # partial delete, clicking the full Execute button may behave
             # unexpectedly.  If this second pass is flaky, flag it in the
@@ -369,7 +374,7 @@ def run(*, base_url: str) -> None:
             exec_btn.wait_for(state="visible", timeout=10_000)
             exec_btn.click()
 
-            # All 4 remaining rows are 'delete', so the all-delete confirm
+            # All 3 remaining rows are 'delete', so the all-delete confirm
             # MUST appear for the full-execute case.
             page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM).wait_for(
                 state="visible", timeout=10_000

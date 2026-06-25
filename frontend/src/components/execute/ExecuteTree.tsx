@@ -57,8 +57,18 @@ type VRow = GroupHeaderVRow | FileVRow;
 interface ExecuteTreeProps {
   groups: Group[];
   filter: TypeFilterValue;
-  selectedFilePath: string | null;
-  onSelectFile: (filePath: string) => void;
+  /** Multi-selection (#697): the file paths currently selected in the dialog. */
+  selectedPaths: string[];
+  /**
+   * A row was clicked. ``mods`` carries the Ctrl/Cmd + Shift state and
+   * ``orderedFilePaths`` is the visible row order (for Shift-range math) — the
+   * parent owns the selection state and resolves it via lib/multiSelect.
+   */
+  onSelectFile: (
+    filePath: string,
+    mods: { ctrl: boolean; shift: boolean },
+    orderedFilePaths: string[]
+  ) => void;
   /** Right-click a row — opens the execute-dialog context menu (cluster B). */
   onContextMenu?: (
     filePath: string,
@@ -74,7 +84,7 @@ interface ExecuteTreeProps {
 
 export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
   function ExecuteTree(
-    { groups, filter, selectedFilePath, onSelectFile, onContextMenu },
+    { groups, filter, selectedPaths, onSelectFile, onContextMenu },
     ref
   ) {
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -108,13 +118,23 @@ export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
             folder: item.folder,
             decision: item.user_decision as "delete" | "ignore",
             thumbnailUrl: item.thumbnail_url,
-            isSelected: item.file_path === selectedFilePath,
+            isSelected: selectedPaths.includes(item.file_path),
             isLocked: item.is_locked,
           });
         }
       }
       return rows;
-    }, [groups, filter, selectedFilePath]);
+    }, [groups, filter, selectedPaths]);
+
+    // Visible file paths in render order — the domain over which a Shift+click
+    // computes its inclusive range. Passed up to the parent on every click.
+    const orderedFilePaths = useMemo<string[]>(() => {
+      const paths: string[] = [];
+      for (const vrow of vrows) {
+        if (vrow.kind === "file") paths.push(vrow.filePath);
+      }
+      return paths;
+    }, [vrows]);
 
     // Build index from groupId → first vrow index so we can jump to it.
     const groupStartIndex = useMemo<Map<string, number>>(() => {
@@ -150,10 +170,10 @@ export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
     }));
 
     const handleFileClick = useCallback(
-      (filePath: string) => {
-        onSelectFile(filePath);
+      (filePath: string, mods: { ctrl: boolean; shift: boolean }) => {
+        onSelectFile(filePath, mods, orderedFilePaths);
       },
-      [onSelectFile]
+      [onSelectFile, orderedFilePaths]
     );
 
     if (vrows.length === 0) {
@@ -240,7 +260,10 @@ function ExecuteFileRow({
   onContextMenu,
 }: {
   vrow: FileVRow;
-  onClick: (filePath: string) => void;
+  onClick: (
+    filePath: string,
+    mods: { ctrl: boolean; shift: boolean }
+  ) => void;
   onContextMenu?: (
     filePath: string,
     isLocked: boolean,
@@ -255,14 +278,20 @@ function ExecuteFileRow({
     <button
       type="button"
       data-testid={testId}
-      onClick={() => onClick(vrow.filePath)}
+      aria-selected={vrow.isSelected}
+      onClick={(e) =>
+        onClick(vrow.filePath, {
+          ctrl: e.ctrlKey || e.metaKey,
+          shift: e.shiftKey,
+        })
+      }
       onContextMenu={(e) => {
         if (!onContextMenu) return;
         e.preventDefault();
         onContextMenu(vrow.filePath, vrow.isLocked, e.clientX, e.clientY);
       }}
       className={[
-        "flex items-center gap-3 w-full px-3 py-2 text-left border-b border-neutral-100 hover:bg-neutral-50 focus:outline-none focus:ring-inset focus:ring-1 focus:ring-neutral-300",
+        "flex items-center gap-3 w-full px-3 py-2 text-left select-none border-b border-neutral-100 hover:bg-neutral-50 focus:outline-none focus:ring-inset focus:ring-1 focus:ring-neutral-300",
         vrow.isSelected ? "bg-blue-50 hover:bg-blue-100" : "",
       ]
         .join(" ")

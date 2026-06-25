@@ -334,6 +334,113 @@ describe("ExecuteDialog", () => {
     });
   });
 
+  // 7a-i (#697). Ctrl+click builds a multi-selection; Execute-selected scopes
+  // to ALL selected rows. ref (delete) + dup (ignore) is a mixed scope, so the
+  // all-delete gate stays closed and executeDecisions fires directly.
+  it("Ctrl+click selects multiple rows; Execute-selected scopes to all of them", () => {
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-ref.jpg"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-dup.jpg"), {
+        ctrlKey: true,
+      });
+    });
+
+    // Both rows are visually selected.
+    expect(screen.getByTestId("execute-row-1-ref.jpg")).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    expect(screen.getByTestId("execute-row-1-dup.jpg")).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED));
+    });
+
+    expect(executeDecisionsMock).toHaveBeenCalledOnce();
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/photos/ref.jpg", "/photos/dup.jpg"],
+    });
+  });
+
+  // 7a-ii (#697). A PLAIN click REPLACES the selection (not additive) — the
+  // invariant s51/s64 depend on: click A then plain-click B ⇒ only B selected.
+  it("a plain click replaces the selection rather than adding to it", () => {
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-ref.jpg"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-dup.jpg"));
+    });
+
+    expect(screen.getByTestId("execute-row-1-ref.jpg")).toHaveAttribute(
+      "aria-selected",
+      "false"
+    );
+    expect(screen.getByTestId("execute-row-1-dup.jpg")).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED));
+    });
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/photos/dup.jpg"],
+    });
+  });
+
+  // 7a-iii (#697). Ctrl+click toggles a row back OUT of the selection.
+  it("Ctrl+click toggles a row out of the selection", () => {
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-ref.jpg"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-dup.jpg"), {
+        ctrlKey: true,
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-dup.jpg"), {
+        ctrlKey: true,
+      });
+    });
+
+    expect(screen.getByTestId("execute-row-1-dup.jpg")).toHaveAttribute(
+      "aria-selected",
+      "false"
+    );
+    expect(screen.getByTestId("execute-row-1-ref.jpg")).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+  });
+
   // 7b. Execute-selected on a delete-only row shows DeleteConfirmDialog gate first.
   it("Execute-selected on a delete-only row shows the delete-confirm gate", () => {
     const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
