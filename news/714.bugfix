@@ -1,0 +1,1 @@
+Fix the web prune-lock flow folding still-locked items into the prune set when their unlock PATCH fails — hold them back while still pruning the unlocked buckets, and surface a prune-context error (#702)
