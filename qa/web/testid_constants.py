@@ -191,6 +191,20 @@ SCAN_AUTOTUNE = "scan-autotune"
 """'Auto-tune reader concurrency' checkbox (Advanced settings) — default ON
 (opt-out, #551 Phase 4); never changes grouping."""
 
+SCAN_RESCAN_CONFIRM_DIALOG = "scan-rescan-confirm-dialog"
+"""'Discard pending decisions?' confirmation shown when Start Scan is clicked
+while the loaded manifest has staged (un-executed) decisions a re-scan would
+discard.  Nested modal over the scan dialog.  Mirrors Qt's
+MainWindow._confirm_no_pending_decisions QMessageBox — s27 (#142)."""
+
+SCAN_RESCAN_CONFIRM_CANCEL = "scan-rescan-confirm-cancel"
+"""'Cancel' button in the rescan-confirm dialog (the safe default — keeps the
+pending decisions and leaves the scan dialog open, no scan)."""
+
+SCAN_RESCAN_CONFIRM_DISCARD = "scan-rescan-confirm-discard"
+"""'Discard & Rescan' button — destructive: proceeds with the scan, which
+rebuilds the manifest and clears the pending decisions."""
+
 # ---------------------------------------------------------------------------
 # Execute-action dialog (§5 canonical names — Phase 2C2)
 # ---------------------------------------------------------------------------

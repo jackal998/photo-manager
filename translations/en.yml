@@ -592,3 +592,10 @@ web:
   # Scan dialog — web-only strings added alongside the browse picker.
   scan:
     browse: "Browse…"
+  rescan_confirm:
+    title: "Discard pending decisions?"
+    body: "You have {pending} on the loaded manifest. Starting a new scan will discard them."
+    noun_singular: "pending decision"
+    noun_plural: "pending decisions"
+    cancel: "Cancel"
+    discard_and_rescan: "Discard & Rescan"

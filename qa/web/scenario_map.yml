@@ -152,9 +152,9 @@ scenarios:
     notes: "HONEST PARTIAL — the DECISION shortcuts (Qt step 0, #615) only. Ports app/views/components/decision_tree_view.py (bare 'd' → user_decision='delete', bare 'k' → '' / no-decision per #584; modifier-bearing presses fall through, Qt NoModifier guard) onto a document-level hook (frontend/src/hooks/useDecisionShortcuts.ts) that drives the SAME store.setDecisions the multi-select context menu uses — true parity, no new mutation path. Three branches over the near-duplicates group: A 'd' single (q95 → 'delete', others clean), B 'k' single (same selection → clears q95 back to '' — the d-vs-k discriminator: a stuck-on-delete/no-op handler fails B, a stuck-on-keep handler fails A), C 'd' multi (q80 + Ctrl+q72 → both 'delete', fan-out over the whole selection). Asserted by user_decision VALUE via GET /api/manifest (a staged 'delete' keeps outcome='' so the row stays visible, no Execute). /api/decision skips the allowed-roots guard so the repo fixture dir is scanned directly with a temp db (s30/s53 precedent). HONEST OMITS (no web equivalent / separate item): ArrowDown roving focus through the virtualizer = a separate FE item (D3b); Alt+F menu mnemonic + Tab-cycle + Esc-dismiss = Qt-native UIA menu/dialog keyboard traversal (Radix owns dialog focus + Esc, the browser owns Tab order); 'p' play/pause = a PreviewPane concern. The hook's guards (modifier held / editable-field target / open-modal inertness) are covered by useDecisionShortcuts.test.ts."
 
   - scenario: s27_rescan_confirm
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s27_rescan_confirm
+    status: done
+    notes: "Re-scan while the loaded manifest has pending decisions → 'Discard pending decisions?' gate (#142). Stage a delete on a row, click Start Scan: Branch A Cancel keeps the decision, runs NO scan, and the scan dialog STAYS OPEN (true Qt parity — the new RescanConfirmDialog is a nested Radix modal, but ScanDialog's onInteractOutside/onEscapeKeyDown guards keep the dialog open while it's up, unlike s34's documented close-cascade divergence). Branch B Discard & Rescan rebuilds the manifest and clears the decisions. FE feature build: ScanDialog.handleStart now gates on a pendingDecisionCount store selector + a RescanConfirmDialog (en/zh_TW, pluralized count). Pending count verified through GET /api/manifest (the persisted authority the store mirrors)."
 
   - scenario: s28_exit_dirty_prompt
     playwright_module: null

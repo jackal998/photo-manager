@@ -499,3 +499,10 @@ web:
   # Scan dialog — web-only strings added alongside the browse picker.
   scan:
     browse: "瀏覽…"
+  rescan_confirm:
+    title: "捨棄未儲存的決策?"
+    body: "目前載入的清單上有 {pending} 尚未儲存。開始新的掃描將會捨棄這些決策。"
+    noun_singular: "項待儲存的決策"
+    noun_plural: "項待儲存的決策"
+    cancel: "取消"
+    discard_and_rescan: "捨棄並重新掃描"

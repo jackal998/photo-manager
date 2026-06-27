@@ -41,6 +41,7 @@ import {
 import { SourceRow, type SourceEntry } from "./scan/SourceRow";
 import { ScanProgress } from "./scan/ScanProgress";
 import { FsBrowser } from "./FsBrowser";
+import { RescanConfirmDialog } from "./dialogs/RescanConfirmDialog";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,6 +118,16 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   const loadManifest = useAppStore((s) => s.loadManifest);
   const resetScan = useAppStore((s) => s.resetScan);
 
+  // Count of loaded-manifest rows carrying a staged (un-executed) decision.
+  // A re-scan rebuilds the manifest from scratch and would discard these, so
+  // Start Scan gates behind a confirm when this is > 0 (Qt s27 / #142 parity).
+  const pendingDecisionCount = useAppStore((s) =>
+    s.manifest.groups.reduce(
+      (n, g) => n + g.items.filter((f) => f.user_decision !== "").length,
+      0
+    )
+  );
+
   // ---------------------------------------------------------------------------
   // Form state — local to dialog (reset on each open)
   // ---------------------------------------------------------------------------
@@ -132,6 +143,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
 
   // Filesystem picker target (null = picker closed).
   const [browseTarget, setBrowseTarget] = useState<BrowseTarget | null>(null);
+
+  // Re-scan confirmation gate — open once Start Scan is clicked while pending
+  // decisions exist. A nested modal layer over this dialog (same treatment as
+  // the FsBrowser picker below: the onInteractOutside/onEscapeKeyDown guards
+  // keep this dialog open while the confirm is up).
+  const [rescanConfirmOpen, setRescanConfirmOpen] = useState(false);
 
   // Load persisted sources/output when the dialog opens fresh (not mid-scan).
   //
@@ -265,7 +282,10 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     outputPath.trim() !== "" &&
     sources.some((s) => s.label.trim() !== "" && s.path.trim() !== "");
 
-  const handleStart = useCallback(() => {
+  // The actual scan kickoff: validate, build the request, persist sources for
+  // the next launch, fire startScan. Reached directly when there are no
+  // pending decisions, or via the rescan-confirm "Discard & Rescan" verdict.
+  const startScanNow = useCallback(() => {
     const validSources = sources.filter(
       (s) => s.label.trim() !== "" && s.path.trim() !== ""
     );
@@ -305,6 +325,27 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
 
     void startScan(req);
   }, [sources, outputPath, autoSelect, aggressiveDelete, autotuneReadKnee, startScan]);
+
+  // Start Scan click. When the loaded manifest still has pending decisions, a
+  // re-scan would discard them — gate behind a confirm (Qt s27 / #142). With
+  // no pending decisions, start immediately (the default path every other
+  // scan scenario exercises, so they prove the gate doesn't fire spuriously).
+  const handleStart = useCallback(() => {
+    if (pendingDecisionCount > 0) {
+      setRescanConfirmOpen(true);
+      return;
+    }
+    startScanNow();
+  }, [pendingDecisionCount, startScanNow]);
+
+  const handleRescanConfirm = useCallback(() => {
+    setRescanConfirmOpen(false);
+    startScanNow();
+  }, [startScanNow]);
+
+  const handleRescanCancel = useCallback(() => {
+    setRescanConfirmOpen(false);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Cancel
@@ -351,10 +392,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         // is a nested layer — a click inside it must not dismiss the scan
         // dialog underneath).
         onInteractOutside={(e) => {
-          if (isRunning || browseTarget !== null) e.preventDefault();
+          if (isRunning || browseTarget !== null || rescanConfirmOpen)
+            e.preventDefault();
         }}
         onEscapeKeyDown={(e) => {
-          if (isRunning || browseTarget !== null) e.preventDefault();
+          if (isRunning || browseTarget !== null || rescanConfirmOpen)
+            e.preventDefault();
         }}
       >
         <DialogHeader>
@@ -547,6 +590,17 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
           onOpenChange={(o) => {
             if (!o) setBrowseTarget(null);
           }}
+        />
+
+        {/* Re-scan confirmation — nested over this dialog. Cancel keeps the
+            pending decisions and leaves this dialog open (the guards above
+            stop the nested-modal interact-outside from closing it); Discard &
+            Rescan proceeds with the scan, which rebuilds the manifest. */}
+        <RescanConfirmDialog
+          open={rescanConfirmOpen}
+          pendingCount={pendingDecisionCount}
+          onConfirm={handleRescanConfirm}
+          onCancel={handleRescanCancel}
         />
       </DialogContent>
     </Dialog>

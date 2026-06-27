@@ -41,6 +41,9 @@ import {
   SCAN_OUTPUT_PATH,
   SCAN_PROGRESS_BAR,
   SCAN_PROGRESS_LOG,
+  SCAN_RESCAN_CONFIRM_CANCEL,
+  SCAN_RESCAN_CONFIRM_DIALOG,
+  SCAN_RESCAN_CONFIRM_DISCARD,
   SCAN_START_BUTTON,
   SCAN_STATUS_TEXT,
 } from "@/testids";
@@ -62,6 +65,33 @@ function seedScanState(patch: Partial<ReturnType<typeof useAppStore.getState>["s
   useAppStore.setState((s) => ({
     scan: { ...s.scan, ...patch },
   }));
+}
+
+/**
+ * Seed the loaded manifest with rows carrying the given decisions, so the
+ * rescan-confirm gate (Qt s27 / #142) has pending decisions to discard. Only
+ * `user_decision` is read by the gate selector; the rest of FileRow is filled
+ * with throwaway values and cast.
+ */
+function seedManifestDecisions(decisions: Array<"" | "delete" | "ignore">) {
+  const items = decisions.map((d, i) => ({
+    file_path: `C:/p/file${i}.jpg`,
+    basename: `file${i}.jpg`,
+    user_decision: d,
+  }));
+  useAppStore.setState((s) => ({
+    manifest: {
+      ...s.manifest,
+      groups: [{ group_number: 1, member_count: items.length, items }],
+    },
+  }) as never);
+}
+
+/** Fill the source label/path + output so the Start button is enabled. */
+async function fillStartFields(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByRole("textbox", { name: /source label/i }), "Pics");
+  await user.type(screen.getByRole("textbox", { name: /source path/i }), "D:/pics");
+  await user.type(screen.getByTestId(SCAN_OUTPUT_PATH), "D:/out.db");
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +122,9 @@ describe("ScanDialog", () => {
         error: null,
         outputPath: null,
       },
-      manifest: s.manifest,
+      // Clear any pending decisions seeded by the rescan-gate tests so the
+      // default-path tests (no gate) start clean regardless of test order.
+      manifest: { ...s.manifest, groups: [] },
       settings: s.settings,
     }));
   });
@@ -393,5 +425,66 @@ describe("ScanDialog", () => {
       expect(labels).toHaveLength(1);
     });
     expect(screen.getByRole("textbox", { name: /source label/i })).toHaveValue("");
+  });
+
+  // -------------------------------------------------------------------------
+  // Re-scan confirmation gate (Qt s27 / #142)
+  // -------------------------------------------------------------------------
+
+  it("opens the rescan-confirm gate instead of scanning when decisions are pending", async () => {
+    const user = userEvent.setup();
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+    seedManifestDecisions(["delete"]);
+
+    renderDialog();
+    await fillStartFields(user);
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    // The confirm appears; the scan has NOT started.
+    expect(screen.getByTestId(SCAN_RESCAN_CONFIRM_DIALOG)).toBeInTheDocument();
+    expect(startScanMock).not.toHaveBeenCalled();
+    // Body carries the pluralized count so the user (and QA) can see how many
+    // decisions would be discarded.
+    expect(screen.getByTestId(SCAN_RESCAN_CONFIRM_DIALOG)).toHaveTextContent(
+      "1 pending decision"
+    );
+  });
+
+  it("proceeds with the scan when the gate's Discard & Rescan is clicked", async () => {
+    const user = userEvent.setup();
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+    seedManifestDecisions(["delete", "ignore"]);
+
+    renderDialog();
+    await fillStartFields(user);
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+    // Plural body for two pending decisions.
+    expect(screen.getByTestId(SCAN_RESCAN_CONFIRM_DIALOG)).toHaveTextContent(
+      "2 pending decisions"
+    );
+
+    await user.click(screen.getByTestId(SCAN_RESCAN_CONFIRM_DISCARD));
+
+    expect(startScanMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not scan and keeps the dialog open when the gate is cancelled", async () => {
+    const user = userEvent.setup();
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+    seedManifestDecisions(["delete"]);
+
+    renderDialog();
+    await fillStartFields(user);
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+    await user.click(screen.getByTestId(SCAN_RESCAN_CONFIRM_CANCEL));
+
+    expect(startScanMock).not.toHaveBeenCalled();
+    // The scan dialog stays open (true Qt parity — the nested-modal guard keeps
+    // it from closing on the confirm's dismiss).
+    expect(screen.getByTestId(SCAN_DIALOG)).toBeInTheDocument();
+    expect(screen.queryByTestId(SCAN_RESCAN_CONFIRM_DIALOG)).not.toBeInTheDocument();
   });
 });

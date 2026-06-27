@@ -52,6 +52,9 @@ REQUIRED_TESTIDS: dict[str, str] = {
     "SCAN_PROGRESS_LOG": "scan-progress-log",
     "SCAN_PROGRESS_BAR": "scan-progress-bar",
     "SCAN_STATUS_TEXT": "scan-status-text",
+    "SCAN_RESCAN_CONFIRM_DIALOG": "scan-rescan-confirm-dialog",
+    "SCAN_RESCAN_CONFIRM_CANCEL": "scan-rescan-confirm-cancel",
+    "SCAN_RESCAN_CONFIRM_DISCARD": "scan-rescan-confirm-discard",
     # Execute dialog (§5 canonical)
     "EXECUTE_DIALOG": "execute-dialog",
     "EXECUTE_ALL_DELETE_BANNER": "execute-all-delete-banner",
