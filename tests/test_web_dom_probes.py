@@ -35,6 +35,7 @@ REQUIRED_TESTIDS: dict[str, str] = {
     # Main window
     "MAIN_RESULT_TREE": "main-result-tree",
     "MAIN_STATUS_BAR": "main-status-bar",
+    "MAIN_STATUS_ERROR": "main-status-error",
     "MAIN_SCAN_BUTTON": "main-scan-button",
     "MAIN_EXECUTE_BUTTON": "main-execute-button",
     "MAIN_LANG_TOGGLE": "main-lang-toggle",

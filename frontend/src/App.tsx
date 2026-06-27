@@ -40,6 +40,7 @@ import {
   MAIN_SCAN_BUTTON,
   MAIN_SETTINGS_BUTTON,
   MAIN_STATUS_BAR,
+  MAIN_STATUS_ERROR,
 } from "./testids";
 
 // ---------------------------------------------------------------------------
@@ -338,6 +339,21 @@ export default function App() {
         >
           {statusText}
         </p>
+        {/* Additive error line (#712): manifest.error is written by ~9 store
+            actions (failed load / decision / lock / prune / save) but was
+            rendered nowhere. Show it below the status text — without masking
+            the summary — so the failure is visible. */}
+        {manifest.error !== null && (
+          <p
+            data-testid={MAIN_STATUS_ERROR}
+            role="alert"
+            className="px-4 py-1 text-sm text-red-600"
+          >
+            {t("web.status.manifest_failed", "Manifest error: {error}", {
+              error: manifest.error,
+            })}
+          </p>
+        )}
       </footer>
 
       {/* ------------------------------------------------------------------ */}

@@ -484,6 +484,7 @@ web:
     loading_manifest: "Loading manifest…"
     scanning: "Scanning{stage}"
     scan_failed: "Scan failed: {error}"
+    manifest_failed: "Manifest error: {error}"
     ready: "Ready"
   empty_state:
     no_manifest: "No manifest loaded — Scan or Open a manifest to begin."

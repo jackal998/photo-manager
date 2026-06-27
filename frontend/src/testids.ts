@@ -2,6 +2,7 @@
 
 export const MAIN_RESULT_TREE = "main-result-tree";
 export const MAIN_STATUS_BAR = "main-status-bar";
+export const MAIN_STATUS_ERROR = "main-status-error";
 export const MAIN_SCAN_BUTTON = "main-scan-button";
 export const MAIN_EXECUTE_BUTTON = "main-execute-button";
 export const MAIN_LANG_TOGGLE = "main-lang-toggle";

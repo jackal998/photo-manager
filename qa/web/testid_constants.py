@@ -36,6 +36,13 @@ MAIN_RESULT_TREE = "main-result-tree"
 MAIN_STATUS_BAR = "main-status-bar"
 """Status-bar paragraph shown at the bottom of the main page."""
 
+MAIN_STATUS_ERROR = "main-status-error"
+"""Additive error line in the footer, below MAIN_STATUS_BAR.  Renders the
+store's ``manifest.error`` (a failed manifest load / decision / lock / prune /
+save) as a ``role="alert"`` line so the failure is visible to the user instead
+of being written to a field nothing renders (#712).  Conditional — absent when
+``manifest.error`` is null."""
+
 MAIN_SCAN_BUTTON = "main-scan-button"
 """'Scan' / 'Re-scan' button that opens the scan dialog."""
 

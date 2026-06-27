@@ -87,7 +87,7 @@ def test_zh_tw_toolbar_scan_is_chinese() -> None:
 
 
 def test_zh_tw_all_web_keys_present() -> None:
-    """All 12 web.* keys added in this PR must exist in zh_TW strings.
+    """Every web.* key the UI renders must exist in zh_TW strings (en↔zh parity).
 
     Real failure mode: one key was added to en.yml but omitted from zh_TW.yml,
     causing the web UI to silently render English in an otherwise Chinese session."""
@@ -100,6 +100,7 @@ def test_zh_tw_all_web_keys_present() -> None:
         "web.status.loading_manifest",
         "web.status.scanning",
         "web.status.scan_failed",
+        "web.status.manifest_failed",  # #712 — manifest.error render line
         "web.status.ready",
         "web.empty_state.no_manifest",
         "web.manifest.input_placeholder",

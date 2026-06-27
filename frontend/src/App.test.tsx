@@ -20,6 +20,7 @@ import {
   MAIN_SCAN_BUTTON,
   MAIN_SETTINGS_BUTTON,
   MAIN_STATUS_BAR,
+  MAIN_STATUS_ERROR,
   SCAN_DIALOG,
   DLGE_SETTINGS_DIALOG,
   EXECUTE_DIALOG,
@@ -222,6 +223,63 @@ describe("App status bar", () => {
 
   it("shows 'Ready' when no manifest is loaded and no scan is running", () => {
     renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_STATUS_BAR)).toHaveTextContent("Ready");
+  });
+
+  // #712 — manifest.error was written by ~9 store actions but rendered nowhere.
+  // The footer now shows an additive role="alert" line when it is non-null.
+
+  it("does not render the manifest-error line when manifest.error is null", () => {
+    renderWithProviders(<App />);
+    expect(screen.queryByTestId(MAIN_STATUS_ERROR)).not.toBeInTheDocument();
+  });
+
+  it("renders the manifest-error alert when manifest.error is set, without masking the summary", () => {
+    // A manifest is loaded (path !== null) AND a later action failed. The
+    // error must appear AND the 'N groups · M files' summary must remain — the
+    // additive line never hides the summary (the reason it is a separate <p>
+    // and not an error-first branch in the statusText chain).
+    act(() => {
+      useAppStore.setState({
+        manifest: {
+          path: "/manifests/test.db",
+          groups: TEST_GROUPS,
+          totalGroups: 1,
+          totalFiles: 2,
+          loading: false,
+          error: "decision PATCH failed",
+        },
+      });
+    });
+    renderWithProviders(<App />);
+    const alert = screen.getByTestId(MAIN_STATUS_ERROR);
+    expect(alert).toHaveTextContent("Manifest error: decision PATCH failed");
+    expect(alert).toHaveAttribute("role", "alert");
+    // Summary still visible — not masked by the error.
+    expect(screen.getByTestId(MAIN_STATUS_BAR)).toHaveTextContent(
+      "1 groups · 2 files"
+    );
+  });
+
+  it("surfaces a manifest LOAD failure (path null) as the error line while the status bar stays 'Ready'", () => {
+    // loadManifest's own catch leaves path null and sets error — the most
+    // common manifest.error source (e.g. opening a moved/typo'd manifest).
+    act(() => {
+      useAppStore.setState({
+        manifest: {
+          path: null,
+          groups: [],
+          totalGroups: 0,
+          totalFiles: 0,
+          loading: false,
+          error: "HTTP 404: Manifest not found: '/bad.db'",
+        },
+      });
+    });
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_STATUS_ERROR)).toHaveTextContent(
+      "Manifest error: HTTP 404: Manifest not found: '/bad.db'"
+    );
     expect(screen.getByTestId(MAIN_STATUS_BAR)).toHaveTextContent("Ready");
   });
 });
