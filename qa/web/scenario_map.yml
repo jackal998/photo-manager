@@ -187,9 +187,9 @@ scenarios:
     notes: "All-delete warning banner + per-group jump link. NON-destructive: marks all 5 delete, opens execute dialog, asserts EXECUTE_ALL_DELETE_BANNER visible + the execute-all-delete-jump-{group_number} button visible, clicks the real <button> (web IMPROVES on Qt, which couldn't click the QLabel <a> on hosted CI), Escape-closes, asserts rows unchanged. No file deletion."
 
   - scenario: s34_lock_confirm_at_execute
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s34_lock_confirm_at_execute
+    status: done
+    notes: "Execute-time lock-confirm, Cancel verdict (#182). Scans the 5 near-dups, marks all 5 'delete' via per-row CTX_SET_ACTION_DELETE, locks q95 via CTX_LOCK → Execute → all-delete confirm (web ordering: fires BEFORE the POST) → POST /api/execute 409 locked_paths → LOCK_CONFIRM_DIALOG. Asserts the body contains 'DELETE' (IMMEDIATE/execute context — the web has no per-context apply-button label, so the delete-now cue is asserted on the dialog BODY, not on a Qt-style LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE label). Drives LOCK_CONFIRM_BTN_CANCEL → asserts (a) the lock-confirm dialog is hidden, (b) EXECUTE_DIALOG is STILL visible (handleCancel for op=='execute' clears only lockConflict, never executeOpen — LockConfirmDialog.tsx:108), (c) GET /api/manifest == the pre-execute snapshot (all 5 still 'delete', q95 still is_locked, total_files==5), (d) all 5 tmpdir files remain on disk (the 409 pre-flight + Cancel delete nothing). Sister to s36 (Unlock & Apply) and s32 (Unlocked-Only in the ActionDialog flow); s34 exclusively exercises the Cancel verdict. DIVERGENCE: Qt fires the lock-confirm BEFORE the all-delete confirm; the web reverses the ordering (DeleteConfirmSheet → 409 → LockConfirmDialog) with an identical outcome. Templated on s36."
 
   - scenario: s35_lock_via_context_menu
     playwright_module: qa.web.scenarios.s35_lock_via_context_menu
@@ -319,8 +319,8 @@ scenarios:
 
   - scenario: s59_execute_dialog_select_by_main_tree_sync
     playwright_module: null
-    status: todo
-    notes: ""
+    status: skip
+    notes: "SKIP — web-architecture-eliminated (NOT blocked). Qt s59 pins the pre-#444 bug where the MAIN result tree showed stale Action cells after the Execute dialog was closed on the Set-Action-by-Field path WITHOUT executing (refresh_tree was never called on that reject path). The root cause is Qt-specific: the QStandardItemModel backing the main tree is a SEPARATE render artifact from vm.groups, so an in-dialog mutation needs an explicit refresh_tree to resync the tree cells. The web has no such split — state.manifest.groups is the SINGLE source of truth for both the main ResultTree and the ExecuteDialog; every decision mutation (setDecision / setDecisions / applyBulkDecide) writes that one Zustand slice and both views re-render reactively, so the tree is already current the moment the decision applies (before the dialog even closes). A web s59 could only assert React's own reactivity (assert-true-by-construction) = metric-gaming, banned by the project no-padding rule. The load-bearing DATA assertion (manifest split after the Set-Action-by-Field regex) is already covered by s30_execute_dialog_regex_right_click. Scoped 2026-06-27 via the 4-candidate parity workflow."
 
   - scenario: s60_execute_filter_by_action_type
     playwright_module: qa.web.scenarios.s60_execute_filter_by_action_type
