@@ -231,8 +231,12 @@ export default function App() {
 
         <button
           data-testid={MAIN_EXECUTE_BUTTON}
-          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
+          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={() => openExecuteDialog()}
+          // #673 — gate Execute on a loaded manifest, matching the menu
+          // Action → Execute, the Set-Action button, and Qt. Without it the
+          // toolbar opens the destructive-execute dialog over empty groups.
+          disabled={manifestPath === null}
         >
           {t("web.toolbar.execute", "Execute")}
         </button>

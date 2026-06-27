@@ -161,12 +161,31 @@ describe("App header toolbar", () => {
     expect(screen.getByTestId(MAIN_SCAN_BUTTON)).toBeInTheDocument();
   });
 
-  it("renders the Execute button (enabled)", () => {
+  it("disables the Execute button when no manifest is loaded", () => {
+    // #673 — the toolbar Execute is manifest-gated, matching the menu
+    // Action → Execute, the Set-Action button, and Qt. With no manifest
+    // there is nothing to execute, so the entry point is disabled.
     renderWithProviders(<App />);
     const btn = screen.getByTestId(MAIN_EXECUTE_BUTTON);
     expect(btn).toBeInTheDocument();
-    // Execute button is now enabled — it opens the ExecuteDialog.
-    expect(btn).not.toBeDisabled();
+    expect(btn).toBeDisabled();
+  });
+
+  it("enables the Execute button once a manifest is loaded", () => {
+    act(() => {
+      useAppStore.setState({
+        manifest: {
+          path: "/tmp/test.sqlite",
+          groups: TEST_GROUPS,
+          totalGroups: 1,
+          totalFiles: 2,
+          loading: false,
+          error: null,
+        },
+      });
+    });
+    renderWithProviders(<App />);
+    expect(screen.getByTestId(MAIN_EXECUTE_BUTTON)).not.toBeDisabled();
   });
 
   it("renders the Lang toggle button showing EN", () => {
@@ -325,6 +344,20 @@ describe("ExecuteDialog opens from toolbar", () => {
   });
 
   it("clicking Execute button opens the ExecuteDialog", async () => {
+    // Execute is manifest-gated (#673), so seed a loaded manifest before
+    // exercising the click → dialog wiring.
+    act(() => {
+      useAppStore.setState({
+        manifest: {
+          path: "/tmp/test.sqlite",
+          groups: TEST_GROUPS,
+          totalGroups: 1,
+          totalFiles: 2,
+          loading: false,
+          error: null,
+        },
+      });
+    });
     const user = userEvent.setup();
     renderWithProviders(<App />);
     await user.click(screen.getByTestId(MAIN_EXECUTE_BUTTON));
