@@ -74,6 +74,7 @@ for the chore plan.
 | [Web — Execute (only selected)](#web--execute-only-selected) | Web UI |
 | [Web — ScanDialog source/output persistence](#web--scandialog-sourceoutput-persistence) | Web UI |
 | [Web — result-tree column sort and resize persistence](#web--result-tree-column-sort-and-resize-persistence) | Web UI |
+| [Web — manifest decision persistence](#web--manifest-decision-persistence) | Web UI |
 | [Similarity column](#similarity-column) | Review |
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
@@ -740,6 +741,17 @@ for the chore plan.
 - **Conditions / variants:** Sort persistence is **in-session only** (matches the Qt s45 contract — cross-launch sort is explicitly out of scope); width persistence **is** cross-launch. No backend change — sort/resize is a pure client proxy-model concern; `GET /api/manifest` order stays the service-layer default. Header labels resolve from the `web.column.*` i18n catalog (so they translate in zh_TW); the Size header reads **"Size"** (human-readable) rather than the desktop's raw-byte **"Size (Bytes)"**.
 - **Related:** Desktop analogue [Similarity column](#similarity-column) (Qt sort headers + `window_state.ini` widths); part of the web-port FE-parity backlog [#678](https://github.com/jackal998/photo-manager/issues/678) ([#685](https://github.com/jackal998/photo-manager/issues/685)); QA scenarios [`qa/web/scenarios/s45_sort_persistence.py`](../qa/web/scenarios/s45_sort_persistence.py) (sort + in-session persistence) + [`qa/web/scenarios/s47_column_layout_persist.py`](../qa/web/scenarios/s47_column_layout_persist.py) (width persist across reload).
 - **Last verified:** 2026-06-24 (#685 — result-tree column model; s45/s47 live-run PASS via batch; full 52-scenario batch PASS confirming the default-order isolation held across the 21 row-reading scenarios; 279 vitest).
+
+---
+
+### Web — manifest decision persistence
+
+- **Entry point:** Any per-row decision in the main result tree — the `DecisionControl` dropdown ([frontend/src/components/result/DecisionControl.tsx](../frontend/src/components/result/DecisionControl.tsx)) or the right-click **Set Action** items — calls `store.setDecision` → `PATCH /api/decision` → `ManifestRepository.batch_update_decisions` ([infrastructure/manifest_repository.py](../infrastructure/manifest_repository.py)).
+- **Trigger:** Automatic — every staged keep/delete/ignore decision is persisted the instant it is made.
+- **Behaviour:** The web app has **no explicit Save step and no dirty state**. `PATCH /api/decision` writes `user_decision` to the `migration_manifest` table synchronously (`executemany` + `commit()` + `close()`), and `GET /api/manifest` is stateless — it re-reads the DB on every request ("SQLite is the only source of truth"). A decision therefore survives a full page reload + manifest re-open with no user action: the Zustand store is wiped on reload, yet re-opening the same `.db` re-hydrates the decision from disk. This is the web realisation of the Qt [Save Manifest Decisions — base flow](#save-manifest-decisions--base-flow) **guarantee** (don't lose review work), achieved by construction rather than by an explicit save.
+- **Conditions / variants:** The Qt **File → Save Manifest Decisions…** menu item is deliberately **not** rendered in the web menu bar ([frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)): a web "Save" button would only WAL-checkpoint the already-committed DB, so it would be a semantically-hollow affordance that teaches a false "click Save or lose work" model. The backend `POST /api/save` (a WAL-checkpoint / copy-to-new-path utility — `execute_service.py` `save()`) exists and is store-plumbed but has no UI entry point. The **save-as / export-snapshot** flow (`POST /api/save` with a `target_path`, the Qt dialog's relocate-the-manifest variant) is the one genuine open product question — tracked as a deferred follow-up, not shipped here.
+- **Related:** Desktop analogue [Save Manifest Decisions — base flow](#save-manifest-decisions--base-flow); web-port menu-bar parity backlog [#673](https://github.com/jackal998/photo-manager/issues/673) (Save-Manifest sub-item); QA scenario [`qa/web/scenarios/s12_save_manifest.py`](../qa/web/scenarios/s12_save_manifest.py) (durability across reload + reopen + on-disk commit).
+- **Last verified:** 2026-06-28 (s12 web port — live-run PASS; decision round-trips through reload + reopen and is committed on disk).
 
 ---
 

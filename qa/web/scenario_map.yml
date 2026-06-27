@@ -72,9 +72,9 @@ scenarios:
     notes: "Live Photo HEIC+MOV pair (#88 regression guard). Scans the live-photo fixture; asserts both IMG_0001.HEIC and IMG_0001.MOV appear (the MOV-presence check is the pre-#88 regression guard — the MOV was silently dropped before hashing), both share one group_number, and user_decision=='' post-scan. Divergences: GET /api/manifest JSON vs Qt sqlite read; group_number (int) vs Qt group_id; strict user_decision=='' assert (Qt only WARNed)."
 
   - scenario: s12_save_manifest
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s12_save_manifest
+    status: done
+    notes: "Save Manifest reframed as the live-persistence durability GUARANTEE (#673 Save-Manifest sub-item). The web has no explicit Save step + no dirty state: PATCH /api/decision commits to the manifest DB synchronously (executemany+commit+close, manifest_repository.py:462-471), GET /api/manifest is stateless ('SQLite is the only source of truth'), and POST /api/save is a pure WAL-checkpoint/copy whose docstring says 'decisions are already persisted per-PATCH' (execute_service.py:504-546). So Qt's Save-Manifest intent (decisions survive the session) is met by construction; this scenario verifies it STRICTER than Qt s12: stage Delete via the DecisionControl, assert the VALUE round-trips (Qt only checks table-exists + row counts), then reload (wipes the Zustand store → empty state) + reopen the same .db and assert the decision survives THREE ways — re-rendered control shows 'Delete', GET /api/manifest still 1 decision, and a read-only sqlite read confirms migration_manifest + 'SQLite format 3' header + user_decision='delete' committed on disk. Divergences: no File>Save click / 'Saved N' status (web has no Save step — not the persistence mechanism); decision read via GET /api/manifest + sqlite vs Qt's saved-copy sqlite read. The save-as/export-snapshot product question (POST /api/save target_path as a UI flow) is unevidenced → filed as a deferred follow-up, not built here."
 
   - scenario: s13_execute_action
     playwright_module: qa.web.scenarios.s13_execute_action
