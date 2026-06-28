@@ -75,6 +75,7 @@ for the chore plan.
 | [Web — ScanDialog source/output persistence](#web--scandialog-sourceoutput-persistence) | Web UI |
 | [Web — result-tree column sort and resize persistence](#web--result-tree-column-sort-and-resize-persistence) | Web UI |
 | [Web — manifest decision persistence](#web--manifest-decision-persistence) | Web UI |
+| [Web — scan dialog invalid source path](#web--scan-dialog-invalid-source-path) | Web UI |
 | [Similarity column](#similarity-column) | Review |
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
@@ -752,6 +753,17 @@ for the chore plan.
 - **Conditions / variants:** The Qt **File → Save Manifest Decisions…** menu item is deliberately **not** rendered in the web menu bar ([frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)): a web "Save" button would only WAL-checkpoint the already-committed DB, so it would be a semantically-hollow affordance that teaches a false "click Save or lose work" model. The backend `POST /api/save` (a WAL-checkpoint / copy-to-new-path utility — `execute_service.py` `save()`) exists and is store-plumbed but has no UI entry point. The **save-as / export-snapshot** flow (`POST /api/save` with a `target_path`, the Qt dialog's relocate-the-manifest variant) is the one genuine open product question — tracked as a deferred follow-up, not shipped here.
 - **Related:** Desktop analogue [Save Manifest Decisions — base flow](#save-manifest-decisions--base-flow); web-port menu-bar parity backlog [#673](https://github.com/jackal998/photo-manager/issues/673) (Save-Manifest sub-item); QA scenario [`qa/web/scenarios/s12_save_manifest.py`](../qa/web/scenarios/s12_save_manifest.py) (durability across reload + reopen + on-disk commit).
 - **Last verified:** 2026-06-28 (s12 web port — live-run PASS; decision round-trips through reload + reopen and is committed on disk).
+
+---
+
+### Web — scan dialog invalid source path
+
+- **Entry point:** The scan dialog's source-path field ([frontend/src/components/scan/SourceRow.tsx](../frontend/src/components/scan/SourceRow.tsx)) + **Start Scan** ([frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx)).
+- **Trigger:** Starting a scan whose source path does not exist (or is not a directory).
+- **Behaviour:** The web does **not** validate the source path before the scan (no pre-scan existence check on the field). A non-existent path is accepted by `POST /api/scan`; the scanner's `scan_sources` then raises `FileNotFoundError: Source directory not found: <path>` ([scanner/walker.py](../scanner/walker.py)), which the SSE stream emits as a `failed` event. The store sets `scan.status='failed'` + `scan.error` ([frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)) and `ScanDialog` renders a `role="alert"` paragraph that **names the offending path** — and **stays open** so the user can correct it. Fixing the path and re-scanning clears the alert and proceeds. This realises the Qt #144 guarantee (a bad path is never a silent no-op) via the scan-failure surface rather than the desktop's up-front inline `+ Add` gate.
+- **Conditions / variants:** Validation **timing** diverges from desktop — Qt blocks the path on `+ Add` before any scan (`_FolderTreePanel._on_add_typed`, [app/views/scan_dialog.py](../app/views/scan_dialog.py)); the web fails the running scan. The exact-parity pre-scan inline validation (a `GET /api/fs/stat` probe) is a deferred enhancement, tracked as [#678](https://github.com/jackal998/photo-manager/issues/678) item C — declined here to avoid a filesystem-information-disclosure endpoint for a timing-only nicety. The Qt #216 output-Browse "Save Manifest As" native dialog has no web analog (the web output Browse uses the in-DOM `FsBrowser` save-mode picker, covered by s17).
+- **Related:** Desktop scenario [`qa/scenarios/s38_scan_dialog_invalid_path.py`](../qa/scenarios/s38_scan_dialog_invalid_path.py); web port [`qa/web/scenarios/s38_scan_dialog_invalid_path.py`](../qa/web/scenarios/s38_scan_dialog_invalid_path.py); feature-parity backlog [#678](https://github.com/jackal998/photo-manager/issues/678) (item C — inline path validation).
+- **Last verified:** 2026-06-29 (s38 web port — live-run PASS).
 
 ---
 

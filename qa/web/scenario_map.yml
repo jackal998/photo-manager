@@ -103,8 +103,8 @@ scenarios:
 
   - scenario: s18_log_menu
     playwright_module: null
-    status: todo
-    notes: ""
+    status: skip
+    notes: "SKIP — no web equivalent surface. Desktop s18 drives the menu-bar Log menu's four items (Open Latest Log / Open Latest Delete Log / Open Log Directory / Open Delete Log Directory), each shelling os.startfile/xdg-open (infrastructure/logging.py) or popping a QMessageBox. The web MenuBar is File/Action/View only and has NO Log menu (deliberate deferral — MenuBar.tsx:14 'Log menu: depends on the web OS-integration (reveal/open) story'); app/web/routes/ has no /api/log* endpoint and the web layer writes no on-disk app log file. Unlike s19 (Open folder), whose POST /api/reveal already existed for revealing a user PHOTO, there is no analog for revealing the app's own diagnostic logs. Building one needs a product decision on exposing server-side diagnostics through a browser UI plus net-new endpoints + a new menu — new product scope, not a scenario port. Same combined shape as s39 (desktop-only OS integration) + s21 (deliberate MenuBar deferral)."
 
   - scenario: s19_context_menu_open_folder
     playwright_module: qa.web.scenarios.s19_context_menu_open_folder
@@ -207,9 +207,9 @@ scenarios:
     notes: "Asserts idle on startup then 'N groups · M files' after scan. Qt #138 3s-sleep and #140 menu-hover probes have no web equivalent — omitted with divergence note."
 
   - scenario: s38_scan_dialog_invalid_path
-    playwright_module: null
-    status: todo
-    notes: ""
+    playwright_module: qa.web.scenarios.s38_scan_dialog_invalid_path
+    status: done
+    notes: "#144 ported via the web-idiomatic scan-FAILURE surface (validation-timing divergence). Desktop validates a typed source path UP FRONT on '+ Add' (Path.is_dir() in _FolderTreePanel._on_add_typed, scan_dialog.py) and blocks before any scan; the web SourceRow is a bare text input with no pre-scan check, so a bad path is accepted by POST /api/scan and then scan_sources raises FileNotFoundError 'Source directory not found: <path>' (scanner/walker.py) → SSE failed → store scan.status='failed' + scan.error (useAppStore.ts) → ScanDialog renders a role='alert' that NAMES the path, dialog stays open. Same user-facing guarantee (bad path → visible named error, never a silent no-op), web-idiomatically. Scenario: bad path → alert names the offending leaf + dialog stays open; corrected path (empty temp dir) → alert clears + dialog closes (recovery — failed state not sticky). Anchors on role='alert' scoped to scan-dialog (no testid/FE source change). DIVERGENCES: (a) validation TIMING — web fails the running scan, desktop blocks pre-add; the exact-parity pre-scan inline error (a GET /api/fs/stat probe) is deferred as #678 item C, declined to avoid a filesystem-info-disclosure endpoint for a timing-only nicety (mirrors #677's honest single-select s64 port). (b) #216 (output Browse opens a native 'Save Manifest As' window) has no web analog — the web output Browse uses the in-DOM FsBrowser save-mode picker already covered by s17."
 
   - scenario: s39_window_geometry_persist
     playwright_module: null
