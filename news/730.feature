@@ -1,0 +1,1 @@
+Add a video transcode fallback (V2): when the browser cannot decode a video's codec natively (e.g. HEVC without the OS codec), the web app lazily transcodes the source to H.264 via ffmpeg (cached, served with HTTP Range) so playback is unbreakable across machines (#730)
