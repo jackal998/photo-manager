@@ -194,9 +194,11 @@ testdata/
 # scripts/bench_autotune_604.py and scripts/probe_*.py.
 # Summary writeups live under docs/audits/; the raw JSON is local-only.
 bench_604_*.json
+bench_web_port*.json
 probe_*.json
 monitor_*.json
 .bench_604_artifacts/
+.bench_web_port_artifacts/
 .probe_598_artifacts/
 .probe_timeline_artifacts/
 .probe_monitor_artifacts/
