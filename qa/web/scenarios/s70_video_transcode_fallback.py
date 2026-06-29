@@ -153,42 +153,32 @@ def run(*, base_url: str) -> None:
                 f"{src_before!r}. The transcode flag should only appear after an error."
             )
 
-            # ── Dispatch a synthetic 'error' event on the <video> element ────
-            # This is the codec-independent way to trigger the swap-once logic.
-            page.evaluate(
-                """(testid) => {
-                    const el = document.querySelector('[data-testid="' + testid + '"]');
-                    if (el) {
-                        el.dispatchEvent(new Event('error', { bubbles: true }));
-                    }
-                }""",
-                preview_testid,
-            )
+            # ── Trigger the swap and assert the transcode REQUEST fires ──────
+            # Dispatching a synthetic 'error' is the codec-independent way to
+            # exercise the swap-once logic. We assert via the NETWORK request
+            # (not by re-reading the element's src afterward): in CI the
+            # transcode URL 501s (no ffmpeg), which fires a SECOND error that
+            # flips the component to its terminal state and removes the <video>
+            # — so reading src after the swap races with that removal. The
+            # request, once made, is a stable observable that proves the swap.
+            with page.expect_request(
+                lambda r: "transcode=h264" in r.url, timeout=5_000
+            ) as req_info:
+                page.evaluate(
+                    """(testid) => {
+                        const el = document.querySelector('[data-testid="' + testid + '"]');
+                        if (el) {
+                            el.dispatchEvent(new Event('error', { bubbles: true }));
+                        }
+                    }""",
+                    preview_testid,
+                )
 
-            # ── Assert the src now contains transcode=h264 ────────────────────
-            # The React key change remounts the element, so we poll for the
-            # new element with the updated src.
-            page.wait_for_function(
-                """(testid) => {
-                    const el = document.querySelector('[data-testid="' + testid + '"]');
-                    return el && el.src && el.src.includes('transcode=h264');
-                }""",
-                arg=preview_testid,
-                timeout=5_000,
-            )
-
-            src_after = page.evaluate(
-                """(testid) => {
-                    const el = document.querySelector('[data-testid="' + testid + '"]');
-                    return el ? el.src : null;
-                }""",
-                preview_testid,
-            )
-            assert src_after is not None, "Could not read <video> src after error"
-            assert "transcode=h264" in src_after, (
-                f"src does not contain transcode=h264 after synthetic error: "
-                f"{src_after!r}. "
-                f"Check onError handler in PreviewPane.tsx sets useTranscode=true."
+            transcode_req = req_info.value
+            assert transcode_req is not None and "transcode=h264" in transcode_req.url, (
+                "Frontend did not request the transcode URL after a <video> decode "
+                "error. Check the onError handler in PreviewPane.tsx sets "
+                "useTranscode=true (swapping src to /api/media?...&transcode=h264)."
             )
 
     finally:

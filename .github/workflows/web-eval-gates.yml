@@ -203,6 +203,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest  # for the V2 transcode integration test step below
 
       # The web-arm scan's EXIF stage shells out to exiftool (same runtime
       # boundary qa-batch.yml installs via choco on Windows).
