@@ -270,4 +270,9 @@ ALL_SCENARIOS = [
     # title. Uses qa/sandbox/huge (1 file). Pins the live double-click →
     # requestFullRes → on_open_full_res_viewer(service=…) wiring.
     "s68_full_res_viewer_double_click",
+    # s69 — V1 web video playback: GET /api/media + <video> element.
+    # Scans a WebM/VP9 test clip (qa/sandbox/video-playback/clip.webm),
+    # selects the row, asserts <video> renders + real decode (readyState >= 2,
+    # duration > 0) + frames advance after play(). VP8/VP9 = no codec gate.
+    "s69_video_playback",
 ]

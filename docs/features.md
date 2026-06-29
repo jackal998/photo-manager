@@ -80,6 +80,7 @@ for the chore plan.
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
 | [Preview pane — no-autoplay video default](#preview-pane--no-autoplay-video-default) | Preview pane |
+| [Web preview pane — video playback (V1 streaming)](#web-preview-pane--video-playback-v1-streaming) | Web UI |
 
 ---
 
@@ -808,6 +809,17 @@ for the chore plan.
 - **Conditions / variants:** Explicit Play click in the player starts playback normally. The group media controller is still created when videos are present (for coordinated play/pause), but is not auto-triggered.
 - **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `app/views/preview_pane.py`.
 - **Last verified:** 2026-06-09 (#622 Phase 1)
+
+---
+
+### Web preview pane — video playback (V1 streaming)
+
+- **Entry point:** `app/web/routes/media.py` (`GET /api/media`); `frontend/src/components/PreviewPane.tsx`; `frontend/src/components/FullResViewer.tsx`.
+- **Trigger:** Selecting a file row whose `media_type === "video"` in the web result tree.
+- **Behaviour:** The web inline preview pane renders a native `<video controls>` element (instead of `<img>`) for video rows. The video source is `GET /api/media?path=<encoded-path>`, which streams the original file bytes with HTTP Range/206 support so the browser can seek without downloading the whole file. No autoplay — matches the Qt desktop no-autoplay default (PR #624). The FullResViewer overlay also renders `<video controls>` for video rows (instead of the `<img>` + pan/zoom chrome). `media_type` is derived server-side from `scanner/media.VIDEO_EXTENSIONS` (the canonical walked set: `.mp4`, `.mov`, `.m4v`, `.avi`) and returned in every `FileRow` payload from `GET /api/manifest`. `app/views/media_utils` re-exports this canonical set so Qt code and web code agree on which extensions are video.
+- **Conditions / variants:** `GET /api/media` reuses the same allowed-roots path guard as `GET /api/image` (403 on traversal, 400 on empty path, 404 on missing file). Range support: no Range header → 200 full file; `Range: bytes=START-END` → 206 with `Content-Range`; open-ended `bytes=START-` → 206 to EOF; suffix-range `bytes=-N` → 206 last N bytes; unsatisfiable range (start ≥ size, `bytes=-`, `bytes=-0`) → 416. Content-Type is resolved from extension (`.mp4` → `video/mp4`, `.mov` → `video/quicktime`, `.m4v` → `video/x-m4v`, `.webm` → `video/webm`, `.avi` → `video/x-msvideo`, `.mkv` → `video/x-matroska`). V1 serves original bytes only — no transcoding.
+- **Related:** `app/web/routes/media.py`; `core/app_service/review_view.py` (`media_type` field); `scanner/media.py` (`is_video`, `VIDEO_EXTENSIONS`); `frontend/src/api/client.ts` (`mediaUrl`); `frontend/src/api/types.ts` (`FileRow.media_type`); QA scenario [`qa/web/scenarios/s69_video_playback.py`](../qa/web/scenarios/s69_video_playback.py); fixture [`qa/sandbox/video-playback/clip.mp4`](../qa/sandbox/video-playback/clip.mp4) (VP9-in-MP4, 2 s).
+- **Last verified:** 2026-06-29 (V1 streaming slice)
 
 ---
 

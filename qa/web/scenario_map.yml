@@ -415,3 +415,8 @@ scenarios:
     playwright_module: qa.web.scenarios.s68_full_res_viewer_double_click
     status: done
     notes: "Double-click the inline preview tile opens the full-res viewer; Escape closes; main window stays responsive. Scans near-duplicates, selects neardup_00_q95.jpg, waits preview-single-image, double-clicks the TILE (not the row), asserts fullres-dialog + fullres-image visible + the dialog title contains the basename (soft-probes the 'W x H' dims), Escape -> dialog hidden, then asserts result tree + row still present. Divergences: web uses Playwright native dblclick on the tile (Qt synthesized OS WM_LBUTTONDBLCLK with a seed-click); same-document Radix overlay vs Qt top-level OS window; deliberately the preview tile, not the FileRow onDoubleClick shortcut, to match Qt intent."
+
+  - scenario: s69_video_playback
+    playwright_module: qa.web.scenarios.s69_video_playback
+    status: done
+    notes: "V1 web video playback: GET /api/media Range streaming + <video> element in PreviewPane. Scans a 2-second WebM/VP9 synthetic clip (qa/sandbox/video-playback/clip.webm, generated once with ffmpeg lavfi) duplicated at runtime into a tmpdir to survive singleton-drop (s05 duplicate-to-observe). Asserts: manifest media_type=='video'; row click renders <video> (not <img>) in preview-single-image; readyState >= 2 (HAVE_CURRENT_DATA) AND duration > 0 (real decode); currentTime > 0 after play() (frames advance). VP8/VP9 = open codec always in headless Chromium — no proprietary-codec gate. Divergences: WebM fixture (not .MOV/H.264) for CI independence; readyState/currentTime via page.evaluate (no UIA analog); duplicate-to-observe avoids singleton-drop."

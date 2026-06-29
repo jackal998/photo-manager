@@ -341,3 +341,12 @@ export function thumbnailUrl(path: string, size: number = 128): string {
 export function fullResUrl(path: string): string {
   return `${BASE}/api/image?path=${encodeURIComponent(path)}&size=0`;
 }
+
+/**
+ * Returns the URL for the raw media stream (GET /api/media).
+ * Used by <video src=...> for video rows. The server supports HTTP Range
+ * so native browser video controls (seek, scrub) work correctly.
+ */
+export function mediaUrl(path: string): string {
+  return `${BASE}/api/media?path=${encodeURIComponent(path)}`;
+}

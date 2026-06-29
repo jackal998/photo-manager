@@ -15,7 +15,7 @@
 
 import { useCallback } from "react";
 import { useAppStore } from "@/store/useAppStore";
-import { thumbnailUrl } from "@/api/client";
+import { thumbnailUrl, mediaUrl } from "@/api/client";
 import { formatBytes, formatScore, formatDims, formatDate } from "@/lib/format";
 import { PREVIEW_PANE, PREVIEW_SINGLE_IMAGE, PREVIEW_INFO } from "@/testids";
 import type { FileRow } from "@/api/types";
@@ -73,18 +73,28 @@ export function PreviewPane() {
         <EmptyState />
       ) : (
         <>
-          {/* Image area — overflow-y:scroll is ALWAYS-ON (not auto).
+          {/* Media area — overflow-y:scroll is ALWAYS-ON (not auto).
               This is the #535 fix: prevents the portrait oscillation loop
               where the scrollbar appearance/disappearance thrashes layout. */}
           <div className="flex-1 overflow-y-scroll overflow-x-hidden flex items-start justify-center bg-neutral-900 min-h-0">
-            <img
-              data-testid={PREVIEW_SINGLE_IMAGE}
-              src={thumbnailUrl(selectedFilePath, 512)}
-              alt={row.basename}
-              className="max-w-full object-contain cursor-zoom-in"
-              onDoubleClick={handleDoubleClick}
-              draggable={false}
-            />
+            {row.media_type === "video" ? (
+              <video
+                data-testid={PREVIEW_SINGLE_IMAGE}
+                src={mediaUrl(selectedFilePath)}
+                controls
+                className="max-w-full max-h-full object-contain"
+                // No autoplay — matches Qt desktop single-view player behaviour.
+              />
+            ) : (
+              <img
+                data-testid={PREVIEW_SINGLE_IMAGE}
+                src={thumbnailUrl(selectedFilePath, 512)}
+                alt={row.basename}
+                className="max-w-full object-contain cursor-zoom-in"
+                onDoubleClick={handleDoubleClick}
+                draggable={false}
+              />
+            )}
           </div>
 
           {/* Metadata sidebar */}

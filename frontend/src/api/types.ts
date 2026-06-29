@@ -30,6 +30,8 @@ export interface FileRow {
   phash: string | null;
   hamming_distance: number | null;
   thumbnail_url: string;
+  /** Added V1 video-playback: "image" for photos, "video" for video files. */
+  media_type?: "image" | "video";
 }
 
 export interface Group {

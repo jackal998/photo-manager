@@ -21,9 +21,8 @@ class TestIsVideo:
         "/some/clip.mp4",
         r"C:\videos\clip.MP4",   # case-insensitive
         "movie.mov",
-        "screen.webm",
         "archive.avi",
-        "anime.mkv",
+        "clip.m4v",
     ])
     def test_recognized_video_extensions(self, path):
         assert is_video(path) is True
@@ -40,10 +39,18 @@ class TestIsVideo:
         assert is_video(path) is False
 
     def test_video_extensions_set_intact(self):
-        """Catch accidental edits to the canonical extension set."""
+        """Catch accidental edits to the canonical extension set.
+
+        VIDEO_EXTENSIONS is re-exported from scanner.media (canonical walked set).
+        The walked set is {.mp4, .mov, .m4v, .avi} — .webm/.mkv are not walked
+        and are therefore NOT in this set (they were removed in the FIX-3 consolidation).
+        """
         assert ".mp4" in VIDEO_EXTENSIONS
         assert ".mov" in VIDEO_EXTENSIONS
         assert ".jpg" not in VIDEO_EXTENSIONS
+        # .webm/.mkv are NOT walked — confirm they are absent so drift is caught.
+        assert ".webm" not in VIDEO_EXTENSIONS
+        assert ".mkv" not in VIDEO_EXTENSIONS
 
 
 class TestFormatDuration:

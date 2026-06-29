@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scanner.media import is_video as _is_video
 from scanner.phash_distance import hamming_distance as _phash_hamming
 
 # ---------------------------------------------------------------------------
@@ -146,6 +147,7 @@ def _build_file_row(
         "phash": getattr(record, "phash", None),
         "hamming_distance": getattr(record, "hamming_distance", None),
         "thumbnail_url": _thumbnail_url(file_path),
+        "media_type": "video" if _is_video(file_path) else "image",
     }
 
 

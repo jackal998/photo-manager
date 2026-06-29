@@ -27,8 +27,28 @@ import {
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 
 import { useAppStore } from "@/store/useAppStore";
-import { fullResUrl } from "@/api/client";
+import { fullResUrl, mediaUrl } from "@/api/client";
 import { FULLRES_DIALOG, FULLRES_IMAGE } from "@/testids";
+import type { FileRow } from "@/api/types";
+
+// ---------------------------------------------------------------------------
+// FullResViewer
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Row lookup — same pattern as PreviewPane
+// ---------------------------------------------------------------------------
+
+function findRow(
+  groups: ReturnType<typeof useAppStore.getState>["manifest"]["groups"],
+  filePath: string
+): FileRow | null {
+  for (const group of groups) {
+    const row = group.items.find((f) => f.file_path === filePath);
+    if (row !== undefined) return row;
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // FullResViewer
@@ -38,6 +58,10 @@ export function FullResViewer() {
   const fullResPath = useAppStore((s) => s.preview.fullResPath);
   const closeFullRes = useAppStore((s) => s.closeFullRes);
   const revealInExplorer = useAppStore((s) => s.revealInExplorer);
+  const groups = useAppStore((s) => s.manifest.groups);
+
+  const row = fullResPath !== null ? findRow(groups, fullResPath) : null;
+  const isVideo = row?.media_type === "video";
 
   const isOpen = fullResPath !== null;
 
@@ -175,64 +199,79 @@ export function FullResViewer() {
             </div>
           </DialogPrimitive.Title>
 
-          {/* Image canvas — panning area */}
+          {/* Media canvas */}
           <div
-            className="flex-1 overflow-hidden flex items-center justify-center cursor-grab active:cursor-grabbing select-none relative"
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onWheel={handleWheel}
-            // Backdrop click closes the viewer (click on overlay, not on img).
+            className="flex-1 overflow-hidden flex items-center justify-center select-none relative"
+            style={{ cursor: isVideo ? "default" : "grab" }}
+            onMouseMove={isVideo ? undefined : handleMouseMove}
+            onMouseUp={isVideo ? undefined : handleMouseUp}
+            onMouseLeave={isVideo ? undefined : handleMouseUp}
+            onWheel={isVideo ? undefined : handleWheel}
+            // Backdrop click closes the viewer (click on overlay, not on media).
             onClick={(e) => {
               if (e.target === e.currentTarget) closeFullRes();
             }}
           >
-            {/* Loading spinner */}
-            {loading && !loadError && fullResPath !== null && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin" />
-              </div>
-            )}
-
-            {/* 413 / load-error fallback */}
-            {loadError && (
-              <div className="flex flex-col items-center gap-4 text-white">
-                <p className="text-sm text-neutral-300">
-                  File too large for in-browser full-res preview.
-                </p>
-                <button
-                  onClick={handleReveal}
-                  className="px-4 py-2 bg-white text-neutral-900 rounded font-medium text-sm hover:bg-neutral-200 transition-colors"
-                >
-                  Open in default app
-                </button>
-              </div>
-            )}
-
-            {/* The full-res image — rendered even while loading so onLoad fires */}
-            {fullResPath !== null && !loadError && (
-              <img
+            {isVideo && fullResPath !== null ? (
+              /* Video player — native controls, no autoplay (matches Qt desktop). */
+              <video
                 data-testid={FULLRES_IMAGE}
                 key={fullResPath}
-                src={fullResUrl(fullResPath)}
-                alt={basename}
-                className="max-w-none"
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-                  transformOrigin: "center center",
-                  cursor: scale > 1 ? "grab" : "default",
-                  visibility: loading ? "hidden" : "visible",
-                }}
-                onLoad={handleLoad}
-                onError={handleError}
-                onMouseDown={handleMouseDown}
-                draggable={false}
+                src={mediaUrl(fullResPath)}
+                controls
+                className="max-w-full max-h-full"
+                // No autoplay — matches Qt desktop single-view player behaviour.
               />
+            ) : (
+              <>
+                {/* Loading spinner (images only) */}
+                {loading && !loadError && fullResPath !== null && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+                  </div>
+                )}
+
+                {/* 413 / load-error fallback */}
+                {loadError && (
+                  <div className="flex flex-col items-center gap-4 text-white">
+                    <p className="text-sm text-neutral-300">
+                      File too large for in-browser full-res preview.
+                    </p>
+                    <button
+                      onClick={handleReveal}
+                      className="px-4 py-2 bg-white text-neutral-900 rounded font-medium text-sm hover:bg-neutral-200 transition-colors"
+                    >
+                      Open in default app
+                    </button>
+                  </div>
+                )}
+
+                {/* The full-res image — rendered even while loading so onLoad fires */}
+                {fullResPath !== null && !loadError && (
+                  <img
+                    data-testid={FULLRES_IMAGE}
+                    key={fullResPath}
+                    src={fullResUrl(fullResPath)}
+                    alt={basename}
+                    className="max-w-none"
+                    style={{
+                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                      transformOrigin: "center center",
+                      cursor: scale > 1 ? "grab" : "default",
+                      visibility: loading ? "hidden" : "visible",
+                    }}
+                    onLoad={handleLoad}
+                    onError={handleError}
+                    onMouseDown={handleMouseDown}
+                    draggable={false}
+                  />
+                )}
+              </>
             )}
           </div>
 
-          {/* Zoom hint */}
-          {!loadError && (
+          {/* Zoom hint (images only — video has native controls) */}
+          {!isVideo && !loadError && (
             <div className="flex-shrink-0 text-center text-neutral-400 text-xs py-1 bg-neutral-900">
               Ctrl+scroll to zoom · Drag to pan · Esc to close
             </div>

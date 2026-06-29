@@ -94,6 +94,11 @@ def _magic_type(path: Path) -> Optional[str]:
     return None
 
 
+def is_video(path: str) -> bool:
+    """True if the path's extension is a walked video format."""
+    return Path(path).suffix.lower() in VIDEO_EXTENSIONS
+
+
 def get_file_type(path: Path) -> tuple[str, bool]:
     """Return (file_type, needs_magic_check) for a media file.
 

@@ -292,6 +292,9 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # group) — huge sandbox is one isolated file which never appears as
     # a TreeItem (singletons are status-bar-only).
     "s68_full_res_viewer_double_click": ["qa/sandbox/near-duplicates"],
+    # s69 — V1 web video playback: GET /api/media + <video> element.
+    # Uses qa/sandbox/video-playback (clip.webm WebM/VP9 fixture).
+    "s69_video_playback": ["qa/sandbox/video-playback"],
 }
 
 # Per-scenario overrides for ui.prune_singletons. build_settings maps a
