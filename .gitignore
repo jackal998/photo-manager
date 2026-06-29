@@ -199,6 +199,13 @@ probe_*.json
 monitor_*.json
 .bench_604_artifacts/
 .bench_web_port_artifacts/
+
+# Local-only real-RAW fixtures for the T4 full-res-decode OOM bench. Real
+# ProRAW DNGs are 70-120 MB each (repo bloat) and personal photos (PII), so
+# they are never committed — the bench skips its cold-OOM sub-run when this
+# dir is empty (CI has no RAW codecs anyway; the OOM check is a dev-rig
+# checkpoint). Populate locally via make_qa_large_source.py --include-large-raw.
+qa/fixtures/raw_local/
 .probe_598_artifacts/
 .probe_timeline_artifacts/
 .probe_monitor_artifacts/
