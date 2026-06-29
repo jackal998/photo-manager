@@ -81,6 +81,7 @@ for the chore plan.
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
 | [Preview pane — no-autoplay video default](#preview-pane--no-autoplay-video-default) | Preview pane |
 | [Web preview pane — video playback (V1 streaming)](#web-preview-pane--video-playback-v1-streaming) | Web UI |
+| [Web preview pane — video transcode fallback (V2 H.264)](#web-preview-pane--video-transcode-fallback-v2-h264) | Web UI |
 
 ---
 
@@ -809,6 +810,17 @@ for the chore plan.
 - **Conditions / variants:** Explicit Play click in the player starts playback normally. The group media controller is still created when videos are present (for coordinated play/pause), but is not auto-triggered.
 - **Related:** [#622](https://github.com/jackal998/photo-manager/issues/622) Phase 1; `app/views/preview_pane.py`.
 - **Last verified:** 2026-06-09 (#622 Phase 1)
+
+---
+
+### Web preview pane — video transcode fallback (V2 H.264)
+
+- **Entry point:** `infrastructure/transcode_service.py` (`TranscodeService`); `app/web/routes/media.py` (`GET /api/media?transcode=h264`); `frontend/src/components/PreviewPane.tsx`; `frontend/src/components/FullResViewer.tsx`.
+- **Trigger:** The browser's `<video>` element fires an `error` event when the native codec cannot decode the source (e.g. HEVC on a browser without the OS H.265 codec pack).
+- **Behaviour:** On first decode error the frontend swaps the `<video>` `src` from `/api/media?path=…` to `/api/media?path=…&transcode=h264` ONCE (swap-once, never loops). The React `key` includes the transcode flag so the element remounts and re-attempts decode on swap. While the transcode is being prepared, a "Preparing video…" label (PreviewPane) or spinner (FullResViewer) is shown. On a second error (transcode also failed) a terminal "Video cannot be played" message is displayed. The backend lazily transcodes the source to H.264 MP4 using ffmpeg (`libx264 -preset fast -crf 23`, `aac` audio, `-movflags +faststart`) and caches the result under `AppData/Local/PhotoManager/transcodes/v1/<sha1>.mp4`. Cache key = `sha1(source_path | mtime_ns)` so the cache auto-invalidates when the file changes. Concurrent requests for the same source serialise on a per-key lock; total concurrent ffmpeg processes are bounded to 2 by a `BoundedSemaphore`. The source path is validated against allowed roots (path guard) before transcoding; the service-internal cache path is never exposed to the guard. If ffmpeg is not installed the route returns `HTTP 501`.
+- **Conditions / variants:** The fallback only fires on error — native-codec sources play without transcoding overhead. The `mediaUrl(path, { transcode: "h264" })` helper in `client.ts` appends `&transcode=h264`; zero-arg callers are unaffected (backward-compatible).
+- **Related:** `infrastructure/transcode_service.py`; `app/web/routes/media.py`; `frontend/src/api/client.ts` (`mediaUrl` opts); QA scenario [`qa/web/scenarios/s70_video_transcode_fallback.py`](../qa/web/scenarios/s70_video_transcode_fallback.py); integration test `tests/integration/test_transcode_integration.py`; unit test `tests/test_transcode_service.py`.
+- **Last verified:** 2026-06-29 (V2 transcode fallback)
 
 ---
 

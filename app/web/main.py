@@ -51,10 +51,13 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     - Drains the WIC executor (CoUninitialize + shutdown).
     """
     import infrastructure.image_service as _img_svc_mod
+    import infrastructure.transcode_service as _transcode_svc_mod
 
     # Startup ----------------------------------------------------------------
     image_service = _img_svc_mod.ImageService()
     app.state.image_service = image_service
+    transcode_service = _transcode_svc_mod.TranscodeService()
+    app.state.transcode_service = transcode_service
     app.state.allowed_roots = []
     # asyncio.Lock for POST /api/execute — prevents concurrent destructive
     # operations from racing on the same manifest.  Created during startup

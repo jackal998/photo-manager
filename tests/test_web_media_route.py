@@ -8,17 +8,26 @@ Tests cover:
   - Malformed range syntax → 416
   - Content-Type per extension (video/mp4, video/quicktime, video/webm, etc.)
   - Path-guard rejection (empty path → 400, out-of-roots → 403, not on disk → 404)
+  - transcode=h264 with a pre-placed cached file → 200/206 + video/mp4
+  - transcode=h264 when ffmpeg is unavailable → 501
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.web.main import create_app
+from infrastructure.transcode_service import (
+    TranscodeService,
+    TranscodeUnavailable,
+    TRANSCODE_RECIPE_VERSION,
+    _compute_cache_key,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -314,3 +323,134 @@ class TestContentType:
         # mimetypes may return something for some extensions; the fallback is
         # application/octet-stream; any non-null value is acceptable.
         assert ct  # must not be empty
+
+
+# ---------------------------------------------------------------------------
+# V2 transcode=h264 route tests (CI-safe — no real ffmpeg invoked)
+# ---------------------------------------------------------------------------
+
+# Fake cached MP4 content served by the transcode tests.
+_CACHED_MP4 = b"\x00\x00\x00\x1cftypisom\x00\x00\x00\x00"  # minimal MP4-ish bytes
+
+
+@pytest.fixture()
+def client_with_transcode(tmp_path: Path, tmp_video: Path):
+    """TestClient with a stub TranscodeService whose cache is pre-warmed.
+
+    The service's cache directory is set to tmp_path/transcodes/v<VERSION>
+    and the cached file for tmp_video is pre-placed so no ffmpeg is called.
+    """
+    cache_dir = tmp_path / "transcodes" / f"v{TRANSCODE_RECIPE_VERSION}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_key = _compute_cache_key(tmp_video)
+    cached_file = cache_dir / f"{cache_key}.mp4"
+    cached_file.write_bytes(_CACHED_MP4)
+
+    # Build a real TranscodeService pointing at our tmp cache dir.
+    class _Settings:
+        def get(self, key, default=None):
+            if key == "video_transcode_cache_dir":
+                return str(tmp_path / "transcodes")
+            return default
+
+    with patch("shutil.which", return_value="/fake/ffmpeg"):
+        svc = TranscodeService(settings=_Settings())
+
+    app = create_app()
+    with TestClient(app, raise_server_exceptions=True) as c:
+        c.app.state.allowed_roots = [tmp_path]
+        c.app.state.transcode_service = svc
+        yield c, tmp_video, cached_file
+
+
+class TestTranscodeH264Route:
+    """Tests for GET /api/media?path=...&transcode=h264.
+
+    These tests verify the SERVING + error-mapping logic — not ffmpeg itself
+    (which is CI-gated in tests/integration/test_transcode_integration.py).
+    """
+
+    def test_transcode_hit_returns_200_with_cached_file(
+        self, client_with_transcode
+    ) -> None:
+        c, source, cached_file = client_with_transcode
+        resp = c.get("/api/media", params={"path": str(source), "transcode": "h264"})
+        assert resp.status_code == 200
+
+    def test_transcode_hit_content_type_is_video_mp4(
+        self, client_with_transcode
+    ) -> None:
+        c, source, cached_file = client_with_transcode
+        resp = c.get("/api/media", params={"path": str(source), "transcode": "h264"})
+        ct = resp.headers.get("content-type", "").split(";")[0].strip()
+        assert ct == "video/mp4"
+
+    def test_transcode_hit_serves_cached_bytes(
+        self, client_with_transcode
+    ) -> None:
+        c, source, cached_file = client_with_transcode
+        resp = c.get("/api/media", params={"path": str(source), "transcode": "h264"})
+        assert resp.content == _CACHED_MP4
+
+    def test_transcode_hit_has_accept_ranges(
+        self, client_with_transcode
+    ) -> None:
+        c, source, cached_file = client_with_transcode
+        resp = c.get("/api/media", params={"path": str(source), "transcode": "h264"})
+        assert resp.headers.get("accept-ranges") == "bytes"
+
+    def test_transcode_hit_range_request_returns_206(
+        self, client_with_transcode
+    ) -> None:
+        c, source, cached_file = client_with_transcode
+        resp = c.get(
+            "/api/media",
+            params={"path": str(source), "transcode": "h264"},
+            headers={"range": "bytes=0-3"},
+        )
+        assert resp.status_code == 206
+        assert resp.content == _CACHED_MP4[0:4]
+
+    def test_transcode_unavailable_returns_501(
+        self, tmp_path: Path, tmp_video: Path
+    ) -> None:
+        """When ffmpeg is absent the route returns 501."""
+
+        class _NoFfmpegSettings:
+            def get(self, key, default=None):
+                if key == "video_transcode_cache_dir":
+                    return str(tmp_path / "transcodes")
+                return default
+
+        with patch("shutil.which", return_value=None):
+            svc = TranscodeService(settings=_NoFfmpegSettings())
+
+        app = create_app()
+        with TestClient(app, raise_server_exceptions=True) as c:
+            c.app.state.allowed_roots = [tmp_path]
+            c.app.state.transcode_service = svc
+            resp = c.get(
+                "/api/media",
+                params={"path": str(tmp_video), "transcode": "h264"},
+            )
+
+        assert resp.status_code == 501
+
+    def test_transcode_source_path_guard_still_applies(
+        self, client_with_transcode
+    ) -> None:
+        """PATH guard on the SOURCE file is still active even with transcode=h264."""
+        c, source, _ = client_with_transcode
+        import sys
+        outside = Path(
+            "C:/Windows/System32/ntdll.dll"
+            if sys.platform == "win32"
+            else "/etc/passwd"
+        )
+        resp = c.get(
+            "/api/media",
+            params={"path": str(outside), "transcode": "h264"},
+        )
+        # 400 (empty/bad) or 403 (outside roots) — either is the guard firing.
+        assert resp.status_code in (400, 403)

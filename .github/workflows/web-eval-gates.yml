@@ -206,8 +206,17 @@ jobs:
 
       # The web-arm scan's EXIF stage shells out to exiftool (same runtime
       # boundary qa-batch.yml installs via choco on Windows).
-      - name: Install exiftool
-        run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl
+      # ffmpeg is added for the V2 transcode integration test (advisory).
+      - name: Install exiftool and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl ffmpeg
+
+      # V2 transcode: verify a real HEVC→H.264 transcode produces valid output.
+      # Advisory (continue-on-error on the parent job) — runs after sandbox build.
+      - name: Run transcode integration test
+        run: >
+          python -m pytest
+          tests/integration/test_transcode_integration.py
+          -m integration -v --no-cov
 
       # Build the qa/sandbox/ fixture tree (idempotent) — the bench sources.
       - name: Build QA sandbox fixtures

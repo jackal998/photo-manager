@@ -2,6 +2,9 @@
 
 Mirrors the security pattern of /api/image: the same path guard is reused.
 V1 scope: pass-through byte serving only — no transcoding.
+V2 scope: optional transcode=h264 query param triggers lazy H.264 transcode
+          (cached) so HEVC and other browser-incompatible codecs degrade
+          gracefully.
 
 RFC 7233 byte-range semantics:
   - No Range header → 200, full file, Accept-Ranges: bytes
@@ -63,39 +66,26 @@ def _stream_slice(
             yield chunk
 
 
-@router.get("/api/media")
-def get_media(request: Request, path: str = "") -> StreamingResponse:
-    """Serve raw media bytes for the given source path.
+def _serve_file(
+    file_path: Path,
+    media_type: str,
+    range_header: str,
+) -> StreamingResponse:
+    """Build a 200 or 206 StreamingResponse for ``file_path``.
 
-    Path validation:
-    - 400: empty or malformed path string
-    - 403: path resolves outside every allowed root (traversal guard)
-    - 404: path is under an allowed root but does not exist on disk
-    - 416: unsatisfiable byte range
-
-    No Range header → 200 (full file).
-    Range header    → 206 (byte slice, RFC 7233 inclusive END).
+    Extracted so both the direct and transcode serving paths share
+    identical Range / 206 / 416 logic without duplication.
     """
-    allowed_roots: list[Path] = getattr(request.app.state, "allowed_roots", [])
-    resolved = validate_under_roots(path, allowed_roots)
-
-    if not resolved.exists():
-        raise HTTPException(status_code=404, detail=f"file not found: {path!r}")
-
     try:
-        file_size = resolved.stat().st_size
+        file_size = file_path.stat().st_size
     except OSError as exc:
         raise HTTPException(
             status_code=500, detail=f"could not stat file: {exc}"
         ) from exc
 
-    media_type = _content_type(resolved)
-    range_header = request.headers.get("range", "")
-
     if not range_header:
-        # No Range → 200 full file.
         return StreamingResponse(
-            _stream_slice(resolved, 0, max(file_size - 1, 0)),
+            _stream_slice(file_path, 0, max(file_size - 1, 0)),
             status_code=200,
             media_type=media_type,
             headers={
@@ -104,10 +94,8 @@ def get_media(request: Request, path: str = "") -> StreamingResponse:
             },
         )
 
-    # Parse Range header.
     m = _RANGE_RE.match(range_header.strip())
     if not m:
-        # Malformed range syntax → 416.
         return StreamingResponse(
             iter([]),
             status_code=416,
@@ -118,9 +106,7 @@ def get_media(request: Request, path: str = "") -> StreamingResponse:
     end_raw = m.group(2)
 
     if not start_raw:
-        # Suffix-range: bytes=-N  →  last N bytes.
         if not end_raw or int(end_raw) == 0:
-            # bytes=-  or  bytes=-0 → unsatisfiable.
             return StreamingResponse(
                 iter([]),
                 status_code=416,
@@ -133,7 +119,6 @@ def get_media(request: Request, path: str = "") -> StreamingResponse:
         start = int(start_raw)
         end = int(end_raw) if end_raw else file_size - 1
 
-    # Clamp end to last byte; reject unsatisfiable start.
     end = min(end, file_size - 1)
     if start >= file_size or start > end:
         return StreamingResponse(
@@ -144,7 +129,7 @@ def get_media(request: Request, path: str = "") -> StreamingResponse:
 
     slice_len = end - start + 1
     return StreamingResponse(
-        _stream_slice(resolved, start, end),
+        _stream_slice(file_path, start, end),
         status_code=206,
         media_type=media_type,
         headers={
@@ -153,3 +138,79 @@ def get_media(request: Request, path: str = "") -> StreamingResponse:
             "Content-Length": str(slice_len),
         },
     )
+
+
+@router.get("/api/media")
+async def get_media(
+    request: Request, path: str = "", transcode: str = ""
+) -> StreamingResponse:
+    """Serve raw media bytes for the given source path.
+
+    Path validation:
+    - 400: empty or malformed path string
+    - 403: path resolves outside every allowed root (traversal guard)
+    - 404: path is under an allowed root but does not exist on disk
+    - 416: unsatisfiable byte range
+
+    No Range header → 200 (full file).
+    Range header    → 206 (byte slice, RFC 7233 inclusive END).
+
+    When ``transcode=h264`` is set the source file is lazily transcoded
+    to H.264 MP4 (cached) and the cached file is served.  Only the
+    SOURCE path is validated against allowed_roots; the service-internal
+    cache path is never exposed to the path guard.
+
+    Error codes for the transcode path:
+    - 501: ffmpeg not installed (TranscodeUnavailable)
+    - 500: ffmpeg exited non-zero or produced no output (TranscodeError)
+    """
+    import asyncio
+
+    from infrastructure.transcode_service import (
+        TranscodeError,
+        TranscodeUnavailable,
+    )
+
+    allowed_roots: list[Path] = getattr(request.app.state, "allowed_roots", [])
+    resolved = validate_under_roots(path, allowed_roots)
+
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"file not found: {path!r}")
+
+    range_header = request.headers.get("range", "")
+
+    if transcode == "h264":
+        # The source is already validated; the cache path is service-internal
+        # and must NOT be path-guarded (it lives outside any scan root).
+        svc = getattr(request.app.state, "transcode_service", None)
+        if svc is None:
+            raise HTTPException(
+                status_code=500,
+                detail="transcode service not initialised",
+            )
+        try:
+            loop = asyncio.get_event_loop()
+            cached_path: Path = await loop.run_in_executor(
+                None, svc.get_transcoded_path, resolved
+            )
+        except TranscodeUnavailable as exc:
+            raise HTTPException(
+                status_code=501,
+                detail="video transcoding unavailable (ffmpeg not installed)",
+            ) from exc
+        except TranscodeError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"video transcode failed: {exc}",
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"transcode I/O error: {exc}",
+            ) from exc
+
+        return _serve_file(cached_path, "video/mp4", range_header)
+
+    # Direct serve (V1 path).
+    media_type = _content_type(resolved)
+    return _serve_file(resolved, media_type, range_header)

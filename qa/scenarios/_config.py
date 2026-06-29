@@ -295,6 +295,9 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # s69 — V1 web video playback: GET /api/media + <video> element.
     # Uses qa/sandbox/video-playback (clip.webm WebM/VP9 fixture).
     "s69_video_playback": ["qa/sandbox/video-playback"],
+    # s70 — V2 video transcode fallback: synthetic error → transcode=h264 swap.
+    # Same video-playback fixture as s69 (clip.mp4); the Qt driver mirrors s69.
+    "s70_video_transcode_fallback": ["qa/sandbox/video-playback"],
 }
 
 # Per-scenario overrides for ui.prune_singletons. build_settings maps a

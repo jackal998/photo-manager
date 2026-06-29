@@ -275,4 +275,9 @@ ALL_SCENARIOS = [
     # selects the row, asserts <video> renders + real decode (readyState >= 2,
     # duration > 0) + frames advance after play(). VP8/VP9 = no codec gate.
     "s69_video_playback",
+    # s70 — V2 video transcode fallback: synthetic onError → src swap to
+    # transcode=h264.  Pins the client-side swap-once logic without requiring
+    # a real ffmpeg (dispatches a synthetic error event, asserts the <video>
+    # src gains &transcode=h264 on the first error and NOT before it).
+    "s70_video_transcode_fallback",
 ]

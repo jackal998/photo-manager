@@ -13,7 +13,7 @@
 // Double-clicking the image opens the full-resolution overlay via
 // store.openFullRes(path).
 
-import { useCallback } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { thumbnailUrl, mediaUrl } from "@/api/client";
 import { formatBytes, formatScore, formatDims, formatDate } from "@/lib/format";
@@ -58,6 +58,27 @@ export function PreviewPane() {
 
   const row = selectedFilePath !== null ? findRow(groups, selectedFilePath) : null;
 
+  // Transcode fallback state — reset when the selected file changes.
+  const [useTranscode, setUseTranscode] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
+  const [canPlay, setCanPlay] = useState(false);
+  useEffect(() => {
+    setUseTranscode(false);
+    setVideoFailed(false);
+    setCanPlay(false);
+  }, [selectedFilePath]);
+
+  const handleVideoError = useCallback(() => {
+    if (!useTranscode) {
+      // First error: swap to the H.264 transcode fallback.
+      setUseTranscode(true);
+      setCanPlay(false);
+    } else {
+      // Second error (transcode also failed): show terminal state.
+      setVideoFailed(true);
+    }
+  }, [useTranscode]);
+
   const handleDoubleClick = useCallback(() => {
     if (selectedFilePath !== null) {
       openFullRes(selectedFilePath);
@@ -78,13 +99,32 @@ export function PreviewPane() {
               where the scrollbar appearance/disappearance thrashes layout. */}
           <div className="flex-1 overflow-y-scroll overflow-x-hidden flex items-start justify-center bg-neutral-900 min-h-0">
             {row.media_type === "video" ? (
-              <video
-                data-testid={PREVIEW_SINGLE_IMAGE}
-                src={mediaUrl(selectedFilePath)}
-                controls
-                className="max-w-full max-h-full object-contain"
-                // No autoplay — matches Qt desktop single-view player behaviour.
-              />
+              videoFailed ? (
+                <div className="flex items-center justify-center h-full text-neutral-400 text-sm select-none">
+                  Video cannot be played
+                </div>
+              ) : (
+                <>
+                  {/* "Preparing video…" overlay while the transcode is in flight. */}
+                  {useTranscode && !canPlay && (
+                    <div className="absolute flex items-center justify-center pointer-events-none">
+                      <span className="text-neutral-400 text-sm">Preparing video…</span>
+                    </div>
+                  )}
+                  <video
+                    // key forces a remount (and re-attempt) when the src swaps to
+                    // the transcode URL; changing src alone is not always enough.
+                    key={selectedFilePath + (useTranscode ? ":h264" : "")}
+                    data-testid={PREVIEW_SINGLE_IMAGE}
+                    src={mediaUrl(selectedFilePath, useTranscode ? { transcode: "h264" } : undefined)}
+                    controls
+                    className="max-w-full max-h-full object-contain"
+                    onError={handleVideoError}
+                    onCanPlay={() => setCanPlay(true)}
+                    // No autoplay — matches Qt desktop single-view player behaviour.
+                  />
+                </>
+              )
             ) : (
               <img
                 data-testid={PREVIEW_SINGLE_IMAGE}

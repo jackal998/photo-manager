@@ -346,7 +346,12 @@ export function fullResUrl(path: string): string {
  * Returns the URL for the raw media stream (GET /api/media).
  * Used by <video src=...> for video rows. The server supports HTTP Range
  * so native browser video controls (seek, scrub) work correctly.
+ *
+ * When ``opts.transcode`` is "h264" the server lazily transcodes the
+ * source to H.264 (cached) and serves the cached file.  Used by the
+ * transcode-fallback swap-once logic in PreviewPane / FullResViewer.
  */
-export function mediaUrl(path: string): string {
-  return `${BASE}/api/media?path=${encodeURIComponent(path)}`;
+export function mediaUrl(path: string, opts?: { transcode?: "h264" }): string {
+  const base = `${BASE}/api/media?path=${encodeURIComponent(path)}`;
+  return opts?.transcode ? `${base}&transcode=${opts.transcode}` : base;
 }

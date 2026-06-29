@@ -65,7 +65,7 @@ export function FullResViewer() {
 
   const isOpen = fullResPath !== null;
 
-  // Reset image state whenever the path changes.
+  // Reset image + video state whenever the path changes.
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [naturalDims, setNaturalDims] = useState<{
@@ -73,12 +73,20 @@ export function FullResViewer() {
     h: number;
   } | null>(null);
 
+  // Transcode fallback state (video only).
+  const [useTranscode, setUseTranscode] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
+  const [videoCanPlay, setVideoCanPlay] = useState(false);
+
   useEffect(() => {
     setLoading(true);
     setLoadError(false);
     setNaturalDims(null);
     setScale(1);
     setPan({ x: 0, y: 0 });
+    setUseTranscode(false);
+    setVideoFailed(false);
+    setVideoCanPlay(false);
   }, [fullResPath]);
 
   // ---------------------------------------------------------------------------
@@ -141,6 +149,16 @@ export function FullResViewer() {
     setLoading(false);
     setLoadError(true);
   }, []);
+
+  // Video-specific error: swap to transcode on first error, terminal on second.
+  const handleVideoError = useCallback(() => {
+    if (!useTranscode) {
+      setUseTranscode(true);
+      setVideoCanPlay(false);
+    } else {
+      setVideoFailed(true);
+    }
+  }, [useTranscode]);
 
   const handleReveal = useCallback(() => {
     if (fullResPath !== null) {
@@ -213,15 +231,37 @@ export function FullResViewer() {
             }}
           >
             {isVideo && fullResPath !== null ? (
-              /* Video player — native controls, no autoplay (matches Qt desktop). */
-              <video
-                data-testid={FULLRES_IMAGE}
-                key={fullResPath}
-                src={mediaUrl(fullResPath)}
-                controls
-                className="max-w-full max-h-full"
-                // No autoplay — matches Qt desktop single-view player behaviour.
-              />
+              /* Video player — native controls, no autoplay (matches Qt desktop).
+                 On decode error, swap ONCE to the H.264 transcode fallback; on a
+                 second error show a terminal "cannot be played" message. */
+              videoFailed ? (
+                <div className="flex flex-col items-center gap-4 text-white">
+                  <p className="text-sm text-neutral-300">
+                    Video cannot be played
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Spinner while transcoded file is being prepared. */}
+                  {useTranscode && !videoCanPlay && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+                    </div>
+                  )}
+                  <video
+                    data-testid={FULLRES_IMAGE}
+                    // key forces a full remount when the src swaps to the transcode
+                    // URL so the browser re-initiates the decode attempt.
+                    key={fullResPath + (useTranscode ? ":h264" : "")}
+                    src={mediaUrl(fullResPath, useTranscode ? { transcode: "h264" } : undefined)}
+                    controls
+                    className="max-w-full max-h-full"
+                    onError={handleVideoError}
+                    onCanPlay={() => setVideoCanPlay(true)}
+                    // No autoplay — matches Qt desktop single-view player behaviour.
+                  />
+                </>
+              )
             ) : (
               <>
                 {/* Loading spinner (images only) */}
