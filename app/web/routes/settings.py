@@ -55,11 +55,23 @@ async def get_settings() -> dict:
     Only keys in _WEB_SETTINGS_KEYS are returned — this prevents GET from
     leaking any future sensitive key that might be added to settings.json.
 
+    ``sources.list`` is resolved through the shared migration helper so an
+    upgrader carrying only the legacy ``sources.{iphone,takeout,jdrive}``
+    keys (no ``sources.list``) still gets their source list in the web UI —
+    the same reconstruction the Qt ScanDialog performs (#258).
+
     Returns:
         200 {<allowlisted key>: value, ...}  (absent keys return None)
     """
+    from core.app_service.settings_migration import resolve_source_entries
+
     settings = _load_settings()
-    return {key: settings.get(key) for key in _WEB_SETTINGS_KEYS}
+    result = {key: settings.get(key) for key in _WEB_SETTINGS_KEYS}
+    if not result.get("sources.list"):
+        resolved = resolve_source_entries(settings)
+        if resolved:
+            result["sources.list"] = resolved
+    return result
 
 
 @router.patch("/api/settings")

@@ -22,9 +22,9 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 
-# --- import ALL_SCENARIOS from the Qt harness (always importable) ----------
+# --- import ALL_SCENARIOS from the Qt-free registry (no Qt / ctypes pulled in)
 sys.path.insert(0, str(_REPO))
-from qa.scenarios._batch import ALL_SCENARIOS  # noqa: E402  # type: ignore[import]
+from qa.scenario_ids import ALL_SCENARIOS  # noqa: E402  # type: ignore[import]
 
 # --- determine whether playwright is available ----------------------------
 try:

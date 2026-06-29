@@ -17,8 +17,10 @@ from app.viewmodels.main_vm import MainVM
 from core.app_service.review_view import serialize_groups
 
 # Valid stored user_decision values.
-# Cross-reference: app/views/constants.py IGNORE_DECISION == "ignore"
-# (can't import it here — that module imports PySide6).
+# Cross-reference: core.constants.IGNORE_DECISION == "ignore". Kept as an
+# explicit literal here (not imported) for a self-contained frozenset; the
+# drift-check tests in tests/test_review_service.py and tests/test_web_qt_free.py
+# pin the two in sync.
 VALID_DECISIONS: frozenset[str] = frozenset({"", "delete", "ignore"})
 
 

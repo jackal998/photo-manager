@@ -1,7 +1,7 @@
 """Check parity between qa/web/scenario_map.yml and ALL_SCENARIOS.
 
 Invariant: the number of ``scenarios`` entries in scenario_map.yml must
-equal ``len(ALL_SCENARIOS)`` from qa.scenarios._batch.  This script
+equal ``len(ALL_SCENARIOS)`` from qa.scenario_ids.  This script
 enforces that invariant in CI (layer 1 probe) and locally.
 
 Exit codes
@@ -26,10 +26,10 @@ _REPO = Path(__file__).resolve().parents[1]
 
 
 def _load_all_scenarios() -> list[str]:
-    """Import ALL_SCENARIOS from qa.scenarios._batch and return it."""
+    """Import ALL_SCENARIOS from the Qt-free qa.scenario_ids registry."""
     sys.path.insert(0, str(_REPO))
     try:
-        from qa.scenarios._batch import ALL_SCENARIOS  # type: ignore[import]
+        from qa.scenario_ids import ALL_SCENARIOS  # type: ignore[import]
         return list(ALL_SCENARIOS)
     except ImportError as exc:
         print(f"ERROR: cannot import ALL_SCENARIOS: {exc}", file=sys.stderr)

@@ -40,6 +40,7 @@ from app.views.window_state import (
     save_widget_geometry,
 )
 from app.views.workers.scan_worker import ScanWorker
+from core.app_service.settings_migration import resolve_source_entries
 from infrastructure.i18n import t
 from scanner.workers import default_hash_workers
 
@@ -779,29 +780,15 @@ class ScanDialog(QDialog):
 
     def _load_from_settings(self) -> None:
         """Populate the dialog from saved settings (new list format or legacy keys)."""
-        sources_list = self.settings.get("sources.list")
-        if sources_list:
-            entries = [
-                _SourceEntry(path=item["path"], recursive=item.get("recursive", True))
-                for item in sources_list
-                if isinstance(item, dict) and item.get("path")
-            ]
-            self._source_list.set_entries(entries)
-        else:
-            # Migration shim (since the 2025 "sources.list" rollout):
-            # users upgrading from pre-sources.list builds still carry
-            # only the legacy sources.{iphone,takeout,jdrive} keys.
-            # Removing this branch silently empties their source list
-            # on first launch -- no error, no warning, just zero sources.
-            # tests/test_settings_migration.py pins the contract; a PR
-            # that intentionally drops this shim must drop that test
-            # too and ship a migration story. See #258.
-            entries = []
-            for key in ("iphone", "takeout", "jdrive"):
-                path = self.settings.get(f"sources.{key}", "")
-                if path:
-                    entries.append(_SourceEntry(path=path, recursive=True))
-            self._source_list.set_entries(entries)
+        # New-format ``sources.list`` and the #258 legacy-keys migration shim
+        # both live in the Qt-free ``resolve_source_entries`` helper, shared
+        # with the web settings loader so upgraders never silently lose their
+        # source list. See core/app_service/settings_migration.py.
+        entries = [
+            _SourceEntry(path=item["path"], recursive=item["recursive"])
+            for item in resolve_source_entries(self.settings)
+        ]
+        self._source_list.set_entries(entries)
 
         saved_out = self.settings.get("sources.output", "migration_manifest.sqlite")
         self._output_field.setText(saved_out or "migration_manifest.sqlite")

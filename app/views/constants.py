@@ -6,6 +6,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
+# IGNORE_DECISION is Qt-free and consumed by surviving (web / service / kept-
+# test) code, so it lives in core.constants. Re-exported here for the desktop
+# app's continued use.
+from core.constants import IGNORE_DECISION  # noqa: F401
 from infrastructure.i18n import t
 
 # Column indices stay as integer constants — they're not user-facing.
@@ -79,11 +83,9 @@ def headers() -> list[str]:
 # "remove from list" / "從清單移除" (decision.remove_from_list in en/zh_TW).
 IGNORE_SENTINEL: str = "__ignore__"
 
-# Stored user_decision value for the deferred ignore flow.
-# Displayed in the Action column via the localised "remove from list" label,
-# and applied at execute time (outcome='ignored', drop from vm).
-# Wire value is internal-only; user-facing label is decision.remove_from_list.
-IGNORE_DECISION: str = "ignore"
+# IGNORE_DECISION (the stored user_decision value for the deferred ignore
+# flow) is imported above from core.constants — it is Qt-free and shared with
+# the web / service layers.
 
 # Sentinels for lock / unlock dispatched through the same regex / multi-
 # select code path as decisions. They DO NOT update ``user_decision`` —

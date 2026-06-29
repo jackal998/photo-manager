@@ -71,14 +71,15 @@ def test_phase2b_modules_import_no_pyside6():
 
 
 def test_decision_constant_sync():
-    """VALID_DECISIONS must stay in sync with IGNORE_DECISION from constants.py.
+    """VALID_DECISIONS must stay in sync with IGNORE_DECISION from core.constants.
 
-    The review_service uses IGNORE_DECISION's value ('ignore') but cannot
-    import constants.py (Qt-coupled). This test catches drift between the
-    two definitions.
+    The review_service uses IGNORE_DECISION's value ('ignore') but defines its
+    own VALID_DECISIONS frozenset; this test catches drift between the two.
+    IGNORE_DECISION lives in the Qt-free core.constants so this probe survives
+    the eventual app/views deletion.
     """
-    from app.views.constants import IGNORE_DECISION
     from core.app_service.review_service import VALID_DECISIONS
+    from core.constants import IGNORE_DECISION
 
     assert IGNORE_DECISION in VALID_DECISIONS, (
         f"IGNORE_DECISION ({IGNORE_DECISION!r}) must be in review_service.VALID_DECISIONS. "

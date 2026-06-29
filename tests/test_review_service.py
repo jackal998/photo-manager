@@ -282,6 +282,6 @@ class TestValidDecisions:
         assert "keep" not in VALID_DECISIONS
 
     def test_ignore_in_sync_with_constants(self):
-        """IGNORE_DECISION from app.views.constants must be in VALID_DECISIONS."""
-        from app.views.constants import IGNORE_DECISION
+        """IGNORE_DECISION from core.constants must be in VALID_DECISIONS."""
+        from core.constants import IGNORE_DECISION
         assert IGNORE_DECISION in VALID_DECISIONS
