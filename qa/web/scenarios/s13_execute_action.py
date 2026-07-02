@@ -567,17 +567,25 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
             confirm_yes.click()
 
             # Unscoped commit (scope_paths=null) applies to EVERY decided row —
-            # group A's 2 deletes AND group B's 1 ignore row. Poll until group
-            # A's basenames leave the manifest (the deterministic completion
-            # signal; group B's undecided rows never leave).
+            # group A's 2 deletes AND group B's 1 ignore row. Poll until BOTH
+            # leave the manifest: delete outcomes are finalized PER FILE inside
+            # the execute call but ignore rows are finalized in one batch at
+            # the END (execute_service), so group A's absence alone is not the
+            # full completion signal — a GET landing between the two commits
+            # still shows the ignore row (observed as a CI-only flake; local
+            # runs never hit the window).
             deadline = time.monotonic() + 30.0
             post_execute = _get_manifest(base_url, db_path)
             post_b2g = _basename_to_group(post_execute)
-            while any(n in post_b2g for n in _MIXED_GROUP_A_BASENAMES):
+            while (
+                any(n in post_b2g for n in _MIXED_GROUP_A_BASENAMES)
+                or _MIXED_GROUP_B_BASENAMES[0] in post_b2g
+            ):
                 if time.monotonic() >= deadline:
                     raise AssertionError(
-                        "Timed out after 30s waiting for group A to leave the "
-                        f"manifest; last groups={post_execute.get('groups', [])}"
+                        "Timed out after 30s waiting for group A + the ignore "
+                        "row to leave the manifest; last "
+                        f"groups={post_execute.get('groups', [])}"
                     )
                 time.sleep(0.5)
                 post_execute = _get_manifest(base_url, db_path)
