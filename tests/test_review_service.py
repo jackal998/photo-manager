@@ -87,6 +87,33 @@ def _make_pair(tmp_path: Path, group_id: str = "/grp/a") -> Path:
     return _make_full_schema_manifest(tmp_path, rows)
 
 
+def _make_pair_with_lock(tmp_path: Path, group_id: str = "/grp/a") -> Path:
+    """Two-row manifest: locked Ref row + unlocked REVIEW_DUPLICATE row."""
+    rows = [
+        {
+            "source_path": "/photos/ref.jpg",
+            "source_label": "test",
+            "action": "",
+            "group_id": group_id,
+            "score": 0.9,
+            "file_size_bytes": 2048,
+            "outcome": "",
+            "is_locked": 1,
+        },
+        {
+            "source_path": "/photos/dup.jpg",
+            "source_label": "test",
+            "action": "REVIEW_DUPLICATE",
+            "group_id": group_id,
+            "hamming_distance": 4,
+            "file_size_bytes": 1024,
+            "outcome": "",
+            "is_locked": 0,
+        },
+    ]
+    return _make_full_schema_manifest(tmp_path, rows)
+
+
 def _read_field(manifest: Path, field: str) -> dict[str, object]:
     """Return {source_path: field_value} for all rows."""
     conn = sqlite3.connect(str(manifest))
@@ -228,6 +255,67 @@ class TestSetDecisions:
         items = result["groups"][0]["items"]
         dup_item = next(i for i in items if i["file_path"] == "/photos/dup.jpg")
         assert dup_item["user_decision"] == "delete"
+
+
+# ---------------------------------------------------------------------------
+# set_decisions — locked-rows gate (#733, Qt parity)
+# ---------------------------------------------------------------------------
+
+class TestSetDecisionsLockedRowGate:
+    def test_locked_row_without_flags_raises_and_writes_nothing(self, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        with pytest.raises(ValueError) as exc_info:
+            set_decisions(str(manifest), {"/photos/ref.jpg": "delete"})
+        assert exc_info.value.args[0] == "locked_paths"
+        assert exc_info.value.args[1] == ["/photos/ref.jpg"]
+        assert exc_info.value.args[2] == 1
+        # DB must be UNCHANGED — the gate fires before any write.
+        decisions = _read_field(manifest, "user_decision")
+        assert decisions["/photos/ref.jpg"] == ""
+
+    def test_locked_row_clearing_decision_is_also_gated(self, tmp_path):
+        """Qt does not special-case '' — clearing a locked row's decision
+        is gated exactly like setting one (#733 parity)."""
+        manifest = _make_pair_with_lock(tmp_path)
+        with pytest.raises(ValueError) as exc_info:
+            set_decisions(str(manifest), {"/photos/ref.jpg": ""})
+        assert exc_info.value.args[0] == "locked_paths"
+
+    def test_force_locked_applies_decision_and_unlocks(self, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        n = set_decisions(
+            str(manifest), {"/photos/ref.jpg": "delete"}, force_locked=True
+        )
+        assert n == 1
+        decisions = _read_field(manifest, "user_decision")
+        locks = _read_field(manifest, "is_locked")
+        assert decisions["/photos/ref.jpg"] == "delete"
+        assert locks["/photos/ref.jpg"] == 0
+
+    def test_skip_locked_writes_unlocked_only_leaves_locked_untouched(self, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        n = set_decisions(
+            str(manifest),
+            {"/photos/ref.jpg": "delete", "/photos/dup.jpg": "delete"},
+            skip_locked=True,
+        )
+        assert n == 1
+        decisions = _read_field(manifest, "user_decision")
+        locks = _read_field(manifest, "is_locked")
+        # Locked ref.jpg is untouched — neither decision nor lock state changed.
+        assert decisions["/photos/ref.jpg"] == ""
+        assert locks["/photos/ref.jpg"] == 1
+        # Unlocked dup.jpg got the decision.
+        assert decisions["/photos/dup.jpg"] == "delete"
+
+    def test_no_locked_rows_targeted_fast_path_still_writes(self, tmp_path):
+        """A locked row exists in the manifest but isn't in the target set —
+        the gate must not fire (mirrors bulk_decide's targeted-only check)."""
+        manifest = _make_pair_with_lock(tmp_path)
+        n = set_decisions(str(manifest), {"/photos/dup.jpg": "delete"})
+        assert n == 1
+        decisions = _read_field(manifest, "user_decision")
+        assert decisions["/photos/dup.jpg"] == "delete"
 
 
 # ---------------------------------------------------------------------------

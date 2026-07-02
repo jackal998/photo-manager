@@ -114,22 +114,45 @@ def load_review(
     }
 
 
-def set_decisions(manifest_path: str, decisions: dict[str, str]) -> int:
-    """Persist user decisions to the manifest.
+def set_decisions(
+    manifest_path: str,
+    decisions: dict[str, str],
+    *,
+    force_locked: bool = False,
+    skip_locked: bool = False,
+) -> int:
+    """Persist user decisions to the manifest, gated on locked rows.
 
-    The returned count is the number of rows REQUESTED, not necessarily
-    the number matched in the DB (executemany does not report per-row matches).
+    Mirrors the Qt desktop's ``set_decision_with_lock_check`` /
+    ``LockedRowsConfirmDialog`` gate (#182, #733): a decision write that
+    would touch a locked row is refused unless the caller opts into one
+    of ``force_locked`` (write anyway, unlocking the row in the same
+    write) or ``skip_locked`` (drop locked rows from the write set,
+    leaving both ``is_locked`` and ``user_decision`` untouched). The gate
+    applies to every decision value, including ``""`` (clearing a locked
+    row's decision is also gated — Qt does not special-case it).
+
+    The returned count is the number of rows ACTUALLY submitted for write
+    (narrowed by ``skip_locked``), not necessarily the number matched in
+    the DB (executemany does not report per-row matches).
 
     Args:
         manifest_path: Absolute path to the manifest.
         decisions: Mapping of file_path → decision value.
+        force_locked: When True, locked rows are written anyway and
+            unlocked (``is_locked`` set to False) in the same write.
+        skip_locked: When True, locked rows are dropped from the write
+            set; only the unlocked subset is written.
 
     Returns:
-        Number of decision entries submitted.
+        Number of decision entries actually submitted.
 
     Raises:
         FileNotFoundError: If manifest_path does not exist on disk.
         ValueError: If any decision value is not in VALID_DECISIONS.
+        ValueError("locked_paths", [...], matched_total): The decision
+            write targets locked rows and neither ``force_locked`` nor
+            ``skip_locked`` is set.
     """
     _require_manifest(manifest_path)
     for fp, dec in decisions.items():
@@ -138,7 +161,35 @@ def set_decisions(manifest_path: str, decisions: dict[str, str]) -> int:
                 f"Invalid decision {dec!r} for {fp!r}. "
                 f"Allowed values: {sorted(VALID_DECISIONS)}"
             )
-    ManifestRepository().batch_update_decisions(manifest_path, decisions)
+
+    # Locked-rows gate — RE-READ is_locked from the DB (never trust client
+    # state). Reuses ManifestRepository.load(), the same repository call
+    # action_service.bulk_decide's path_to_rec build is ultimately backed by.
+    repo = ManifestRepository()
+    path_to_rec = {rec.file_path: rec for rec in repo.load(manifest_path)}
+    locked: list[str] = [
+        p for p in decisions if getattr(path_to_rec.get(p), "is_locked", False)
+    ]
+
+    if skip_locked:
+        # Apply to Unlocked Only — narrow the write set IN PLACE so both the
+        # write and the returned count reflect the actually-applied subset.
+        # Locked rows keep their is_locked + user_decision untouched.
+        locked_set = set(locked)
+        decisions = {p: v for p, v in decisions.items() if p not in locked_set}
+    elif locked and not force_locked:
+        # 409 carries the FULL targeted count (before any narrowing) so the
+        # caller can derive the unlocked count without a separate preview.
+        raise ValueError("locked_paths", locked, len(decisions))
+    elif force_locked and locked:
+        # Unlock & Apply All — unlock the locked rows in the same write as
+        # the decision (mirrors Qt's batch_update_decisions_and_lock call).
+        repo.batch_update_decisions_and_lock(
+            manifest_path, decisions, {p: False for p in locked}
+        )
+        return len(decisions)
+
+    repo.batch_update_decisions(manifest_path, decisions)
     return len(decisions)
 
 

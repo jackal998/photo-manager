@@ -90,21 +90,36 @@ def _merge_roots(request: Request, roots: list[str]) -> None:
 
 @router.patch("/api/decision")
 async def patch_decision(body: DecisionUpdate) -> dict:
-    """Persist user decisions for a batch of files.
+    """Persist user decisions for a batch of files, gated on locked rows.
 
-    The returned count is the number of rows REQUESTED, not necessarily
-    the number matched in the DB (executemany does not report per-row matches).
+    The returned count is the number of rows ACTUALLY submitted for write
+    (narrowed by ``skip_locked``), not necessarily the number matched in
+    the DB (executemany does not report per-row matches).
 
     Returns:
         200 {updated: int}
         400 if a decision value is invalid
         404 if manifest_path does not exist on disk
+        409 locked_paths (locked rows targeted and force_locked=False and
+            skip_locked=False) — mirrors POST /api/action/bulk-decide's
+            409 detail shape: {code, locked_paths, matched_total}
         422 on db error
     """
     decisions = {item.file_path: item.decision for item in body.decisions}
     try:
-        updated = set_decisions(body.manifest_path, decisions)
+        updated = set_decisions(
+            body.manifest_path,
+            decisions,
+            force_locked=body.force_locked,
+            skip_locked=body.skip_locked,
+        )
     except ValueError as exc:
+        args = exc.args
+        if args and args[0] == "locked_paths":
+            detail: dict = {"code": "locked_paths", "locked_paths": args[1]}
+            if len(args) > 2:
+                detail["matched_total"] = args[2]
+            raise HTTPException(status_code=409, detail=detail) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(

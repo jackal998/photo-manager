@@ -144,6 +144,8 @@ class DecisionUpdate(BaseModel):
 
     manifest_path: str
     decisions: list[DecisionItem]
+    force_locked: bool = False
+    skip_locked: bool = False
 
 
 class LockItem(BaseModel):

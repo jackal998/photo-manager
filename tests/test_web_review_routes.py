@@ -68,6 +68,41 @@ def _make_pair(tmp_path: Path) -> Path:
     ])
 
 
+def _make_pair_with_lock(tmp_path: Path) -> Path:
+    """Two-row manifest: locked Ref row + unlocked REVIEW_DUPLICATE row."""
+    return _make_manifest(tmp_path, [
+        {
+            "source_path": "/photos/ref.jpg",
+            "action": "",
+            "group_id": "/g/1",
+            "outcome": "",
+            "file_size_bytes": 2048,
+            "is_locked": 1,
+        },
+        {
+            "source_path": "/photos/dup.jpg",
+            "action": "REVIEW_DUPLICATE",
+            "group_id": "/g/1",
+            "hamming_distance": 4,
+            "outcome": "",
+            "file_size_bytes": 1024,
+            "is_locked": 0,
+        },
+    ])
+
+
+def _read_field(manifest: Path, field: str) -> dict[str, object]:
+    """Return {source_path: field_value} for all rows."""
+    conn = sqlite3.connect(str(manifest))
+    try:
+        rows = conn.execute(
+            f"SELECT source_path, {field} FROM migration_manifest"
+        ).fetchall()
+    finally:
+        conn.close()
+    return dict(rows)
+
+
 def _make_real_file_manifest(tmp_path: Path) -> tuple[Path, Path, Path]:
     """Create two real JPEG files in a sub-directory and a manifest pointing to them.
 
@@ -254,6 +289,58 @@ class TestPatchDecision:
         assert not Path(bogus).exists(), (
             "sqlite3.connect() must not silently create a manifest file on PATCH"
         )
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/decision — locked-rows gate (#733, Qt parity)
+# ---------------------------------------------------------------------------
+
+class TestPatchDecisionLockedRowGate:
+    def test_locked_row_without_flags_returns_409(self, client, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/ref.jpg", "decision": "delete"}],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "locked_paths"
+        assert detail["locked_paths"] == ["/photos/ref.jpg"]
+        assert detail["matched_total"] == 1
+        # DB must be UNCHANGED.
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == ""
+
+    def test_force_locked_applies_decision_and_unlocks(self, client, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/ref.jpg", "decision": "delete"}],
+            "force_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["updated"] == 1
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == "delete"
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 0
+
+    def test_skip_locked_writes_unlocked_only(self, client, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [
+                {"file_path": "/photos/ref.jpg", "decision": "delete"},
+                {"file_path": "/photos/dup.jpg", "decision": "delete"},
+            ],
+            "skip_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["updated"] == 1
+        decisions = _read_field(manifest, "user_decision")
+        locks = _read_field(manifest, "is_locked")
+        # Locked ref.jpg is untouched.
+        assert decisions["/photos/ref.jpg"] == ""
+        assert locks["/photos/ref.jpg"] == 1
+        # Unlocked dup.jpg got the decision.
+        assert decisions["/photos/dup.jpg"] == "delete"
 
 
 # ---------------------------------------------------------------------------
