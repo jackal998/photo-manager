@@ -15,7 +15,11 @@ import { act, render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { ExecuteDialog, findAllDeleteGroupIds } from "./ExecuteDialog";
+import {
+  ExecuteDialog,
+  findAllDeleteGroupIds,
+  completeDeleteGroupIds,
+} from "./ExecuteDialog";
 import { useAppStore } from "@/store/useAppStore";
 import {
   EXECUTE_DIALOG,
@@ -595,6 +599,32 @@ describe("ExecuteDialog", () => {
   });
 
   // -------------------------------------------------------------------------
+  // #733 — the pre-execute blocking gate must fire whenever ANY group is
+  // complete-delete, not just when the ENTIRE scope is complete-delete. A
+  // mixed manifest (one complete-delete group + one group with keeps) used
+  // to slip through with no blocking confirm — only the passive banner.
+  // -------------------------------------------------------------------------
+
+  it("mixed manifest: unscoped Execute blocks when ANY group is complete-delete, even though another group has keeps", () => {
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      // group 1 (MIXED_GROUP) has a keep row; group 2 (ALL_DELETE_GROUP) is
+      // entirely delete. The bug: isAllDeleteScope() looked at every decided
+      // row across BOTH groups, saw group 1's ignore row, and returned false.
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId(EXECUTE_BTN_EXECUTE));
+    });
+
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toBeInTheDocument();
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
   // "Execute (only selected)" — group-pull scope (#430). When the dialog is
   // opened with scopeGroupNumbers set, every groups-derived view confines to
   // those groups, and Execute commits ONLY the scoped groups' decided rows
@@ -653,6 +683,39 @@ describe("ExecuteDialog", () => {
     });
   });
 
+  it("scoped Execute under 'all' filter does NOT confirm when the scoped group has undecided leftovers", () => {
+    // Qt parity (#733): under the "all" filter the complete-group check runs
+    // UNFILTERED over the dialog's groups, so undecided rows count AGAINST
+    // "complete". Gating on decidedPaths instead would see only the delete
+    // rows and false-positive the confirm on this group.
+    const partialDeleteGroup: Group = {
+      group_number: 4,
+      member_count: 2,
+      items: [
+        makeFile("e.jpg", "/photos/e.jpg", "delete", "4"),
+        makeFile("f.jpg", "/photos/f.jpg", "", "4"),
+      ],
+    };
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      openDialog([partialDeleteGroup, ALL_DELETE_GROUP], [4]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId(EXECUTE_BTN_EXECUTE));
+    });
+
+    expect(
+      screen.queryByTestId(EXECUTE_ALL_DELETE_CONFIRM)
+    ).not.toBeInTheDocument();
+    expect(executeDecisionsMock).toHaveBeenCalledOnce();
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/photos/e.jpg"],
+    });
+  });
+
   // Pure narrowing logic (change C) — deterministic, no Select driving.
   describe("findAllDeleteGroupIds (filter-narrowed)", () => {
     const gAllDelete: Group = {
@@ -689,6 +752,77 @@ describe("ExecuteDialog", () => {
     });
     it("filter 'ignore' never qualifies a group on its (hidden) delete rows", () => {
       expect(findAllDeleteGroupIds(all, "ignore")).toEqual([]);
+    });
+  });
+
+  // Pure narrowing logic for the #733 pre-execute BLOCKING gate — distinct
+  // from findAllDeleteGroupIds (the passive banner), which narrows by the
+  // active TypeFilter instead of an explicit scope set.
+  describe("completeDeleteGroupIds (#733 pre-execute blocking gate)", () => {
+    const gComplete: Group = {
+      group_number: 1,
+      member_count: 2,
+      items: [
+        makeFile("a", "/p/a", "delete", "1"),
+        makeFile("b", "/p/b", "delete", "1"),
+      ],
+    };
+    const gWithKeeps: Group = {
+      group_number: 2,
+      member_count: 2,
+      items: [
+        makeFile("c", "/p/c", "delete", "2"),
+        makeFile("d", "/p/d", "ignore", "2"),
+      ],
+    };
+    const gUndecided: Group = {
+      group_number: 3,
+      member_count: 2,
+      items: [
+        makeFile("e", "/p/e", "delete", "3"),
+        makeFile("f", "/p/f", "", "3"),
+      ],
+    };
+
+    it("unscoped (null): a group where every item is delete qualifies", () => {
+      expect(completeDeleteGroupIds([gComplete], null)).toEqual(["1"]);
+    });
+
+    it("unscoped: a mixed manifest (one complete group + one group with keeps) returns only the complete group", () => {
+      expect(completeDeleteGroupIds([gComplete, gWithKeeps], null)).toEqual([
+        "1",
+      ]);
+    });
+
+    it("unscoped: a group with undecided rows is NOT complete", () => {
+      expect(completeDeleteGroupIds([gUndecided], null)).toEqual([]);
+    });
+
+    it("scoped: narrowing to a subset of a mixed group can make it complete IN SCOPE", () => {
+      // gWithKeeps: c=delete, d=ignore. Scoping to just [c] narrows the
+      // group's in-scope subset to all-delete, even though the group overall
+      // (including the out-of-scope d=ignore row) is mixed.
+      expect(completeDeleteGroupIds([gWithKeeps], ["/p/c"])).toEqual(["2"]);
+    });
+
+    it("scoped: an empty in-scope subset never qualifies", () => {
+      expect(
+        completeDeleteGroupIds([gComplete], ["/p/does-not-exist"])
+      ).toEqual([]);
+    });
+
+    it("result IDs are sorted numerically", () => {
+      const g10: Group = {
+        group_number: 10,
+        member_count: 1,
+        items: [makeFile("x", "/p/x", "delete", "10")],
+      };
+      const g2: Group = {
+        group_number: 2,
+        member_count: 1,
+        items: [makeFile("y", "/p/y", "delete", "2")],
+      };
+      expect(completeDeleteGroupIds([g10, g2], null)).toEqual(["2", "10"]);
     });
   });
 });

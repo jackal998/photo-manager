@@ -87,6 +87,50 @@ export function findAllDeleteGroupIds(
   return ids;
 }
 
+/** Returns the group IDs (as strings, sorted numerically) that are "complete
+ * delete" within ``scopePaths`` — Qt parity with
+ * ``_complete_delete_groups(paths_filter=...)``
+ * (app/views/dialogs/execute_action_dialog.py:301-338).
+ *
+ * - ``scopePaths === null``: a group qualifies when EVERY item (including
+ *   undecided) has ``user_decision === "delete"``.
+ * - ``scopePaths`` set: narrow to each group's IN-SCOPE items (file_path in
+ *   ``scopePaths``); a group qualifies when that in-scope subset is
+ *   non-empty and every one of them is "delete". Out-of-scope rows don't
+ *   count for or against "complete" — mirrors Qt's ``paths_filter``
+ *   narrowing so partial-execute doesn't false-positive on unselected kept
+ *   rows or false-negative on a group whose only selected rows are delete.
+ *
+ * This is the PRE-EXECUTE BLOCKING gate (§5.5/#733) — distinct from
+ * ``findAllDeleteGroupIds`` (the passive banner), which narrows by the
+ * active TypeFilter instead of an explicit scope.
+ */
+export function completeDeleteGroupIds(
+  groups: ReturnType<typeof useAppStore.getState>["manifest"]["groups"],
+  scopePaths: string[] | null
+): string[] {
+  const scope = scopePaths === null ? null : new Set(scopePaths);
+  const ids: number[] = [];
+  for (const group of groups) {
+    const items = group.items;
+    if (items.length === 0) continue;
+    if (scope === null) {
+      if (items.every((item) => item.user_decision === "delete")) {
+        ids.push(group.group_number);
+      }
+      continue;
+    }
+    const inScope = items.filter((item) => scope.has(item.file_path));
+    if (
+      inScope.length > 0 &&
+      inScope.every((item) => item.user_decision === "delete")
+    ) {
+      ids.push(group.group_number);
+    }
+  }
+  return ids.sort((a, b) => a - b).map(String);
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -117,6 +161,8 @@ export function ExecuteDialog() {
   });
   // Pre-execute all-delete confirmation gate (§5.5).
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  // The complete-delete group IDs backing the currently-open confirm (#733).
+  const [deleteConfirmGroupIds, setDeleteConfirmGroupIds] = useState<string[]>([]);
   // Pending execute opts queued while the delete-confirm dialog is open.
   const pendingExecOptsRef = useRef<{ scopePaths?: string[]; forceLocked?: boolean } | null>(null);
 
@@ -266,25 +312,6 @@ export function ExecuteDialog() {
     setRemoveConfirmPath(null);
   }, []);
 
-  // Returns true when all decided rows (in the given scope) are "delete".
-  // Used as the pre-execute safety gate (§5.5).
-  const isAllDeleteScope = useCallback(
-    (scopePaths?: string[]) => {
-      const scope = scopePaths ? new Set(scopePaths) : null;
-      let hasDecided = false;
-      for (const group of scopedGroups) {
-        for (const item of group.items) {
-          if (item.user_decision === "") continue;
-          if (scope !== null && !scope.has(item.file_path)) continue;
-          hasDecided = true;
-          if (item.user_decision !== "delete") return false;
-        }
-      }
-      return hasDecided;
-    },
-    [scopedGroups]
-  );
-
   const handleExecute = useCallback(() => {
     // #676/#502 "visible = committed": when a non-"all" type filter is
     // active, scope the commit to the currently-visible rows (decidedPaths)
@@ -295,8 +322,10 @@ export function ExecuteDialog() {
     // is already confined to the scoped groups, so route through the scoped
     // branch even under the "all" filter so the commit stays inside the scope.
     if (filter === "all" && scopeGroupNumbers === null) {
-      if (isAllDeleteScope()) {
+      const ids = completeDeleteGroupIds(scopedGroups, null);
+      if (ids.length > 0) {
         pendingExecOptsRef.current = {};
+        setDeleteConfirmGroupIds(ids);
         setDeleteConfirmOpen(true);
       } else {
         void executeDecisions();
@@ -304,24 +333,35 @@ export function ExecuteDialog() {
       return;
     }
     const scopePaths = decidedPaths;
-    if (isAllDeleteScope(scopePaths)) {
+    // Gate scope ≠ commit scope under the group-scoped + "all"-filter branch:
+    // Qt runs the complete-group check UNFILTERED over the dialog's groups
+    // (paths_filter=None), so undecided rows count AGAINST "complete". Passing
+    // decidedPaths here would drop them from the check and false-positive on
+    // groups with undecided leftovers. Non-"all" filters keep decidedPaths
+    // (= Qt's visible-rows paths_filter, #502).
+    const gateScope = filter === "all" ? null : scopePaths;
+    const ids = completeDeleteGroupIds(scopedGroups, gateScope);
+    if (ids.length > 0) {
       pendingExecOptsRef.current = { scopePaths };
+      setDeleteConfirmGroupIds(ids);
       setDeleteConfirmOpen(true);
     } else {
       void executeDecisions({ scopePaths });
     }
-  }, [executeDecisions, isAllDeleteScope, filter, decidedPaths, scopeGroupNumbers]);
+  }, [executeDecisions, scopedGroups, filter, decidedPaths, scopeGroupNumbers]);
 
   const handleExecuteSelected = useCallback(() => {
     if (sel.selectedPaths.length === 0) return;
     const scopePaths = sel.selectedPaths;
-    if (isAllDeleteScope(scopePaths)) {
+    const ids = completeDeleteGroupIds(scopedGroups, scopePaths);
+    if (ids.length > 0) {
       pendingExecOptsRef.current = { scopePaths };
+      setDeleteConfirmGroupIds(ids);
       setDeleteConfirmOpen(true);
     } else {
       void executeDecisions({ scopePaths });
     }
-  }, [executeDecisions, sel.selectedPaths, isAllDeleteScope]);
+  }, [executeDecisions, sel.selectedPaths, scopedGroups]);
 
   const handleDeleteConfirmConfirm = useCallback(() => {
     setDeleteConfirmOpen(false);
@@ -364,6 +404,7 @@ export function ExecuteDialog() {
     <DeleteConfirmDialog
       open={deleteConfirmOpen}
       deleteCount={deleteCount}
+      groupIds={deleteConfirmGroupIds}
       onConfirm={handleDeleteConfirmConfirm}
       onCancel={handleDeleteConfirmCancel}
     />

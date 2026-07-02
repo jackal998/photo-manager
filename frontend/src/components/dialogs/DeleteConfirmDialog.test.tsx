@@ -9,6 +9,7 @@
 //   6. Clicking Cancel calls onCancel.
 //   7. Plural copy: "N files will be deleted" for N > 1.
 //   8. Singular copy: "1 file will be deleted" for N === 1.
+//   9. Body names the qualifying group IDs (#733 Qt-parity copy).
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -25,13 +26,14 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function renderDialog(open = true, deleteCount = 5) {
+function renderDialog(open = true, deleteCount = 5, groupIds = ["3"]) {
   const onConfirm = vi.fn();
   const onCancel = vi.fn();
   const result = render(
     <DeleteConfirmDialog
       open={open}
       deleteCount={deleteCount}
+      groupIds={groupIds}
       onConfirm={onConfirm}
       onCancel={onCancel}
     />
@@ -102,6 +104,13 @@ describe("DeleteConfirmDialog", () => {
     renderDialog(true, 1);
     expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toHaveTextContent(
       "1 file will be deleted"
+    );
+  });
+
+  it("body names the qualifying group IDs", () => {
+    renderDialog(true, 3, ["3", "5"]);
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toHaveTextContent(
+      "Group(s) 3, 5 will have EVERY file deleted"
     );
   });
 });

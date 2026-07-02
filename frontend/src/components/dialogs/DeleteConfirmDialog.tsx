@@ -1,5 +1,9 @@
-// DeleteConfirmDialog — shown before executing when ALL files in scope would
-// be deleted (the "all-delete" safety gate, §5.5).
+// DeleteConfirmDialog — shown before executing when one or more GROUPS would
+// have EVERY in-scope member deleted (the "complete-delete-group" safety
+// gate, #733 — Qt parity with ``_complete_delete_groups`` in
+// app/views/dialogs/execute_action_dialog.py). This fires per-GROUP, not
+// per-scope: a mixed manifest where only SOME groups are entirely delete
+// still blocks, even though the overall scope also contains kept rows.
 //
 // Testid shape:
 //   - wrapper:      execute-all-delete-confirm  (EXECUTE_ALL_DELETE_CONFIRM)
@@ -9,8 +13,9 @@
 // The body must contain a DIGIT representing the delete count so QA can
 // assert on it (§5.5: "body containing a DIGIT 'N files will be deleted'").
 //
-// Props-driven: the caller (ExecuteDialog) passes open/onConfirm/onCancel
-// and the file count. This keeps the component pure and easy to test.
+// Props-driven: the caller (ExecuteDialog) passes open/onConfirm/onCancel,
+// the file count, and the qualifying group IDs. This keeps the component
+// pure and easy to test.
 
 import {
   Dialog,
@@ -30,6 +35,12 @@ import {
 export interface DeleteConfirmDialogProps {
   open: boolean;
   deleteCount: number;
+  /**
+   * The complete-delete group IDs (as strings) backing this confirm.
+   * Optional/empty for callers with no group concept (the field-based
+   * bulk-decide ActionDialog) — falls back to the generic copy below.
+   */
+  groupIds?: string[];
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -37,18 +48,32 @@ export interface DeleteConfirmDialogProps {
 export function DeleteConfirmDialog({
   open,
   deleteCount,
+  groupIds = [],
   onConfirm,
   onCancel,
 }: DeleteConfirmDialogProps) {
+  const hasGroups = groupIds.length > 0;
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
       <DialogContent data-testid={EXECUTE_ALL_DELETE_CONFIRM}>
         <DialogHeader>
-          <DialogTitle>Delete all files?</DialogTitle>
+          <DialogTitle>
+            {hasGroups ? "Entire group(s) will be deleted" : "Delete all files?"}
+          </DialogTitle>
           <DialogDescription>
-            {deleteCount} {deleteCount === 1 ? "file" : "files"} will be
-            deleted. This operation moves files to the recycle bin and cannot
-            easily be undone in bulk. Are you sure?
+            {hasGroups ? (
+              <>
+                Group(s) {groupIds.join(", ")} will have EVERY file deleted (
+                {deleteCount} {deleteCount === 1 ? "file" : "files"} will be
+                deleted). Files will be sent to the Recycle Bin. Continue?
+              </>
+            ) : (
+              <>
+                {deleteCount} {deleteCount === 1 ? "file" : "files"} will be
+                deleted. This operation moves files to the recycle bin and
+                cannot easily be undone in bulk. Are you sure?
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2">
