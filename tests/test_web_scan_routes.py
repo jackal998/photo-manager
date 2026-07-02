@@ -530,9 +530,14 @@ class TestCalibrationReadback:
             captured["config"] = config
             bus.finished("/fake/out.sqlite")
 
+        # exif_workers=1: ScanConfig.__post_init__ clamps to
+        # max(1, min(4, cpu_count // 2)) — on a 4-vCPU CI runner the cap is 2,
+        # so an explicit 4 would be clamped and the assertion would be
+        # machine-dependent. 1 survives the clamp on every machine while still
+        # proving settings.json's scan.exif_workers=9 did not override it.
         body = _valid_scan_body(
             hash_pool="thread",
-            exif_workers=4,
+            exif_workers=1,
             autotune_knees={r"\\MINE": {"knee": 1, "recipe": "2"}},
         )
         with patch("app.web.routes.scan.run_pipeline", _capture):
@@ -543,7 +548,7 @@ class TestCalibrationReadback:
         assert config.hash_pool == "thread"
         # "thread" is not "auto" → no hash_pool_cache lookup is performed.
         assert config.hash_pool_rates is None
-        assert config.exif_workers == 4
+        assert config.exif_workers == 1
         assert config.autotune_knees == {r"\\MINE": {"knee": 1, "recipe": "2"}}
 
 
