@@ -205,22 +205,25 @@ def bulk_decide(
     #   force_locked → mutate locked rows too (Unlock & Apply All)
     #   skip_locked  → apply to the unlocked subset only (Apply to Unlocked Only)
     #   neither      → refuse with 409 if any matched row is locked
-    if kind == "decision" and (skip_locked or not force_locked):
+    locked: list[str] = []
+    if kind == "decision":
         path_to_rec: dict[str, Any] = {}
         for group in groups_objs:
             for rec in getattr(group, "items", []):
                 path_to_rec[rec.file_path] = rec
-        locked: list[str] = [
+        locked = [
             p for p in safe if getattr(path_to_rec.get(p), "is_locked", False)
         ]
         if skip_locked:
             # Narrow `safe` to the unlocked subset IN PLACE so the write set AND
             # the returned matched/affected_paths both report the actually-
             # applied subset (mirrors Qt set_count=len(unlocked_items)). Locked
-            # rows keep their is_locked + user_decision untouched.
+            # rows keep their is_locked + user_decision untouched — clear
+            # `locked` so the force-unlock apply below can never touch them.
             locked_set = set(locked)
             safe = [p for p in safe if p not in locked_set]
-        elif locked:
+            locked = []
+        elif locked and not force_locked:
             # 409 carries the FULL matched count (len(safe) BEFORE any narrowing)
             # so the FE derives unlocked = matched_total - len(locked) without a
             # separate preview.
@@ -230,6 +233,15 @@ def bulk_decide(
     repo = ManifestRepository()
     if kind in ("lock", "unlock"):
         repo.batch_update_lock_state(manifest_path, {p: lock_value for p in safe})
+    elif locked:
+        # force_locked path — Unlock & Apply All: the Qt verdict UNLOCKS the
+        # locked rows in the same write as the decision (#733; execute_service's
+        # force path does the same via batch_update_lock_state). One commit.
+        repo.batch_update_decisions_and_lock(
+            manifest_path,
+            {p: decision_value for p in safe},
+            {p: False for p in locked},
+        )
     else:
         repo.batch_update_decisions(manifest_path, {p: decision_value for p in safe})
 

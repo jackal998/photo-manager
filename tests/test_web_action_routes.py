@@ -638,8 +638,15 @@ class TestBulkDecideLockedRowGate:
 
         # Decision must be applied despite the lock.
         assert _read_user_decision(manifest, str(fa)) == "delete"
+        # #733 — "Unlock & Apply All" UNLOCKS the row in the same write (Qt
+        # verdict parity; execute_service's force path does the same). Before
+        # the fix the decision landed but is_locked stayed True, so the very
+        # next execute re-tripped the lock gate on a row the user had already
+        # force-confirmed.
+        assert _read_is_locked(manifest, str(fa)) is False
         # fb is NOT in the pattern match, so it stays undecided.
         assert _read_user_decision(manifest, str(fb)) == ""
+        assert _read_is_locked(manifest, str(fb)) is False
 
     def test_preview_on_locked_row_returns_200_not_409(self, client_with_roots, tmp_path):
         # Ship-blocker (adversarial review, both peers): preview is a DRY-RUN
