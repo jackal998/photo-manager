@@ -280,4 +280,11 @@ ALL_SCENARIOS = [
     # a real ffmpeg (dispatches a synthetic error event, asserts the <video>
     # src gains &transcode=h264 on the first error and NOT before it).
     "s70_video_transcode_fallback",
+    # s71 — GroupGrid multi-tile video: scan a 2-member EXACT-dup video group,
+    # click the group row → assert GroupGrid renders N tiles + GroupMediaController
+    # present; click a tile → <video> mounts + decodes (readyState>=2, currentTime>0);
+    # group-play → >=2 videos advance; master scrub → all tiles seek to ~same time.
+    # Qt counterpart (qa/scenarios/s71_*.py) is a LIGHTWEIGHT group-loads guard only
+    # (scan → group in manifest) — QMediaPlayer playback is NOT required in qa-batch.
+    "s71_grid_video_tiles",
 ]

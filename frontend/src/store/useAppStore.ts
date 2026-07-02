@@ -37,6 +37,7 @@ import type {
   AppStore,
   ExecuteState,
   ManifestState,
+  PreviewMode,
   PreviewState,
   ResultViewState,
   ScanState,
@@ -101,6 +102,7 @@ const initialSettings: SettingsState = {
 const initialPreview: PreviewState = {
   selectedFilePath: null,
   fullResPath: null,
+  selectedGroupId: null,
 };
 
 const initialSelection: SelectionState = {
@@ -563,6 +565,18 @@ export const useAppStore = create<AppStore>()(
     setSelectedFile(path) {
       set((state) => {
         state.preview.selectedFilePath = path;
+        // Selecting a file clears any group selection — the two are mutually
+        // exclusive (mirrors Qt: FILE-row click → show_single clears the grid).
+        state.preview.selectedGroupId = null;
+      });
+    },
+
+    setSelectedGroup(groupId) {
+      set((state) => {
+        state.preview.selectedGroupId = groupId;
+        // Selecting a group clears the file selection — mutually exclusive
+        // (mirrors Qt: GROUP-row click → show_grid clears the single-file view).
+        state.preview.selectedFilePath = null;
       });
     },
 
@@ -1072,6 +1086,35 @@ export const useAppStore = create<AppStore>()(
     },
   }))
 );
+
+// ---------------------------------------------------------------------------
+// Derived selectors — exported for use in components
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the preview mode from the current preview state.
+ *
+ * - 'grid'   — a group is selected (selectedGroupId non-null)
+ * - 'single' — a file is selected (selectedFilePath non-null)
+ * - 'empty'  — nothing selected
+ *
+ * The two fields are mutually exclusive (setSelectedFile clears selectedGroupId
+ * and vice versa), so only one branch ever fires. The 'grid' check comes first
+ * so a stale selectedFilePath (which setSelectedGroup clears) can't accidentally
+ * produce 'single'.
+ *
+ * Usage in a component:
+ *   const mode = useAppStore(selectPreviewMode);
+ */
+export function selectPreviewMode(state: AppStore): PreviewMode {
+  // Use loose != to treat undefined the same as null. Tests call
+  // useAppStore.setState with a partial preview object that may omit
+  // selectedGroupId; strict !== would treat the missing field as non-null
+  // and incorrectly return 'grid'.
+  if (state.preview.selectedGroupId != null) return "grid";
+  if (state.preview.selectedFilePath != null) return "single";
+  return "empty";
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers — not exported

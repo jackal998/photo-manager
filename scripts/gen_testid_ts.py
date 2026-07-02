@@ -122,6 +122,18 @@ def render_testids_ts() -> str:
     lines.append("  return `col-resize-${colId}`;")
     lines.append("}")
     lines.append("")
+    lines.append(
+        "export function gridVideoTileTestid(groupId: string, basename: string): string {"
+    )
+    lines.append("  return `grid-video-tile-${groupId}-${basename}`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
+        "export function gridImageTileTestid(groupId: string, basename: string): string {"
+    )
+    lines.append("  return `grid-image-tile-${groupId}-${basename}`;")
+    lines.append("}")
+    lines.append("")
 
     return "\n".join(lines)
 

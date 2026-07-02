@@ -736,6 +736,84 @@ def col_resize_testid(col_id: str) -> str:
     return f"col-resize-{col_id}"
 
 
+# ---------------------------------------------------------------------------
+# Group grid (multi-tile video feature)
+# ---------------------------------------------------------------------------
+
+GRID_CONTAINER = "grid-container"
+"""Outer div of the GroupGrid tile grid.  Present when a group row is selected
+in the result tree and the preview pane switches to grid mode."""
+
+# ---------------------------------------------------------------------------
+# GroupMediaController bar elements (GMC_*)
+# ---------------------------------------------------------------------------
+
+GMC_BAR = "gmc-bar"
+"""Outer div of the GroupMediaController control bar — the canonical testid for
+the controller bar rendered below the tile grid when the group contains at
+least one video tile."""
+
+GMC_PLAY_PAUSE = "gmc-play-pause"
+"""Play / pause button in the GroupMediaController bar.  Clicking broadcasts
+play or pause to all registered video tiles via a majority-vote algorithm."""
+
+GMC_PROGRESS_SLIDER = "gmc-progress-slider"
+"""Master progress range input in the GroupMediaController bar.  Dragging and
+releasing seeks all registered video tiles to the slider position (in ms)."""
+
+GMC_CURRENT_TIME = "gmc-current-time"
+"""Current-time span in the GroupMediaController bar.  Displays the master
+playback position as MM:SS (or HH:MM:SS when duration exceeds one hour)."""
+
+GMC_DURATION = "gmc-duration"
+"""Total-duration span in the GroupMediaController bar.  Displays the maximum
+duration across all registered video tiles as MM:SS / HH:MM:SS."""
+
+GMC_MUTE_BUTTON = "gmc-mute-button"
+"""Mute toggle button in the GroupMediaController bar.  Clicking toggles the
+shared volume between 0 (muted) and the last non-zero value (default 50/100)."""
+
+GMC_VOLUME_SLIDER = "gmc-volume-slider"
+"""Volume range input (0–100) in the GroupMediaController bar.  Changing the
+slider broadcasts the new volume (divided by 100) to all registered tiles."""
+
+
+def grid_video_tile_testid(group_id: str, basename: str) -> str:
+    """Return the ``data-testid`` value for a VideoTile inside GroupGrid.
+
+    Parameters
+    ----------
+    group_id:
+        The string form of ``group_number`` (use ``str(group_number)``).
+    basename:
+        The filename component only — *not* the full path.
+
+    Returns
+    -------
+    str
+        ``"grid-video-tile-{group_id}-{basename}"``
+    """
+    return f"grid-video-tile-{group_id}-{basename}"
+
+
+def grid_image_tile_testid(group_id: str, basename: str) -> str:
+    """Return the ``data-testid`` value for an ImageTile inside GroupGrid.
+
+    Parameters
+    ----------
+    group_id:
+        The string form of ``group_number`` (use ``str(group_number)``).
+    basename:
+        The filename component only — *not* the full path.
+
+    Returns
+    -------
+    str
+        ``"grid-image-tile-{group_id}-{basename}"``
+    """
+    return f"grid-image-tile-{group_id}-{basename}"
+
+
 def execute_row_testid(group_id: str, basename: str) -> str:
     """Return the ``data-testid`` value for a file row in the execute tree.
 

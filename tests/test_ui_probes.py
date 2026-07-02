@@ -45,6 +45,7 @@ MAIN_WINDOW_PATH = REPO / "app" / "views" / "main_window.py"
 SCANNER_DEDUP_PATH = REPO / "scanner" / "dedup.py"
 EN_YAML = REPO / "translations" / "en.yml"
 ZH_TW_YAML = REPO / "translations" / "zh_TW.yml"
+VIDEO_TILE_TSX_PATH = REPO / "frontend" / "src" / "components" / "VideoTile.tsx"
 
 
 # Tree columns that the user expects to filter against in the Select
@@ -1233,4 +1234,50 @@ def test_probe_qtbus_implements_every_scanprogressbus_method():
         f"_QtBus means the Qt scan worker will raise AttributeError at runtime "
         f"when the pipeline calls bus.<method>(). Implement the method in "
         f"_QtBus (scan_worker.py) and connect it to the matching Qt signal."
+    )
+
+
+def test_probe_video_tile_video_element_carries_video_testid():
+    """The <video> inside VideoTile.tsx must carry a "{testId}-video" data-testid.
+
+    s71 (qa/web/scenarios/s71_grid_video_tiles.py) targets each tile's media
+    element via ``page.get_by_test_id(f"{tile_testid}-video")`` — the outer
+    tile div keeps the plain ``{testId}`` and the inner <video> appends
+    ``-video``. If a refactor drops the inner testid (or renames the suffix),
+    the Playwright scenario times out with a stale "element not found" error
+    that reads like a mount bug rather than a testid drift. This probe pins
+    the contract as a source-text shape so the drift fails fast in CI.
+
+    The invariant is inherently a JSX-text shape (a data-testid attribute
+    derived from a prop on a specific element), so we inspect the source text
+    rather than importing the TSX (no TS toolchain in the pytest run).
+    """
+    src = VIDEO_TILE_TSX_PATH.read_text(encoding="utf-8")
+
+    # The JSX <video> element opens with `<video` on its own line followed by
+    # attributes on subsequent lines and closes with a self-closing `/>`.
+    # Anchoring on `<video` + newline distinguishes the real element from the
+    # literal "<video>" that appears in the file's header prose comment.
+    # Capture the attribute block up to the first `/>`.
+    video_tag_match = re.search(r"<video\s*\n(.*?)/>", src, re.DOTALL)
+    assert video_tag_match is not None, (
+        "No self-closing <video ... /> JSX element found in VideoTile.tsx. The "
+        "grid video tile must render a native <video> on click — check the "
+        "component was not refactored away from an inline self-closing element."
+    )
+    video_tag = video_tag_match.group(1)
+
+    # The data-testid must derive from the testId prop with a "-video" suffix.
+    # The value is a JSX expression with a template literal (`${testId}-video`)
+    # so it contains `}` internally — match the attribute up to end-of-line
+    # rather than up to the first `}`.
+    testid_line = next(
+        (ln for ln in video_tag.splitlines() if "data-testid=" in ln), ""
+    )
+    assert "testId" in testid_line and "-video" in testid_line, (
+        "VideoTile.tsx's <video> element does not carry a "
+        '`data-testid={testId ? `${testId}-video` : undefined}` attribute. '
+        "s71 addresses the tile media element as '{tile-testid}-video'; without "
+        "this attribute the scenario cannot find the <video> and will time out. "
+        f"Current <video> tag attributes: {video_tag.strip()!r}"
     )

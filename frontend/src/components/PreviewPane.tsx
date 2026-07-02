@@ -1,8 +1,11 @@
 // PreviewPane — inline image preview panel.
 //
-// Reads store.preview.selectedFilePath. When set, shows:
-//   - A thumbnail at size=512 (preview-single-image)
-//   - Metadata sidebar (preview-info): name, folder, size, score, dims, dates
+// Reads store.preview.selectedFilePath and store.preview.selectedGroupId.
+// Mode-aware rendering (selectPreviewMode selector):
+//   - 'grid'   → <GroupGrid groupId={selectedGroupId}> keyed on groupId so
+//                videos are paused+unmounted on group change (no orphan audio).
+//   - 'single' → single <img> / <video> for the selected file.
+//   - 'empty'  → placeholder "Select a file to preview".
 //
 // CRITICAL (#535 fix): the image scroll container uses overflow-y:scroll
 // (always-on, never "auto") to avoid the portrait fit-on-width oscillation
@@ -15,10 +18,12 @@
 
 import { useCallback, useState, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
+import { selectPreviewMode } from "@/store/useAppStore";
 import { thumbnailUrl, mediaUrl } from "@/api/client";
 import { formatBytes, formatScore, formatDims, formatDate } from "@/lib/format";
 import { PREVIEW_PANE, PREVIEW_SINGLE_IMAGE, PREVIEW_INFO } from "@/testids";
 import type { FileRow } from "@/api/types";
+import { GroupGrid } from "./GroupGrid";
 
 // ---------------------------------------------------------------------------
 // Helper — find a FileRow by file_path in the manifest groups
@@ -53,8 +58,10 @@ function EmptyState() {
 
 export function PreviewPane() {
   const selectedFilePath = useAppStore((s) => s.preview.selectedFilePath);
+  const selectedGroupId = useAppStore((s) => s.preview.selectedGroupId);
   const groups = useAppStore((s) => s.manifest.groups);
   const openFullRes = useAppStore((s) => s.openFullRes);
+  const previewMode = useAppStore(selectPreviewMode);
 
   const row = selectedFilePath !== null ? findRow(groups, selectedFilePath) : null;
 
@@ -90,9 +97,13 @@ export function PreviewPane() {
       data-testid={PREVIEW_PANE}
       className="flex flex-col h-full bg-neutral-50 border-l border-neutral-200"
     >
-      {selectedFilePath === null || row === null ? (
-        <EmptyState />
-      ) : (
+      {previewMode === "grid" && selectedGroupId !== null ? (
+        // Grid mode — GroupGrid is keyed on selectedGroupId so a group change
+        // forces a full unmount+remount of the GroupMediaProvider and all its
+        // VideoTile children. This is the web analog of Qt's clear() cleanup:
+        // on group change every <video> element is destroyed (no orphan audio).
+        <GroupGrid key={selectedGroupId} groupId={selectedGroupId} />
+      ) : previewMode === "single" && selectedFilePath !== null && row !== null ? (
         <>
           {/* Media area — overflow-y:scroll is ALWAYS-ON (not auto).
               This is the #535 fix: prevents the portrait oscillation loop
@@ -154,6 +165,8 @@ export function PreviewPane() {
             <MetaRow label="Created" value={formatDate(row.creation_date)} />
           </div>
         </>
+      ) : (
+        <EmptyState />
       )}
     </div>
   );

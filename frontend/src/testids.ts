@@ -122,6 +122,14 @@ export const DLGE_SETTINGS_SAVE = "settings-save-button";
 export const DLGE_SETTINGS_CANCEL = "settings-cancel-button";
 export const DLGE_SETTINGS_PRUNE_SELECT = "settings-prune-select";
 export const DLGE_CONFIRM_CANCEL = "confirm-cancel-button";
+export const GRID_CONTAINER = "grid-container";
+export const GMC_BAR = "gmc-bar";
+export const GMC_PLAY_PAUSE = "gmc-play-pause";
+export const GMC_PROGRESS_SLIDER = "gmc-progress-slider";
+export const GMC_CURRENT_TIME = "gmc-current-time";
+export const GMC_DURATION = "gmc-duration";
+export const GMC_MUTE_BUTTON = "gmc-mute-button";
+export const GMC_VOLUME_SLIDER = "gmc-volume-slider";
 
 export function rowFileTestid(groupId: string, basename: string): string {
   return `row-file-${groupId}-${basename}`;
@@ -173,4 +181,12 @@ export function colHeaderTestid(colId: string): string {
 
 export function colResizeTestid(colId: string): string {
   return `col-resize-${colId}`;
+}
+
+export function gridVideoTileTestid(groupId: string, basename: string): string {
+  return `grid-video-tile-${groupId}-${basename}`;
+}
+
+export function gridImageTileTestid(groupId: string, basename: string): string {
+  return `grid-image-tile-${groupId}-${basename}`;
 }

@@ -133,6 +133,7 @@ function resetStore() {
     preview: {
       selectedFilePath: null,
       fullResPath: null,
+      selectedGroupId: null,
     },
     execute: {
       executeOpen: false,
@@ -395,6 +396,7 @@ describe("PreviewPane is always mounted in main layout", () => {
         preview: {
           selectedFilePath: "/photos/ref.jpg",
           fullResPath: null,
+          selectedGroupId: null,
         },
       });
     });

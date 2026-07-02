@@ -42,11 +42,33 @@ export interface SettingsState {
 // Phase 2C2 — preview state
 // ---------------------------------------------------------------------------
 
+/**
+ * Discriminated mode for the preview pane.
+ *
+ * - ``'single'`` — a file row is selected; PreviewPane shows the single-file
+ *   view. ``selectedFilePath`` is non-null, ``selectedGroupId`` is null.
+ * - ``'grid'`` — a group row is selected; PreviewPane will show the grid view.
+ *   ``selectedGroupId`` is non-null, ``selectedFilePath`` is null.
+ * - ``'empty'`` — nothing selected; PreviewPane shows EmptyState.
+ */
+export type PreviewMode = "single" | "grid" | "empty";
+
 export interface PreviewState {
   /** File path currently shown in the inline preview pane. Null = nothing selected. */
   selectedFilePath: string | null;
   /** File path open in the full-resolution dialog. Null = dialog closed. */
   fullResPath: string | null;
+  /**
+   * Group number whose grid is shown in the preview pane. Null = no group selected.
+   * Mutually exclusive with selectedFilePath: selecting a group clears
+   * selectedFilePath; selecting a file clears selectedGroupId.
+   *
+   * Mirrors the Qt trigger at app/views/main_window.py:756 — a GROUP-row
+   * click calls show_grid(all files in group); a FILE-row click calls
+   * show_single. The store owns the discrimination; the PreviewPane reads
+   * previewMode to decide which branch to render.
+   */
+  selectedGroupId: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +368,16 @@ export interface AppActions {
 
   /** Close the full-resolution dialog. */
   closeFullRes(): void;
+
+  /**
+   * Select a group row to show its grid in the preview pane.
+   * Clears selectedFilePath (the two selections are mutually exclusive).
+   * Pass null to clear the group selection without selecting a file.
+   *
+   * Mirrors the Qt trigger at app/views/main_window.py:756:
+   * GROUP-row click → show_grid(all files in group).
+   */
+  setSelectedGroup(groupId: number | null): void;
 
   // -------------------------------------------------------------------------
   // Phase 2C2 — execute dialog actions

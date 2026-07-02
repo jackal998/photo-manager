@@ -55,6 +55,7 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
   const setDecision = useAppStore((s) => s.setDecision);
   const setLock = useAppStore((s) => s.setLock);
   const setSelectedFile = useAppStore((s) => s.setSelectedFile);
+  const setSelectedGroup = useAppStore((s) => s.setSelectedGroup);
   const openFullRes = useAppStore((s) => s.openFullRes);
   const selectedPaths = useAppStore((s) => s.selection.selectedPaths);
   const setSelection = useAppStore((s) => s.setSelection);
@@ -301,7 +302,12 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
                   groupNumber={vrow.groupNumber}
                   memberCount={vrow.memberCount}
                   expanded={!collapsed.has(vrow.groupNumber)}
-                  onToggle={() => toggleGroup(vrow.groupNumber)}
+                  onToggle={() => {
+                    toggleGroup(vrow.groupNumber);
+                    // GROUP-row click also selects the group for grid preview
+                    // (mirrors Qt main_window.py:756 — GROUP selection → show_grid).
+                    setSelectedGroup(vrow.groupNumber);
+                  }}
                 />
               ) : (
                 (() => {

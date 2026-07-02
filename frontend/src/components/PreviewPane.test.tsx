@@ -95,6 +95,7 @@ function resetStore() {
     preview: {
       selectedFilePath: null,
       fullResPath: null,
+      selectedGroupId: null,
     },
   });
 }
@@ -124,7 +125,7 @@ describe("PreviewPane", () => {
   it("shows empty state when selectedFilePath is set but file not in manifest", () => {
     // File path set but manifest is empty — no groups to find the row in.
     useAppStore.setState({
-      preview: { selectedFilePath: "/photos/ghost.jpg", fullResPath: null },
+      preview: { selectedFilePath: "/photos/ghost.jpg", fullResPath: null, selectedGroupId: null },
     });
     render(<PreviewPane />);
     expect(screen.getByText(/select a file to preview/i)).toBeInTheDocument();
@@ -134,7 +135,7 @@ describe("PreviewPane", () => {
     beforeEach(() => {
       seedManifest();
       useAppStore.setState({
-        preview: { selectedFilePath: FILE_PATH, fullResPath: null },
+        preview: { selectedFilePath: FILE_PATH, fullResPath: null, selectedGroupId: null },
       });
     });
 
@@ -216,7 +217,7 @@ describe("PreviewPane", () => {
   it("switches to a different file when store.preview.selectedFilePath changes", () => {
     seedManifest();
     useAppStore.setState({
-      preview: { selectedFilePath: FILE_PATH, fullResPath: null },
+      preview: { selectedFilePath: FILE_PATH, fullResPath: null, selectedGroupId: null },
     });
     const { rerender } = render(<PreviewPane />);
 
@@ -226,7 +227,7 @@ describe("PreviewPane", () => {
     // Update store to select the second file.
     act(() => {
       useAppStore.setState({
-        preview: { selectedFilePath: FILE_PATH_2, fullResPath: null },
+        preview: { selectedFilePath: FILE_PATH_2, fullResPath: null, selectedGroupId: null },
       });
     });
     rerender(<PreviewPane />);
@@ -251,7 +252,7 @@ describe("FullResViewer", () => {
 
   it("renders the dialog when fullResPath is set", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     render(<FullResViewer />);
     expect(screen.getByTestId(FULLRES_DIALOG)).toBeInTheDocument();
@@ -259,7 +260,7 @@ describe("FullResViewer", () => {
 
   it("dialog shows the image element with correct testid", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     render(<FullResViewer />);
     expect(screen.getByTestId(FULLRES_IMAGE)).toBeInTheDocument();
@@ -267,7 +268,7 @@ describe("FullResViewer", () => {
 
   it("image src uses size=0 (full-res URL)", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     render(<FullResViewer />);
     const img = screen.getByTestId(FULLRES_IMAGE);
@@ -278,7 +279,7 @@ describe("FullResViewer", () => {
 
   it("dialog title area contains the filename", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     render(<FullResViewer />);
     const dialog = screen.getByTestId(FULLRES_DIALOG);
@@ -287,7 +288,7 @@ describe("FullResViewer", () => {
 
   it("Esc key calls store.closeFullRes", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     const spy = vi.fn();
     useAppStore.setState({ closeFullRes: spy } as Partial<ReturnType<typeof useAppStore.getState>>);
@@ -302,7 +303,7 @@ describe("FullResViewer", () => {
 
   it("close button calls store.closeFullRes", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     const spy = vi.fn();
     useAppStore.setState({ closeFullRes: spy } as Partial<ReturnType<typeof useAppStore.getState>>);
@@ -318,7 +319,7 @@ describe("FullResViewer", () => {
 
   it("shows 413 fallback button and hides image on load error", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     render(<FullResViewer />);
 
@@ -342,7 +343,7 @@ describe("FullResViewer", () => {
 
   it("fallback 'Open in default app' button calls store.revealInExplorer", () => {
     useAppStore.setState({
-      preview: { selectedFilePath: null, fullResPath: FILE_PATH },
+      preview: { selectedFilePath: null, fullResPath: FILE_PATH, selectedGroupId: null },
     });
     const spy = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ revealInExplorer: spy } as Partial<ReturnType<typeof useAppStore.getState>>);

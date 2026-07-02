@@ -122,6 +122,7 @@ beforeEach(() => {
     preview: {
       selectedFilePath: null,
       fullResPath: null,
+      selectedGroupId: null,
     },
     selection: {
       selectedPaths: [],
