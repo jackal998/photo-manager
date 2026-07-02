@@ -76,6 +76,7 @@ for the chore plan.
 | [Web — result-tree column sort and resize persistence](#web--result-tree-column-sort-and-resize-persistence) | Web UI |
 | [Web — manifest decision persistence](#web--manifest-decision-persistence) | Web UI |
 | [Web — scan dialog invalid source path](#web--scan-dialog-invalid-source-path) | Web UI |
+| [Web — desktop shell (pywebview launcher)](#web--desktop-shell-pywebview-launcher) | Web UI |
 | [Similarity column](#similarity-column) | Review |
 | [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
 | [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
@@ -768,6 +769,17 @@ for the chore plan.
 - **Conditions / variants:** Validation **timing** diverges from desktop — Qt blocks the path on `+ Add` before any scan (`_FolderTreePanel._on_add_typed`, [app/views/scan_dialog.py](../app/views/scan_dialog.py)); the web fails the running scan. The exact-parity pre-scan inline validation (a `GET /api/fs/stat` probe) is a deferred enhancement, tracked as [#678](https://github.com/jackal998/photo-manager/issues/678) item C — declined here to avoid a filesystem-information-disclosure endpoint for a timing-only nicety. The Qt #216 output-Browse "Save Manifest As" native dialog has no web analog (the web output Browse uses the in-DOM `FsBrowser` save-mode picker, covered by s17).
 - **Related:** Desktop scenario [`qa/scenarios/s38_scan_dialog_invalid_path.py`](../qa/scenarios/s38_scan_dialog_invalid_path.py); web port [`qa/web/scenarios/s38_scan_dialog_invalid_path.py`](../qa/web/scenarios/s38_scan_dialog_invalid_path.py); feature-parity backlog [#678](https://github.com/jackal998/photo-manager/issues/678) (item C — inline path validation).
 - **Last verified:** 2026-06-29 (s38 web port — live-run PASS).
+
+---
+
+### Web — desktop shell (pywebview launcher)
+
+- **Entry point:** [launcher.py](../launcher.py) (repo root) — a unified entry point that dispatches on the `PHOTO_MANAGER_WEB` environment variable.
+- **Trigger:** Setting `PHOTO_MANAGER_WEB` to a truthy value (anything other than unset / `0` / `false` / `no` / `off`) before launch. Unset/falsey boots the classic PySide6 desktop app unchanged (`main.main()`).
+- **Behaviour:** When enabled, `launcher.py` starts the FastAPI app under uvicorn on `127.0.0.1:8765` (override via `PHOTO_MANAGER_WEB_PORT`) in a daemon thread, waits for `GET /api/health` to return 200, verifies the Edge WebView2 runtime is installed, then opens a native 1280×800 pywebview window titled **Photo Manager** pointed at the loopback URL. If WebView2 is missing it raises a clear `RuntimeError` naming the install URL rather than showing a silent blank window. Closing the window signals uvicorn's graceful shutdown (so `app.web.main`'s lifespan drain runs) and exits. The Qt and web paths are mutually exclusive — one process runs exactly one.
+- **Conditions / variants:** The WebView2 runtime check is Windows-only (a no-op on other platforms, which use a different pywebview backend). The server binds loopback only (never `0.0.0.0`), so the API is unreachable off-box. The SPA is served from `frontend/dist` (built via `npm run build`); if the dist is absent the window loads the bare API root. PySide6 stays installed and remains the default launch — this shell runs *alongside* Qt; Qt removal is a later phase.
+- **Related:** [launcher.py](../launcher.py); [tests/test_launcher.py](../tests/test_launcher.py); [app/web/main.py](../app/web/main.py) (uvicorn factory + `/api/health`); epic [#644](https://github.com/jackal998/photo-manager/issues/644) (Phase 2 — pywebview shell). PyInstaller packaging (entry pivot to `launcher.py` + `collect_all('pythonnet')` / `collect_all('clr_loader')` + a non-headless WebView2 smoke) is a follow-up.
+- **Last verified:** 2026-07-02 (4b — `tests/test_launcher.py` PASS; the native WebView2 window is validated by a manual Windows smoke).
 
 ---
 
