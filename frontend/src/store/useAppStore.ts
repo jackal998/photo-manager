@@ -294,38 +294,9 @@ export const useAppStore = create<AppStore>()(
     },
 
     async setDecision(filePath, decision) {
-      const manifestPath = get().manifest.path;
-      if (manifestPath === null) return;
-
-      // Save previous value for possible revert.
-      const previousDecision = readFileRowField(
-        get().manifest,
-        filePath,
-        (row) => row.user_decision
-      );
-
-      // Optimistic apply.
-      applyFileRowPatch(set as ImmerSetFn, filePath, (row) => {
-        row.user_decision = decision;
-      });
-
-      try {
-        await patchDecisions(manifestPath, [{ file_path: filePath, decision }]);
-      } catch (err) {
-        // Revert on failure.
-        // Guard is `!== null` (not falsy) because DecisionValue includes ""
-        // (the no-decision state) — a falsy check would wrongly skip reverting
-        // a row whose prior decision was the empty string.
-        if (previousDecision !== null) {
-          applyFileRowPatch(set as ImmerSetFn, filePath, (row) => {
-            row.user_decision = previousDecision;
-          });
-        }
-        set((state) => {
-          state.manifest.error =
-            err instanceof Error ? err.message : String(err);
-        });
-      }
+      // Routes through setDecisions so the 409 locked_paths handling (#733)
+      // isn't duplicated between the single-path and batch entry points.
+      await get().setDecisions([filePath], decision);
     },
 
     async setLock(filePath, locked) {
@@ -367,7 +338,7 @@ export const useAppStore = create<AppStore>()(
     // Batch decision / lock actions (multi-selection context menu)
     // -----------------------------------------------------------------------
 
-    async setDecisions(paths, decision) {
+    async setDecisions(paths, decision, opts = {}) {
       const manifestPath = get().manifest.path;
       if (manifestPath === null || paths.length === 0) return;
 
@@ -388,18 +359,34 @@ export const useAppStore = create<AppStore>()(
       try {
         await patchDecisions(
           manifestPath,
-          paths.map((p) => ({ file_path: p, decision }))
+          paths.map((p) => ({ file_path: p, decision })),
+          { forceLocked: opts.forceLocked ?? false }
         );
       } catch (err) {
+        // Revert the optimistic apply on EVERY failure (conflict or not) —
+        // mirrors removeFromList's 409 flow.
         for (const [p, prev] of previous) {
           applyFileRowPatch(set as ImmerSetFn, p, (row) => {
             row.user_decision = prev;
           });
         }
-        set((state) => {
-          state.manifest.error =
-            err instanceof Error ? err.message : String(err);
-        });
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          set((state) => {
+            state.execute.lockConflict = {
+              paths: err.lockedPaths ?? [],
+              op: "decision",
+              // Preserve the original path list so "Unlocked Only" can filter
+              // out the locked paths and re-apply the decision to the rest.
+              originalPaths: [...paths],
+              pendingDecision: decision,
+            };
+          });
+        } else {
+          set((state) => {
+            state.manifest.error =
+              err instanceof Error ? err.message : String(err);
+          });
+        }
       }
     },
 

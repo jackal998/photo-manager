@@ -132,11 +132,13 @@ export interface PatchDecisionsResult {
 
 export async function patchDecisions(
   manifestPath: string,
-  decisions: DecisionEntry[]
+  decisions: DecisionEntry[],
+  opts?: { forceLocked?: boolean }
 ): Promise<PatchDecisionsResult> {
-  return patchJson<PatchDecisionsResult>("/api/decision", {
+  return patchJsonOrConflict<PatchDecisionsResult>("/api/decision", {
     manifest_path: manifestPath,
     decisions,
+    force_locked: opts?.forceLocked ?? false,
   });
 }
 
@@ -228,12 +230,17 @@ export class ApiConflictError extends Error {
 }
 
 /**
- * POST JSON with special handling for 409 responses:
- * parses the detail body and throws ApiConflictError instead of a generic Error.
+ * Fetch JSON with special handling for 409 responses: parses the detail
+ * body and throws ApiConflictError instead of a generic Error. Shared by
+ * postJsonOrConflict (execute/remove) and patchJsonOrConflict (decision).
  */
-async function postJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
+async function jsonOrConflict<T>(
+  method: "POST" | "PATCH",
+  path: string,
+  body: unknown
+): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -249,7 +256,8 @@ async function postJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
         code = detail.code;
         if (code === "locked_paths" && "locked_paths" in detail) {
           lockedPaths = (detail as LockedPathsError).locked_paths;
-          // matched_total is bulk-decide-only (#674); execute/remove omit it.
+          // matched_total is sent by bulk-decide (#674) and decision (#733);
+          // execute/remove omit it.
           const mt = (detail as LockedPathsError).matched_total;
           if (typeof mt === "number") {
             matchedTotal = mt;
@@ -264,6 +272,14 @@ async function postJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
 
   await checkResponse(res);
   return res.json() as Promise<T>;
+}
+
+async function postJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
+  return jsonOrConflict<T>("POST", path, body);
+}
+
+async function patchJsonOrConflict<T>(path: string, body: unknown): Promise<T> {
+  return jsonOrConflict<T>("PATCH", path, body);
 }
 
 // POST /api/execute

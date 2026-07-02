@@ -1121,10 +1121,14 @@ describe("setDecisions – one PATCH for the whole list, optimistic on all", () 
     expect(items[1].user_decision).toBe(""); // b — untouched
     expect(items[2].user_decision).toBe("delete"); // c
     expect(client.patchDecisions).toHaveBeenCalledTimes(1);
-    expect(client.patchDecisions).toHaveBeenCalledWith("/data/scan.db", [
-      { file_path: "/p/a.jpg", decision: "delete" },
-      { file_path: "/p/c.jpg", decision: "delete" },
-    ]);
+    expect(client.patchDecisions).toHaveBeenCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/p/a.jpg", decision: "delete" },
+        { file_path: "/p/c.jpg", decision: "delete" },
+      ],
+      { forceLocked: false }
+    );
   });
 
   it("is a no-op for an empty path list (no PATCH)", async () => {
@@ -1143,6 +1147,31 @@ describe("setDecisions – one PATCH for the whole list, optimistic on all", () 
     expect(items[0].user_decision).toBe(""); // reverted
     expect(items[1].user_decision).toBe(""); // reverted
     expect(useAppStore.getState().manifest.error).toBe("server error");
+  });
+
+  // #733 — a 409 locked_paths conflict reverts the optimistic apply (same as
+  // any other failure) but routes to execute.lockConflict INSTEAD of
+  // manifest.error, so LockConfirmDialog (not a bare error banner) drives
+  // the recovery — mirrors removeFromList's 409 flow.
+  it("on 409 locked_paths: reverts optimistically, sets lockConflict (op=decision), leaves manifest.error untouched", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg"])]);
+    const conflict = new client.ApiConflictError("locked_paths", ["/p/b.jpg"]);
+    vi.mocked(client.patchDecisions).mockRejectedValueOnce(conflict);
+
+    await useAppStore
+      .getState()
+      .setDecisions(["/p/a.jpg", "/p/b.jpg"], "delete");
+
+    const items = useAppStore.getState().manifest.groups[0].items;
+    expect(items[0].user_decision).toBe(""); // reverted
+    expect(items[1].user_decision).toBe(""); // reverted
+    expect(useAppStore.getState().manifest.error).toBeNull();
+    expect(useAppStore.getState().execute.lockConflict).toEqual({
+      paths: ["/p/b.jpg"],
+      op: "decision",
+      originalPaths: ["/p/a.jpg", "/p/b.jpg"],
+      pendingDecision: "delete",
+    });
   });
 });
 

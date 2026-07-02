@@ -13,6 +13,8 @@
 //   8. Unlocked Only (remove op) calls removeFromList([], false).
 //   9. Body text is context-sensitive (IMMEDIATE for execute, DEFERRED for remove).
 //  10. Locked path list is rendered.
+//  11. op="decision" (#733): Unlock & Apply / Unlocked Only re-run setDecisions
+//      with the pending decision; Unlock & Apply is NOT the destructive variant.
 
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -32,9 +34,10 @@ import {
 // ---------------------------------------------------------------------------
 
 function seedLockConflict(
-  op: "execute" | "remove",
+  op: "execute" | "remove" | "decision",
   paths: string[] = ["/photos/a.jpg"],
-  originalPaths: string[] | null = null
+  originalPaths: string[] | null = null,
+  pendingDecision?: "" | "delete" | "ignore"
 ) {
   act(() => {
     useAppStore.setState((s) => ({
@@ -47,6 +50,7 @@ function seedLockConflict(
           // Default originalPaths to the locked paths themselves when not
           // explicitly provided (simulates: all paths in scope were locked).
           originalPaths: originalPaths ?? [...paths],
+          pendingDecision,
         },
       },
     }));
@@ -69,13 +73,16 @@ function clearLockConflict() {
 describe("LockConfirmDialog", () => {
   let executeDecisionsMock: ReturnType<typeof vi.fn>;
   let removeFromListMock: ReturnType<typeof vi.fn>;
+  let setDecisionsMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
     removeFromListMock = vi.fn().mockResolvedValue(undefined);
+    setDecisionsMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({
       executeDecisions: executeDecisionsMock,
       removeFromList: removeFromListMock,
+      setDecisions: setDecisionsMock,
     } as never);
     clearLockConflict();
   });
@@ -192,5 +199,82 @@ describe("LockConfirmDialog", () => {
     render(<LockConfirmDialog />);
     expect(screen.getByText("/photos/locked1.jpg")).toBeInTheDocument();
     expect(screen.getByText("/photos/locked2.jpg")).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #733 — op="decision" (PATCH /api/decision 409 locked_paths)
+  // ---------------------------------------------------------------------------
+
+  it("Unlock & Apply (decision) re-runs setDecisions with the ORIGINAL scope, forceLocked:true, and the pending decision", async () => {
+    const user = userEvent.setup();
+    const lockedPaths = ["/photos/locked.jpg"];
+    const originalPaths = ["/photos/ok.jpg", "/photos/locked.jpg"];
+    seedLockConflict("decision", lockedPaths, originalPaths, "delete");
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    expect(setDecisionsMock).toHaveBeenCalledWith(originalPaths, "delete", {
+      forceLocked: true,
+    });
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+    expect(removeFromListMock).not.toHaveBeenCalled();
+  });
+
+  it("Unlocked Only (decision) re-runs setDecisions with the pending decision, excluding locked paths", async () => {
+    const user = userEvent.setup();
+    const lockedPaths = ["/photos/locked.jpg"];
+    const originalPaths = [
+      "/photos/ok.jpg",
+      "/photos/locked.jpg",
+      "/photos/also-ok.jpg",
+    ];
+    seedLockConflict("decision", lockedPaths, originalPaths, "ignore");
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
+    expect(setDecisionsMock).toHaveBeenCalledWith(
+      ["/photos/ok.jpg", "/photos/also-ok.jpg"],
+      "ignore"
+    );
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+    expect(removeFromListMock).not.toHaveBeenCalled();
+  });
+
+  it("Unlocked Only (decision) is a no-op when every original path was locked", async () => {
+    const user = userEvent.setup();
+    const lockedPaths = ["/photos/locked.jpg"];
+    seedLockConflict("decision", lockedPaths, lockedPaths, "delete");
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
+    expect(setDecisionsMock).not.toHaveBeenCalled();
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+  });
+
+  it("Cancel (decision) clears lockConflict and does not call setDecisions", async () => {
+    const user = userEvent.setup();
+    seedLockConflict("decision", ["/photos/a.jpg"], undefined, "delete");
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_CANCEL));
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    expect(setDecisionsMock).not.toHaveBeenCalled();
+  });
+
+  it("body for op='decision' says nothing is deleted yet (DEFERRED copy, Qt #417 parity)", () => {
+    seedLockConflict("decision", ["/a.jpg"], ["/a.jpg", "/b.jpg"], "delete");
+    render(<LockConfirmDialog />);
+    expect(screen.getByText(/nothing is deleted yet/i)).toBeInTheDocument();
+  });
+
+  it("Unlock & Apply uses the default (non-destructive) variant for op='decision', but destructive for op='execute'", () => {
+    seedLockConflict("decision", ["/a.jpg"], ["/a.jpg"], "delete");
+    const { unmount } = render(<LockConfirmDialog />);
+    const decisionBtn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    // "default" variant = bg-neutral-900; "destructive" = bg-red-600.
+    expect(decisionBtn.className).toContain("bg-neutral-900");
+    expect(decisionBtn.className).not.toContain("bg-red-600");
+    unmount();
+
+    seedLockConflict("execute", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const executeBtn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(executeBtn.className).toContain("bg-red-600");
   });
 });

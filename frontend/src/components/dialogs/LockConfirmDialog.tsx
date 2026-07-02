@@ -1,10 +1,10 @@
-// LockConfirmDialog — shown when POST /api/execute or /api/remove returns
-// a 409 locked_paths conflict.
+// LockConfirmDialog — shown when POST /api/execute, POST /api/remove, or
+// PATCH /api/decision (#733) returns a 409 locked_paths conflict.
 //
 // Driven entirely by store.execute.lockConflict:
 //   - null  → dialog hidden (not mounted)
-//   - set   → dialog open; op tells us whether the original call was "execute"
-//             or "remove".
+//   - set   → dialog open; op tells us whether the original call was
+//             "execute", "remove", "prune", or "decision".
 //
 // Three outcomes:
 //   Unlock & Apply  → re-run the original op with forceLocked:true
@@ -12,11 +12,16 @@
 //   Cancel          → clear lockConflict, do nothing
 //
 // Body copy is context-sensitive:
-//   op === "execute" → "About to DELETE N locked files"  (IMMEDIATE danger)
-//   op === "remove"  → "N locked files will be skipped or force-unlocked"
-//                      (DEFERRED — remove doesn't delete)
-//   op === "prune"   → "N locked singleton groups would be pruned" (#686 D6 gate;
-//                      verdicts route to resolvePruneLock, NOT a re-run of an op)
+//   op === "execute"  → "About to DELETE N locked files"  (IMMEDIATE danger)
+//   op === "remove"   → "N locked files will be skipped or force-unlocked"
+//                       (DEFERRED — remove doesn't delete)
+//   op === "prune"    → "N locked singleton groups would be pruned" (#686 D6
+//                       gate; verdicts route to resolvePruneLock, NOT a
+//                       re-run of an op)
+//   op === "decision" → "N locked rows would be affected" (DEFERRED — Qt
+//                       #417 parity: setting a decision doesn't delete
+//                       anything, it only queues it for a later Execute).
+//                       Unlock & Apply is NOT destructive for this op.
 
 import {
   Dialog,
@@ -39,6 +44,7 @@ export function LockConfirmDialog() {
   const lockConflict = useAppStore((s) => s.execute.lockConflict);
   const executeDecisions = useAppStore((s) => s.executeDecisions);
   const removeFromList = useAppStore((s) => s.removeFromList);
+  const setDecisions = useAppStore((s) => s.setDecisions);
   const resolvePruneLock = useAppStore((s) => s.resolvePruneLock);
   const set = useAppStore.setState;
 
@@ -46,6 +52,7 @@ export function LockConfirmDialog() {
   const lockedPaths = lockConflict?.paths ?? [];
   const op = lockConflict?.op ?? "execute";
   const n = lockedPaths.length;
+  const originalPathsLen = lockConflict?.originalPaths?.length ?? 0;
 
   function clearConflict() {
     set((s) => ({
@@ -68,10 +75,15 @@ export function LockConfirmDialog() {
     //     files outside a "Execute selected" scope (over-deletion).
     //   - remove: re-running with only lockedPaths would drop the unlocked files
     //     the user asked to remove (silent under-action).
+    //   - decision: re-running with only lockedPaths would leave the unlocked
+    //     rows' decision unset (silent under-action), same reasoning as remove.
     const original = lockConflict?.originalPaths ?? [];
+    const pendingDecision = lockConflict?.pendingDecision ?? "";
     clearConflict();
     if (op === "execute") {
       void executeDecisions({ scopePaths: original, forceLocked: true });
+    } else if (op === "decision") {
+      void setDecisions(original, pendingDecision, { forceLocked: true });
     } else {
       void removeFromList(original, true);
     }
@@ -86,12 +98,19 @@ export function LockConfirmDialog() {
     // Capture before clearConflict() nulls the store field.
     const lockedSet = new Set(lockedPaths);
     const original = lockConflict?.originalPaths ?? [];
+    const pendingDecision = lockConflict?.pendingDecision ?? "";
     // Filter the original scope to exclude locked paths, then re-run.
     const unlockedPaths = original.filter((p) => !lockedSet.has(p));
     clearConflict();
     if (op === "execute") {
       // Re-run execute with only the unlocked subset in scope.
       void executeDecisions({ scopePaths: unlockedPaths });
+    } else if (op === "decision") {
+      // Re-run setDecisions with only the unlocked subset; nothing to do if
+      // every original path was locked.
+      if (unlockedPaths.length > 0) {
+        void setDecisions(unlockedPaths, pendingDecision);
+      }
     } else {
       // Re-run remove with only the unlocked subset.
       void removeFromList(unlockedPaths, false);
@@ -113,13 +132,17 @@ export function LockConfirmDialog() {
       ? "Locked files in delete scope"
       : op === "remove"
         ? "Locked files in remove scope"
-        : "Locked singleton groups";
+        : op === "decision"
+          ? "Locked rows affected"
+          : "Locked singleton groups";
   const description =
     op === "execute"
       ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be permanently DELETED. Unlock and proceed, or skip locked files only.`
       : op === "remove"
         ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} in the remove list. Unlock and remove, or remove unlocked files only.`
-        : `${n} locked singleton ${n === 1 ? "group" : "groups"} would be pruned. Unlock and prune ${n === 1 ? "it" : "them"}, or keep ${n === 1 ? "it" : "them"} in the list.`;
+        : op === "decision"
+          ? `Setting this decision would change ${originalPathsLen} row(s); ${n} ${n === 1 ? "is" : "are"} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.`
+          : `${n} locked singleton ${n === 1 ? "group" : "groups"} would be pruned. Unlock and prune ${n === 1 ? "it" : "them"}, or keep ${n === 1 ? "it" : "them"} in the list.`;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleCancel()}>
@@ -153,7 +176,9 @@ export function LockConfirmDialog() {
             Unlocked only
           </Button>
           <Button
-            variant="destructive"
+            // "decision" is not destructive — nothing is deleted, it only
+            // queues the decision (Qt #417 parity). Every other op is.
+            variant={op === "decision" ? "default" : "destructive"}
             data-testid={LOCK_CONFIRM_BTN_UNLOCK_APPLY}
             onClick={handleUnlockApply}
           >

@@ -129,11 +129,14 @@ export interface ResultViewState {
 // Phase 2C2 — execute state
 // ---------------------------------------------------------------------------
 
-/** Describes a lock-conflict returned by POST /api/execute or /api/remove. */
+/**
+ * Describes a lock-conflict returned by POST /api/execute, POST /api/remove,
+ * or PATCH /api/decision (#733).
+ */
 export interface LockConflict {
   /** The paths the server reported as locked. */
   paths: string[];
-  op: "execute" | "remove" | "prune";
+  op: "execute" | "remove" | "prune" | "decision";
   /**
    * The original path list that triggered the conflict.
    * - execute: all decided paths that were in scope at call time (null means
@@ -141,10 +144,17 @@ export interface LockConflict {
    * - remove: the file_paths array that was passed to removeFromList.
    * - prune: unused (null) — the prune-context gate reads `execute.prunePending`
    *   to continue, not a re-runnable original scope.
+   * - decision: the full path list passed to setDecision/setDecisions that
+   *   triggered the conflict.
    * Used by "Unlocked Only" to compute the filtered scope without re-hitting the
    * locked files.
    */
   originalPaths: string[] | null;
+  /**
+   * Set only when ``op === "decision"`` — the decision value to re-apply on
+   * "Unlock & Apply" / "Unlocked Only". Undefined for every other op.
+   */
+  pendingDecision?: DecisionValue;
 }
 
 /** Prune prompt state — the unlocked buckets shown in the confirmation dialog. */
@@ -278,6 +288,12 @@ export interface AppActions {
   /**
    * Optimistically apply a decision to the matching FileRow in manifest.groups,
    * then PATCH /api/decision.
+   *
+   * - On 409 locked_paths: reverts the optimistic apply, then sets
+   *   execute.lockConflict (op="decision") instead of manifest.error.
+   * - On other errors: reverts the optimistic apply and sets manifest.error.
+   *
+   * Routes through setDecisions([filePath], decision) — no duplicated logic.
    */
   setDecision(filePath: string, decision: DecisionValue): Promise<void>;
 
@@ -290,10 +306,24 @@ export interface AppActions {
   /**
    * Batch variant of setDecision — optimistically apply the same decision to
    * every path, then PATCH /api/decision once with the whole list (one
-   * round-trip, the desktop's atomic "set action on selection" parity).  On
-   * failure every row reverts to its prior value.  No-op for an empty list.
+   * round-trip, the desktop's atomic "set action on selection" parity).  No-op
+   * for an empty list.
+   *
+   * - On success: nothing further (optimistic apply already reflects it).
+   * - On 409 locked_paths (#733): reverts every optimistic apply, then sets
+   *   execute.lockConflict = { paths: lockedPaths, op: "decision",
+   *   originalPaths: [...paths], pendingDecision: decision } instead of
+   *   manifest.error — mirrors the removeFromList 409 flow.
+   * - On other errors: reverts every optimistic apply and sets manifest.error.
+   *
+   * ``opts.forceLocked`` threads through to patchDecisions's force_locked —
+   * used by LockConfirmDialog's "Unlock & Apply" re-run.
    */
-  setDecisions(paths: string[], decision: DecisionValue): Promise<void>;
+  setDecisions(
+    paths: string[],
+    decision: DecisionValue,
+    opts?: { forceLocked?: boolean }
+  ): Promise<void>;
 
   /**
    * Batch variant of setLock — optimistically apply the lock to every path,
