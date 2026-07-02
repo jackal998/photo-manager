@@ -1,0 +1,1 @@
+Add a `PHOTO_MANAGER_WEB` launcher that runs the app's web UI in a native Edge WebView2 desktop window (via pywebview), alongside the classic Qt desktop app which stays the default — the desktop shell for the localhost web port. (#732)
