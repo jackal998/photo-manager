@@ -224,6 +224,11 @@ async def start_scan(req: WebScanRequest) -> JSONResponse:
     loop = asyncio.get_running_loop()
     task.loop = loop
 
+    # #652 — read back hash-pool / read-knee calibration + exif_workers from
+    # settings.json for any field the request left unset, matching the Qt
+    # ScanDialog's per-scan resolution instead of the old hardcoded defaults.
+    req = req.resolved_with(_load_settings())
+
     # Store config on task so hash_pool_measured can compute the fingerprint.
     config = req.to_config()
     task._config = config  # type: ignore[attr-defined]

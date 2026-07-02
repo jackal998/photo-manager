@@ -28,6 +28,10 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     # change must reconsider this path disclosure.
     "sources.list",
     "sources.output",
+    # #652 — read-back for the web scan calibration parity fix; lets the
+    # web ScanDialog pre-fill/display the exif worker count the way the
+    # POST /api/scan resolver (WebScanRequest.resolved_with) reads it.
+    "scan.exif_workers",
 )
 
 

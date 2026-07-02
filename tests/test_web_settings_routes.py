@@ -161,3 +161,20 @@ class TestPatchSettings:
         on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
         assert on_disk["sources"]["list"] == sources
         assert on_disk["sources"]["output"] == "out/scan.db"
+
+    def test_exif_workers_round_trip(self, client, tmp_settings: Path):
+        """scan.exif_workers (#652) is PATCH-writable and GET-readable — the
+        allowlist entry that lets POST /api/scan's resolved_with() read this
+        value back is useless if the web UI can't write it in the first place.
+        """
+        resp = client.patch("/api/settings", json={
+            "updates": {"scan.exif_workers": 6}
+        })
+        assert resp.status_code == 200
+        assert resp.json()["updated"] == 1
+
+        body = client.get("/api/settings").json()
+        assert body["scan.exif_workers"] == 6
+
+        on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
+        assert on_disk["scan"]["exif_workers"] == 6

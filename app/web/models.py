@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from collections import deque
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 
 from core.app_service.cancel_token import _CancelToken
 from core.app_service.dtos import ScanConfig
+from core.app_service.scan_runner import hash_pool_fingerprint
 
 
 # ---------------------------------------------------------------------------
@@ -209,19 +211,73 @@ class WebScanRequest(BaseModel):
     dhash_threshold: int = 10
     limit: int | None = None
     workers: int = 4
-    exif_workers: int = 2
-    hash_pool: str = "thread"
+    # None = "server resolves from settings.json" (see resolved_with()); an
+    # explicit value in the request is always honored untouched. This mirrors
+    # the Qt ScanDialog default of "auto" hash-pool + settings-read exif
+    # workers, rather than hardcoding a value at the HTTP boundary (#652).
+    exif_workers: int | None = None
+    hash_pool: str | None = None
     hash_pool_rates: dict | None = None
     auto_select_enabled: bool = False
     auto_select_aggressive_delete: bool = False
     autotune_read_knee: bool = False
     autotune_knees: dict = {}
 
+    def resolved_with(self, settings) -> "WebScanRequest":
+        """Return a NEW WebScanRequest with calibration fields read back from settings.
+
+        Mirrors the Qt desktop's per-scan resolution (scan_dialog.py
+        ``_resolve_hash_pool`` + the ``scan.exif_workers`` /
+        ``scan.read_knee_cache`` reads in ``_start_scan``): the web scan path
+        previously hardcoded ``hash_pool="thread"``, ``exif_workers=2``, and
+        never read the hash-pool / read-knee calibration caches, so every web
+        scan re-measured from scratch instead of reusing a prior scan's
+        calibration (#652).
+
+        Only fields left at their unset default (``None`` / empty dict) are
+        resolved from ``settings``; any value explicitly supplied by the
+        caller is returned unchanged. ``settings`` is any object exposing
+        ``get`` (e.g. ``JsonSettings``).
+        """
+        hash_pool = self.hash_pool if self.hash_pool is not None else settings.get("scan.hash_pool", "auto")
+
+        hash_pool_rates = self.hash_pool_rates
+        if hash_pool_rates is None and hash_pool == "auto":
+            fp = hash_pool_fingerprint(
+                {label: Path(p) for label, p in self.sources.items()},
+                dict(self.recursive_map),
+                os.cpu_count() or 4,
+            )
+            cache = settings.get("scan.hash_pool_cache", {}) or {}
+            hash_pool_rates = cache.get(fp)
+
+        autotune_knees = self.autotune_knees or (settings.get("scan.read_knee_cache", {}) or {})
+
+        exif_workers = self.exif_workers
+        if exif_workers is None:
+            exif_workers = settings.get("scan.exif_workers", 2)
+            try:
+                exif_workers = int(exif_workers)
+            except (TypeError, ValueError):
+                exif_workers = 2
+
+        return self.model_copy(
+            update={
+                "hash_pool": hash_pool,
+                "hash_pool_rates": hash_pool_rates,
+                "autotune_knees": autotune_knees,
+                "exif_workers": exif_workers,
+            }
+        )
+
     def to_config(self) -> ScanConfig:
         """Build a ScanConfig from this HTTP request.
 
         Path()-wraps sources values and output_path; lets ScanConfig
-        __post_init__ clamp exif_workers.
+        __post_init__ clamp exif_workers. ``hash_pool``/``exif_workers``
+        fall back to their Qt-parity defaults ("auto" / 2) when the request
+        was never passed through ``resolved_with()`` (e.g. direct callers,
+        unit tests constructing a WebScanRequest by hand).
         """
         return ScanConfig(
             sources={label: Path(p) for label, p in self.sources.items()},
@@ -233,8 +289,8 @@ class WebScanRequest(BaseModel):
             dhash_threshold=self.dhash_threshold,
             limit=self.limit,
             workers=self.workers,
-            exif_workers=self.exif_workers,
-            hash_pool=self.hash_pool,
+            exif_workers=self.exif_workers if self.exif_workers is not None else 2,
+            hash_pool=self.hash_pool if self.hash_pool is not None else "auto",
             hash_pool_rates=dict(self.hash_pool_rates) if self.hash_pool_rates else None,
             auto_select_enabled=self.auto_select_enabled,
             auto_select_aggressive_delete=self.auto_select_aggressive_delete,
