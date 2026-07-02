@@ -79,7 +79,7 @@ scenarios:
   - scenario: s13_execute_action
     playwright_module: qa.web.scenarios.s13_execute_action
     status: done
-    notes: "Destructive execute round-trip. Scans disposable tmpdir copies of near-duplicates, marks all 5 rows delete via context menu, Execute -> all-delete confirm -> Yes, then asserts (absence-based) all 5 files gone from disk AND GET /api/manifest total_files==0 — deleted rows are filtered out by WHERE outcome='' in _LOAD_ALL_SQL, so the contract is ABSENCE, not outcome=='deleted'. Qt regex bulk-mark + executed=1 SQLite read have no web equivalent — context-menu marking + absence assertion used instead."
+    notes: "Destructive execute round-trip. Scans disposable tmpdir copies of near-duplicates, marks all 5 rows delete via context menu, Execute -> all-delete confirm -> Yes, then asserts (absence-based) all 5 files gone from disk AND GET /api/manifest total_files==0 — deleted rows are filtered out by WHERE outcome='' in _LOAD_ALL_SQL, so the contract is ABSENCE, not outcome=='deleted'. Qt regex bulk-mark + executed=1 SQLite read have no web equivalent — context-menu marking + absence assertion used instead. #733 MIXED-MANIFEST phase: two exif-edge groups (A all-delete, B one ignore + two undecided) prove the pre-execute confirm fires per Qt's _complete_delete_groups (ANY qualifying group), not only on a 100%-delete whole scope; asserts Cancel is a no-op and Yes commits group A's deletes + finalizes B's ignore row while B's undecided files survive untouched."
 
   - scenario: s14_action_by_regex
     playwright_module: qa.web.scenarios.s14_action_by_regex
@@ -290,7 +290,7 @@ scenarios:
   - scenario: s53_execute_dialog_lock_decision
     playwright_module: qa.web.scenarios.s53_execute_dialog_lock_decision
     status: done
-    notes: "Cluster B. Lock / Unlock / Set-Action-delete via the execute-dialog row menu (ExecuteContextMenu). Seeds two decisions (delete + ignore) through the result-tree menu to expose rows in the decided-rows-only execute tree (#676), then drives the EXECUTE menu (PATCH /api/lock, PATCH /api/decision); asserts is_locked / user_decision via GET /api/manifest. No multi-row select (web targets the right-clicked row only, s35 precedent)."
+    notes: "Cluster B. Lock / Unlock / Set-Action-delete via the execute-dialog row menu (ExecuteContextMenu). Seeds two decisions (delete + ignore) through the result-tree menu to expose rows in the decided-rows-only execute tree (#676), then drives the EXECUTE menu (PATCH /api/lock, PATCH /api/decision); asserts is_locked / user_decision via GET /api/manifest. No multi-row select (web targets the right-clicked row only, s35 precedent). #733 LOCKED-ROW DECISION phase: re-locks q88, then right-click Set-Action-delete on the SAME locked row proves PATCH /api/decision is now lock-gated (409 -> LOCK_CONFIRM_DIALOG op='decision' DEFERRED wording) instead of silently overwriting; asserts Cancel leaves decision+lock unchanged and Unlock & Apply writes 'delete' while force-unlocking."
 
   - scenario: s54_execute_dialog_remove_from_list
     playwright_module: qa.web.scenarios.s54_execute_dialog_remove_from_list
