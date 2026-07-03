@@ -212,9 +212,21 @@ scenarios:
     notes: "#144 ported via the web-idiomatic scan-FAILURE surface (validation-timing divergence). Desktop validates a typed source path UP FRONT on '+ Add' (Path.is_dir() in _FolderTreePanel._on_add_typed, scan_dialog.py) and blocks before any scan; the web SourceRow is a bare text input with no pre-scan check, so a bad path is accepted by POST /api/scan and then scan_sources raises FileNotFoundError 'Source directory not found: <path>' (scanner/walker.py) → SSE failed → store scan.status='failed' + scan.error (useAppStore.ts) → ScanDialog renders a role='alert' that NAMES the path, dialog stays open. Same user-facing guarantee (bad path → visible named error, never a silent no-op), web-idiomatically. Scenario: bad path → alert names the offending leaf + dialog stays open; corrected path (empty temp dir) → alert clears + dialog closes (recovery — failed state not sticky). Anchors on role='alert' scoped to scan-dialog (no testid/FE source change). DIVERGENCES: (a) validation TIMING — web fails the running scan, desktop blocks pre-add; the exact-parity pre-scan inline error (a GET /api/fs/stat probe) is deferred as #678 item C, declined to avoid a filesystem-info-disclosure endpoint for a timing-only nicety (mirrors #677's honest single-select s64 port). (b) #216 (output Browse opens a native 'Save Manifest As' window) has no web analog — the web output Browse uses the in-DOM FsBrowser save-mode picker already covered by s17."
 
   - scenario: s39_window_geometry_persist
-    playwright_module: null
-    status: skip
-    notes: "SKIP — desktop-only (#688). Qt window-geometry round-trip: ctypes MoveWindow / GetWindowRect + QSettings INI persistence across a subprocess relaunch. A browser tab has no OS-controlled window position/size and no per-app geometry-persistence contract (the window chrome belongs to the browser, not the app). The web's per-machine UI-chrome analog — result-tree column widths via localStorage — is covered by s47 (#685, done)."
+    playwright_module: qa.web.scenarios.s39_layout_persist
+    status: done
+    notes: >-
+      #739 re-flip from SKIP. Qt window-geometry round-trip (ctypes
+      MoveWindow/GetWindowRect + QSettings INI persistence) still has no
+      browser analog — window chrome belongs to the browser, not the app —
+      but this scenario's OTHER half (the splitter/floor guard, #136) now has
+      a real web feature to port: the resizable preview-pane width. Drags the
+      preview-resize handle, asserts the width grew, asserts
+      localStorage.getItem('panelWidths') persists the new width,
+      page.reload()s, reopens the manifest, and asserts the width restores.
+      needs_rework parity per web-port-tech-design.md:2485 — the assertion
+      weakens from screen-pixel window position to "panel width survives a
+      reload". Result-tree column widths remain covered separately by s47
+      (#685, done).
 
   - scenario: s40_results_tree_double_click
     playwright_module: qa.web.scenarios.s40_results_tree_double_click
@@ -265,7 +277,7 @@ scenarios:
   - scenario: s48_dialog_geometry_persist
     playwright_module: null
     status: skip
-    notes: "SKIP — desktop-only (#688). Qt dialog-geometry persistence: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. Web dialogs are Radix / DOM overlays with no user-resizable geometry and no persistence contract, so there is nothing to round-trip. NOTE: s47 (#685) IS a real web feature (column-width persistence) — it is NOT a skip; only window/dialog OS-geometry (s39/s48) is desktop-only."
+    notes: "SKIP — desktop-only (#688). Qt dialog-geometry persistence: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. Web dialogs are Radix / DOM overlays with no user-resizable geometry and no persistence contract, so there is nothing to round-trip. NOTE: s47 (#685) and s39 (#739) ARE real web features (column-width and preview-panel-width persistence) — NOT skips; only this dialog-geometry scenario (s48) remains desktop-only."
 
   - scenario: s49_scan_auto_select
     playwright_module: qa.web.scenarios.s49_scan_auto_select
