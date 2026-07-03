@@ -5,6 +5,7 @@
 // reads scan state from the store. See ScanDialog.tsx header comment.
 
 import { useState, useCallback, useEffect } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 
 import { cn } from "./lib/utils";
 import { useAppStore } from "./store/useAppStore";
@@ -41,6 +42,7 @@ import {
   MAIN_SETTINGS_BUTTON,
   MAIN_STATUS_BAR,
   MAIN_STATUS_ERROR,
+  PREVIEW_RESIZE_HANDLE,
 } from "./testids";
 
 // ---------------------------------------------------------------------------
@@ -155,6 +157,40 @@ export default function App() {
   const openActionDialog = useAppStore((s) => s.openActionDialog);
   const manifestPath = useAppStore((s) => s.manifest.path);
   const hasSelection = useAppStore((s) => s.selection.selectedPaths.length > 0);
+
+  // ---------------------------------------------------------------------------
+  // Preview-panel resize (#739) — mirrors the #685 column-resize recipe
+  // (ColumnHeaderRow.handleResizeStart): mousedown tracks window mousemove /
+  // mouseup so the drag keeps working once the cursor leaves the thin handle;
+  // each move updates the width in-memory only (persist=false) for live
+  // feedback, and the final width is persisted once on mouseup (persist=true).
+  // ---------------------------------------------------------------------------
+
+  const previewWidth = useAppStore((s) => s.resultView.panelWidths.preview);
+  const setPreviewWidth = useAppStore((s) => s.setPreviewWidth);
+
+  const handlePreviewResizeStart = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = previewWidth;
+      let latest = startWidth;
+      // The handle sits LEFT of the preview pane: dragging left (negative
+      // delta) widens the preview; dragging right narrows it.
+      function onMove(ev: globalThis.MouseEvent) {
+        latest = startWidth - (ev.clientX - startX);
+        setPreviewWidth(latest, false);
+      }
+      function onUp() {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        setPreviewWidth(latest, true); // commit the final width to localStorage
+      }
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [previewWidth, setPreviewWidth]
+  );
 
   // "Execute (only selected)": snapshot the current main-tree selection and
   // open the execute dialog scoped to those rows' groups (#430 group-pull).
@@ -357,8 +393,19 @@ export default function App() {
             />
           )}
         </div>
-        {/* Preview pane — fixed 280px right column */}
-        <div className="w-72 flex-shrink-0 overflow-hidden border-l border-neutral-200">
+        {/* Drag handle — resizable tree/preview boundary (#739, was fixed w-72) */}
+        <div
+          data-testid={PREVIEW_RESIZE_HANDLE}
+          role="separator"
+          aria-orientation="vertical"
+          className="w-1 flex-shrink-0 cursor-col-resize bg-neutral-200 hover:bg-neutral-400"
+          onMouseDown={handlePreviewResizeStart}
+        />
+        {/* Preview pane — resizable right column, width persists (#739) */}
+        <div
+          className="flex-shrink-0 overflow-hidden"
+          style={{ width: previewWidth }}
+        >
           <PreviewPane />
         </div>
       </main>

@@ -81,6 +81,7 @@ export const PRUNE_REMEMBER = "prune-remember";
 export const PREVIEW_PANE = "preview-pane";
 export const PREVIEW_SINGLE_IMAGE = "preview-single-image";
 export const PREVIEW_INFO = "preview-info";
+export const PREVIEW_RESIZE_HANDLE = "preview-resize-handle";
 export const FULLRES_DIALOG = "fullres-dialog";
 export const FULLRES_IMAGE = "fullres-image";
 export const CONTEXT_MENU = "context-menu";

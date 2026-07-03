@@ -343,6 +343,14 @@ PREVIEW_SINGLE_IMAGE = "preview-single-image"
 PREVIEW_INFO = "preview-info"
 """Metadata / EXIF info section below the preview image."""
 
+PREVIEW_RESIZE_HANDLE = "preview-resize-handle"
+"""Drag handle for resizing the preview pane (#739).  Sits between the result
+tree and the preview pane in App.tsx; mousedown here begins a resize drag
+that mirrors the #685 column-resize recipe (ColumnHeaderRow.tsx) — live width
+updates per mousemove, one localStorage write (key "panelWidths") on mouseup.
+s39 (rewritten from the desktop-only window-geometry scenario) drags this
+handle and asserts the width survives a page reload."""
+
 # ---------------------------------------------------------------------------
 # Full-resolution image dialog
 # ---------------------------------------------------------------------------

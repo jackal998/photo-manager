@@ -46,6 +46,7 @@ import type {
 } from "./types";
 import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
 import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
+import { loadPanelWidths, savePanelWidths, clampPanelWidth } from "../lib/panelWidths";
 import { normalizePrunePref } from "../lib/prune";
 import type { PrunePref } from "../lib/prune";
 import { ACTION_DIALOG_FIELD_OPTIONS } from "../lib/actionDialogFields";
@@ -113,12 +114,14 @@ const initialSelection: SelectionState = {
 };
 
 // sortColumn null = no sort = server order (the default every result-tree
-// scenario relies on). columnWidths hydrate from localStorage (s47 cross-launch
-// persistence) merged over the defaults — read once at store creation.
+// scenario relies on). columnWidths / panelWidths hydrate from localStorage
+// (s47 / s39 cross-launch persistence) merged over the defaults — read once
+// at store creation.
 const initialResultView: ResultViewState = {
   sortColumn: null,
   sortDirection: "asc",
   columnWidths: loadColumnWidths(),
+  panelWidths: loadPanelWidths(),
 };
 
 const initialExecute: ExecuteState = {
@@ -158,6 +161,7 @@ export const useAppStore = create<AppStore>()(
     resultView: {
       ...initialResultView,
       columnWidths: { ...initialResultView.columnWidths },
+      panelWidths: { ...initialResultView.panelWidths },
     },
     execute: { ...initialExecute },
     action: { ...initialAction },
@@ -516,6 +520,25 @@ export const useAppStore = create<AppStore>()(
       // move. Read back the committed state so the blob matches the store exactly.
       if (persist) {
         saveColumnWidths({ ...get().resultView.columnWidths });
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // #739 — preview-panel resize + persistence (mirrors setColumnWidth)
+    // -----------------------------------------------------------------------
+
+    setPreviewWidth(width: number, persist = true) {
+      // Clamp to [MIN_PANEL_WIDTH, 60% of the viewport] so a fast/overshooting
+      // drag can never persist a 0-width preview pane or swallow the whole tree.
+      const clamped = clampPanelWidth(width);
+      set((state) => {
+        state.resultView.panelWidths.preview = clamped;
+      });
+      // A resize drag passes persist=false per mousemove (live feedback only) and
+      // persist=true once on mouseup — avoids a synchronous localStorage write per
+      // move. Read back the committed state so the blob matches the store exactly.
+      if (persist) {
+        savePanelWidths({ ...get().resultView.panelWidths });
       }
     },
 

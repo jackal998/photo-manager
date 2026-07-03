@@ -3,6 +3,7 @@
 
 import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
 import type { ColumnId, SortDirection } from "../lib/resultColumns";
+import type { PanelId } from "../lib/panelWidths";
 import type { PrunePref } from "../lib/prune";
 
 // ---------------------------------------------------------------------------
@@ -123,6 +124,13 @@ export interface ResultViewState {
    * setColumnWidth on a resize drag, which also writes back to localStorage.
    */
   columnWidths: Record<ColumnId, number>;
+  /**
+   * Per-panel width in px (currently just the preview pane, #739). Hydrated
+   * from localStorage at store creation (cross-launch persistence, key
+   * "panelWidths", s39 rework) and merged over the defaults; mutated by
+   * setPreviewWidth on a resize drag, which also writes back to localStorage.
+   */
+  panelWidths: Record<PanelId, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +387,16 @@ export interface AppActions {
    * programmatic set still persists.
    */
   setColumnWidth(column: ColumnId, width: number, persist?: boolean): void;
+
+  /**
+   * Set the preview pane's width (px, #739). During a resize drag this is
+   * called per mousemove with ``persist: false`` (live in-memory feedback
+   * only); on mouseup it is called once with ``persist: true`` to write the
+   * width map to localStorage under key "panelWidths" (cross-launch).
+   * Clamped to [MIN_PANEL_WIDTH, 60% of the viewport] — see
+   * lib/panelWidths.ts::clampPanelWidth.
+   */
+  setPreviewWidth(width: number, persist?: boolean): void;
 
   /** GET /api/settings and populate settings.values. */
   loadSettings(): Promise<void>;

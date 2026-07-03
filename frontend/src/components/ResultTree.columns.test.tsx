@@ -10,6 +10,7 @@ import { ResultTree } from "./ResultTree";
 import { useAppStore } from "@/store/useAppStore";
 import { colHeaderTestid } from "@/testids";
 import { DEFAULT_COLUMN_WIDTHS } from "@/lib/resultColumns";
+import { DEFAULT_PANEL_WIDTHS } from "@/lib/panelWidths";
 import type { FileRow as FileRowData, Group } from "@/api/types";
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,7 @@ describe("ResultTree column-model sort", () => {
         sortColumn: null,
         sortDirection: "asc",
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
+        panelWidths: { ...DEFAULT_PANEL_WIDTHS },
       },
     });
     restore = stubOffsetHeight();
@@ -182,6 +184,7 @@ describe("setColumnWidth store action", () => {
         sortColumn: null,
         sortDirection: "asc",
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
+        panelWidths: { ...DEFAULT_PANEL_WIDTHS },
       },
     });
   });
