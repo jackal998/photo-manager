@@ -36,6 +36,7 @@ const mockPatchSettings = vi.mocked(patchSettings);
 import {
   SCAN_ADD_SOURCE,
   SCAN_AUTO_SELECT,
+  SCAN_AUTOTUNE,
   SCAN_CANCEL_BUTTON,
   SCAN_COLOR_THRESHOLD,
   SCAN_DHASH_THRESHOLD,
@@ -384,7 +385,23 @@ describe("ScanDialog", () => {
     expect(mockPatchSettings).toHaveBeenCalledWith({
       "sources.list": [{ path: "D:/pics", recursive: false }],
       "sources.output": "D:/out.db",
+      // #743: the auto-tune preference persists (default ON here).
+      "ui.scan_dialog.autotune_read_knee": true,
     });
+  });
+
+  it("loads the persisted auto-tune-read-knee preference on open (#743)", async () => {
+    // Persisted OFF should override the ON default when the dialog opens.
+    mockGetSettings.mockResolvedValueOnce({
+      "sources.list": [],
+      "sources.output": "",
+      "ui.scan_dialog.autotune_read_knee": false,
+    } as never);
+
+    renderDialog();
+
+    const knee = await screen.findByTestId(SCAN_AUTOTUNE);
+    await waitFor(() => expect(knee).not.toBeChecked());
   });
 
   it("does not clobber user-typed input when a non-empty settings load resolves late", async () => {

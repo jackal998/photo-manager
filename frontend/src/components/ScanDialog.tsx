@@ -212,9 +212,11 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // makes load-on-open race-safe BY DESIGN: neither an empty NOR a late
   // non-empty settings response can clobber in-progress edits (e.g. a scenario
   // that reopens the dialog after a Start Scan persisted a prior source list).
-  // The advanced-settings checkboxes AND the grouping-sensitivity thresholds
-  // (#736) are NOT persisted by this cluster (s23b pins thresholds-not-
-  // persisted) — they always reset to defaults.
+  // The auto-select checkboxes AND the grouping-sensitivity thresholds (#736)
+  // are NOT persisted (s23b pins thresholds-not-persisted) — they reset to
+  // defaults each open. EXCEPTION: the auto-tune-read-knee preference (#743) IS
+  // persisted — the default set below is overridden by the saved value in the
+  // async load, and it's written back on Start.
   useEffect(() => {
     if (!(open && scan.status === "idle")) return;
     let cancelled = false;
@@ -241,6 +243,13 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         const out = settings["sources.output"];
         if (typeof out === "string" && out !== "") {
           setOutputPath((prev) => (prev === "" ? out : prev));
+        }
+        // Auto-tune-read-knee preference persists (#743): override the default
+        // with the saved value when present (unlike the reset-to-default
+        // auto-select checkboxes above).
+        const knee = settings["ui.scan_dialog.autotune_read_knee"];
+        if (typeof knee === "boolean") {
+          setAutotuneReadKnee(knee);
         }
       })
       .catch(() => {
@@ -417,6 +426,10 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         recursive: s.recursive,
       })),
       "sources.output": outputPath.trim(),
+      // Persist the auto-tune-read-knee preference (#743) — a per-user setting
+      // (unlike the auto-select checkboxes + grouping thresholds, which stay
+      // per-scan). Mirrors Qt, which saves this toggle across launches.
+      "ui.scan_dialog.autotune_read_knee": autotuneReadKnee,
     }).catch((err) => {
       console.warn("Failed to persist scan sources; not saved for next launch:", err);
     });
