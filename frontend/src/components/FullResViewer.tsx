@@ -129,7 +129,9 @@ export function FullResViewer() {
       if (!e.ctrlKey) return;
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      setScale((prev) => Math.max(0.1, Math.min(10, prev + delta)));
+      // Clamp 5%–800%, matching the desktop full-res viewer (#743, Qt
+      // full_res_viewer.py:165). Was 10%–1000%.
+      setScale((prev) => Math.max(0.05, Math.min(8, prev + delta)));
     },
     []
   );
