@@ -16,13 +16,16 @@ Web adaptation (self-contained round-trip):
   This is strictly stronger than reading s23a's residue and is robust against
   scenario ordering.
 
-Thresholds-not-persisted: the web ScanDialog exposes NO pHash/color threshold
-inputs (its Advanced section is auto-select/aggressive/autotune only), and the
-/api/settings allowlist excludes the threshold keys. We assert their absence from
-GET /api/settings to pin the Qt s23b FORBIDDEN_KEYS contract. Because GET returns
-only allowlisted keys, this specifically catches the realistic regression where a
-future PR BOTH allowlists AND persists a threshold key — the path by which a
-threshold could leak back into the dialog.
+Thresholds-not-persisted: the web ScanDialog's Advanced section DOES expose
+pHash/dHash/mean-color threshold number inputs (#736, "Grouping sensitivity"),
+but they are sent per-scan in the WebScanRequest only — never through
+patchSettings, and the /api/settings allowlist excludes the threshold keys. We
+assert their absence from GET /api/settings to pin the Qt s23b FORBIDDEN_KEYS
+contract. Because GET returns only allowlisted keys, this specifically catches
+the realistic regression where a future PR BOTH allowlists AND persists a
+threshold key — the path by which a threshold could leak back into the dialog.
+Coverage for the inputs themselves (render/wiring into the POST /api/scan body)
+lives in s17_scan_dialog_widgets.py.
 
 Desktop source: qa/scenarios/s23b_verify_settings.py
 Fixtures:       qa/sandbox/unique, qa/sandbox/near-duplicates (distinct basenames)
@@ -54,7 +57,11 @@ _REPO = Path(__file__).resolve().parents[3]
 _SRC_UNIQUE = str(_REPO / "qa" / "sandbox" / "unique")
 _SRC_NEARDUPS = str(_REPO / "qa" / "sandbox" / "near-duplicates")
 
-_FORBIDDEN_KEYS = ("scan.phash_threshold", "scan.mean_color_threshold")
+_FORBIDDEN_KEYS = (
+    "scan.phash_threshold",
+    "scan.dhash_threshold",
+    "scan.mean_color_threshold",
+)
 
 
 def _get_settings(base_url: str) -> dict:

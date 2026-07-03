@@ -99,7 +99,7 @@ scenarios:
   - scenario: s17_scan_dialog_widgets
     playwright_module: qa.web.scenarios.s17_scan_dialog_widgets
     status: done
-    notes: "Drives the scan dialog Browse buttons through the NESTED FsBrowser (directory mode for source, save mode for output); asserts the scan dialog survives the nested layer and both fields are written back. Qt native QFileDialog → in-DOM picker."
+    notes: "Drives the scan dialog Browse buttons through the NESTED FsBrowser (directory mode for source, save mode for output); asserts the scan dialog survives the nested layer and both fields are written back. Qt native QFileDialog → in-DOM picker. #736: also proves the three grouping-sensitivity threshold inputs (pHash/dHash/mean-color) land in the POST /api/scan request body (captured via page.expect_request, not a grouping-count delta), and that sources added out of order render alphabetized (display-only) while the POST body's source order stays original insertion order — guarding BUILD RISKS #1 (dedup keeper priority) and #3 (testid idx binding)."
 
   - scenario: s18_log_menu
     playwright_module: null
