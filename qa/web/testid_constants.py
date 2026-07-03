@@ -174,7 +174,15 @@ SCAN_PROGRESS_BAR = "scan-progress-bar"
 """Progress bar shown during scan (value = completed / total)."""
 
 SCAN_STATUS_TEXT = "scan-status-text"
-"""Short status line above the progress bar (stage name, ETA, …)."""
+"""Short status line above the progress bar (localized stage name, #740)."""
+
+SCAN_THROUGHPUT_TEXT = "scan-throughput-text"
+"""Files/sec row shown while running (#740) — hidden when the rate is 0/undefined
+(no samples yet). Mirrors the Qt #424 ``_format_throughput`` wording."""
+
+SCAN_ETA_TEXT = "scan-eta-text"
+"""ETA row shown while running (#740) — hidden until the #424 min-samples gate
+clears (≥5s elapsed on the current stage AND a known total)."""
 
 SCAN_ADVANCED = "scan-advanced"
 """Collapsible 'Advanced settings' section summary/toggle in the scan dialog."""

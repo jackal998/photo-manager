@@ -1,20 +1,31 @@
-// Running-state UI for ScanDialog: progress bar, status text, log area, cancel button.
-// Only rendered while scan.status === "running".
+// Running-state UI for ScanDialog: progress bar, status text, throughput/ETA
+// (#740), log area, cancel button. Only rendered while scan.status === "running".
 
 import { useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { useT } from "@/i18n/useT";
+import { formatThroughput, stageLabel } from "@/lib/scanProgress";
 import {
   SCAN_CANCEL_BUTTON,
+  SCAN_ETA_TEXT,
   SCAN_PROGRESS_BAR,
   SCAN_PROGRESS_LOG,
   SCAN_STATUS_TEXT,
+  SCAN_THROUGHPUT_TEXT,
 } from "@/testids";
 
 interface ScanProgressProps {
   stageName: string;
   completed: number;
   total: number;
+  /** Raw files/sec from the SSE "stage" event; 0/undefined suppresses the row. */
+  filesPerSec: number;
+  /**
+   * Pre-computed, pre-gated ETA string (already past the #424 min-samples
+   * gate — see ScanDialog.tsx). Null/undefined hides the row entirely.
+   */
+  eta: string | null | undefined;
   log: string[];
   onCancel: () => void;
 }
@@ -23,9 +34,12 @@ export function ScanProgress({
   stageName,
   completed,
   total,
+  filesPerSec,
+  eta,
   log,
   onCancel,
 }: ScanProgressProps) {
+  const t = useT();
   const logRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll log to the bottom whenever log lines grow.
@@ -39,16 +53,31 @@ export function ScanProgress({
   const isDeterminate = total > 0;
   const pct = isDeterminate ? Math.round((completed / total) * 100) : 0;
 
+  const throughputText = formatThroughput(filesPerSec);
+
   return (
     <div className="flex flex-col gap-3 mt-4">
-      {/* Status text */}
+      {/* Status text — localized stage label (#740; raw stage id / "Running…"
+          for an unmapped or absent stage — see lib/scanProgress.ts). */}
       <p
         data-testid={SCAN_STATUS_TEXT}
         className="text-sm font-medium text-neutral-700 truncate"
         aria-live="polite"
       >
-        {stageName || "Running…"}
+        {stageLabel(stageName, t)}
       </p>
+
+      {/* Throughput + ETA (#740) — each suppressed independently when not
+          yet meaningful, mirroring the Qt #424 receiver gating. */}
+      {(throughputText !== null || eta) && (
+        <p className="text-xs font-mono text-neutral-500">
+          {throughputText !== null && (
+            <span data-testid={SCAN_THROUGHPUT_TEXT}>{throughputText}</span>
+          )}
+          {throughputText !== null && eta && "  —  "}
+          {eta && <span data-testid={SCAN_ETA_TEXT}>ETA {eta}</span>}
+        </p>
+      )}
 
       {/* Progress bar */}
       <div data-testid={SCAN_PROGRESS_BAR} aria-label="Scan progress">

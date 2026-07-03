@@ -81,6 +81,7 @@ const initialScan: ScanState = {
   log: [],
   error: null,
   outputPath: null,
+  stageStartedAt: null,
 };
 
 const initialManifest: ManifestState = {
@@ -197,6 +198,14 @@ export const useAppStore = create<AppStore>()(
           }
           case "stage": {
             const ev = payload as ScanStageEvent;
+            // #740 — reset the ETA min-samples gate's clock on a stage
+            // TRANSITION only (mirrors Qt's `_stage_started_at_monotonic`
+            // reset in `_on_stage_progress`): re-stamping on every same-stage
+            // emit would keep the gate perpetually "just started" and the
+            // ETA would never clear the ≥5s threshold.
+            if (ev.stage_name !== state.scan.stageName) {
+              state.scan.stageStartedAt = Date.now();
+            }
             state.scan.stageName = ev.stage_name;
             state.scan.completed = ev.completed;
             state.scan.total = ev.total;

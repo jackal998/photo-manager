@@ -8,6 +8,7 @@ import { useState, useCallback, useEffect } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 
 import { cn } from "./lib/utils";
+import { stageLabel } from "./lib/scanProgress";
 import { useAppStore } from "./store/useAppStore";
 import { useScanSSE } from "./hooks/useScanSSE";
 import { useBeforeUnloadGuard } from "./hooks/useBeforeUnloadGuard";
@@ -248,7 +249,8 @@ export default function App() {
   } else if (manifest.loading) {
     statusText = t("web.status.loading_manifest", "Loading manifest…");
   } else if (scan.status === "running") {
-    const stage = scan.stageName !== "" ? ` — ${scan.stageName}` : "";
+    // #740 — localize the stage name (was the raw SSE stage id, e.g. "HASH").
+    const stage = scan.stageName !== "" ? ` — ${stageLabel(scan.stageName, t)}` : "";
     statusText = t("web.status.scanning", "Scanning{stage}", { stage });
   } else if (scan.status === "failed" && scan.error !== null) {
     statusText = t("web.status.scan_failed", "Scan failed: {error}", { error: scan.error });

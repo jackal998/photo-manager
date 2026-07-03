@@ -23,6 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
+import { formatEta, isEtaReady } from "@/lib/scanProgress";
 import { getSettings, patchSettings } from "@/api/client";
 import type { WebScanRequest } from "@/api/types";
 import {
@@ -330,6 +331,21 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // ---------------------------------------------------------------------------
 
   const isRunning = scan.status === "running";
+
+  // #740 — receiver-side ETA, gated by the Qt #424 min-samples rule: don't
+  // show a number until the current stage has been running ≥5s (throughput
+  // needs time to settle) AND the stage has a known total (indeterminate
+  // stages — CLASSIFY/SCORE/WRITE — have nothing to estimate "remaining"
+  // against). `scan.stageStartedAt` is stamped on stage TRANSITIONS only
+  // (useAppStore.ts), so a fresh stage always restarts the gate's clock —
+  // otherwise the prior stage's settled throughput would leak into the new
+  // stage's first estimate.
+  const scanEta =
+    isRunning &&
+    scan.stageStartedAt !== null &&
+    isEtaReady((Date.now() - scan.stageStartedAt) / 1000, scan.total)
+      ? formatEta(Math.max(0, scan.total - scan.completed), scan.filesPerSec)
+      : null;
 
   const canStart =
     !isRunning &&
@@ -743,6 +759,8 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
             stageName={scan.stageName}
             completed={scan.completed}
             total={scan.total}
+            filesPerSec={scan.filesPerSec}
+            eta={scanEta}
             log={scan.log}
             onCancel={handleCancel}
           />

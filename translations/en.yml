@@ -592,6 +592,15 @@ web:
   # Scan dialog — web-only strings added alongside the browse picker.
   scan:
     browse: "Browse…"
+    # #740 — localized stage labels for the SSE `stage_name` values
+    # (WALK/HASH/EXIFTOOL/CLASSIFY/SCORE/WRITE, core/app_service/scan_runner.py
+    # STAGE_* constants). Mirrors the desktop scan_dialog.stage_* wording above.
+    stage_walk: "Walking sources"
+    stage_hash: "Hashing files"
+    stage_exiftool: "Reading EXIF + scoring signals"
+    stage_classify: "Classifying duplicates"
+    stage_score: "Scoring keepers"
+    stage_write: "Writing manifest"
   rescan_confirm:
     title: "Discard pending decisions?"
     body: "You have {pending} on the loaded manifest. Starting a new scan will discard them."

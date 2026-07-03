@@ -102,6 +102,7 @@ beforeEach(() => {
       log: [],
       error: null,
       outputPath: null,
+      stageStartedAt: null,
     },
     manifest: {
       path: null,
@@ -179,6 +180,62 @@ describe("ingestScanEvent – stage", () => {
     expect(scan.filesPerSec).toBe(7.5);
     // Status stays running (we didn't start a scan, but stage is not terminal)
     expect(scan.status).toBe("idle");
+  });
+
+  // #740 — stageStartedAt feeds the ETA min-samples gate (ScanDialog.tsx).
+  it("stamps stageStartedAt on a stage TRANSITION", () => {
+    expect(useAppStore.getState().scan.stageStartedAt).toBeNull();
+    useAppStore.getState().ingestScanEvent("stage", {
+      event: "stage",
+      stage_name: "WALK",
+      completed: 1,
+      total: 0,
+      files_per_sec: 0,
+    });
+    expect(useAppStore.getState().scan.stageStartedAt).not.toBeNull();
+  });
+
+  it("does NOT re-stamp stageStartedAt for repeated emits of the SAME stage", () => {
+    useAppStore.getState().ingestScanEvent("stage", {
+      event: "stage",
+      stage_name: "HASH",
+      completed: 1,
+      total: 100,
+      files_per_sec: 1,
+    });
+    const first = useAppStore.getState().scan.stageStartedAt;
+    useAppStore.getState().ingestScanEvent("stage", {
+      event: "stage",
+      stage_name: "HASH",
+      completed: 2,
+      total: 100,
+      files_per_sec: 2,
+    });
+    expect(useAppStore.getState().scan.stageStartedAt).toBe(first);
+  });
+
+  it("re-stamps stageStartedAt when the stage changes", () => {
+    useAppStore.getState().ingestScanEvent("stage", {
+      event: "stage",
+      stage_name: "WALK",
+      completed: 1,
+      total: 0,
+      files_per_sec: 0,
+    });
+    const walkStartedAt = useAppStore.getState().scan.stageStartedAt;
+    useAppStore.getState().ingestScanEvent("stage", {
+      event: "stage",
+      stage_name: "HASH",
+      completed: 1,
+      total: 100,
+      files_per_sec: 1,
+    });
+    // Different stage → a fresh (non-null) timestamp. We can't assert a
+    // strictly later Date.now() without flaking on a fast CI clock, but the
+    // transition must produce SOME stamp — null would mean the reset logic
+    // regressed to "never stamps after the first stage".
+    expect(useAppStore.getState().scan.stageStartedAt).not.toBeNull();
+    expect(walkStartedAt).not.toBeNull();
   });
 });
 

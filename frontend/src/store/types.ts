@@ -23,6 +23,15 @@ export interface ScanState {
   error: string | null;
   /** Manifest db path emitted by the "finished" SSE event. Null until finished. */
   outputPath: string | null;
+  /**
+   * `Date.now()` timestamp of the most recent stage TRANSITION (not every
+   * "stage" event — only when `stage_name` changes). Feeds the #424 ETA
+   * min-samples gate (ScanDialog.tsx): the ETA is suppressed until enough
+   * wall-clock time has elapsed on the CURRENT stage, mirroring the Qt
+   * receiver's `_stage_started_at_monotonic` reset-on-stage-change bookkeeping.
+   * Null before the first stage event of a scan.
+   */
+  stageStartedAt: number | null;
 }
 
 export interface ManifestState {

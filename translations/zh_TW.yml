@@ -499,6 +499,13 @@ web:
   # Scan dialog — web-only strings added alongside the browse picker.
   scan:
     browse: "瀏覽…"
+    # #740 — localized stage labels, matching translations/en.yml's web.scan.stage_*.
+    stage_walk: "正在掃描來源"
+    stage_hash: "正在計算雜湊"
+    stage_exiftool: "正在讀取 EXIF 與評分訊號"
+    stage_classify: "正在分類重複項"
+    stage_score: "正在評分候選"
+    stage_write: "正在寫入清單"
   rescan_confirm:
     title: "捨棄未儲存的決策?"
     body: "目前載入的清單上有 {pending} 尚未儲存。開始新的掃描將會捨棄這些決策。"

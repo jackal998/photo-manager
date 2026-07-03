@@ -126,6 +126,7 @@ describe("ScanDialog", () => {
         log: [],
         error: null,
         outputPath: null,
+        stageStartedAt: null,
       },
       // Clear any pending decisions seeded by the rescan-gate tests so the
       // default-path tests (no gate) start clean regardless of test order.
@@ -216,7 +217,11 @@ describe("ScanDialog", () => {
     renderDialog();
 
     expect(screen.getByTestId(SCAN_PROGRESS_BAR)).toBeInTheDocument();
-    expect(screen.getByTestId(SCAN_STATUS_TEXT)).toHaveTextContent("HASH");
+    // #740 — the status text now shows the LOCALIZED stage label, not the
+    // raw SSE stage id "HASH" (the catalog is empty in tests, so this is
+    // the English fallback wired in lib/scanProgress.ts, matching the
+    // desktop scan_dialog.stage_hash wording).
+    expect(screen.getByTestId(SCAN_STATUS_TEXT)).toHaveTextContent("Hashing files");
     expect(screen.getByTestId(SCAN_PROGRESS_LOG)).toBeInTheDocument();
     expect(screen.getByTestId(SCAN_CANCEL_BUTTON)).toBeInTheDocument();
     // Start button should not be present while running.
