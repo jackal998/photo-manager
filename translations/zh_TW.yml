@@ -525,3 +525,6 @@ web:
     noun_plural: "項待儲存的決策"
     cancel: "取消"
     discard_and_rescan: "捨棄並重新掃描"
+  execute_dialog:
+    files_not_found_title: "找不到檔案"
+    files_failed_title: "刪除失敗"

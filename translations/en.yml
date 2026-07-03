@@ -621,3 +621,10 @@ web:
     noun_plural: "pending decisions"
     cancel: "Cancel"
     discard_and_rescan: "Discard & Rescan"
+  # ExecuteResultSummary (#742) — inline Files-Not-Found / Files-Failed-to-Delete
+  # split rendered after Execute, mirroring the desktop's two QMessageBox.warning
+  # dialogs (execute_dialog.files_not_found_*/files_failed_* above) as inline
+  # sections instead of blocking dialogs.
+  execute_dialog:
+    files_not_found_title: "Files Not Found"
+    files_failed_title: "Files Failed to Delete"

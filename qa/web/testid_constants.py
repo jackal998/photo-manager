@@ -288,6 +288,17 @@ EXECUTE_REMOVE_CONFIRM_NO = "execute-remove-confirm-no"
 """'Cancel' / 'No' button inside the remove-from-list confirmation sheet
 (the default — destructive-ish action requires an explicit Yes)."""
 
+EXECUTE_RESULT_MISSING = "execute-result-missing"
+"""Files-Not-Found summary section rendered inline after an Execute whose
+result carries a non-empty `missing` list (#742) — web parity with the
+desktop's execute_dialog.files_not_found_* QMessageBox."""
+
+EXECUTE_RESULT_FAILED = "execute-result-failed"
+"""Files-Failed-to-Delete summary section rendered inline after an Execute
+whose result carries a non-empty `failed` list (#742), each row showing the
+decoded winerror reason (infrastructure/winerror_reasons.py) when available —
+web parity with the desktop's execute_dialog.files_failed_* QMessageBox."""
+
 # ---------------------------------------------------------------------------
 # Lock-conflict confirmation dialog
 # ---------------------------------------------------------------------------

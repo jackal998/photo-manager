@@ -31,6 +31,8 @@ import {
   EXECUTE_TYPE_FILTER,
   EXECUTE_TREE,
   EXECUTE_PREVIEW_PANE,
+  EXECUTE_RESULT_MISSING,
+  EXECUTE_RESULT_FAILED,
   executeAllDeleteJumpTestid,
 } from "@/testids";
 import type { Group } from "@/api/types";
@@ -510,6 +512,66 @@ describe("ExecuteDialog", () => {
     });
     render(<ExecuteDialog />);
     expect(screen.getByRole("alert")).toHaveTextContent("Server unavailable");
+  });
+
+  // #742 — Files-Not-Found / Files-Failed-to-Delete split rendered from the
+  // last executeResult, distinct from the whole-op executeError alert above.
+  it("renders the Files Not Found section from executeResult.missing", () => {
+    act(() => {
+      openDialog([MIXED_GROUP]);
+      useAppStore.setState((s) => ({
+        execute: {
+          ...s.execute,
+          executeResult: {
+            success_paths: [],
+            failed: [],
+            ignored: [],
+            missing: ["/photos/gone.jpg"],
+            db_write_failed: [],
+            log_path: null,
+            groups: [],
+          },
+        },
+      }));
+    });
+    render(<ExecuteDialog />);
+    const section = screen.getByTestId(EXECUTE_RESULT_MISSING);
+    expect(section).toHaveTextContent("/photos/gone.jpg");
+    expect(screen.queryByTestId(EXECUTE_RESULT_FAILED)).not.toBeInTheDocument();
+  });
+
+  it("renders the Files Failed to Delete section with the decoded reason from executeResult.failed", () => {
+    act(() => {
+      openDialog([MIXED_GROUP]);
+      useAppStore.setState((s) => ({
+        execute: {
+          ...s.execute,
+          executeResult: {
+            success_paths: [],
+            failed: [["/photos/locked.mp4", "file is in use by another process"]],
+            ignored: [],
+            missing: [],
+            db_write_failed: [],
+            log_path: null,
+            groups: [],
+          },
+        },
+      }));
+    });
+    render(<ExecuteDialog />);
+    const section = screen.getByTestId(EXECUTE_RESULT_FAILED);
+    expect(section).toHaveTextContent("/photos/locked.mp4");
+    expect(section).toHaveTextContent("file is in use by another process");
+    expect(screen.queryByTestId(EXECUTE_RESULT_MISSING)).not.toBeInTheDocument();
+  });
+
+  it("renders neither result section when executeResult is null", () => {
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+    expect(screen.queryByTestId(EXECUTE_RESULT_MISSING)).not.toBeInTheDocument();
+    expect(screen.queryByTestId(EXECUTE_RESULT_FAILED)).not.toBeInTheDocument();
   });
 
   // 12. Execute button disabled while executeRunning

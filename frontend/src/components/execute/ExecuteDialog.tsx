@@ -40,6 +40,7 @@ import { HiddenDestructiveBanner } from "./HiddenDestructiveBanner";
 import { TypeFilter, type TypeFilterValue } from "./TypeFilter";
 import { ExecuteTree, type ExecuteTreeHandle } from "./ExecuteTree";
 import { ExecuteContextMenu } from "./ExecuteContextMenu";
+import { ExecuteResultSummary } from "./ExecuteResultSummary";
 import { DeleteConfirmDialog } from "@/components/dialogs/DeleteConfirmDialog";
 import { RemoveFromListConfirmDialog } from "@/components/dialogs/RemoveFromListConfirmDialog";
 
@@ -139,6 +140,7 @@ export function ExecuteDialog() {
   const executeOpen = useAppStore((s) => s.execute.executeOpen);
   const executeRunning = useAppStore((s) => s.execute.executeRunning);
   const executeError = useAppStore((s) => s.execute.executeError);
+  const executeResult = useAppStore((s) => s.execute.executeResult);
   const groups = useAppStore((s) => s.manifest.groups);
   const scopeGroupNumbers = useAppStore((s) => s.execute.scopeGroupNumbers);
   const closeExecuteDialog = useAppStore((s) => s.closeExecuteDialog);
@@ -485,6 +487,16 @@ export function ExecuteDialog() {
           <p role="alert" className="text-sm text-red-600 mt-1">
             {executeError}
           </p>
+        )}
+
+        {/* Files-Not-Found / Files-Failed-to-Delete split (#742) — inline
+            summary of the last Execute's per-file outcome, distinct from the
+            whole-operation `executeError` alert above. */}
+        {executeResult !== null && (
+          <ExecuteResultSummary
+            missing={executeResult.missing}
+            failed={executeResult.failed}
+          />
         )}
 
         {/* Footer */}

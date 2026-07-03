@@ -667,6 +667,10 @@ export const useAppStore = create<AppStore>()(
         state.execute.executeRunning = true;
         state.execute.executeError = null;
         state.execute.lockConflict = null;
+        // Clear any prior run's per-file result (#742): otherwise a stale
+        // Files-Not-Found / Files-Failed summary keeps rendering next to a
+        // fresh executeError if THIS run throws before setting a new result.
+        state.execute.executeResult = null;
       });
 
       try {
