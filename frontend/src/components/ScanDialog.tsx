@@ -31,9 +31,12 @@ import {
   SCAN_AGGRESSIVE_DELETE,
   SCAN_AUTO_SELECT,
   SCAN_AUTOTUNE,
+  SCAN_COLOR_THRESHOLD,
+  SCAN_DHASH_THRESHOLD,
   SCAN_DIALOG,
   SCAN_OUTPUT_PATH,
   SCAN_OUTPUT_BROWSE,
+  SCAN_PHASH_THRESHOLD,
   SCAN_SOURCE_LIST,
   SCAN_START_BUTTON,
 } from "@/testids";
@@ -65,6 +68,31 @@ function splitPath(p: string): { dir: string | undefined; name: string } {
 }
 
 const DEFAULT_OUTPUT_NAME = "migration_manifest.sqlite";
+
+// Grouping-sensitivity threshold defaults — mirror Qt ScanDialog's slider
+// defaults exactly (#736). Per-scan only: read at scan-start, never persisted
+// (s23b_verify_settings.py hard-asserts their absence from GET /api/settings).
+const DEFAULT_PHASH_THRESHOLD = 10;
+const DEFAULT_DHASH_THRESHOLD = 10;
+const DEFAULT_MEAN_COLOR_THRESHOLD = 30;
+
+/**
+ * Parse a threshold `<input type="number">`'s raw string value to an int
+ * clamped to `[min, max]`. An empty or non-numeric value falls back to
+ * `fallback` so the request built in `startScanNow` always carries a valid
+ * int (never NaN) — the min/max attrs are a soft browser hint only, this is
+ * the authoritative guard.
+ */
+function clampThresholdInput(
+  raw: string,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
 
 /**
  * Map persisted `sources.list` (from GET /api/settings) into SourceEntry rows.
@@ -141,6 +169,28 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   const [aggressiveDelete, setAggressiveDelete] = useState(false);
   const [autotuneReadKnee, setAutotuneReadKnee] = useState(true);
 
+  // Grouping-sensitivity thresholds (#736) — per-scan React state, NEVER
+  // persisted (no patchSettings key; s23b_verify_settings.py pins the
+  // absence of these keys from GET /api/settings). Qt reads its sliders at
+  // scan-start only and never saves them; this mirrors that exactly.
+  //
+  // Held as the RAW typed string (not a pre-clamped number): clamping on
+  // every keystroke would corrupt a clear-and-retype (clearing snaps the
+  // field back to the default immediately, so the next digit appends onto
+  // that default instead of starting fresh). The int coercion + range clamp
+  // (clampThresholdInput) is applied once, at request-build time in
+  // startScanNow, which is also where the spec's "empty/NaN falls back to
+  // the default" guarantee actually needs to hold.
+  const [phashThresholdInput, setPhashThresholdInput] = useState(
+    String(DEFAULT_PHASH_THRESHOLD)
+  );
+  const [dhashThresholdInput, setDhashThresholdInput] = useState(
+    String(DEFAULT_DHASH_THRESHOLD)
+  );
+  const [meanColorThresholdInput, setMeanColorThresholdInput] = useState(
+    String(DEFAULT_MEAN_COLOR_THRESHOLD)
+  );
+
   // Filesystem picker target (null = picker closed).
   const [browseTarget, setBrowseTarget] = useState<BrowseTarget | null>(null);
 
@@ -161,8 +211,9 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // makes load-on-open race-safe BY DESIGN: neither an empty NOR a late
   // non-empty settings response can clobber in-progress edits (e.g. a scenario
   // that reopens the dialog after a Start Scan persisted a prior source list).
-  // The advanced-settings checkboxes are NOT persisted by this cluster (s23b
-  // pins thresholds-not-persisted) — they always reset to defaults.
+  // The advanced-settings checkboxes AND the grouping-sensitivity thresholds
+  // (#736) are NOT persisted by this cluster (s23b pins thresholds-not-
+  // persisted) — they always reset to defaults.
   useEffect(() => {
     if (!(open && scan.status === "idle")) return;
     let cancelled = false;
@@ -172,6 +223,9 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     setAutoSelect(false);
     setAggressiveDelete(false);
     setAutotuneReadKnee(true);
+    setPhashThresholdInput(String(DEFAULT_PHASH_THRESHOLD));
+    setDhashThresholdInput(String(DEFAULT_DHASH_THRESHOLD));
+    setMeanColorThresholdInput(String(DEFAULT_MEAN_COLOR_THRESHOLD));
     void getSettings()
       .then((settings) => {
         if (cancelled) return;
@@ -298,6 +352,27 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       recursiveMap[s.label.trim()] = s.recursive;
     }
 
+    // Coerce the raw threshold inputs to valid ints exactly once, here at
+    // request-build time (empty/NaN falls back to the Qt default).
+    const phashThreshold = clampThresholdInput(
+      phashThresholdInput,
+      1,
+      20,
+      DEFAULT_PHASH_THRESHOLD
+    );
+    const dhashThreshold = clampThresholdInput(
+      dhashThresholdInput,
+      1,
+      20,
+      DEFAULT_DHASH_THRESHOLD
+    );
+    const meanColorThreshold = clampThresholdInput(
+      meanColorThresholdInput,
+      0,
+      100,
+      DEFAULT_MEAN_COLOR_THRESHOLD
+    );
+
     const req: WebScanRequest = {
       sources: sourcesMap,
       output_path: outputPath.trim(),
@@ -306,6 +381,13 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       // Aggressive only takes effect under auto-select; never send it alone.
       auto_select_aggressive_delete: autoSelect && aggressiveDelete,
       autotune_read_knee: autotuneReadKnee,
+      // Grouping-sensitivity thresholds (#736) — per-scan only, see the
+      // useState declarations above. NEVER added to the patchSettings call
+      // below (that would break s23b_verify_settings.py's FORBIDDEN_KEYS
+      // assertion that GET /api/settings never carries these keys).
+      threshold: phashThreshold,
+      dhash_threshold: dhashThreshold,
+      mean_color_threshold: meanColorThreshold,
     };
 
     // Persist the source list + output for the next launch (#678-E /
@@ -324,7 +406,17 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     });
 
     void startScan(req);
-  }, [sources, outputPath, autoSelect, aggressiveDelete, autotuneReadKnee, startScan]);
+  }, [
+    sources,
+    outputPath,
+    autoSelect,
+    aggressiveDelete,
+    autotuneReadKnee,
+    phashThresholdInput,
+    dhashThresholdInput,
+    meanColorThresholdInput,
+    startScan,
+  ]);
 
   // Start Scan click. When the loaded manifest still has pending decisions, a
   // re-scan would discard them — gate behind a confirm (Qt s27 / #142). With
@@ -415,18 +507,32 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
             role="list"
             aria-label="Scan source list"
           >
-            {sources.map((entry, idx) => (
-              <div key={entry.id} role="listitem">
-                <SourceRow
-                  entry={entry}
-                  idx={idx}
-                  disabled={isRunning}
-                  onChange={handleSourceChange}
-                  onRemove={handleSourceRemove}
-                  onBrowse={handleBrowseSource}
-                />
-              </div>
-            ))}
+            {/* DISPLAY-ONLY alphabetical sort (case-insensitive, by path).
+                Sorts a copy of {entry, idx} pairs for rendering only — the
+                underlying `sources` array (and therefore sourcesMap /
+                recursiveMap built in startScanNow, and each row's testid
+                `idx`) stays bound to the ORIGINAL insertion order, because
+                dedup infers keeper source_priority from first-seen order
+                (scanner/dedup.py). Mirrors the Qt folder-list display sort. */}
+            {sources
+              .map((entry, idx) => ({ entry, idx }))
+              .sort((a, b) =>
+                a.entry.path.localeCompare(b.entry.path, undefined, {
+                  sensitivity: "base",
+                })
+              )
+              .map(({ entry, idx }) => (
+                <div key={entry.id} role="listitem">
+                  <SourceRow
+                    entry={entry}
+                    idx={idx}
+                    disabled={isRunning}
+                    onChange={handleSourceChange}
+                    onRemove={handleSourceRemove}
+                    onBrowse={handleBrowseSource}
+                  />
+                </div>
+              ))}
           </div>
           <Button
             type="button"
@@ -532,6 +638,95 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 Also mark all other files for delete
               </span>
             </label>
+
+            {/* Grouping sensitivity — pHash/dHash/mean-color thresholds
+                (#736). Number inputs (the spinbox half of Qt's slider+
+                spinbox pair) rather than a range slider — deterministically
+                testable, unlike a slider (s71 lesson). Per-scan only: see
+                the useState + startScanNow wiring above. */}
+            <div className="mt-1 flex flex-col gap-3 border-t border-neutral-100 pt-3">
+              <span className="text-sm font-medium text-neutral-700">
+                Grouping sensitivity
+              </span>
+
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="scan-phash-threshold-input"
+                  className="text-sm text-neutral-700"
+                >
+                  pHash Similarity Threshold (default: 10, range: 1–20)
+                </label>
+                <input
+                  id="scan-phash-threshold-input"
+                  type="number"
+                  min={1}
+                  max={20}
+                  data-testid={SCAN_PHASH_THRESHOLD}
+                  value={phashThresholdInput}
+                  disabled={isRunning}
+                  onChange={(e) => setPhashThresholdInput(e.target.value)}
+                  className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
+                />
+                <p
+                  className="text-xs text-neutral-500"
+                  title="Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs)."
+                >
+                  How many bits two 64-bit pHashes may differ before grouping. Lower = stricter.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="scan-dhash-threshold-input"
+                  className="text-sm text-neutral-700"
+                >
+                  dHash Confidence Threshold (default: 10, range: 1–20)
+                </label>
+                <input
+                  id="scan-dhash-threshold-input"
+                  type="number"
+                  min={1}
+                  max={20}
+                  data-testid={SCAN_DHASH_THRESHOLD}
+                  value={dhashThresholdInput}
+                  disabled={isRunning}
+                  onChange={(e) => setDhashThresholdInput(e.target.value)}
+                  className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
+                />
+                <p
+                  className="text-xs text-neutral-500"
+                  title="A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
+                >
+                  Second hash that confirms a pHash match. Lower = stricter confirmation.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="scan-color-threshold-input"
+                  className="text-sm text-neutral-700"
+                >
+                  Mean Color Gate (default: 30, range: 0–100)
+                </label>
+                <input
+                  id="scan-color-threshold-input"
+                  type="number"
+                  min={0}
+                  max={100}
+                  data-testid={SCAN_COLOR_THRESHOLD}
+                  value={meanColorThresholdInput}
+                  disabled={isRunning}
+                  onChange={(e) => setMeanColorThresholdInput(e.target.value)}
+                  className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
+                />
+                <p
+                  className="text-xs text-neutral-500"
+                  title="L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
+                >
+                  Reject a pHash match when average colours differ by more than this (L2). 0 = off.
+                </p>
+              </div>
+            </div>
           </div>
         </details>
 

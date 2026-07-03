@@ -37,8 +37,11 @@ import {
   SCAN_ADD_SOURCE,
   SCAN_AUTO_SELECT,
   SCAN_CANCEL_BUTTON,
+  SCAN_COLOR_THRESHOLD,
+  SCAN_DHASH_THRESHOLD,
   SCAN_DIALOG,
   SCAN_OUTPUT_PATH,
+  SCAN_PHASH_THRESHOLD,
   SCAN_PROGRESS_BAR,
   SCAN_PROGRESS_LOG,
   SCAN_RESCAN_CONFIRM_CANCEL,
@@ -46,6 +49,8 @@ import {
   SCAN_RESCAN_CONFIRM_DISCARD,
   SCAN_START_BUTTON,
   SCAN_STATUS_TEXT,
+  scanSourceLabelTestid,
+  scanSourcePathTestid,
 } from "@/testids";
 
 // ---------------------------------------------------------------------------
@@ -486,5 +491,143 @@ describe("ScanDialog", () => {
     // it from closing on the confirm's dismiss).
     expect(screen.getByTestId(SCAN_DIALOG)).toBeInTheDocument();
     expect(screen.queryByTestId(SCAN_RESCAN_CONFIRM_DIALOG)).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Grouping-sensitivity thresholds (#736) — number inputs, per-scan only
+  // -------------------------------------------------------------------------
+
+  it("renders the three grouping-sensitivity threshold inputs with correct defaults/min/max", () => {
+    renderDialog();
+
+    const phash = screen.getByTestId(SCAN_PHASH_THRESHOLD);
+    const dhash = screen.getByTestId(SCAN_DHASH_THRESHOLD);
+    const meanColor = screen.getByTestId(SCAN_COLOR_THRESHOLD);
+
+    expect(phash).toHaveValue(10);
+    expect(phash).toHaveAttribute("type", "number");
+    expect(phash).toHaveAttribute("min", "1");
+    expect(phash).toHaveAttribute("max", "20");
+
+    expect(dhash).toHaveValue(10);
+    expect(dhash).toHaveAttribute("min", "1");
+    expect(dhash).toHaveAttribute("max", "20");
+
+    expect(meanColor).toHaveValue(30);
+    expect(meanColor).toHaveAttribute("min", "0");
+    expect(meanColor).toHaveAttribute("max", "100");
+  });
+
+  it("includes changed threshold values in the startScan request payload", async () => {
+    const user = userEvent.setup();
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+
+    renderDialog();
+    await fillStartFields(user);
+
+    await user.clear(screen.getByTestId(SCAN_PHASH_THRESHOLD));
+    await user.type(screen.getByTestId(SCAN_PHASH_THRESHOLD), "5");
+    await user.clear(screen.getByTestId(SCAN_DHASH_THRESHOLD));
+    await user.type(screen.getByTestId(SCAN_DHASH_THRESHOLD), "7");
+    await user.clear(screen.getByTestId(SCAN_COLOR_THRESHOLD));
+    await user.type(screen.getByTestId(SCAN_COLOR_THRESHOLD), "42");
+
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    expect(startScanMock).toHaveBeenCalledOnce();
+    const [req] = startScanMock.mock.calls[0] as [
+      { threshold: number; dhash_threshold: number; mean_color_threshold: number },
+    ];
+    expect(req.threshold).toBe(5);
+    expect(req.dhash_threshold).toBe(7);
+    expect(req.mean_color_threshold).toBe(42);
+  });
+
+  it("falls back to the default when a threshold input is cleared to empty (never sends NaN)", async () => {
+    const user = userEvent.setup();
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+
+    renderDialog();
+    await fillStartFields(user);
+
+    await user.clear(screen.getByTestId(SCAN_PHASH_THRESHOLD));
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    expect(startScanMock).toHaveBeenCalledOnce();
+    const [req] = startScanMock.mock.calls[0] as [{ threshold: number }];
+    expect(req.threshold).toBe(10);
+  });
+
+  it("resets threshold inputs to defaults when the dialog closes and reopens (never persisted)", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderDialog(true);
+
+    await user.clear(screen.getByTestId(SCAN_PHASH_THRESHOLD));
+    await user.type(screen.getByTestId(SCAN_PHASH_THRESHOLD), "5");
+    expect(screen.getByTestId(SCAN_PHASH_THRESHOLD)).toHaveValue(5);
+
+    // Close then reopen (same component instance — ScanDialog's hooks stay
+    // mounted while Radix un/re-renders DialogContent). The reset-on-open
+    // effect must fire again and restore the default, proving the threshold
+    // is per-scan React state with no persistence layer to read back from.
+    rerender(<ScanDialog open={false} onOpenChange={vi.fn()} />);
+    rerender(<ScanDialog open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId(SCAN_PHASH_THRESHOLD)).toHaveValue(10);
+  });
+
+  // -------------------------------------------------------------------------
+  // Source list — display-only alphabetization (#736)
+  // -------------------------------------------------------------------------
+
+  it("renders source rows alphabetized by path (display-only) while the start-scan payload keeps insertion order", async () => {
+    const user = userEvent.setup();
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+
+    renderDialog();
+
+    // Add 3 rows in NON-alphabetical insertion order: Zebra(0), Alpha(1), Mango(2).
+    await user.type(screen.getByTestId(scanSourceLabelTestid(0)), "Zebra");
+    await user.type(screen.getByTestId(scanSourcePathTestid(0)), "/z-path");
+
+    await user.click(screen.getByTestId(SCAN_ADD_SOURCE));
+    await user.type(screen.getByTestId(scanSourceLabelTestid(1)), "Alpha");
+    await user.type(screen.getByTestId(scanSourcePathTestid(1)), "/a-path");
+
+    await user.click(screen.getByTestId(SCAN_ADD_SOURCE));
+    await user.type(screen.getByTestId(scanSourceLabelTestid(2)), "Mango");
+    await user.type(screen.getByTestId(scanSourcePathTestid(2)), "/m-path");
+
+    // Rendered DOM order (document order) is alphabetized by path, case-insensitive.
+    const pathInputs = screen.getAllByRole("textbox", { name: /source path/i });
+    expect(pathInputs.map((el) => (el as HTMLInputElement).value)).toEqual([
+      "/a-path",
+      "/m-path",
+      "/z-path",
+    ]);
+
+    // Each row's testid stays bound to its ORIGINAL insertion index — idx 0
+    // is still "Zebra" even though it renders last (risk #3: testid idx drift).
+    expect(screen.getByTestId(scanSourceLabelTestid(0))).toHaveValue("Zebra");
+    expect(screen.getByTestId(scanSourceLabelTestid(1))).toHaveValue("Alpha");
+    expect(screen.getByTestId(scanSourceLabelTestid(2))).toHaveValue("Mango");
+
+    await user.type(screen.getByTestId(SCAN_OUTPUT_PATH), "D:/out.db");
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    expect(startScanMock).toHaveBeenCalledOnce();
+    const [req] = startScanMock.mock.calls[0] as [{ sources: Record<string, string> }];
+    // sourcesMap/recursiveMap in startScanNow must keep iterating the
+    // ORIGINAL unsorted `sources` array (risk #1: priority regression) — the
+    // submitted key order is insertion order, NOT the alphabetized display.
+    expect(Object.keys(req.sources)).toEqual(["Zebra", "Alpha", "Mango"]);
+    expect(req.sources).toEqual({
+      Zebra: "/z-path",
+      Alpha: "/a-path",
+      Mango: "/m-path",
+    });
   });
 });

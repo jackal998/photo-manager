@@ -191,6 +191,26 @@ SCAN_AUTOTUNE = "scan-autotune"
 """'Auto-tune reader concurrency' checkbox (Advanced settings) — default ON
 (opt-out, #551 Phase 4); never changes grouping."""
 
+SCAN_PHASH_THRESHOLD = "scan-phash-threshold"
+"""pHash Similarity Threshold number input (Advanced settings, #736) —
+Hamming-distance ceiling (default 10, range 1-20) between two 64-bit pHashes
+before two images are grouped as near-duplicates. Sent per-scan as
+``WebScanRequest.threshold``; never persisted (mirrors Qt's slider+spinbox,
+read at scan-start only)."""
+
+SCAN_DHASH_THRESHOLD = "scan-dhash-threshold"
+"""dHash Confidence Threshold number input (Advanced settings, #736) —
+Hamming-distance ceiling (default 10, range 1-20) for the second,
+independent perceptual hash that confirms a pHash near-duplicate as
+high-confidence. Sent per-scan as ``WebScanRequest.dhash_threshold``; never
+persisted."""
+
+SCAN_COLOR_THRESHOLD = "scan-color-threshold"
+"""Mean Color Gate number input (Advanced settings, #736) — L2 distance
+ceiling (default 30, range 0-100) between two images' average RGB colors;
+above it a pHash match is excluded from grouping (0 = disabled). Sent
+per-scan as ``WebScanRequest.mean_color_threshold``; never persisted."""
+
 SCAN_RESCAN_CONFIRM_DIALOG = "scan-rescan-confirm-dialog"
 """'Discard pending decisions?' confirmation shown when Start Scan is clicked
 while the loaded manifest has staged (un-executed) decisions a re-scan would
