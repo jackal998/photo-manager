@@ -89,7 +89,7 @@ scenarios:
   - scenario: s15_context_menu
     playwright_module: qa.web.scenarios.s15_context_menu
     status: done
-    notes: "Right-click → delete / keep; asserts user_decision via GET /api/manifest. Multi-select Ctrl+click not yet implemented in web; drives two single-row operations instead."
+    notes: "Right-click → delete / keep; asserts user_decision via GET /api/manifest. Multi-select Ctrl+click not yet implemented in web; drives two single-row operations instead. #735: file-row phase asserts 'Set Action by Field…' (opens ActionDialog, best-effort column-prefill to 'Size (Bytes)' from the size cell) and 'Execute Action (only selected)…' (opens ExecuteDialog); group-row phase right-clicks the group header and asserts the REDUCED menu (By-Field + Remove present, Execute-selected/Keep/Delete/Lock/Open-folder absent)."
 
   - scenario: s16_open_manifest
     playwright_module: qa.web.scenarios.s16_open_manifest

@@ -21,6 +21,17 @@ Qt divergences:
     assert single-row (a) and single-row (b) fully, and drive (c) as a
     second single-row delete to cover the same DB write path without
     requiring the web multi-select implementation to be complete.
+
+#735 additions (file-row + group-row menu parity):
+  - (d) File-row menu: assert "Set Action by Field…" and "Execute Action
+    (only selected)…" are present, click each in turn, assert the
+    corresponding dialog (ActionDialog / ExecuteDialog) opens, then dismiss.
+  - (e) Column-prefill (best-effort): right-click the "size" cell specifically
+    and assert the ActionDialog's field combo opens pre-selected to
+    "Size (Bytes)".
+  - (f) Group-row menu: right-click the group header and assert the REDUCED
+    menu — By-Field + Remove present, Execute-selected/Keep/Delete/Lock/
+    Open-folder absent.
 """
 from __future__ import annotations
 
@@ -36,11 +47,22 @@ from qa.web._invariants import (
     run_scan,
     right_click_row,
     click_context_item,
+    dismiss_modal_overlays,
 )
 from qa.web.testid_constants import (
+    ACTION_DIALOG,
+    ACTION_FIELD_COMBO,
+    CONTEXT_MENU,
+    CTX_EXECUTE_SELECTED,
+    CTX_LOCK,
+    CTX_OPEN_FOLDER,
+    CTX_SET_ACTION_BY_FIELD,
     CTX_SET_ACTION_DELETE,
     CTX_SET_ACTION_KEEP,
+    CTX_SET_ACTION_REMOVE,
+    EXECUTE_DIALOG,
     row_file_testid,
+    row_group_testid,
 )
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -158,6 +180,75 @@ def run(*, base_url: str) -> None:
             assert post_c[target_b] == "", (
                 f"Step (c) clobbered step (b) on {target_b!r}"
             )
+
+            # --- Step (d): file-row menu — By-Field + Execute-selected (#735) ---
+            # A row untouched by (a)/(b)/(c) so opening+dismissing these dialogs
+            # (no Apply/Execute click) cannot be mistaken for a decision write.
+            target_d = "neardup_03_q72.jpg"
+            row_tid_d = row_file_testid(group_id, target_d)
+
+            right_click_row(page, row_tid_d)
+            assert page.get_by_test_id(CTX_SET_ACTION_BY_FIELD).is_visible(), (
+                "Expected 'Set Action by Field…' in the file-row context menu"
+            )
+            click_context_item(page, CTX_SET_ACTION_BY_FIELD)
+            page.get_by_test_id(ACTION_DIALOG).wait_for(state="visible", timeout=5_000)
+            dismiss_modal_overlays(page)
+
+            right_click_row(page, row_tid_d)
+            assert page.get_by_test_id(CTX_EXECUTE_SELECTED).is_visible(), (
+                "Expected 'Execute Action (only selected)…' in the file-row "
+                "context menu"
+            )
+            click_context_item(page, CTX_EXECUTE_SELECTED)
+            page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="visible", timeout=5_000)
+            dismiss_modal_overlays(page)
+
+            # --- Step (e): column-prefill (best-effort) ---
+            # Right-click the "size" cell specifically (not the row generally)
+            # and assert the ActionDialog opens pre-selected to "Size (Bytes)".
+            row_d = page.get_by_test_id(row_tid_d)
+            row_d.wait_for(state="visible", timeout=10_000)
+            row_d.scroll_into_view_if_needed(timeout=10_000)
+            row_d.locator('[data-col="size"]').click(button="right")
+            page.get_by_test_id(CONTEXT_MENU).wait_for(state="visible", timeout=5_000)
+            click_context_item(page, CTX_SET_ACTION_BY_FIELD)
+            page.get_by_test_id(ACTION_DIALOG).wait_for(state="visible", timeout=5_000)
+            field_value = page.get_by_test_id(ACTION_FIELD_COMBO).input_value()
+            assert field_value == "Size (Bytes)", (
+                "Expected the ActionDialog field pre-filled to 'Size (Bytes)' "
+                f"from the size-column right-click, got {field_value!r}"
+            )
+            dismiss_modal_overlays(page)
+
+            # --- Step (f): group-row menu — reduced set (#735) ---
+            # Right-click the group header itself (not a file row): only
+            # By-Field + Remove must be present; every file-row-only entry
+            # (Execute-selected, Keep, Delete, Lock, Open folder) must be
+            # absent. get_by_test_id matches data-testid EXACTLY (not a
+            # prefix), and exactly one ContextMenu is ever mounted at a time,
+            # so these checks can't be fooled by a sibling/child collision.
+            row_tid_group = row_group_testid(group_id)
+            right_click_row(page, row_tid_group)
+            assert page.get_by_test_id(CTX_SET_ACTION_BY_FIELD).is_visible(), (
+                "Expected 'Set Action by Field…' in the group-row context menu"
+            )
+            assert page.get_by_test_id(CTX_SET_ACTION_REMOVE).is_visible(), (
+                "Expected 'Remove from list' in the group-row context menu"
+            )
+            for absent_testid, label in (
+                (CTX_EXECUTE_SELECTED, "Execute Action (only selected)…"),
+                (CTX_SET_ACTION_KEEP, "Keep"),
+                (CTX_SET_ACTION_DELETE, "Delete"),
+                (CTX_LOCK, "Lock"),
+                (CTX_OPEN_FOLDER, "Open folder"),
+            ):
+                assert page.get_by_test_id(absent_testid).count() == 0, (
+                    f"'{label}' must be ABSENT from the group-row reduced menu, "
+                    f"testid={absent_testid!r}"
+                )
+            page.keyboard.press("Escape")
+            page.get_by_test_id(CONTEXT_MENU).wait_for(state="hidden", timeout=5_000)
     finally:
         try:
             os.unlink(db_path)
