@@ -53,12 +53,13 @@ const VIDEO_ROW: FileRow = {
   creation_date: null,
   phash: null,
   hamming_distance: null,
-  thumbnail_url: "",
+  thumbnail_url: "/api/image?path=%2Fclips%2Fholiday.mp4&size=512",
   media_type: "video",
 };
 
 const TILE_TESTID = "grid-video-tile-1-holiday.mp4";
 const VIDEO_TESTID = `${TILE_TESTID}-video`;
+const POSTER_TESTID = `${TILE_TESTID}-poster`;
 
 // Probe child that surfaces the live registry paths into a shared array so the
 // test can assert register/unregister without mocking the whole context.
@@ -92,6 +93,46 @@ describe("VideoTile", () => {
     expect(
       container.querySelector(`[data-testid="${VIDEO_TESTID}"]`)
     ).toBeNull();
+  });
+
+  it("renders the poster <img> with row.thumbnail_url before the click", () => {
+    const { container } = render(
+      <GroupMediaProvider>
+        <VideoTile row={VIDEO_ROW} data-testid={TILE_TESTID} />
+      </GroupMediaProvider>
+    );
+
+    // Failure mode: the tile falling back to the Qt-parity-breaking dark-only
+    // placeholder — no real frame shown behind the ▶ glyph (issue #734).
+    const poster = container.querySelector<HTMLImageElement>(
+      `[data-testid="${POSTER_TESTID}"]`
+    );
+    expect(poster).not.toBeNull();
+    expect(poster!.tagName.toLowerCase()).toBe("img");
+    expect(poster!.src).toContain(VIDEO_ROW.thumbnail_url);
+  });
+
+  it("falls back to the dark background (glyph stays) when the poster fails to load", () => {
+    const { container } = render(
+      <GroupMediaProvider>
+        <VideoTile row={VIDEO_ROW} data-testid={TILE_TESTID} />
+      </GroupMediaProvider>
+    );
+
+    const poster = container.querySelector(
+      `[data-testid="${POSTER_TESTID}"]`
+    )!;
+    act(() => {
+      fireEvent.error(poster);
+    });
+
+    // Failure mode: a poster load failure (404, unsupported codec on the
+    // backend rescue attempt) leaving a broken-image icon on screen instead
+    // of the dark fallback the rest of the grid uses.
+    expect(
+      container.querySelector(`[data-testid="${POSTER_TESTID}"]`)
+    ).toBeNull();
+    expect(container.querySelector('[aria-label="Play video"]')).not.toBeNull();
   });
 
   it("mounts a <video> with the '-video' testid after the click", () => {

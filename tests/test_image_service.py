@@ -32,6 +32,11 @@ from infrastructure.image_service import (
     _ByteBudgetLRUCache,
     _FULLRES_DECODE_SEM,
     _PLACEHOLDER_JPEG,
+    _SHELL_GETIMAGE_FLAG_ATTEMPTS,
+    _SIIGBF_BIGGERSIZEOK,
+    _SIIGBF_RESIZETOFIT,
+    _SIIGBF_SCALEUP,
+    _SIIGBF_THUMBNAILONLY,
     _compute_cache_key,
 )
 
@@ -758,3 +763,51 @@ class TestStatusReporterWiring:
             msg = svc._build_rebuilding_cache_message()
         assert "Rebuilding thumbnail cache" in msg
         assert PREVIEW_RECIPE_VERSION in msg
+
+
+# ── Shell/WIC GetImage flag attempt sequence (#734) ──────────────────────
+
+
+class TestShellGetImageFlagAttempts:
+    """Pins the ordered flag-combo sequence _shell_thumbnail_sync tries
+    against IShellItemImageFactory::GetImage.
+
+    This is a structural pin, not a live COM test (COM behavior can't be
+    faked without test padding — see photo-manager CLAUDE.md). The failure
+    mode it guards: a well-meaning refactor silently dropping or reordering
+    the bare-RESIZETOFIT rescue would re-break video thumbnails (they'd
+    revert to the grey placeholder) with no CI signal, since ubuntu CI has
+    no WIC and Windows CI has no guaranteed video codec support — only a
+    static assertion on the tuple's shape catches this.
+    """
+
+    def test_legacy_two_combos_are_first_in_original_order(self):
+        """The two pre-existing flag combos must stay first and in order —
+        this is exactly the behavior images already relied on before #734,
+        and reordering them would change which attempt succeeds for images
+        with a live thumbcache entry.
+        """
+        legacy_first = (
+            _SIIGBF_RESIZETOFIT | _SIIGBF_THUMBNAILONLY | _SIIGBF_BIGGERSIZEOK | _SIIGBF_SCALEUP
+        )
+        legacy_second = _SIIGBF_RESIZETOFIT | _SIIGBF_BIGGERSIZEOK | _SIIGBF_SCALEUP
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[0] == legacy_first
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[1] == legacy_second
+
+    def test_bare_resizetofit_rescue_is_last(self):
+        """The rescue attempt (flags=0, i.e. bare RESIZETOFIT) must be the
+        final attempt in the sequence.
+
+        Failure mode: dropping this attempt, or placing it before the
+        legacy combos, silently re-breaks video thumbnails — the Media
+        Foundation video provider rejects BIGGERSIZEOK|SCALEUP with
+        hr=0x80004005 (E_FAIL) and only succeeds with flags=0.
+        """
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[-1] == _SIIGBF_RESIZETOFIT
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[-1] == 0x00
+
+    def test_exactly_three_attempts_no_extras(self):
+        """Pins the sequence length so a stray 4th attempt (or an
+        accidental duplicate) doesn't slip in unnoticed.
+        """
+        assert len(_SHELL_GETIMAGE_FLAG_ATTEMPTS) == 3

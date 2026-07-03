@@ -1,8 +1,12 @@
 // VideoTile — a single video tile inside GroupGrid.
 //
-// Renders a dark placeholder (no thumbnail src — the /api/image endpoint is
-// image-only; using it for video would serve a broken image). A play affordance
-// (▶ glyph) is shown over the dark background until the user clicks.
+// Renders row.thumbnail_url as a poster image (the /api/image endpoint falls
+// through to the Shell/WIC thumbnail provider for video paths too, so this
+// resolves to a real decoded frame — see infrastructure/image_service.py's
+// GetImage rescue attempt, which also benefits Qt since it's shared
+// infrastructure). The poster is best-effort: onError falls back to the dark
+// background. A play affordance (▶ glyph) is shown over the poster (or the
+// dark fallback) until the user clicks.
 //
 // On CLICK: mounts a native <video controls autoPlay> using the V1/V2
 // mediaUrl() + transcode-fallback swap pattern (same [useTranscode,
@@ -45,6 +49,10 @@ export function VideoTile({
   // Whether the user has clicked to mount the player yet.
   const [playerMounted, setPlayerMounted] = useState(false);
 
+  // Whether the poster <img> failed to load — falls back to the dark
+  // background (the ▶ glyph stays either way).
+  const [posterFailed, setPosterFailed] = useState(false);
+
   // Per-tile independent transcode-fallback state — same pattern as
   // PreviewPane.tsx:62-69 and FullResViewer.tsx:76-89.
   const [useTranscode, setUseTranscode] = useState(false);
@@ -56,6 +64,7 @@ export function VideoTile({
     setUseTranscode(false);
     setVideoFailed(false);
     setCanPlay(false);
+    setPosterFailed(false);
   }, [row.file_path]);
 
   // Ref to the <video> element — used to register/unregister with the context.
@@ -106,8 +115,19 @@ export function VideoTile({
       title={row.basename}
     >
       {!playerMounted ? (
-        // Dark poster with play affordance — before user clicks.
+        // Poster frame (or dark fallback on load failure) with play
+        // affordance — before user clicks.
         <div className="absolute inset-0 flex items-center justify-center">
+          {!posterFailed && (
+            <img
+              data-testid={testId ? `${testId}-poster` : undefined}
+              src={row.thumbnail_url}
+              alt=""
+              className="absolute inset-0 w-full h-full object-cover"
+              draggable={false}
+              onError={() => setPosterFailed(true)}
+            />
+          )}
           <span
             className="text-white text-3xl opacity-80 pointer-events-none"
             aria-label="Play video"

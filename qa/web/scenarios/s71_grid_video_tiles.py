@@ -42,10 +42,15 @@ GROUP_ROW_NOT_SELECTABLE:
     out with a message pointing at the missing wiring.
 
 THUMBNAIL_SOURCE:
-    FileRow.thumbnail_url is built for images (/api/image?...&size=512).
-    Video tiles show a placeholder/dark background instead of a real poster
-    frame.  The scenario asserts the tile container and the <video> element
-    that mounts after the user clicks the tile — not an <img>.
+    FileRow.thumbnail_url is built for every row, video included
+    (/api/image?...&size=512). #734 added a Shell/WIC rescue attempt
+    (flags=0) so video paths resolve to a real decoded frame instead of the
+    grey placeholder; the tile renders that frame as a poster <img> (testid
+    "{tile}-poster") behind the ▶ glyph until the user clicks. This scenario
+    asserts the poster resolves (naturalWidth > 0) pre-click, then asserts
+    the <video> element that mounts after the click — codec-independent
+    either way since the endpoint always serves valid JPEG bytes (real frame
+    or placeholder fallback).
 
 CLICK_TO_MOUNT_BROADCAST:
     Faithful to Qt (preview_pane.py:347 thumbnail-until-click): each video
@@ -249,16 +254,36 @@ def run(*, base_url: str) -> None:
             n_tile_containers = page.evaluate(
                 """(gid) => document.querySelectorAll(
                     '[data-testid^="grid-video-tile-' + gid + '-"]'
+                    + ':not([data-testid$="-poster"])'
                 ).length""",
                 str(group_number),
             )
-            # Each tile also nests a "-video" element AFTER it is clicked; at
-            # this point no tile has been clicked, so the container count equals
-            # the member count exactly.
+            # Each tile nests a "-poster" <img> from mount (#734) and a
+            # "-video" element AFTER it is clicked — both share the tile's
+            # testid prefix, so the count excludes the suffixed children. No
+            # tile has been clicked yet, so with "-poster" excluded the
+            # container count equals the member count exactly.
             assert n_tile_containers == n_tiles, (
                 f"Expected {n_tiles} grid-video-tile containers before any "
                 f"click; found {n_tile_containers}."
             )
+
+            # ── Assert each tile's poster <img> resolves (#734) ──────────────
+            # Codec-independent: on CI without a working Shell/WIC video
+            # rescue the endpoint still serves the placeholder JPEG, which is
+            # a valid (if grey) image — naturalWidth > 0 either way. What this
+            # catches is the poster <img> being absent, broken, or never
+            # resolving at all (e.g. a dropped testid or a 404 on thumbnail_url).
+            for tile_testid in tile_testids:
+                poster_testid = f"{tile_testid}-poster"
+                page.wait_for_function(
+                    """(tid) => {
+                        const el = document.querySelector('[data-testid="' + tid + '"]');
+                        return el && el.complete && el.naturalWidth > 0;
+                    }""",
+                    arg=poster_testid,
+                    timeout=10_000,
+                )
 
             # ── Click tile 1 → assert real decode + autoplay advance ─────────
             first_video_testid = _mount_tile_and_await_decode(page, tile_testids[0])

@@ -96,6 +96,27 @@ def _make_placeholder_jpeg() -> bytes:
 _PLACEHOLDER_JPEG: bytes = _make_placeholder_jpeg()
 
 
+# ── IShellItemImageFactory::GetImage flags (shellapi.h SIIGBF_*) ──────────
+_SIIGBF_RESIZETOFIT = 0x00
+_SIIGBF_BIGGERSIZEOK = 0x01
+_SIIGBF_THUMBNAILONLY = 0x08
+_SIIGBF_SCALEUP = 0x10
+
+# Ordered GetImage flag combos to try per requested size, thumbcache-hit
+# fast path first, ending with a bare-RESIZETOFIT rescue. The rescue exists
+# because the Media Foundation video thumbnail provider (no Explorer
+# thumbcache entry) rejects BIGGERSIZEOK|SCALEUP with hr=0x80004005 (E_FAIL)
+# but succeeds with flags=0 — measured against a VP9-in-MP4 sample and a
+# 139 MB NAS HEVC .MOV, both returning real decoded frames. Attempt 1 fails
+# with hr=0x80030002 (STG_E_FILENOTFOUND) when there is no thumbcache entry.
+# Images still resolve at attempt 1 or 2; the rescue is unreached for them.
+_SHELL_GETIMAGE_FLAG_ATTEMPTS: tuple[int, ...] = (
+    _SIIGBF_RESIZETOFIT | _SIIGBF_THUMBNAILONLY | _SIIGBF_BIGGERSIZEOK | _SIIGBF_SCALEUP,
+    _SIIGBF_RESIZETOFIT | _SIIGBF_BIGGERSIZEOK | _SIIGBF_SCALEUP,
+    _SIIGBF_RESIZETOFIT,
+)
+
+
 # ── Windows COM STA executor for WIC/Shell calls ──────────────────────────
 #
 # WIC COM objects must be called from a thread that has called
@@ -738,11 +759,6 @@ class ImageService:
                     self.Data4[:] = (ctypes.c_ubyte * 8)(*last_eight)
 
             iid_ishell_item_image_factory = GUID("{bcc18b79-ba16-442f-80c4-8a59c30c463b}")
-            # SIIGBF flags
-            siigbf_resizetofit = 0x00
-            siigbf_biggersizeok = 0x01
-            siigbf_thumbnailonly = 0x08
-            siigbf_scaleup = 0x10
 
             # SHCreateItemFromParsingName
             shell32 = ctypes.windll.shell32
@@ -792,20 +808,13 @@ class ImageService:
             def _try_get_image(request_px: int) -> bytes | None:
                 size = SIZE(request_px, request_px)
                 hbm_local = wintypes.HBITMAP()
-                flags = (
-                    siigbf_resizetofit
-                    | siigbf_thumbnailonly
-                    | siigbf_biggersizeok
-                    | siigbf_scaleup
-                )
-                hr_local = get_image_fn(ppsi, size, flags, ctypes.byref(hbm_local))
-                if hr_local != 0 or not hbm_local:
-                    # Fallback attempt without THUMBNAILONLY
+                for flags in _SHELL_GETIMAGE_FLAG_ATTEMPTS:
                     hbm_local = wintypes.HBITMAP()
-                    flags2 = siigbf_resizetofit | siigbf_biggersizeok | siigbf_scaleup
-                    hr2 = get_image_fn(ppsi, size, flags2, ctypes.byref(hbm_local))
-                    if hr2 != 0 or not hbm_local:
-                        return None
+                    hr_local = get_image_fn(ppsi, size, flags, ctypes.byref(hbm_local))
+                    if hr_local == 0 and hbm_local:
+                        break
+                else:
+                    return None
 
                 # Convert HBITMAP to PIL Image → JPEG bytes
                 class BITMAPINFOHEADER(ctypes.Structure):
