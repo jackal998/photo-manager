@@ -139,6 +139,18 @@ MIXED-MANIFEST phase (#733 — the regression the OLD gate missed):
       ``open_execute_dialog`` before the second Execute click when the
       close is observed. The safety contract (Cancel deletes nothing, decisions
       unchanged) is identical; only the post-Cancel dialog state differs.
+
+MISSING-FILE phase (#742 — the new 'Files Not Found' inline summary section):
+  Marks one file 'delete', deletes it directly from disk (bypassing the app)
+  before clicking Execute, and asserts the ``EXECUTE_RESULT_MISSING`` section
+  renders the orphaned basename while ``EXECUTE_RESULT_FAILED`` stays absent
+  (a missing path short-circuits before ``DeleteService`` is ever called, so
+  it can never carry a decoded winerror reason). The 'Files Failed to Delete'
+  side of the split needs a real OS-level sharing-violation/permission error,
+  which isn't reliably forceable from a black-box browser driver — that path
+  is covered by ``ExecuteDialog.test.tsx`` (vitest) plus the Python-level
+  ``test_winerror_reasons.py`` / ``test_delete_service.py`` instead. See
+  ``_run_missing_file_phase``'s docstring for the deterministic setup.
 """
 from __future__ import annotations
 
@@ -167,6 +179,8 @@ from qa.web.testid_constants import (
     EXECUTE_ALL_DELETE_CONFIRM,
     EXECUTE_ALL_DELETE_CONFIRM_YES,
     EXECUTE_ALL_DELETE_CONFIRM_NO,
+    EXECUTE_RESULT_MISSING,
+    EXECUTE_RESULT_FAILED,
     row_file_testid,
     row_decision_testid,
 )
@@ -251,7 +265,7 @@ def _basename_to_group(manifest: dict) -> dict[str, str]:
 
 
 def run(*, base_url: str) -> None:
-    """Two independent phases against the destructive execute round-trip:
+    """Three independent phases against the destructive execute round-trip:
 
     1. The original all-delete round-trip (unchanged — see the module
        docstring's "Web slice" section).
@@ -259,9 +273,14 @@ def run(*, base_url: str) -> None:
        module docstring's "MIXED-MANIFEST phase" section) — a fresh scan,
        fresh tmpdir, fresh manifest, run in its own PWContext so it starts
        from a clean app state independent of phase 1's outcome.
+    3. The MISSING-FILE phase added for #742 — a delete-decided row whose
+       source file vanished before Execute runs renders in the new
+       'Files Not Found' summary section (see
+       ``_run_missing_file_phase``'s docstring).
     """
     _run_full_delete_phase(base_url)
     _run_mixed_manifest_phase(base_url)
+    _run_missing_file_phase(base_url)
 
 
 def _run_full_delete_phase(base_url: str) -> None:
@@ -633,5 +652,104 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
                 f"{sorted(post_decisions)}"
             )
             print("probe_status: s13 mixed-manifest gate + commit OK")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Missing-file phase (#742 — Files-Not-Found summary section)
+# ---------------------------------------------------------------------------
+
+
+def _run_missing_file_phase(base_url: str) -> None:
+    """A delete-decided row whose source file vanished before Execute runs
+    surfaces in the 'Files Not Found' summary section (#742), not a silent
+    no-op or a crash.
+
+    Deterministic forcing of the 'missing' outcome (unlike 'failed', which
+    would need a real OS-level sharing violation/permission error — not
+    reliably forceable from a black-box browser driver): mark exactly one
+    file 'delete', then ``os.remove()`` it directly — simulating a stale
+    path (drive unmounted mid-review, external cleanup pass) — before
+    clicking Execute. ``_load_decided_rows`` (core/app_service/execute_service.py)
+    still returns the path from SQLite (the row-identity source of truth,
+    #123/s24 precedent); the pre-delete ``os.path.exists()`` check inside
+    ``execute_decisions`` (execute_service.py:190) is what routes it to
+    ``missing`` instead of attempting ``send2trash`` — so this never reaches
+    ``DeleteService`` at all, and 'Files Failed to Delete' must NOT render.
+
+    Only ONE of the two group members is marked 'delete' (its pair is left
+    undecided) so the group is never "complete-delete" — the #733 all-delete
+    confirm gate does not fire, and clicking Execute commits immediately.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="qa_s13_missing_")
+    db_path = os.path.join(tmpdir, "s13_missing_manifest.db")
+    try:
+        # Two copies of the same source file form one exact-dup group — a
+        # lone scanned file would be a singleton and dropped by the review
+        # load's orphan-skip (manifest_repository), same constraint s24 works
+        # around.
+        basename = "s13_missing_00.jpg"
+        basename_pair = "s13_missing_01.jpg"
+        src = _NEAR_DUPS_DIR / _FIXTURE_BASENAMES[0]
+        dst = os.path.join(tmpdir, basename)
+        dst_pair = os.path.join(tmpdir, basename_pair)
+        shutil.copy(str(src), dst)
+        shutil.copy(str(src), dst_pair)
+
+        with PWContext(base_url=base_url) as ctx:
+            page = ctx.new_page()
+            page.goto("/")
+
+            run_scan(page, sources=[tmpdir], output_path=db_path, scan_timeout=60_000)
+
+            manifest = _get_manifest(base_url, db_path)
+            assert manifest["total_groups"] >= 1, (
+                f"expected at least 1 group after scanning the missing-file "
+                f"fixture pair, got total_groups={manifest['total_groups']}"
+            )
+            group = manifest["groups"][0]
+            group_id = str(group["group_number"])
+            present = {Path(f["file_path"]).name for f in group.get("items", [])}
+            assert basename in present, (
+                f"{basename!r} missing from group {group_id} items: {sorted(present)}"
+            )
+
+            # Mark ONLY the target file 'delete'; its pair stays undecided so
+            # the group is not complete-delete (no all-delete confirm gate).
+            right_click_row(page, row_file_testid(group_id, basename))
+            click_context_item(page, CTX_SET_ACTION_DELETE)
+
+            # ── ORPHAN: remove the file directly, bypassing the app ──────────
+            os.remove(dst)
+            assert not os.path.exists(dst), f"setup: {dst} still on disk after os.remove"
+
+            open_execute_dialog(page)
+            page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="visible", timeout=10_000)
+            execute_btn = page.get_by_test_id(EXECUTE_BTN_EXECUTE)
+            execute_btn.wait_for(state="visible", timeout=10_000)
+            execute_btn.click()
+
+            # The group is NOT complete-delete (its pair is undecided), so no
+            # DeleteConfirmDialog interrupts — the commit fires immediately.
+            missing_section = page.get_by_test_id(EXECUTE_RESULT_MISSING)
+            missing_section.wait_for(state="visible", timeout=15_000)
+            missing_text = missing_section.inner_text()
+            assert basename in missing_text, (
+                f"'Files Not Found' section must name the orphaned file "
+                f"{basename!r}; got: {missing_text!r}"
+            )
+            assert page.get_by_test_id(EXECUTE_RESULT_FAILED).count() == 0, (
+                "no delete was ever attempted (missing short-circuits before "
+                "send2trash), so 'Files Failed to Delete' must not render"
+            )
+            # The pair was never touched — still on disk.
+            assert os.path.exists(dst_pair), (
+                f"the undecided pair file must survive Execute untouched: {dst_pair}"
+            )
+            print(
+                "probe_status: s13 missing-file section OK "
+                f"missing_text={missing_text!r}"
+            )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
