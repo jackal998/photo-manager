@@ -380,6 +380,18 @@ for the chore plan.
 
 ---
 
+### Web — preview panel resizable + persistence
+
+- **Entry point:** Drag handle (`data-testid="preview-resize-handle"`) between the result tree and the preview pane in [`frontend/src/App.tsx`](../frontend/src/App.tsx), wired to `store.setPreviewWidth` in [`frontend/src/store/useAppStore.ts`](../frontend/src/store/useAppStore.ts) and the persistence helpers in [`frontend/src/lib/panelWidths.ts`](../frontend/src/lib/panelWidths.ts).
+- **Trigger:** User drags the thin vertical grabber between the result tree and the preview pane. Restores the persisted width on every page load.
+- **Behaviour:** Mirrors the [#685](https://github.com/jackal998/photo-manager/issues/685) column-resize recipe verbatim in structure: `mousedown` on the handle begins tracking `window` `mousemove`/`mouseup` (so the drag keeps working once the cursor leaves the thin handle); each move updates the width in-memory only (`persist=false`) for live feedback, and the final width is written to localStorage once on `mouseup` (`persist=true`) — avoiding a write per pixel of drag. Width is clamped to **[200px, 60% of the current viewport width]**, the web analog of the desktop splitter's 200px floor + disabled-collapse guard above (so neither the tree nor the preview pane can be squeezed to invisibility). The default width (288px) matches the prior fixed `w-72` Tailwind class, so an unresized layout is pixel-identical to before this change.
+- **Conditions / variants:** Persisted under localStorage key **`panelWidths`** — a small per-panel width map (`{"preview": <px>}`), kept as its OWN key separate from the [#685](https://github.com/jackal998/photo-manager/issues/685) column-widths key (`pm.result-tree.column-widths.v1`), since it is a distinct persisted concept. Per-browser, auto-isolated per Playwright context like the column-widths key — no server-side reset needed.
+- **FullResViewer-overlay divergence (intentional, awaits sign-off):** the web full-resolution viewer ([`frontend/src/components/FullResViewer.tsx`](../frontend/src/components/FullResViewer.tsx)) is a fullscreen `DialogPrimitive` overlay, **not** a resizable/movable window like the desktop's counterpart. This is a deliberate web divergence rather than an oversight — a movable/resizable overlay window is a distinct, larger feature that is intentionally **not built here** and awaits the issue owner's explicit sign-off (the issue's second ask) before any work starts.
+- **Related:** issue [#739](https://github.com/jackal998/photo-manager/issues/739); mirrors the #685 recipe ([`frontend/src/components/result/ColumnHeaderRow.tsx`](../frontend/src/components/result/ColumnHeaderRow.tsx), [`frontend/src/lib/columnWidths.ts`](../frontend/src/lib/columnWidths.ts)); desktop analog is "Main window — geometry + splitter persistence" above. QA scenario [`qa/web/scenarios/s39_layout_persist.py`](../qa/web/scenarios/s39_layout_persist.py) (re-flip of `s39_window_geometry_persist` from SKIP, `qa/web/scenario_map.yml`); unit test [`frontend/src/lib/panelWidths.test.ts`](../frontend/src/lib/panelWidths.test.ts).
+- **Last verified:** 2026-07-03 (#739 initial implementation)
+
+---
+
 ### Main window — keyboard navigation
 
 - **Entry point:** Main result tree's built-in `QTreeView` keyboard handling, augmented in [tree_controller.py](../app/views/components/tree_controller.py).
