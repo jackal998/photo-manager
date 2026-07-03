@@ -25,6 +25,13 @@ Web-observable assertions (all via Playwright testids + HTTP):
   7. Delete confirm dialog (execute-all-delete-confirm) appears on Apply.
   8. After confirmation, GET /api/manifest reflects user_decision=="delete" for
      the matched row and unchanged decisions for all other rows.
+  9. (#741) action-btn-apply is ENABLED even while the pattern is still empty
+     (asserted right after the dialog opens, before any pattern is typed) —
+     the #397 friction regression fix; the backend no-ops on an empty pattern.
+  10. (#741) The delete-confirm dialog shows a pattern-aware summary
+      (action-delete-confirm-summary, "File Name contains 'q9'") and its
+      confirm button reads "Mark N files for deletion" instead of the
+      generic "Yes, delete all" copy.
 
 Qt divergences:
   - Qt drives mode-toggle radio buttons (Simple ↔ Regex) that no longer exist in
@@ -71,6 +78,7 @@ from qa.web.testid_constants import (
     ACTION_MATCH_COUNTER,
     ACTION_ACTION_COMBO,
     ACTION_BTN_APPLY,
+    ACTION_DELETE_CONFIRM_SUMMARY,
     EXECUTE_ALL_DELETE_CONFIRM,
     EXECUTE_ALL_DELETE_CONFIRM_YES,
 )
@@ -169,6 +177,18 @@ def run(*, base_url: str) -> None:
                 f"action-field-combo expected 'File Name', got {field_value!r}"
             )
 
+            # ── Step 3b (#741): Apply is enabled with an empty pattern ─────
+            # At this point no pattern has been typed yet (field just reset
+            # to its default "File Name", pattern == ""). Apply must NOT be
+            # disabled — the #397 friction regression fix; the backend
+            # no-ops on an empty pattern rather than the button gating it.
+            apply_btn_pre = page.get_by_test_id(ACTION_BTN_APPLY)
+            apply_btn_pre.wait_for(state="visible", timeout=5_000)
+            assert not apply_btn_pre.is_disabled(), (
+                "action-btn-apply must be enabled even with an empty "
+                "pattern (#741) — the backend no-ops on an empty pattern."
+            )
+
             # ── Step 4: simple section should be visible (string field) ───
             simple_row = page.get_by_test_id(ACTION_SIMPLE_ROW)
             simple_row.wait_for(state="visible", timeout=5_000)
@@ -235,8 +255,26 @@ def run(*, base_url: str) -> None:
             confirm_dialog = page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM)
             confirm_dialog.wait_for(state="visible", timeout=10_000)
 
+            # ── Step 9b (#741): pattern-aware summary + deferred-decision
+            # wording — replaces the old generic "N files will be deleted"
+            # copy for this ActionDialog-driven confirm.
+            summary = page.get_by_test_id(ACTION_DELETE_CONFIRM_SUMMARY)
+            summary.wait_for(state="visible", timeout=5_000)
+            summary_text = summary.inner_text()
+            assert "File Name" in summary_text and _SIMPLE_TEXT in summary_text, (
+                f"action-delete-confirm-summary should describe the "
+                f"field+pattern (expected 'File Name' and {_SIMPLE_TEXT!r} "
+                f"in the text), got {summary_text!r}"
+            )
+
             confirm_yes = page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM_YES)
             confirm_yes.wait_for(state="visible", timeout=5_000)
+            confirm_yes_text = confirm_yes.inner_text()
+            assert re.search(r"Mark\s+\d+\s+files?\s+for\s+deletion", confirm_yes_text), (
+                f"execute-all-delete-confirm-yes should read "
+                f"'Mark N files for deletion' (#741 deferred-decision "
+                f"wording), got {confirm_yes_text!r}"
+            )
             confirm_yes.click()
 
             # Wait for the dialog to close (Apply + confirm → dialog closes).
