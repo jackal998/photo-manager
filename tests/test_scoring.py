@@ -445,6 +445,28 @@ class TestLivePhotoMovPassengerRule:
         heic_score = compute_score(heic, [heic, mov])
         assert isinstance(heic_score, float)
 
+    def test_mov_with_jpg_peer_returns_none(self):
+        """#738: iPhone 'Most Compatible' mode exports Live Photos as JPG+MOV.
+        The MOV is a passenger exactly like the HEIC+MOV case — before #738 the
+        jpg suffix was excluded and the MOV got a real composite score."""
+        jpg = _row("/x/IMG_001.jpg")
+        mov = _row("/x/IMG_001.mov")
+        assert compute_score(mov, [jpg, mov]) is None
+
+    def test_mov_with_jpeg_peer_returns_none(self):
+        """#738: the `.jpeg` spelling is recognised the same as `.jpg`."""
+        jpeg = _row("/x/IMG_001.jpeg")
+        mov = _row("/x/IMG_001.mov")
+        assert compute_score(mov, [jpeg, mov]) is None
+
+    def test_jpg_orphan_not_penalised_as_live_photo(self):
+        """#738 regression guard: broadening the MOV-passenger rule must NOT
+        broaden the orphan penalty. A lone JPG (no paired video) is an ordinary
+        photo — it keeps the 1.0 dimension baseline, never the 0.5 HEIC orphan
+        penalty (which stays HEIC/HEIF-only, `_HEIC_SUFFIXES`)."""
+        jpg = _row("/x/IMG_777.jpg")
+        assert _score_live_photo(jpg, [jpg]) == 1.0
+
 
 # ── Tier 1 — Format penalty ─────────────────────────────────────────────────
 

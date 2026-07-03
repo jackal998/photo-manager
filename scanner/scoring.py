@@ -148,8 +148,20 @@ _BAD_PATH_SEGMENTS: frozenset[str] = frozenset({
 # tag census, not the image one). #461: ".avi" included so AVI rows (now
 # that they reach scoring) get the video treatment, not the image baseline.
 _VIDEO_SUFFIXES: frozenset[str] = frozenset({"mov", "mp4", "avi"})
-# HEIC suffixes used by the Live Photo peer detection.
+# HEIC suffixes — the still-image formats whose ORPHAN (no paired video) earns
+# the Live Photo completeness penalty in ``_score_live_photo``. HEIC/HEIF
+# strongly imply a Live Photo still, so a missing video is a lost-pair signal;
+# a bare JPG does NOT (it is an ordinary photo), so jpg is deliberately excluded
+# here — broadening this set would wrongly penalise every orphan JPEG.
 _HEIC_SUFFIXES: frozenset[str] = frozenset({"heic", "heif"})
+# Still-image formats that pair with a same-stem MOV/MP4 to form a Live Photo —
+# used by the MOV-passenger rule in ``compute_score`` (#738). Broader than
+# ``_HEIC_SUFFIXES``: iPhone's "Most Compatible" mode exports Live Photos as
+# JPG+MOV, so a same-stem jpg/jpeg + video co-occurrence is a Live Photo signal
+# too. This set is NOT used for the orphan penalty above (a lone jpg is normal).
+_LIVE_PHOTO_IMAGE_SUFFIXES: frozenset[str] = frozenset(
+    {"heic", "heif", "jpg", "jpeg"}
+)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -415,9 +427,11 @@ def compute_score(
     Pure function: no I/O, no globals. Same (row, group_rows, weights)
     always produces the same result.
     """
-    # Live Photo passenger rule.
+    # Live Photo passenger rule — a video whose same-stem, same-folder still
+    # sibling is a Live Photo image (HEIC/HEIF or, #738, JPG/JPEG) is a
+    # passenger and does not compete for the KEEP slot.
     if _suffix(row) in _VIDEO_SUFFIXES and _has_paired_peer_with_suffixes(
-        row, group_rows, _HEIC_SUFFIXES
+        row, group_rows, _LIVE_PHOTO_IMAGE_SUFFIXES
     ):
         return None
 
