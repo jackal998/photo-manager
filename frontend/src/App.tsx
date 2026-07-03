@@ -17,7 +17,7 @@ import { useT } from "./i18n/useT";
 import { ScanDialog } from "./components/ScanDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ResultTree } from "./components/ResultTree";
-import type { ContextMenuTarget } from "./components/ResultTree";
+import type { ContextMenuTarget, GroupContextMenuTarget } from "./components/ResultTree";
 import { PreviewPane } from "./components/PreviewPane";
 import { FullResViewer } from "./components/FullResViewer";
 import { ExecuteDialog } from "./components/execute/ExecuteDialog";
@@ -54,6 +54,10 @@ interface ContextMenuState {
   filePath: string;
   isLocked: boolean;
   targetPaths: string[];
+  /** Which ContextMenu item set to render (#735). */
+  variant: "file" | "group";
+  /** The right-clicked column (file variant only, #735). */
+  col?: string;
 }
 
 const CLOSED_MENU: ContextMenuState = {
@@ -63,6 +67,8 @@ const CLOSED_MENU: ContextMenuState = {
   filePath: "",
   isLocked: false,
   targetPaths: [],
+  variant: "file",
+  col: undefined,
 };
 
 export default function App() {
@@ -113,6 +119,24 @@ export default function App() {
       filePath: target.filePath,
       isLocked: target.isLocked,
       targetPaths,
+      variant: "file",
+      col: target.col,
+    });
+  }, []);
+
+  // Group-header right-click (#735) — reduced menu (By-Field + Remove),
+  // scoped to the group's own member paths regardless of the current
+  // multi-selection (Qt's group-row menu has no selection interaction).
+  const handleGroupContextMenu = useCallback((target: GroupContextMenuTarget) => {
+    setContextMenu({
+      open: true,
+      x: target.x,
+      y: target.y,
+      filePath: "",
+      isLocked: false,
+      targetPaths: target.memberPaths,
+      variant: "group",
+      col: undefined,
     });
   }, []);
 
@@ -244,7 +268,10 @@ export default function App() {
         <button
           data-testid={ACTION_MAIN_BUTTON}
           className="px-3 py-1 rounded border text-sm hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={openActionDialog}
+          // #735: openActionDialog now takes an optional initialField: string,
+          // so it can no longer be wired directly as a MouseEventHandler (the
+          // synthetic event isn't assignable to `string`) — wrap it argless.
+          onClick={() => openActionDialog()}
           disabled={manifestPath === null}
         >
           {t("web.action_dialog.title", "Set Action")}
@@ -324,7 +351,10 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <ResultTree onContextMenu={handleContextMenu} />
+            <ResultTree
+              onContextMenu={handleContextMenu}
+              onGroupContextMenu={handleGroupContextMenu}
+            />
           )}
         </div>
         {/* Preview pane — fixed 280px right column */}
@@ -389,6 +419,9 @@ export default function App() {
           filePath={contextMenu.filePath}
           isLocked={contextMenu.isLocked}
           targetPaths={contextMenu.targetPaths}
+          variant={contextMenu.variant}
+          clickedCol={contextMenu.col}
+          onExecuteSelected={handleExecuteSelectedOnly}
           onClose={handleContextMenuClose}
         />
       )}

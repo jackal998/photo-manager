@@ -1,5 +1,6 @@
 // Group header row: expand/collapse toggle + group summary.
 
+import type { MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronRight, ChevronDown } from "lucide-react";
 import { rowGroupTestid } from "@/testids";
@@ -7,20 +8,34 @@ import { rowGroupTestid } from "@/testids";
 interface GroupRowProps {
   groupNumber: number;
   memberCount: number;
+  /** The group's member file paths (#735) — carried into the group-row
+   *  context menu's "Remove from List" scope. */
+  memberPaths: string[];
   expanded: boolean;
   onToggle: () => void;
+  /** Right-click on the group header (#735) — opens the reduced group
+   *  context menu (Set Action by Field… + Remove from List). */
+  onContextMenu?: (memberPaths: string[], x: number, y: number) => void;
 }
 
 export function GroupRow({
   groupNumber,
   memberCount,
+  memberPaths,
   expanded,
   onToggle,
+  onContextMenu,
 }: GroupRowProps) {
+  function handleContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    onContextMenu?.(memberPaths, e.clientX, e.clientY);
+  }
+
   return (
     <button
       data-testid={rowGroupTestid(String(groupNumber))}
       onClick={onToggle}
+      onContextMenu={handleContextMenu}
       className={cn(
         "w-full flex items-center gap-2 px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200",
         "text-sm font-medium text-neutral-800 border-b border-neutral-200 text-left"

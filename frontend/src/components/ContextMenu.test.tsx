@@ -16,7 +16,14 @@
 //  12. Clicking outside the menu calls onClose.
 //  13. Multi-target: the decision/lock verbs act on the WHOLE targetPaths set,
 //      while Open folder stays scoped to the single right-clicked filePath.
+//  14. (#735) File variant: shows By-Field + Execute-selected; By-Field calls
+//      openActionDialog(resolved field) and Execute-selected calls the wired
+//      onExecuteSelected prop.
+//  15. (#735) Group variant: renders ONLY By-Field + Remove, hides
+//      Execute-selected/Keep/Delete/Lock/Open-folder/Apply-best-copy; Remove
+//      calls removeFromList with the group's member paths (targetPaths).
 
+import type { ComponentProps } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -26,8 +33,10 @@ import { ContextMenu } from "./ContextMenu";
 import {
   CONTEXT_MENU,
   CTX_APPLY_BEST_COPY,
+  CTX_EXECUTE_SELECTED,
   CTX_LOCK,
   CTX_OPEN_FOLDER,
+  CTX_SET_ACTION_BY_FIELD,
   CTX_SET_ACTION_DELETE,
   CTX_SET_ACTION_KEEP,
   CTX_SET_ACTION_REMOVE,
@@ -40,7 +49,11 @@ import {
 
 const FILE_PATH = "/photos/test.jpg";
 
-function renderMenu(isLocked = false, targetPaths: string[] = [FILE_PATH]) {
+function renderMenu(
+  isLocked = false,
+  targetPaths: string[] = [FILE_PATH],
+  extraProps: Partial<ComponentProps<typeof ContextMenu>> = {}
+) {
   const onClose = vi.fn();
   const result = render(
     <ContextMenu
@@ -50,6 +63,7 @@ function renderMenu(isLocked = false, targetPaths: string[] = [FILE_PATH]) {
       isLocked={isLocked}
       targetPaths={targetPaths}
       onClose={onClose}
+      {...extraProps}
     />
   );
   return { ...result, onClose };
@@ -64,17 +78,20 @@ describe("ContextMenu", () => {
   let removeFromListMock: ReturnType<typeof vi.fn>;
   let setLocksMock: ReturnType<typeof vi.fn>;
   let revealMock: ReturnType<typeof vi.fn>;
+  let openActionDialogMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     setDecisionsMock = vi.fn().mockResolvedValue(undefined);
     removeFromListMock = vi.fn().mockResolvedValue(undefined);
     setLocksMock = vi.fn().mockResolvedValue(undefined);
     revealMock = vi.fn().mockResolvedValue(undefined);
+    openActionDialogMock = vi.fn();
     useAppStore.setState({
       setDecisions: setDecisionsMock,
       removeFromList: removeFromListMock,
       setLocks: setLocksMock,
       revealInExplorer: revealMock,
+      openActionDialog: openActionDialogMock,
     } as never);
   });
 
@@ -218,5 +235,103 @@ describe("ContextMenu", () => {
     // Reveal targets only the right-clicked row, never the whole selection.
     expect(revealMock).toHaveBeenCalledWith(FILE_PATH);
     expect(revealMock).toHaveBeenCalledOnce();
+  });
+
+  // -------------------------------------------------------------------------
+  // #735 — file-row By-Field + Execute-selected, group-row reduced menu.
+  // -------------------------------------------------------------------------
+
+  describe("#735 file variant", () => {
+    it("shows By-Field and Execute-selected alongside the pre-existing items", () => {
+      renderMenu(false, [FILE_PATH], { onExecuteSelected: vi.fn() });
+      expect(screen.getByTestId(CTX_SET_ACTION_BY_FIELD)).toBeInTheDocument();
+      expect(screen.getByTestId(CTX_EXECUTE_SELECTED)).toBeInTheDocument();
+      // Pre-existing entries stay present — nothing was reordered/removed.
+      expect(screen.getByTestId(CTX_SET_ACTION_KEEP)).toBeInTheDocument();
+      expect(screen.getByTestId(CTX_SET_ACTION_DELETE)).toBeInTheDocument();
+      expect(screen.getByTestId(CTX_SET_ACTION_REMOVE)).toBeInTheDocument();
+      expect(screen.getByTestId(CTX_OPEN_FOLDER)).toBeInTheDocument();
+      expect(screen.getByTestId(CTX_APPLY_BEST_COPY)).toBeInTheDocument();
+    });
+
+    it("By-Field with no clickedCol calls openActionDialog(undefined) and onClose", async () => {
+      const user = userEvent.setup();
+      const { onClose } = renderMenu(false, [FILE_PATH], {
+        onExecuteSelected: vi.fn(),
+      });
+      await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
+      expect(openActionDialogMock).toHaveBeenCalledWith(undefined);
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it("By-Field with a mapped clickedCol resolves and passes the field label", async () => {
+      const user = userEvent.setup();
+      const { onClose } = renderMenu(false, [FILE_PATH], {
+        onExecuteSelected: vi.fn(),
+        clickedCol: "size",
+      });
+      await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
+      expect(openActionDialogMock).toHaveBeenCalledWith("Size (Bytes)");
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it("By-Field with an unmapped clickedCol (e.g. score) falls back to no pre-fill", async () => {
+      const user = userEvent.setup();
+      renderMenu(false, [FILE_PATH], {
+        onExecuteSelected: vi.fn(),
+        clickedCol: "score",
+      });
+      await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
+      expect(openActionDialogMock).toHaveBeenCalledWith(undefined);
+    });
+
+    it("Execute-selected invokes the wired onExecuteSelected prop and onClose", async () => {
+      const user = userEvent.setup();
+      const onExecuteSelected = vi.fn();
+      const { onClose } = renderMenu(false, [FILE_PATH], { onExecuteSelected });
+      await user.click(screen.getByTestId(CTX_EXECUTE_SELECTED));
+      expect(onExecuteSelected).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("#735 group variant", () => {
+    const GROUP_PATHS = ["/g/a.jpg", "/g/b.jpg", "/g/c.jpg"];
+
+    it("renders ONLY By-Field and Remove", () => {
+      renderMenu(false, GROUP_PATHS, { variant: "group" });
+      expect(screen.getByTestId(CTX_SET_ACTION_BY_FIELD)).toBeInTheDocument();
+      expect(screen.getByTestId(CTX_SET_ACTION_REMOVE)).toBeInTheDocument();
+    });
+
+    it("hides Execute-selected, Keep, Delete, Lock, Open-folder, Apply-best-copy", () => {
+      renderMenu(false, GROUP_PATHS, {
+        variant: "group",
+        onExecuteSelected: vi.fn(),
+      });
+      expect(screen.queryByTestId(CTX_EXECUTE_SELECTED)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(CTX_SET_ACTION_KEEP)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(CTX_SET_ACTION_DELETE)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(CTX_LOCK)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(CTX_UNLOCK)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(CTX_OPEN_FOLDER)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(CTX_APPLY_BEST_COPY)).not.toBeInTheDocument();
+    });
+
+    it("Remove calls removeFromList with the group's member paths (targetPaths)", async () => {
+      const user = userEvent.setup();
+      const { onClose } = renderMenu(false, GROUP_PATHS, { variant: "group" });
+      await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
+      expect(removeFromListMock).toHaveBeenCalledWith(GROUP_PATHS);
+      expect(setDecisionsMock).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it("By-Field opens argless (group right-click never threads a column)", async () => {
+      const user = userEvent.setup();
+      renderMenu(false, GROUP_PATHS, { variant: "group" });
+      await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
+      expect(openActionDialogMock).toHaveBeenCalledWith(undefined);
+    });
   });
 });

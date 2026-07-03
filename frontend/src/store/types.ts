@@ -489,8 +489,15 @@ export interface AppActions {
   // Action dialog actions (Set Action by Field / bulk-decide)
   // -------------------------------------------------------------------------
 
-  /** Open the action dialog (resets transient state). */
-  openActionDialog(): void;
+  /**
+   * Open the action dialog (resets transient state). When `initialField` is
+   * provided and is one of the valid ActionDialog field-option values
+   * (#735 — right-click "Set Action by Field…" pre-fill), the dialog opens
+   * with that field selected instead of the default. Omitted / invalid
+   * values fall back to the default field — unchanged prior behaviour for
+   * every existing argless callsite.
+   */
+  openActionDialog(initialField?: string): void;
 
   /** Close the action dialog and clear transient state. */
   closeActionDialog(): void;

@@ -1017,6 +1017,48 @@ describe("useAppStore action slice (bulk-decide)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// openActionDialog – initialField (#735, right-click "Set Action by Field…")
+// ---------------------------------------------------------------------------
+
+describe("openActionDialog – initialField (#735)", () => {
+  it("argless call keeps the default field (unchanged prior behaviour)", () => {
+    useAppStore.getState().openActionDialog();
+    expect(useAppStore.getState().action.field).toBe("File Name");
+    expect(useAppStore.getState().action.actionDialogOpen).toBe(true);
+  });
+
+  it("a valid field value sets action.field to that value", () => {
+    useAppStore.getState().openActionDialog("Size (Bytes)");
+    expect(useAppStore.getState().action.field).toBe("Size (Bytes)");
+    expect(useAppStore.getState().action.actionDialogOpen).toBe(true);
+  });
+
+  it("an unrecognised string value falls back to the default field", () => {
+    useAppStore.getState().openActionDialog("Not A Real Field");
+    expect(useAppStore.getState().action.field).toBe("File Name");
+  });
+
+  it("a non-string value (e.g. a stray DOM event from onClick={openActionDialog}) falls back to the default field", () => {
+    // Regression guard: App.tsx's toolbar button wires onClick={openActionDialog}
+    // directly, so the browser passes a MouseEvent as the first argument. That
+    // must never leak into store.action.field.
+    useAppStore.getState().openActionDialog({ type: "click" } as never);
+    expect(useAppStore.getState().action.field).toBe("File Name");
+  });
+
+  it("resets transient preview/error state on open, same as the argless path", () => {
+    useAppStore.setState((s) => ({
+      action: { ...s.action, previewMatched: 5, actionError: "boom" },
+    }));
+    useAppStore.getState().openActionDialog("Similarity");
+    const action = useAppStore.getState().action;
+    expect(action.field).toBe("Similarity");
+    expect(action.previewMatched).toBe(-1);
+    expect(action.actionError).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // selection slice — main result-tree multi-selection (Phase 4)
 // ---------------------------------------------------------------------------
 

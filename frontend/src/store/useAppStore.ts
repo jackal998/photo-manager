@@ -48,6 +48,7 @@ import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
 import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
 import { normalizePrunePref } from "../lib/prune";
 import type { PrunePref } from "../lib/prune";
+import { ACTION_DIALOG_FIELD_OPTIONS } from "../lib/actionDialogFields";
 
 // ---------------------------------------------------------------------------
 // Type alias for immer-wrapped set function inside create()
@@ -919,11 +920,19 @@ export const useAppStore = create<AppStore>()(
     // Action dialog actions (Set Action by Field / bulk-decide)
     // -----------------------------------------------------------------------
 
-    openActionDialog() {
+    openActionDialog(initialField) {
       set((state) => {
         state.action = {
           ...initialAction,
           actionDialogOpen: true,
+          // #735: guard against non-string / unrecognised values — callers
+          // wired straight to a DOM event handler (e.g. onClick={openActionDialog})
+          // pass the event object as the first arg, which must fall back to
+          // the default field rather than corrupt the dialog's <select>.
+          ...(typeof initialField === "string" &&
+          ACTION_DIALOG_FIELD_OPTIONS.has(initialField)
+            ? { field: initialField }
+            : {}),
         };
       });
     },

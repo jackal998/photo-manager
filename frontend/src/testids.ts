@@ -89,6 +89,7 @@ export const CTX_LOCK = "ctx-lock";
 export const CTX_UNLOCK = "ctx-unlock";
 export const CTX_APPLY_BEST_COPY = "ctx-apply-best-copy";
 export const CTX_SET_ACTION_BY_FIELD = "ctx-set-action-by-field";
+export const CTX_EXECUTE_SELECTED = "ctx-execute-selected";
 export const ACTION_MAIN_BUTTON = "main-action-button";
 export const ACTION_DIALOG = "action-dialog";
 export const ACTION_FIELD_COMBO = "action-field-combo";

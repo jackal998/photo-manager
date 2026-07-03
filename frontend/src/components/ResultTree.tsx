@@ -21,6 +21,17 @@ export interface ContextMenuTarget {
   isLocked: boolean;
   x: number;
   y: number;
+  /** The right-clicked column key (#735), e.g. "name" / "size" / "date" —
+   *  undefined when the click landed outside a metadata cell. */
+  col?: string;
+}
+
+/** Group-header right-click target (#735) — carries the group's member file
+ *  paths for the reduced group context menu's "Remove from List". */
+export interface GroupContextMenuTarget {
+  memberPaths: string[];
+  x: number;
+  y: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,9 +58,11 @@ type VRow = GroupHeaderVRow | FileVRow;
 
 interface ResultTreeProps {
   onContextMenu?: (target: ContextMenuTarget) => void;
+  /** Group-header right-click (#735). */
+  onGroupContextMenu?: (target: GroupContextMenuTarget) => void;
 }
 
-export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
+export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProps = {}) {
   const manifest = useAppStore((s) => s.manifest);
   const groups = useAppStore((s) => s.manifest.groups);
   const setDecision = useAppStore((s) => s.setDecision);
@@ -220,10 +233,17 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
   );
 
   const handleContextMenu = useCallback(
-    (filePath: string, isLocked: boolean, x: number, y: number) => {
-      onContextMenu?.({ filePath, isLocked, x, y });
+    (filePath: string, isLocked: boolean, x: number, y: number, col?: string) => {
+      onContextMenu?.({ filePath, isLocked, x, y, col });
     },
     [onContextMenu]
+  );
+
+  const handleGroupContextMenu = useCallback(
+    (memberPaths: string[], x: number, y: number) => {
+      onGroupContextMenu?.({ memberPaths, x, y });
+    },
+    [onGroupContextMenu]
   );
 
   // ---------------------------------------------------------------------------
@@ -301,6 +321,11 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
                 <GroupRow
                   groupNumber={vrow.groupNumber}
                   memberCount={vrow.memberCount}
+                  memberPaths={
+                    orderedItemsByGroup
+                      .get(vrow.groupNumber)
+                      ?.map((item) => item.file_path) ?? []
+                  }
                   expanded={!collapsed.has(vrow.groupNumber)}
                   onToggle={() => {
                     toggleGroup(vrow.groupNumber);
@@ -308,6 +333,7 @@ export function ResultTree({ onContextMenu }: ResultTreeProps = {}) {
                     // (mirrors Qt main_window.py:756 — GROUP selection → show_grid).
                     setSelectedGroup(vrow.groupNumber);
                   }}
+                  onContextMenu={handleGroupContextMenu}
                 />
               ) : (
                 (() => {

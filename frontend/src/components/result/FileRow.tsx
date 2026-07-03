@@ -32,7 +32,17 @@ interface FileRowProps {
     mods: { ctrl: boolean; shift: boolean }
   ) => void;
   onOpenFullRes?: (filePath: string) => void;
-  onContextMenu?: (filePath: string, isLocked: boolean, x: number, y: number) => void;
+  /** `col` (#735) is the clicked column's key, resolved from the nearest
+   *  `[data-col]` ancestor of the click target — undefined when the click
+   *  landed outside a metadata cell (e.g. the thumbnail, decision, or lock
+   *  controls). */
+  onContextMenu?: (
+    filePath: string,
+    isLocked: boolean,
+    x: number,
+    y: number,
+    col?: string
+  ) => void;
   isSelected?: boolean;
 }
 
@@ -56,7 +66,12 @@ export function FileRow({ row, groupId, columnWidths, onDecision, onLock, onSele
 
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
-    onContextMenu?.(row.file_path, row.is_locked, e.clientX, e.clientY);
+    // #735 — resolve the clicked column (if any) from the nearest [data-col]
+    // ancestor so the context menu can pre-fill "Set Action by Field…".
+    const col =
+      (e.target as HTMLElement).closest("[data-col]")?.getAttribute("data-col") ??
+      undefined;
+    onContextMenu?.(row.file_path, row.is_locked, e.clientX, e.clientY, col);
   }
 
   return (
@@ -87,7 +102,7 @@ export function FileRow({ row, groupId, columnWidths, onDecision, onLock, onSele
       </div>
 
       {/* Name + folder */}
-      <div className="flex-shrink-0 min-w-0 overflow-hidden" style={{ width: columnWidths.name }}>
+      <div data-col="name" className="flex-shrink-0 min-w-0 overflow-hidden" style={{ width: columnWidths.name }}>
         <div className="flex items-center gap-1 flex-wrap">
           {row.is_ref_winner && (
             <span className="inline-block text-xs font-semibold bg-blue-100 text-blue-700 rounded px-1 py-0.5 leading-none">
@@ -102,7 +117,7 @@ export function FileRow({ row, groupId, columnWidths, onDecision, onLock, onSele
       </div>
 
       {/* Similarity */}
-      <div className="flex-shrink-0 text-sm overflow-hidden" style={{ width: columnWidths.similarity }}>
+      <div data-col="similarity" className="flex-shrink-0 text-sm overflow-hidden" style={{ width: columnWidths.similarity }}>
         <span
           className={cn(
             "inline-block text-xs rounded px-1 py-0.5",
@@ -116,27 +131,27 @@ export function FileRow({ row, groupId, columnWidths, onDecision, onLock, onSele
       </div>
 
       {/* Action */}
-      <div className="flex-shrink-0 text-xs text-neutral-600 truncate" style={{ width: columnWidths.action }} title={row.action}>
+      <div data-col="action" className="flex-shrink-0 text-xs text-neutral-600 truncate" style={{ width: columnWidths.action }} title={row.action}>
         {row.action || "—"}
       </div>
 
       {/* Score */}
-      <div className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.score }}>
+      <div data-col="score" className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.score }}>
         {formatScore(row.score)}
       </div>
 
       {/* Dimensions */}
-      <div className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.dims }}>
+      <div data-col="dims" className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.dims }}>
         {formatDims(row.pixel_width, row.pixel_height)}
       </div>
 
       {/* File size */}
-      <div className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.size }}>
+      <div data-col="size" className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.size }}>
         {formatBytes(row.file_size_bytes)}
       </div>
 
       {/* Shot date */}
-      <div className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.date }}>
+      <div data-col="date" className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.date }}>
         {formatDate(row.shot_date)}
       </div>
 

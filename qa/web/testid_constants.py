@@ -363,10 +363,18 @@ CTX_APPLY_BEST_COPY = "ctx-apply-best-copy"
 
 CTX_SET_ACTION_BY_FIELD = "ctx-set-action-by-field"
 """Context-menu item: open the Set Action by Field (ActionDialog) bulk-decide
-flow.  Present on the execute-dialog row menu (and the result-tree menu in a
-future port); maps to ``store.openActionDialog()`` — the same dialog the
-toolbar 'Set Action' button opens.  Mirrors Qt's execute-dialog
-'Set Action by Field…' item (execute_action_dialog.py:810)."""
+flow.  Present on the execute-dialog row menu AND the result-tree file-row and
+group-row menus (#735); maps to ``store.openActionDialog(initialField?)`` —
+the same dialog the toolbar 'Set Action' button opens, optionally pre-filled
+from the right-clicked column.  Mirrors Qt's 'Set Action by Field…' item
+(execute_action_dialog.py:810, context_menu.py)."""
+
+CTX_EXECUTE_SELECTED = "ctx-execute-selected"
+"""Context-menu item (file-row variant only, #735): 'Execute Action (only
+selected)…' — invokes the same execute-selected-only flow as the menu-bar
+Action entry (re-reads the live selection). Mirrors Qt's
+context_menu.py file-row menu / action_handlers.py:85-99. Absent from the
+group-row reduced menu."""
 
 # ---------------------------------------------------------------------------
 # Action dialog (Set Action by Field — §5.4 contract)
