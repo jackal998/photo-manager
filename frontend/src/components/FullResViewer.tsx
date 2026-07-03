@@ -242,10 +242,14 @@ export function FullResViewer() {
                 </div>
               ) : (
                 <>
-                  {/* Spinner while transcoded file is being prepared. */}
+                  {/* Spinner + "Preparing video…" while the transcode is in
+                      flight (#737) — matches PreviewPane's message so the
+                      first-view transcode stall reads as work-in-progress, not
+                      a stuck player. */}
                   {useTranscode && !videoCanPlay && (
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
                       <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span className="text-white/80 text-sm">Preparing video…</span>
                     </div>
                   )}
                   <video

@@ -362,4 +362,43 @@ describe("FullResViewer", () => {
 
     expect(spy).toHaveBeenCalledWith(FILE_PATH);
   });
+
+  it("shows 'Preparing video…' after a decode error swaps to the transcode fallback (#737)", () => {
+    // A video row must be in the manifest so isVideo resolves true.
+    const videoPath = "/photos/clip.mov";
+    useAppStore.setState({
+      manifest: {
+        path: "/manifests/test.db",
+        groups: [
+          {
+            group_number: 1,
+            member_count: 1,
+            items: [
+              { ...testRow, file_path: videoPath, basename: "clip.mov", media_type: "video" },
+            ],
+          },
+        ],
+        totalGroups: 1,
+        totalFiles: 1,
+        loading: false,
+        error: null,
+      },
+      preview: { selectedFilePath: null, fullResPath: videoPath, selectedGroupId: null },
+    });
+    render(<FullResViewer />);
+
+    // Before any error the native <video> plays — no "Preparing video…".
+    expect(screen.queryByText(/preparing video/i)).not.toBeInTheDocument();
+
+    // First decode error swaps to the H.264 transcode fallback; while the
+    // transcode is in flight the "Preparing video…" indicator is shown.
+    const video = screen.getByTestId(FULLRES_IMAGE);
+    act(() => {
+      fireEvent.error(video);
+    });
+    expect(screen.getByText(/preparing video/i)).toBeInTheDocument();
+    expect(screen.getByTestId(FULLRES_IMAGE).getAttribute("src") ?? "").toContain(
+      "transcode=h264"
+    );
+  });
 });

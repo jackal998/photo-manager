@@ -168,7 +168,14 @@ class TranscodeService:
             self._ffmpeg,
             "-i", str(source),
             "-c:v", "libx264",
-            "-preset", "fast",
+            # ultrafast (was "fast", #737): this is a throwaway H.264 stream the
+            # browser plays once and the result is cached to disk, so encode
+            # SPEED matters far more than output size — ultrafast is the fastest
+            # libx264 preset and directly cuts the first-byte transcode stall
+            # that every first view of the owner's ~99%-HEVC library pays. The
+            # larger output is irrelevant (cached, then discarded). Progressive
+            # streaming + a real progress % is the proper follow-up fix.
+            "-preset", "ultrafast",
             "-crf", "23",
             "-c:a", "aac",
             "-movflags", "+faststart",
