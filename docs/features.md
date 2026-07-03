@@ -790,6 +790,20 @@ for the chore plan.
 
 ---
 
+### Web — scan progress throughput / ETA / localized stages (#740)
+
+- **Entry point:** The running-state panel inside the scan dialog ([frontend/src/components/scan/ScanProgress.tsx](../frontend/src/components/scan/ScanProgress.tsx)), fed by the SSE `stage` event's `files_per_sec` field (already captured in `ScanState.filesPerSec`, [frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)) and a receiver-computed ETA ([frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx)). Web port of the desktop [Scan dialog — stage / throughput / ETA progress (#424)](#scan-dialog--stage--throughput--eta-progress-424).
+- **Trigger:** Automatic while a scan is running — every SSE `stage` event re-renders the panel.
+- **Behaviour:**
+  - **Localized stage labels.** The raw `stage_name` the backend emits (`WALK`/`HASH`/`EXIFTOOL`/`CLASSIFY`/`SCORE`/`WRITE` — the `core/app_service/scan_runner.py` `STAGE_*` constants) is mapped to a localized label via new `web.scan.stage_*` i18n keys ([translations/en.yml](../translations/en.yml) / [translations/zh_TW.yml](../translations/zh_TW.yml)), mirroring the desktop `scan_dialog.stage_*` wording. The lookup lives in [frontend/src/lib/scanProgress.ts](../frontend/src/lib/scanProgress.ts) (`stageLabel`) and is used at **both** call sites that previously rendered the raw stage id: the scan dialog's status line and the main-window status bar's "Scanning — …" text ([frontend/src/App.tsx](../frontend/src/App.tsx)). An unrecognised stage name (a future backend stage this build predates) falls back to the raw id, and an empty stage name falls back to "Running…" — the pre-#740 behaviour — rather than crashing or rendering a blank line.
+  - **Throughput.** The dialog shows a compact "N files/sec" line (`formatThroughput`, `scanProgress.ts`) — one decimal below 10/s, whole numbers at/above — matching the desktop `_format_throughput` wording exactly. Hidden entirely (not shown as "—") when the rate is 0 or undefined, e.g. before the first sample.
+  - **ETA.** Computed receiver-side as `remaining / files_per_sec` (`formatEta`) and gated by the same rule as Qt #424's `_ETA_MIN_SAMPLES_SECONDS`: suppressed until the **current stage** has been running ≥5s AND the stage has a known total (`isEtaReady`) — an indeterminate stage (CLASSIFY/SCORE/WRITE, `total=0`) never shows an ETA, since there's no "remaining" to estimate against. The 5s clock is tracked by a new `ScanState.stageStartedAt` timestamp, re-stamped only on a stage **transition** (`useAppStore.ts` `ingestScanEvent`) so a freshly-started stage never inherits the prior stage's settled throughput. Hidden entirely while not yet meaningful; only computed while `scan.status === "running"`.
+- **Conditions / variants:** Unlike the desktop, the "N files/sec" / "ETA …" wording itself is not routed through the i18n catalog (neither is the Qt version — `_format_throughput`/`_format_eta` build plain English strings) — only the six stage labels are localized. The throughput and ETA rows are each suppressed independently, so a stalled stage (rate freshly dropped to 0) hides the throughput text but can still show a stale-but-recent ETA render on the same tick, matching desktop's per-field gating rather than an all-or-nothing row.
+- **Related:** Desktop analogue [Scan dialog — stage / throughput / ETA progress (#424)](#scan-dialog--stage--throughput--eta-progress-424); [#740](https://github.com/jackal998/photo-manager/issues/740); vitest [`frontend/src/lib/scanProgress.test.ts`](../frontend/src/lib/scanProgress.test.ts) (pure helpers) + [`frontend/src/components/scan/ScanProgress.test.tsx`](../frontend/src/components/scan/ScanProgress.test.tsx) (rendering, incl. the unmapped-stage fallback).
+- **Last verified:** 2026-07-03 (#740 — initial web port of throughput/ETA/localized stages).
+
+---
+
 ### Web — desktop shell (pywebview launcher)
 
 - **Entry point:** [launcher.py](../launcher.py) (repo root) — a unified entry point that dispatches on the `PHOTO_MANAGER_WEB` environment variable.
