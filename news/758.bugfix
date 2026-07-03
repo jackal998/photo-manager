@@ -1,0 +1,1 @@
+The web scan dialog now remembers the "Auto-tune reader concurrency" toggle across launches, and the full-resolution viewer's zoom range matches the desktop (5%–800%). (#758)
