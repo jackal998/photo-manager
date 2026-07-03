@@ -385,6 +385,11 @@ _TRANSLATION_EXEMPT_KEYS: frozenset[str] = frozenset({
     # natural-language structure that differs by locale); this one is
     # the format-template degenerate case.
     "action_dialog.pattern_summary_numeric_threshold",
+    # Web analog of the above (#741): the same `{field} {op} {value}`
+    # placeholder + math-operator template — nothing language-specific to
+    # translate. The other three web.action_dialog.pattern_summary_* keys ARE
+    # translated (Simple/Regex/TopN have locale-specific natural-language form).
+    "web.action_dialog.pattern_summary_numeric_threshold",
     # Language autonyms in the web View → Language switcher: each language
     # is shown in its own name in every locale (standard i18n practice), so
     # "English" stays "English" in zh_TW. (The zh entry "中文 (繁體)" passes
