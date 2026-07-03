@@ -507,6 +507,25 @@ Disabled when every matched row is locked (no unlocked subset)."""
 ACTION_LOCK_CONFIRM_BTN_CANCEL = "action-lock-confirm-btn-cancel"
 """'Cancel' — dismiss the inline lock dialog, write nothing."""
 
+# --- ActionDialog "Recent" patterns (#741 sub-item B) ----------------------
+
+ACTION_RECENT_SELECT = "action-recent-select"
+"""Jump-menu combo listing recent patterns for the current field; picking an
+entry fills the pattern input. Always resets to its placeholder option after
+a pick (it is a trigger, not a persistent value)."""
+
+ACTION_RECENT_CLEAR = "action-recent-clear"
+"""Button that clears the whole Recent list (all fields), shown only when
+at least one entry is visible for the current field."""
+
+# --- ActionDialog pattern-aware delete-confirm (#741 sub-item C) -----------
+
+ACTION_DELETE_CONFIRM_SUMMARY = "action-delete-confirm-summary"
+"""Pattern-summary sentence inside the delete-confirm dialog body — e.g.
+"File Name contains 'IMG'". Only rendered when DeleteConfirmDialog is given
+a patternSummary prop (the ActionDialog bulk-decide caller; the generic
+execute-flow caller never sets it)."""
+
 # ---------------------------------------------------------------------------
 # Settings dialog
 # ---------------------------------------------------------------------------

@@ -178,3 +178,23 @@ class TestPatchSettings:
 
         on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
         assert on_disk["scan"]["exif_workers"] == 6
+
+    def test_recent_patterns_round_trip(self, client, tmp_settings: Path):
+        """ui.action_dialog.recent_patterns (#741 sub-item B) round-trips a
+        list of [field-or-null, pattern] 2-element arrays — the JSON shape
+        of the Qt select_dialog.py (field, pattern) tuple list. A scalar
+        round-trip (test_round_trip_allowlisted_key) wouldn't catch a
+        nested-list-with-null value being mishandled by JsonSettings.set.
+        """
+        entries = [["File Name", "IMG"], [None, "legacy_pattern"]]
+        resp = client.patch("/api/settings", json={
+            "updates": {"ui.action_dialog.recent_patterns": entries}
+        })
+        assert resp.status_code == 200
+        assert resp.json()["updated"] == 1
+
+        body = client.get("/api/settings").json()
+        assert body["ui.action_dialog.recent_patterns"] == entries
+
+        on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
+        assert on_disk["ui"]["action_dialog"]["recent_patterns"] == entries

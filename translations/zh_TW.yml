@@ -468,6 +468,18 @@ web:
     lock_conflict_body: "有 {n} 個鎖定的列會受影響。要解鎖並一併套用嗎？"
     unlock_and_apply: "解鎖並套用"
     unlocked_only: "僅套用至未鎖定"
+    # #741 sub-item B — 最近使用的樣式。
+    recent_button: "最近使用:"
+    recent_empty: "(尚無最近使用的樣式)"
+    recent_clear: "清除"
+    # #741 sub-item C — 樣式摘要文字。
+    pattern_summary_simple: "{field} {op}「{text}」"
+    pattern_summary_regex: "{field} 正規式「{pattern}」"
+    pattern_summary_numeric_threshold: "{field} {op} {value}"
+    pattern_summary_numeric_topn: "依 {field} 取每組{order} {n} 筆"
+    delete_confirm_title: "確認批次刪除決策"
+    delete_confirm_body: "這將把 {matched} 個檔案標記為刪除，條件為 {summary}。檔案要等到執行「執行動作」時才會移至回收桶。"
+    delete_confirm_button: "標記 {matched} 個檔案為刪除"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
     file: "檔案"

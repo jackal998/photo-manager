@@ -156,6 +156,13 @@ export interface SettingsMap {
   "sources.list"?: unknown;
   /** ScanDialog output-path persistence (#678-E / s23a/s23b). */
   "sources.output"?: string | null;
+  /**
+   * ActionDialog "Recent" list (#741 sub-item B): an array of
+   * [field-or-null, pattern] tuples, most-recent-first, capped at 10. Same
+   * settings.json key the Qt select_dialog.py uses — see
+   * frontend/src/lib/recentPatterns.ts.
+   */
+  "ui.action_dialog.recent_patterns"?: unknown;
 }
 
 // ---------------------------------------------------------------------------

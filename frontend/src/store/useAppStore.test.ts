@@ -1042,6 +1042,33 @@ describe("useAppStore action slice (bulk-decide)", () => {
     ).rejects.toBe(conflict);
   });
 
+  it("applyBulkDecide passes an empty pattern straight through to the API (#741 sub-item A no-op proof)", async () => {
+    // The FE Apply-button gate no longer blocks an empty pattern (#741 —
+    // #397 regression fix). This test proves the WIRING doesn't add its own
+    // block either: an empty pattern reaches the API call unmodified. The
+    // other half of the no-op proof — that the backend resolves an empty
+    // pattern to ZERO matches — is already pinned server-side at
+    // core/app_service/action_resolve.py:341 (`if not pattern: return []`)
+    // and tests/test_action_resolve.py's empty-pattern-guard test.
+    useAppStore.setState((s) => ({
+      manifest: { ...s.manifest, path: "/m/test.db" },
+      action: { ...s.action, field: "File Name", pattern: "", action: "delete" },
+    }));
+    vi.mocked(client.bulkDecide).mockReset().mockResolvedValueOnce({
+      matched: 0,
+      affected_paths: [],
+      action_applied: "decision",
+      groups: [],
+    } as never);
+
+    await useAppStore.getState().applyBulkDecide();
+
+    expect(client.bulkDecide).toHaveBeenCalledWith(
+      expect.objectContaining({ pattern: "" })
+    );
+    expect(useAppStore.getState().action.previewMatched).toBe(0);
+  });
+
   it("previewBulkDecide drops a stale out-of-order response (latest wins)", async () => {
     // Preview A is issued first but resolves LAST; preview B is issued second
     // and resolves first. Only B (the latest request) may commit — A's late

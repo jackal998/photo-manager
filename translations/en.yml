@@ -561,6 +561,19 @@ web:
     lock_conflict_body: "{n} locked row(s) would be affected. Unlock and apply anyway?"
     unlock_and_apply: "Unlock & Apply"
     unlocked_only: "Apply to Unlocked Only"
+    # #741 sub-item B — Recent patterns (mirrors Qt's action_dialog.recent_*).
+    recent_button: "Recent:"
+    recent_empty: "(no recent patterns)"
+    recent_clear: "Clear"
+    # #741 sub-item C — pattern-to-human-summary (mirrors Qt's
+    # action_dialog.pattern_summary_* and delete_regex_confirm.*).
+    pattern_summary_simple: "{field} {op} '{text}'"
+    pattern_summary_regex: "{field} regex '{pattern}'"
+    pattern_summary_numeric_threshold: "{field} {op} {value}"
+    pattern_summary_numeric_topn: "{order} {n} per group by {field}"
+    delete_confirm_title: "Confirm bulk-delete decision"
+    delete_confirm_body: "This will mark {matched} file(s) for deletion via {summary}. Files move to the Recycle Bin only once you run Execute Action."
+    delete_confirm_button: "Mark {matched} files for deletion"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
     file: "File"

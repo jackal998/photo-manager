@@ -32,6 +32,15 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     # web ScanDialog pre-fill/display the exif worker count the way the
     # POST /api/scan resolver (WebScanRequest.resolved_with) reads it.
     "scan.exif_workers",
+    # #741 sub-item B — ActionDialog "Recent" patterns. Value is a list of
+    # [field-or-null, pattern] 2-element arrays (JSON serialisation of the
+    # Qt select_dialog.py tuple shape), most-recent-first, capped at 10.
+    # This is the SAME settings key the Qt ActionDialog persists under
+    # (ui.action_dialog.recent_patterns) — sharing the key lets Recent
+    # entries round-trip between the desktop and web ports when they point
+    # at the same settings.json. Read on the web ActionDialog's open,
+    # written after a successful non-numeric-field Apply.
+    "ui.action_dialog.recent_patterns",
 )
 
 

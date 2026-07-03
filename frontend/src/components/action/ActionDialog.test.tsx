@@ -11,11 +11,20 @@
 //   8. Numeric threshold encodes "__cmp__:>=:VALUE" in the pattern.
 //   9. Numeric top-N encodes "__top_n__:N:desc" for "top" order.
 //  10. Preview: pattern change triggers previewBulkDecide and renders counter.
-//  11. Apply button disabled when pattern is empty.
+//  11. Apply button is ENABLED even when pattern is empty (#741 sub-item A —
+//      the #397 regression fix; the backend no-ops on an empty pattern).
 //  12. Apply button disabled when manifest is not loaded.
 //  13. Delete action shows DeleteConfirmDialog before applying.
 //  14. 409 locked_paths surfaces the lock-confirm overlay.
 //  15. Non-delete action calls applyBulkDecide directly (no confirm).
+//  19. Clicking Apply with an empty pattern reaches applyBulkDecide (#741 A).
+//  20. Recent select fills the pattern field when an entry is picked (#741 B).
+//  21. Recent select is filtered to the current field + legacy null-field entries.
+//  22. Delete-confirm shows the pattern summary + "Mark N files for deletion" (#741 C).
+//  23. Regression: Apply records the CURRENT pattern (not a stale one captured
+//      at mount) after the pattern changes post-mount — the #741 stale-closure
+//      fix (handleApply now depends on doApply, which itself depends on
+//      [field, pattern]).
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -44,10 +53,23 @@ import {
   ACTION_LOCK_CONFIRM_DIALOG,
   ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY,
   ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY,
+  ACTION_RECENT_SELECT,
+  ACTION_RECENT_CLEAR,
+  ACTION_DELETE_CONFIRM_SUMMARY,
   EXECUTE_ALL_DELETE_CONFIRM,
   EXECUTE_ALL_DELETE_CONFIRM_YES,
 } from "@/testids";
-import { ApiConflictError } from "@/api/client";
+import { ApiConflictError, getSettings, patchSettings } from "@/api/client";
+import { RECENT_PATTERNS_KEY } from "@/lib/recentPatterns";
+
+vi.mock("@/api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/client")>();
+  return {
+    ...actual,
+    getSettings: vi.fn(),
+    patchSettings: vi.fn(),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -120,6 +142,9 @@ describe("ActionDialog", () => {
       applyBulkDecide: applyMock,
     } as never);
     resetStore();
+    // Default: no persisted recent patterns. Individual tests override with
+    // mockResolvedValueOnce for the Recent-select cases.
+    vi.mocked(getSettings).mockReset().mockResolvedValue({} as never);
   });
 
   afterEach(() => {
@@ -320,11 +345,39 @@ describe("ActionDialog", () => {
     expect(screen.getByTestId(ACTION_PREVIEW_LIST)).toBeInTheDocument();
   });
 
-  // 11. Apply button disabled when pattern is empty
-  it("Apply button is disabled when pattern is empty", () => {
+  // 11. Apply button is ENABLED even when pattern is empty (#741 sub-item A
+  // — the #397 regression fix. The backend no-ops on an empty pattern:
+  // core/app_service/action_resolve.py:341 `if not pattern: return []`,
+  // pinned by tests/test_action_resolve.py's empty-pattern-guard test — so
+  // gating the button on it was pure friction with no safety value.)
+  it("Apply button is enabled even when pattern is empty (#741 sub-item A)", () => {
     openDialog();
     render(<ActionDialog />);
-    expect(screen.getByTestId(ACTION_BTN_APPLY)).toBeDisabled();
+    expect(screen.getByTestId(ACTION_BTN_APPLY)).not.toBeDisabled();
+  });
+
+  // 19. Clicking Apply with an empty pattern reaches applyBulkDecide — proves
+  // the click is no longer blocked by the removed gate. (The "resolves to no
+  // paths" half of the no-op proof is a store-level test in
+  // useAppStore.test.ts, since applyBulkDecide reads pattern from the store,
+  // not from an argument this component passes.)
+  it("clicking Apply with an empty pattern reaches applyBulkDecide (#741 sub-item A)", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          field: "File Name",
+          pattern: "",
+          action: "__ignore__", // non-delete: skip the confirm dialog for this check
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+    expect(applyMock).toHaveBeenCalledWith({});
   });
 
   // 12. Apply button disabled when manifest not loaded
@@ -559,5 +612,192 @@ describe("ActionDialog", () => {
     expect(screen.getByTestId(ACTION_SIMPLE_DISABLED_NOTE)).toBeInTheDocument();
     // The Regex input must remain the interactive escape hatch.
     expect(screen.getByTestId(ACTION_REGEX_INPUT)).not.toBeDisabled();
+  });
+
+  // 20. Recent select fills the pattern field when an entry is picked (#741 B).
+  it("Recent select fills the pattern field when an entry is picked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValueOnce({
+      "ui.action_dialog.recent_patterns": [["File Name", "IMG"]],
+    } as never);
+    const setPatternMock = vi.fn();
+    useAppStore.setState({ setActionPattern: setPatternMock } as never);
+
+    openDialog(); // field defaults to "File Name"
+    render(<ActionDialog />);
+
+    const select = await screen.findByTestId(ACTION_RECENT_SELECT);
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).options.length).toBeGreaterThan(1);
+    });
+    await user.selectOptions(select, "IMG");
+
+    expect(setPatternMock).toHaveBeenCalledWith("IMG");
+  });
+
+  // 21. Recent select is filtered to the current field + legacy null-field entries.
+  it("Recent select only shows entries for the current field plus legacy null-field entries", async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce({
+      "ui.action_dialog.recent_patterns": [
+        ["File Name", "IMG"],
+        ["Folder", "2024"],
+        [null, "legacy_any_field"],
+      ],
+    } as never);
+
+    openDialog(); // field defaults to "File Name"
+    render(<ActionDialog />);
+
+    const select = await screen.findByTestId(ACTION_RECENT_SELECT);
+    await waitFor(() => {
+      const values = Array.from((select as HTMLSelectElement).options).map((o) => o.value);
+      expect(values).toContain("IMG");
+    });
+    const values = Array.from((select as HTMLSelectElement).options).map((o) => o.value);
+    expect(values).toContain("legacy_any_field");
+    expect(values).not.toContain("2024");
+  });
+
+  it("Clear removes all recent entries and persists the empty list", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValueOnce({
+      "ui.action_dialog.recent_patterns": [["File Name", "IMG"]],
+    } as never);
+
+    openDialog();
+    render(<ActionDialog />);
+
+    const clearBtn = await screen.findByTestId(ACTION_RECENT_CLEAR);
+    await user.click(clearBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(ACTION_RECENT_CLEAR)).not.toBeInTheDocument();
+    });
+    expect(patchSettings).toHaveBeenCalledWith({
+      "ui.action_dialog.recent_patterns": [],
+    });
+  });
+
+  // 22. Delete-confirm shows the pattern summary + "Mark N files for deletion" (#741 C).
+  it("delete-confirm shows the pattern summary and 'Mark N files for deletion' button", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          field: "File Name",
+          pattern: "IMG",
+          action: "delete",
+          previewMatched: 3,
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    const summary = await screen.findByTestId(ACTION_DELETE_CONFIRM_SUMMARY);
+    expect(summary).toHaveTextContent("File Name contains 'IMG'");
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES)).toHaveTextContent(
+      "Mark 3 files for deletion"
+    );
+  });
+
+  it("delete-confirm falls back to the raw regex for a complex pattern", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          field: "File Name",
+          pattern: "IMG_\\d+",
+          action: "delete",
+          previewMatched: 2,
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    const summary = await screen.findByTestId(ACTION_DELETE_CONFIRM_SUMMARY);
+    expect(summary).toHaveTextContent("File Name regex 'IMG_\\d+'");
+  });
+
+  // Applying an empty pattern with "delete" selected shows the confirm with a
+  // 0 count (deferred-decision copy) — the destructive path is still gated by
+  // the confirm dialog even though Apply itself is enabled (#741 A + C).
+  it("delete-confirm shows a 0 count when applying an empty pattern with 'delete' selected", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          field: "File Name",
+          pattern: "",
+          action: "delete",
+          previewMatched: -1, // no preview has run for an empty pattern
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES)).toHaveTextContent(
+      "Mark 0 files for deletion"
+    );
+  });
+
+  // 23. Regression coverage for the stale-closure fix: doApply used to be
+  // recreated only when [action] changed, so a handleApply built at mount
+  // time (pattern "A") kept closing over that stale pattern even after the
+  // user typed a new one ("B") before clicking Apply — Recent would have
+  // recorded "A" (or been skipped) instead of "B". Now that doApply depends
+  // on [field, pattern], changing the pattern after mount must be reflected
+  // in what gets recorded.
+  it("records the CURRENT pattern into Recent after the pattern changes post-mount, not the stale mount-time value (#741 stale-closure fix)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValueOnce({} as never);
+
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          field: "File Name",
+          pattern: "A",
+          action: "__ignore__", // non-delete: applies directly, no confirm gate
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+
+    // Change the pattern AFTER the initial render/mount — this is exactly
+    // the scenario the stale-closure bug broke.
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: { ...s.action, pattern: "B" },
+      }));
+    });
+
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    expect(applyMock).toHaveBeenCalledWith({});
+    expect(patchSettings).toHaveBeenCalledWith({
+      [RECENT_PATTERNS_KEY]: [["File Name", "B"]],
+    });
+    // Never recorded the stale "A" pattern as the front entry.
+    expect(patchSettings).not.toHaveBeenCalledWith({
+      [RECENT_PATTERNS_KEY]: [["File Name", "A"]],
+    });
   });
 });

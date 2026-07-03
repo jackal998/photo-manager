@@ -9,6 +9,7 @@
 import { type ChangeEvent, useCallback, useRef, useState } from "react";
 
 import { useT } from "@/i18n/useT";
+import { escapeRegex } from "@/lib/regexEscape";
 import {
   ACTION_REGEX_ROW,
   ACTION_REGEX_INPUT,
@@ -24,11 +25,6 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Escape a string for safe embedding in a regex. */
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 type SimpleOp = "contains" | "starts_with" | "ends_with" | "exact";
 

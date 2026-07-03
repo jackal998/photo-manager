@@ -26,7 +26,15 @@ import { Button } from "@/components/ui/button";
 
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
-import { ApiConflictError } from "@/api/client";
+import { ApiConflictError, getSettings, patchSettings } from "@/api/client";
+import {
+  parseRecentPatterns,
+  recordRecentPattern,
+  visibleRecentPatterns,
+  RECENT_PATTERNS_KEY,
+  type RecentPatternEntry,
+} from "@/lib/recentPatterns";
+import { buildPatternSummary } from "@/lib/patternSummary";
 import {
   ACTION_DIALOG,
   ACTION_FIELD_COMBO,
@@ -39,11 +47,19 @@ import {
   ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY,
   ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY,
   ACTION_LOCK_CONFIRM_BTN_CANCEL,
+  ACTION_RECENT_SELECT,
+  ACTION_RECENT_CLEAR,
 } from "@/testids";
 
 import { RegexPanel } from "./RegexPanel";
 import { NumericPanel } from "./NumericPanel";
 import { DeleteConfirmDialog } from "@/components/dialogs/DeleteConfirmDialog";
+
+// Sentinel for the Recent <select> — a jump-menu control, not a persistent
+// value: picking a real entry fires onChange then the select is reset back
+// to this placeholder. Distinct from any real pattern (recordRecentPattern
+// never stores an empty/whitespace-only pattern).
+const RECENT_SENTINEL = "__recent_none__";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -125,6 +141,13 @@ export function ActionDialog() {
     number | null
   >(null);
 
+  // Recent patterns (#741 sub-item B) — local dialog state (mirrors how
+  // RegexPanel keeps its own Simple-mode local state), loaded fresh on every
+  // dialog open and written after a successful non-numeric Apply in doApply
+  // below. Kept out of the Zustand store since it's ephemeral UI state for
+  // this one dialog, not app-wide data other components need to read.
+  const [recentPatterns, setRecentPatterns] = useState<RecentPatternEntry[]>([]);
+
   // Debounce timer ref
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -161,22 +184,48 @@ export function ActionDialog() {
   }, [field, pattern]);
 
   // ---------------------------------------------------------------------------
-  // Apply handler
+  // Recent patterns — read on dialog open (#741 sub-item B)
   // ---------------------------------------------------------------------------
 
-  const handleApply = useCallback(async () => {
-    if (action === "delete") {
-      setDeleteConfirmOpen(true);
-      return;
-    }
-    await doApply({});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [action]);
+  useEffect(() => {
+    if (!actionDialogOpen) return;
+    let cancelled = false;
+    void getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        setRecentPatterns(parseRecentPatterns(settings[RECENT_PATTERNS_KEY]));
+      })
+      .catch(() => {
+        // Settings unreadable — Recent starts empty; the dialog is fully usable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actionDialogOpen]);
+
+  // ---------------------------------------------------------------------------
+  // Apply handler
+  // ---------------------------------------------------------------------------
 
   const doApply = useCallback(
     async (opts: { forceLocked?: boolean; skipLocked?: boolean }) => {
       try {
         await applyBulkDecide(opts);
+        // Recent patterns (#741 sub-item B): record AFTER a successful apply
+        // (mirrors Qt's A9/#347 ordering — a pattern that never actually
+        // applied should never enter Recent). Numeric fields are excluded:
+        // their __cmp__:/__top_n__: pseudo-patterns would be meaningless in
+        // the Recent list, which only ever re-fills the regex/simple input
+        // (mirrors Qt's `if not self._field_panel_is_numeric()` gate).
+        if (!isNumeric) {
+          setRecentPatterns((prev) => {
+            const next = recordRecentPattern(prev, field, pattern);
+            if (next !== prev) {
+              void patchSettings({ [RECENT_PATTERNS_KEY]: next });
+            }
+            return next;
+          });
+        }
         closeActionDialog();
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
@@ -188,8 +237,20 @@ export function ActionDialog() {
         // Other errors are handled via store.actionError — no throw needed
       }
     },
-    [applyBulkDecide, closeActionDialog],
+    [applyBulkDecide, closeActionDialog, isNumeric, field, pattern],
   );
+
+  // Apply button: "delete" opens the confirm gate; every other action applies
+  // directly. Depends on doApply (not just action) so it never closes over a
+  // stale pattern — doApply's identity changes with field/pattern, so an
+  // [action]-only dep list recorded a stale/empty Recent entry (#741 fix).
+  const handleApply = useCallback(async () => {
+    if (action === "delete") {
+      setDeleteConfirmOpen(true);
+      return;
+    }
+    await doApply({});
+  }, [action, doApply]);
 
   const handleDeleteConfirmConfirm = useCallback(async () => {
     setDeleteConfirmOpen(false);
@@ -225,6 +286,26 @@ export function ActionDialog() {
     },
     [actionRunning, closeActionDialog]
   );
+
+  // ---------------------------------------------------------------------------
+  // Recent patterns handlers (#741 sub-item B)
+  // ---------------------------------------------------------------------------
+
+  const visibleRecent = visibleRecentPatterns(recentPatterns, field);
+
+  const handleRecentSelect = useCallback(
+    (e: ChangeEvent<HTMLSelectElement>) => {
+      const value = e.target.value;
+      if (value === RECENT_SENTINEL) return;
+      setActionPattern(value);
+    },
+    [setActionPattern]
+  );
+
+  const handleClearRecent = useCallback(() => {
+    setRecentPatterns([]);
+    void patchSettings({ [RECENT_PATTERNS_KEY]: [] });
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Field combo handler
@@ -283,6 +364,16 @@ export function ActionDialog() {
 
   const actionSelectValue = action === "" ? KEEP_SENTINEL : action;
 
+  // Localised field label + pattern-aware summary for the delete-confirm
+  // dialog (#741 sub-item C). Pure function of (fieldDisplay, pattern) — see
+  // lib/patternSummary.ts doc comment for why this can't go stale.
+  const fieldEntry = FIELDS.find((f) => f.label === field);
+  const fieldDisplay = t(
+    `web.column.${fieldEntry?.key ?? field}`,
+    fieldEntry?.label ?? field
+  );
+  const patternSummary = buildPatternSummary(fieldDisplay, pattern, t);
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -292,6 +383,7 @@ export function ActionDialog() {
       <DeleteConfirmDialog
         open={deleteConfirmOpen}
         deleteCount={previewMatched >= 0 ? previewMatched : 0}
+        patternSummary={patternSummary}
         onConfirm={() => void handleDeleteConfirmConfirm()}
         onCancel={handleDeleteConfirmCancel}
       />
@@ -368,6 +460,45 @@ export function ActionDialog() {
               {t("web.action_dialog.title", "Set Action by Field")}
             </DialogTitle>
           </DialogHeader>
+
+          {/* Recent patterns (#741 sub-item B) — mirrors Qt's Recent row
+              positioned above the Field combo. A jump-menu <select>: picking
+              a real entry fills the pattern input then resets back to the
+              placeholder option. Filtered to entries recorded for the
+              current field (plus legacy null-field entries, which apply to
+              any field) via visibleRecentPatterns. */}
+          <div className="flex items-center gap-2 mt-2">
+            <label className="text-sm font-medium w-20 flex-shrink-0">
+              {t("web.action_dialog.recent_button", "Recent:")}
+            </label>
+            <select
+              data-testid={ACTION_RECENT_SELECT}
+              value={RECENT_SENTINEL}
+              onChange={handleRecentSelect}
+              className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1"
+            >
+              <option value={RECENT_SENTINEL} disabled>
+                {visibleRecent.length === 0
+                  ? t("web.action_dialog.recent_empty", "(no recent patterns)")
+                  : t("web.action_dialog.recent_button", "Recent:")}
+              </option>
+              {visibleRecent.map(([, pat], i) => (
+                <option key={`${pat}-${i}`} value={pat}>
+                  {pat}
+                </option>
+              ))}
+            </select>
+            {visibleRecent.length > 0 && (
+              <button
+                type="button"
+                data-testid={ACTION_RECENT_CLEAR}
+                onClick={handleClearRecent}
+                className="text-xs text-neutral-500 underline hover:text-neutral-700 flex-shrink-0"
+              >
+                {t("web.action_dialog.recent_clear", "Clear")}
+              </button>
+            )}
+          </div>
 
           {/* Field selector */}
           <div className="flex items-center gap-3 mt-2">
@@ -500,7 +631,7 @@ export function ActionDialog() {
               type="button"
               data-testid={ACTION_BTN_APPLY}
               onClick={() => void handleApply()}
-              disabled={actionRunning || pattern === "" || manifestPath === null}
+              disabled={actionRunning || manifestPath === null}
             >
               {actionRunning
                 ? t("web.action_dialog.applying", "Applying…")

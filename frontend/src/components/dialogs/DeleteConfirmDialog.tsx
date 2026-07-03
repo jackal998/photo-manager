@@ -16,6 +16,15 @@
 // Props-driven: the caller (ExecuteDialog) passes open/onConfirm/onCancel,
 // the file count, and the qualifying group IDs. This keeps the component
 // pure and easy to test.
+//
+// #741 sub-item C — pattern-aware variant: when the caller (the ActionDialog
+// bulk-decide flow) passes `patternSummary`, this OVERRIDES the two generic
+// branches above with Qt-parity DEFERRED-DECISION copy (mirrors
+// app/views/dialogs/delete_regex_confirm_dialog.py::DeleteRegexConfirmDialog)
+// — Apply only QUEUES a decision; nothing is deleted until Execute Action
+// runs, so the wording must say "mark for deletion", not "will be deleted".
+// The prop is optional/additive: every existing caller (no patternSummary)
+// keeps its pre-existing copy unchanged.
 
 import {
   Dialog,
@@ -26,7 +35,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/useT";
 import {
+  ACTION_DELETE_CONFIRM_SUMMARY,
   EXECUTE_ALL_DELETE_CONFIRM,
   EXECUTE_ALL_DELETE_CONFIRM_NO,
   EXECUTE_ALL_DELETE_CONFIRM_YES,
@@ -41,6 +52,14 @@ export interface DeleteConfirmDialogProps {
    * bulk-decide ActionDialog) — falls back to the generic copy below.
    */
   groupIds?: string[];
+  /**
+   * Human-readable pattern summary (see lib/patternSummary.ts), e.g.
+   * "File Name contains 'IMG'". When present, this dialog renders the
+   * pattern-aware deferred-decision copy instead of the generic branches
+   * below — see the module doc comment. Undefined for every non-ActionDialog
+   * caller (unchanged behaviour).
+   */
+  patternSummary?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -49,19 +68,43 @@ export function DeleteConfirmDialog({
   open,
   deleteCount,
   groupIds = [],
+  patternSummary,
   onConfirm,
   onCancel,
 }: DeleteConfirmDialogProps) {
+  const t = useT();
   const hasGroups = groupIds.length > 0;
+  const hasPatternSummary = patternSummary !== undefined;
+
+  const title = hasPatternSummary
+    ? t("web.action_dialog.delete_confirm_title", "Confirm bulk-delete decision")
+    : hasGroups
+    ? "Entire group(s) will be deleted"
+    : "Delete all files?";
+
+  const confirmLabel = hasPatternSummary
+    ? t(
+        "web.action_dialog.delete_confirm_button",
+        "Mark {matched} files for deletion",
+        { matched: deleteCount }
+      )
+    : "Yes, delete all";
+
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
       <DialogContent data-testid={EXECUTE_ALL_DELETE_CONFIRM}>
         <DialogHeader>
-          <DialogTitle>
-            {hasGroups ? "Entire group(s) will be deleted" : "Delete all files?"}
-          </DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {hasGroups ? (
+            {hasPatternSummary ? (
+              <span data-testid={ACTION_DELETE_CONFIRM_SUMMARY}>
+                {t(
+                  "web.action_dialog.delete_confirm_body",
+                  "This will mark {matched} file(s) for deletion via {summary}. Files move to the Recycle Bin only once you run Execute Action.",
+                  { matched: deleteCount, summary: patternSummary }
+                )}
+              </span>
+            ) : hasGroups ? (
               <>
                 Group(s) {groupIds.join(", ")} will have EVERY file deleted (
                 {deleteCount} {deleteCount === 1 ? "file" : "files"} will be
@@ -89,7 +132,7 @@ export function DeleteConfirmDialog({
             data-testid={EXECUTE_ALL_DELETE_CONFIRM_YES}
             onClick={onConfirm}
           >
-            Yes, delete all
+            {confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

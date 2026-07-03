@@ -10,6 +10,9 @@
 //   7. Plural copy: "N files will be deleted" for N > 1.
 //   8. Singular copy: "1 file will be deleted" for N === 1.
 //   9. Body names the qualifying group IDs (#733 Qt-parity copy).
+//  10. patternSummary prop (#741 sub-item C): overrides title + shows the
+//      summary sentence + confirm button reads "Mark N files for deletion".
+//  11. Generic callers (no patternSummary) are unaffected — additive prop.
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -17,6 +20,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import {
+  ACTION_DELETE_CONFIRM_SUMMARY,
   EXECUTE_ALL_DELETE_CONFIRM,
   EXECUTE_ALL_DELETE_CONFIRM_NO,
   EXECUTE_ALL_DELETE_CONFIRM_YES,
@@ -111,6 +115,57 @@ describe("DeleteConfirmDialog", () => {
     renderDialog(true, 3, ["3", "5"]);
     expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toHaveTextContent(
       "Group(s) 3, 5 will have EVERY file deleted"
+    );
+  });
+
+  // 10. patternSummary prop (#741 sub-item C).
+  it("shows the pattern summary and 'Mark N files for deletion' when patternSummary is set", () => {
+    render(
+      <DeleteConfirmDialog
+        open={true}
+        deleteCount={5}
+        patternSummary="File Name contains 'IMG'"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId(ACTION_DELETE_CONFIRM_SUMMARY)).toHaveTextContent(
+      "File Name contains 'IMG'"
+    );
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES)).toHaveTextContent(
+      "Mark 5 files for deletion"
+    );
+    // The generic "will be deleted" / "delete all" copy must NOT appear —
+    // the deferred-decision wording is the whole point of this variant.
+    expect(
+      screen.queryByText(/delete all files\?/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking the pattern-summary confirm button still calls onConfirm", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <DeleteConfirmDialog
+        open={true}
+        deleteCount={1}
+        patternSummary="Score >= 90"
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await user.click(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES));
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  // 11. Generic (group-based) callers are unaffected by the additive prop.
+  it("omitting patternSummary keeps the generic group-delete copy unchanged", () => {
+    renderDialog(true, 3, ["3", "5"]);
+    expect(
+      screen.queryByTestId(ACTION_DELETE_CONFIRM_SUMMARY)
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES)).toHaveTextContent(
+      "Yes, delete all"
     );
   });
 });
