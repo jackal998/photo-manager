@@ -317,6 +317,13 @@ export const useAppStore = create<AppStore>()(
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
+      // #718 — clear any stale error from a previous action before this one
+      // has a chance to fail; must run before the try/await below so a
+      // clear-then-fail sequence keeps this action's own error.
+      set((state) => {
+        state.manifest.error = null;
+      });
+
       // Save previous value for revert.
       const previousLocked = readFileRowField(
         get().manifest,
@@ -355,6 +362,13 @@ export const useAppStore = create<AppStore>()(
     async setDecisions(paths, decision, opts = {}) {
       const manifestPath = get().manifest.path;
       if (manifestPath === null || paths.length === 0) return;
+
+      // #718 — clear any stale error from a previous action before this one
+      // has a chance to fail; must run before the try/await below so a
+      // clear-then-fail sequence keeps this action's own error.
+      set((state) => {
+        state.manifest.error = null;
+      });
 
       // Snapshot prior values per path so a failed PATCH reverts every row.
       const previous = new Map<string, DecisionValue>();
@@ -409,6 +423,13 @@ export const useAppStore = create<AppStore>()(
       // A no-op (nothing to lock) is a success, not a failure — callers that
       // branch on the result must not treat an empty list as a rejection.
       if (manifestPath === null || paths.length === 0) return true;
+
+      // #718 — clear any stale error from a previous action before this one
+      // has a chance to fail; must run before the try/await below so a
+      // clear-then-fail sequence keeps this action's own error.
+      set((state) => {
+        state.manifest.error = null;
+      });
 
       const previous = new Map<string, boolean>();
       for (const p of paths) {
@@ -725,6 +746,13 @@ export const useAppStore = create<AppStore>()(
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
+      // #718 — clear any stale error from a previous action before this one
+      // has a chance to fail; must run before the try/await below so a
+      // clear-then-fail sequence keeps this action's own error.
+      set((state) => {
+        state.manifest.error = null;
+      });
+
       try {
         const result = await postRemove({
           manifest_path: manifestPath,
@@ -865,6 +893,14 @@ export const useAppStore = create<AppStore>()(
     },
 
     async resolvePruneLock(verdict) {
+      // #718 — clear any stale error from a previous action first. This
+      // action may itself LATER set its own "held back" unlock-failure error
+      // (below, on a failed unlock) — that later set is unaffected because it
+      // comes after this entry clear, not before it.
+      set((state) => {
+        state.manifest.error = null;
+      });
+
       const pending = get().execute.prunePending;
       const locked = get().execute.lockConflict?.paths ?? [];
       // Close the lock dialog.
@@ -926,6 +962,13 @@ export const useAppStore = create<AppStore>()(
     async saveManifest(targetPath) {
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
+
+      // #718 — clear any stale error from a previous action before this one
+      // has a chance to fail; must run before the try/await below so a
+      // clear-then-fail sequence keeps this action's own error.
+      set((state) => {
+        state.manifest.error = null;
+      });
 
       try {
         await postSave({

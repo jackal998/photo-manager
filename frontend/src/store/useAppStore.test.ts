@@ -1366,6 +1366,110 @@ describe("selection is cleared whenever manifest.groups is replaced", () => {
 });
 
 // ---------------------------------------------------------------------------
+// manifest.error clears on entry (#718) — a stale error from a prior action
+// must not linger after a later action starts, whether it succeeds or fails.
+// ---------------------------------------------------------------------------
+
+/** Stamp a stale manifest.error onto the already-seeded manifest slice. */
+function seedStaleError(message = "stale error from a previous action"): void {
+  useAppStore.setState((s) => ({
+    manifest: { ...s.manifest, error: message },
+  }));
+}
+
+describe("manifest.error clears on entry (#718)", () => {
+  it("setLock success clears a stale error from a previous action", async () => {
+    seedManifest([makeGroup(1, ["/p/lock-clear.jpg"])]);
+    seedStaleError();
+    vi.mocked(client.patchLocks).mockResolvedValue({ updated: 1 });
+
+    await useAppStore.getState().setLock("/p/lock-clear.jpg", true);
+
+    expect(useAppStore.getState().manifest.error).toBeNull();
+  });
+
+  it("setLock failure still ends with ITS OWN error, not the stale one and not null", async () => {
+    seedManifest([makeGroup(1, ["/p/lock-fail.jpg"])]);
+    seedStaleError();
+    vi.mocked(client.patchLocks).mockRejectedValue(new Error("new lock failure"));
+
+    await useAppStore.getState().setLock("/p/lock-fail.jpg", true);
+
+    // Clear-then-fail: the entry clear runs first, then the catch block's
+    // own set — the stale message must never survive and null would wrongly
+    // mean "no failure happened".
+    expect(useAppStore.getState().manifest.error).toBe("new lock failure");
+  });
+
+  it("setDecisions success clears a stale error from a previous action", async () => {
+    seedManifest([makeGroup(1, ["/p/dec-clear.jpg"])]);
+    seedStaleError();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 1 });
+
+    await useAppStore.getState().setDecisions(["/p/dec-clear.jpg"], "delete");
+
+    expect(useAppStore.getState().manifest.error).toBeNull();
+  });
+
+  it("setLocks success clears a stale error from a previous action", async () => {
+    seedManifest([makeGroup(1, ["/p/locks-clear.jpg"])]);
+    seedStaleError();
+    vi.mocked(client.patchLocks).mockResolvedValue({ updated: 1 });
+
+    await useAppStore.getState().setLocks(["/p/locks-clear.jpg"], true);
+
+    expect(useAppStore.getState().manifest.error).toBeNull();
+  });
+
+  it("removeFromList success clears a stale error from a previous action", async () => {
+    seedManifest([makeGroup(1, ["/p/remove-clear.jpg"])]);
+    seedStaleError();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ removed: 1, groups: [] })
+    );
+
+    await useAppStore.getState().removeFromList(["/p/remove-clear.jpg"]);
+
+    expect(useAppStore.getState().manifest.error).toBeNull();
+  });
+
+  it("saveManifest success clears a stale error from a previous action", async () => {
+    seedManifest([]);
+    seedStaleError();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ saved_to: "/data/scan.db", updated: 0 })
+    );
+
+    await useAppStore.getState().saveManifest();
+
+    expect(useAppStore.getState().manifest.error).toBeNull();
+  });
+
+  it("resolvePruneLock's own 'held back' error survives the entry clear on a failing unlock", async () => {
+    // Mirrors the #702 "held back" regression setup (see the resolvePruneLock
+    // describe block above), but seeds a STALE manifest.error first to prove
+    // the entry-clear + late-set ordering: the clear must not wipe out the
+    // "held back" message this action sets further down on a failed unlock.
+    const lockGroup = makeGroup(1, ["/p/lock.jpg", "/p/sibling.jpg"]);
+    lockGroup.items[0].is_locked = true;
+    seedManifest([lockGroup]);
+    seedStaleError();
+    useAppStore.setState((s) => ({
+      execute: {
+        ...s.execute,
+        prunePending: { plain: [], actioned: ["/p/x.jpg"], pref: "ask" },
+        lockConflict: { paths: ["/p/lock.jpg"], op: "prune", originalPaths: null },
+      },
+    }));
+    vi.mocked(client.patchLocks).mockRejectedValueOnce(new Error("locks failed"));
+
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+
+    expect(useAppStore.getState().manifest.error).toContain("held back");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // openExecuteDialog scope (#430 group-pull — "Execute (only selected)")
 // ---------------------------------------------------------------------------
 
