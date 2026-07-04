@@ -1,0 +1,1 @@
+The docs-coverage guard no longer blocks a pure refactor of the manifest repository that leaves the schema untouched, and the testing docs now spell out that real-browser interaction behaviour must be proven by a Playwright scenario rather than a jsdom unit test. (#762)
