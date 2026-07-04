@@ -56,6 +56,14 @@ Outcomes:
   user-visible — flag suggesting "add or extend qa/scenarios/
   driver to cover X". Lower severity than missing features.md
   entry (which is Gate 2's ✗).
+- ✗ the diff changes dialog/overlay open-close-dismiss-focus
+  behaviour (Radix/portal dismissal, outside-click/Esc, focus
+  trap, drag, virtualized-list scroll — see docs/testing.md) —
+  a Playwright `qa/web/scenarios/` run (existing scenario or a
+  LEAD live-run) is REQUIRED before merge; a passing jsdom
+  vitest alone does NOT satisfy this (jsdom doesn't dispatch
+  real pointerdown/portal/focus events, so it can pass while the
+  real dialog behaves wrongly).
 
 ## What NOT to flag
 

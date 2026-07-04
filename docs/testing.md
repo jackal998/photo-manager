@@ -460,6 +460,24 @@ npm --prefix frontend run test            # single run
 npm --prefix frontend run test:coverage   # with v8 coverage
 ```
 
+**Real-browser interaction behaviour — jsdom is a smoke test, not proof.**
+jsdom does not implement a real browser's event/portal/focus machinery, so
+a vitest test can pass while the actual behaviour in Chromium is wrong. A
+concrete example: a portal-dialog dismissal test asserted the dialog's
+`open` state flipped to `false` under jsdom and passed — but a live
+Playwright run of the same interaction showed the real dialog never
+closed, because jsdom doesn't dispatch Radix's real `pointerdown` /
+portal / focus events the component depends on. For these behaviour
+classes, the qa-web layer-3 Playwright scenario (real Chromium, driven by
+`web-scenario-batch` CI) is the only test that counts as proof; treat any
+passing jsdom vitest for them as a structural smoke check only:
+
+- Radix/portal open-dismiss behaviour (dialogs, popovers, menus)
+- Outside-click and Escape-key dismissal
+- Focus trap / focus restoration
+- Drag interactions
+- Virtualized-list scroll behaviour
+
 **testid parity** (`tests/test_testid_parity.py`)
 
 `frontend/src/testids.ts` is auto-generated from `qa/web/testid_constants.py`
