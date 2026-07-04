@@ -6,6 +6,16 @@ name: web-eval-gates
 # siblings; the Qt-arm A/B and the real-ProRAW OOM-bound check are dev-rig
 # checkpoints (Qt platform libs / RAW codecs absent here) and auto-skip. The
 # flip of every job here from advisory to blocking is the Phase 4 cutover.
+#   PATH-SCOPING TODO (#622 follow-up): this workflow-level `paths:` filter
+#   is safe ONLY while every job here stays advisory (continue-on-error:
+#   true). A `paths:` filter makes GitHub Actions skip the whole workflow
+#   run (no status posted) for non-matching PRs; if a job is later marked
+#   REQUIRED at Phase 4 cutover, a skipped-but-required check gets stuck
+#   pending forever instead of going green. Before flipping any job here to
+#   required, replace this workflow-level `paths:` filter with the same
+#   job-always-runs + step-level `if:` diff-filter pattern used in
+#   tests.yml (see its "Determine changed-file scope" step) so the job
+#   still reports a fast green on non-matching PRs instead of being skipped.
 on:
   pull_request:
     paths:

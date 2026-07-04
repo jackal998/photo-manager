@@ -18,9 +18,60 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
+      # fetch-depth: 0 so the changed-file filter below can diff against
+      # origin/<base> (same reason pr-gates.yml needs it — see that file).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Path-scoping (#622 follow-up): a pure frontend/docs/news PR still
+      # needs this job to report a green (not skipped/pending) required
+      # check, but shouldn't pay the ~7min Python install+pytest cost. This
+      # job ALWAYS runs; only the expensive steps below are gated on the
+      # filter result, so the required-check never goes stuck-pending.
+      #
+      # Fail-OPEN by construction: on a push event, a non-PR context, or an
+      # empty/unparseable diff, backend defaults to true (run everything).
+      # backend=false requires EVERY changed file to match the allowlist —
+      # any file outside frontend/**, docs/**, news/**, or *.md (including
+      # a brand-new top-level directory) forces backend=true. This is a
+      # deny-then-allowlist, not an allow-then-denylist, so new backend
+      # code added later is caught by default instead of silently skipped.
+      - name: Determine changed-file scope
+        id: filter
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "Non-PR event (${{ github.event_name }}) — always run full suite."
+            exit 0
+          fi
+          BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          CHANGED=$(git diff --name-only "$BASE_REF...HEAD" 2>/dev/null || true)
+          if [ -z "$CHANGED" ]; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "No resolvable diff against $BASE_REF (empty or unparseable) — fail-open, running full suite."
+            exit 0
+          fi
+          echo "Changed files:"
+          echo "$CHANGED"
+          BACKEND="false"
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              frontend/*|docs/*|news/*|*.md) ;;
+              *) BACKEND="true" ;;
+            esac
+          done <<< "$CHANGED"
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+          echo "Resolved backend=$BACKEND"
+
+      - name: Skipped — frontend-only diff
+        if: steps.filter.outputs.backend != 'true'
+        run: echo "Diff only touches frontend/docs/news/*.md — skipping pytest for this PR."
 
       - uses: actions/setup-python@v5
+        if: steps.filter.outputs.backend == 'true'
         with:
           python-version: "3.11"
           cache: pip
@@ -29,17 +80,20 @@ jobs:
             dev-requirements.txt
 
       - name: Install dependencies
+        if: steps.filter.outputs.backend == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
 
       - name: Run pytest with coverage
+        if: steps.filter.outputs.backend == 'true'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest
 
       - name: Per-file coverage floor (every tracked module ≥ 80%)
+        if: steps.filter.outputs.backend == 'true'
         run: python scripts/check_coverage_per_file.py
 
       - name: Upload coverage report
