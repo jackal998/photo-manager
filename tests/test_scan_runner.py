@@ -305,3 +305,175 @@ class TestAutoSelectPipeline:
         assert len(deleted) >= 1, (
             f"aggressive auto-select must mark at least one non-keeper for delete; rows={rows!r}"
         )
+
+    def test_manifest_write_is_atomic_with_auto_select(self, tmp_path):
+        """#651 — positive atomicity check.
+
+        write_manifest() now folds the auto-select keeper lock into the
+        SAME connection/transaction as the row inserts. Read the manifest
+        ONCE and assert it holds both facts at once: every scanned row
+        AND the keeper's lock/decision. Before #651 these were two
+        separate writes (write_manifest, then a standalone
+        apply_auto_select_decisions call) — a crash between them could
+        leave a manifest with all rows but no keeper lock. One coherent
+        read proves that window is gone.
+        """
+        from core.app_service.cancel_token import _CancelToken
+        from core.app_service.dtos import ScanConfig
+        from core.app_service.scan_runner import run_pipeline
+
+        src = tmp_path / "src"
+        src.mkdir()
+        self._make_dup_dir(src)
+        out = tmp_path / "manifest.sqlite"
+
+        config = ScanConfig(
+            sources={"src": src},
+            output_path=out,
+            recursive_map={"src": False},
+            workers=1,
+            exif_workers=1,
+            hash_pool="thread",
+            auto_select_enabled=True,
+        )
+        bus = _SpyBus()
+        run_pipeline(config, _CancelToken(), bus)
+
+        assert bus.failed_msgs == [], (
+            f"run_pipeline must not fail; got bus.failed_msgs={bus.failed_msgs!r}"
+        )
+        assert bus.finished_paths == [str(out)], (
+            f"bus.finished must fire with manifest path; got {bus.finished_paths!r}"
+        )
+
+        rows = self._read_manifest_rows(out)
+        assert len(rows) == 2, (
+            "manifest write must not be skipped/truncated by folding in "
+            f"the auto-select pass; expected 2 rows, got {rows!r}"
+        )
+        names = {Path(r["source_path"]).name for r in rows}
+        assert names == {"a.jpg", "b.jpg"}, f"unexpected rows: {rows!r}"
+
+        locked = [r for r in rows if r["is_locked"]]
+        assert len(locked) == 1, (
+            "exactly one keeper must be locked in the SAME manifest that "
+            f"holds all scanned rows; rows={rows!r}"
+        )
+        assert locked[0]["user_decision"] == "", (
+            f"keeper's user_decision must be canonical ''; got {locked[0]!r}"
+        )
+
+    def test_failed_auto_select_write_leaves_no_partial_manifest(
+        self, tmp_path, monkeypatch
+    ):
+        """#651 — failure-injection rollback proof.
+
+        Inject a failure INSIDE write_manifest's auto-select block (after
+        the row INSERTs, before the commit + os.replace). The whole
+        write_manifest call must raise and output_path must be left
+        completely unchanged — no partial manifest (rows without a
+        keeper lock) is ever swapped into place. This is the exact
+        incoherence window #651 closes: pre-fix, the row INSERTs were
+        already committed and swapped in via a first os.replace() before
+        the separate auto-select write ran, so a crash here used to
+        leave a real, unlocked manifest on disk.
+        """
+        import core.services.auto_select as auto_select_mod
+        from core.app_service.cancel_token import _CancelToken
+        from core.app_service.dtos import ScanConfig
+        from core.app_service.scan_runner import run_pipeline
+
+        src = tmp_path / "src"
+        src.mkdir()
+        self._make_dup_dir(src)
+        out = tmp_path / "manifest.sqlite"
+        assert not out.exists(), "precondition: no prior manifest on first scan"
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("injected failure mid-write (#651 rollback test)")
+
+        # build_auto_select_writes is called from inside write_manifest's
+        # tmp-connection block, AFTER rows are inserted but BEFORE
+        # conn.commit() / os.replace() — the exact seam #651 added.
+        monkeypatch.setattr(auto_select_mod, "build_auto_select_writes", _boom)
+
+        config = ScanConfig(
+            sources={"src": src},
+            output_path=out,
+            recursive_map={"src": False},
+            workers=1,
+            exif_workers=1,
+            hash_pool="thread",
+            auto_select_enabled=True,
+        )
+        bus = _SpyBus()
+
+        with pytest.raises(RuntimeError, match="injected failure mid-write"):
+            run_pipeline(config, _CancelToken(), bus)
+
+        assert not out.exists(), (
+            "a failed auto-select write must NOT leave a partial manifest "
+            "at output_path — os.replace() must never run when the "
+            "in-progress tmp write raised"
+        )
+        assert bus.finished_paths == [], (
+            "bus.finished() must not fire when the manifest write raised"
+        )
+
+    def test_failed_rescan_preserves_prior_manifest(self, tmp_path, monkeypatch):
+        """#651 — the load-bearing durability guarantee: a failed RE-SCAN
+        must never destroy an existing good manifest.
+
+        First write a real manifest (auto-select on → rows + a locked
+        keeper). Then inject a failure inside write_manifest's auto-select
+        block on a second scan to the SAME output_path. The second
+        run_pipeline must raise and the ORIGINAL manifest — every row and
+        the keeper lock — must survive byte-for-byte, because os.replace()
+        is skipped and the destination is never touched. This is the exact
+        real-user scenario #651 protects (re-scanning over prior decisions);
+        the fresh-scan sibling test only proves no partial file is created.
+        """
+        import core.services.auto_select as auto_select_mod
+        from core.app_service.cancel_token import _CancelToken
+        from core.app_service.dtos import ScanConfig
+        from core.app_service.scan_runner import run_pipeline
+
+        src = tmp_path / "src"
+        src.mkdir()
+        self._make_dup_dir(src)
+        out = tmp_path / "manifest.sqlite"
+
+        config = ScanConfig(
+            sources={"src": src},
+            output_path=out,
+            recursive_map={"src": False},
+            workers=1,
+            exif_workers=1,
+            hash_pool="thread",
+            auto_select_enabled=True,
+        )
+
+        # 1. First scan succeeds — capture the good manifest's state.
+        run_pipeline(config, _CancelToken(), _SpyBus())
+        good_rows = self._read_manifest_rows(out)
+        good_bytes = out.read_bytes()
+        assert len(good_rows) == 2 and sum(r["is_locked"] for r in good_rows) == 1, (
+            f"precondition: first scan must write 2 rows + 1 lock; got {good_rows!r}"
+        )
+
+        # 2. Second scan fails inside the folded auto-select write.
+        def _boom(*args, **kwargs):
+            raise RuntimeError("injected failure mid-rescan (#651 clobber test)")
+
+        monkeypatch.setattr(auto_select_mod, "build_auto_select_writes", _boom)
+        with pytest.raises(RuntimeError, match="injected failure mid-rescan"):
+            run_pipeline(config, _CancelToken(), _SpyBus())
+
+        # 3. The prior good manifest must be completely untouched.
+        assert out.read_bytes() == good_bytes, (
+            "a failed re-scan must leave the prior manifest byte-identical — "
+            "os.replace() must never swap in the aborted tmp write"
+        )
+        assert self._read_manifest_rows(out) == good_rows, (
+            "prior rows/locks must survive a failed re-scan intact"
+        )

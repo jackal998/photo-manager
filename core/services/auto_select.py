@@ -31,6 +31,55 @@ from collections import defaultdict
 from typing import Iterable
 
 
+def build_auto_select_writes(
+    keepers: set[str],
+    non_keepers_for_delete: set[str] | None = None,
+) -> tuple[dict[str, str], dict[str, bool]]:
+    """Build the ``(decisions, lock_states)`` write-sets for the post-scan
+    auto-select pass. Pure — no I/O, no schema access.
+
+    #651 — extracted from :func:`apply_auto_select_decisions` so
+    ``scanner.manifest.write_manifest`` can fold the SAME write-set
+    into the manifest's own tmp connection (closing the incoherence
+    window where a crash between the manifest write and a separate
+    auto-select write left keepers unlocked), while
+    ``apply_auto_select_decisions`` keeps working standalone for any
+    other caller.
+
+    The canonical stored value for "keep" is the **empty string** —
+    matches what ``settable_decisions()`` returns and what the right-
+    click "Set Action → keep" path writes. Earlier versions wrote the
+    literal ``"keep"`` string which then leaked into the tree's Action
+    column as raw text instead of an empty cell (#425). The lock badge
+    in COL_LOCK is what signals the user that a row was auto-selected
+    as the keeper.
+
+    Args:
+        keepers: Paths of the per-group top-scored rows from
+            :func:`top_score_path_per_group`. Each receives
+            ``user_decision=""`` AND ``is_locked=1``.
+        non_keepers_for_delete: Paths to receive
+            ``user_decision='delete'``. ``None`` (the default) leaves
+            non-keepers' decision untouched — that's the non-aggressive
+            behaviour. Pass an empty set or ``None`` interchangeably;
+            both skip the delete writes.
+
+    Returns:
+        ``(decisions, lock_states)`` — ``decisions`` maps
+        ``source_path -> user_decision``; ``lock_states`` maps
+        ``source_path -> True`` for every keeper.
+    """
+    # #425 — was {p: "keep" ...} which leaked as raw "keep" text in the
+    # tree's Action column. "" is the canonical keep state per
+    # settable_decisions(); the lock badge in COL_LOCK is the user-
+    # visible signal that the row was auto-selected.
+    decisions: dict[str, str] = {p: "" for p in keepers}
+    if non_keepers_for_delete:
+        decisions.update({p: "delete" for p in non_keepers_for_delete})
+    lock_states: dict[str, bool] = {p: True for p in keepers}
+    return decisions, lock_states
+
+
 def apply_auto_select_decisions(
     manifest_path: str,
     keepers: set[str],
@@ -47,13 +96,12 @@ def apply_auto_select_decisions(
     in a scored group (Live Photo MOV passengers, isolated files) are
     NOT included by callers — the caller filters before passing in.
 
-    The canonical stored value for "keep" is the **empty string** —
-    matches what ``settable_decisions()`` returns and what the right-
-    click "Set Action → keep" path writes. Earlier versions of this
-    helper wrote the literal ``"keep"`` string which then leaked into
-    the tree's Action column as raw text instead of an empty cell
-    (#425). The lock badge in COL_LOCK is what signals the user that
-    a row was auto-selected as the keeper.
+    #651 — the scan pipeline itself no longer calls this function (it
+    passes ``keepers`` / ``non_keepers_for_delete`` into
+    ``scanner.manifest.write_manifest`` so the writes land atomically
+    with the manifest). This function remains for any other caller
+    that needs to apply auto-select decisions to an ALREADY-WRITTEN
+    manifest as a separate, non-atomic step.
 
     Args:
         manifest_path: Absolute path to the SQLite manifest just
@@ -78,13 +126,9 @@ def apply_auto_select_decisions(
         # caller can invoke unconditionally without an outer guard.
         return
 
-    # #425 — was {p: "keep" ...} which leaked as raw "keep" text in the
-    # tree's Action column. "" is the canonical keep state per
-    # settable_decisions(); the lock badge in COL_LOCK is the user-
-    # visible signal that the row was auto-selected.
-    decisions: dict[str, str] = {p: "" for p in keepers}
-    if non_keepers_for_delete:
-        decisions.update({p: "delete" for p in non_keepers_for_delete})
+    decisions, lock_states = build_auto_select_writes(
+        keepers, non_keepers_for_delete
+    )
 
     repo = ManifestRepository()
     # Lazy-migrate the schema before writing — ``write_manifest`` uses
@@ -96,9 +140,7 @@ def apply_auto_select_decisions(
     # Single-transaction write — saves one connection-open + one fsync
     # vs the original split call pair. Microsecond gain on local SSD,
     # measurable over SMB/NAS.
-    repo.batch_update_decisions_and_lock(
-        manifest_path, decisions, {p: True for p in keepers}
-    )
+    repo.batch_update_decisions_and_lock(manifest_path, decisions, lock_states)
 
 
 def top_score_path_per_group(rows: Iterable) -> set[str]:

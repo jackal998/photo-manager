@@ -144,6 +144,122 @@ UPDATE migration_manifest SET outcome = ?, executed = ? WHERE source_path = ?
 """
 
 
+def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
+    """#433 — drop the legacy ``dest_path`` column and migrate
+    ``action='MOVE'`` rows to '' (undecided).
+
+    Idempotent: the ``PRAGMA table_info`` guard makes this a no-op
+    on manifests that never had ``dest_path`` (written by the
+    post-#433 scanner) or that have already been migrated.
+
+    Portable: uses the copy-table dance (new table → copy rows →
+    drop old → rename) rather than ``ALTER TABLE DROP COLUMN`` so
+    it works on SQLite < 3.35. The whole rebuild runs in one
+    transaction; the MOVE→'' normalisation is folded into the copy
+    ``SELECT`` via ``CASE``. Row count is preserved exactly — no
+    row is dropped, only ``dest_path`` and the MOVE label go away.
+
+    #584 — ``outcome`` is added as a hardcoded tail (crash-avoidance
+    for ancient dest_path manifests opened after the #584 migration).
+    It is NOT in ``_POST_DROP_COLUMNS`` to avoid a duplicate-column
+    error; it is always written as '' (the default in-review state).
+    """
+    cols = {row[1] for row in conn.execute(
+        "PRAGMA table_info(migration_manifest)"
+    )}
+    if _DROP_MOVE_COLUMN not in cols:
+        return  # already migrated / new-schema manifest — no-op
+
+    select_cols = ", ".join(
+        "CASE WHEN action = 'MOVE' THEN '' ELSE action END AS action"
+        if c == "action" else c
+        for c in _POST_DROP_COLUMNS
+    )
+    insert_cols = ", ".join(_POST_DROP_COLUMNS)
+
+    # Single transaction: build the new table from the canonical DDL,
+    # copy every surviving column (MOVE→'' inline), swap names.
+    conn.executescript(
+        f"""
+        BEGIN;
+        CREATE TABLE migration_manifest_new (
+            id               INTEGER PRIMARY KEY,
+            source_path      TEXT    NOT NULL,
+            source_label     TEXT    NOT NULL,
+            action           TEXT    NOT NULL,
+            source_hash      TEXT,
+            phash            TEXT,
+            hamming_distance INTEGER,
+            group_id         TEXT,
+            reason           TEXT,
+            executed         INTEGER NOT NULL DEFAULT 0,
+            user_decision    TEXT    NOT NULL DEFAULT '',
+            file_size_bytes  INTEGER,
+            shot_date        TEXT,
+            creation_date    TEXT,
+            mtime            TEXT,
+            pixel_width      INTEGER,
+            pixel_height     INTEGER,
+            exif_tag_count   INTEGER,
+            gps_present      INTEGER NOT NULL DEFAULT 0,
+            xmp_derived      INTEGER NOT NULL DEFAULT 0,
+            score            REAL,
+            is_locked        INTEGER NOT NULL DEFAULT 0,
+            outcome          TEXT    NOT NULL DEFAULT ''
+        );
+        INSERT INTO migration_manifest_new ({insert_cols}, is_locked, outcome)
+            SELECT {select_cols}, is_locked, '' FROM migration_manifest;
+        DROP TABLE migration_manifest;
+        ALTER TABLE migration_manifest_new RENAME TO migration_manifest;
+        CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
+        CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
+        CREATE INDEX IF NOT EXISTS idx_action      ON migration_manifest(action);
+        CREATE INDEX IF NOT EXISTS idx_group_id    ON migration_manifest(group_id);
+        COMMIT;
+        """
+    )
+
+
+def migrate_manifest_schema(conn: sqlite3.Connection) -> None:
+    """Run the lazy ALTER TABLE migrations on an ALREADY-OPEN connection.
+
+    #651 — extracted from ``ManifestRepository.ensure_schema`` so the
+    same migration core can run on a connection the CALLER already
+    owns. Two callers:
+
+      * ``ManifestRepository.ensure_schema`` — opens its own
+        connection against a manifest path, delegates here, closes.
+      * ``scanner.manifest.write_manifest`` — reuses the tmp-file
+        connection it already has open mid-write, so the post-scan
+        auto-select writes (keeper locks / non-keeper decisions) land
+        in the SAME transaction as the row inserts and the same
+        ``os.replace`` atomic swap. Closes the incoherence window
+        where a crash between the manifest write and a separate
+        auto-select write left keepers unlocked.
+
+    Idempotent — every ALTER is wrapped in a try/except that silently
+    skips columns that already exist. Order matters: the additive
+    ADD-COLUMN migrations run FIRST so every modern column exists,
+    THEN the #433 drop-move structural migration rebuilds the table
+    without ``dest_path``.
+
+    Does not commit a final transaction or close the connection —
+    that is the caller's responsibility. (Each ADD COLUMN is committed
+    individually below; ``_drop_move_dest_path`` commits its own
+    BEGIN/COMMIT block.)
+    """
+    for col, ddl in _MIGRATIONS:
+        try:
+            conn.execute(
+                f"ALTER TABLE migration_manifest "
+                f"ADD COLUMN {col} {ddl}"
+            )
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+    _drop_move_dest_path(conn)
+
+
 def _photo_record(
     source_path: str,
     group_number: int,
@@ -260,94 +376,9 @@ class ManifestRepository:
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
         conn = _connect(manifest_path)
         try:
-            for col, ddl in _MIGRATIONS:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE migration_manifest "
-                        f"ADD COLUMN {col} {ddl}"
-                    )
-                    conn.commit()
-                except Exception:
-                    pass  # column already exists
-            self._drop_move_dest_path(conn)
+            migrate_manifest_schema(conn)
         finally:
             conn.close()
-
-    @staticmethod
-    def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
-        """#433 — drop the legacy ``dest_path`` column and migrate
-        ``action='MOVE'`` rows to '' (undecided).
-
-        Idempotent: the ``PRAGMA table_info`` guard makes this a no-op
-        on manifests that never had ``dest_path`` (written by the
-        post-#433 scanner) or that have already been migrated.
-
-        Portable: uses the copy-table dance (new table → copy rows →
-        drop old → rename) rather than ``ALTER TABLE DROP COLUMN`` so
-        it works on SQLite < 3.35. The whole rebuild runs in one
-        transaction; the MOVE→'' normalisation is folded into the copy
-        ``SELECT`` via ``CASE``. Row count is preserved exactly — no
-        row is dropped, only ``dest_path`` and the MOVE label go away.
-
-        #584 — ``outcome`` is added as a hardcoded tail (crash-avoidance
-        for ancient dest_path manifests opened after the #584 migration).
-        It is NOT in ``_POST_DROP_COLUMNS`` to avoid a duplicate-column
-        error; it is always written as '' (the default in-review state).
-        """
-        cols = {row[1] for row in conn.execute(
-            "PRAGMA table_info(migration_manifest)"
-        )}
-        if _DROP_MOVE_COLUMN not in cols:
-            return  # already migrated / new-schema manifest — no-op
-
-        select_cols = ", ".join(
-            "CASE WHEN action = 'MOVE' THEN '' ELSE action END AS action"
-            if c == "action" else c
-            for c in _POST_DROP_COLUMNS
-        )
-        insert_cols = ", ".join(_POST_DROP_COLUMNS)
-
-        # Single transaction: build the new table from the canonical DDL,
-        # copy every surviving column (MOVE→'' inline), swap names.
-        conn.executescript(
-            f"""
-            BEGIN;
-            CREATE TABLE migration_manifest_new (
-                id               INTEGER PRIMARY KEY,
-                source_path      TEXT    NOT NULL,
-                source_label     TEXT    NOT NULL,
-                action           TEXT    NOT NULL,
-                source_hash      TEXT,
-                phash            TEXT,
-                hamming_distance INTEGER,
-                group_id         TEXT,
-                reason           TEXT,
-                executed         INTEGER NOT NULL DEFAULT 0,
-                user_decision    TEXT    NOT NULL DEFAULT '',
-                file_size_bytes  INTEGER,
-                shot_date        TEXT,
-                creation_date    TEXT,
-                mtime            TEXT,
-                pixel_width      INTEGER,
-                pixel_height     INTEGER,
-                exif_tag_count   INTEGER,
-                gps_present      INTEGER NOT NULL DEFAULT 0,
-                xmp_derived      INTEGER NOT NULL DEFAULT 0,
-                score            REAL,
-                is_locked        INTEGER NOT NULL DEFAULT 0,
-                outcome          TEXT    NOT NULL DEFAULT ''
-            );
-            INSERT INTO migration_manifest_new ({insert_cols}, is_locked, outcome)
-                SELECT {select_cols}, is_locked, '' FROM migration_manifest;
-            DROP TABLE migration_manifest;
-            ALTER TABLE migration_manifest_new RENAME TO migration_manifest;
-            CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
-            CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
-            CREATE INDEX IF NOT EXISTS idx_action      ON migration_manifest(action);
-            CREATE INDEX IF NOT EXISTS idx_group_id    ON migration_manifest(group_id);
-            COMMIT;
-            """
-        )
 
     # ------------------------------------------------------------------ load
 

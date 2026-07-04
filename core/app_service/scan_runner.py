@@ -1176,6 +1176,7 @@ def run_pipeline(
         bus.failed("Scan cancelled.")
         return
     keepers: set[str] = set()
+    non_keepers: "set[str] | None" = None
     if config.auto_select_enabled:
         from core.services.auto_select import top_score_path_per_group
         keepers = top_score_path_per_group(rows)
@@ -1184,6 +1185,15 @@ def run_pipeline(
                 if row.source_path in keepers:
                     row.action = "KEEP"
             bus.log(f"Auto-select: marked {len(keepers):,} keeper(s) per group.")
+            if config.auto_select_aggressive_delete:
+                from core.services.auto_select import (
+                    non_keepers_for_aggressive_delete,
+                )
+                non_keepers = non_keepers_for_aggressive_delete(rows, keepers)
+                bus.log(
+                    f"Auto-select aggressive: marked {len(non_keepers):,}"
+                    f" non-keeper(s) for delete."
+                )
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -1191,7 +1201,7 @@ def run_pipeline(
     for line in buf.getvalue().splitlines():
         bus.log(line)
 
-    # --- 5. Write manifest ---
+    # --- 5. Write manifest (atomic incl. auto-select decisions — #651) ---
     if cancel_token():
         logger.warning("Scan cancelled by user before manifest write")
         bus.failed("Scan cancelled.")
@@ -1199,25 +1209,14 @@ def run_pipeline(
     bus.log(f"Writing manifest → {config.output_path}")
     write_tracker = _StageTracker(STAGE_WRITE)
     _emit_stage(bus, write_tracker, 0, 0, force=True)
-    write_manifest(rows, config.output_path)
+    write_manifest(
+        rows,
+        config.output_path,
+        keepers=keepers if keepers else None,
+        non_keepers_for_delete=non_keepers,
+    )
     _emit_stage(bus, write_tracker, 1, 1, force=True)
-
-    # --- 5.5: post-write keep+lock (#393) ---
     if keepers:
-        from core.services.auto_select import apply_auto_select_decisions
-        non_keepers: "set[str] | None" = None
-        if config.auto_select_aggressive_delete:
-            from core.services.auto_select import (
-                non_keepers_for_aggressive_delete,
-            )
-            non_keepers = non_keepers_for_aggressive_delete(rows, keepers)
-            bus.log(
-                f"Auto-select aggressive: marked {len(non_keepers):,}"
-                f" non-keeper(s) for delete."
-            )
-        apply_auto_select_decisions(
-            str(config.output_path), keepers, non_keepers
-        )
         bus.log(
             f"Auto-select: locked {len(keepers):,} keeper(s);"
             f" decisions written."
