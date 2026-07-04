@@ -279,15 +279,23 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         void loadManifest(scan.outputPath, { selectKeepers: autoSelect });
       }
       onOpenChange(false);
+      // #661 Bug 2: without this, scan.status stays "finished" forever, so the
+      // load-from-settings effect's `status === "idle"` gate (above) never
+      // re-arms on the next open and the dialog shows stale sources.
+      resetScan();
     }
-  }, [scan.status, scan.outputPath, autoSelect, loadManifest, onOpenChange]);
+  }, [scan.status, scan.outputPath, autoSelect, loadManifest, onOpenChange, resetScan]);
 
   // Transition: cancelled → close dialog cleanly
   useEffect(() => {
     if (scan.status === "cancelled") {
       onOpenChange(false);
+      // #661 Bug 2 (same root cause as the finished branch above): reset so
+      // reopening the dialog re-arms the idle-gated settings load instead of
+      // showing stale sources.
+      resetScan();
     }
-  }, [scan.status, onOpenChange]);
+  }, [scan.status, onOpenChange, resetScan]);
 
   // ---------------------------------------------------------------------------
   // Source list actions

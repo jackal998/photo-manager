@@ -320,6 +320,37 @@ describe("ScanDialog", () => {
     });
   });
 
+  it("calls resetScan after a finished transition (#661 Bug 2)", () => {
+    // Without resetScan, scan.status stays "finished" forever, so the
+    // idle-gated load-from-settings effect never re-arms and reopening the
+    // dialog shows stale sources.
+    const resetScanMock = vi.fn();
+    useAppStore.setState({ resetScan: resetScanMock } as never);
+
+    const { onOpenChange } = renderDialog();
+
+    act(() => {
+      seedScanState({ status: "finished", outputPath: null });
+    });
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(resetScanMock).toHaveBeenCalledOnce();
+  });
+
+  it("calls resetScan after a cancelled transition (#661 Bug 2)", () => {
+    const resetScanMock = vi.fn();
+    useAppStore.setState({ resetScan: resetScanMock } as never);
+
+    const { onOpenChange } = renderDialog();
+
+    act(() => {
+      seedScanState({ status: "cancelled" });
+    });
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(resetScanMock).toHaveBeenCalledOnce();
+  });
+
   it("passes selectKeepers:true to loadManifest when auto-select is enabled (#692)", () => {
     // When the user turned on "Auto select after scan", the post-scan load must
     // select + scroll to the auto-selected keepers (Qt #239 parity). The flag is
