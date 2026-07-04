@@ -1,0 +1,1 @@
+The web app's status-footer error message now clears as soon as you take another action, instead of lingering on screen until the next manifest load. (#760)
