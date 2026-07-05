@@ -415,7 +415,22 @@ export function ExecuteDialog() {
         data-testid={EXECUTE_DIALOG}
         className="max-w-4xl w-full max-h-[90vh] flex flex-col"
         onInteractOutside={(e) => {
-          if (executeRunning) e.preventDefault();
+          // #721 — never dismiss the Execute review dialog via an interaction
+          // OUTSIDE it. Two reasons: (1) it stages destructive actions, so a
+          // stray backdrop click must not discard the review; (2) the sibling
+          // LockConfirmDialog (a Radix modal portaled at App level, NOT a DOM
+          // child of this dialog) fires spurious outside-interactions on this
+          // layer as it unmounts on Cancel — first a `focusin` focus-return,
+          // then, once it has closed, a `pointerdown` that is no longer
+          // stack-gated (verified live: both events fire with executeRunning
+          // false). Either would cascade-close the Execute dialog when the user
+          // merely cancelled the lock prompt. Blocking ALL outside-interaction
+          // is race-free; a lockConflict/state guard loses the race against the
+          // child's synchronous clearConflict(). Escape is deliberately left
+          // alone below: Radix routes it only to the topmost layer, so an idle
+          // Execute dialog still closes on Escape (s33 / s51 / s61) and never
+          // while the lock prompt is up.
+          e.preventDefault();
         }}
         onEscapeKeyDown={(e) => {
           if (executeRunning) e.preventDefault();

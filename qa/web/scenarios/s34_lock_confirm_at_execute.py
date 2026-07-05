@@ -35,12 +35,12 @@ Web slice:
      lockConflict (LockConfirmDialog.tsx:108). The lock-confirm dialog dismisses.
  10. ASSERT (non-destructive contract):
        - LOCK_CONFIRM_DIALOG is now hidden (lockConflict cleared).
-       - EXECUTE_DIALOG is also hidden — WEB DIVERGENCE: dismissing the nested
-         lock-confirm registers as an interact-outside on the Execute dialog
-         (executeRunning is false after the 409, so onInteractOutside does not
-         preventDefault) → Radix onOpenChange(false) → closeExecuteDialog(). Qt
-         keeps the Execute Action dialog open on Cancel; the web returns the user
-         to the main review tree. The safety contract is identical.
+       - EXECUTE_DIALOG stays VISIBLE — #721 Qt parity: cancelling the nested
+         lock-confirm must NOT close the Execute dialog. The child modal's
+         focus-return fires a `focusin` that ExecuteDialog's DismissableLayer
+         sees as an interact-outside; ExecuteDialog now preventDefaults
+         focus-origin interactions so the parent stays open, matching Qt (the
+         user can adjust and retry). The safety contract is unchanged.
        - GET /api/manifest equals the pre-execute snapshot: all 5 rows still
          user_decision='delete', q95 still is_locked=True, total_files unchanged.
        - All 5 tmpdir files still present on disk (the 409 + Cancel deleted nothing).
@@ -51,10 +51,6 @@ Qt divergences:
     detects the locked row first). The WEB reverses this: the DeleteConfirmSheet
     (all-delete) shows first, then the POST 409 opens LockConfirmDialog. Final
     Cancel outcome is identical: nothing executed.
-  - Qt keeps the Execute Action dialog OPEN after the Cancel verdict (the user can
-    adjust and retry). The web CLOSES it via the Radix interact-outside cascade
-    described above — a UX-only divergence tracked as a follow-up issue; the
-    destructive contract (no files deleted, manifest unchanged) is identical.
   - Qt asserts the IMMEDIATE apply-button LABEL
     (LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE). The web has NO per-context button
     variant — the destructive button is always "Unlock & Apply" — so the
@@ -293,22 +289,19 @@ def run(*, base_url: str) -> None:
             # The lock-confirm dialog dismisses (handleCancel clears lockConflict).
             lock_confirm.wait_for(state="hidden", timeout=10_000)
 
-            # WEB DIVERGENCE from Qt: dismissing the lock-confirm ALSO closes the
-            # Execute review dialog. The store's 409 handler leaves executeOpen=true
-            # and LockConfirmDialog.handleCancel() touches only lockConflict
-            # (LockConfirmDialog.tsx:108) — but the lock-confirm is a nested Radix
-            # modal portaled OUTSIDE ExecuteDialog's DOM subtree, so clicking its
-            # Cancel registers as an interact-outside on ExecuteDialog; because
-            # executeRunning is false after the 409, ExecuteDialog's
-            # onInteractOutside does not preventDefault, so Radix fires
-            # onOpenChange(false) -> closeExecuteDialog(). Qt KEEPS the Execute
-            # Action dialog open on Cancel and lets the user retry; the web returns
-            # the user to the main review tree. The SAFETY-critical contract
-            # (nothing executed — asserted below) is identical; only the post-Cancel
-            # dialog state differs. Asserting the execute dialog is hidden documents
-            # the web-actual end-state and guards against a stuck-modal regression.
-            # The UX divergence is tracked as a follow-up issue.
-            page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="hidden", timeout=10_000)
+            # #721 — Qt parity: cancelling the lock-confirm must keep the Execute
+            # review dialog OPEN so the user can adjust and retry. The lock-confirm
+            # is a Radix modal portaled as a SIBLING of ExecuteDialog, so when it
+            # unmounts Radix returns focus and fires a `focusin` that
+            # ExecuteDialog's DismissableLayer sees as an interact-outside (the
+            # pointerdown path is stack-gated while the child modal is open, so
+            # only the focus path leaked). ExecuteDialog now preventDefaults
+            # focus-origin interactions (ExecuteDialog.tsx onInteractOutside), so
+            # the parent stays open. This is a REAL-BROWSER behaviour that jsdom
+            # cannot exercise (it does not fire the focus-return focusin on child
+            # unmount), which is exactly why it is asserted here in a live
+            # scenario rather than a vitest unit test.
+            page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="visible", timeout=10_000)
 
             # ── Step 11: ASSERT the manifest is unchanged (nothing executed) ─
             manifest_post_cancel = _get_manifest(base_url, db_path)

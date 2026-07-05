@@ -154,7 +154,7 @@ scenarios:
   - scenario: s27_rescan_confirm
     playwright_module: qa.web.scenarios.s27_rescan_confirm
     status: done
-    notes: "Re-scan while the loaded manifest has pending decisions → 'Discard pending decisions?' gate (#142). Stage a delete on a row, click Start Scan: Branch A Cancel keeps the decision, runs NO scan, and the scan dialog STAYS OPEN (true Qt parity — the new RescanConfirmDialog is a nested Radix modal, but ScanDialog's onInteractOutside/onEscapeKeyDown guards keep the dialog open while it's up, unlike s34's documented close-cascade divergence). Branch B Discard & Rescan rebuilds the manifest and clears the decisions. FE feature build: ScanDialog.handleStart now gates on a pendingDecisionCount store selector + a RescanConfirmDialog (en/zh_TW, pluralized count). Pending count verified through GET /api/manifest (the persisted authority the store mirrors)."
+    notes: "Re-scan while the loaded manifest has pending decisions → 'Discard pending decisions?' gate (#142). Stage a delete on a row, click Start Scan: Branch A Cancel keeps the decision, runs NO scan, and the scan dialog STAYS OPEN (true Qt parity — the new RescanConfirmDialog is a nested Radix modal, but ScanDialog's onInteractOutside/onEscapeKeyDown guards keep the dialog open while it's up — the same outside-dismiss guarding ExecuteDialog received for its sibling lock-confirm in #721). Branch B Discard & Rescan rebuilds the manifest and clears the decisions. FE feature build: ScanDialog.handleStart now gates on a pendingDecisionCount store selector + a RescanConfirmDialog (en/zh_TW, pluralized count). Pending count verified through GET /api/manifest (the persisted authority the store mirrors)."
 
   - scenario: s28_exit_dirty_prompt
     playwright_module: null
