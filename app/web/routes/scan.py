@@ -20,6 +20,11 @@ from core.app_service.scan_runner import run_pipeline
 
 router = APIRouter()
 
+# Idle interval after which the live SSE stream emits a keepalive `ping` event
+# (#661). Named so tests can patch it small; the client's connection-drop
+# watchdog (useScanSSE.ts) is sized as a multiple of this.
+_KEEPALIVE_TIMEOUT_S = 30.0
+
 # ---------------------------------------------------------------------------
 # Settings helpers — mirrors how scan_dialog.py locates settings.json
 # ---------------------------------------------------------------------------
@@ -346,12 +351,21 @@ async def scan_events(task_id: str, request: Request) -> EventSourceResponse:
             # Live stream: await queue until sentinel (None) or disconnect.
             while True:
                 try:
-                    item = await asyncio.wait_for(q.get(), timeout=30.0)
+                    item = await asyncio.wait_for(
+                        q.get(), timeout=_KEEPALIVE_TIMEOUT_S
+                    )
                 except asyncio.TimeoutError:
-                    # Keepalive comment — sse_starlette also sends its own
-                    # keep-alive pings, but we send a comment here for
-                    # explicit control on long-idle scans.
-                    yield {"comment": "keepalive"}
+                    # #661 — emit a NAMED keepalive event (not an SSE comment).
+                    # SSE comments (`: ...`) keep the socket warm but fire NO JS
+                    # handler, so the browser cannot use them to tell "healthy
+                    # but quiet" from "server dead". A named `ping` event IS
+                    # observable, letting the client's connection-drop watchdog
+                    # (useScanSSE.ts) reset its timer. It carries NO `id`, so it
+                    # never disturbs Last-Event-ID resume. This yield runs on the
+                    # async event loop, decoupled from the scan thread, so pings
+                    # keep flowing while the server lives regardless of scan
+                    # speed — exactly the liveness signal the watchdog needs.
+                    yield {"event": "ping", "data": "{}"}
                     continue
                 except asyncio.CancelledError:
                     # Client disconnected — do NOT cancel the scan.

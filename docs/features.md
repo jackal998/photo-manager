@@ -809,6 +809,15 @@ for the chore plan.
 
 ---
 
+### Web — scan SSE connection-drop watchdog (#661)
+
+- **Entry point:** `useScanSSE` ([frontend/src/hooks/useScanSSE.ts](../frontend/src/hooks/useScanSSE.ts)), mounted once in `App` for the active scan's `taskId`.
+- **Behaviour:** While a scan streams, a client-side watchdog (90s) surfaces a `failed`-status error — *"Lost connection to the scanner. The scan may still be running on the server — reopen Scan to check the result."* — if the SSE stream goes fully silent, so a dead server no longer leaves the scan dialog frozen with no feedback (the error renders via the same `failed`-status surface as a real scan failure; the dialog stays open). The watchdog is reset by ANY incoming event, including a new **named `ping` keepalive** the backend emits every ~30s on an idle stream ([app/web/routes/scan.py](../app/web/routes/scan.py) `_KEEPALIVE_TIMEOUT_S`). This replaces the previous keepalive *comment*: SSE comments keep the socket warm but fire NO JS handler, so the client could not distinguish "healthy but quiet" (a slow NAS or a big file — legitimately many seconds between progress events) from "server dead". The `ping` yields from the async event loop, decoupled from the scan thread, so it keeps flowing while the server lives regardless of scan speed; it carries no `id`, leaving Last-Event-ID resume untouched. `onerror` is still left to native auto-reconnect (a transient blip recovers via Last-Event-ID replay — see [#687 web parity](#execute-action--partial-execution-via-execute-selected)); only a drop that outlasts the watchdog surfaces the error. The message says the scan *may still be running* because the backend scan runs on a server thread independent of the browser's connection (`disconnect ≠ cancel`).
+- **Related:** [#661](https://github.com/jackal998/photo-manager/issues/661). Bug 2 (PR #761) fixed the sibling lifecycle bug — scan status was not reset to `idle` after a scan, so reopening the dialog showed stale sources. Tests: backend [`tests/test_web_scan_routes.py`](../tests/test_web_scan_routes.py) `test_sse_idle_stream_emits_named_ping_keepalive` (named ping on an idle stream, observed on the wire) + frontend [`frontend/src/hooks/useScanSSE.test.ts`](../frontend/src/hooks/useScanSSE.test.ts) (fake-timer watchdog: fires after silence, rearms on ping, rearms on a real event, disarms on a terminal event). No live qa scenario — a true server-drop cannot be automated in the shared-server web-scenario batch without breaking co-tenant scenarios; the mechanism is deterministically unit-tested on both ends (server emits `ping` ↔ client watchdog consumes it).
+- **Last verified:** 2026-07-05 (#661 — named ping + client connection-drop watchdog).
+
+---
+
 ### Web — desktop shell (pywebview launcher)
 
 - **Entry point:** [launcher.py](../launcher.py) (repo root) — a unified entry point that dispatches on the `PHOTO_MANAGER_WEB` environment variable.

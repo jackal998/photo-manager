@@ -143,6 +143,33 @@ class TestScanEvents:
 
         assert "finished" in event_names or "completed_empty" in event_names
 
+    def test_sse_idle_stream_emits_named_ping_keepalive(self, client):
+        # #661 — while a stream is idle the keepalive must be a NAMED `ping`
+        # event, not an SSE comment. Comments (`: ...`) fire no JS handler, so
+        # the client's connection-drop watchdog can't observe them; a named
+        # event can. A blocking pipeline holds the scan open with no progress
+        # events, and a tiny keepalive timeout makes the ping fire immediately.
+        # The pipeline idles ~0.3s before finishing; with the keepalive timeout
+        # patched to 0.05s that idle window emits several `ping` events, then the
+        # `finished` terminal ends the stream naturally (no mid-stream disconnect,
+        # which is what makes this fast and non-flaky).
+        seen: list[str] = []
+        with patch(
+            "app.web.routes.scan.run_pipeline", _noop_pipeline_factory(0.3)
+        ), patch("app.web.routes.scan._KEEPALIVE_TIMEOUT_S", 0.05):
+            resp = client.post("/api/scan", json=_valid_scan_body())
+            task_id = resp.json()["task_id"]
+
+            with client.stream("GET", f"/api/scan/{task_id}/events") as stream:
+                for line in stream.iter_lines():
+                    seen.append(line)
+
+        saw_ping = any(
+            line.startswith("event:") and line.split(":", 1)[1].strip() == "ping"
+            for line in seen
+        )
+        assert saw_ping, f"expected a named `ping` event; saw lines: {seen[:40]}"
+
     def test_sse_unknown_task_returns_404(self, client):
         resp = client.get("/api/scan/does-not-exist/events")
         assert resp.status_code == 404

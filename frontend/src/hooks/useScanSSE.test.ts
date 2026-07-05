@@ -180,6 +180,86 @@ describe("useScanSSE – taskId change reopens connection", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// #661 — connection-drop watchdog (fake timers)
+// ---------------------------------------------------------------------------
+
+describe("useScanSSE – #661 connection watchdog", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires a 'failed' error and closes the stream after ~90s of silence", () => {
+    renderHook(() => useScanSSE("task-wd-1"));
+    const es = FakeEventSource.instances[0];
+
+    // Just under the window: nothing yet.
+    vi.advanceTimersByTime(89_000);
+    expect(ingestMock).not.toHaveBeenCalled();
+    expect(es.closed).toBe(false);
+
+    // Cross the window → connection-lost surfaces as a failed status.
+    vi.advanceTimersByTime(2_000);
+    expect(ingestMock).toHaveBeenCalledWith("failed", {
+      event: "failed",
+      msg: expect.stringContaining("Lost connection"),
+    });
+    // The futile native auto-reconnect loop is stopped.
+    expect(es.closed).toBe(true);
+  });
+
+  it("a named 'ping' keepalive rearms the watchdog (no false drop)", () => {
+    renderHook(() => useScanSSE("task-wd-2"));
+    const es = FakeEventSource.instances[0];
+
+    // A ping arrives at 60s (well within the 90s window)...
+    vi.advanceTimersByTime(60_000);
+    es.emit("ping", {});
+    // ...so 60s later (120s total, only 60s since the ping) still no drop.
+    vi.advanceTimersByTime(60_000);
+    expect(ingestMock).not.toHaveBeenCalled();
+    expect(es.closed).toBe(false);
+
+    // Now go silent past a full window from the last ping → drop.
+    vi.advanceTimersByTime(91_000);
+    expect(ingestMock).toHaveBeenCalledWith("failed", {
+      event: "failed",
+      msg: expect.stringContaining("Lost connection"),
+    });
+  });
+
+  it("a real progress event also rearms the watchdog", () => {
+    renderHook(() => useScanSSE("task-wd-3"));
+    const es = FakeEventSource.instances[0];
+
+    vi.advanceTimersByTime(80_000);
+    es.emit("stage", { event: "stage", stage_name: "HASH", completed: 1, total: 9, files_per_sec: 1 });
+    ingestMock.mockClear(); // drop the stage call; we only care about a spurious failed
+    vi.advanceTimersByTime(80_000); // 80s since the stage — still inside the window
+    expect(ingestMock).not.toHaveBeenCalledWith(
+      "failed",
+      expect.objectContaining({ msg: expect.stringContaining("Lost connection") })
+    );
+    expect(es.closed).toBe(false);
+  });
+
+  it("a terminal event disarms the watchdog (no late connection-lost)", () => {
+    renderHook(() => useScanSSE("task-wd-4"));
+    const es = FakeEventSource.instances[0];
+
+    es.emit("finished", { event: "finished", output_path: "/out.db" });
+    expect(es.closed).toBe(true);
+    ingestMock.mockClear();
+
+    // Long after the terminal event — the watchdog must NOT fire.
+    vi.advanceTimersByTime(300_000);
+    expect(ingestMock).not.toHaveBeenCalled();
+  });
+});
+
 // Satisfy the type system — useAppStore is only used as a selector in the
 // hook; the mock above captures all calls.
 void useAppStore;
