@@ -1,4 +1,5 @@
-"""Web scenario s32 — bulk-regex lock-confirm → "Apply to Unlocked Only" (#674).
+"""Web scenario s32 — bulk-regex lock-confirm: Cancel-keeps-open (#764) +
+"Apply to Unlocked Only" (#674).
 
 Ported from qa/scenarios/s32_lock_confirm_bulk_regex.py (Qt UIA).
 
@@ -18,6 +19,11 @@ Web slice (all assertions via Playwright testids + sqlite + GET /api/manifest):
   3. ActionDialog again: regex ``q[89]\\d``, action 'delete', Apply →
      DeleteConfirm sheet → Yes → POST bulk-decide returns 409 locked_paths →
      the ActionDialog inline lock dialog (ACTION_LOCK_CONFIRM_DIALOG) opens.
+  3b. (#764) Click CANCEL (ACTION_LOCK_CONFIRM_BTN_CANCEL) → the lock dialog
+     hides but the ActionDialog STAYS OPEN (Qt parity — pre-fix it cascade-
+     closed via the sibling-portal outside-interaction, the ActionDialog twin
+     of #721) and nothing is applied. Then re-Apply the same regex on the
+     still-open dialog to reach the lock dialog again for step 4.
   4. "Apply to Unlocked Only" (ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY) is ENABLED
      (matched_total=3, 1 locked → 2 unlocked). Click it → re-POST skip_locked.
   5. ASSERT (both layers, per the #674 adversarial-review):
@@ -55,6 +61,7 @@ from qa.web.testid_constants import (
     ACTION_REGEX_INPUT,
     ACTION_LOCK_CONFIRM_DIALOG,
     ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY,
+    ACTION_LOCK_CONFIRM_BTN_CANCEL,
     EXECUTE_ALL_DELETE_CONFIRM,
     EXECUTE_ALL_DELETE_CONFIRM_YES,
     MENU_ACTION,
@@ -195,6 +202,38 @@ def run(*, base_url: str) -> None:
 
             # POST bulk-decide returns 409 locked_paths → inline lock dialog.
             lock_dialog = page.get_by_test_id(ACTION_LOCK_CONFIRM_DIALOG)
+            lock_dialog.wait_for(state="visible", timeout=15_000)
+
+            # ── Step 3b (#764): CANCEL keeps the ActionDialog OPEN ────────
+            # The inline lock-confirm is a Radix modal portaled as a SIBLING of
+            # the ActionDialog (both mount at App level), so before the #764 fix
+            # cancelling it cascade-closed the parent — the actionRunning-only
+            # onInteractOutside guard let the child's focus-return / post-unmount
+            # pointerdown through (the ActionDialog twin of #721). Verify Cancel
+            # now (a) hides the lock dialog, (b) leaves the ActionDialog OPEN (Qt
+            # parity — execute_action_dialog.py returns on a non-PROCEED verdict,
+            # leaving the dialog up), (c) applies nothing. jsdom cannot fire that
+            # cascade, so it is proven here live rather than in a vitest.
+            cancel_btn = page.get_by_test_id(ACTION_LOCK_CONFIRM_BTN_CANCEL)
+            cancel_btn.wait_for(state="visible", timeout=5_000)
+            cancel_btn.click()
+            lock_dialog.wait_for(state="hidden", timeout=10_000)
+            page.get_by_test_id(ACTION_DIALOG).wait_for(state="visible", timeout=10_000)
+            cancelled_state = _read_db_state(db_path)
+            assert cancelled_state == after_lock, (
+                f"Cancel must apply nothing — manifest should still equal the "
+                f"post-lock snapshot; got {cancelled_state} vs {after_lock}"
+            )
+
+            # Re-drive the same destructive apply on the STILL-OPEN dialog to
+            # reach the lock-confirm again for the Unlocked-Only verdict below —
+            # this also exercises the "adjust and retry" flow the #764 fix
+            # enables (the dialog kept the user's field/regex/action).
+            _apply_regex_action(
+                page, regex=_DESTRUCTIVE_REGEX, action_value="delete"
+            )
+            confirm.wait_for(state="visible", timeout=10_000)
+            page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM_YES).click()
             lock_dialog.wait_for(state="visible", timeout=15_000)
 
             # ── Step 4: "Apply to Unlocked Only" is enabled (2 unlocked) ──

@@ -449,7 +449,19 @@ export function ActionDialog() {
           data-testid={ACTION_DIALOG}
           className="max-w-2xl w-full"
           onInteractOutside={(e) => {
-            if (actionRunning) e.preventDefault();
+            // #764 (twin of #721) — never dismiss the Action dialog via an
+            // interaction OUTSIDE it. The inline lock-confirm (rendered just
+            // above) is a Radix modal portaled at App level, so it is a DOM
+            // SIBLING of this dialog, not a child; cancelling it fires a
+            // focus-return `focusin` and a post-unmount `pointerdown` on this
+            // layer that an `actionRunning`-only guard let through, cascade-
+            // closing the Action dialog and discarding the user's pattern.
+            // Unconditional preventDefault is race-free (a lockConfirmOpen/state
+            // guard loses the race against the child's synchronous
+            // setLockConfirmOpen(false)). Escape is left guarding only
+            // actionRunning below: Radix routes Escape to the topmost layer
+            // only, so an idle Action dialog still closes on Escape (s50).
+            e.preventDefault();
           }}
           onEscapeKeyDown={(e) => {
             if (actionRunning) e.preventDefault();
