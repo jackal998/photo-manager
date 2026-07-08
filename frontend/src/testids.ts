@@ -155,6 +155,10 @@ export function rowDecisionTestid(groupId: string, basename: string): string {
   return `row-decision-${groupId}-${basename}`;
 }
 
+export function rowDecisionOptionTestid(groupId: string, basename: string, option: string): string {
+  return `row-decision-${groupId}-${basename}-${option}`;
+}
+
 export function rowLockTestid(groupId: string, basename: string): string {
   return `row-lock-${groupId}-${basename}`;
 }

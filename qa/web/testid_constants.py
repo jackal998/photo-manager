@@ -628,6 +628,30 @@ def row_decision_testid(group_id: str, basename: str) -> str:
     return f"row-decision-{group_id}-{basename}"
 
 
+def row_decision_option_testid(group_id: str, basename: str, option: str) -> str:
+    """Return the ``data-testid`` for one button of a per-row decision control.
+
+    The DecisionControl renders three direct-click buttons (``none`` / ``delete``
+    / ``ignore``); each button carries the group testid with the option slug
+    appended so Playwright can click a specific decision without opening a menu.
+
+    Parameters
+    ----------
+    group_id:
+        The string form of ``group_number`` (use ``str(group_number)``).
+    basename:
+        The filename component only — *not* the full path.
+    option:
+        The button slug: ``"none"``, ``"delete"`` or ``"ignore"``.
+
+    Returns
+    -------
+    str
+        ``"row-decision-{group_id}-{basename}-{option}"``
+    """
+    return f"row-decision-{group_id}-{basename}-{option}"
+
+
 def row_lock_testid(group_id: str, basename: str) -> str:
     """Return the ``data-testid`` value for a per-row lock toggle.
 
