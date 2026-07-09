@@ -2048,6 +2048,8 @@ The `harness: qt` matrix entries are removed one by one as each scenario graduat
 
 This section is the contract the **web frontend (Contract 1) must honor**. Every `data-testid` listed here must be present in the rendered DOM when its parent component is mounted. Static probes in `tests/test_web_dom_probes.py` verify the presence of required testids against the app's static HTML/JS output via Playwright's `page.locator('[data-testid]').all()`.
 
+> **Staleness note (2026-07-10).** This §5 inventory captures the *original* design contract and has since drifted from what shipped. The **authoritative sources are: `frontend/src/testids.ts`** (generated from `qa/web/testid_constants.py`) for the exact shipped `data-testid` strings, and **`docs/features.md`** for shipped behaviour/controls. Known drift: (a) the literal id convention was reworked from `{surface}-btn-{action}` to `{surface}-{action}[-button]`, so many example strings below no longer match the DOM; (b) several controls listed here were deliberately **not shipped** or deferred and are tracked as such — e.g. the List/Log top-menus and File→Save-Manifest (see the intentional-omission comment in `frontend/src/components/MenuBar.tsx`), and `ctx-apply-best-copy` (§5.7), which shipped only as a no-op stub. Treat any mismatch between this section and `testids.ts`/`features.md` as this doc being stale, not the code.
+
 #### 5.1 Main Window Surface
 
 ```html
