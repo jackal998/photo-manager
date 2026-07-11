@@ -7,13 +7,15 @@
 //
 // `variant` selects which item set renders (#735 — Qt parity):
 //   - "file" (default): the full file-row menu — unchanged from before #735,
-//     plus the new post-Open-Folder group (Set Action by Field… / Execute
+//     plus the post-Open-Folder group (Set Action by Field… / Execute
 //     Action (only selected)…).
 //   - "group": the reduced group-header menu — Set Action by Field… + Remove
-//     from List ONLY (mirrors Qt's group-row menu, context_menu.py:167-171).
+//     from List (mirrors Qt's group-row menu, context_menu.py:167-171).
 //
-// ctx-apply-best-copy is stubbed (no-op handler kept per §5.7) — the
-// best-copy auto-selection logic lives in a future store action.
+// ctx-apply-best-copy (#744) appears in BOTH variants — it acts on the
+// right-clicked row/group's own group (via the `groupNumber` prop), not the
+// file-row/group-row targetPaths selection, so it isn't gated by variant the
+// way Keep/Delete/Lock/Open-folder are.
 
 import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
@@ -57,6 +59,9 @@ export interface ContextMenuProps {
   /** Invoke the wired "Execute Action (only selected)…" flow. File variant
    *  only — the item is not rendered without this prop. */
   onExecuteSelected?: () => void;
+  /** The right-clicked row/group's group_number (#744) — Apply best-copy
+   *  acts on this group, independent of variant/targetPaths. */
+  groupNumber: number;
 }
 
 export function ContextMenu({
@@ -69,12 +74,14 @@ export function ContextMenu({
   variant = "file",
   clickedCol,
   onExecuteSelected,
+  groupNumber,
 }: ContextMenuProps) {
   const setDecisions = useAppStore((s) => s.setDecisions);
   const removeFromList = useAppStore((s) => s.removeFromList);
   const setLocks = useAppStore((s) => s.setLocks);
   const revealInExplorer = useAppStore((s) => s.revealInExplorer);
   const openActionDialog = useAppStore((s) => s.openActionDialog);
+  const applyBestCopy = useAppStore((s) => s.applyBestCopy);
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -163,10 +170,12 @@ export function ContextMenu({
     onClose();
   }
 
-  // ctx-apply-best-copy is intentionally a no-op stub — the best-copy store
-  // action is not yet implemented. The menu item is kept so QA can locate it.
+  // Apply best-copy decisions to this group (#744): within groupNumber, the
+  // top-score row becomes the keeper (decision "" + locked); every row the
+  // classifier positively identified as a duplicate gets "delete". Acts on
+  // the right-clicked row/group's OWN group, not targetPaths.
   function handleApplyBestCopy() {
-    // TODO: wire store.applyBestCopy(filePath) when that action lands.
+    void applyBestCopy(groupNumber);
     onClose();
   }
 
@@ -192,10 +201,24 @@ export function ContextMenu({
     </button>
   );
 
+  // Apply best-copy (#744) — present in BOTH variants (it acts on groupNumber,
+  // independent of the file-row/group-row targetPaths distinction).
+  const applyBestCopyItem = (
+    <button
+      data-testid={CTX_APPLY_BEST_COPY}
+      role="menuitem"
+      className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+      onClick={handleApplyBestCopy}
+    >
+      Apply best-copy decisions to this group
+    </button>
+  );
+
   if (variant === "group") {
-    // Reduced group-header menu (#735) — By-Field + Remove ONLY. NO
-    // Keep/Delete trio, NO Lock/Unlock, NO Open Folder, NO Execute-selected,
-    // NO Apply-best-copy. Mirrors Qt's group-row menu (context_menu.py:167-171).
+    // Reduced group-header menu (#735) — By-Field + Remove + Apply-best-copy
+    // (#744). NO Keep/Delete trio, NO Lock/Unlock, NO Open Folder, NO
+    // Execute-selected. Mirrors Qt's group-row menu (context_menu.py:167-171)
+    // plus the #744 group-scoped addition.
     return (
       <div
         ref={menuRef}
@@ -206,6 +229,8 @@ export function ContextMenu({
       >
         {setActionByFieldItem}
         {removeFromListItem}
+        <div className="my-1 border-t border-neutral-100" role="separator" />
+        {applyBestCopyItem}
       </div>
     );
   }
@@ -290,14 +315,7 @@ export function ContextMenu({
         </button>
       )}
       <div className="my-1 border-t border-neutral-100" role="separator" />
-      <button
-        data-testid={CTX_APPLY_BEST_COPY}
-        role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none text-neutral-400"
-        onClick={handleApplyBestCopy}
-      >
-        Apply best copy (coming soon)
-      </button>
+      {applyBestCopyItem}
     </div>
   );
 }

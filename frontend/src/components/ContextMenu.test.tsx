@@ -11,7 +11,7 @@
 //   7. Clicking Lock calls store.setLocks(targetPaths, true) and onClose.
 //   8. Clicking Unlock calls store.setLocks(targetPaths, false) and onClose.
 //   9. Clicking Open folder calls store.revealInExplorer(filePath) and onClose.
-//  10. Clicking Apply best copy (no-op stub) still calls onClose.
+//  10. Clicking Apply best copy calls store.applyBestCopy(groupNumber) and onClose.
 //  11. Pressing Esc calls onClose.
 //  12. Clicking outside the menu calls onClose.
 //  13. Multi-target: the decision/lock verbs act on the WHOLE targetPaths set,
@@ -19,9 +19,10 @@
 //  14. (#735) File variant: shows By-Field + Execute-selected; By-Field calls
 //      openActionDialog(resolved field) and Execute-selected calls the wired
 //      onExecuteSelected prop.
-//  15. (#735) Group variant: renders ONLY By-Field + Remove, hides
-//      Execute-selected/Keep/Delete/Lock/Open-folder/Apply-best-copy; Remove
-//      calls removeFromList with the group's member paths (targetPaths).
+//  15. (#735) Group variant: renders By-Field + Remove + Apply-best-copy
+//      (#744), hides Execute-selected/Keep/Delete/Lock/Open-folder; Remove
+//      calls removeFromList with the group's member paths (targetPaths);
+//      Apply-best-copy calls applyBestCopy(groupNumber) regardless of variant.
 
 import type { ComponentProps } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -48,6 +49,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const FILE_PATH = "/photos/test.jpg";
+const GROUP_NUMBER = 3;
 
 function renderMenu(
   isLocked = false,
@@ -63,6 +65,7 @@ function renderMenu(
       isLocked={isLocked}
       targetPaths={targetPaths}
       onClose={onClose}
+      groupNumber={GROUP_NUMBER}
       {...extraProps}
     />
   );
@@ -79,6 +82,7 @@ describe("ContextMenu", () => {
   let setLocksMock: ReturnType<typeof vi.fn>;
   let revealMock: ReturnType<typeof vi.fn>;
   let openActionDialogMock: ReturnType<typeof vi.fn>;
+  let applyBestCopyMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     setDecisionsMock = vi.fn().mockResolvedValue(undefined);
@@ -86,12 +90,14 @@ describe("ContextMenu", () => {
     setLocksMock = vi.fn().mockResolvedValue(undefined);
     revealMock = vi.fn().mockResolvedValue(undefined);
     openActionDialogMock = vi.fn();
+    applyBestCopyMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({
       setDecisions: setDecisionsMock,
       removeFromList: removeFromListMock,
       setLocks: setLocksMock,
       revealInExplorer: revealMock,
       openActionDialog: openActionDialogMock,
+      applyBestCopy: applyBestCopyMock,
     } as never);
   });
 
@@ -175,10 +181,11 @@ describe("ContextMenu", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("Apply best copy (stub) still calls onClose", async () => {
+  it("Apply best copy calls applyBestCopy(groupNumber) and onClose", async () => {
     const user = userEvent.setup();
     const { onClose } = renderMenu();
     await user.click(screen.getByTestId(CTX_APPLY_BEST_COPY));
+    expect(applyBestCopyMock).toHaveBeenCalledWith(GROUP_NUMBER);
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -298,13 +305,14 @@ describe("ContextMenu", () => {
   describe("#735 group variant", () => {
     const GROUP_PATHS = ["/g/a.jpg", "/g/b.jpg", "/g/c.jpg"];
 
-    it("renders ONLY By-Field and Remove", () => {
+    it("renders By-Field, Remove, and Apply-best-copy", () => {
       renderMenu(false, GROUP_PATHS, { variant: "group" });
       expect(screen.getByTestId(CTX_SET_ACTION_BY_FIELD)).toBeInTheDocument();
       expect(screen.getByTestId(CTX_SET_ACTION_REMOVE)).toBeInTheDocument();
+      expect(screen.getByTestId(CTX_APPLY_BEST_COPY)).toBeInTheDocument();
     });
 
-    it("hides Execute-selected, Keep, Delete, Lock, Open-folder, Apply-best-copy", () => {
+    it("hides Execute-selected, Keep, Delete, Lock, Open-folder", () => {
       renderMenu(false, GROUP_PATHS, {
         variant: "group",
         onExecuteSelected: vi.fn(),
@@ -315,7 +323,6 @@ describe("ContextMenu", () => {
       expect(screen.queryByTestId(CTX_LOCK)).not.toBeInTheDocument();
       expect(screen.queryByTestId(CTX_UNLOCK)).not.toBeInTheDocument();
       expect(screen.queryByTestId(CTX_OPEN_FOLDER)).not.toBeInTheDocument();
-      expect(screen.queryByTestId(CTX_APPLY_BEST_COPY)).not.toBeInTheDocument();
     });
 
     it("Remove calls removeFromList with the group's member paths (targetPaths)", async () => {
@@ -332,6 +339,14 @@ describe("ContextMenu", () => {
       renderMenu(false, GROUP_PATHS, { variant: "group" });
       await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
       expect(openActionDialogMock).toHaveBeenCalledWith(undefined);
+    });
+
+    it("Apply best copy calls applyBestCopy(groupNumber) regardless of variant", async () => {
+      const user = userEvent.setup();
+      const { onClose } = renderMenu(false, GROUP_PATHS, { variant: "group" });
+      await user.click(screen.getByTestId(CTX_APPLY_BEST_COPY));
+      expect(applyBestCopyMock).toHaveBeenCalledWith(GROUP_NUMBER);
+      expect(onClose).toHaveBeenCalledOnce();
     });
   });
 });

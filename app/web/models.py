@@ -191,6 +191,15 @@ class BulkDecideResult(BaseModel):
     groups: list[Any]
 
 
+class ApplyBestCopyRequest(BaseModel):
+    """Body for POST /api/action/apply-best-copy (#744)."""
+
+    manifest_path: str
+    group_number: int
+    force_locked: bool = False
+    skip_locked: bool = False
+
+
 class WebScanRequest(BaseModel):
     """HTTP boundary model for POST /api/scan.
 

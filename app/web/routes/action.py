@@ -1,7 +1,10 @@
-"""Action route: POST /api/action/bulk-decide.
+"""Action routes: POST /api/action/bulk-decide, POST /api/action/apply-best-copy.
 
-Applies a pattern-matched decision or lock mutation to all rows in a manifest
-that match the given field + pattern.
+bulk-decide applies a pattern-matched decision or lock mutation to all rows in
+a manifest that match the given field + pattern. apply-best-copy (#744) is
+scoped to a single already-loaded group (like PATCH /api/decision, not
+pattern-resolved) — see its own docstring / core.app_service.action_service.
+apply_best_copy for the keeper-selection semantics.
 
 Security model
 --------------
@@ -29,7 +32,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.web.models import BulkDecideRequest, BulkDecideResult
+from app.web.models import ApplyBestCopyRequest, BulkDecideRequest, BulkDecideResult
 
 router = APIRouter()
 
@@ -123,4 +126,71 @@ def _run_bulk_decide(
         force_locked=force_locked,
         skip_locked=skip_locked,
         preview=preview,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/action/apply-best-copy (#744)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/action/apply-best-copy")
+async def post_apply_best_copy(body: ApplyBestCopyRequest) -> BulkDecideResult:
+    """Apply best-copy decisions to ONE duplicate group.
+
+    The review-time twin of scan-time auto-select: within the target group,
+    the top-score row becomes the keeper (decision "" + locked); every row
+    the classifier positively identified as a duplicate gets 'delete'.
+
+    Returns:
+        200 BulkDecideResult (action_applied="apply_best_copy")
+        404 manifest not found, or group_number not found in the manifest
+        409 locked_paths (locked rows would be written and force_locked=False
+            and skip_locked=False) — same detail shape as bulk-decide's 409
+        422 force_locked and skip_locked both set, or other validation error
+    """
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            None,
+            _run_apply_best_copy,
+            body.manifest_path,
+            body.group_number,
+            body.force_locked,
+            body.skip_locked,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        args = exc.args
+        if args and args[0] == "locked_paths":
+            detail: dict = {"code": "locked_paths", "locked_paths": args[1]}
+            if len(args) > 2:
+                detail["matched_total"] = args[2]
+            raise HTTPException(status_code=409, detail=detail) from exc
+        if args and args[0] == "group_not_found":
+            raise HTTPException(
+                status_code=404,
+                detail=f"Group not found: {args[1] if len(args) > 1 else body.group_number!r}",
+            ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Apply best copy failed: {exc}") from exc
+
+    return BulkDecideResult(**result)
+
+
+def _run_apply_best_copy(
+    manifest_path: str,
+    group_number: int,
+    force_locked: bool,
+    skip_locked: bool,
+) -> dict:
+    """Blocking worker — runs in the default thread pool."""
+    from core.app_service.action_service import apply_best_copy
+
+    return apply_best_copy(
+        manifest_path=manifest_path,
+        group_number=group_number,
+        force_locked=force_locked,
+        skip_locked=skip_locked,
     )

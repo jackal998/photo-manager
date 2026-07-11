@@ -287,4 +287,25 @@ ALL_SCENARIOS = [
     # Qt counterpart (qa/scenarios/s71_*.py) is a LIGHTWEIGHT group-loads guard only
     # (scan → group in manifest) — QMediaPlayer playback is NOT required in qa-batch.
     "s71_grid_video_tiles",
+    # s72 (#744) — "Apply best-copy decisions to this group" context-menu item.
+    # This is a WEB-ONLY reintroduction: the equivalent Qt right-click action
+    # was REMOVED in PR #224 (closed #210), superseded on desktop by the Set
+    # Action dialog's "top 1 by score within group" numeric condition — see
+    # docs/features.md's Score-column entry. There is deliberately NO
+    # qa/scenarios/s72_apply_best_copy.py Qt-side driver (the feature does not
+    # exist in the Qt UI to drive); only the web scenario below is real.
+    "s72_apply_best_copy",
 ]
+
+# Scenario ids that exist ONLY as qa/web/ Playwright drivers — the Qt UI has
+# no equivalent surface to drive (the entry's comment in ALL_SCENARIOS says
+# why, per id). Kept INSIDE ALL_SCENARIOS so the web batch and the
+# scenario_map.yml parity check keep seeing them; consumers that need the
+# Qt-runnable subset filter with this set:
+#   - qa/scenarios/_batch.py excludes these from default runs and shards
+#     (and refuses an explicit request with a pointer to qa.web._batch);
+#   - tests/test_all_scenarios_registered.py checks these against
+#     qa/web/scenarios/ instead of qa/scenarios/ + SCENARIO_SOURCES.
+WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
+    "s72_apply_best_copy",
+})

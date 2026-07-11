@@ -16,11 +16,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from core.app_service.action_resolve import resolve_matched_paths
 from core.app_service.path_safety import is_under_roots
 from core.app_service.review_view import serialize_groups
+from core.services.auto_select import (
+    build_auto_select_writes,
+    non_keepers_for_aggressive_delete,
+    top_score_path_per_group,
+)
 from infrastructure.manifest_repository import ManifestRepository
 from infrastructure.settings import JsonSettings
 
@@ -253,5 +259,147 @@ def bulk_decide(
         "matched": len(safe),
         "affected_paths": safe,
         "action_applied": action_applied,
+        "groups": fresh_groups,
+    }
+
+
+def apply_best_copy(
+    manifest_path: str,
+    group_number: int,
+    *,
+    force_locked: bool = False,
+    skip_locked: bool = False,
+) -> dict[str, Any]:
+    """Apply best-copy decisions to ONE duplicate group (#744).
+
+    The review-time twin of scan-time auto-select
+    (:mod:`core.services.auto_select`): within the target group, the
+    highest-scoring row becomes the keeper (``user_decision=""`` +
+    ``is_locked=True``); every other row the classifier positively identified
+    as a duplicate (``EXACT`` / ``REVIEW_DUPLICATE``) receives
+    ``user_decision="delete"``. A Ref-tier row pulled into the group by the
+    ungated filename pair edge (RAW+JPG / Live-Photo MOV passenger) is left
+    untouched — same allowlist :func:`core.services.auto_select.
+    non_keepers_for_aggressive_delete` uses for the scan-time aggressive path.
+
+    Deliberately NO ``match_confidence`` filtering: that field lives only on
+    the scanner's transient ``ManifestRow`` shape and is never persisted to
+    the manifest DB, so ``core.models.PhotoRecord`` (what this function reads)
+    has no such attribute — the shared helper's ``getattr(..., None) != "low"``
+    check is naturally always-True here. This is intentional, not a gap (#744
+    scope decision).
+
+    Locked-rows gate mirrors :func:`set_decisions` / ``bulk_decide``: if any
+    row that would be WRITTEN (keeper or delete-target) is currently locked,
+    the write is refused with ``ValueError("locked_paths", locked,
+    matched_total)`` unless ``force_locked`` or ``skip_locked`` is set.
+    ``force_locked`` unlocks every previously-locked delete-target in the same
+    write (Qt "Unlock & Apply All" parity) — the keeper's own lock write
+    (``True``) is unaffected. ``skip_locked`` narrows the write to the
+    unlocked subset only (locked rows keep both their decision and lock state
+    untouched).
+
+    Args:
+        manifest_path: Absolute path to the manifest .sqlite file.
+        group_number: The ``group_number`` assigned by the most recent
+            ``ManifestRepository.load()`` (matches ``review_view.
+            serialize_groups``'s ``group_number`` field the FE already holds).
+        force_locked: Write anyway, force-unlocking previously-locked
+            delete-targets in the same write.
+        skip_locked: Narrow the write to the unlocked subset only.
+
+    Returns:
+        dict with keys ``matched`` (int), ``affected_paths`` (list[str]),
+        ``action_applied`` (``"apply_best_copy"``), ``groups`` (serialised,
+        post-mutation).
+
+    Raises:
+        FileNotFoundError: manifest_path does not exist on disk.
+        ValueError("group_not_found", group_number): no group with this
+            number exists in the current load.
+        ValueError: ``force_locked`` and ``skip_locked`` are both True.
+        ValueError("locked_paths", [...], matched_total): the write would
+            touch locked rows and neither override is set.
+    """
+    _require_manifest(manifest_path)
+
+    if force_locked and skip_locked:
+        raise ValueError("force_locked and skip_locked are mutually exclusive")
+
+    vm = _load_vm(manifest_path)
+    group = next(
+        (g for g in vm.groups if getattr(g, "group_number", None) == group_number),
+        None,
+    )
+    if group is None:
+        raise ValueError("group_not_found", group_number)
+
+    items = list(getattr(group, "items", []))
+
+    # Duck-typed adapter — top_score_path_per_group / non_keepers_for_
+    # aggressive_delete read .group_id/.source_path/.score/.action (the
+    # scanner.dedup.ManifestRow shape); PhotoRecord carries the same data
+    # under different names (.group_number/.file_path) and has no
+    # .match_confidence attribute at all (never persisted — see docstring).
+    # A single constant group_id is fine: every adapted row belongs to the
+    # one already-resolved group, so the helpers' internal grouping is a
+    # no-op bucket of one.
+    scored = [
+        SimpleNamespace(
+            group_id="g",
+            source_path=rec.file_path,
+            score=rec.score,
+            action=getattr(rec, "action", ""),
+        )
+        for rec in items
+    ]
+
+    keepers = top_score_path_per_group(scored)
+    if not keepers:
+        # No scored rows in this group (e.g. every member is a passenger) —
+        # nothing to apply. Benign no-op, mirrors apply_auto_select_decisions.
+        return {
+            "matched": 0,
+            "affected_paths": [],
+            "action_applied": "apply_best_copy",
+            "groups": serialize_groups(vm.groups),
+        }
+
+    non_keepers = non_keepers_for_aggressive_delete(scored, keepers)
+    decisions, lock_states = build_auto_select_writes(keepers, non_keepers)
+
+    path_to_rec = {rec.file_path: rec for rec in items}
+    locked: list[str] = [
+        p for p in decisions if getattr(path_to_rec.get(p), "is_locked", False)
+    ]
+
+    if skip_locked:
+        locked_set = set(locked)
+        decisions = {p: v for p, v in decisions.items() if p not in locked_set}
+        lock_states = {p: v for p, v in lock_states.items() if p not in locked_set}
+    elif locked and not force_locked:
+        # 409 carries the FULL targeted write-set size (before narrowing) —
+        # same contract as set_decisions / bulk_decide's 409.
+        raise ValueError("locked_paths", locked, len(decisions))
+    elif force_locked and locked:
+        # Force-unlock every previously-locked row that would otherwise
+        # refuse the write. A locked KEEPER already has lock_states[p]=True
+        # from build_auto_select_writes — setdefault leaves that alone, so
+        # it stays locked. A locked NON-keeper has no entry yet — it gets
+        # explicitly unlocked so the 'delete' decision write isn't blocked
+        # (mirrors set_decisions' Unlock & Apply All).
+        for p in locked:
+            lock_states.setdefault(p, False)
+
+    repo = ManifestRepository()
+    repo.batch_update_decisions_and_lock(manifest_path, decisions, lock_states)
+
+    vm2 = _load_vm(manifest_path)
+    fresh_groups = serialize_groups(vm2.groups)
+
+    return {
+        "matched": len(decisions),
+        "affected_paths": sorted(decisions),
+        "action_applied": "apply_best_copy",
         "groups": fresh_groups,
     }

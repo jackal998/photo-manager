@@ -24,6 +24,8 @@ export interface ContextMenuTarget {
   /** The right-clicked column key (#735), e.g. "name" / "size" / "date" —
    *  undefined when the click landed outside a metadata cell. */
   col?: string;
+  /** The row's group_number (#744) — Apply best-copy is group-scoped. */
+  groupNumber: number;
 }
 
 /** Group-header right-click target (#735) — carries the group's member file
@@ -32,6 +34,8 @@ export interface GroupContextMenuTarget {
   memberPaths: string[];
   x: number;
   y: number;
+  /** The group_number (#744) — Apply best-copy is group-scoped. */
+  groupNumber: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,15 +237,22 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   );
 
   const handleContextMenu = useCallback(
-    (filePath: string, isLocked: boolean, x: number, y: number, col?: string) => {
-      onContextMenu?.({ filePath, isLocked, x, y, col });
+    (
+      filePath: string,
+      isLocked: boolean,
+      groupNumber: number,
+      x: number,
+      y: number,
+      col?: string
+    ) => {
+      onContextMenu?.({ filePath, isLocked, x, y, col, groupNumber });
     },
     [onContextMenu]
   );
 
   const handleGroupContextMenu = useCallback(
-    (memberPaths: string[], x: number, y: number) => {
-      onGroupContextMenu?.({ memberPaths, x, y });
+    (memberPaths: string[], groupNumber: number, x: number, y: number) => {
+      onGroupContextMenu?.({ memberPaths, x, y, groupNumber });
     },
     [onGroupContextMenu]
   );
@@ -344,6 +355,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                     <FileRow
                       row={fileRow}
                       groupId={String(vrow.groupNumber)}
+                      groupNumber={vrow.groupNumber}
                       columnWidths={columnWidths}
                       onDecision={handleDecision}
                       onLock={handleLock}

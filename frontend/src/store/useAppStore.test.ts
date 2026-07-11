@@ -48,6 +48,7 @@ vi.mock("../api/client", async (importOriginal) => {
     postPrune: real.postPrune,
     postSave: real.postSave,
     postReveal: real.postReveal,
+    applyBestCopy: real.applyBestCopy,
     ApiConflictError: real.ApiConflictError,
   };
 });
@@ -692,6 +693,94 @@ describe("removeFromList – 409 locked_paths sets lockConflict op=remove with o
     expect(execute.lockConflict!.op).toBe("remove");
     expect(execute.lockConflict!.originalPaths).toEqual(paths);
     expect(execute.lockConflict!.paths).toEqual(["/photos/j.jpg"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyBestCopy (#744)
+// ---------------------------------------------------------------------------
+
+describe("applyBestCopy – success replaces manifest groups (no optimistic update)", () => {
+  it("updates manifest.groups from the server response", async () => {
+    const before = makeGroup(1, ["/photos/keeper.jpg", "/photos/peer.jpg"]);
+    seedManifest([before]);
+
+    const after = makeGroup(1, ["/photos/keeper.jpg", "/photos/peer.jpg"]);
+    after.items[0].user_decision = "";
+    after.items[0].is_locked = true;
+    after.items[1].user_decision = "delete";
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({
+        matched: 2,
+        affected_paths: ["/photos/keeper.jpg", "/photos/peer.jpg"],
+        action_applied: "apply_best_copy",
+        groups: [after],
+      })
+    );
+
+    await useAppStore.getState().applyBestCopy(1);
+
+    const { manifest } = useAppStore.getState();
+    expect(manifest.groups[0].items[0].user_decision).toBe("");
+    expect(manifest.groups[0].items[0].is_locked).toBe(true);
+    expect(manifest.groups[0].items[1].user_decision).toBe("delete");
+  });
+
+  it("sends group_number in the request body", async () => {
+    seedManifest([makeGroup(1, ["/photos/a.jpg"])]);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ matched: 0, affected_paths: [], action_applied: "apply_best_copy", groups: [] })
+    );
+
+    await useAppStore.getState().applyBestCopy(7);
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as { body: string }).body);
+    expect(body.group_number).toBe(7);
+  });
+
+  it("is a no-op when no manifest is loaded", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await useAppStore.getState().applyBestCopy(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyBestCopy – 409 locked_paths sets lockConflict op=apply-best-copy with groupNumber", () => {
+  it("sets lockConflict.groupNumber (not originalPaths) for the retry", async () => {
+    const group = makeGroup(1, ["/photos/keeper.jpg", "/photos/peer.jpg"]);
+    seedManifest([group]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({
+        code: "locked_paths",
+        locked_paths: ["/photos/peer.jpg"],
+        matched_total: 2,
+      })
+    );
+
+    await useAppStore.getState().applyBestCopy(1);
+
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict).not.toBeNull();
+    expect(execute.lockConflict!.op).toBe("apply-best-copy");
+    expect(execute.lockConflict!.groupNumber).toBe(1);
+    expect(execute.lockConflict!.paths).toEqual(["/photos/peer.jpg"]);
+    expect(execute.lockConflict!.originalPaths).toBeNull();
+    // manifest.groups is untouched on a conflict (no optimistic update to revert).
+    expect(useAppStore.getState().manifest.groups[0].items).toHaveLength(2);
+  });
+
+  it("a non-conflict error sets manifest.error instead", async () => {
+    seedManifest([makeGroup(1, ["/photos/a.jpg"])]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      errorResponse(422, "Group not found")
+    );
+
+    await useAppStore.getState().applyBestCopy(1);
+
+    const { execute, manifest } = useAppStore.getState();
+    expect(execute.lockConflict).toBeNull();
+    expect(manifest.error).toBeTruthy();
   });
 });
 

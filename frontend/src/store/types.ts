@@ -153,7 +153,7 @@ export interface ResultViewState {
 export interface LockConflict {
   /** The paths the server reported as locked. */
   paths: string[];
-  op: "execute" | "remove" | "prune" | "decision";
+  op: "execute" | "remove" | "prune" | "decision" | "apply-best-copy";
   /**
    * The original path list that triggered the conflict.
    * - execute: all decided paths that were in scope at call time (null means
@@ -163,6 +163,8 @@ export interface LockConflict {
    *   to continue, not a re-runnable original scope.
    * - decision: the full path list passed to setDecision/setDecisions that
    *   triggered the conflict.
+   * - apply-best-copy: unused (null) — the retry re-runs by groupNumber, not
+   *   a path list (see `groupNumber` below).
    * Used by "Unlocked Only" to compute the filtered scope without re-hitting the
    * locked files.
    */
@@ -172,6 +174,12 @@ export interface LockConflict {
    * "Unlock & Apply" / "Unlocked Only". Undefined for every other op.
    */
   pendingDecision?: DecisionValue;
+  /**
+   * Set only when ``op === "apply-best-copy"`` — the group_number to re-run
+   * applyBestCopy against on "Unlock & Apply" / "Unlocked Only". Undefined
+   * for every other op.
+   */
+  groupNumber?: number;
 }
 
 /** Prune prompt state — the unlocked buckets shown in the confirmation dialog. */
@@ -565,6 +573,28 @@ export interface AppActions {
 
   /** Clear the actionError field. */
   clearActionError(): void;
+
+  /**
+   * POST /api/action/apply-best-copy for one group (#744) — the review-time
+   * twin of scan-time auto-select: within the group, the top-score row
+   * becomes the keeper (decision "" + locked); every row the classifier
+   * positively identified as a duplicate gets "delete". No optimistic
+   * update — the response's authoritative `groups` replaces manifest.groups.
+   *
+   * - On success: replaces manifest.groups from the response.
+   * - On 409 locked_paths: sets execute.lockConflict (op="apply-best-copy",
+   *   groupNumber=groupNumber) so the existing LockConfirmDialog drives the
+   *   Unlock & Apply / Unlocked Only retry.
+   * - On other errors: sets manifest.error.
+   *
+   * Lock verdicts mirror applyBulkDecide: forceLocked unlocks previously-
+   * locked delete-targets in the same write; skipLocked narrows the write to
+   * the unlocked subset only. Mutually exclusive (the route 422s if both).
+   */
+  applyBestCopy(
+    groupNumber: number,
+    opts?: { forceLocked?: boolean; skipLocked?: boolean }
+  ): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

@@ -839,4 +839,258 @@ class TestBulkDecideSkipLocked:
         assert resp.status_code == 422, resp.text
         # No write on a rejected request.
         assert _read_user_decision(manifest, str(fa)) == ""
+
+
+# ---------------------------------------------------------------------------
+# POST /api/action/apply-best-copy (#744)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyBestCopy:
+    """Review-time twin of scan-time auto-select, scoped to one group: the
+    top-score row becomes the keeper (decision '' + locked); every row the
+    classifier positively identified as a duplicate gets 'delete'; a Ref-tier
+    passenger (not a positively-classified duplicate) is left untouched.
+    """
+
+    def _three_row_group(self, tmp_path):
+        """keeper (fa, score=0.9, REVIEW_DUPLICATE) is the highest score;
+        fb (score=0.5, REVIEW_DUPLICATE) is a lower-score duplicate peer;
+        fc (score=0.7, action='') is a Ref-tier passenger pulled into the
+        group by the ungated pair edge — never auto-deleted."""
+        files_dir = tmp_path / "files"
+        files_dir.mkdir()
+        fa = files_dir / "keeper.jpg"
+        fb = files_dir / "peer.jpg"
+        fc = files_dir / "passenger.jpg"
+        for f in (fa, fb, fc):
+            f.write_bytes(b"\x00" * 64)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(fa), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.9,
+            },
+            {
+                "source_path": str(fb), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.5,
+            },
+            {
+                "source_path": str(fc), "action": "",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.7,
+            },
+        ])
+        return manifest, fa, fb, fc
+
+    def test_success_keeper_locked_duplicate_deleted_passenger_untouched(
+        self, client_with_roots, tmp_path
+    ):
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["action_applied"] == "apply_best_copy"
+        assert body["matched"] == 2
+        assert set(body["affected_paths"]) == {str(fa), str(fb)}
+
+        # Keeper: highest score, canonical-empty keep decision, locked.
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_is_locked(manifest, str(fa)) is True
+        # Lower-score DUPLICATE peer: deleted, never locked.
+        assert _read_user_decision(manifest, str(fb)) == "delete"
+        assert _read_is_locked(manifest, str(fb)) is False
+        # Ref-tier passenger: untouched (not a positively-classified duplicate).
+        assert _read_user_decision(manifest, str(fc)) == ""
+        assert _read_is_locked(manifest, str(fc)) is False
+
+    def test_no_scored_rows_is_noop(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        files_dir = tmp_path / "files"
+        files_dir.mkdir()
+        fa = files_dir / "a.jpg"
+        fb = files_dir / "b.jpg"
+        fa.write_bytes(b"\x00" * 64)
+        fb.write_bytes(b"\x00" * 64)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(fa), "action": "",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": None,
+            },
+            {
+                "source_path": str(fb), "action": "",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": None,
+            },
+        ])
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["matched"] == 0
+        assert body["affected_paths"] == []
+        assert _read_user_decision(manifest, str(fa)) == ""
+
+    def test_unknown_group_number_returns_404(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 999,
+        })
+        assert resp.status_code == 404, resp.text
+        # Nothing mutated.
+        assert _read_user_decision(manifest, str(fa)) == ""
+
+    def test_manifest_not_found_returns_404(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(tmp_path / "does_not_exist.sqlite"),
+            "group_number": 1,
+        })
+        assert resp.status_code == 404, resp.text
+
+    def test_force_and_skip_both_true_returns_422(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+            "force_locked": True,
+            "skip_locked": True,
+        })
+        assert resp.status_code == 422, resp.text
+        assert _read_user_decision(manifest, str(fa)) == ""
+
+    def test_locked_peer_without_override_returns_409(self, client_with_roots, tmp_path):
+        """fb (a delete-target) is locked; no override → 409 locked_paths, no write."""
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+        conn = sqlite3.connect(str(manifest))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+                (str(fb),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json().get("detail", {})
+        assert detail.get("code") == "locked_paths"
+        assert str(fb) in detail.get("locked_paths", [])
+        # The full write-set size (keeper + duplicate peer) is 2.
+        assert detail.get("matched_total") == 2
+        # Nothing mutated.
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_user_decision(manifest, str(fb)) == ""
+        assert _read_is_locked(manifest, str(fb)) is True
+
+    def test_force_locked_unlocks_locked_peer_and_applies(
+        self, client_with_roots, tmp_path
+    ):
+        """force_locked=True writes anyway and force-unlocks the previously
+        locked delete-target (Qt 'Unlock & Apply All' parity)."""
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+        conn = sqlite3.connect(str(manifest))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+                (str(fb),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+            "force_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_user_decision(manifest, str(fb)) == "delete"
+        assert _read_is_locked(manifest, str(fb)) is False
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_is_locked(manifest, str(fa)) is True
+
+    def test_force_locked_keeper_already_locked_stays_locked(
+        self, client_with_roots, tmp_path
+    ):
+        """The keeper (fa) is ALREADY locked when apply-best-copy re-selects
+        it as the keeper; force_locked must not accidentally unlock it — the
+        keeper's own lock write (True) from build_auto_select_writes wins."""
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+        conn = sqlite3.connect(str(manifest))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE source_path IN (?, ?)",
+                (str(fa), str(fb)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+            "force_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        # Keeper stays locked (it's supposed to be); peer gets force-unlocked.
+        assert _read_is_locked(manifest, str(fa)) is True
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_is_locked(manifest, str(fb)) is False
+        assert _read_user_decision(manifest, str(fb)) == "delete"
+
+    def test_skip_locked_leaves_locked_peer_untouched(
+        self, client_with_roots, tmp_path
+    ):
+        """skip_locked=True narrows the write to the unlocked subset only —
+        the locked peer keeps both its decision and lock state untouched."""
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+        conn = sqlite3.connect(str(manifest))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+                (str(fb),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+            "skip_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["matched"] == 1
+        assert body["affected_paths"] == [str(fa)]
+
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_is_locked(manifest, str(fa)) is True
+        # fb untouched — still locked, still no decision.
+        assert _read_user_decision(manifest, str(fb)) == ""
+        assert _read_is_locked(manifest, str(fb)) is True
         assert _read_user_decision(manifest, str(fb)) == ""
