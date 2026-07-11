@@ -61,6 +61,8 @@ interface ContextMenuState {
   variant: "file" | "group";
   /** The right-clicked column (file variant only, #735). */
   col?: string;
+  /** The target row/group's group_number (#744) — Apply best-copy scope. */
+  groupNumber: number;
 }
 
 const CLOSED_MENU: ContextMenuState = {
@@ -72,6 +74,7 @@ const CLOSED_MENU: ContextMenuState = {
   targetPaths: [],
   variant: "file",
   col: undefined,
+  groupNumber: 0,
 };
 
 export default function App() {
@@ -124,12 +127,14 @@ export default function App() {
       targetPaths,
       variant: "file",
       col: target.col,
+      groupNumber: target.groupNumber,
     });
   }, []);
 
-  // Group-header right-click (#735) — reduced menu (By-Field + Remove),
-  // scoped to the group's own member paths regardless of the current
-  // multi-selection (Qt's group-row menu has no selection interaction).
+  // Group-header right-click (#735) — reduced menu (By-Field + Remove +
+  // Apply best-copy, #744), scoped to the group's own member paths
+  // regardless of the current multi-selection (Qt's group-row menu has no
+  // selection interaction).
   const handleGroupContextMenu = useCallback((target: GroupContextMenuTarget) => {
     setContextMenu({
       open: true,
@@ -140,6 +145,7 @@ export default function App() {
       targetPaths: target.memberPaths,
       variant: "group",
       col: undefined,
+      groupNumber: target.groupNumber,
     });
   }, []);
 
@@ -470,6 +476,7 @@ export default function App() {
           targetPaths={contextMenu.targetPaths}
           variant={contextMenu.variant}
           clickedCol={contextMenu.col}
+          groupNumber={contextMenu.groupNumber}
           onExecuteSelected={handleExecuteSelectedOnly}
           onClose={handleContextMenuClose}
         />

@@ -22,6 +22,8 @@ import {
 interface FileRowProps {
   row: FileRowData;
   groupId: string;
+  /** The row's numeric group_number (#744) — Apply best-copy is group-scoped. */
+  groupNumber: number;
   /** Per-column widths from the result-view store — keeps each cell aligned
    *  with the ColumnHeaderRow above and honours user resizes (#685 / s47). */
   columnWidths: Record<ColumnId, number>;
@@ -39,6 +41,7 @@ interface FileRowProps {
   onContextMenu?: (
     filePath: string,
     isLocked: boolean,
+    groupNumber: number,
     x: number,
     y: number,
     col?: string
@@ -46,7 +49,7 @@ interface FileRowProps {
   isSelected?: boolean;
 }
 
-export function FileRow({ row, groupId, columnWidths, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected }: FileRowProps) {
+export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected }: FileRowProps) {
   const simLabel = similarityLabel(row.similarity);
   // Passenger rows get a subtle amber highlight on the similarity badge.
   const isPassenger = row.similarity.kind === "passenger";
@@ -71,7 +74,7 @@ export function FileRow({ row, groupId, columnWidths, onDecision, onLock, onSele
     const col =
       (e.target as HTMLElement).closest("[data-col]")?.getAttribute("data-col") ??
       undefined;
-    onContextMenu?.(row.file_path, row.is_locked, e.clientX, e.clientY, col);
+    onContextMenu?.(row.file_path, row.is_locked, groupNumber, e.clientX, e.clientY, col);
   }
 
   return (

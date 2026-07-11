@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from qa.scenarios._batch import ALL_SCENARIOS
+from qa.scenario_ids import ALL_SCENARIOS, WEB_ONLY_SCENARIOS
 from qa.scenarios._config import SCENARIO_SOURCES
 
 REPO = Path(__file__).resolve().parent.parent
@@ -74,7 +74,9 @@ def test_no_stale_entries_in_all_scenarios() -> None:
     mismatch in pytest output instead of behind a CI red.
     """
     on_disk = _on_disk_scenario_names()
-    registered = set(ALL_SCENARIOS)
+    # Web-only ids deliberately have no qa/scenarios/ driver; their file
+    # check lives in test_web_only_scenarios_have_web_drivers below.
+    registered = set(ALL_SCENARIOS) - WEB_ONLY_SCENARIOS
     stale = registered - on_disk
     assert not stale, (
         f"ALL_SCENARIOS entries with no matching qa/scenarios/<name>.py "
@@ -92,7 +94,9 @@ def test_every_scenario_has_source_config() -> None:
     unit tests instead of on the first CI run of the new scenario.
     """
     missing_config = [
-        s for s in ALL_SCENARIOS if s not in SCENARIO_SOURCES
+        s
+        for s in ALL_SCENARIOS
+        if s not in SCENARIO_SOURCES and s not in WEB_ONLY_SCENARIOS
     ]
     assert not missing_config, (
         f"scenarios registered in ALL_SCENARIOS but missing from "
@@ -111,3 +115,24 @@ def test_no_stale_entries_in_scenario_sources() -> None:
         f"SCENARIO_SOURCES keys not in ALL_SCENARIOS (dead config in "
         f"qa/scenarios/_config.py): {sorted(stale_keys)}"
     )
+
+
+# -- web-only exemption stays honest ----------------------------------------
+
+def test_web_only_scenarios_have_web_drivers() -> None:
+    """WEB_ONLY_SCENARIOS -> qa/web/scenarios/<name>.py. Web-only ids are
+    exempt from the Qt-side file/SOURCES checks above, so this is the check
+    that keeps the exemption honest: the id must still be registered in
+    ALL_SCENARIOS (or the web batch never runs it) AND its Playwright driver
+    must exist on disk. An entry here with neither is dead config.
+    """
+    web_dir = REPO / "qa" / "web" / "scenarios"
+    for name in sorted(WEB_ONLY_SCENARIOS):
+        assert name in set(ALL_SCENARIOS), (
+            f"{name} is in WEB_ONLY_SCENARIOS but not ALL_SCENARIOS - "
+            "the web batch iterates ALL_SCENARIOS, so it would never run"
+        )
+        assert (web_dir / f"{name}.py").is_file(), (
+            f"{name} is web-only but qa/web/scenarios/{name}.py does not "
+            "exist - the exemption from the Qt-side checks is unjustified"
+        )

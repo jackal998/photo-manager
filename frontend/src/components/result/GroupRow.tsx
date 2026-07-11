@@ -14,8 +14,14 @@ interface GroupRowProps {
   expanded: boolean;
   onToggle: () => void;
   /** Right-click on the group header (#735) — opens the reduced group
-   *  context menu (Set Action by Field… + Remove from List). */
-  onContextMenu?: (memberPaths: string[], x: number, y: number) => void;
+   *  context menu (Set Action by Field… + Remove from List + Apply
+   *  best-copy, #744). */
+  onContextMenu?: (
+    memberPaths: string[],
+    groupNumber: number,
+    x: number,
+    y: number
+  ) => void;
 }
 
 export function GroupRow({
@@ -28,7 +34,7 @@ export function GroupRow({
 }: GroupRowProps) {
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
-    onContextMenu?.(memberPaths, e.clientX, e.clientY);
+    onContextMenu?.(memberPaths, groupNumber, e.clientX, e.clientY);
   }
 
   return (

@@ -1,10 +1,11 @@
-// LockConfirmDialog — shown when POST /api/execute, POST /api/remove, or
-// PATCH /api/decision (#733) returns a 409 locked_paths conflict.
+// LockConfirmDialog — shown when POST /api/execute, POST /api/remove,
+// PATCH /api/decision (#733), or POST /api/action/apply-best-copy (#744)
+// returns a 409 locked_paths conflict.
 //
 // Driven entirely by store.execute.lockConflict:
 //   - null  → dialog hidden (not mounted)
 //   - set   → dialog open; op tells us whether the original call was
-//             "execute", "remove", "prune", or "decision".
+//             "execute", "remove", "prune", "decision", or "apply-best-copy".
 //
 // Three outcomes:
 //   Unlock & Apply  → re-run the original op with forceLocked:true
@@ -22,6 +23,9 @@
 //                       #417 parity: setting a decision doesn't delete
 //                       anything, it only queues it for a later Execute).
 //                       Unlock & Apply is NOT destructive for this op.
+//   op === "apply-best-copy" → "N locked rows would be affected" (DEFERRED,
+//                       same reasoning as "decision" — the write only queues
+//                       keep/delete decisions). Re-runs applyBestCopy(groupNumber).
 
 import {
   Dialog,
@@ -46,6 +50,7 @@ export function LockConfirmDialog() {
   const removeFromList = useAppStore((s) => s.removeFromList);
   const setDecisions = useAppStore((s) => s.setDecisions);
   const resolvePruneLock = useAppStore((s) => s.resolvePruneLock);
+  const applyBestCopy = useAppStore((s) => s.applyBestCopy);
   const set = useAppStore.setState;
 
   const isOpen = lockConflict !== null;
@@ -77,13 +82,20 @@ export function LockConfirmDialog() {
     //     the user asked to remove (silent under-action).
     //   - decision: re-running with only lockedPaths would leave the unlocked
     //     rows' decision unset (silent under-action), same reasoning as remove.
+    //   - apply-best-copy: re-runs by groupNumber (not a path list) — the
+    //     service re-derives the keeper/delete-target write-set itself.
     const original = lockConflict?.originalPaths ?? [];
     const pendingDecision = lockConflict?.pendingDecision ?? "";
+    const groupNumber = lockConflict?.groupNumber;
     clearConflict();
     if (op === "execute") {
       void executeDecisions({ scopePaths: original, forceLocked: true });
     } else if (op === "decision") {
       void setDecisions(original, pendingDecision, { forceLocked: true });
+    } else if (op === "apply-best-copy") {
+      if (groupNumber !== undefined) {
+        void applyBestCopy(groupNumber, { forceLocked: true });
+      }
     } else {
       void removeFromList(original, true);
     }
@@ -99,6 +111,7 @@ export function LockConfirmDialog() {
     const lockedSet = new Set(lockedPaths);
     const original = lockConflict?.originalPaths ?? [];
     const pendingDecision = lockConflict?.pendingDecision ?? "";
+    const groupNumber = lockConflict?.groupNumber;
     // Filter the original scope to exclude locked paths, then re-run.
     const unlockedPaths = original.filter((p) => !lockedSet.has(p));
     clearConflict();
@@ -110,6 +123,12 @@ export function LockConfirmDialog() {
       // every original path was locked.
       if (unlockedPaths.length > 0) {
         void setDecisions(unlockedPaths, pendingDecision);
+      }
+    } else if (op === "apply-best-copy") {
+      // Re-run by groupNumber with skipLocked:true — the service narrows the
+      // write to the unlocked subset itself.
+      if (groupNumber !== undefined) {
+        void applyBestCopy(groupNumber, { skipLocked: true });
       }
     } else {
       // Re-run remove with only the unlocked subset.
@@ -134,7 +153,9 @@ export function LockConfirmDialog() {
         ? "Locked files in remove scope"
         : op === "decision"
           ? "Locked rows affected"
-          : "Locked singleton groups";
+          : op === "apply-best-copy"
+            ? "Locked rows in this group"
+            : "Locked singleton groups";
   const description =
     op === "execute"
       ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be permanently DELETED. Unlock and proceed, or skip locked files only.`
@@ -142,7 +163,9 @@ export function LockConfirmDialog() {
         ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} in the remove list. Unlock and remove, or remove unlocked files only.`
         : op === "decision"
           ? `Setting this decision would change ${originalPathsLen} row(s); ${n} ${n === 1 ? "is" : "are"} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.`
-          : `${n} locked singleton ${n === 1 ? "group" : "groups"} would be pruned. Unlock and prune ${n === 1 ? "it" : "them"}, or keep ${n === 1 ? "it" : "them"} in the list.`;
+          : op === "apply-best-copy"
+            ? `Applying best-copy to this group would affect rows that include ${n} locked ${n === 1 ? "row" : "rows"}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.`
+            : `${n} locked singleton ${n === 1 ? "group" : "groups"} would be pruned. Unlock and prune ${n === 1 ? "it" : "them"}, or keep ${n === 1 ? "it" : "them"} in the list.`;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleCancel()}>
@@ -176,9 +199,12 @@ export function LockConfirmDialog() {
             Unlocked only
           </Button>
           <Button
-            // "decision" is not destructive — nothing is deleted, it only
-            // queues the decision (Qt #417 parity). Every other op is.
-            variant={op === "decision" ? "default" : "destructive"}
+            // "decision" / "apply-best-copy" are not destructive — nothing is
+            // deleted, they only queue decisions (Qt #417 parity). Every
+            // other op is.
+            variant={
+              op === "decision" || op === "apply-best-copy" ? "default" : "destructive"
+            }
             data-testid={LOCK_CONFIRM_BTN_UNLOCK_APPLY}
             onClick={handleUnlockApply}
           >

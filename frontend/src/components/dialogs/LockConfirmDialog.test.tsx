@@ -15,6 +15,8 @@
 //  10. Locked path list is rendered.
 //  11. op="decision" (#733): Unlock & Apply / Unlocked Only re-run setDecisions
 //      with the pending decision; Unlock & Apply is NOT the destructive variant.
+//  12. op="apply-best-copy" (#744): Unlock & Apply / Unlocked Only re-run
+//      applyBestCopy(groupNumber, {forceLocked|skipLocked}); NOT destructive.
 
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -34,10 +36,11 @@ import {
 // ---------------------------------------------------------------------------
 
 function seedLockConflict(
-  op: "execute" | "remove" | "decision",
+  op: "execute" | "remove" | "decision" | "apply-best-copy",
   paths: string[] = ["/photos/a.jpg"],
   originalPaths: string[] | null = null,
-  pendingDecision?: "" | "delete" | "ignore"
+  pendingDecision?: "" | "delete" | "ignore",
+  groupNumber?: number
 ) {
   act(() => {
     useAppStore.setState((s) => ({
@@ -51,6 +54,7 @@ function seedLockConflict(
           // explicitly provided (simulates: all paths in scope were locked).
           originalPaths: originalPaths ?? [...paths],
           pendingDecision,
+          groupNumber,
         },
       },
     }));
@@ -74,15 +78,18 @@ describe("LockConfirmDialog", () => {
   let executeDecisionsMock: ReturnType<typeof vi.fn>;
   let removeFromListMock: ReturnType<typeof vi.fn>;
   let setDecisionsMock: ReturnType<typeof vi.fn>;
+  let applyBestCopyMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
     removeFromListMock = vi.fn().mockResolvedValue(undefined);
     setDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    applyBestCopyMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({
       executeDecisions: executeDecisionsMock,
       removeFromList: removeFromListMock,
       setDecisions: setDecisionsMock,
+      applyBestCopy: applyBestCopyMock,
     } as never);
     clearLockConflict();
   });
@@ -276,5 +283,63 @@ describe("LockConfirmDialog", () => {
     render(<LockConfirmDialog />);
     const executeBtn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
     expect(executeBtn.className).toContain("bg-red-600");
+  });
+
+  // ---------------------------------------------------------------------------
+  // #744 — op="apply-best-copy" (POST /api/action/apply-best-copy 409 locked_paths)
+  // ---------------------------------------------------------------------------
+
+  it("Unlock & Apply (apply-best-copy) re-runs applyBestCopy(groupNumber, {forceLocked:true})", async () => {
+    const user = userEvent.setup();
+    seedLockConflict(
+      "apply-best-copy",
+      ["/photos/peer.jpg"],
+      null,
+      undefined,
+      3
+    );
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    expect(applyBestCopyMock).toHaveBeenCalledWith(3, { forceLocked: true });
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+    expect(removeFromListMock).not.toHaveBeenCalled();
+    expect(setDecisionsMock).not.toHaveBeenCalled();
+  });
+
+  it("Unlocked Only (apply-best-copy) re-runs applyBestCopy(groupNumber, {skipLocked:true})", async () => {
+    const user = userEvent.setup();
+    seedLockConflict(
+      "apply-best-copy",
+      ["/photos/peer.jpg"],
+      null,
+      undefined,
+      5
+    );
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
+    expect(applyBestCopyMock).toHaveBeenCalledWith(5, { skipLocked: true });
+  });
+
+  it("Cancel (apply-best-copy) clears lockConflict and does not call applyBestCopy", async () => {
+    const user = userEvent.setup();
+    seedLockConflict("apply-best-copy", ["/photos/a.jpg"], null, undefined, 1);
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_CANCEL));
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    expect(applyBestCopyMock).not.toHaveBeenCalled();
+  });
+
+  it("body for op='apply-best-copy' says nothing is deleted yet (non-destructive queueing copy)", () => {
+    seedLockConflict("apply-best-copy", ["/a.jpg"], null, undefined, 1);
+    render(<LockConfirmDialog />);
+    expect(screen.getByText(/nothing is deleted yet/i)).toBeInTheDocument();
+  });
+
+  it("Unlock & Apply uses the default (non-destructive) variant for op='apply-best-copy'", () => {
+    seedLockConflict("apply-best-copy", ["/a.jpg"], null, undefined, 1);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-neutral-900");
+    expect(btn.className).not.toContain("bg-red-600");
   });
 });

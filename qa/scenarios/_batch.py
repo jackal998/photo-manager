@@ -37,7 +37,7 @@ PY = sys.executable
 # without pulling in this module's ctypes / subprocess machinery. Re-imported
 # here so the Qt batch runner keeps working unchanged.
 sys.path.insert(0, str(REPO))
-from qa.scenario_ids import ALL_SCENARIOS  # noqa: E402
+from qa.scenario_ids import ALL_SCENARIOS, WEB_ONLY_SCENARIOS  # noqa: E402
 
 
 def select_shard(
@@ -409,12 +409,24 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args(sys.argv[1:])
+    # Web-only ids (no qa/scenarios/<name>.py driver) never run here — the
+    # import would fail. Default runs and shards silently exclude them; an
+    # explicit request gets a loud pointer to the web batch instead.
+    qt_scenarios = [s for s in ALL_SCENARIOS if s not in WEB_ONLY_SCENARIOS]
     if args.scenarios:
+        web_only = [s for s in args.scenarios if s in WEB_ONLY_SCENARIOS]
+        if web_only:
+            print(
+                f"error: {web_only} are web-only scenarios (no Qt driver) — "
+                "run them via: python -m qa.web._batch",
+                flush=True,
+            )
+            return 2
         targets = args.scenarios
     elif args.shard is not None:
-        targets = select_shard(ALL_SCENARIOS, args.shard, args.total_shards)
+        targets = select_shard(qt_scenarios, args.shard, args.total_shards)
     else:
-        targets = list(ALL_SCENARIOS)
+        targets = list(qt_scenarios)
 
     if args.dry_run:
         label = (

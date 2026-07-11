@@ -309,3 +309,17 @@ export interface BulkDecideResult {
   action_applied: string;
   groups: Group[];
 }
+
+// ---------------------------------------------------------------------------
+// POST /api/action/apply-best-copy request type (#744).
+// Response reuses BulkDecideResult — same shape (matched, affected_paths,
+// action_applied="apply_best_copy", groups).
+// ---------------------------------------------------------------------------
+
+export interface ApplyBestCopyRequest {
+  manifest_path: string;
+  group_number: number;
+  force_locked?: boolean;
+  // Apply to the unlocked subset only (mutually exclusive with force_locked).
+  skip_locked?: boolean;
+}

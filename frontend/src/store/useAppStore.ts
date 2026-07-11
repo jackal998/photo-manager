@@ -7,6 +7,7 @@ import type { WritableDraft } from "immer";
 
 import {
   ApiConflictError,
+  applyBestCopy as apiApplyBestCopy,
   bulkDecide,
   cancelScan,
   getManifest,
@@ -1158,6 +1159,51 @@ export const useAppStore = create<AppStore>()(
       set((state) => {
         state.action.actionError = null;
       });
+    },
+
+    async applyBestCopy(groupNumber, opts = {}) {
+      const { forceLocked = false, skipLocked = false } = opts;
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+
+      // #718 — clear any stale error before this action has a chance to fail.
+      set((state) => {
+        state.manifest.error = null;
+      });
+
+      try {
+        const result = await apiApplyBestCopy({
+          manifest_path: manifestPath,
+          group_number: groupNumber,
+          force_locked: forceLocked,
+          skip_locked: skipLocked,
+        });
+
+        set((state) => {
+          // Replace groups from the authoritative server response — no
+          // optimistic update (mirrors applyBulkDecide; the write mixes
+          // "" and "delete" across rows, so there is no single value to
+          // optimistically apply).
+          state.manifest.groups = result.groups;
+        });
+      } catch (err) {
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          set((state) => {
+            state.execute.lockConflict = {
+              paths: err.lockedPaths ?? [],
+              op: "apply-best-copy",
+              // Retry re-runs by groupNumber, not a path list.
+              originalPaths: null,
+              groupNumber,
+            };
+          });
+        } else {
+          set((state) => {
+            state.manifest.error =
+              err instanceof Error ? err.message : String(err);
+          });
+        }
+      }
     },
   }))
 );
