@@ -1,0 +1,1 @@
+Web review screen: right-clicking a group (or a file in it) now offers "Apply best-copy decisions to this group" — top-score file kept and locked, all others marked delete, with the standard lock-conflict dialog when locked rows are present (#744; review-time twin of scan-time auto-select).
