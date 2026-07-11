@@ -10,9 +10,12 @@
 //   - Save Manifest: backend IS plumbed (POST /api/save + store.saveManifest),
 //     but the web persists decisions live via PATCH /api/decision, so whether
 //     an explicit "save snapshot" is meaningful needs a product decision.
-//   - List → Remove from List: needs a remove-by-regex / selection entry point.
 //   - Log menu: depends on the web OS-integration (reveal/open) story.
 //   - File → Exit: N/A for a browser tab.
+// List → Remove from List shipped in #678-D: acts on the current main-tree
+// selection via the same store.removeFromList path as the context menu.
+// Web variant of Qt's no-selection QMessageBox: the item is disabled when
+// nothing is selected (same idiom as Execute (only selected)).
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 
@@ -26,6 +29,8 @@ import {
   MENU_ACTION_SET,
   MENU_ACTION_EXECUTE,
   MENU_ACTION_EXECUTE_SELECTED,
+  MENU_LIST,
+  MENU_LIST_REMOVE_FROM_LIST,
   MENU_VIEW,
   MENU_VIEW_LANG_EN,
   MENU_VIEW_LANG_ZH,
@@ -47,6 +52,8 @@ export interface MenuBarProps {
   onExecute: () => void;
   /** Open the execute dialog scoped to the current main-tree selection. */
   onExecuteSelected: () => void;
+  /** Remove the current main-tree selection from the review list (#678-D). */
+  onRemoveFromList: () => void;
   onSetLocale: (locale: string) => void;
 }
 
@@ -74,6 +81,7 @@ export function MenuBar({
   onSetAction,
   onExecute,
   onExecuteSelected,
+  onRemoveFromList,
   onSetLocale,
 }: MenuBarProps) {
   const t = useT();
@@ -141,6 +149,25 @@ export function MenuBar({
               onSelect={onExecuteSelected}
             >
               {t("web.menu.action_execute_selected", "Execute (only selected)…")}
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+
+      {/* List (#678-D — Qt parity; item order mirrors Qt: File/Action/List/View) */}
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger data-testid={MENU_LIST} className={TRIGGER_CLASS}>
+          {t("web.menu.list", "List")}
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className={CONTENT_CLASS} align="start" sideOffset={2}>
+            <DropdownMenu.Item
+              data-testid={MENU_LIST_REMOVE_FROM_LIST}
+              className={ITEM_CLASS}
+              disabled={!manifestLoaded || !hasSelection}
+              onSelect={onRemoveFromList}
+            >
+              {t("web.menu.list_remove", "Remove from List")}
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

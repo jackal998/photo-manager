@@ -104,6 +104,17 @@ Gated on a non-empty main-tree multi-selection. Opens the execute-action
 dialog scoped to the selected rows' groups (#430 group-pull: selecting any
 row pulls its whole group into the dialog)."""
 
+MENU_LIST = "menu-list"
+"""'List' top-level menu trigger (design contract §5.1; Qt parity #678-D)."""
+
+MENU_LIST_REMOVE_FROM_LIST = "menu-list-remove-from-list"
+"""List → Remove from List menu item.
+
+Gated on a manifest + non-empty main-tree selection (web variant of Qt's
+no-selection QMessageBox: the item is disabled instead). Removes the
+selected rows from the review list via the same store.removeFromList
+path the context menu uses (finalize outcome='ignored', lock-aware 409)."""
+
 MENU_VIEW = "menu-view"
 """'View' top-level menu trigger."""
 
