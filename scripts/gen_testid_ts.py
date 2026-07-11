@@ -63,6 +63,12 @@ def render_testids_ts() -> str:
     lines.append("}")
     lines.append("")
     lines.append(
+        "export function rowDecisionOptionTestid(groupId: string, basename: string, option: string): string {"
+    )
+    lines.append("  return `row-decision-${groupId}-${basename}-${option}`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
         "export function rowLockTestid(groupId: string, basename: string): string {"
     )
     lines.append("  return `row-lock-${groupId}-${basename}`;")

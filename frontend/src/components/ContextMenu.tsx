@@ -125,7 +125,7 @@ export function ContextMenu({
     // maybeOfferPrune (the singleton-prune offer). Like desktop, there is NO
     // confirmation dialog on this path — that belongs to the execute-dialog
     // remove. Staging a reversible 'ignore' decision stays available via the
-    // per-row decision dropdown (DecisionControl).
+    // per-row decision buttons (DecisionControl).
     void removeFromList(targetPaths);
     onClose();
   }

@@ -90,6 +90,7 @@ from qa.web._invariants import (
 from qa.web.testid_constants import (
     MAIN_EMPTY_STATE,
     row_decision_testid,
+    row_decision_option_testid,
 )
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -258,14 +259,20 @@ def run(*, base_url: str) -> None:
             gid_after = _group_id_for(reopened, ROW_TARGET)
 
             # (a) the re-rendered control reflects the persisted decision — the
-            # client re-hydrated from the DB, not from the wiped store.
-            trigger = page.get_by_test_id(row_decision_testid(gid_after, ROW_TARGET))
-            trigger.wait_for(state="visible", timeout=10_000)
-            trigger.scroll_into_view_if_needed(timeout=10_000)
-            trigger_text = trigger.inner_text()
-            assert "Delete" in trigger_text, (
+            # client re-hydrated from the DB, not from the wiped store. The
+            # DecisionControl is a button row, so the active decision is the
+            # button with aria-pressed="true" (every label renders as text, so an
+            # inner-text check would false-pass).
+            delete_btn = page.get_by_test_id(
+                row_decision_option_testid(gid_after, ROW_TARGET, "delete")
+            )
+            delete_btn.wait_for(state="visible", timeout=10_000)
+            delete_btn.scroll_into_view_if_needed(timeout=10_000)
+            pressed = delete_btn.get_attribute("aria-pressed")
+            assert pressed == "true", (
                 "after reload + reopen the DecisionControl must re-render the "
-                f"persisted 'Delete' decision; trigger showed {trigger_text!r}"
+                "persisted 'Delete' decision as the active button; delete button "
+                f"aria-pressed was {pressed!r}"
             )
 
             # (b) the server's view of the DB still carries the decision value.

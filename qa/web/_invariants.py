@@ -472,45 +472,45 @@ def click_context_item(page: "Page", item_testid: str, *, timeout: float = 5_000
     page.get_by_test_id("context-menu").wait_for(state="hidden", timeout=timeout)
 
 
+# DecisionControl button labels → testid option slug (row_decision_option_testid).
+_DECISION_LABEL_TO_SLUG = {"None": "none", "Delete": "delete", "Ignore": "ignore"}
+
+
 def set_row_decision(
     page: "Page", decision_testid: str, label: str, *, timeout: float = 5_000
 ) -> None:
-    """Stage a per-row decision via the result-tree DecisionControl dropdown.
+    """Stage a per-row decision via the result-tree DecisionControl buttons.
 
-    The DecisionControl is a Radix ``Select``: clicking its trigger opens a
-    portalled listbox whose options are the visible labels ``None`` / ``Delete``
-    / ``Ignore``.  This is the affordance for STAGING a reversible
-    ``user_decision`` (PATCH /api/decisions) — distinct from the context-menu
-    "Remove from list", which FINALIZES ``outcome='ignored'`` since #694.
-
-    Mirrors the s60 ``_select_type_filter`` Radix-select pattern (click trigger →
-    ``get_by_role("option", name=...)`` → click), with a scroll-into-view first
-    because the tree is virtualised.
+    The DecisionControl is a row of three direct-click buttons (``None`` /
+    ``Delete`` / ``Ignore``); one click stages the decision with no menu to open
+    (#744).  Each button's testid is the group decision testid with the option
+    slug appended (``row_decision_option_testid``).  This is the affordance for
+    STAGING a reversible ``user_decision`` (PATCH /api/decisions) — distinct from
+    the context-menu "Remove from list", which FINALIZES ``outcome='ignored'``
+    since #694.
 
     Requires an UNLOCKED row: ``FileRow`` disables the DecisionControl when the
     row is locked (``disabled={row.is_locked}``), so calling this on a locked row
-    swallows the trigger click and times out on the option locator (fail-loud,
-    but with an opaque message) — stage decisions BEFORE locking.
+    hits a disabled button and Playwright fails loud ("element is not enabled") —
+    stage decisions BEFORE locking.
 
     Parameters
     ----------
     page:
         The Playwright Page with a loaded manifest.
     decision_testid:
-        The DecisionControl trigger testid, e.g.
+        The DecisionControl group testid, e.g.
         ``row_decision_testid(group_id, basename)`` from ``testid_constants``.
     label:
-        The visible option label: ``"None"``, ``"Delete"`` or ``"Ignore"``.
+        The button label: ``"None"``, ``"Delete"`` or ``"Ignore"``.
     timeout:
-        Maximum milliseconds to wait for the trigger and option.
+        Maximum milliseconds to wait for the button.
     """
-    trigger = page.get_by_test_id(decision_testid)
-    trigger.wait_for(state="visible", timeout=timeout)
-    trigger.scroll_into_view_if_needed(timeout=timeout)
-    trigger.click()
-    option = page.get_by_role("option", name=label, exact=True)
-    option.wait_for(state="visible", timeout=timeout)
-    option.click()
+    slug = _DECISION_LABEL_TO_SLUG[label]  # KeyError = fail loud on a bad label
+    button = page.get_by_test_id(f"{decision_testid}-{slug}")
+    button.wait_for(state="visible", timeout=timeout)
+    button.scroll_into_view_if_needed(timeout=timeout)
+    button.click()
 
 
 # ---------------------------------------------------------------------------

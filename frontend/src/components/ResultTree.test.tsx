@@ -12,6 +12,7 @@ import {
   rowGroupTestid,
   rowFileTestid,
   rowDecisionTestid,
+  rowDecisionOptionTestid,
   rowLockTestid,
 } from "@/testids";
 import type { Group } from "@/api/types";
@@ -372,39 +373,30 @@ describe("ResultTree", () => {
       ).toBeInTheDocument();
     });
 
-    it("DecisionControl is disabled when row is locked", () => {
+    it("DecisionControl buttons are disabled when row is locked", () => {
       render(<ResultTree />);
-      // exactB is locked — its trigger should be disabled.
-      const trigger = screen.getByTestId(
-        rowDecisionTestid(String(GROUP_2_NUM), "b.jpg")
+      // exactB is locked — each decision button should be disabled.
+      const deleteBtn = screen.getByTestId(
+        rowDecisionOptionTestid(String(GROUP_2_NUM), "b.jpg", "delete")
       );
-      expect(trigger).toBeDisabled();
+      expect(deleteBtn).toBeDisabled();
     });
 
-    it("DecisionControl calls store.setDecision on value change", () => {
+    it("DecisionControl calls store.setDecision on a direct button click", () => {
       const spy = vi.fn();
       useAppStore.setState({ setDecision: spy } as Partial<typeof useAppStore.getState>);
 
       render(<ResultTree />);
-      // Open the select for ref.jpg (not locked) and choose "ignore".
-      const trigger = screen.getByTestId(
-        rowDecisionTestid(String(GROUP_1_NUM), "ref.jpg")
+      // One click on the "Ignore" button for ref.jpg (not locked) stages the
+      // decision directly — no menu to open (buttons work in jsdom, unlike the
+      // former Radix-Select portal).
+      const ignoreBtn = screen.getByTestId(
+        rowDecisionOptionTestid(String(GROUP_1_NUM), "ref.jpg", "ignore")
       );
       act(() => {
-        fireEvent.click(trigger);
+        fireEvent.click(ignoreBtn);
       });
-      // Radix Select renders options in a portal; find by text.
-      const ignoreOption = screen.queryByText("Ignore");
-      if (ignoreOption) {
-        act(() => {
-          fireEvent.click(ignoreOption);
-        });
-        expect(spy).toHaveBeenCalledWith("/photos/ref.jpg", "ignore");
-      } else {
-        // In jsdom Radix portals may not open; assert spy readiness instead.
-        // The real interaction is covered by Playwright E2E.
-        expect(trigger).not.toBeDisabled();
-      }
+      expect(spy).toHaveBeenCalledWith("/photos/ref.jpg", "ignore");
     });
 
     it("highlights the keeper and consumes the one-shot scroll signal (#692)", () => {
