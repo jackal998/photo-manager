@@ -265,3 +265,82 @@ def test_main_dispatches_to_web_when_enabled(monkeypatch):
         launcher, "_run_qt", lambda: pytest.fail("qt path taken when web enabled")
     )
     assert launcher.main() == 7
+
+
+# --- web smoke (packaging CI, #772) ----------------------------------------
+
+
+def test_run_web_smoke_healthy_returns_zero_and_shuts_down(monkeypatch):
+    server, thread = _RecordingServer(), _RecordingThread()
+    server.started = True  # uvicorn sets this after a successful bind+startup
+    monkeypatch.setattr(launcher, "_serve_uvicorn", lambda port: (server, thread))
+    monkeypatch.setattr(launcher, "_wait_for_health", lambda port: True)
+
+    assert launcher.run_web_smoke(port=8765) == 0
+    assert server.should_exit is True  # graceful shutdown, not process teardown
+    assert thread.joined is True
+
+
+def test_run_web_smoke_rejects_foreign_server_on_port(monkeypatch):
+    # Regression (found live): our uvicorn failed to bind because ANOTHER
+    # photo-manager instance owned the port, its /api/health answered 200,
+    # and the smoke false-passed. Health 200 alone is not proof that OUR
+    # server started — Server.started must also be true.
+    server, thread = _RecordingServer(), _RecordingThread()
+    server.started = False  # bind failed; uvicorn never started
+    monkeypatch.setattr(launcher, "_serve_uvicorn", lambda port: (server, thread))
+    monkeypatch.setattr(launcher, "_wait_for_health", lambda port: True)
+
+    assert launcher.run_web_smoke(port=8765) == 1
+
+
+def test_run_web_smoke_unhealthy_returns_one_but_still_shuts_down(monkeypatch):
+    server, thread = _RecordingServer(), _RecordingThread()
+    monkeypatch.setattr(launcher, "_serve_uvicorn", lambda port: (server, thread))
+    monkeypatch.setattr(launcher, "_wait_for_health", lambda port: False)
+
+    assert launcher.run_web_smoke(port=8765) == 1
+    assert server.should_exit is True
+    assert thread.joined is True
+
+
+def test_main_dispatches_to_smoke_before_web_or_qt(monkeypatch):
+    # Smoke wins even when PHOTO_MANAGER_WEB is also set: CI sets exactly
+    # one knob and must never open a window or the Qt app.
+    monkeypatch.setenv("PHOTO_MANAGER_WEB_SMOKE", "1")
+    monkeypatch.setenv("PHOTO_MANAGER_WEB", "1")
+    monkeypatch.setattr(launcher, "run_web_smoke", lambda: 0)
+    monkeypatch.setattr(
+        launcher, "run_web", lambda *a, **k: pytest.fail("window path taken in smoke")
+    )
+    monkeypatch.setattr(
+        launcher, "_run_qt", lambda: pytest.fail("qt path taken in smoke")
+    )
+    assert launcher.main() == 0
+
+
+def test_main_surfaces_fatal_and_reraises_on_web_runtime_error(monkeypatch):
+    # console=False in the frozen exe means a raised RuntimeError is
+    # invisible — main() must route it through _surface_fatal, then
+    # still exit non-zero via the re-raise.
+    monkeypatch.delenv("PHOTO_MANAGER_WEB_SMOKE", raising=False)
+    monkeypatch.setenv("PHOTO_MANAGER_WEB", "1")
+    surfaced = []
+
+    def _boom():
+        raise RuntimeError("WebView2 runtime missing")
+
+    monkeypatch.setattr(launcher, "run_web", _boom)
+    monkeypatch.setattr(launcher, "_surface_fatal", surfaced.append)
+
+    with pytest.raises(RuntimeError, match="WebView2 runtime missing"):
+        launcher.main()
+    assert surfaced == ["WebView2 runtime missing"]
+
+
+def test_surface_fatal_is_noop_when_not_frozen(monkeypatch):
+    # Dev runs keep the plain traceback; the MessageBox fires only for the
+    # frozen Windows exe (sys.frozen is absent in a normal interpreter).
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not getattr(sys, "frozen", False)
+    launcher._surface_fatal("boom")  # must not raise, must not block

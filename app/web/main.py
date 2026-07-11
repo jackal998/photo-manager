@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import os
+import sys
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -118,9 +119,12 @@ def create_app(frontend_dist: Optional[Path] = None) -> FastAPI:
         presence of a real build.
 
         If the resolved dist has no ``index.html`` (the frontend has not been
-        built) the SPA mount is silently skipped, so the factory never raises
-        on a missing or half-built frontend.  API routers are always
-        registered before the mount so ``/api/*`` routes always take precedence.
+        built) the SPA mount is skipped in dev/tests, so the factory never
+        raises on a missing or half-built frontend there.  In a FROZEN build
+        (PyInstaller, ``sys.frozen``) the same condition is a packaging bug —
+        the exe would boot to a dead page with no clue — so it raises loudly
+        instead (#772).  API routers are always registered before the mount
+        so ``/api/*`` routes always take precedence.
     """
     dist = frontend_dist if frontend_dist is not None else _DEFAULT_FRONTEND_DIST
 
@@ -158,6 +162,15 @@ def create_app(frontend_dist: Optional[Path] = None) -> FastAPI:
     # dist never mounts a non-servable StaticFiles (html=True needs index.html).
     if (dist / "index.html").exists():
         app.mount("/", StaticFiles(directory=str(dist), html=True), name="spa")
+    elif getattr(sys, "frozen", False):
+        # Frozen exe with no bundled SPA = broken release artifact. Silent
+        # skip here means a WebView2 window on a blank page with no error
+        # anywhere — fail loud at startup instead (#772).
+        raise RuntimeError(
+            f"Bundled frontend is missing: {dist / 'index.html'} not found. "
+            "This build is broken — rebuild the release with `npm run build` "
+            "before PyInstaller so frontend/dist ships inside the bundle."
+        )
 
     return app
 

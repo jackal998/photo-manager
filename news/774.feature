@@ -1,0 +1,1 @@
+Tagged releases now ship the web shell (#772): the exe entry point is launcher.py (Qt still the default), the built SPA is bundled and verified inside the artifact, a server-only smoke gates every release build, and the zip includes photo-manager-web.bat to launch web mode with a double-click.

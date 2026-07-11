@@ -55,6 +55,13 @@ def _web_enabled(env: Optional[dict] = None) -> bool:
     )
 
 
+def _web_smoke_enabled(env: Optional[dict] = None) -> bool:
+    """True when ``PHOTO_MANAGER_WEB_SMOKE`` selects the CI smoke path."""
+    return _env_flag_truthy(
+        (env if env is not None else os.environ).get("PHOTO_MANAGER_WEB_SMOKE")
+    )
+
+
 def _web_port(env: Optional[dict] = None) -> int:
     """Loopback port for the embedded server.
 
@@ -200,6 +207,54 @@ def run_web(port: Optional[int] = None) -> int:
     return 0
 
 
+def run_web_smoke(port: Optional[int] = None) -> int:
+    """Boot the embedded server, wait for ``/api/health``, shut down. No window.
+
+    Packaging smoke for the frozen bundle (release.yml): proves the FastAPI
+    app, its bundled ``frontend/dist``, and uvicorn all survive freezing —
+    without needing a display or the WebView2 runtime on the CI runner. The
+    exit code is the verdict; the windowed exe has no visible stdout.
+    """
+    from loguru import logger
+
+    from infrastructure.logging import init_logging
+
+    init_logging()
+    resolved_port = port if port is not None else _web_port()
+    server, thread = _serve_uvicorn(resolved_port)
+    # BOTH conditions: /api/health answering 200 is not enough on its own —
+    # if OUR uvicorn failed to bind (port already taken by another instance),
+    # the probe would hit the OTHER process's healthy endpoint and false-pass.
+    # uvicorn sets Server.started only after ITS startup (bind included).
+    healthy = _wait_for_health(resolved_port) and getattr(server, "started", False)
+    server.should_exit = True
+    thread.join(timeout=5.0)
+    if not healthy:
+        logger.error(
+            "web smoke: server never became healthy on {}:{}",
+            _WEB_HOST,
+            resolved_port,
+        )
+        return 1
+    logger.info("web smoke: healthy on {}:{} — OK", _WEB_HOST, resolved_port)
+    return 0
+
+
+def _surface_fatal(message: str) -> None:
+    """Show a startup-fatal error where a windowed frozen exe can't print.
+
+    The release bundle is built with ``console=False``, so a raised
+    RuntimeError (missing WebView2, unhealthy embedded server, missing
+    bundled frontend) would otherwise kill the process with no visible
+    trace. Only fires for the frozen Windows exe; dev runs keep the
+    ordinary traceback.
+    """
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, "Photo Manager", 0x10)
+
+
 def _run_qt() -> int:
     """Delegate to the classic PySide6 desktop entry point."""
     from main import main as qt_main
@@ -208,9 +263,15 @@ def _run_qt() -> int:
 
 
 def main() -> int:
-    """Dispatch to the web shell or the Qt desktop app based on env."""
+    """Dispatch to the web smoke, web shell, or Qt desktop app based on env."""
+    if _web_smoke_enabled():
+        return run_web_smoke()
     if _web_enabled():
-        return run_web()
+        try:
+            return run_web()
+        except RuntimeError as exc:
+            _surface_fatal(str(exc))
+            raise
     return _run_qt()
 
 

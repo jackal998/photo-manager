@@ -46,6 +46,28 @@ jobs:
           "asset_name=photo-manager-$version-windows-x64.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "tag=$tag version=$version"
 
+      # The web shell ships the built SPA inside the bundle (#772); the
+      # spec fails the build if frontend/dist is missing, so this step
+      # must precede PyInstaller.
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        shell: pwsh
+        run: |
+          Push-Location frontend
+          npm ci
+          npm run build
+          Pop-Location
+          if (-not (Test-Path "frontend\dist\index.html")) {
+            Write-Error "npm run build did not produce frontend/dist/index.html"
+            exit 1
+          }
+
       # Clean venv with ONLY requirements.txt + build-requirements.txt
       # — dev-requirements (pytest/ruff/etc) intentionally absent so
       # the bundle reflects production deps, not dev tooling.
@@ -62,6 +84,12 @@ jobs:
           .venv-build\Scripts\python -m PyInstaller pyinstaller.spec --clean --noconfirm
           if (-not (Test-Path "dist\photo-manager\photo-manager.exe")) {
             Write-Error "PyInstaller did not produce dist\photo-manager\photo-manager.exe"
+            exit 1
+          }
+          # PyInstaller 6 onedir layout puts datas under _internal — the
+          # web shell's SPA must be inside the bundle (#772).
+          if (-not (Test-Path "dist\photo-manager\_internal\frontend\dist\index.html")) {
+            Write-Error "Bundle is missing _internal\frontend\dist\index.html — the web shell would boot to a dead page"
             exit 1
           }
           $size = (Get-ChildItem -Recurse "dist\photo-manager" | Measure-Object Length -Sum).Sum / 1MB
@@ -101,9 +129,40 @@ jobs:
           Write-Host "--- stderr (post-kill) ---"
           if (Test-Path $stderrFile) { Get-Content $stderrFile }
 
+      # Server-only smoke of the WEB path (#772): PHOTO_MANAGER_WEB_SMOKE
+      # makes launcher.py boot uvicorn + the bundled SPA, poll /api/health,
+      # and exit — its exit code is the verdict. No display, no WebView2
+      # runtime needed on the runner (the windowed exe prints nothing, so
+      # the exit code is all there is).
+      - name: Web-shell smoke test (server-only)
+        shell: pwsh
+        env:
+          PHOTO_MANAGER_WEB_SMOKE: '1'
+        run: |
+          $exe = "dist\photo-manager\photo-manager.exe"
+          $p = Start-Process -FilePath $exe -PassThru -NoNewWindow
+          if (-not $p.WaitForExit(90000)) {
+            Stop-Process -Id $p.Id -Force
+            Write-Error "web smoke timed out after 90s"
+            exit 1
+          }
+          if ($p.ExitCode -ne 0) {
+            Write-Error "web smoke failed (exit=$($p.ExitCode))"
+            exit 1
+          }
+          Write-Host "Web-shell smoke OK (embedded server healthy, bundled SPA present)"
+
       - name: Zip bundle
         shell: pwsh
         run: |
+          # Double-click helper for the web shell — users shouldn't have to
+          # set an env var by hand to try web mode.
+          $bat = @(
+            '@echo off',
+            'set PHOTO_MANAGER_WEB=1',
+            'start "" "%~dp0photo-manager.exe"'
+          )
+          $bat | Set-Content -Path "dist\photo-manager\photo-manager-web.bat" -Encoding ascii
           $asset = "${{ steps.version.outputs.asset_name }}"
           Compress-Archive -Path "dist\photo-manager\*" -DestinationPath $asset -Force
           Write-Host "Built $asset"
@@ -141,7 +200,8 @@ jobs:
             "",
             "1. Download ``$asset`` from the Assets section below.",
             "2. Extract the zip anywhere - the bundle is self-contained, no installer.",
-            "3. Run ``photo-manager.exe``.",
+            "3. Run ``photo-manager.exe`` (classic desktop app).",
+            "4. To try the new web UI shell, run ``photo-manager-web.bat`` instead (needs the Edge WebView2 runtime, preinstalled on most Windows 10/11 machines).",
             "",
             "**SmartScreen note:** the binary is unsigned, so Windows SmartScreen will show ""Windows protected your PC"" on first launch. Click **More info** -> **Run anyway**. This will go away once we publish a signed release."
           )
