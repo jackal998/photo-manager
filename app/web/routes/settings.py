@@ -106,8 +106,16 @@ async def patch_settings(body: SettingsUpdate) -> dict:
                 detail=f"settings key not writable: {key!r}",
             )
     settings = _load_settings()
-    for key, value in body.updates.items():
-        settings.set(key, value)
+    try:
+        for key, value in body.updates.items():
+            settings.set(key, value)
+    except TypeError as exc:
+        # #658: a non-dict intermediate node now raises instead of being
+        # silently clobbered — surface it as a client-visible 422.
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to apply settings update: {exc}",
+        ) from exc
     try:
         settings.save()
     except Exception as exc:
