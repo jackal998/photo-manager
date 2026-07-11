@@ -583,6 +583,8 @@ web:
     action_set: "Set Action by Regex"
     action_execute: "Execute…"
     action_execute_selected: "Execute (only selected)…"
+    list: "List"
+    list_remove: "Remove from List"
     view: "View"
     view_language: "Language"
     lang_en: "English"

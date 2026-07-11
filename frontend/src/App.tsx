@@ -209,6 +209,16 @@ export default function App() {
     openExecuteDialog(selected);
   }, [openExecuteDialog]);
 
+  // List → Remove from List (#678-D): same live-selection read as
+  // handleExecuteSelectedOnly, routed through the SAME store.removeFromList
+  // path the context menu uses (finalize outcome='ignored', lock-aware 409).
+  const handleRemoveFromListSelected = useCallback(() => {
+    const store = useAppStore.getState();
+    const selected = store.selection.selectedPaths;
+    if (selected.length === 0) return;
+    void store.removeFromList(selected);
+  }, []);
+
   const handleManifestOpen = useCallback(() => {
     const path = manifestInputValue.trim();
     if (path === "") return;
@@ -282,6 +292,7 @@ export default function App() {
         onSetAction={openActionDialog}
         onExecute={() => openExecuteDialog()}
         onExecuteSelected={handleExecuteSelectedOnly}
+        onRemoveFromList={handleRemoveFromListSelected}
         onSetLocale={(loc) => void setLocale(loc)}
       />
 

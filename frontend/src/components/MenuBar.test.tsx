@@ -20,6 +20,8 @@ import {
   MENU_ACTION_SET,
   MENU_ACTION_EXECUTE,
   MENU_ACTION_EXECUTE_SELECTED,
+  MENU_LIST,
+  MENU_LIST_REMOVE_FROM_LIST,
   MENU_VIEW,
   MENU_VIEW_LANG_ZH,
 } from "@/testids";
@@ -31,6 +33,7 @@ function setup(overrides: Partial<ComponentProps<typeof MenuBar>> = {}) {
     onSetAction: vi.fn(),
     onExecute: vi.fn(),
     onExecuteSelected: vi.fn(),
+    onRemoveFromList: vi.fn(),
     onSetLocale: vi.fn(),
   };
   render(
@@ -46,11 +49,12 @@ function setup(overrides: Partial<ComponentProps<typeof MenuBar>> = {}) {
 }
 
 describe("MenuBar", () => {
-  it("renders the three top-level menus", () => {
+  it("renders the four top-level menus", () => {
     setup();
     expect(screen.getByTestId(MAIN_MENU_BAR)).toBeInTheDocument();
     expect(screen.getByTestId(MENU_FILE)).toBeInTheDocument();
     expect(screen.getByTestId(MENU_ACTION)).toBeInTheDocument();
+    expect(screen.getByTestId(MENU_LIST)).toBeInTheDocument();
     expect(screen.getByTestId(MENU_VIEW)).toBeInTheDocument();
   });
 
@@ -131,5 +135,31 @@ describe("MenuBar", () => {
     await user.click(screen.getByTestId(MENU_VIEW));
     await user.click(await screen.findByTestId(MENU_VIEW_LANG_ZH));
     expect(h.onSetLocale).toHaveBeenCalledWith("zh_TW");
+  });
+
+  it("List → Remove from List is disabled without a selection", async () => {
+    const h = setup({ manifestLoaded: true, hasSelection: false });
+    await userEvent.click(screen.getByTestId(MENU_LIST));
+    const item = await screen.findByTestId(MENU_LIST_REMOVE_FROM_LIST);
+    expect(item).toHaveAttribute("data-disabled");
+    await userEvent.click(item);
+    expect(h.onRemoveFromList).not.toHaveBeenCalled();
+  });
+
+  it("List → Remove from List is disabled without a manifest even with a selection", async () => {
+    const h = setup({ manifestLoaded: false, hasSelection: true });
+    await userEvent.click(screen.getByTestId(MENU_LIST));
+    const item = await screen.findByTestId(MENU_LIST_REMOVE_FROM_LIST);
+    expect(item).toHaveAttribute("data-disabled");
+    await userEvent.click(item);
+    expect(h.onRemoveFromList).not.toHaveBeenCalled();
+  });
+
+  it("List → Remove from List dispatches with manifest + selection", async () => {
+    const h = setup({ manifestLoaded: true, hasSelection: true });
+    await userEvent.click(screen.getByTestId(MENU_LIST));
+    const item = await screen.findByTestId(MENU_LIST_REMOVE_FROM_LIST);
+    await userEvent.click(item);
+    expect(h.onRemoveFromList).toHaveBeenCalledOnce();
   });
 });

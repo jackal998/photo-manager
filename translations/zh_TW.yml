@@ -489,6 +489,8 @@ web:
     action_set: "以正規表示式設定動作"
     action_execute: "執行…"
     action_execute_selected: "僅執行所選…"
+    list: "清單"
+    list_remove: "從清單移除"
     view: "檢視"
     view_language: "語言"
     lang_en: "English"
