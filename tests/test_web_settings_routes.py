@@ -198,3 +198,21 @@ class TestPatchSettings:
 
         on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
         assert on_disk["ui"]["action_dialog"]["recent_patterns"] == entries
+
+
+class TestNonDictIntermediate658:
+    def test_patch_returns_422_when_intermediate_is_scalar(
+        self, client, tmp_settings: Path
+    ):
+        # Seed a scalar where the "ui" subtree belongs; PATCHing an
+        # allowlisted dotted key under it must surface JsonSettings' #658
+        # TypeError as a 422 — the old stack silently rewrote {"ui": ...}
+        # to a dict and answered 200 {updated: 1}.
+        tmp_settings.write_text(json.dumps({"ui": "light"}), encoding="utf-8")
+        resp = client.patch(
+            "/api/settings", json={"updates": {"ui.locale": "zh-TW"}}
+        )
+        assert resp.status_code == 422
+        assert "ui" in resp.json()["detail"]
+        # And the file is untouched — no partial restructure was persisted.
+        assert json.loads(tmp_settings.read_text(encoding="utf-8")) == {"ui": "light"}
