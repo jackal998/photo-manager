@@ -145,6 +145,15 @@ def create_app(frontend_dist: Optional[Path] = None) -> FastAPI:
             allow_credentials=False,
         )
 
+    # Origin/Host CSRF guard on every mutating route (#662): refuses
+    # DNS-rebound Hosts and cross-origin browser writes with 403. Added
+    # AFTER CORSMiddleware so it wraps OUTSIDE it — a refused request is
+    # answered by the guard directly and never earns CORS headers; safe
+    # methods (incl. preflight OPTIONS) pass straight through.
+    from app.web.security import OriginHostGuard
+
+    app.add_middleware(OriginHostGuard)
+
     # API routers are registered FIRST so /api/* always wins over the SPA mount.
     app.include_router(health_router)
     app.include_router(scan_router)
