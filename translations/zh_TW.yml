@@ -394,6 +394,7 @@ web:
     scanning: "掃描中{stage}"
     scan_failed: "掃描失敗：{error}"
     manifest_failed: "清單錯誤：{error}"
+    execute_failed: "操作錯誤：{error}"
     ready: "就緒"
   empty_state:
     no_manifest: "尚未載入清單 — 請掃描或開啟清單以開始。"

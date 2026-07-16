@@ -117,8 +117,9 @@ for the chore plan.
 - **Trigger:** User right-clicks a file row and picks **Open Folder**.
 - **Behaviour:** Opens the file's containing directory in the OS file manager with the file pre-selected (on Windows, `explorer /select,<path>`; on other platforms, falls back to `QDesktopServices.openUrl` on the parent directory).
 - **Conditions / variants:** The same OS-aware impl is reused by the file-row double-click handler (see [Main window — results tree double-click](#main-window--results-tree-double-click)) — one canonical Open Folder cascade rather than two divergent copies.
+- **Web parity:** `ContextMenu.tsx`'s "Open folder" calls `store.revealInExplorer`, which POSTs to the reveal endpoint and, on failure, writes `execute.executeError` (non-fatal — the manifest state is unaffected). A UI/UX audit found this failure was invisible from the main tree: the only renderer of `executeError` was `ExecuteDialog`, which isn't mounted while closed. Fixed by an additive footer error line (`MAIN_EXECUTE_ERROR`, below `MAIN_STATUS_ERROR`) that renders `execute.executeError` whenever the Execute dialog is closed (suppressed while it's open, since `ExecuteDialog` already shows the same message inline) — same "silent field" pattern as #712's `MAIN_STATUS_ERROR`.
 - **Related:** Originally part of the [PR #19](https://github.com/jackal998/photo-manager/pull/19) context-menu redesign; extracted into a shared helper in [PR #198](https://github.com/jackal998/photo-manager/pull/198). QA scenario [`qa/scenarios/s19_context_menu_open_folder.py`](../qa/scenarios/s19_context_menu_open_folder.py).
-- **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326))
+- **Last verified:** 2026-05-21 (sweep for [#326](https://github.com/jackal998/photo-manager/issues/326)); 2026-07-16 (web audit remediation — `MAIN_EXECUTE_ERROR` footer surface for failed reveal)
 
 ---
 

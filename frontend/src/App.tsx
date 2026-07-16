@@ -43,6 +43,7 @@ import {
   MAIN_SETTINGS_BUTTON,
   MAIN_STATUS_BAR,
   MAIN_STATUS_ERROR,
+  MAIN_EXECUTE_ERROR,
   PREVIEW_RESIZE_HANDLE,
 } from "./testids";
 
@@ -253,6 +254,8 @@ export default function App() {
 
   const scan = useAppStore((s) => s.scan);
   const manifest = useAppStore((s) => s.manifest);
+  const executeError = useAppStore((s) => s.execute.executeError);
+  const executeOpen = useAppStore((s) => s.execute.executeOpen);
   const noManifest = manifest.path === null && !manifest.loading;
 
   let statusText: string;
@@ -451,6 +454,25 @@ export default function App() {
           >
             {t("web.status.manifest_failed", "Manifest error: {error}", {
               error: manifest.error,
+            })}
+          </p>
+        )}
+        {/* Additive error line: execute.executeError is written by
+            revealInExplorer ("Open folder" in the main-tree context menu)
+            on a failed reveal, but the ONLY other consumer was ExecuteDialog
+            — which isn't mounted/visible unless the user already has it
+            open. Show it here so a reveal failure from the main tree is
+            visible. Suppressed while the Execute dialog IS open to avoid
+            showing the same message twice (ExecuteDialog renders its own
+            copy inline). */}
+        {executeError !== null && !executeOpen && (
+          <p
+            data-testid={MAIN_EXECUTE_ERROR}
+            role="alert"
+            className="px-4 py-1 text-sm text-red-600"
+          >
+            {t("web.status.execute_failed", "Action error: {error}", {
+              error: executeError,
             })}
           </p>
         )}

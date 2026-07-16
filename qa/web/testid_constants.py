@@ -43,6 +43,17 @@ save) as a ``role="alert"`` line so the failure is visible to the user instead
 of being written to a field nothing renders (#712).  Conditional — absent when
 ``manifest.error`` is null."""
 
+MAIN_EXECUTE_ERROR = "main-execute-error"
+"""Additive error line in the footer, below MAIN_STATUS_ERROR.  Renders the
+store's ``execute.executeError`` as a ``role="alert"`` line so failures from
+main-tree actions that write this field but have no other visible surface —
+notably ``revealInExplorer`` ("Open folder" in the main result-tree context
+menu) — are visible even when the Execute dialog is closed. Same field is
+also shown inside ExecuteDialog while it's open; this is the same #712
+"silent field" pattern applied to a gap the audit found (a failed reveal was
+invisible unless the user separately had the Execute dialog open). Conditional
+— absent when ``execute.executeError`` is null."""
+
 MAIN_SCAN_BUTTON = "main-scan-button"
 """'Scan' / 'Re-scan' button that opens the scan dialog."""
 
