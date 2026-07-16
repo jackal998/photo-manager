@@ -1672,7 +1672,32 @@ def _validate_path(raw: str, allowed_roots: list[Path]) -> Path | None:
     return None
 ```
 
-`allowed_roots` is set at startup from the loaded manifest's source directories plus any configured scan roots. Requests for paths outside these roots return 403. This is the only security gate needed for a localhost app — the server is not accessible from the network.
+`allowed_roots` is set at startup from the loaded manifest's source directories plus any configured scan roots. Requests for paths outside these roots return 403.
+
+> **Security addendum (2026-07-11, #662).** The original note above ended "this is the
+> only security gate needed for a localhost app — the server is not accessible from the
+> network." That waved off the browser-borne surface; the hardening pass closed it and
+> settled the trust boundary:
+>
+> 1. **Origin/Host CSRF guard (shipped, `app/web/security.py`).** Every mutating method
+>    (anything but GET/HEAD/OPTIONS) is refused with 403 unless the `Host` hostname is
+>    loopback (DNS-rebinding guard — a rebound request arrives with the attacker's
+>    hostname) AND any browser-supplied `Origin` (or, failing that, `Referer`) matches
+>    the server's own `host:port` exactly (literal `Origin: null` — the sandboxed-iframe
+>    vector — is refused; the Vite dev origins are allowed only under
+>    `PHOTO_MANAGER_DEV_MODE=1`). Headerless non-browser clients pass: a browser cannot
+>    strip its own Origin on a cross-origin write. Deliberate side effect: an instance
+>    someone binds beyond loopback serves reads but refuses all mutations.
+> 2. **Manifest-root trust boundary (decided: manifest-derived roots stay).**
+>    `allowed_roots` continues to derive from the loaded manifest's own folders. The
+>    threat model is explicit: opening a manifest is a trusted act by the single local
+>    user, in the same trust class as opening a document or running a script — a
+>    fully-crafted hostile manifest is out of scope. An OS-configured independent
+>    allow-list would add real friction for zero realistic gain on this deployment
+>    model; revisit ONLY if the server is ever deliberately exposed beyond loopback.
+> 3. **TOCTOU / symlink race (accepted-low).** `is_under_roots` resolves symlinks at
+>    check time; the residual check-then-op race requires a hostile local process, at
+>    which point the attacker already runs code as the user. No `O_NOFOLLOW` recheck.
 
 
 ---

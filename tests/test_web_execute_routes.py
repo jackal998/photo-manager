@@ -560,7 +560,10 @@ class TestExecuteMutex:
             async def _run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app_inst),
-                    base_url="http://test",
+                    # "testserver" (not the arbitrary "test"): the #662
+                    # Origin/Host guard allowlists loopback + the standard
+                    # test Host only, so a bare made-up hostname is 403.
+                    base_url="http://testserver",
                 ) as client:
                     # Set allowed_roots on app.state after lifespan startup.
                     app_inst.state.allowed_roots = [tmp_path]
