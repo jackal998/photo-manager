@@ -13,7 +13,11 @@
 //   Cancel          → clear lockConflict, do nothing
 //
 // Body copy is context-sensitive:
-//   op === "execute"  → "About to DELETE N locked files"  (IMMEDIATE danger)
+//   op === "execute"  → "About to DELETE N locked files (Recycle Bin)"
+//                       (IMMEDIATE danger — deletion is via send2trash, not
+//                       permanent; #wording-audit corrected the earlier
+//                       "permanently DELETED" claim to match
+//                       DeleteConfirmDialog's accurate recycle-bin wording)
 //   op === "remove"   → "N locked files will be skipped or force-unlocked"
 //                       (DEFERRED — remove doesn't delete)
 //   op === "prune"    → "N locked singleton groups would be pruned" (#686 D6
@@ -158,7 +162,7 @@ export function LockConfirmDialog() {
             : "Locked singleton groups";
   const description =
     op === "execute"
-      ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be permanently DELETED. Unlock and proceed, or skip locked files only.`
+      ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only.`
       : op === "remove"
         ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} in the remove list. Unlock and remove, or remove unlocked files only.`
         : op === "decision"
