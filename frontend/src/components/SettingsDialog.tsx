@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAppStore } from "@/store/useAppStore";
+import { useT } from "@/i18n/useT";
 import { normalizePrunePref, type PrunePref } from "@/lib/prune";
 import {
   DLGE_SETTINGS_CANCEL,
@@ -40,6 +41,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const settings = useAppStore((s) => s.settings);
   const loadSettings = useAppStore((s) => s.loadSettings);
   const saveSettings = useAppStore((s) => s.saveSettings);
+  const t = useT();
 
   // Local editable copies of the three keys.
   const [prunePref, setPrunePref] = useState<PrunePref>("ask");
@@ -76,7 +78,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       try {
         sortingDefaults = JSON.parse(sortingDefaultsRaw) as unknown;
       } catch {
-        setSortingError("Invalid JSON for sorting.defaults");
+        setSortingError(
+          t("web.settings.sorting_invalid_json", "Invalid JSON for sorting.defaults")
+        );
         return;
       }
     }
@@ -105,22 +109,33 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid={DLGE_SETTINGS_DIALOG} className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
+          <DialogTitle>{t("web.settings.title", "Settings")}</DialogTitle>
         </DialogHeader>
 
         <div className="mt-4 flex flex-col gap-4">
           {/* ui.prune_singletons — 3-value enum (#686) */}
           <label className="flex items-center gap-2 text-sm">
-            <span className="min-w-0">Prune singletons (ui.prune_singletons)</span>
+            <span className="min-w-0">
+              {t(
+                "web.settings.prune_singletons_label",
+                "Prune singletons (ui.prune_singletons)"
+              )}
+            </span>
             <select
               data-testid={DLGE_SETTINGS_PRUNE_SELECT}
               value={prunePref}
               onChange={(e) => setPrunePref(normalizePrunePref(e.target.value))}
               className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400"
             >
-              <option value="ask">Ask each time</option>
-              <option value="always">Always prune</option>
-              <option value="never">Never prune</option>
+              <option value="ask">
+                {t("web.settings.prune_ask", "Ask each time")}
+              </option>
+              <option value="always">
+                {t("web.settings.prune_always", "Always prune")}
+              </option>
+              <option value="never">
+                {t("web.settings.prune_never", "Never prune")}
+              </option>
             </select>
           </label>
 
@@ -132,7 +147,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 setAutotuneReadKnee(checked === true)
               }
             />
-            Auto-tune read knee (ui.scan_dialog.autotune_read_knee)
+            {t(
+              "web.settings.autotune_read_knee_label",
+              "Auto-tune read knee (ui.scan_dialog.autotune_read_knee)"
+            )}
           </label>
 
           {/* sorting.defaults — raw JSON textarea */}
@@ -141,7 +159,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               htmlFor="settings-sorting-defaults"
               className="text-sm font-medium text-neutral-700"
             >
-              Sorting defaults (sorting.defaults — JSON)
+              {t(
+                "web.settings.sorting_defaults_label",
+                "Sorting defaults (sorting.defaults — JSON)"
+              )}
             </label>
             <textarea
               id="settings-sorting-defaults"
@@ -169,7 +190,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             data-testid={DLGE_SETTINGS_CANCEL}
             onClick={handleCancel}
           >
-            Cancel
+            {t("web.settings.cancel", "Cancel")}
           </Button>
           <Button
             type="button"
@@ -177,7 +198,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             disabled={settings.loading}
             onClick={handleSave}
           >
-            Save
+            {t("web.settings.save", "Save")}
           </Button>
         </DialogFooter>
       </DialogContent>

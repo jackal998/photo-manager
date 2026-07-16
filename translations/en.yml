@@ -631,3 +631,104 @@ web:
   execute_dialog:
     files_not_found_title: "Files Not Found"
     files_failed_title: "Files Failed to Delete"
+    # Dialog chrome (web audit fix 5 — was hardcoded English).
+    title: "Execute Actions"
+    show_label: "Show:"
+    file_count: "{n} file(s)"
+    select_row_to_preview: "Select a row to preview"
+    cancel: "Cancel"
+    execute_selected: "Execute selected"
+    execute: "Execute"
+    executing: "Executing…"
+  # Main result-tree + Execute-dialog right-click menus (ContextMenu.tsx +
+  # execute/ExecuteContextMenu.tsx share this namespace — identical verbs,
+  # web audit fix 5: was hardcoded English in both).
+  context_menu:
+    keep: "Keep (clear decision)"
+    delete: "Delete"
+    remove: "Remove from list"
+    lock: "Lock"
+    unlock: "Unlock"
+    open_folder: "Open folder"
+    set_action_by_field: "Set Action by Field…"
+    execute_selected: "Execute Action (only selected)…"
+    apply_best_copy: "Apply best-copy decisions to this group"
+  # LockConfirmDialog — was hardcoded English (web audit fix 1 + fix 5).
+  lock_confirm:
+    title_execute: "Locked files in delete scope"
+    title_remove: "Locked files in remove scope"
+    title_decision: "Locked rows affected"
+    title_apply_best_copy: "Locked rows in this group"
+    title_prune: "Locked singleton groups"
+    body_execute: "{n} locked file(s) are about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only."
+    body_remove: "{n} locked file(s) are in the remove list. Unlock and remove, or remove unlocked files only."
+    body_decision: "Setting this decision would change {originalPathsLen} row(s); {n} are locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel."
+    body_apply_best_copy: "Applying best-copy to this group would affect rows that include {n} locked row(s). Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel."
+    body_prune: "{n} locked singleton group(s) would be pruned. Unlock and prune them, or keep them in the list."
+    cancel: "Cancel"
+    unlocked_only: "Unlocked only"
+    unlock_apply: "Unlock & Apply"
+  # PruneConfirmDialog (web audit fix 5 — was hardcoded English).
+  prune_confirm:
+    title: "Prune singleton groups?"
+    body_mixed: "{plain} singleton group(s) have only one file left, and {actioned} more carry an un-executed delete/ignore action. Remove the plain singleton group(s) from the list?"
+    body_actioned_only: "{actioned} singleton group(s) with an un-executed delete/ignore action remain. Remove them from the list?"
+    body_plain_only: "{plain} singleton group(s) now have only one file remaining. Remove these singleton group(s) from the list?"
+    include_actioned: "Also remove {n} actioned singleton(s)"
+    dont_ask_again: "Don't ask again"
+    keep_all: "Keep all"
+    remove_count: "Remove {n}"
+  # RemoveFromListConfirmDialog (web audit fix 5 — was hardcoded English).
+  remove_confirm:
+    title: "Remove from list?"
+    body: "Remove {basename} from the list? This only updates the manifest — no file on disk is touched. The removed row will not appear in the review tree until you re-scan."
+    this_item: "this item"
+    cancel: "Cancel"
+    yes_remove: "Yes, remove"
+  # SettingsDialog (web audit fix 5 — was hardcoded English).
+  settings:
+    title: "Settings"
+    prune_singletons_label: "Prune singletons (ui.prune_singletons)"
+    prune_ask: "Ask each time"
+    prune_always: "Always prune"
+    prune_never: "Never prune"
+    autotune_read_knee_label: "Auto-tune read knee (ui.scan_dialog.autotune_read_knee)"
+    sorting_defaults_label: "Sorting defaults (sorting.defaults — JSON)"
+    sorting_invalid_json: "Invalid JSON for sorting.defaults"
+    cancel: "Cancel"
+    save: "Save"
+  # FullResViewer (web audit fix 5 — was partially hardcoded English).
+  fullres:
+    close: "Close"
+    video_cannot_be_played: "Video cannot be played"
+    preparing_video: "Preparing video…"
+    too_large: "File too large for in-browser full-res preview."
+    open_in_default_app: "Open in default app"
+    zoom_hint: "Ctrl+scroll to zoom · Drag to pan · Esc to close"
+  # PreviewPane (web audit fix 5 — was hardcoded English).
+  preview:
+    select_file: "Select a file to preview"
+    video_cannot_be_played: "Video cannot be played"
+    preparing_video: "Preparing video…"
+    meta_name: "Name"
+    meta_folder: "Folder"
+    meta_size: "Size"
+    meta_score: "Score"
+    meta_dims: "Dims"
+    meta_shot: "Shot"
+    meta_created: "Created"
+  # lib/format.ts similarityLabel() — the one natural-language word among its
+  # symbol-only outputs (web audit fix 5).
+  format:
+    similarity_ref: "Ref"
+  # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —
+  # the patternSummary branch above was already translated).
+  delete_confirm:
+    title_groups: "Entire group(s) will be deleted"
+    title_all: "Delete all files?"
+    yes_delete_all: "Yes, delete all"
+    body_groups: "Group(s) {groups} will have EVERY file deleted ({n} {fileWord} will be deleted). Files will be sent to the Recycle Bin. Continue?"
+    body_all: "{n} {fileWord} will be deleted. This operation moves files to the recycle bin and cannot easily be undone in bulk. Are you sure?"
+    file_singular: "file"
+    file_plural: "files"
+    cancel: "Cancel"

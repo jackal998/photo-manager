@@ -29,6 +29,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAppStore } from "@/store/useAppStore";
+import { useT } from "@/i18n/useT";
 import { computePruneSet } from "@/lib/prune";
 import {
   PRUNE_BTN_KEEP,
@@ -42,6 +43,7 @@ export function PruneConfirmDialog() {
   const prunePrompt = useAppStore((s) => s.execute.prunePrompt);
   const applyPrune = useAppStore((s) => s.applyPrune);
   const saveSettings = useAppStore((s) => s.saveSettings);
+  const t = useT();
 
   const isOpen = prunePrompt !== null;
   const plain = prunePrompt?.plain ?? [];
@@ -98,19 +100,22 @@ export function PruneConfirmDialog() {
   }
 
   const description = isMixed
-    ? `${plain.length} singleton group${plain.length === 1 ? "" : "s"} ` +
-      `${plain.length === 1 ? "has" : "have"} only one file left, and ` +
-      `${actioned.length} more carr${actioned.length === 1 ? "ies" : "y"} an ` +
-      `un-executed delete/ignore action. Remove the plain singleton` +
-      `${plain.length === 1 ? "" : "s"} from the list?`
+    ? t(
+        "web.prune_confirm.body_mixed",
+        "{plain} singleton group(s) have only one file left, and {actioned} more carry an un-executed delete/ignore action. Remove the plain singleton group(s) from the list?",
+        { plain: plain.length, actioned: actioned.length }
+      )
     : actioned.length > 0
-      ? `${actioned.length} singleton group${actioned.length === 1 ? "" : "s"} ` +
-        `with an un-executed delete/ignore action remain. Remove ` +
-        `${actioned.length === 1 ? "it" : "them"} from the list?`
-      : `${plain.length} singleton group${plain.length === 1 ? "" : "s"} now ` +
-        `${plain.length === 1 ? "has" : "have"} only one file remaining. Remove ` +
-        `${plain.length === 1 ? "this singleton group" : "these singleton groups"} ` +
-        `from the list?`;
+      ? t(
+          "web.prune_confirm.body_actioned_only",
+          "{actioned} singleton group(s) with an un-executed delete/ignore action remain. Remove them from the list?",
+          { actioned: actioned.length }
+        )
+      : t(
+          "web.prune_confirm.body_plain_only",
+          "{plain} singleton group(s) now have only one file remaining. Remove these singleton group(s) from the list?",
+          { plain: plain.length }
+        );
 
   const candidates = [...plain, ...actioned];
 
@@ -125,7 +130,9 @@ export function PruneConfirmDialog() {
     >
       <DialogContent data-testid={PRUNE_CONFIRM_DIALOG}>
         <DialogHeader>
-          <DialogTitle>Prune singleton groups?</DialogTitle>
+          <DialogTitle>
+            {t("web.prune_confirm.title", "Prune singleton groups?")}
+          </DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
@@ -147,8 +154,11 @@ export function PruneConfirmDialog() {
               checked={includeActioned}
               onCheckedChange={(checked) => setIncludeActioned(checked === true)}
             />
-            Also remove {actioned.length} actioned singleton
-            {actioned.length === 1 ? "" : "s"}
+            {t(
+              "web.prune_confirm.include_actioned",
+              "Also remove {n} actioned singleton(s)",
+              { n: actioned.length }
+            )}
           </label>
         )}
 
@@ -158,7 +168,7 @@ export function PruneConfirmDialog() {
             checked={remember}
             onCheckedChange={(checked) => setRemember(checked === true)}
           />
-          Don&apos;t ask again
+          {t("web.prune_confirm.dont_ask_again", "Don't ask again")}
         </label>
 
         <DialogFooter className="gap-2">
@@ -167,14 +177,14 @@ export function PruneConfirmDialog() {
             data-testid={PRUNE_BTN_KEEP}
             onClick={handleKeep}
           >
-            Keep all
+            {t("web.prune_confirm.keep_all", "Keep all")}
           </Button>
           <Button
             variant="default"
             data-testid={PRUNE_BTN_REMOVE}
             onClick={handleRemove}
           >
-            Remove {removeCount}
+            {t("web.prune_confirm.remove_count", "Remove {n}", { n: removeCount })}
           </Button>
         </DialogFooter>
       </DialogContent>

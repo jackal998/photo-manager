@@ -75,12 +75,19 @@ export function DeleteConfirmDialog({
   const t = useT();
   const hasGroups = groupIds.length > 0;
   const hasPatternSummary = patternSummary !== undefined;
+  // "file(s)" would flatten the singular/plural distinction the copy relies
+  // on ("1 file" vs "5 files") — translate the two forms separately instead
+  // (zh_TW has no plural marking, so both keys carry the same Chinese noun).
+  const fileWord =
+    deleteCount === 1
+      ? t("web.delete_confirm.file_singular", "file")
+      : t("web.delete_confirm.file_plural", "files");
 
   const title = hasPatternSummary
     ? t("web.action_dialog.delete_confirm_title", "Confirm bulk-delete decision")
     : hasGroups
-    ? "Entire group(s) will be deleted"
-    : "Delete all files?";
+    ? t("web.delete_confirm.title_groups", "Entire group(s) will be deleted")
+    : t("web.delete_confirm.title_all", "Delete all files?");
 
   const confirmLabel = hasPatternSummary
     ? t(
@@ -88,7 +95,7 @@ export function DeleteConfirmDialog({
         "Mark {matched} files for deletion",
         { matched: deleteCount }
       )
-    : "Yes, delete all";
+    : t("web.delete_confirm.yes_delete_all", "Yes, delete all");
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
@@ -105,17 +112,17 @@ export function DeleteConfirmDialog({
                 )}
               </span>
             ) : hasGroups ? (
-              <>
-                Group(s) {groupIds.join(", ")} will have EVERY file deleted (
-                {deleteCount} {deleteCount === 1 ? "file" : "files"} will be
-                deleted). Files will be sent to the Recycle Bin. Continue?
-              </>
+              t(
+                "web.delete_confirm.body_groups",
+                "Group(s) {groups} will have EVERY file deleted ({n} {fileWord} will be deleted). Files will be sent to the Recycle Bin. Continue?",
+                { groups: groupIds.join(", "), n: deleteCount, fileWord }
+              )
             ) : (
-              <>
-                {deleteCount} {deleteCount === 1 ? "file" : "files"} will be
-                deleted. This operation moves files to the recycle bin and
-                cannot easily be undone in bulk. Are you sure?
-              </>
+              t(
+                "web.delete_confirm.body_all",
+                "{n} {fileWord} will be deleted. This operation moves files to the recycle bin and cannot easily be undone in bulk. Are you sure?",
+                { n: deleteCount, fileWord }
+              )
             )}
           </DialogDescription>
         </DialogHeader>
@@ -125,7 +132,7 @@ export function DeleteConfirmDialog({
             data-testid={EXECUTE_ALL_DELETE_CONFIRM_NO}
             onClick={onCancel}
           >
-            Cancel
+            {t("web.delete_confirm.cancel", "Cancel")}
           </Button>
           <Button
             variant="destructive"

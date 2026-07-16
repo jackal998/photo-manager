@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
+import { useT } from "@/i18n/useT";
 import {
   LOCK_CONFIRM_BTN_CANCEL,
   LOCK_CONFIRM_BTN_UNLOCK_APPLY,
@@ -56,6 +57,7 @@ export function LockConfirmDialog() {
   const resolvePruneLock = useAppStore((s) => s.resolvePruneLock);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
   const set = useAppStore.setState;
+  const t = useT();
 
   const isOpen = lockConflict !== null;
   const lockedPaths = lockConflict?.paths ?? [];
@@ -152,24 +154,44 @@ export function LockConfirmDialog() {
 
   const title =
     op === "execute"
-      ? "Locked files in delete scope"
+      ? t("web.lock_confirm.title_execute", "Locked files in delete scope")
       : op === "remove"
-        ? "Locked files in remove scope"
+        ? t("web.lock_confirm.title_remove", "Locked files in remove scope")
         : op === "decision"
-          ? "Locked rows affected"
+          ? t("web.lock_confirm.title_decision", "Locked rows affected")
           : op === "apply-best-copy"
-            ? "Locked rows in this group"
-            : "Locked singleton groups";
+            ? t("web.lock_confirm.title_apply_best_copy", "Locked rows in this group")
+            : t("web.lock_confirm.title_prune", "Locked singleton groups");
   const description =
     op === "execute"
-      ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only.`
+      ? t(
+          "web.lock_confirm.body_execute",
+          "{n} locked file(s) are about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only.",
+          { n }
+        )
       : op === "remove"
-        ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} in the remove list. Unlock and remove, or remove unlocked files only.`
+        ? t(
+            "web.lock_confirm.body_remove",
+            "{n} locked file(s) are in the remove list. Unlock and remove, or remove unlocked files only.",
+            { n }
+          )
         : op === "decision"
-          ? `Setting this decision would change ${originalPathsLen} row(s); ${n} ${n === 1 ? "is" : "are"} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.`
+          ? t(
+              "web.lock_confirm.body_decision",
+              "Setting this decision would change {originalPathsLen} row(s); {n} are locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.",
+              { originalPathsLen, n }
+            )
           : op === "apply-best-copy"
-            ? `Applying best-copy to this group would affect rows that include ${n} locked ${n === 1 ? "row" : "rows"}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.`
-            : `${n} locked singleton ${n === 1 ? "group" : "groups"} would be pruned. Unlock and prune ${n === 1 ? "it" : "them"}, or keep ${n === 1 ? "it" : "them"} in the list.`;
+            ? t(
+                "web.lock_confirm.body_apply_best_copy",
+                "Applying best-copy to this group would affect rows that include {n} locked row(s). Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.",
+                { n }
+              )
+            : t(
+                "web.lock_confirm.body_prune",
+                "{n} locked singleton group(s) would be pruned. Unlock and prune them, or keep them in the list.",
+                { n }
+              );
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleCancel()}>
@@ -193,14 +215,14 @@ export function LockConfirmDialog() {
             data-testid={LOCK_CONFIRM_BTN_CANCEL}
             onClick={handleCancel}
           >
-            Cancel
+            {t("web.lock_confirm.cancel", "Cancel")}
           </Button>
           <Button
             variant="outline"
             data-testid={LOCK_CONFIRM_BTN_UNLOCKED_ONLY}
             onClick={handleUnlockedOnly}
           >
-            Unlocked only
+            {t("web.lock_confirm.unlocked_only", "Unlocked only")}
           </Button>
           <Button
             // "decision" / "apply-best-copy" are not destructive — nothing is
@@ -212,7 +234,7 @@ export function LockConfirmDialog() {
             data-testid={LOCK_CONFIRM_BTN_UNLOCK_APPLY}
             onClick={handleUnlockApply}
           >
-            Unlock &amp; Apply
+            {t("web.lock_confirm.unlock_apply", "Unlock & Apply")}
           </Button>
         </DialogFooter>
       </DialogContent>

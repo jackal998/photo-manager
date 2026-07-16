@@ -23,6 +23,7 @@
 
 import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
+import { useT } from "@/i18n/useT";
 import {
   CONTEXT_MENU,
   CTX_LOCK,
@@ -56,6 +57,7 @@ export function ExecuteContextMenu({
   const setDecision = useAppStore((s) => s.setDecision);
   const setLock = useAppStore((s) => s.setLock);
   const openActionDialog = useAppStore((s) => s.openActionDialog);
+  const t = useT();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -129,7 +131,7 @@ export function ExecuteContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleDelete}
       >
-        Delete
+        {t("web.context_menu.delete", "Delete")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_KEEP}
@@ -137,7 +139,7 @@ export function ExecuteContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleKeep}
       >
-        Keep (clear decision)
+        {t("web.context_menu.keep", "Keep (clear decision)")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_REMOVE}
@@ -145,7 +147,7 @@ export function ExecuteContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleRemove}
       >
-        Remove from list
+        {t("web.context_menu.remove", "Remove from list")}
       </button>
       <div className="my-1 border-t border-neutral-100" role="separator" />
       {isLocked ? (
@@ -155,7 +157,7 @@ export function ExecuteContextMenu({
           className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
           onClick={handleUnlock}
         >
-          Unlock
+          {t("web.context_menu.unlock", "Unlock")}
         </button>
       ) : (
         <button
@@ -164,7 +166,7 @@ export function ExecuteContextMenu({
           className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
           onClick={handleLock}
         >
-          Lock
+          {t("web.context_menu.lock", "Lock")}
         </button>
       )}
       <div className="my-1 border-t border-neutral-100" role="separator" />
@@ -174,7 +176,7 @@ export function ExecuteContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleSetByField}
       >
-        Set Action by Field…
+        {t("web.context_menu.set_action_by_field", "Set Action by Field…")}
       </button>
     </div>
   );

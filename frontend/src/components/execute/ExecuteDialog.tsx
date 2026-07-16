@@ -24,6 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/useT";
 
 import { useAppStore } from "@/store/useAppStore";
 import { nextSelection, type SelectionResult } from "@/lib/multiSelect";
@@ -146,6 +147,7 @@ export function ExecuteDialog() {
   const closeExecuteDialog = useAppStore((s) => s.closeExecuteDialog);
   const executeDecisions = useAppStore((s) => s.executeDecisions);
   const removeFromList = useAppStore((s) => s.removeFromList);
+  const t = useT();
 
   // -------------------------------------------------------------------------
   // Local dialog state
@@ -437,16 +439,19 @@ export function ExecuteDialog() {
         }}
       >
         <DialogHeader>
-          <DialogTitle>Execute Actions</DialogTitle>
+          <DialogTitle>{t("web.execute_dialog.title", "Execute Actions")}</DialogTitle>
         </DialogHeader>
 
         {/* Toolbar row: TypeFilter */}
         <div className="flex items-center gap-3 mt-2">
-          <span className="text-sm text-neutral-600">Show:</span>
+          <span className="text-sm text-neutral-600">
+            {t("web.execute_dialog.show_label", "Show:")}
+          </span>
           <TypeFilter value={filter} onChange={setFilter} />
           <span className="text-xs text-neutral-400 ml-auto">
-            {decidedPaths.length}{" "}
-            {decidedPaths.length === 1 ? "file" : "files"}
+            {t("web.execute_dialog.file_count", "{n} file(s)", {
+              n: decidedPaths.length,
+            })}
           </span>
         </div>
 
@@ -491,7 +496,7 @@ export function ExecuteDialog() {
               />
             ) : (
               <div className="text-xs text-neutral-400 text-center pt-8">
-                Select a row to preview
+                {t("web.execute_dialog.select_row_to_preview", "Select a row to preview")}
               </div>
             )}
           </div>
@@ -522,7 +527,7 @@ export function ExecuteDialog() {
             onClick={closeExecuteDialog}
             disabled={executeRunning}
           >
-            Cancel
+            {t("web.execute_dialog.cancel", "Cancel")}
           </Button>
           <Button
             type="button"
@@ -531,7 +536,7 @@ export function ExecuteDialog() {
             onClick={handleExecuteSelected}
             disabled={executeRunning || sel.selectedPaths.length === 0}
           >
-            Execute selected
+            {t("web.execute_dialog.execute_selected", "Execute selected")}
           </Button>
           <Button
             type="button"
@@ -539,7 +544,9 @@ export function ExecuteDialog() {
             onClick={handleExecute}
             disabled={executeRunning || decidedPaths.length === 0}
           >
-            {executeRunning ? "Executing…" : "Execute"}
+            {executeRunning
+              ? t("web.execute_dialog.executing", "Executing…")
+              : t("web.execute_dialog.execute", "Execute")}
           </Button>
         </DialogFooter>
 
