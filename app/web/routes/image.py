@@ -86,19 +86,32 @@ async def get_image(
     if svc is None:
         raise HTTPException(status_code=503, detail="image_service not initialised")
 
+    # -- Source mtime for cache-key freshness (Correction #11) -----------
+    # Stat'd ONCE here and threaded through both calls below so the same
+    # source-mtime-derived cache key backs the decode AND the ETag lookup
+    # without a second stat of the source file (perf: at most one extra
+    # os.stat per request).
+    try:
+        source_mtime_ns = resolved.stat().st_mtime_ns
+    except OSError:
+        source_mtime_ns = 0
+
     loop = asyncio.get_running_loop()
     # run_in_executor dispatches the blocking decode to the default thread pool.
     # The WIC path inside image_service internally re-dispatches to its own
     # STA-initialised _wic_executor — the nested-executor pattern is intentional
     # so WIC COM objects always run on an STA thread regardless of the caller.
     jpeg: bytes = await loop.run_in_executor(
-        None, svc.get_image_bytes, str(resolved), size, quality
+        None, svc.get_image_bytes, str(resolved), size, quality, source_mtime_ns
     )
 
     # -- ETag from disk-cache file mtime_ns + size -----------------------
+    # The disk-cache file itself is keyed on (path, size, source_mtime_ns), so
+    # an in-place source edit resolves to a DIFFERENT cache file — freshly
+    # written just now — whose own mtime naturally busts this ETag too.
     etag: str | None = None
     try:
-        cache_path = svc.image_disk_cache_path(str(resolved), size)
+        cache_path = svc.image_disk_cache_path(str(resolved), size, source_mtime_ns)
         st = cache_path.stat()
         etag = f'"{st.st_mtime_ns}-{st.st_size}"'
     except (OSError, AttributeError):

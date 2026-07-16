@@ -600,6 +600,85 @@ class TestPreviewRecipeVersion:
         assert PREVIEW_RECIPE_VERSION == "1"
 
 
+# ── Source-mtime cache-key freshness (Correction #11) ────────────────────
+
+
+class TestSourceMtimeCacheFreshness:
+    """Correction #11: overwriting a source file in place (same path + size)
+    must not keep serving the old cached bytes forever.
+
+    Before the fix, ``_compute_cache_key`` was ``sha1(path|size)`` only, so
+    an in-place edit (crop/re-export writing to the same path) resolved to
+    the SAME disk-cache file and was served/304'd indefinitely. Folding
+    source mtime_ns into the key means an edit produces a fresh key.
+    """
+
+    def test_compute_cache_key_changes_with_source_mtime_same_path_and_size(self):
+        """Same path + size_key, different source_mtime_ns -> different key."""
+        key_a = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=1000)
+        key_b = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=2000)
+        assert key_a != key_b
+
+    def test_compute_cache_key_stable_for_same_inputs(self):
+        """Same (path, size, mtime) -> deterministic, reproducible key."""
+        key_a = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=1000)
+        key_b = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=1000)
+        assert key_a == key_b
+
+    def test_get_image_uses_a_fresh_key_after_source_overwritten_in_place(
+        self, tmp_path
+    ):
+        """End-to-end: _get_image on an overwritten source (same path, same
+        size arg) must NOT return the stale disk-cached bytes.
+
+        Real failure mode this pins: a user crops photo.jpg and re-exports
+        to the SAME path. Before the fix, _get_image's cache key was
+        path+size only, so the old disk-cache entry (or in-mem entry) was
+        returned unchanged — the crop was invisible in the UI.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._versioned_disk_path = tmp_path
+        svc._thumb_cache = _ByteBudgetLRUCache(1_000_000)
+        svc._preview_cache = _ByteBudgetLRUCache(1_000_000)
+        svc._pillow_available = True
+        svc._pillow_heif_available = False
+        svc._rawpy_available = False
+
+        source = tmp_path / "photo.jpg"
+        source.write_bytes(b"original-bytes")
+
+        old_jpeg = _make_jpeg(4, 4)
+        new_jpeg = _make_jpeg(8, 8)
+
+        with patch.object(svc, "_load_from_source") as mock_load:
+            mock_load.return_value = old_jpeg
+            first = svc._get_image(str(source), 128)
+        assert first == old_jpeg
+
+        # Simulate an in-place overwrite: same path, new content, later mtime.
+        import os
+        import time
+
+        time.sleep(0.01)
+        source.write_bytes(b"cropped-bytes-same-path")
+        os.utime(source, ns=(time.time_ns(), time.time_ns()))
+
+        with patch.object(svc, "_load_from_source") as mock_load:
+            mock_load.return_value = new_jpeg
+            second = svc._get_image(str(source), 128)
+
+        assert second == new_jpeg, (
+            "after an in-place source overwrite, _get_image must decode "
+            "fresh bytes instead of returning the stale disk/mem cache entry"
+        )
+
+    def test_source_mtime_ns_defaults_to_zero_when_source_missing(self):
+        """A stat failure (deleted/moved source) degrades to mtime=0 rather
+        than raising — the cache key stays deterministic for a missing file
+        instead of crashing the request."""
+        assert svc_mod._source_mtime_ns("/definitely/does/not/exist.jpg") == 0
+
+
 # ── status_reporter wiring (#622 Phase 1) ────────────────────────────────
 
 
