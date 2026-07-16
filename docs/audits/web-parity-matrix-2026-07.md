@@ -366,3 +366,84 @@ Reminder: fixes merge to `docs/web-port-feasibility`, so GitHub never auto-close
 | #642 | Phase 0 — headless-core extraction (MVC seam) | **tracker/epic** | Substantive status: **substantively done** — `core/app_service/` fully populated (scan_runner, cancel_token `_CancelToken`, dtos, review/execute/action services, path_safety, fs_browse); modules document + enforce zero PySide6 (`core/app_service/action_service.py:6`); Qt app consumes it. Checkboxes stale. | no |
 | #641 | widen CI workflow triggers to the web-port integration base | **implemented-admin-open** | Acceptance met by removing branch restrictions entirely: `.github/workflows/pr-gates.yml`, `qa-batch.yml`, `tests.yml` all run on `pull_request:` with no `branches:` filter ("Run on every PR regardless of target branch" comments in each); `news-gate.yml` likewise all-PR; so sub-PRs targeting `docs/web-port-feasibility` are CI-gated today (observed on shipped phase PRs). | yes |
 | #622 | Preview/cache redesign — viewport-bounded sink, byte-budget LRU | **partial** | Phase 1 DONE: commits `9187360` (viewport cap + embedded JPEG + modal full-res viewer) + `f1d1795` (async res + status notice); byte-budget tier caches `infrastructure/image_service.py:68-69,225` (64 MB thumb / 192 MB preview, RAM-scaled); `app/views/dialogs/full_res_viewer.py` exists. Phase 2 NOT done: `app/views/preview_coordinator.py` and `infrastructure/device_key.py` do not exist (ls confirms); Phase 3 real-NAS verification not evidenced. Stays open for Phases 2-3. | no |
+
+
+---
+
+<!-- addendum-2026-07-16 -->
+
+# 2026-07-16 re-audit deltas
+
+This matrix's baseline was commit `d3eb09c`. The tree has since moved to
+`6d5e3ce` (5 merged phase PRs ahead). The rows above are **left unchanged
+as the dated historical record** — this section lists what the
+[2026-07-16 goal audit](web-port-goal-audit-2026-07-16.md) (adversarial
+recheck detail incorporated) found has changed since, so a reader isn't
+misled by a stale verdict cell. Cite this section, not a silently-edited
+row above, when reporting current status.
+
+- **#662 (T2-4, was real-gap) — SHIPPED + CLOSED.** `app/web/security.py`
+  now implements `OriginHostGuard` (same-origin check on `Origin` with a
+  dev-origin allowlist, `Referer` fallback, explicit rejection of literal
+  `Origin: null`), wired as ASGI middleware at `app/web/main.py:148-155`.
+  Shipped via PR #777, commit `6d5e3ce` "feat(web-security): Origin/Host
+  CSRF guard on mutating routes (#662)". The item-2 sub-item
+  (`allowed_roots`/manifest-root trust boundary) is resolved by a
+  documented decision in the tech-design's security addendum
+  (`docs/design/web-port-tech-design.md`, unassigned-concerns section);
+  the owner did not veto that resolution at the #777 review. If the owner
+  instead wants the trust-boundary sub-item tracked as further work, file
+  a follow-up issue — it is not re-opened here.
+- **#658 / #653 (T2-4, were real-gap) — FIXED + CLOSED.** Both landed in
+  commit `61e0c3f` "fix(settings): raise on non-dict intermediate + atomic
+  save (#658, #653) (#775)": `infrastructure/settings.py`'s `set()` now
+  raises `TypeError` naming the conflicting path instead of silently
+  clobbering a non-dict intermediate node (#658), and `save()` now writes
+  to a sibling `.tmp` file + `fsync` + `os.replace` (#653), matching
+  `scanner/manifest.py`'s existing atomic pattern.
+- **#678 (T2-3, was tracker/partial) — item D closed; net 5/6 clusters
+  done.** Item D (multi-row selection + List menu) shipped its remaining
+  List-menu half via commit `506735f` "feat(web): List menu — Remove from
+  List menu-bar entry (#678-D) (#776)" — `frontend/src/components/MenuBar.tsx:157-170`
+  now renders a real `MENU_LIST` dropdown wired to `onRemoveFromList`.
+  Only item C (inline pre-scan path validation) remains a genuine
+  declined/deferred gap; A/B/D/E/F are now all done.
+- **#673 (T2-4, was partial) — List sub-item shipped.** Of the 5 unported
+  menu items this row's evidence originally listed (Save Manifest /
+  Execute Selected / Remove from List / Log menu / Exit), "Remove from
+  List" is now shipped — same commit `506735f` as the #678-D item above.
+  The row's overall **partial** verdict stands: Save Manifest, Log menu,
+  and Exit remain unported.
+- **#744 (T2-1, was partial) — 3 more commits landed, divergence-list
+  artifact still the open deliverable.** Beyond the button-row fix
+  (`2394320`) already recorded above, `apply_best_copy` shipped
+  (commits `a829b95`/`3c530b9`, "feat(web): apply best-copy decisions to a
+  group via context menu (#744)") plus a doc-hygiene commit
+  (`dc46d43`/`c893d1a`) flagging tech-design §5 stale — see the §5.7
+  correction in `docs/design/web-port-tech-design.md:2076-2079`. The
+  issue's actual deliverable — a full reconciliation pass producing a
+  structured divergence list with owner keep/fix sign-off — still does
+  not exist (`grep -rln "Daylight|Aperture" docs/` finds only the two
+  audit docs already on record). Verdict stays **partial**.
+- **#737 (T2-1, was partial) — evidence correction, verdict unchanged.**
+  This row's "quick levers done, proper fix not done" categorization is
+  still accurate, but the specific "no cache found" phrasing in a prior
+  evidence pass was wrong even at the matrix's own audit date:
+  `infrastructure/transcode_service.py:96,104`'s `sha1(source_path|mtime_ns)`-keyed
+  cache predates this matrix's baseline (`d3eb09c`) — it was never new.
+  The **partial** categorization itself is correct (no `-progress` pipe
+  or fMP4 streaming exists); only the evidence text describing what
+  already existed was in error.
+- **Endorsed-omission #2 (List menu) — "scheduled" is now "shipped".**
+  The G1 sign-off table's row 2 fallback text ("scheduled to be
+  implemented in P3.2(c) instead of endorsed") is fulfilled: commit
+  `506735f` (#678-D / #776, same commit as above) ships the List-menu
+  entry. This is no longer a pending-schedule note.
+- **P-1 contradiction (ctx-apply-best-copy vs the tech-design §5.7
+  staleness note) — resolved in favor of the code.** The tech-design
+  doc's "shipped only as a no-op stub" claim for `ctx-apply-best-copy`
+  was itself stale/false; the feature is fully implemented (see the #744
+  entry above and the corrected note at
+  `docs/design/web-port-tech-design.md:2076-2079`). `qa/web/scenario_map.yml`
+  s72 (`status: done`) was accurate; the design doc was the stale side of
+  the contradiction.
