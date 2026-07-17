@@ -1,5 +1,14 @@
 # Web-Port Program — Status Snapshot (2026-07-02)
 
+> **SUPERSEDED as of 2026-07-16.** This snapshot is 2 weeks stale relative
+> to the current tree. Current status lives in
+> [`web-parity-matrix-2026-07.md`](web-parity-matrix-2026-07.md) (see its
+> "2026-07-16 re-audit deltas" addendum for what shipped since this doc
+> was written) and
+> [`web-port-goal-audit-2026-07-16.md`](web-port-goal-audit-2026-07-16.md)
+> (the full goal-vs-code re-audit). The body below is kept intact as the
+> historical record — do not treat it as current.
+
 > **What this file is.** A human-readable, long-lived checkpoint of the Qt → localhost-web
 > port: the original plan, where we are, what is left, and how a fresh session picks it up.
 > Written because the program is a large **56-PR stacked chain** and the GitHub epic
