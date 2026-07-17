@@ -24,7 +24,7 @@ describe("similarityLabel", () => {
 
   it("uses the translated string returned by t, not the English fallback", () => {
     const sim: Similarity = { kind: "ref", percent: null };
-    const t = (_key: string, _fallback: string) => "參考";
+    const t = () => "參考";
     expect(similarityLabel(sim, t)).toBe("參考");
   });
 
