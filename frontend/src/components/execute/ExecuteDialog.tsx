@@ -449,8 +449,15 @@ export function ExecuteDialog() {
           </span>
           <TypeFilter value={filter} onChange={setFilter} />
           <span className="text-xs text-neutral-400 ml-auto">
-            {t("web.execute_dialog.file_count", "{n} file(s)", {
+            {/* Singular/plural translated separately, not flattened to
+                "(s)" (review finding) — zh_TW keys carry the same word for
+                both counts since Chinese has no plural marking. */}
+            {t("web.execute_dialog.file_count", "{n} {fileWord}", {
               n: decidedPaths.length,
+              fileWord:
+                decidedPaths.length === 1
+                  ? t("web.execute_dialog.file_singular", "file")
+                  : t("web.execute_dialog.file_plural", "files"),
             })}
           </span>
         </div>

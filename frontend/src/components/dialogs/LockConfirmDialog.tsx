@@ -152,6 +152,33 @@ export function LockConfirmDialog() {
     clearConflict();
   }
 
+  // Singular/plural word forms chosen by count, translated separately rather
+  // than flattened to "(s)" — zh_TW has no plural marking, so its singular
+  // and plural keys carry the same Chinese word; en's keep correct grammar
+  // ("1 locked file is" vs "2 locked files are"), matching the pattern
+  // DeleteConfirmDialog already uses for fileWord (review finding: the
+  // flattened templates below previously rendered "1 locked file(s) are").
+  const fileWord =
+    n === 1
+      ? t("web.lock_confirm.file_singular", "file")
+      : t("web.lock_confirm.file_plural", "files");
+  const isWord =
+    n === 1
+      ? t("web.lock_confirm.is_singular", "is")
+      : t("web.lock_confirm.is_plural", "are");
+  const rowWord =
+    n === 1
+      ? t("web.lock_confirm.row_singular", "row")
+      : t("web.lock_confirm.row_plural", "rows");
+  const groupWord =
+    n === 1
+      ? t("web.lock_confirm.group_singular", "group")
+      : t("web.lock_confirm.group_plural", "groups");
+  const pronounWord =
+    n === 1
+      ? t("web.lock_confirm.pronoun_singular", "it")
+      : t("web.lock_confirm.pronoun_plural", "them");
+
   const title =
     op === "execute"
       ? t("web.lock_confirm.title_execute", "Locked files in delete scope")
@@ -166,31 +193,31 @@ export function LockConfirmDialog() {
     op === "execute"
       ? t(
           "web.lock_confirm.body_execute",
-          "{n} locked file(s) are about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only.",
-          { n }
+          "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only.",
+          { n, fileWord, isWord }
         )
       : op === "remove"
         ? t(
             "web.lock_confirm.body_remove",
-            "{n} locked file(s) are in the remove list. Unlock and remove, or remove unlocked files only.",
-            { n }
+            "{n} locked {fileWord} {isWord} in the remove list. Unlock and remove, or remove unlocked files only.",
+            { n, fileWord, isWord }
           )
         : op === "decision"
           ? t(
               "web.lock_confirm.body_decision",
-              "Setting this decision would change {originalPathsLen} row(s); {n} are locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.",
-              { originalPathsLen, n }
+              "Setting this decision would change {originalPathsLen} row(s); {n} {isWord} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.",
+              { originalPathsLen, n, isWord }
             )
           : op === "apply-best-copy"
             ? t(
                 "web.lock_confirm.body_apply_best_copy",
-                "Applying best-copy to this group would affect rows that include {n} locked row(s). Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.",
-                { n }
+                "Applying best-copy to this group would affect rows that include {n} locked {rowWord}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.",
+                { n, rowWord }
               )
             : t(
                 "web.lock_confirm.body_prune",
-                "{n} locked singleton group(s) would be pruned. Unlock and prune them, or keep them in the list.",
-                { n }
+                "{n} locked singleton {groupWord} would be pruned. Unlock and prune {pronoun}, or keep {pronoun} in the list.",
+                { n, groupWord, pronoun: pronounWord }
               );
 
   return (

@@ -175,6 +175,55 @@ describe("PruneConfirmDialog", () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Singular/plural grammar (review finding on the web-audit-remediation
+  // branch: the i18n pass had flattened "group(s)"/"singleton(s)" into fixed
+  // templates, e.g. "1 singleton group(s) now have only one file remaining").
+  // ---------------------------------------------------------------------------
+
+  it("plain-only: singular grammar for n=1", () => {
+    render(<PruneConfirmDialog />);
+    seedPrune({ plain: ["/p/a.jpg"] });
+    expect(
+      screen.getByText(
+        "1 singleton group now has only one file remaining. Remove this singleton group from the list?"
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("plain-only: plural grammar for n>1", () => {
+    render(<PruneConfirmDialog />);
+    seedPrune({ plain: ["/p/a.jpg", "/p/b.jpg"] });
+    expect(
+      screen.getByText(
+        "2 singleton groups now have only one file remaining. Remove these singleton groups from the list?"
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("mixed: singular grammar on both buckets when each has n=1", () => {
+    render(<PruneConfirmDialog />);
+    seedPrune({ plain: ["/p/a.jpg"], actioned: ["/p/x.jpg"] });
+    expect(
+      screen.getByText(
+        "1 singleton group has only one file left, and 1 more carries an un-executed delete/ignore action. Remove the plain singleton group from the list?"
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("actioned-only checkbox label: singular for n=1, plural for n>1", () => {
+    render(<PruneConfirmDialog />);
+    seedPrune({ plain: ["/p/a.jpg"], actioned: ["/p/x.jpg"] });
+    expect(
+      screen.getByText("Also remove 1 actioned singleton")
+    ).toBeInTheDocument();
+
+    seedPrune({ plain: ["/p/a.jpg"], actioned: ["/p/x.jpg", "/p/y.jpg"] });
+    expect(
+      screen.getByText("Also remove 2 actioned singletons")
+    ).toBeInTheDocument();
+  });
+
   it("opt-in / remember reset between opens (no leak from a prior event)", async () => {
     const user = userEvent.setup();
     render(<PruneConfirmDialog />);

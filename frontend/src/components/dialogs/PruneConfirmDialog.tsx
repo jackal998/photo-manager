@@ -99,22 +99,61 @@ export function PruneConfirmDialog() {
     void applyPrune(lockedToPrune);
   }
 
+  // Singular/plural word forms chosen by count, translated separately rather
+  // than flattened to "(s)" (review finding — see LockConfirmDialog for the
+  // same pattern). zh_TW has no plural marking, so its singular/plural keys
+  // carry the same Chinese word; en's keep correct grammar.
+  const plainGroupWord =
+    plain.length === 1
+      ? t("web.prune_confirm.group_singular", "group")
+      : t("web.prune_confirm.group_plural", "groups");
+  const plainHasWord =
+    plain.length === 1
+      ? t("web.prune_confirm.has_singular", "has")
+      : t("web.prune_confirm.has_plural", "have");
+  const plainGroupPhrase =
+    plain.length === 1
+      ? t("web.prune_confirm.this_group", "this singleton group")
+      : t("web.prune_confirm.these_groups", "these singleton groups");
+  const actionedGroupWord =
+    actioned.length === 1
+      ? t("web.prune_confirm.group_singular", "group")
+      : t("web.prune_confirm.group_plural", "groups");
+  const actionedCarryWord =
+    actioned.length === 1
+      ? t("web.prune_confirm.carry_singular", "carries")
+      : t("web.prune_confirm.carry_plural", "carry");
+  const actionedPronoun =
+    actioned.length === 1
+      ? t("web.prune_confirm.pronoun_singular", "it")
+      : t("web.prune_confirm.pronoun_plural", "them");
+  const actionedSingletonWord =
+    actioned.length === 1
+      ? t("web.prune_confirm.singleton_singular", "singleton")
+      : t("web.prune_confirm.singleton_plural", "singletons");
+
   const description = isMixed
     ? t(
         "web.prune_confirm.body_mixed",
-        "{plain} singleton group(s) have only one file left, and {actioned} more carry an un-executed delete/ignore action. Remove the plain singleton group(s) from the list?",
-        { plain: plain.length, actioned: actioned.length }
+        "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete/ignore action. Remove the plain singleton {plainGroupWord} from the list?",
+        {
+          plain: plain.length,
+          actioned: actioned.length,
+          plainGroupWord,
+          plainHasWord,
+          actionedCarryWord,
+        }
       )
     : actioned.length > 0
       ? t(
           "web.prune_confirm.body_actioned_only",
-          "{actioned} singleton group(s) with an un-executed delete/ignore action remain. Remove them from the list?",
-          { actioned: actioned.length }
+          "{actioned} singleton {actionedGroupWord} with an un-executed delete/ignore action remain. Remove {pronoun} from the list?",
+          { actioned: actioned.length, actionedGroupWord, pronoun: actionedPronoun }
         )
       : t(
           "web.prune_confirm.body_plain_only",
-          "{plain} singleton group(s) now have only one file remaining. Remove these singleton group(s) from the list?",
-          { plain: plain.length }
+          "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Remove {phrase} from the list?",
+          { plain: plain.length, plainGroupWord, plainHasWord, phrase: plainGroupPhrase }
         );
 
   const candidates = [...plain, ...actioned];
@@ -156,8 +195,8 @@ export function PruneConfirmDialog() {
             />
             {t(
               "web.prune_confirm.include_actioned",
-              "Also remove {n} actioned singleton(s)",
-              { n: actioned.length }
+              "Also remove {n} actioned {singletonWord}",
+              { n: actioned.length, singletonWord: actionedSingletonWord }
             )}
           </label>
         )}
