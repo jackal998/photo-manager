@@ -98,6 +98,13 @@ const UNDECIDED_GROUP: Group = {
   ],
 };
 
+/** A group with exactly ONE decided row — pins the file_count singular case. */
+const SINGLE_DECIDED_GROUP: Group = {
+  group_number: 4,
+  member_count: 1,
+  items: [makeFile("only.jpg", "/photos/only.jpg", "delete", "4")],
+};
+
 // ---------------------------------------------------------------------------
 // jsdom virtualizer fix (same as ResultTree.test.tsx)
 // ---------------------------------------------------------------------------
@@ -210,6 +217,31 @@ describe("ExecuteDialog", () => {
   it("does not render dialog content when executeOpen=false", () => {
     render(<ExecuteDialog />);
     expect(screen.queryByTestId(EXECUTE_DIALOG)).not.toBeInTheDocument();
+  });
+
+  // Singular/plural grammar (review finding on the web-audit-remediation
+  // branch: the i18n pass had flattened "file(s)" into a fixed template, so
+  // n=1 read "1 file(s)").
+  it("file_count uses singular grammar for n=1 decided row", () => {
+    act(() => {
+      openDialog([SINGLE_DECIDED_GROUP]);
+    });
+    // Scoped to the toolbar count span (class "ml-auto") — ExecuteTree's
+    // per-group member-count text ALSO renders "1 file"/"2 files" and would
+    // collide with an unscoped getByText. Dialog content is Radix-portaled
+    // to document.body, so query there rather than the render container.
+    render(<ExecuteDialog />);
+    const countSpan = document.querySelector("span.ml-auto");
+    expect(countSpan).toHaveTextContent("1 file");
+  });
+
+  it("file_count uses plural grammar for n>1 decided rows", () => {
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+    const countSpan = document.querySelector("span.ml-auto");
+    expect(countSpan).toHaveTextContent("2 files");
   });
 
   // 2. ExecuteTree shows decided rows only

@@ -29,8 +29,10 @@ Web slice:
      locked_paths → the frontend opens LOCK_CONFIRM_DIALOG. The 409 is a
      pre-flight rejection: nothing has been deleted at this point.
   8. Assert the lock-confirm body makes the delete-now consequence explicit —
-     it must contain "DELETE" (web body copy: "...permanently DELETED..."). This
-     is the IMMEDIATE/execute context, distinct from the DEFERRED remove context.
+     it must contain "DELETE" (web body copy: "...about to be deleted (sent to
+     the Recycle Bin)..." — corrected from an earlier "permanently DELETED"
+     wording bug; deletion is via send2trash, never permanent). This is the
+     IMMEDIATE/execute context, distinct from the DEFERRED remove context.
   9. Click LOCK_CONFIRM_BTN_CANCEL → handleCancel() for op=="execute" clears
      lockConflict (LockConfirmDialog.tsx:108). The lock-confirm dialog dismisses.
  10. ASSERT (non-destructive contract):
@@ -272,13 +274,20 @@ def run(*, base_url: str) -> None:
             lock_confirm.wait_for(state="visible", timeout=20_000)
 
             # IMMEDIATE/execute context: the body must make the delete-now
-            # consequence explicit. Web body copy reads "...permanently
-            # DELETED..." — assert the DELETE cue (replaces Qt's per-context
-            # apply-button-label assertion, which the web has no equivalent of).
+            # consequence explicit. Web body copy reads "...about to be
+            # deleted (sent to the Recycle Bin)..." — assert the DELETE cue
+            # (replaces Qt's per-context apply-button-label assertion, which
+            # the web has no equivalent of) and that it does NOT overclaim
+            # permanence (deletion is via send2trash, never permanent).
             dialog_text = lock_confirm.inner_text()
             assert "DELETE" in dialog_text.upper(), (
                 f"LOCK_CONFIRM_DIALOG body must make the delete-now consequence "
                 f"explicit (expected 'DELETE' in body); got: {dialog_text[:200]!r}"
+            )
+            assert "permanent" not in dialog_text.lower(), (
+                f"LOCK_CONFIRM_DIALOG body must not claim deletion is permanent "
+                f"(actual semantics: send2trash to the Recycle Bin); got: "
+                f"{dialog_text[:200]!r}"
             )
 
             # ── Step 10: drive the Cancel verdict ─────────────────────────

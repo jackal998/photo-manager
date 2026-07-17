@@ -239,10 +239,25 @@ def _compute_cache_budgets() -> tuple[int, int]:
     return thumb, preview
 
 
-def _compute_cache_key(path: str, size_key: int) -> str:
-    """Compute a stable cache key from path and requested side."""
-    sig = f"{path}|{int(size_key)}".encode("utf-8", errors="ignore")
+def _compute_cache_key(path: str, size_key: int, source_mtime_ns: int = 0) -> str:
+    """Compute a stable cache key from path, requested side, and source mtime.
+
+    Folding ``source_mtime_ns`` in means an in-place edit to the source file
+    (same path + size, different content — e.g. a crop/re-export) produces a
+    fresh key instead of silently hitting the old cache entry forever
+    (Correction #11). Defaults to 0 so any caller that can't cheaply supply
+    a source mtime still gets a stable, deterministic key.
+    """
+    sig = f"{path}|{int(size_key)}|{int(source_mtime_ns)}".encode("utf-8", errors="ignore")
     return hashlib.sha1(sig).hexdigest()
+
+
+def _source_mtime_ns(path: str) -> int:
+    """Best-effort source-file mtime_ns; 0 if the stat fails (e.g. deleted)."""
+    try:
+        return Path(path).stat().st_mtime_ns
+    except OSError:
+        return 0
 
 
 def _ensure_dir(p: Path) -> None:
@@ -449,7 +464,13 @@ class ImageService:
 
     # Web API entry points (Phase 1)
 
-    def get_image_bytes(self, path: str, size: int, quality: int = 85) -> bytes:
+    def get_image_bytes(
+        self,
+        path: str,
+        size: int,
+        quality: int = 85,
+        source_mtime_ns: int | None = None,
+    ) -> bytes:
         """Return JPEG bytes for the web image endpoint.
 
         Thin wrapper over ``_get_image`` — reuses the existing mem/disk cache,
@@ -459,23 +480,51 @@ class ImageService:
         ``size == 0`` → full-res (passes requested_side=0 to _get_image which
         falls through to rawpy.postprocess or Shell/WIC at max WIC size).
         ``size > 0``  → thumbnail/preview tier (same as get_thumbnail/get_preview).
+
+        ``source_mtime_ns``: pass a pre-stat'd value (the web route already
+        stats ``resolved`` for path validation) to avoid a second stat of the
+        same source file; ``None`` computes it internally.
         """
-        return self._get_image(path, size)
+        return self._get_image(path, size, source_mtime_ns)
 
-    def image_disk_cache_path(self, path: str, size: int) -> Path:
-        """Return the disk-cache file path for (path, size).
+    def image_disk_cache_path(
+        self, path: str, size: int, source_mtime_ns: int | None = None
+    ) -> Path:
+        """Return the disk-cache file path for (path, size, source mtime).
 
-        Reuses the same versioned key as _get_image so the route can
+        Reuses the same versioned key as ``_get_image`` so the route can
         stat() it for an mtime-bearing ETag without re-deriving the key.
         Returns the path regardless of whether the file exists yet.
+
+        Pass the SAME ``source_mtime_ns`` used for the matching
+        ``get_image_bytes`` call so both derive the identical key from one
+        source stat (Correction #11 perf note: at most one extra os.stat per
+        request) — ``None`` re-stats internally for callers that don't have
+        it handy.
         """
-        key = _compute_cache_key(path, size)
+        if source_mtime_ns is None:
+            source_mtime_ns = _source_mtime_ns(path)
+        key = _compute_cache_key(path, size, source_mtime_ns)
         return self._versioned_disk_path / f"{key}.jpg"
 
     # Internal helpers
-    def _get_image(self, path: str, requested_side: int) -> bytes:
-        """Get image via memory/disk cache or load and cache it."""
-        key = _compute_cache_key(path, requested_side)
+    def _get_image(
+        self,
+        path: str,
+        requested_side: int,
+        source_mtime_ns: int | None = None,
+    ) -> bytes:
+        """Get image via memory/disk cache or load and cache it.
+
+        ``source_mtime_ns`` folds the source file's mtime into the cache key
+        (Correction #11) so overwriting a photo in place (same path + size)
+        gets a fresh key instead of serving stale cached bytes indefinitely.
+        ``None`` (the default, used by get_thumbnail/get_preview) stats the
+        source itself; the web route passes a pre-stat'd value.
+        """
+        if source_mtime_ns is None:
+            source_mtime_ns = _source_mtime_ns(path)
+        key = _compute_cache_key(path, requested_side, source_mtime_ns)
 
         # Determine which cache tier to consult (thumb vs preview)
         cache = self._thumb_cache if requested_side > 0 and requested_side <= _THUMB_SIDE_THRESHOLD else self._preview_cache

@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/useT";
 import {
   EXECUTE_REMOVE_CONFIRM,
   EXECUTE_REMOVE_CONFIRM_NO,
@@ -40,15 +41,20 @@ export function RemoveFromListConfirmDialog({
   onConfirm,
   onCancel,
 }: RemoveFromListConfirmDialogProps) {
+  const t = useT();
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
       <DialogContent data-testid={EXECUTE_REMOVE_CONFIRM}>
         <DialogHeader>
-          <DialogTitle>Remove from list?</DialogTitle>
+          <DialogTitle>
+            {t("web.remove_confirm.title", "Remove from list?")}
+          </DialogTitle>
           <DialogDescription>
-            Remove {basename || "this item"} from the list? This only updates
-            the manifest — no file on disk is touched. The removed row will not
-            appear in the review tree until you re-scan.
+            {t(
+              "web.remove_confirm.body",
+              "Remove {basename} from the list? This only updates the manifest — no file on disk is touched. The removed row will not appear in the review tree until you re-scan.",
+              { basename: basename || t("web.remove_confirm.this_item", "this item") }
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2">
@@ -57,14 +63,14 @@ export function RemoveFromListConfirmDialog({
             data-testid={EXECUTE_REMOVE_CONFIRM_NO}
             onClick={onCancel}
           >
-            Cancel
+            {t("web.remove_confirm.cancel", "Cancel")}
           </Button>
           <Button
             variant="destructive"
             data-testid={EXECUTE_REMOVE_CONFIRM_YES}
             onClick={onConfirm}
           >
-            Yes, remove
+            {t("web.remove_confirm.yes_remove", "Yes, remove")}
           </Button>
         </DialogFooter>
       </DialogContent>

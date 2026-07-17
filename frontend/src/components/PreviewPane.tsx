@@ -19,6 +19,7 @@
 import { useCallback, useState, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { selectPreviewMode } from "@/store/useAppStore";
+import { useT } from "@/i18n/useT";
 import { thumbnailUrl, mediaUrl } from "@/api/client";
 import { formatBytes, formatScore, formatDims, formatDate } from "@/lib/format";
 import { PREVIEW_PANE, PREVIEW_SINGLE_IMAGE, PREVIEW_INFO } from "@/testids";
@@ -45,9 +46,10 @@ function findRow(
 // ---------------------------------------------------------------------------
 
 function EmptyState() {
+  const t = useT();
   return (
     <div className="flex items-center justify-center h-full text-neutral-400 text-sm select-none">
-      Select a file to preview
+      {t("web.preview.select_file", "Select a file to preview")}
     </div>
   );
 }
@@ -62,6 +64,7 @@ export function PreviewPane() {
   const groups = useAppStore((s) => s.manifest.groups);
   const openFullRes = useAppStore((s) => s.openFullRes);
   const previewMode = useAppStore(selectPreviewMode);
+  const t = useT();
 
   const row = selectedFilePath !== null ? findRow(groups, selectedFilePath) : null;
 
@@ -112,14 +115,16 @@ export function PreviewPane() {
             {row.media_type === "video" ? (
               videoFailed ? (
                 <div className="flex items-center justify-center h-full text-neutral-400 text-sm select-none">
-                  Video cannot be played
+                  {t("web.preview.video_cannot_be_played", "Video cannot be played")}
                 </div>
               ) : (
                 <>
                   {/* "Preparing video…" overlay while the transcode is in flight. */}
                   {useTranscode && !canPlay && (
                     <div className="absolute flex items-center justify-center pointer-events-none">
-                      <span className="text-neutral-400 text-sm">Preparing video…</span>
+                      <span className="text-neutral-400 text-sm">
+                        {t("web.preview.preparing_video", "Preparing video…")}
+                      </span>
                     </div>
                   )}
                   <video
@@ -153,16 +158,28 @@ export function PreviewPane() {
             data-testid={PREVIEW_INFO}
             className="flex-shrink-0 p-3 border-t border-neutral-200 bg-white text-xs space-y-1 overflow-y-auto max-h-56"
           >
-            <MetaRow label="Name" value={row.basename} mono />
-            <MetaRow label="Folder" value={row.folder} mono />
-            <MetaRow label="Size" value={formatBytes(row.file_size_bytes)} />
-            <MetaRow label="Score" value={formatScore(row.score)} />
+            <MetaRow label={t("web.preview.meta_name", "Name")} value={row.basename} mono />
+            <MetaRow label={t("web.preview.meta_folder", "Folder")} value={row.folder} mono />
             <MetaRow
-              label="Dims"
+              label={t("web.preview.meta_size", "Size")}
+              value={formatBytes(row.file_size_bytes)}
+            />
+            <MetaRow
+              label={t("web.preview.meta_score", "Score")}
+              value={formatScore(row.score)}
+            />
+            <MetaRow
+              label={t("web.preview.meta_dims", "Dims")}
               value={formatDims(row.pixel_width, row.pixel_height)}
             />
-            <MetaRow label="Shot" value={formatDate(row.shot_date)} />
-            <MetaRow label="Created" value={formatDate(row.creation_date)} />
+            <MetaRow
+              label={t("web.preview.meta_shot", "Shot")}
+              value={formatDate(row.shot_date)}
+            />
+            <MetaRow
+              label={t("web.preview.meta_created", "Created")}
+              value={formatDate(row.creation_date)}
+            />
           </div>
         </>
       ) : (

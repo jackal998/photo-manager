@@ -21,6 +21,7 @@ import {
   MAIN_SETTINGS_BUTTON,
   MAIN_STATUS_BAR,
   MAIN_STATUS_ERROR,
+  MAIN_EXECUTE_ERROR,
   SCAN_DIALOG,
   DLGE_SETTINGS_DIALOG,
   EXECUTE_DIALOG,
@@ -301,6 +302,49 @@ describe("App status bar", () => {
       "Manifest error: HTTP 404: Manifest not found: '/bad.db'"
     );
     expect(screen.getByTestId(MAIN_STATUS_BAR)).toHaveTextContent("Ready");
+  });
+
+  // Audit fix — revealInExplorer ("Open folder") failures wrote
+  // execute.executeError, but the only renderer was ExecuteDialog, which
+  // isn't mounted while closed — a failed reveal from the main tree was
+  // invisible. MAIN_EXECUTE_ERROR is the additive footer line fixing that,
+  // mirroring the #712 MAIN_STATUS_ERROR pattern above.
+
+  it("does not render the execute-error line when execute.executeError is null", () => {
+    renderWithProviders(<App />);
+    expect(screen.queryByTestId(MAIN_EXECUTE_ERROR)).not.toBeInTheDocument();
+  });
+
+  it("renders the execute-error alert when execute.executeError is set and the Execute dialog is closed", () => {
+    act(() => {
+      useAppStore.setState((s) => ({
+        execute: {
+          ...s.execute,
+          executeOpen: false,
+          executeError: "reveal failed: file not found",
+        },
+      }));
+    });
+    renderWithProviders(<App />);
+    const alert = screen.getByTestId(MAIN_EXECUTE_ERROR);
+    expect(alert).toHaveTextContent(
+      "Action error: reveal failed: file not found"
+    );
+    expect(alert).toHaveAttribute("role", "alert");
+  });
+
+  it("suppresses the execute-error footer line while the Execute dialog is open (ExecuteDialog shows it inline instead)", () => {
+    act(() => {
+      useAppStore.setState((s) => ({
+        execute: {
+          ...s.execute,
+          executeOpen: true,
+          executeError: "execute_already_running",
+        },
+      }));
+    });
+    renderWithProviders(<App />);
+    expect(screen.queryByTestId(MAIN_EXECUTE_ERROR)).not.toBeInTheDocument();
   });
 });
 

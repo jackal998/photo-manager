@@ -130,6 +130,60 @@ class TestThumbnailHappyPath:
 
 
 # ---------------------------------------------------------------------------
+# Source-mtime cache-key freshness (Correction #11)
+# ---------------------------------------------------------------------------
+
+
+class TestSourceMtimeThreadedThroughSharedStat:
+    """Correction #11's binding fix: ETag/cache-key freshness must derive
+    from the SOURCE file's mtime, not the disk-cache file's own mtime alone
+    (which never changes on an in-place source overwrite that reuses the
+    same path+size). The route stats the source once and must pass the
+    IDENTICAL value to both svc.get_image_bytes and svc.image_disk_cache_path
+    — a second independent stat would defeat the "at most one extra os.stat
+    per request" perf note and risks a torn read if the file changes between
+    the two calls.
+    """
+
+    def test_get_image_bytes_and_disk_cache_path_receive_the_same_source_mtime(
+        self, client, tmp_image, mock_svc
+    ):
+        client.get("/api/image", params={"path": str(tmp_image), "size": 256})
+
+        # get_image_bytes(path, size, quality, source_mtime_ns) — 4th positional.
+        bytes_call_mtime = mock_svc.get_image_bytes.call_args.args[3]
+        # image_disk_cache_path(path, size, source_mtime_ns) — 3rd positional.
+        path_call_mtime = mock_svc.image_disk_cache_path.call_args.args[2]
+
+        assert bytes_call_mtime == path_call_mtime
+        assert bytes_call_mtime == tmp_image.stat().st_mtime_ns
+
+    def test_source_mtime_changes_when_source_file_is_overwritten(
+        self, client, tmp_image, mock_svc
+    ):
+        """The mtime the route derives must actually track the source file
+        — pinning the mechanism the freshness fix depends on."""
+        import os
+        import time
+
+        client.get("/api/image", params={"path": str(tmp_image), "size": 256})
+        first_mtime = mock_svc.get_image_bytes.call_args.args[3]
+
+        time.sleep(0.01)
+        tmp_image.write_bytes(FAKE_JPEG + b"-edited")
+        os.utime(tmp_image, ns=(time.time_ns(), time.time_ns()))
+
+        client.get("/api/image", params={"path": str(tmp_image), "size": 256})
+        second_mtime = mock_svc.get_image_bytes.call_args.args[3]
+
+        assert second_mtime != first_mtime, (
+            "overwriting the source file in place must change the "
+            "source_mtime_ns the route derives — this is what makes the "
+            "downstream cache key/ETag freshness-bearing"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Full-res (size=0): 200 + no stale-while-revalidate
 # ---------------------------------------------------------------------------
 

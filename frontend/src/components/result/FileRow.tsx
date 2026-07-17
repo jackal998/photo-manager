@@ -2,6 +2,7 @@
 
 import type { MouseEvent } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/useT";
 import {
   similarityLabel,
   formatBytes,
@@ -50,7 +51,8 @@ interface FileRowProps {
 }
 
 export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected }: FileRowProps) {
-  const simLabel = similarityLabel(row.similarity);
+  const t = useT();
+  const simLabel = similarityLabel(row.similarity, t);
   // Passenger rows get a subtle amber highlight on the similarity badge.
   const isPassenger = row.similarity.kind === "passenger";
 
@@ -109,7 +111,7 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
         <div className="flex items-center gap-1 flex-wrap">
           {row.is_ref_winner && (
             <span className="inline-block text-xs font-semibold bg-blue-100 text-blue-700 rounded px-1 py-0.5 leading-none">
-              Ref
+              {t("web.format.similarity_ref", "Ref")}
             </span>
           )}
           <span className="font-semibold text-sm truncate">{row.basename}</span>

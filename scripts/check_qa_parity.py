@@ -69,14 +69,39 @@ def _parse_yaml_fallback() -> list[str]:
 
 # Phase targets: number of scenarios expected to have status != "todo"
 # (i.e. actively ported or marked skip).  Phase 1 ships the scaffold
-# only — all 67 entries are "todo", so the target is 0.
+# only — all entries are "todo", so the target is 0.
+#
+# Phases 0-3 are fixed milestones (small subsets of the total). Phase 4
+# ("complete") is deliberately NOT a fixed number here — see
+# _phase4_target(). A hard-coded PHASE_TARGETS[4] would silently stop
+# tracking the real total the moment a new scenario is added to
+# ALL_SCENARIOS (Correction #14): the total would grow but the frozen
+# target would not, so a newly added `todo` scenario could pass the
+# phase-4 gate unported.
 PHASE_TARGETS: dict[int, int] = {
     0: 0,   # pre-scaffold
     1: 0,   # scaffold only — all todo
     2: 10,  # Phase 2 milestone: 10 scenarios ported
     3: 35,  # Phase 3 milestone: 35 scenarios ported
-    4: 67,  # Phase 4 complete: all scenarios ported
 }
+
+
+def _phase4_target(source_count: int) -> int:
+    """Phase-4 target: every scenario must be non-"todo" (ported or
+    permanently marked skip) — i.e. zero todo entries remain.
+
+    Runtime-derived from the current total instead of a frozen constant, so
+    adding a new scenario to ALL_SCENARIOS without porting or skipping it
+    fails this gate instead of silently passing (Correction #14).
+
+    NOTE: no separate "documented skip count" is subtracted here.
+    ``_count_ported`` below already treats status "skip" as non-todo (it
+    counts anything != "todo"), so permanently-skipped scenarios are already
+    included in ``ported`` — subtracting a skip count from the target would
+    double-count them and create N slots of slack (one new unported
+    scenario per skip entry could slip through before the gate ever fires).
+    """
+    return source_count
 
 
 def _count_ported(scenario_map_names: list[str]) -> int:
@@ -151,14 +176,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- phase target check -------------------------------------------------
     if args.phase is not None:
-        if args.phase not in PHASE_TARGETS:
+        valid_phases = sorted(set(PHASE_TARGETS) | {4})
+        if args.phase not in valid_phases:
             print(
-                f"FAIL: unknown phase {args.phase}; valid values: {sorted(PHASE_TARGETS)}",
+                f"FAIL: unknown phase {args.phase}; valid values: {valid_phases}",
                 file=sys.stderr,
             )
             return 1
 
-        target = PHASE_TARGETS[args.phase]
+        target = (
+            _phase4_target(source_count)
+            if args.phase == 4
+            else PHASE_TARGETS[args.phase]
+        )
         ported = _count_ported(map_names)
         if ported < target:
             print(

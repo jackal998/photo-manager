@@ -13,7 +13,11 @@
 //   Cancel          → clear lockConflict, do nothing
 //
 // Body copy is context-sensitive:
-//   op === "execute"  → "About to DELETE N locked files"  (IMMEDIATE danger)
+//   op === "execute"  → "About to DELETE N locked files (Recycle Bin)"
+//                       (IMMEDIATE danger — deletion is via send2trash, not
+//                       permanent; #wording-audit corrected the earlier
+//                       "permanently DELETED" claim to match
+//                       DeleteConfirmDialog's accurate recycle-bin wording)
 //   op === "remove"   → "N locked files will be skipped or force-unlocked"
 //                       (DEFERRED — remove doesn't delete)
 //   op === "prune"    → "N locked singleton groups would be pruned" (#686 D6
@@ -37,6 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
+import { useT } from "@/i18n/useT";
 import {
   LOCK_CONFIRM_BTN_CANCEL,
   LOCK_CONFIRM_BTN_UNLOCK_APPLY,
@@ -52,6 +57,7 @@ export function LockConfirmDialog() {
   const resolvePruneLock = useAppStore((s) => s.resolvePruneLock);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
   const set = useAppStore.setState;
+  const t = useT();
 
   const isOpen = lockConflict !== null;
   const lockedPaths = lockConflict?.paths ?? [];
@@ -146,26 +152,73 @@ export function LockConfirmDialog() {
     clearConflict();
   }
 
+  // Singular/plural word forms chosen by count, translated separately rather
+  // than flattened to "(s)" — zh_TW has no plural marking, so its singular
+  // and plural keys carry the same Chinese word; en's keep correct grammar
+  // ("1 locked file is" vs "2 locked files are"), matching the pattern
+  // DeleteConfirmDialog already uses for fileWord (review finding: the
+  // flattened templates below previously rendered "1 locked file(s) are").
+  const fileWord =
+    n === 1
+      ? t("web.lock_confirm.file_singular", "file")
+      : t("web.lock_confirm.file_plural", "files");
+  const isWord =
+    n === 1
+      ? t("web.lock_confirm.is_singular", "is")
+      : t("web.lock_confirm.is_plural", "are");
+  const rowWord =
+    n === 1
+      ? t("web.lock_confirm.row_singular", "row")
+      : t("web.lock_confirm.row_plural", "rows");
+  const groupWord =
+    n === 1
+      ? t("web.lock_confirm.group_singular", "group")
+      : t("web.lock_confirm.group_plural", "groups");
+  const pronounWord =
+    n === 1
+      ? t("web.lock_confirm.pronoun_singular", "it")
+      : t("web.lock_confirm.pronoun_plural", "them");
+
   const title =
     op === "execute"
-      ? "Locked files in delete scope"
+      ? t("web.lock_confirm.title_execute", "Locked files in delete scope")
       : op === "remove"
-        ? "Locked files in remove scope"
+        ? t("web.lock_confirm.title_remove", "Locked files in remove scope")
         : op === "decision"
-          ? "Locked rows affected"
+          ? t("web.lock_confirm.title_decision", "Locked rows affected")
           : op === "apply-best-copy"
-            ? "Locked rows in this group"
-            : "Locked singleton groups";
+            ? t("web.lock_confirm.title_apply_best_copy", "Locked rows in this group")
+            : t("web.lock_confirm.title_prune", "Locked singleton groups");
   const description =
     op === "execute"
-      ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} about to be permanently DELETED. Unlock and proceed, or skip locked files only.`
+      ? t(
+          "web.lock_confirm.body_execute",
+          "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only.",
+          { n, fileWord, isWord }
+        )
       : op === "remove"
-        ? `${n} locked ${n === 1 ? "file" : "files"} ${n === 1 ? "is" : "are"} in the remove list. Unlock and remove, or remove unlocked files only.`
+        ? t(
+            "web.lock_confirm.body_remove",
+            "{n} locked {fileWord} {isWord} in the remove list. Unlock and remove, or remove unlocked files only.",
+            { n, fileWord, isWord }
+          )
         : op === "decision"
-          ? `Setting this decision would change ${originalPathsLen} row(s); ${n} ${n === 1 ? "is" : "are"} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.`
+          ? t(
+              "web.lock_confirm.body_decision",
+              "Setting this decision would change {originalPathsLen} row(s); {n} {isWord} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel.",
+              { originalPathsLen, n, isWord }
+            )
           : op === "apply-best-copy"
-            ? `Applying best-copy to this group would affect rows that include ${n} locked ${n === 1 ? "row" : "rows"}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.`
-            : `${n} locked singleton ${n === 1 ? "group" : "groups"} would be pruned. Unlock and prune ${n === 1 ? "it" : "them"}, or keep ${n === 1 ? "it" : "them"} in the list.`;
+            ? t(
+                "web.lock_confirm.body_apply_best_copy",
+                "Applying best-copy to this group would affect rows that include {n} locked {rowWord}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.",
+                { n, rowWord }
+              )
+            : t(
+                "web.lock_confirm.body_prune",
+                "{n} locked singleton {groupWord} would be pruned. Unlock and prune {pronoun}, or keep {pronoun} in the list.",
+                { n, groupWord, pronoun: pronounWord }
+              );
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleCancel()}>
@@ -189,14 +242,14 @@ export function LockConfirmDialog() {
             data-testid={LOCK_CONFIRM_BTN_CANCEL}
             onClick={handleCancel}
           >
-            Cancel
+            {t("web.lock_confirm.cancel", "Cancel")}
           </Button>
           <Button
             variant="outline"
             data-testid={LOCK_CONFIRM_BTN_UNLOCKED_ONLY}
             onClick={handleUnlockedOnly}
           >
-            Unlocked only
+            {t("web.lock_confirm.unlocked_only", "Unlocked only")}
           </Button>
           <Button
             // "decision" / "apply-best-copy" are not destructive — nothing is
@@ -208,7 +261,7 @@ export function LockConfirmDialog() {
             data-testid={LOCK_CONFIRM_BTN_UNLOCK_APPLY}
             onClick={handleUnlockApply}
           >
-            Unlock &amp; Apply
+            {t("web.lock_confirm.unlock_apply", "Unlock & Apply")}
           </Button>
         </DialogFooter>
       </DialogContent>

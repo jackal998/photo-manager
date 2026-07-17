@@ -19,6 +19,7 @@
 
 import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
+import { useT } from "@/i18n/useT";
 import { resolveInitialField } from "@/lib/actionDialogFields";
 import {
   CONTEXT_MENU,
@@ -82,6 +83,7 @@ export function ContextMenu({
   const revealInExplorer = useAppStore((s) => s.revealInExplorer);
   const openActionDialog = useAppStore((s) => s.openActionDialog);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
+  const t = useT();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -186,7 +188,7 @@ export function ContextMenu({
       className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
       onClick={handleSetActionByField}
     >
-      Set Action by Field…
+      {t("web.context_menu.set_action_by_field", "Set Action by Field…")}
     </button>
   );
 
@@ -197,7 +199,7 @@ export function ContextMenu({
       className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
       onClick={handleSetRemove}
     >
-      Remove from list
+      {t("web.context_menu.remove", "Remove from list")}
     </button>
   );
 
@@ -210,7 +212,7 @@ export function ContextMenu({
       className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
       onClick={handleApplyBestCopy}
     >
-      Apply best-copy decisions to this group
+      {t("web.context_menu.apply_best_copy", "Apply best-copy decisions to this group")}
     </button>
   );
 
@@ -249,7 +251,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleSetKeep}
       >
-        Keep (clear decision)
+        {t("web.context_menu.keep", "Keep (clear decision)")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_DELETE}
@@ -257,7 +259,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleSetDelete}
       >
-        Delete
+        {t("web.context_menu.delete", "Delete")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_REMOVE}
@@ -265,7 +267,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleSetRemove}
       >
-        Remove from list
+        {t("web.context_menu.remove", "Remove from list")}
       </button>
       <div className="my-1 border-t border-neutral-100" role="separator" />
       {isLocked ? (
@@ -275,7 +277,7 @@ export function ContextMenu({
           className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
           onClick={handleUnlock}
         >
-          Unlock
+          {t("web.context_menu.unlock", "Unlock")}
         </button>
       ) : (
         <button
@@ -284,7 +286,7 @@ export function ContextMenu({
           className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
           onClick={handleLock}
         >
-          Lock
+          {t("web.context_menu.lock", "Lock")}
         </button>
       )}
       <button
@@ -293,7 +295,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
         onClick={handleOpenFolder}
       >
-        Open folder
+        {t("web.context_menu.open_folder", "Open folder")}
       </button>
       {/* #735 — post-Open-Folder group, mirrors Qt's file-row menu
           (context_menu.py): separator -> Set Action by Field… -> Execute
@@ -311,7 +313,7 @@ export function ContextMenu({
           className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
           onClick={handleExecuteSelected}
         >
-          Execute Action (only selected)…
+          {t("web.context_menu.execute_selected", "Execute Action (only selected)…")}
         </button>
       )}
       <div className="my-1 border-t border-neutral-100" role="separator" />

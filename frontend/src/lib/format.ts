@@ -14,21 +14,29 @@ function assertNever(x: never): string {
 /**
  * Return a short human-readable label for a Similarity value.
  *
- * Rendering rules (English; i18n deferred to Phase 2D):
+ * Rendering rules:
  *   kind "percent"   → "92%"
- *   kind "ref"       → "Ref"
+ *   kind "ref"       → "Ref" (translatable — the one natural-language word here)
  *   kind "passenger" → "★ 92%"
  *   kind "near_dup"  → "~"
  *   kind "none"      → "—"
+ *
+ * Stays a pure function (no store import, no hooks — this module is used
+ * outside React too) by accepting an optional translate function; callers
+ * pass useT()'s `t`. Omitting it (existing tests, non-React callers) falls
+ * back to the English default, same as before.
  */
-export function similarityLabel(similarity: Similarity): string {
+export function similarityLabel(
+  similarity: Similarity,
+  t: (key: string, fallback: string) => string = (_key, fallback) => fallback
+): string {
   switch (similarity.kind) {
     case "percent":
       return similarity.percent !== null
         ? `${Math.round(similarity.percent)}%`
         : EM_DASH;
     case "ref":
-      return "Ref";
+      return t("web.format.similarity_ref", "Ref");
     case "passenger":
       return similarity.percent !== null
         ? `★ ${Math.round(similarity.percent)}%`

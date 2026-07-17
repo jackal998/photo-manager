@@ -36,7 +36,7 @@ import {
 // ---------------------------------------------------------------------------
 
 function seedLockConflict(
-  op: "execute" | "remove" | "decision" | "apply-best-copy",
+  op: "execute" | "remove" | "decision" | "apply-best-copy" | "prune",
   paths: string[] = ["/photos/a.jpg"],
   originalPaths: string[] | null = null,
   pendingDecision?: "" | "delete" | "ignore",
@@ -183,13 +183,16 @@ describe("LockConfirmDialog", () => {
     expect(executeDecisionsMock).not.toHaveBeenCalled();
   });
 
-  it("body mentions DELETE for execute op (IMMEDIATE danger copy)", () => {
+  it("body mentions DELETE for execute op (IMMEDIATE danger copy), correctly scoped to the Recycle Bin", () => {
     seedLockConflict("execute", ["/a.jpg"]);
     render(<LockConfirmDialog />);
-    // The description should call out DELETE for execute operations.
+    // The description should call out DELETE for execute operations, but
+    // must NOT claim deletion is permanent — actual semantics are
+    // send2trash to the OS Recycle Bin (matches DeleteConfirmDialog).
     expect(
-      screen.getByText(/permanently DELETED/i)
+      screen.getByText(/about to be deleted \(sent to the Recycle Bin\)/i)
     ).toBeInTheDocument();
+    expect(screen.queryByText(/permanently/i)).not.toBeInTheDocument();
   });
 
   it("body mentions remove (DEFERRED copy) for remove op", () => {
@@ -197,6 +200,61 @@ describe("LockConfirmDialog", () => {
     render(<LockConfirmDialog />);
     expect(
       screen.getByText(/remove list/i)
+    ).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Singular/plural grammar (review finding on the web-audit-remediation
+  // branch: the i18n pass had flattened "file(s)"/"row(s)"/"group(s)" into
+  // fixed templates, so n=1 read "1 locked file(s) are about to be deleted").
+  // ---------------------------------------------------------------------------
+
+  it("uses singular grammar for n=1 (execute op): '1 locked file is about to be deleted'", () => {
+    seedLockConflict("execute", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText(/^1 locked file is about to be deleted/)
+    ).toBeInTheDocument();
+  });
+
+  it("uses plural grammar for n>1 (execute op): '2 locked files are about to be deleted'", () => {
+    seedLockConflict("execute", ["/a.jpg", "/b.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText(/^2 locked files are about to be deleted/)
+    ).toBeInTheDocument();
+  });
+
+  it("uses singular grammar for n=1 (apply-best-copy op): '1 locked row'", () => {
+    seedLockConflict("apply-best-copy", ["/a.jpg"], null, undefined, 1);
+    render(<LockConfirmDialog />);
+    expect(screen.getByText(/1 locked row\./)).toBeInTheDocument();
+    expect(screen.queryByText(/1 locked rows\./)).not.toBeInTheDocument();
+  });
+
+  it("uses plural grammar for n>1 (apply-best-copy op): '2 locked rows'", () => {
+    seedLockConflict("apply-best-copy", ["/a.jpg", "/b.jpg"], null, undefined, 1);
+    render(<LockConfirmDialog />);
+    expect(screen.getByText(/2 locked rows\./)).toBeInTheDocument();
+  });
+
+  it("uses singular grammar + 'it' pronoun for n=1 (prune op)", () => {
+    seedLockConflict("prune", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText(
+        "1 locked singleton group would be pruned. Unlock and prune it, or keep it in the list."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("uses plural grammar + 'them' pronoun for n>1 (prune op)", () => {
+    seedLockConflict("prune", ["/a.jpg", "/b.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText(
+        "2 locked singleton groups would be pruned. Unlock and prune them, or keep them in the list."
+      )
     ).toBeInTheDocument();
   });
 
