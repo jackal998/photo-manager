@@ -6,49 +6,95 @@ name: web-eval-gates
 # siblings; the Qt-arm A/B and the real-ProRAW OOM-bound check are dev-rig
 # checkpoints (Qt platform libs / RAW codecs absent here) and auto-skip. The
 # flip of every job here from advisory to blocking is the Phase 4 cutover.
-#   PATH-SCOPING TODO (#622 follow-up): this workflow-level `paths:` filter
-#   is safe ONLY while every job here stays advisory (continue-on-error:
-#   true). A `paths:` filter makes GitHub Actions skip the whole workflow
-#   run (no status posted) for non-matching PRs; if a job is later marked
-#   REQUIRED at Phase 4 cutover, a skipped-but-required check gets stuck
-#   pending forever instead of going green. Before flipping any job here to
-#   required, replace this workflow-level `paths:` filter with the same
-#   job-always-runs + step-level `if:` diff-filter pattern used in
-#   tests.yml (see its "Determine changed-file scope" step) so the job
-#   still reports a fast green on non-matching PRs instead of being skipped.
+#   PATH-SCOPING (#773, DONE): every job below always runs (no workflow-level
+#   path filter); the detect-web-changes job computes the diff scope once and
+#   every other job consumes it via `needs:` + step-level `if:` — the same
+#   job-always-runs + step-level-`if` diff-filter pattern tests.yml uses in
+#   its "Determine changed-file scope" step. This is what lets a later
+#   REQUIRED flip avoid a skipped-but-required check stuck pending forever on
+#   non-web PRs. Removing continue-on-error / setting WEB_PORT_PHASE per the
+#   cutover sequence remains a SEPARATE step (#773 step 3, not done here),
+#   sized by the advisory-run flake history.
 on:
   pull_request:
-    paths:
-      - 'frontend/**'
-      - 'app/web/**'
-      - 'qa/web/**'
-      - 'tests/test_web_dom_probes.py'
-      - 'tests/conftest.py'
-      - 'scripts/check_qa_parity.py'
-      - 'scripts/bench_web_port.py'
-      - 'scripts/bench_thumbnail_latency.py'
-      - 'scripts/make_qa_large_source.py'
-      - 'core/app_service/**'
-      - 'infrastructure/image_service.py'
-      - '.github/workflows/web-eval-gates.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  detect-web-changes:
+    # Computes once whether this PR's diff touches any web-eval-relevant path;
+    # every job below consumes the boolean via `needs:` + step-level `if:`
+    # instead of a workflow-level path filter (see PATH-SCOPING note above).
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      # fetch-depth: 0 so the diff step below can compare against origin/<base>.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Fail-OPEN by construction: on a non-PR event, or an empty/unparseable
+      # diff, web defaults to true (run everything). This is a positive
+      # allowlist match — it mirrors the removed workflow-level trigger,
+      # which only fired on these exact globs — unlike tests.yml's
+      # denylist-to-skip filter: ANY changed file matching one of these globs
+      # sets web=true; no match means none of the moved globs changed, so
+      # web stays false and downstream jobs report a fast green.
+      - name: Determine changed-file scope
+        id: filter
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+            echo "Non-PR event (${{ github.event_name }}) — always run full web-eval suite."
+            exit 0
+          fi
+          BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          CHANGED=$(git diff --name-only "$BASE_REF...HEAD" 2>/dev/null || true)
+          if [ -z "$CHANGED" ]; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+            echo "No resolvable diff against $BASE_REF (empty or unparseable) — fail-open, running full web-eval suite."
+            exit 0
+          fi
+          echo "Changed files:"
+          echo "$CHANGED"
+          WEB="false"
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              frontend/*|app/web/*|qa/web/*|tests/test_web_dom_probes.py|tests/conftest.py|scripts/check_qa_parity.py|scripts/bench_web_port.py|scripts/bench_thumbnail_latency.py|scripts/make_qa_large_source.py|core/app_service/*|infrastructure/image_service.py|.github/workflows/web-eval-gates.yml)
+                WEB="true" ;;
+            esac
+          done <<< "$CHANGED"
+          echo "web=$WEB" >> "$GITHUB_OUTPUT"
+          echo "Resolved web=$WEB"
+
   qa-parity-counter:
+    needs: detect-web-changes
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
       WEB_PORT_PHASE: ${{ vars.WEB_PORT_PHASE || '0' }}
     steps:
       - uses: actions/checkout@v4
+        if: needs.detect-web-changes.outputs.web == 'true'
+
+      - name: Skipped — diff does not touch web-eval paths
+        if: needs.detect-web-changes.outputs.web != 'true'
+        run: echo "Diff does not touch web-eval-gates paths — skipping qa-parity-counter for this PR."
+
       - uses: actions/setup-python@v5
+        if: needs.detect-web-changes.outputs.web == 'true'
         with:
           python-version: "3.11"
       - run: pip install pyyaml
+        if: needs.detect-web-changes.outputs.web == 'true'
       - name: QA parity counter
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: python scripts/check_qa_parity.py --phase ${{ env.WEB_PORT_PHASE }}
         # Non-blocking until Phase 4: continue-on-error: true
         # At Phase 4 cutover: remove continue-on-error
@@ -59,6 +105,7 @@ jobs:
     # Playwright DOM probe (tests/test_web_dom_probes.py -m web_probe).
     # Failures surface in the job log and PR checks but do NOT block merge
     # during Phases 1–3 (continue-on-error: true).
+    needs: detect-web-changes
     runs-on: ubuntu-latest
     timeout-minutes: 12
     continue-on-error: true
@@ -67,24 +114,33 @@ jobs:
       PHOTO_MANAGER_RUN_WEB_PROBE: "1"
     steps:
       - uses: actions/checkout@v4
+        if: needs.detect-web-changes.outputs.web == 'true'
+
+      - name: Skipped — diff does not touch web-eval paths
+        if: needs.detect-web-changes.outputs.web != 'true'
+        run: echo "Diff does not touch web-eval-gates paths — skipping web-dom-probe for this PR."
 
       # Build the frontend — produces frontend/dist that the SPA mount serves.
       - uses: actions/setup-node@v4
+        if: needs.detect-web-changes.outputs.web == 'true'
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
+        if: needs.detect-web-changes.outputs.web == 'true'
         working-directory: frontend
         run: npm ci
 
       - name: Build frontend
+        if: needs.detect-web-changes.outputs.web == 'true'
         working-directory: frontend
         run: npm run build
 
       # Install Python project dependencies (same as tests.yml).
       - uses: actions/setup-python@v5
+        if: needs.detect-web-changes.outputs.web == 'true'
         with:
           python-version: "3.11"
           cache: pip
@@ -93,6 +149,7 @@ jobs:
             dev-requirements.txt
 
       - name: Install Python dependencies
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -100,6 +157,7 @@ jobs:
 
       # Install Playwright and the Chromium browser.
       - name: Install Playwright + Chromium
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: |
           pip install playwright
           python -m playwright install --with-deps chromium
@@ -108,6 +166,7 @@ jobs:
       # --no-cov: this partial run must not write a misleading coverage.json
       # (the per-file floor is enforced by the full pytest run in tests.yml).
       - name: Run web DOM probe
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: python -m pytest tests/test_web_dom_probes.py -m web_probe -v --no-cov
 
   web-scenario-batch:
@@ -117,29 +176,39 @@ jobs:
     # degrade to SKIP so the job always finishes cleanly.
     # Failures surface in the job log and PR checks but do NOT block merge
     # during Phases 1–3 (continue-on-error: true).
+    needs: detect-web-changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        if: needs.detect-web-changes.outputs.web == 'true'
+
+      - name: Skipped — diff does not touch web-eval paths
+        if: needs.detect-web-changes.outputs.web != 'true'
+        run: echo "Diff does not touch web-eval-gates paths — skipping web-scenario-batch for this PR."
 
       # Build the frontend — produces frontend/dist that the SPA mount serves.
       - uses: actions/setup-node@v4
+        if: needs.detect-web-changes.outputs.web == 'true'
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
+        if: needs.detect-web-changes.outputs.web == 'true'
         working-directory: frontend
         run: npm ci
 
       - name: Build frontend
+        if: needs.detect-web-changes.outputs.web == 'true'
         working-directory: frontend
         run: npm run build
 
       # Install Python project dependencies (same as tests.yml).
       - uses: actions/setup-python@v5
+        if: needs.detect-web-changes.outputs.web == 'true'
         with:
           python-version: "3.11"
           cache: pip
@@ -148,6 +217,7 @@ jobs:
             dev-requirements.txt
 
       - name: Install Python dependencies
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -155,16 +225,19 @@ jobs:
 
       # Install Playwright and the Chromium browser.
       - name: Install Playwright + Chromium
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: |
           pip install playwright
           python -m playwright install --with-deps chromium
 
       # Build the qa/sandbox/ fixture tree (idempotent).
       - name: Build QA sandbox fixtures
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: python scripts/make_qa_sandbox.py
 
       # Start the FastAPI server in the background and wait for /api/health.
       - name: Start server
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: |
           python -m app.web.main &
           SERVER_PID=$!
@@ -182,6 +255,7 @@ jobs:
 
       # Run all web scenarios (status:done entries run; todo/skip degrade to SKIP).
       - name: Run web scenario batch
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: python -m qa.web._batch --base-url http://127.0.0.1:8765
 
   bench-sanity:
@@ -197,19 +271,27 @@ jobs:
     # No frontend build / Playwright needed (the latency check uses an in-process
     # TestClient). Non-blocking during Phases 1-3 (continue-on-error: true); the
     # flip to blocking is the Phase 4 cutover.
+    needs: detect-web-changes
     runs-on: ubuntu-latest
     timeout-minutes: 8
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        if: needs.detect-web-changes.outputs.web == 'true'
+
+      - name: Skipped — diff does not touch web-eval paths
+        if: needs.detect-web-changes.outputs.web != 'true'
+        run: echo "Diff does not touch web-eval-gates paths — skipping bench-sanity for this PR."
 
       - uses: actions/setup-python@v5
+        if: needs.detect-web-changes.outputs.web == 'true'
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements.txt
 
       - name: Install Python dependencies
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -222,11 +304,13 @@ jobs:
       # boundary qa-batch.yml installs via choco on Windows).
       # ffmpeg is added for the V2 transcode integration test (advisory).
       - name: Install exiftool and ffmpeg
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl ffmpeg
 
       # V2 transcode: verify a real HEVC→H.264 transcode produces valid output.
       # Advisory (continue-on-error on the parent job) — runs after sandbox build.
       - name: Run transcode integration test
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: >
           python -m pytest
           tests/integration/test_transcode_integration.py
@@ -234,10 +318,12 @@ jobs:
 
       # Build the qa/sandbox/ fixture tree (idempotent) — the bench sources.
       - name: Build QA sandbox fixtures
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: python scripts/make_qa_sandbox.py
 
       # T6 / Phase-0 gate (b): the web-arm scan must emit files_per_s > 0.
       - name: Scan-throughput bench (web arm liveness)
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: >
           python scripts/bench_web_port.py
           --backend web --pairs 1 --limit 50
@@ -246,4 +332,5 @@ jobs:
       # T4: 40 MiB full-res cap -> 413 + warm size=thumb p95. The OOM-bound
       # sub-check skips (no local RAW fixtures in CI).
       - name: Thumbnail-latency + full-res cap bench
+        if: needs.detect-web-changes.outputs.web == 'true'
         run: python scripts/bench_thumbnail_latency.py --mode all
