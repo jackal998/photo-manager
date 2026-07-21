@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 from scanner.dedup import HashResult
-from scanner.exif import parse_exif_date
+from scanner.exif import extract_pil_scoring_signals, parse_exif_date
 
 if TYPE_CHECKING:
     from scanner.walker import FileRecord
@@ -101,7 +101,11 @@ except ImportError:
 # cache-keying token; the value is opaque, only equality matters.
 # "2" (#569) — added Image.draft JPEG shrink-on-load before convert(); the
 # decode resolution (and so the phash bits, marginally) changed.
-HASH_RECIPE_VERSION = "2"
+# "3" (#786) — JPEG hash-stage now also extracts scoring signals
+# (exif_date/exif_tag_count/gps_present/xmp_derived) from the already-open
+# PIL image, added as an 8th return element; per-file JPEG cost shifts
+# (adds EXIF/XMP parsing, removes the exiftool round-trip downstream).
+HASH_RECIPE_VERSION = "3"
 
 
 def compute_sha256(path: Path) -> str:
@@ -115,24 +119,30 @@ def compute_sha256(path: Path) -> str:
 
 def _hashes_from_data(
     path: Path, file_type: str, data: bytes
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
-    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h)``
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict]]:
+    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals)``
     from bytes that have already been read off disk.
 
     This is the single implementation used by both :func:`compute_hashes`
     (which reads the bytes) and :func:`compute_from_bytes` (which receives
     them from the bounded read→compute queue).  Only call for non-video/gif/skip
     types; callers must stream video SHA separately via :func:`compute_sha256`.
+
+    ``inmemory_signals`` (#786) is the scoring-signal dict from
+    :func:`scanner.exif.extract_pil_scoring_signals` for formats in
+    :data:`_INMEMORY_EXIF_TYPES`, else ``None`` — those formats route
+    entirely around the exiftool queue in ``scan_runner._route_outcome``.
     """
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
-        return sha, None, None, None, None, None, None
+        return sha, None, None, None, None, None, None, None
 
     img: Optional[Image.Image] = None
     raw_date: Optional[str] = None
     px_w: Optional[int] = None
     px_h: Optional[int] = None
+    inmemory_signals: Optional[dict] = None
 
     if file_type == "raw":
         img = _load_raw_preview_from_bytes(data)
@@ -161,6 +171,10 @@ def _hashes_from_data(
             with Image.open(io.BytesIO(data)) as pil_img:
                 # Extract date BEFORE convert() — that creates a new image without EXIF.
                 raw_date = _raw_exif_date(pil_img)
+                # #786 — same constraint: the fuller scoring-signal pass
+                # must also run before convert() destroys EXIF/XMP.
+                if file_type in _INMEMORY_EXIF_TYPES:
+                    inmemory_signals = extract_pil_scoring_signals(pil_img)
                 # True dimensions — read BEFORE draft() mutates the reported size.
                 px_w, px_h = pil_img.size
                 # #569 — libjpeg DCT shrink-on-load: decode JPEG/MPO directly at
@@ -177,7 +191,7 @@ def _hashes_from_data(
             img = None
 
     if img is None:
-        return sha, None, None, None, raw_date, None, None
+        return sha, None, None, None, raw_date, None, None, inmemory_signals
     try:
         tiny = img.resize((1, 1), Image.LANCZOS)
         mc = tiny.getpixel((0, 0))[:3]
@@ -189,19 +203,20 @@ def _hashes_from_data(
             raw_date,
             px_w,
             px_h,
+            inmemory_signals,
         )
     except (ValueError, TypeError):
         # #470 — preserve px_w / px_h measured before the phash compute attempt.
         # Wiping them to None would force scoring._score_resolution to 0.0 even
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
-        return sha, None, None, None, raw_date, px_w, px_h
+        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals
 
 
 def compute_hashes(
     path: Path, file_type: str
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
-    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height)``.
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict]]:
+    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals)``.
 
     All values are derived from one in-memory read — no extra file open.
     ``dhash`` is a second, independent perceptual hash (gradient/brightness
@@ -212,10 +227,13 @@ def compute_hashes(
     dimensions are read from ``raw.sizes`` via rawpy (not the embedded thumbnail).
     ``mean_color`` is the average RGB via a 1×1 LANCZOS downscale.
     ``raw_date_str`` is ``None`` for RAW/video; callers pass those to exiftool.
+    ``inmemory_signals`` (#786) is non-``None`` only for formats in
+    :data:`_INMEMORY_EXIF_TYPES` (JPEG) — the scoring-signal dict that lets
+    the scan pipeline skip the exiftool queue for those files entirely.
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
     """
     if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None, None, None, None
+        return compute_sha256(path), None, None, None, None, None, None, None
 
     # Single read: delegate all hash computation to _hashes_from_data.
     return _hashes_from_data(path, file_type, path.read_bytes())
@@ -230,6 +248,15 @@ def compute_hashes(
 #     non-camera-RAW TIFFs (Photoshop / scanner output) — flagging
 #     those as corrupt drops real user files from the manifest (#75).
 _IMAGE_TYPES = frozenset(("jpeg", "heic", "png", "webp"))
+
+# #786 — formats whose scoring signals (exif_date/exif_tag_count/gps_present/
+# xmp_derived) come from this in-memory PIL pass instead of exiftool.
+# scan_runner._route_outcome checks HashResult.inmemory_signals (populated
+# only for these types) to skip the exif_queue entirely for them. HEIC stays
+# on exiftool: pillow-heif exposes no "xmp" info key for any real fixture in
+# this repo's corpus (unlike the JPEG plugin), so xmp_derived parity can't be
+# verified against real data — see the #786 PR discussion.
+_INMEMORY_EXIF_TYPES = frozenset(("jpeg",))
 
 
 @dataclass
@@ -272,8 +299,8 @@ def run_hash_for_record(
     use) or a ``ProcessPoolExecutor`` (planned, see follow-up to #486).
     """
     try:
-        sha256, phash, dhash, mean_color, raw_date, px_w, px_h = compute_hashes(
-            record.path, record.file_type
+        sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals = (
+            compute_hashes(record.path, record.file_type)
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # One bad file must never abort the whole scan — caller logs + skips.
@@ -296,6 +323,7 @@ def run_hash_for_record(
         exif_date=pil_date,
         pixel_width=px_w,
         pixel_height=px_h,
+        inmemory_signals=inmemory_signals,
     )
 
 
@@ -348,9 +376,9 @@ def compute_from_bytes(
         if data is None:
             # video/gif/skip: stream SHA from path, no perceptual hashes.
             sha256 = compute_sha256(record.path)
-            phash = dhash = mean_color = raw_date = px_w = px_h = None
+            phash = dhash = mean_color = raw_date = px_w = px_h = inmemory_signals = None
         else:
-            sha256, phash, dhash, mean_color, raw_date, px_w, px_h = (
+            sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals = (
                 _hashes_from_data(record.path, record.file_type, data)
             )
     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -371,6 +399,7 @@ def compute_from_bytes(
         exif_date=pil_date,
         pixel_width=px_w,
         pixel_height=px_h,
+        inmemory_signals=inmemory_signals,
     )
 
 

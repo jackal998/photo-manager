@@ -68,21 +68,33 @@ class HashResult:
     mean_color: Optional[str] = None   # "R,G,B" average pixel; None for video/RAW/failure
     pixel_width: Optional[int] = None  # image width in pixels; None for video/failure
     pixel_height: Optional[int] = None # image height in pixels; None for video/failure
+    # #786 — exif_tag_count/gps_present/xmp_derived/exif_date_tag from the
+    # in-memory PIL pass (scanner.exif.extract_pil_scoring_signals), for
+    # formats in hasher._INMEMORY_EXIF_TYPES only. None for every other
+    # format — those still get their scoring signals from exiftool.
+    inmemory_signals: Optional[dict] = None
 
     def to_media_extract(self) -> "MediaExtract":  # noqa: F821 — runtime import
-        """Convert this HashResult into a partial MediaExtract (#187 — PR 2).
+        """Convert this HashResult into a MediaExtract (#187 — PR 2).
 
-        Used by the scan pipeline to feed the merge step alongside the
-        exiftool partial. The ``extracted_by`` set is populated per the
-        tool(s) that actually contributed data:
+        Used directly by ``core/app_service/scan_runner.py``'s
+        ``_route_outcome`` for formats whose scoring signals come from the
+        in-memory hash pass instead of exiftool (JPEG, #786): when
+        ``self.inmemory_signals`` is set, the returned extract is layered
+        with ``exif_date`` / ``exif_date_tag`` / ``exif_tag_count`` /
+        ``gps_present`` / ``xmp_derived`` from it and written straight into
+        the pipeline's ``extracts`` dict — no exiftool call for this file
+        at all. The ``extracted_by`` set is populated per the tool(s) that
+        actually contributed data:
 
         * ``"hasher"`` — always (sha256 always present).
         * ``"pil"`` — when phash was computed (i.e. PIL opened the bytes).
           For RAW files this means PIL opened the rawpy-extracted
           thumbnail.
         * ``"rawpy"`` — added for RAW files when sensor dimensions were
-          read; ``merge_extracts`` uses this to prefer rawpy's sensor
-          dims over PIL's thumbnail dims.
+          read (the sensor dims, not PIL's embedded-thumbnail dims).
+        * ``"pil_exif_inmemory"`` — added when ``inmemory_signals`` was
+          available (#786).
         """
         from scanner.media_extract import MediaExtract
 
@@ -95,6 +107,19 @@ class HashResult:
         ):
             extracted.add("rawpy")
 
+        exif_date = self.exif_date
+        exif_date_tag = None  # PIL doesn't surface which tag produced the date.
+        exif_tag_count = None
+        gps_present = None
+        xmp_derived = None
+        if self.inmemory_signals is not None:
+            extracted.add("pil_exif_inmemory")
+            exif_date = self.inmemory_signals["exif_date"]
+            exif_date_tag = self.inmemory_signals["exif_date_tag"]
+            exif_tag_count = self.inmemory_signals["exif_tag_count"]
+            gps_present = self.inmemory_signals["gps_present"]
+            xmp_derived = self.inmemory_signals["xmp_derived"]
+
         return MediaExtract(
             path=self.record.path,
             file_type=self.record.file_type,
@@ -103,9 +128,11 @@ class HashResult:
             mean_color=self.mean_color,
             pixel_width=self.pixel_width,
             pixel_height=self.pixel_height,
-            exif_date=self.exif_date,
-            # exif_date_tag intentionally None — PIL doesn't surface which
-            # tag produced the date. The exiftool partial will fill it.
+            exif_date=exif_date,
+            exif_date_tag=exif_date_tag,
+            exif_tag_count=exif_tag_count,
+            gps_present=gps_present,
+            xmp_derived=xmp_derived,
             extracted_by=extracted,
         )
 

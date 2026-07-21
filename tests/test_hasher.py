@@ -281,7 +281,7 @@ class TestComputeHashes:
             # (not the dropped rawpy.open_buffer); the path fallback also uses imread.
             mock_rawpy.imread.side_effect = unsupported
 
-            sha, ph, dh, ch, dt, w, h = compute_hashes(f, "raw")  # +dhash at index 2
+            sha, ph, dh, ch, dt, w, h, _ = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None
@@ -341,7 +341,7 @@ class TestRealDecodeFailures:
         # path fallback — the #75 non-camera-TIFF class, routed to "raw".
         f.write_bytes(b"II*\x00" + b"\x00" * 256)
 
-        sha, ph, dh, ch, dt, w, h = compute_hashes(f, "raw")
+        sha, ph, dh, ch, dt, w, h, _ = compute_hashes(f, "raw")  # #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None and dh is None and ch is None

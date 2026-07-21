@@ -701,6 +701,15 @@ def run_pipeline(
         implementation.  #564 — the exif_queue put is cancel-safe via a
         cooperative bounded-put loop.  #594 — also watches cancel_token
         so a dialog-close can't wedge the parent drain thread here.
+
+        #786 — formats with in-memory scoring signals (``HashResult.
+        inmemory_signals`` set, currently JPEG only) skip the exiftool
+        queue entirely: their MediaExtract is written straight into
+        ``extracts`` here instead. This runs in the single thread that
+        drains ``out_q`` (same as the ``skipped.append`` above), so the
+        plain dict write needs no lock — mirrors ``_flush_exif_batch``'s
+        writes to the same dict from the exif consumer thread(s); the two
+        never touch the same key (disjoint file sets).
         """
         if isinstance(outcome, HashFailure):
             skipped.append((record.path, outcome.exc_type, outcome.exc_msg))
@@ -708,6 +717,9 @@ def run_pipeline(
         if outcome is None:
             return None
         if record.file_type != "skip":
+            if getattr(outcome, "inmemory_signals", None) is not None:
+                extracts[record.path] = outcome.to_media_extract()
+                return outcome
             # #564 — cooperative bounded put.
             # #594 — ALSO break on cancel_token so a dialog-close unblocks
             # the parent before the teardown branch can reach it.
@@ -1124,7 +1136,9 @@ def run_pipeline(
     if exiftool_missing[0]:
         bus.log(
             "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
-            " and scoring signals (GPS, EXIF census, XMP provenance) unavailable.\n"
+            " and scoring signals (GPS, EXIF census, XMP provenance) unavailable"
+            " for those formats. (JPEG scoring signals are extracted in-memory"
+            " and are unaffected — #786.)\n"
             "Install from https://exiftool.org/ and add to PATH."
         )
     elif et_records:
