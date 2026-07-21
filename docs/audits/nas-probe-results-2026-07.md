@@ -98,6 +98,38 @@ Anomaly logged: one 98 MB HEVC source transcoded to a 415 MB h264 output
 (≈4× inflation) — bitrate ceiling on the transcode profile may be worth
 a look if disk-cache growth ever matters (observation only).
 
+## Cross-validation run — 2026-07-21, second tree (owner-requested)
+
+Full re-run on `\\LinXiaoYun\home\Photos\MobileBackup\iPhone\2024` — same
+NAS box, different share (`home` vs `J`), very different composition:
+2,988 files / 12 dirs / 81.3 GB, HEIC-dominant (1,563) + 541 MOV +
+422 DNG, p50 2.4 MB but mean 27 MB (video-skewed). JSONs:
+`ladder-iphone2024.json`, `exif-iphone2024.json`, `hevc-iphone2024.json`.
+
+- **H1 REPLICATED + absolute-rate discrepancy RESOLVED.** MB/s saturates
+  at c=4-8 again (137→149 MB/s peak, plateau ~127-133 above; p50 latency
+  98ms→6.9s climbing c=1→64). The 149 MB/s ceiling matches the 2026-06-06
+  audit's 137 MB/s link rate — proving the first run's 78.9 MB/s peak on
+  `J:/圖片` was FILE-COMPOSITION drag (small files pay per-op round-trip
+  tax per byte), not NAS slowdown or contention. Conclusion unchanged and
+  now二-share confirmed: real workloads are bandwidth-bound by c≈4-8;
+  only genuinely small-file-heavy sets have a deeper knee (≈16).
+- **H2 REPLICATED**: cold walk 4.2 s / 2,988 entries (710/s) ≈ <1 % of
+  this tree's full-scan time → parallel enumeration stays do-not-build.
+- **H3 COMPLETED INTO A CURVE**: B/A here = **0.24** (phase A whole-file
+  reads 249 s @146 MB/s dominate; exiftool pass 60.5 s). Three-point
+  picture: 40KB corpus **7.98×** → ~3MB photos **1.93×** → 27MB-mean
+  video/DNG tree **0.24×**. The exiftool second-read tax is inversely
+  proportional to file size: the in-memory-EXIF candidate pays off on
+  small-file-heavy libraries and is negligible for video-heavy ones.
+- **#737 STEEPER THAN FIRST SAMPLE**: cold TTFB 3.2MB→0.65s,
+  59.7MB→12.8s, 137MB→24.3s, 220MB→41.6s, 334MB→**46.1s** (warm all
+  <30 ms). The `圖片` sample's 231MB→16.9s vs this tree's 220MB→41.6s
+  shows transcode cost follows DURATION×resolution, not bytes — long
+  clips stall the first view for 40+ s. This strengthens the case that
+  the gate decision should assume worst-case ~45-60 s first views on
+  real libraries, cache notwithstanding.
+
 ## Session deviations (contingency defaults applied, none required a question)
 
 - First HEVC sample all resolved under `J:/圖片/$RECYCLE.BIN/…` —
