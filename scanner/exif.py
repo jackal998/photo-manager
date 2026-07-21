@@ -7,10 +7,14 @@ import queue
 import subprocess
 import sys
 import threading
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 # #465 — default timeout for individual stdout-line reads inside
@@ -484,6 +488,150 @@ _XMP_DERIVED_TAGS: tuple[str, ...] = (
     "XMP:DerivedFrom",
     "XMP-xmpMM:DerivedFrom",   # in case caller uses -G1 / -G:1 in the future
 )
+
+
+# ── In-memory JPEG extraction (#786) ───────────────────────────────────────
+#
+# Ports the scoring signals above to an already-open PIL Image (the
+# hasher's hash-stage decode, scanner/hasher.py) so JPEG never needs the
+# exiftool subprocess round-trip at all — the exiftool pass costs 1.9-8x
+# the hash read (docs/audits/nas-probe-results-2026-07.md). Must be called
+# BEFORE the caller's ``img.convert()`` — that produces a new image with
+# no EXIF, same constraint as ``_raw_exif_date`` in hasher.py.
+#
+# Parity with exiftool is verified against real fixtures in
+# tests/test_scanner_exif.py (see docs/testing.md's scanner/exif.py row)
+# — this is NOT a from-scratch reimplementation of exiftool's parser, it
+# is a narrow port of exactly the tags ``_read_extract_chunk`` queries,
+# checked in the same fallback order.
+
+_EXIF_IFD = 0x8769
+_GPS_IFD = 0x8825
+
+# DateTimeOriginal → CreateDate, same order as _JSON_DATE_KEYS' EXIF
+# portion. XMP dates are checked separately below (via the XMP packet);
+# QuickTime doesn't apply to a JPEG still.
+_PIL_DATE_TAG_CHAIN: tuple[tuple[str, int], ...] = (
+    ("EXIF:DateTimeOriginal", 36867),
+    ("EXIF:CreateDate", 36868),
+)
+
+# name -> numeric PIL tag id for the 14 image-EXIF census tags (all of
+# _CENSUS_TAGS except XMP:Rating / XMP:Subject, which live in the XMP
+# packet and are checked separately). Real cameras write these into the
+# ExifIFD sub-block (0x8769); some tools (incl. this repo's own
+# qa/sandbox generators) write directly onto the main IFD — exiftool's
+# ``-G`` grouping reports both as ``EXIF:...`` regardless of physical
+# placement, so parity requires checking both locations too (see
+# ``_pil_tag_present``).
+_PIL_CENSUS_TAG_IDS: dict[str, int] = {
+    "EXIF:DateTimeOriginal": 36867,
+    "EXIF:Make": 271,
+    "EXIF:Model": 272,
+    "EXIF:ISO": 34855,
+    "EXIF:FocalLength": 37386,
+    "EXIF:ExposureTime": 33434,
+    "EXIF:FNumber": 33437,
+    "EXIF:Flash": 37385,
+    "EXIF:Orientation": 274,
+    "EXIF:Software": 305,
+    "EXIF:LensModel": 42036,
+    "EXIF:ColorSpace": 40961,
+    "EXIF:WhiteBalance": 41987,
+}
+
+
+def _pil_tag_present(exif, exif_ifd, tag_id: int) -> bool:
+    """True if ``tag_id`` is set on either the ExifIFD sub-block or IFD0."""
+    return exif_ifd.get(tag_id) is not None or exif.get(tag_id) is not None
+
+
+def _xmp_has_local_name(xmp_bytes: Optional[bytes], local_name: str) -> bool:
+    """True if the XMP packet has an element or attribute whose
+    namespace-stripped local name matches ``local_name`` (e.g.
+    ``"DerivedFrom"`` for ``xmpMM:DerivedFrom``, present either as a
+    nested element or — the compact/common Lightroom form, verified
+    against real exiftool output — an attribute on ``rdf:Description``).
+
+    Tries a real XML parse first (handles both forms correctly regardless
+    of namespace prefix). Falls back to a bounded substring search if the
+    packet doesn't parse (some tools emit non-well-formed XMP fragments;
+    a raw-bytes search still catches the common case rather than losing
+    the signal entirely).
+    """
+    if not xmp_bytes:
+        return False
+    try:
+        root = ET.fromstring(xmp_bytes)
+    except ET.ParseError:
+        return local_name.encode("ascii", "ignore") in xmp_bytes
+    for elem in root.iter():
+        if elem.tag.rsplit("}", 1)[-1] == local_name:
+            return True
+        for attr in elem.attrib:
+            if attr.rsplit("}", 1)[-1] == local_name:
+                return True
+    return False
+
+
+def extract_pil_scoring_signals(img: "Image.Image") -> dict:
+    """Extract the scoring-system signals from an already-open PIL Image.
+
+    Mirrors ``_record_to_extract``'s exiftool-based signals for JPEG:
+    ``exif_date``/``exif_date_tag`` (fallback chain), ``exif_tag_count``
+    (census tags present), ``gps_present``, ``xmp_derived``. Returns a
+    dict (not a MediaExtract) — the caller (``scan_runner._route_outcome``)
+    layers these onto a ``HashResult.to_media_extract()`` base.
+    """
+    exif = img.getexif()
+    try:
+        exif_ifd = exif.get_ifd(_EXIF_IFD)
+    except Exception:  # pylint: disable=broad-exception-caught
+        exif_ifd = {}
+    try:
+        gps_ifd = exif.get_ifd(_GPS_IFD)
+    except Exception:  # pylint: disable=broad-exception-caught
+        gps_ifd = {}
+
+    exif_date: Optional[datetime] = None
+    exif_date_tag: Optional[str] = None
+    for tag_name, tag_id in _PIL_DATE_TAG_CHAIN:
+        raw = exif_ifd.get(tag_id)
+        if raw is None:
+            raw = exif.get(tag_id)
+        if not isinstance(raw, str) or not raw:
+            continue
+        parsed = parse_exif_date(raw)
+        if parsed is not None:
+            exif_date = parsed
+            exif_date_tag = tag_name
+            break
+
+    gps_present = gps_ifd.get(2) is not None or gps_ifd.get(4) is not None
+
+    xmp_bytes = img.info.get("xmp")
+    xmp_derived = _xmp_has_local_name(xmp_bytes, "DerivedFrom")
+    xmp_rating_present = _xmp_has_local_name(xmp_bytes, "Rating")
+    xmp_subject_present = _xmp_has_local_name(xmp_bytes, "subject")
+
+    exif_tag_count = sum(
+        1 for tag_id in _PIL_CENSUS_TAG_IDS.values()
+        if _pil_tag_present(exif, exif_ifd, tag_id)
+    )
+    if gps_present:
+        exif_tag_count += 1
+    if xmp_rating_present:
+        exif_tag_count += 1
+    if xmp_subject_present:
+        exif_tag_count += 1
+
+    return {
+        "exif_date": exif_date,
+        "exif_date_tag": exif_date_tag,
+        "exif_tag_count": exif_tag_count,
+        "gps_present": gps_present,
+        "xmp_derived": xmp_derived,
+    }
 
 
 def batch_read_extracts(

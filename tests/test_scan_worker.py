@@ -3183,8 +3183,13 @@ class TestPostHashCancelKillsExif:
         # Two source files — HASH completes in two records, then the worker
         # reaches the post-HASH "send sentinels + join consumers" block.
         # That's the cancel checkpoint this test pins.
+        # #786 — JPEG now bypasses the exif_queue entirely (in-memory
+        # extraction), so it would never reach the wedge this test drives.
+        # Use a fake video file instead: "mov"/"mp4" are extension-typed
+        # (no magic-byte content check, scanner/media.py:132) and still
+        # route through exiftool, same as HEIC/RAW.
         for i in range(2):
-            _write_jpeg(tmp_path / f"a{i}.jpg")
+            (tmp_path / f"a{i}.mov").write_bytes(b"fake mov content")
         out = tmp_path / "manifest.sqlite"
 
         worker = ScanWorker(
