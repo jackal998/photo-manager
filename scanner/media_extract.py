@@ -82,7 +82,6 @@ class MediaExtract:
     exif_tag_count: Optional[int] = None  # None = exiftool not run; 0 = ran, no census tags found
     gps_present: Optional[bool] = None    # None = not checked; False = checked, absent; True = present
     xmp_derived: Optional[bool] = None    # None = not checked; False = checked, absent; True = present
-    xmp_rating: Optional[int] = None      # 0–5 if present; None = not present or not checked
 
     # ── Provenance (for debugging and auditing) ────────────────────────────
     extracted_by: set[str] = field(default_factory=set)

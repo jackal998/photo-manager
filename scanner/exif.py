@@ -440,8 +440,10 @@ _JSON_DATE_KEYS = (
 # ── Extended batch for scoring system (#187) ───────────────────────────────
 #
 # The functions below extract a richer set of tags than ``batch_read_dates``:
-# GPS, XMP provenance, user rating, and a census tag count needed by the
-# scorer. ``-fast`` is *not* used because GPS and XMP segments live past the
+# GPS, XMP provenance, and a census tag count needed by the scorer.
+# (``XMP:Rating`` is queried as a census-completeness tag only — its value
+# was extracted through #786, found to have no consumer, and dropped.)
+# ``-fast`` is *not* used because GPS and XMP segments live past the
 # first IFD block that ``-fast`` would stop at. Latency cost on JPEG is ~3-5×
 # higher per file; for a one-time scan this is acceptable for the precision
 # gain.
@@ -499,8 +501,12 @@ def batch_read_extracts(
       (*never None* after this function runs; that is the silent-dropout
       regression contract).
     * ``xmp_derived`` — True if ``xmpMM:DerivedFrom`` is present, else False.
-    * ``xmp_rating`` — integer 0–5 if ``XMP:Rating`` is present, else None.
     * ``extracted_by = {"exiftool"}``.
+
+    ``XMP:Rating`` is still queried (it's one of the ``_CENSUS_TAGS``
+    completeness signals) but its *value* is no longer extracted — #786
+    removed the dead ``xmp_rating`` field (parsed since #187 but never
+    consumed: no manifest column, no scoring weight, no API surface).
 
     Paths that exiftool fails to return a record for still receive a
     ``MediaExtract`` with ``extracted_by={"exiftool"}`` and
@@ -610,16 +616,6 @@ def _record_to_extract(path: Path, rec: dict) -> "MediaExtract":
     # XMP DerivedFrom — same explicit-True/False contract.
     xmp_derived: bool = any(rec.get(t) is not None for t in _XMP_DERIVED_TAGS)
 
-    # XMP Rating — integer or None. Exiftool may emit it as int or string
-    # depending on the file; coerce defensively.
-    raw_rating = rec.get("XMP:Rating")
-    xmp_rating: Optional[int] = None
-    if raw_rating is not None:
-        try:
-            xmp_rating = int(raw_rating)
-        except (ValueError, TypeError):
-            xmp_rating = None
-
     # Census tag count — count any present tag in the union of image +
     # video censuses. The scorer normalises against the appropriate
     # baseline per file_type.
@@ -632,7 +628,6 @@ def _record_to_extract(path: Path, rec: dict) -> "MediaExtract":
         exif_tag_count=exif_tag_count,
         gps_present=gps_present,
         xmp_derived=xmp_derived,
-        xmp_rating=xmp_rating,
         extracted_by={"exiftool"},
     )
 

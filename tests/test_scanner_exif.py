@@ -1169,31 +1169,21 @@ class TestBatchReadExtracts:
         result = batch_read_extracts(paths, et)
         assert result[paths[0]].xmp_derived is False  # NOT None
 
-    def test_xmp_rating_parsed_as_int(self):
+    def test_xmp_rating_counts_toward_census_but_has_no_value_field(self):
+        """#786 dropped the dead ``xmp_rating`` value field (parsed since
+        #187, never consumed — no manifest column, no scoring weight, no
+        API). ``XMP:Rating`` presence must still count toward
+        ``exif_tag_count`` (a real census-completeness signal) even though
+        the rating value itself is no longer extracted."""
         from scanner.exif import batch_read_extracts
         paths = [Path("/fake/img.jpg")]
         et = _make_mock_et([
             (paths[0], {"XMP:Rating": 5}),
         ])
         result = batch_read_extracts(paths, et)
-        assert result[paths[0]].xmp_rating == 5
-
-    def test_xmp_rating_string_coerced(self):
-        """exiftool sometimes emits Rating as string; defensive coerce."""
-        from scanner.exif import batch_read_extracts
-        paths = [Path("/fake/img.jpg")]
-        et = _make_mock_et([
-            (paths[0], {"XMP:Rating": "4"}),
-        ])
-        result = batch_read_extracts(paths, et)
-        assert result[paths[0]].xmp_rating == 4
-
-    def test_xmp_rating_none_when_absent(self):
-        from scanner.exif import batch_read_extracts
-        paths = [Path("/fake/img.jpg")]
-        et = _make_mock_et([(paths[0], None)])
-        result = batch_read_extracts(paths, et)
-        assert result[paths[0]].xmp_rating is None
+        extract = result[paths[0]]
+        assert not hasattr(extract, "xmp_rating")
+        assert extract.exif_tag_count == 1
 
     def test_exif_tag_count_counts_census_tags(self):
         """Count includes only tags in the documented census set
