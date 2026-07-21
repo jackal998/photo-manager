@@ -72,9 +72,14 @@ class HashResult:
     def to_media_extract(self) -> "MediaExtract":  # noqa: F821 — runtime import
         """Convert this HashResult into a partial MediaExtract (#187 — PR 2).
 
-        Used by the scan pipeline to feed the merge step alongside the
-        exiftool partial. The ``extracted_by`` set is populated per the
-        tool(s) that actually contributed data:
+        Used directly by ``core/app_service/scan_runner.py``'s
+        ``_route_outcome`` for formats whose scoring signals come from
+        the in-memory hash pass instead of exiftool (JPEG, #786) — the
+        returned extract is enriched with ``exif_tag_count`` /
+        ``gps_present`` / ``xmp_derived`` from the hasher's PIL-based
+        pass and written straight into the pipeline's ``extracts`` dict.
+        The ``extracted_by`` set is populated per the tool(s) that
+        actually contributed data:
 
         * ``"hasher"`` — always (sha256 always present).
         * ``"pil"`` — when phash was computed (i.e. PIL opened the bytes).

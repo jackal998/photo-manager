@@ -5,13 +5,13 @@ Multiple tools cover different file types and fields:
 * PIL fills sha256, phash, mean_color, pixel_width/height, exif_date for
   jpeg/png/webp/heic.
 * rawpy fills pixel_width/height for RAW (sensor dims, not thumbnail).
-* exiftool fills exif_date for all files plus the new scoring signals
-  (gps_present, xmp_derived, xmp_rating, exif_tag_count).
+* exiftool fills exif_date for all files plus the scoring signals
+  (gps_present, xmp_derived, exif_tag_count).
 * os.stat fills mtime, ctime, file_size_bytes.
 
 Without a canonical contract, every new scoring signal has to be audited
-across all four extractor paths to confirm it isn't silently dropped for
-some file type. ``MediaExtract`` is that contract.
+across all extractor paths to confirm it isn't silently dropped for some
+file type. ``MediaExtract`` is that contract.
 
 Sentinel convention (enforced in tests):
 
@@ -22,8 +22,18 @@ Sentinel convention (enforced in tests):
   ``True``  — signal present.
   value     — signal extracted with this value.
 
-``merge_extracts()`` combines partial extracts (one per tool) into one
-canonical ``MediaExtract`` with explicit per-field precedence.
+There is intentionally no generic "merge N partial extracts" combinator
+here (a prior ``merge_extracts()`` was removed — #786: it was dead in
+production, unit-tested only, and its exif_date precedence
+(exiftool-wins) contradicted the pipeline's actual behaviour
+(PIL-wins-then-exiftool-backfills-None), see
+``core/app_service/scan_runner.py``'s post-hash EXIF backfill and
+``scanner/dedup.py::HashResult.to_media_extract``). Each producer of a
+``MediaExtract`` for the pipeline's ``extracts`` dict — the exiftool
+batch pass (``scanner/exif.py::batch_read_extracts``) or the in-memory
+JPEG pass (``HashResult.to_media_extract`` + hasher-derived signals,
+#786) — writes ONE complete extract per file; there is nothing left to
+merge.
 """
 
 from __future__ import annotations
@@ -79,111 +89,3 @@ class MediaExtract:
     # Values added by each extractor: "hasher", "pil", "rawpy", "exiftool", "stat"
     extraction_errors: list[str] = field(default_factory=list)
     # Non-fatal issues logged here; fatal failures leave the relevant field None
-
-
-# Fields handled by the generic first-non-None precedence in merge_extracts.
-# Explicitly listed so the precedence contract is greppable and reviewable.
-_SIMPLE_FIRST_NON_NONE: tuple[str, ...] = (
-    "sha256",
-    "phash",
-    "mean_color",
-    "mtime",
-    "ctime",
-    "file_size_bytes",
-    "exif_tag_count",
-    "xmp_rating",
-)
-_BOOL_FIRST_NON_NONE: tuple[str, ...] = (
-    "gps_present",
-    "xmp_derived",
-)
-
-
-def merge_extracts(*partials: MediaExtract) -> MediaExtract:
-    """Combine partial MediaExtracts into one canonical instance.
-
-    All partials must share the same ``path`` — that is the merge key.
-    Provenance metadata (``extracted_by``, ``extraction_errors``) is
-    unioned across all partials.
-
-    Precedence rules:
-
-    * ``pixel_width`` / ``pixel_height``: a partial whose ``extracted_by``
-      contains ``"rawpy"`` wins outright (sensor dimensions for RAW files
-      beat PIL's thumbnail dimensions). Otherwise first non-None wins.
-    * ``exif_date`` / ``exif_date_tag``: a partial whose ``extracted_by``
-      contains ``"exiftool"`` wins (exiftool's parsing is more reliable
-      than PIL's IFD walk and honours XMP/QuickTime tags). Otherwise
-      first non-None wins.
-    * All other simple fields: first non-None wins.
-    * Booleans (``gps_present``, ``xmp_derived``): first non-None wins;
-      ``None`` means *not checked* and is skipped, while ``False`` means
-      *checked, absent* and is taken.
-    * ``file_type``: first non-empty wins.
-
-    Raises ``ValueError`` if no partials are provided or if partials
-    reference different paths.
-    """
-    if not partials:
-        raise ValueError("merge_extracts requires at least one partial")
-    paths = {p.path for p in partials}
-    if len(paths) > 1:
-        raise ValueError(
-            f"merge_extracts: all partials must share path; got {sorted(paths)!r}"
-        )
-
-    out = MediaExtract(path=partials[0].path)
-
-    # Provenance union first so the rawpy/exiftool precedence checks can
-    # consult the merged set later if needed.
-    for p in partials:
-        out.extracted_by.update(p.extracted_by)
-        out.extraction_errors.extend(p.extraction_errors)
-
-    # First non-empty wins for file_type.
-    for p in partials:
-        if not out.file_type and p.file_type:
-            out.file_type = p.file_type
-
-    # Simple "first non-None wins" fields.
-    for p in partials:
-        for attr in _SIMPLE_FIRST_NON_NONE:
-            if getattr(out, attr) is None and getattr(p, attr) is not None:
-                setattr(out, attr, getattr(p, attr))
-        for attr in _BOOL_FIRST_NON_NONE:
-            if getattr(out, attr) is None and getattr(p, attr) is not None:
-                setattr(out, attr, getattr(p, attr))
-
-    # pixel_width/height — rawpy wins over PIL (sensor dims, not thumbnail).
-    rawpy_partial = next(
-        (p for p in partials
-         if "rawpy" in p.extracted_by and p.pixel_width is not None),
-        None,
-    )
-    if rawpy_partial is not None:
-        out.pixel_width = rawpy_partial.pixel_width
-        out.pixel_height = rawpy_partial.pixel_height
-    else:
-        for p in partials:
-            if p.pixel_width is not None:
-                out.pixel_width = p.pixel_width
-                out.pixel_height = p.pixel_height
-                break
-
-    # exif_date — exiftool wins over PIL (more reliable parser, XMP-aware).
-    exiftool_date_partial = next(
-        (p for p in partials
-         if "exiftool" in p.extracted_by and p.exif_date is not None),
-        None,
-    )
-    if exiftool_date_partial is not None:
-        out.exif_date = exiftool_date_partial.exif_date
-        out.exif_date_tag = exiftool_date_partial.exif_date_tag
-    else:
-        for p in partials:
-            if p.exif_date is not None:
-                out.exif_date = p.exif_date
-                out.exif_date_tag = p.exif_date_tag
-                break
-
-    return out

@@ -1251,8 +1251,9 @@ class TestBatchReadExtracts:
 
     def test_extracted_by_marks_exiftool(self):
         """Every MediaExtract returned must have ``"exiftool"`` in
-        extracted_by — that's how merge_extracts knows this partial came
-        from exiftool and applies the exiftool-wins-on-exif_date rule."""
+        extracted_by — provenance for debugging/auditing which tool
+        produced this file's extract (exiftool vs. the in-memory JPEG
+        pass, #786)."""
         from scanner.exif import batch_read_extracts
         paths = [Path("/fake/img.jpg")]
         et = _make_mock_et([(paths[0], None)])
@@ -1327,11 +1328,13 @@ class TestBatchReadExtracts:
 
 class TestHashResultToMediaExtract:
     """HashResult is the existing single-read hasher output. The adapter
-    converts it into a partial MediaExtract that merge_extracts can combine
-    with the exiftool partial.
+    converts it into a MediaExtract — for JPEG (#786) the caller
+    (``core/app_service/scan_runner.py::_route_outcome``) enriches this
+    directly with the in-memory scoring signals and writes it straight
+    into the pipeline's ``extracts`` dict; for other formats it documents
+    what PIL/rawpy contributed.
 
-    extracted_by must reflect which tools actually contributed data so the
-    merge step's rawpy-wins-on-dims rule fires correctly.
+    extracted_by must reflect which tools actually contributed data.
     """
 
     def test_jpeg_extract_marks_hasher_and_pil(self):
@@ -1357,8 +1360,8 @@ class TestHashResultToMediaExtract:
         assert me.extracted_by == {"hasher", "pil"}
 
     def test_raw_extract_marks_rawpy(self):
-        """For RAW files with dims, rawpy must be in extracted_by so
-        merge_extracts picks rawpy's sensor dims over PIL's thumbnail."""
+        """For RAW files with dims, rawpy must be in extracted_by —
+        provenance that the sensor dims (not PIL's thumbnail) were used."""
         from scanner.dedup import HashResult
         from scanner.walker import FileRecord
         rec = FileRecord(
