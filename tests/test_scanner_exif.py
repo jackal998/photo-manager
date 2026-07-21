@@ -34,6 +34,8 @@ from scanner.exif import (
     _parse_exiftool_json,
     extract_pil_scoring_signals,
     _xmp_has_local_name,
+    _xmp_tag_value,
+    _xmp_date_string,
 )
 
 
@@ -1641,12 +1643,34 @@ def _open_and_extract(path) -> dict:
         return extract_pil_scoring_signals(img)
 
 
+def _xmp_date_packet(*, datetime_original: str | None = None, create_date: str | None = None) -> bytes:
+    """Build a minimal real XMP packet carrying the given ISO-8601 date(s)
+    as compact attributes (the Lightroom/Photoshop shape verified live
+    against real exiftool — see _xmp_date_string's docstring)."""
+    attrs = []
+    if datetime_original is not None:
+        attrs.append(f'exif:DateTimeOriginal="{datetime_original}"')
+    if create_date is not None:
+        attrs.append(f'xmp:CreateDate="{create_date}"')
+    return (
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        b'<rdf:Description rdf:about=""'
+        b' xmlns:exif="http://ns.adobe.com/exif/1.0/"'
+        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/" '
+        + " ".join(attrs).encode() +
+        b'/></rdf:RDF></x:xmpmeta>'
+    )
+
+
 class TestExtractPilScoringSignalsDateChain:
-    """Date fallback chain: EXIF:DateTimeOriginal -> EXIF:CreateDate, checked
-    in both the ExifIFD sub-block and IFD0 (real exiftool reports both
-    placements under the ``EXIF:`` group regardless of physical IFD —
-    verified live; some tools, incl. this repo's own qa/sandbox generators,
-    write straight to IFD0)."""
+    """Date fallback chain — EXACT exiftool precedence order (_JSON_DATE_KEYS'
+    EXIF portion): EXIF:DateTimeOriginal -> XMP:DateTimeOriginal ->
+    EXIF:CreateDate -> XMP:CreateDate. EXIF tags are checked in both the
+    ExifIFD sub-block and IFD0 (real exiftool reports both placements under
+    the ``EXIF:`` group regardless of physical IFD — verified live; some
+    tools, incl. this repo's own qa/sandbox generators, write straight to
+    IFD0)."""
 
     def test_date_time_original_in_exif_ifd(self, tmp_path):
         p = tmp_path / "a.jpg"
@@ -1687,6 +1711,75 @@ class TestExtractPilScoringSignalsDateChain:
         result = _open_and_extract(p)
         assert result["exif_date"] is None
         assert result["exif_date_tag"] is None
+
+    def test_falls_back_to_xmp_datetime_original_when_no_exif_date(self, tmp_path):
+        """A JPEG with NO EXIF date tags at all but a real XMP
+        exif:DateTimeOriginal must not silently lose its date — this is
+        the exact regression a fresh-context review caught: the chain
+        used to stop at EXIF:CreateDate and never check XMP."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(
+            p, xmp=_xmp_date_packet(datetime_original="2024-07-15T10:30:00")
+        )
+        result = _open_and_extract(p)
+        assert result["exif_date"] == datetime(2024, 7, 15, 10, 30, 0)
+        assert result["exif_date_tag"] == "XMP:DateTimeOriginal"
+
+    def test_falls_back_to_xmp_createdate_when_only_that_is_present(self, tmp_path):
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(p, xmp=_xmp_date_packet(create_date="2024-05-03T09:30:00"))
+        result = _open_and_extract(p)
+        assert result["exif_date"] == datetime(2024, 5, 3, 9, 30, 0)
+        assert result["exif_date_tag"] == "XMP:CreateDate"
+
+    def test_exif_datetime_original_wins_over_xmp(self, tmp_path):
+        """Precedence: EXIF:DateTimeOriginal beats XMP:DateTimeOriginal,
+        matching _JSON_DATE_KEYS' order exactly."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(
+            p,
+            exif_ifd={36867: "2024:08:01 12:00:00"},
+            xmp=_xmp_date_packet(datetime_original="2020-01-01T00:00:00"),
+        )
+        result = _open_and_extract(p)
+        assert result["exif_date"] == datetime(2024, 8, 1, 12, 0, 0)
+        assert result["exif_date_tag"] == "EXIF:DateTimeOriginal"
+
+    def test_xmp_datetime_original_wins_over_exif_createdate(self, tmp_path):
+        """Precedence: XMP:DateTimeOriginal (rung 2) beats EXIF:CreateDate
+        (rung 3) — the fallback chain checks ALL of DateTimeOriginal
+        (EXIF then XMP) before falling through to CreateDate."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(
+            p,
+            exif_ifd={36868: "2020:01:01 00:00:00"},
+            xmp=_xmp_date_packet(datetime_original="2024-07-15T10:30:00"),
+        )
+        result = _open_and_extract(p)
+        assert result["exif_date"] == datetime(2024, 7, 15, 10, 30, 0)
+        assert result["exif_date_tag"] == "XMP:DateTimeOriginal"
+
+    def test_exif_createdate_wins_over_xmp_createdate(self, tmp_path):
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(
+            p,
+            exif_ifd={36868: "2024:05:03 09:30:00"},
+            xmp=_xmp_date_packet(create_date="2020-01-01T00:00:00"),
+        )
+        result = _open_and_extract(p)
+        assert result["exif_date"] == datetime(2024, 5, 3, 9, 30, 0)
+        assert result["exif_date_tag"] == "EXIF:CreateDate"
+
+    def test_xmp_date_with_subsecond_and_timezone_truncated(self, tmp_path):
+        """Same [:19] truncation contract as EXIF dates — converting
+        ISO-8601 to the EXIF colon format must not break subsecond/tz
+        stripping (parse_exif_date does the truncation either way)."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(
+            p, xmp=_xmp_date_packet(datetime_original="2024-07-15T10:30:00.500+09:00")
+        )
+        result = _open_and_extract(p)
+        assert result["exif_date"] == datetime(2024, 7, 15, 10, 30, 0)
 
     def test_plain_datetime_tag_306_is_not_in_the_chain(self, tmp_path):
         """Tag 306 (bare 'DateTime') is intentionally NOT checked — exiftool's
@@ -1809,6 +1902,49 @@ class TestXmpHasLocalName:
         malformed = b'<x:xmpmeta><rdf:RDF><rdf:Description xmpMM:DerivedFrom="x"'
         assert _xmp_has_local_name(malformed, "DerivedFrom") is True
         assert _xmp_has_local_name(malformed, "Rating") is False
+
+
+class TestXmpTagValueAndDateString:
+    """Value extraction (not just presence) — the pieces the date fallback
+    chain leans on."""
+
+    def test_tag_value_from_attribute(self):
+        xmp = _xmp_date_packet(datetime_original="2024-07-15T10:30:00")
+        assert _xmp_tag_value(xmp, "DateTimeOriginal") == "2024-07-15T10:30:00"
+
+    def test_tag_value_from_element_text(self):
+        xmp = (
+            b'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+            b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+            b'<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/">'
+            b'<xmp:CreateDate>2024-05-03T09:30:00</xmp:CreateDate>'
+            b'</rdf:Description></rdf:RDF></x:xmpmeta>'
+        )
+        assert _xmp_tag_value(xmp, "CreateDate") == "2024-05-03T09:30:00"
+
+    def test_tag_value_none_when_absent(self):
+        xmp = _xmp_date_packet(datetime_original="2024-07-15T10:30:00")
+        assert _xmp_tag_value(xmp, "CreateDate") is None
+
+    def test_tag_value_none_when_no_xmp(self):
+        assert _xmp_tag_value(None, "DateTimeOriginal") is None
+
+    def test_tag_value_none_on_malformed_xml(self):
+        """Unlike _xmp_has_local_name, value extraction has no substring
+        fallback — a malformed packet just means 'no XMP date'."""
+        malformed = b'<x:xmpmeta><rdf:RDF><rdf:Description exif:DateTimeOriginal="2024-07-15T10:30:00"'
+        assert _xmp_tag_value(malformed, "DateTimeOriginal") is None
+
+    def test_date_string_converts_iso_to_exif_colon_format(self):
+        xmp = _xmp_date_packet(datetime_original="2024-07-15T10:30:00")
+        assert _xmp_date_string(xmp, "DateTimeOriginal") == "2024:07:15 10:30:00"
+
+    def test_date_string_none_when_tag_absent(self):
+        xmp = _xmp_date_packet(datetime_original="2024-07-15T10:30:00")
+        assert _xmp_date_string(xmp, "CreateDate") is None
+
+    def test_date_string_none_when_no_xmp(self):
+        assert _xmp_date_string(None, "DateTimeOriginal") is None
 
 
 class TestExtractPilScoringSignalsXmpIntegration:

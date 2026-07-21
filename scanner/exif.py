@@ -508,14 +508,6 @@ _XMP_DERIVED_TAGS: tuple[str, ...] = (
 _EXIF_IFD = 0x8769
 _GPS_IFD = 0x8825
 
-# DateTimeOriginal → CreateDate, same order as _JSON_DATE_KEYS' EXIF
-# portion. XMP dates are checked separately below (via the XMP packet);
-# QuickTime doesn't apply to a JPEG still.
-_PIL_DATE_TAG_CHAIN: tuple[tuple[str, int], ...] = (
-    ("EXIF:DateTimeOriginal", 36867),
-    ("EXIF:CreateDate", 36868),
-)
-
 # name -> numeric PIL tag id for the 14 image-EXIF census tags (all of
 # _CENSUS_TAGS except XMP:Rating / XMP:Subject, which live in the XMP
 # packet and are checked separately). Real cameras write these into the
@@ -540,10 +532,28 @@ _PIL_CENSUS_TAG_IDS: dict[str, int] = {
     "EXIF:WhiteBalance": 41987,
 }
 
+# CreateDate (36868) is deliberately NOT in _PIL_CENSUS_TAG_IDS — same
+# non-double-credit rule as the exiftool path (_CENSUS_TAGS excludes it
+# too; it's in the date fallback chain, not the completeness census).
+# Reuse the census dict's DateTimeOriginal entry as the single source of
+# truth for that tag id rather than repeating the literal.
+_EXIF_DATE_TIME_ORIGINAL_TAG = _PIL_CENSUS_TAG_IDS["EXIF:DateTimeOriginal"]
+_EXIF_CREATE_DATE_TAG = 36868
+
 
 def _pil_tag_present(exif, exif_ifd, tag_id: int) -> bool:
     """True if ``tag_id`` is set on either the ExifIFD sub-block or IFD0."""
     return exif_ifd.get(tag_id) is not None or exif.get(tag_id) is not None
+
+
+def _pil_tag_value(exif, exif_ifd, tag_id: int):
+    """Return ``tag_id``'s raw value from the ExifIFD sub-block, or IFD0
+    if absent there — same both-locations check as ``_pil_tag_present``,
+    but returning the value instead of a presence flag."""
+    raw = exif_ifd.get(tag_id)
+    if raw is None:
+        raw = exif.get(tag_id)
+    return raw
 
 
 def _xmp_has_local_name(xmp_bytes: Optional[bytes], local_name: str) -> bool:
@@ -574,6 +584,55 @@ def _xmp_has_local_name(xmp_bytes: Optional[bytes], local_name: str) -> bool:
     return False
 
 
+def _xmp_tag_value(xmp_bytes: Optional[bytes], local_name: str) -> Optional[str]:
+    """Return the text/attribute value of the XMP element or attribute
+    whose namespace-stripped local name matches ``local_name`` (e.g.
+    ``"DateTimeOriginal"`` for ``exif:DateTimeOriginal``), or ``None`` if
+    absent or unparseable.
+
+    Real XML parse only — unlike ``_xmp_has_local_name`` there's no
+    meaningful substring fallback for an extracted VALUE (a truncated
+    packet's malformed tail could hand back garbage instead of a real
+    date); a parse failure here just means "no XMP date", the same
+    outcome exiftool would report if its own XMP parser choked on the
+    same malformed packet.
+    """
+    if not xmp_bytes:
+        return None
+    try:
+        root = ET.fromstring(xmp_bytes)
+    except ET.ParseError:
+        return None
+    for elem in root.iter():
+        if elem.tag.rsplit("}", 1)[-1] == local_name:
+            if elem.text and elem.text.strip():
+                return elem.text.strip()
+        for attr, value in elem.attrib.items():
+            if attr.rsplit("}", 1)[-1] == local_name:
+                return value
+    return None
+
+
+def _xmp_date_string(xmp_bytes: Optional[bytes], local_name: str) -> Optional[str]:
+    """Return the XMP date value for ``local_name`` (e.g.
+    ``"DateTimeOriginal"``, ``"CreateDate"``) converted to the EXIF
+    colon-separated format ``parse_exif_date`` expects, or ``None``.
+
+    XMP dates are ISO-8601 (``"2024-07-15T10:30:00[.sss][+-HH:MM|Z]"``);
+    exiftool's own ``-j -G`` output normalises them to the same
+    ``"YYYY:MM:DD HH:MM:SS..."`` shape EXIF dates use (verified live) —
+    converting here means XMP dates get IDENTICAL sentinel / timezone /
+    subsecond handling via the same ``parse_exif_date`` call, instead of
+    a second parser with its own edge cases to get right.
+    """
+    raw = _xmp_tag_value(xmp_bytes, local_name)
+    if raw is None or len(raw) < 11:
+        return raw
+    date_part = raw[:10].replace("-", ":")
+    sep = " " if raw[10] == "T" else raw[10]
+    return date_part + sep + raw[11:]
+
+
 def extract_pil_scoring_signals(img: "Image.Image") -> dict:
     """Extract the scoring-system signals from an already-open PIL Image.
 
@@ -593,12 +652,22 @@ def extract_pil_scoring_signals(img: "Image.Image") -> dict:
     except Exception:  # pylint: disable=broad-exception-caught
         gps_ifd = {}
 
+    xmp_bytes = img.info.get("xmp")
+
+    # Date fallback chain — EXACT precedence order as _JSON_DATE_KEYS' EXIF
+    # portion (QuickTime doesn't apply to a JPEG still): EXIF:DateTimeOriginal
+    # -> XMP:DateTimeOriginal -> EXIF:CreateDate -> XMP:CreateDate. Missing
+    # the XMP fallbacks would silently lose shot_date for any JPEG whose date
+    # lives only in XMP (e.g. some editing pipelines write XMP but not EXIF).
+    _date_candidates: tuple[tuple[str, Optional[str]], ...] = (
+        ("EXIF:DateTimeOriginal", _pil_tag_value(exif, exif_ifd, _EXIF_DATE_TIME_ORIGINAL_TAG)),
+        ("XMP:DateTimeOriginal", _xmp_date_string(xmp_bytes, "DateTimeOriginal")),
+        ("EXIF:CreateDate", _pil_tag_value(exif, exif_ifd, _EXIF_CREATE_DATE_TAG)),
+        ("XMP:CreateDate", _xmp_date_string(xmp_bytes, "CreateDate")),
+    )
     exif_date: Optional[datetime] = None
     exif_date_tag: Optional[str] = None
-    for tag_name, tag_id in _PIL_DATE_TAG_CHAIN:
-        raw = exif_ifd.get(tag_id)
-        if raw is None:
-            raw = exif.get(tag_id)
+    for tag_name, raw in _date_candidates:
         if not isinstance(raw, str) or not raw:
             continue
         parsed = parse_exif_date(raw)
@@ -609,7 +678,6 @@ def extract_pil_scoring_signals(img: "Image.Image") -> dict:
 
     gps_present = gps_ifd.get(2) is not None or gps_ifd.get(4) is not None
 
-    xmp_bytes = img.info.get("xmp")
     xmp_derived = _xmp_has_local_name(xmp_bytes, "DerivedFrom")
     xmp_rating_present = _xmp_has_local_name(xmp_bytes, "Rating")
     xmp_subject_present = _xmp_has_local_name(xmp_bytes, "subject")
@@ -618,6 +686,12 @@ def extract_pil_scoring_signals(img: "Image.Image") -> dict:
         1 for tag_id in _PIL_CENSUS_TAG_IDS.values()
         if _pil_tag_present(exif, exif_ifd, tag_id)
     )
+    # NOTE: exiftool's own census counts EXIF:GPSLatitude presence
+    # specifically (_CENSUS_TAGS has only "EXIF:GPSLatitude", not
+    # longitude); this reuses gps_present (latitude-OR-longitude) as a
+    # one-tag stand-in instead. Deliberate, not a bug — real camera GPS
+    # always writes both together, so the two conditions never actually
+    # diverge in practice, and gps_present already needs computing anyway.
     if gps_present:
         exif_tag_count += 1
     if xmp_rating_present:
