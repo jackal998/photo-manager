@@ -1,4 +1,15 @@
-"""GET /api/fs/browse — filesystem directory listing."""
+"""GET /api/fs/browse — filesystem directory listing.
+
+DELIBERATELY UNGUARDED (decision recorded 2026-07-22, PR #805): this route
+does NOT call ``_path_guard.validate_under_roots``, unlike execute/image/
+media. It backs the FsBrowser picker, whose whole job is browsing the
+machine to choose NEW scan sources / manifest paths — an allowed-roots
+check would make first-time selection impossible. Read-only listing, no
+mutation. Threat model rests on the server binding loopback-only
+(127.0.0.1, see launcher.py): revisit this exemption BEFORE any change
+that exposes the server beyond localhost (LAN bind, reverse proxy) or
+runs it with elevated privileges.
+"""
 
 from __future__ import annotations
 
