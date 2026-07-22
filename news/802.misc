@@ -1,0 +1,1 @@
+Fix worktree-safe interpreter path for the PreToolUse guard hooks so docs/qa/zombie guards run outside repo-root sessions (#802)
