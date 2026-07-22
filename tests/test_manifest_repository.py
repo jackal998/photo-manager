@@ -341,6 +341,40 @@ class TestManifestRepositoryLoad:
         assert all(r.user_decision == "" for r in records)
 
 
+class TestMigrateSchemaErrorHandling:
+    """migrate_manifest_schema swallows ONLY the duplicate-column idempotency
+    case; any other OperationalError (missing table, locked DB, IO failure)
+    propagates so a real migration failure is not silently masked (#797)."""
+
+    def test_idempotent_when_columns_already_exist(self, tmp_path):
+        """Re-running migration on an already-migrated DB is a no-op — every
+        ADD COLUMN raises 'duplicate column name', which must be swallowed."""
+        from infrastructure.manifest_repository import migrate_manifest_schema
+
+        db = _make_manifest(tmp_path, [])  # fully-migrated schema
+        conn = sqlite3.connect(str(db))
+        try:
+            # Runs against a table that already has every column — exercises
+            # the duplicate-column skip path for all of _MIGRATIONS.
+            migrate_manifest_schema(conn)  # must NOT raise
+            migrate_manifest_schema(conn)  # still a no-op on a second pass
+        finally:
+            conn.close()
+
+    def test_non_duplicate_error_propagates(self, tmp_path):
+        """An ALTER failure that is NOT 'column already exists' (here: the
+        migration_manifest table does not exist) must propagate, not be
+        swallowed as if the column merely pre-existed."""
+        from infrastructure.manifest_repository import migrate_manifest_schema
+
+        conn = sqlite3.connect(str(tmp_path / "no_table.db"))  # empty DB
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="no such table"):
+                migrate_manifest_schema(conn)
+        finally:
+            conn.close()
+
+
 class TestManifestRepositorySave:
     def _make_record(
         self, path: str, action: str, user_decision: str = "", locked: bool = False
