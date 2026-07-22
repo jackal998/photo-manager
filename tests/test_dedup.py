@@ -94,6 +94,24 @@ class TestExactDuplicate:
         kept = "/takeout/b.jpg"  # takeout priority 0 > jdrive priority 1
         assert Path(rows["/jdrive/a.jpg"].duplicate_of).as_posix() == kept
 
+    def test_same_priority_tie_keeper_is_deterministic(self):
+        """Two byte-identical files with the SAME source label (same priority)
+        must pick the same keeper regardless of input order — the
+        lexicographically smallest path, not whichever came first (#792)."""
+        def keeper_for(order: list[str]) -> str:
+            hrs = [
+                _hr(p, sha256="dup", source_label="jdrive", exif_date=_dt())
+                for p in order
+            ]
+            rows = _rows(classify(hrs, source_priority={"jdrive": 0}))
+            exact = [r for r in rows.values() if r.action == "EXACT"]
+            assert len(exact) == 1  # exactly one duplicate flagged
+            return Path(exact[0].duplicate_of).as_posix()
+
+        forward = keeper_for(["/jdrive/b.jpg", "/jdrive/a.jpg"])
+        reverse = keeper_for(["/jdrive/a.jpg", "/jdrive/b.jpg"])
+        assert forward == reverse == "/jdrive/a.jpg"
+
 
 # ---------------------------------------------------------------------------
 # Dynamic source priority

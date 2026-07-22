@@ -326,7 +326,14 @@ def _classify_exact(
     for group in by_hash.values():
         if len(group) < 2:
             continue
-        group.sort(key=lambda h: _priority(h.record.source_label, source_priority))
+        # Deterministic keeper: highest source priority, then lexicographically
+        # smallest path, so same-priority ties resolve identically across scans
+        # (input order must not decide the keeper). Matches the lex-min
+        # convention group_id / rescore rely on (#792).
+        group.sort(key=lambda h: (
+            _priority(h.record.source_label, source_priority),
+            str(h.record.path),
+        ))
         keeper = group[0]
         for duplicate in group[1:]:
             rows[str(duplicate.record.path)] = _make_row(
@@ -466,6 +473,7 @@ def _classify_format_group(
     lossy.sort(key=lambda h: (
         FORMAT_PRIORITY.get(h.record.file_type, 99),
         _priority(h.record.source_label, source_priority),
+        str(h.record.path),  # deterministic tiebreak on same format+priority (#792)
     ))
     keeper = lossy[0]
     for duplicate in lossy[1:]:
@@ -702,7 +710,10 @@ def _classify_near_duplicates(
                 continue
             ordered = sorted(
                 [hr_a, hr_b],
-                key=lambda h: _priority(h.record.source_label, source_priority),
+                key=lambda h: (
+                    _priority(h.record.source_label, source_priority),
+                    str(h.record.path),  # deterministic on same-priority (#792)
+                ),
             )
             flagged = ordered[1]
             flagged_key = str(flagged.record.path)
