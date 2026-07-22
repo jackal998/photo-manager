@@ -322,11 +322,12 @@ Within each duplicate group, every file gets a **composite score** in
 at the right of the result tree and within-group rows sort by score
 descending — the best copy lands at the top of every group.
 
-Right-click a group header and pick **"Apply best-copy decisions to
-this group"** to mark the top scorer `keep` and the rest `delete` in
-one batch. Locked rows are silently protected. Live Photo MOV
-passengers (the `.mov` that pairs with a `.heic` of the same stem)
-inherit their HEIC's decision and are not ranked.
+To act on the ranking in bulk, open **Action › Set Action by
+Field/Regex…** and use the **"Top N per group"** numeric mode on the
+**Score** column — Top 1 selects each group's best copy to mark
+`keep` (Bottom N selects the lower-ranked copies to mark `delete`).
+Or enable **"Auto select after scan"** in the scan dialog to mark and
+lock each group's top scorer as `keep` automatically.
 
 ### Algorithm — two tiers
 
@@ -385,8 +386,8 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
 - **Cached metadata** — `file_size_bytes`, `shot_date`, `creation_date`, `mtime` written
   to the manifest at scan time; load reads from SQLite with zero filesystem round-trips
 - **Keep-worthiness scoring** — composite score in `[0.0, 1.0]` per file (#187);
-  highest-scoring copy lands at the top of each group, "Apply best-copy"
-  right-click action marks it `keep` and the rest `delete` in one batch
+  highest-scoring copy lands at the top of each group; batch-apply via the
+  Set Action dialog's "Top N per group" Score condition or scan-time auto-select
 
 ---
 
