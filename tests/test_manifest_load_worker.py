@@ -95,11 +95,35 @@ class TestManifestLoadWorkerSuccess:
         assert any("Grouping" in p for p in progress)
         assert any("Loaded" in p and "group" in p for p in progress)
 
-    def test_default_sort_branch_executes_when_provided(self, qapp, tmp_path):
-        """default_sort=[(field, asc)] triggers the SortService.sort branch."""
+    def test_default_sort_orders_items_by_the_given_key(self, qapp, tmp_path):
+        """default_sort must actually ORDER the loaded items, not merely run
+        the branch. Two same-group items with distinct sizes, sorted by
+        file_size_bytes DESC, must come back largest-first (#798 — the old
+        test only asserted the branch executed, so a broken sort passed)."""
         from app.views.workers.manifest_load_worker import ManifestLoadWorker
 
-        db = _seed_grouped_manifest(tmp_path)
+        big = tmp_path / "big.jpg"
+        small = tmp_path / "small.jpg"
+        _make_jpeg(big)
+        _make_jpeg(small)
+        db = tmp_path / "sized.sqlite"
+        with sqlite3.connect(db) as conn:
+            conn.executescript(_DDL)
+            gid = "/group/a"
+            conn.execute(
+                "INSERT INTO migration_manifest (source_path, source_label, "
+                "action, hamming_distance, group_id, reason, file_size_bytes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(big), "src", "REVIEW_DUPLICATE", 5, gid, "dup", 300),
+            )
+            conn.execute(
+                "INSERT INTO migration_manifest (source_path, source_label, "
+                "action, group_id, reason, file_size_bytes) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (str(small), "src", "", gid, "ref", 100),
+            )
+            conn.commit()
+
         worker = ManifestLoadWorker(
             str(db), default_sort=[("file_size_bytes", False)]
         )
@@ -111,6 +135,8 @@ class TestManifestLoadWorkerSuccess:
 
         assert finished
         assert len(finished[0]) == 1
+        items = finished[0][0].items
+        assert [it.file_size_bytes for it in items] == [300, 100]
 
     def test_empty_manifest_yields_zero_groups(self, qapp, tmp_path):
         from app.views.workers.manifest_load_worker import ManifestLoadWorker

@@ -1648,7 +1648,11 @@ class ExecuteActionDialog(QDialog):
             try:
                 import send2trash
                 send2trash.send2trash(path)
-            except ImportError:
+            except ImportError:  # pragma: no cover
+                # Defensive only: send2trash is a hard dependency
+                # (requirements.txt), so this fallback fires only on a broken
+                # install. Marked no-cover rather than exercised by a synthetic
+                # sys.modules=None patch, which would be coverage padding (#798).
                 os.remove(path)
             self.deleted_paths.append(path)
             logger.info("Deleted file: {}", path)
