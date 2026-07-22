@@ -6,6 +6,10 @@ on:
       - 'frontend/**'
       - '.github/workflows/frontend.yml'
 
+# Least privilege: this workflow only reads the repo to build + test the SPA.
+permissions:
+  contents: read
+
 concurrency:
   group: frontend-${{ github.ref }}
   cancel-in-progress: true
