@@ -1663,6 +1663,27 @@ def _xmp_date_packet(*, datetime_original: str | None = None, create_date: str |
     )
 
 
+class TestExtractPilScoringSignalsRobustness:
+    """getexif() itself can raise on a malformed base EXIF IFD (#793)."""
+
+    def test_getexif_raising_does_not_crash(self):
+        """A malformed base EXIF IFD makes PIL's ``getexif()`` raise (e.g.
+        ``SyntaxError`` / ``struct.error``) even on an otherwise-decodable
+        image. ``extract_pil_scoring_signals`` must degrade to empty-EXIF
+        signals, not propagate — otherwise the broad except in
+        ``compute_from_bytes`` turns the file into a HashFailure and drops it
+        from the manifest entirely (#793)."""
+        img = MagicMock()
+        img.getexif.side_effect = SyntaxError("malformed EXIF IFD")
+        img.info = {}  # no XMP either
+
+        signals = extract_pil_scoring_signals(img)  # must NOT raise
+
+        assert isinstance(signals, dict)
+        assert signals["exif_date"] is None
+        assert signals["gps_present"] is False
+
+
 class TestExtractPilScoringSignalsDateChain:
     """Date fallback chain — EXACT exiftool precedence order (_JSON_DATE_KEYS'
     EXIF portion): EXIF:DateTimeOriginal -> XMP:DateTimeOriginal ->

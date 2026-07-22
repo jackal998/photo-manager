@@ -1149,11 +1149,19 @@ def run_pipeline(
             f"  EXIF done — {len(extracts):,} files,"
             f" {found_dates:,} dates, {with_gps:,} with GPS"
         )
-        for r in et_records:
-            if r.exif_date is None:
-                extract = extracts.get(r.record.path)
-                if extract is not None:
-                    r.exif_date = extract.exif_date
+
+    # Backfill exif_date from the extracts dict for any record still missing
+    # one. Runs REGARDLESS of exiftool availability: #786 populates `extracts`
+    # for JPEG from the in-memory PIL pass independently of exiftool, so a JPEG
+    # whose date lives only in XMP must not be left UNDATED in exiftool-missing
+    # mode while apply_scoring_to_rows scores it WITH that date — an internally
+    # inconsistent row (#793). For formats that DO need exiftool (HEIC/RAW/video)
+    # there is no extract in exiftool-missing mode, so those are untouched.
+    for r in et_records:
+        if r.exif_date is None:
+            extract = extracts.get(r.record.path)
+            if extract is not None:
+                r.exif_date = extract.exif_date
 
     # --- 4. Classify ---
     if cancel_token():
