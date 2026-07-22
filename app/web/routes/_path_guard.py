@@ -8,6 +8,11 @@ file deletion, so the guard lives in one place.
 The membership test (is a path under an allowed root?) is delegated to
 ``core.app_service.path_safety.is_under_roots`` so that the service layer
 can reuse the same symlink-resolution logic without importing FastAPI.
+
+Known exemption: ``fs.py`` (GET /api/fs/browse) intentionally does not use
+this guard — the picker must browse the whole machine to select new roots.
+See the decision record in fs.py's module docstring before adding routes
+that skip the guard.
 """
 
 from __future__ import annotations
