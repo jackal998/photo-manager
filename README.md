@@ -252,6 +252,52 @@ canonical catalogue.
 
 ---
 
+## Web UI
+
+The app also runs as a **localhost web app** — a FastAPI + SSE backend
+serving a React + TanStack frontend, packaged behind a native
+[pywebview](https://pywebview.flowrl.com/) shell so it still opens as
+its own desktop window rather than a browser tab. Both UIs drive the
+same headless `core/` + `scanner/` + `infrastructure/` engine; the
+PySide6 desktop app above remains the default and primary interface.
+
+**Status:** in development on the `docs/web-port-feasibility`
+integration branch — not yet merged to `master`, and the Qt app stays
+the default launch path (`run.bat` / `main.py`) until the port is
+complete. See [`docs/design/web-port-tech-design.md`](docs/design/web-port-tech-design.md)
+for the architecture and [`docs/audits/web-parity-matrix-2026-07.md`](docs/audits/web-parity-matrix-2026-07.md)
+for the current Qt-vs-web parity snapshot.
+
+```powershell
+cd frontend
+npm install
+npm run build           # builds frontend/dist — the web shell serves this bundle
+cd ..
+$env:PHOTO_MANAGER_WEB = "1"
+.venv\Scripts\python launcher.py
+```
+
+`launcher.py` (repo root) dispatches on the `PHOTO_MANAGER_WEB` env
+var: unset/falsey boots the classic Qt app unchanged; a truthy value
+starts the FastAPI app under uvicorn on loopback (`127.0.0.1:8765` by
+default — override with `PHOTO_MANAGER_WEB_PORT`), waits for it to
+report healthy, then opens a native window pointed at it via
+pywebview.
+
+**Windows dependency:** the pywebview window renders through the
+**Microsoft Edge WebView2 Runtime**. `launcher.py` checks for it up
+front and raises a clear error naming the install URL rather than
+opening a blank window if it's missing — most Windows 10/11 machines
+already have it (it ships with Windows Update / Edge); if not, install
+the Evergreen runtime from
+[Microsoft's WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
+
+For the full web feature surface — every dialog, endpoint, and
+Qt/web behavioural divergence — see the `### Web —` entries throughout
+[`docs/features.md`](docs/features.md).
+
+---
+
 ## Classification rules
 
 | Condition | Action |
