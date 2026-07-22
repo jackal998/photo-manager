@@ -10,15 +10,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".venv/Scripts/python.exe scripts/hooks/qa_scenario_guard.py"
+            "command": "p=.venv/Scripts/python.exe; [ -x \"$p\" ] || p=../../../.venv/Scripts/python.exe; exec \"$p\" scripts/hooks/qa_scenario_guard.py"
           },
           {
             "type": "command",
-            "command": ".venv/Scripts/python.exe scripts/hooks/docs_guard.py"
+            "command": "p=.venv/Scripts/python.exe; [ -x \"$p\" ] || p=../../../.venv/Scripts/python.exe; exec \"$p\" scripts/hooks/docs_guard.py"
           },
           {
             "type": "command",
-            "command": ".venv/Scripts/python.exe scripts/hooks/zombie_check.py"
+            "command": "p=.venv/Scripts/python.exe; [ -x \"$p\" ] || p=../../../.venv/Scripts/python.exe; exec \"$p\" scripts/hooks/zombie_check.py"
           }
         ]
       },
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".venv/Scripts/python.exe scripts/hooks/team_task_created.py"
+            "command": "p=.venv/Scripts/python.exe; [ -x \"$p\" ] || p=../../../.venv/Scripts/python.exe; exec \"$p\" scripts/hooks/team_task_created.py"
           }
         ]
       },
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".venv/Scripts/python.exe scripts/hooks/team_task_completed.py"
+            "command": "p=.venv/Scripts/python.exe; [ -x \"$p\" ] || p=../../../.venv/Scripts/python.exe; exec \"$p\" scripts/hooks/team_task_completed.py"
           }
         ]
       }
