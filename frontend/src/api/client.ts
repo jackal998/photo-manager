@@ -38,8 +38,21 @@ async function checkResponse(res: Response): Promise<void> {
   let detail: string = res.statusText;
   try {
     const body = (await res.json()) as { detail?: unknown };
-    if (typeof body.detail === "string") detail = body.detail;
-    else detail = JSON.stringify(body.detail);
+    const d = body.detail;
+    if (typeof d === "string") {
+      detail = d;
+    } else if (
+      d !== null &&
+      typeof d === "object" &&
+      typeof (d as { message?: unknown }).message === "string"
+    ) {
+      // Several backend errors return a {code, message} object (path
+      // validation, reveal permission, invalid regex, transcode). Surface
+      // the human-readable message, not a raw JSON blob (#795).
+      detail = (d as { message: string }).message;
+    } else if (d !== undefined) {
+      detail = JSON.stringify(d);
+    }
   } catch {
     // body was not JSON; keep statusText
   }
