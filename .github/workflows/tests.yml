@@ -9,6 +9,10 @@ on:
   # CI entirely and only the final PR targeting master is validated.
   pull_request:
 
+# Least privilege: this workflow only reads the repo to run tests.
+permissions:
+  contents: read
+
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
