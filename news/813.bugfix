@@ -1,0 +1,1 @@
+Fix a column-resize listener leak when the result tree unmounts mid-drag, and declare the scan.exif_workers settings key the backend serves (#813).
