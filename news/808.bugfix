@@ -1,0 +1,1 @@
+Make duplicate-keeper selection deterministic on same-priority ties (lexicographically smallest path) so re-scans reproduce the same keep/duplicate decisions (#808).
