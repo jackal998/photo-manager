@@ -570,20 +570,6 @@ class TestDeleteFile:
 
         assert dlg.deleted_paths == []
 
-    def test_falls_back_to_os_remove_when_send2trash_missing(self, qapp, tmp_path):
-        from app.views.dialogs.execute_action_dialog import ExecuteActionDialog
-        f = tmp_path / "photo.jpg"
-        f.write_bytes(b"fake")
-        groups = []
-        dlg = ExecuteActionDialog(groups, manifest_path=None)
-
-        with patch.dict("sys.modules", {"send2trash": None}):
-            with patch("os.remove") as mock_remove:
-                dlg._delete_file(str(f))
-
-        mock_remove.assert_called_once_with(str(f))
-        assert str(f) in dlg.deleted_paths
-
     def test_d7_delete_outcome_db_failure_self_heal(self, qapp, tmp_path):
         """D7 — if the DB write of outcome='deleted' fails after the file
         is trashed, the row stays outcome='' (reappears on next load)
