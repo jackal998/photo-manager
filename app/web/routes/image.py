@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -25,7 +24,7 @@ _FULLRES_MAX_SOURCE_BYTES: int = 40 * 1024 * 1024  # 40 MiB
 
 
 @router.get("/api/image")
-async def get_image(
+def get_image(
     request: Request,
     path: str = "",
     size: int = _DEFAULT_THUMB_SIDE,
@@ -33,6 +32,13 @@ async def get_image(
     raw: int = 0,
 ) -> Response:
     """Return a decoded JPEG for the requested source file.
+
+    Declared as a plain ``def`` so FastAPI runs the whole handler in its
+    worker threadpool. This is the highest-frequency route (one call per
+    visible thumbnail); its path validation + ``stat()`` calls and the JPEG
+    decode are all blocking, and on a NAS-backed root the stats are network
+    round-trips. On ``async def`` those ran on the event loop and stalled
+    every other request. See #790.
 
     Path validation uses THREE distinct status codes — do not collapse:
     - 400: empty or malformed path string
@@ -96,13 +102,12 @@ async def get_image(
     except OSError:
         source_mtime_ns = 0
 
-    loop = asyncio.get_running_loop()
-    # run_in_executor dispatches the blocking decode to the default thread pool.
-    # The WIC path inside image_service internally re-dispatches to its own
-    # STA-initialised _wic_executor — the nested-executor pattern is intentional
-    # so WIC COM objects always run on an STA thread regardless of the caller.
-    jpeg: bytes = await loop.run_in_executor(
-        None, svc.get_image_bytes, str(resolved), size, quality, source_mtime_ns
+    # Decode runs in this handler's own threadpool thread (plain def — the
+    # whole handler is off the event loop). The WIC path inside image_service
+    # internally re-dispatches to its own STA-initialised _wic_executor, so WIC
+    # COM objects still run on an STA thread regardless of the caller. See #790.
+    jpeg: bytes = svc.get_image_bytes(
+        str(resolved), size, quality, source_mtime_ns
     )
 
     # -- ETag from disk-cache file mtime_ns + size -----------------------
