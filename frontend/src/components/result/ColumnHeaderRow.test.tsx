@@ -14,7 +14,7 @@ function renderHeader(
 ) {
   const onToggleSort = vi.fn();
   const onResize = vi.fn();
-  render(
+  const { unmount } = render(
     <ColumnHeaderRow
       columnWidths={DEFAULT_COLUMN_WIDTHS}
       sortColumn={null}
@@ -24,7 +24,7 @@ function renderHeader(
       {...overrides}
     />
   );
-  return { onToggleSort, onResize };
+  return { onToggleSort, onResize, unmount };
 }
 
 describe("ColumnHeaderRow", () => {
@@ -87,6 +87,21 @@ describe("ColumnHeaderRow", () => {
     });
     onResize.mockClear();
     // A move AFTER mouseup must not fire onResize (listener removed).
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mousemove", { clientX: 400 }));
+    });
+    expect(onResize).not.toHaveBeenCalled();
+  });
+
+  it("removes the window drag listeners when unmounted mid-drag (#796)", () => {
+    const { onResize, unmount } = renderHeader();
+    const handle = screen.getByTestId(colResizeTestid("name"));
+    // Start a drag, then unmount before releasing the mouse.
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    unmount();
+    onResize.mockClear();
+    // A move after unmount must not reach a leaked listener (the pre-#796 code
+    // added the window listeners imperatively with no unmount cleanup).
     act(() => {
       window.dispatchEvent(new MouseEvent("mousemove", { clientX: 400 }));
     });

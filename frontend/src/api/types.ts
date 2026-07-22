@@ -163,6 +163,12 @@ export interface SettingsMap {
    * frontend/src/lib/recentPatterns.ts.
    */
   "ui.action_dialog.recent_patterns"?: unknown;
+  /**
+   * ScanDialog exif-worker count (#652): GET /api/settings serves this key
+   * (see app/web/routes/settings.py `_WEB_SETTINGS_KEYS`), so the type must
+   * declare it to stay in sync with the backend contract (#796).
+   */
+  "scan.exif_workers"?: number | null;
 }
 
 // ---------------------------------------------------------------------------
