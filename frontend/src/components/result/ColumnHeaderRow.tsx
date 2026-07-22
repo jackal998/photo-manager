@@ -10,6 +10,7 @@
 // staying pinned to the top vertically.
 
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
 import { COLUMNS, type ColumnId, type SortDirection } from "@/lib/resultColumns";
@@ -34,29 +35,48 @@ export function ColumnHeaderRow({
 }: ColumnHeaderRowProps) {
   const t = useT();
 
-  // Begin a resize drag: track the pointer on the window so the drag keeps
-  // working even when the cursor leaves the 6px handle. Each move updates the
-  // width in-memory only (persist=false) for live feedback; the final width is
-  // persisted once on mouseup (persist=true) to avoid a localStorage write per
-  // mousemove.
+  // Active resize drag, or null. Driving the window listeners from a useEffect
+  // (keyed on this state) instead of adding them imperatively in the mousedown
+  // handler means React removes them on unmount too — not only on mouseup — so
+  // unmounting the tree mid-drag no longer leaks a window mousemove/mouseup
+  // listener holding a stale onResize closure (#796).
+  const [drag, setDrag] = useState<{
+    column: ColumnId;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const latestWidthRef = useRef(0);
+
+  useEffect(() => {
+    if (drag === null) return;
+    const { column, startX, startWidth } = drag;
+    latestWidthRef.current = startWidth;
+    // Track the pointer on the window so the drag keeps working when the cursor
+    // leaves the 6px handle. Each move updates the width in-memory only
+    // (persist=false) for live feedback.
+    function onMove(ev: globalThis.MouseEvent) {
+      latestWidthRef.current = startWidth + (ev.clientX - startX);
+      onResize(column, latestWidthRef.current, false);
+    }
+    // Commit the final width to localStorage once (persist=true) — avoids a
+    // localStorage write per mousemove — then end the drag.
+    function onUp() {
+      onResize(column, latestWidthRef.current, true);
+      setDrag(null);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [drag, onResize]);
+
   function handleResizeStart(e: ReactMouseEvent, column: ColumnId) {
     e.preventDefault();
     // Stop the mousedown from bubbling to the header cell's sort onClick.
     e.stopPropagation();
-    const startX = e.clientX;
-    const startWidth = columnWidths[column];
-    let latest = startWidth;
-    function onMove(ev: globalThis.MouseEvent) {
-      latest = startWidth + (ev.clientX - startX);
-      onResize(column, latest, false);
-    }
-    function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      onResize(column, latest, true); // commit the final width to localStorage
-    }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    setDrag({ column, startX: e.clientX, startWidth: columnWidths[column] });
   }
 
   return (
