@@ -642,7 +642,17 @@ def extract_pil_scoring_signals(img: "Image.Image") -> dict:
     dict (not a MediaExtract) — the caller (``scan_runner._route_outcome``)
     layers these onto a ``HashResult.to_media_extract()`` base.
     """
-    exif = img.getexif()
+    try:
+        exif = img.getexif()
+    except Exception:  # pylint: disable=broad-exception-caught
+        # A malformed base EXIF IFD can make getexif() raise (SyntaxError /
+        # struct.error) on an otherwise-decodable image. Degrade to no EXIF
+        # rather than letting it bubble up to compute_from_bytes' broad
+        # except, which would turn the file into a HashFailure and drop it
+        # from the manifest entirely. {} is interface-compatible: the guarded
+        # get_ifd() below raises AttributeError -> {} , and _pil_tag_value
+        # uses .get() (#793).
+        exif = {}
     try:
         exif_ifd = exif.get_ifd(_EXIF_IFD)
     except Exception:  # pylint: disable=broad-exception-caught
