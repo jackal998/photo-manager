@@ -218,10 +218,10 @@ jobs:
           $asset = "${{ steps.version.outputs.asset_name }}"
           # --verify-tag ensures we're creating the release against
           # the tag that actually triggered this run, not a moved ref.
-          $isPrerelease = if ($tag -match '-(rc|alpha|beta)') { "--prerelease" } else { "" }
-          gh release create $tag $asset `
-            --title $tag `
-            --notes-file release-body.md `
-            --verify-tag `
-            $isPrerelease.Split() | Out-Null
+          # Build the arg list explicitly so a non-prerelease tag never
+          # appends an empty-string positional arg ("".Split() -> @("")),
+          # which gh would treat as a phantom asset file and reject.
+          $ghArgs = @($tag, $asset, '--title', $tag, '--notes-file', 'release-body.md', '--verify-tag')
+          if ($tag -match '-(rc|alpha|beta)') { $ghArgs += '--prerelease' }
+          gh release create @ghArgs | Out-Null
           Write-Host "Release $tag created with asset $asset"
