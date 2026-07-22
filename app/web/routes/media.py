@@ -141,10 +141,17 @@ def _serve_file(
 
 
 @router.get("/api/media")
-async def get_media(
+def get_media(
     request: Request, path: str = "", transcode: str = ""
 ) -> StreamingResponse:
     """Serve raw media bytes for the given source path.
+
+    Declared as a plain ``def`` so FastAPI runs the handler in its worker
+    threadpool: path validation + ``stat()`` (and, for ``transcode=h264``,
+    the ffmpeg run) are blocking, and on a NAS root the stats are network
+    round-trips re-run on every browser Range request. On ``async def`` they
+    ran on the event loop and stalled all other requests. The byte-streaming
+    generator already runs in Starlette's threadpool. See #790.
 
     Path validation:
     - 400: empty or malformed path string
@@ -164,8 +171,6 @@ async def get_media(
     - 501: ffmpeg not installed (TranscodeUnavailable)
     - 500: ffmpeg exited non-zero or produced no output (TranscodeError)
     """
-    import asyncio
-
     from infrastructure.transcode_service import (
         TranscodeError,
         TranscodeUnavailable,
@@ -189,10 +194,9 @@ async def get_media(
                 detail="transcode service not initialised",
             )
         try:
-            loop = asyncio.get_event_loop()
-            cached_path: Path = await loop.run_in_executor(
-                None, svc.get_transcoded_path, resolved
-            )
+            # Plain def → this runs in FastAPI's threadpool; the blocking
+            # ffmpeg transcode is already off the event loop. See #790.
+            cached_path: Path = svc.get_transcoded_path(resolved)
         except TranscodeUnavailable as exc:
             raise HTTPException(
                 status_code=501,

@@ -21,8 +21,14 @@ router = APIRouter()
 
 
 @router.get("/api/fs/browse")
-async def fs_browse(path: str = "") -> dict:
+def fs_browse(path: str = "") -> dict:
     """List directory contents or filesystem roots.
+
+    Declared as a plain ``def`` so FastAPI runs it in its worker threadpool:
+    ``browse()`` walks ``iterdir()`` and stats every entry, which over an SMB
+    /NAS directory is a burst of blocking network round-trips. On ``async def``
+    that would run on the event loop and stall every other request (incl. the
+    live SSE scan-progress stream). See #790.
 
     Args:
         path: Directory to list. Empty or missing → list filesystem roots.

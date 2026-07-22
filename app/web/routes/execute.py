@@ -65,6 +65,30 @@ def _validate_manifest(manifest_path: str, allowed_roots: list[Path]) -> Path:
     return validate_under_roots(manifest_path, allowed_roots)
 
 
+def _validate_execute_inputs(
+    manifest_path: str,
+    scope_paths: list[str] | None,
+    allowed_roots: list[Path],
+) -> None:
+    """Validate manifest + scope paths and confirm the manifest exists.
+
+    Every check here is a blocking ``resolve()``/``is_file()`` stat (a network
+    round-trip on NAS paths, and unbounded over ``scope_paths``), so
+    ``post_execute`` runs this in the executor rather than on the event loop.
+    Raises the same 400/403/404 ``HTTPException``s the inline checks did; they
+    propagate through the awaiting coroutine to FastAPI unchanged. See #790.
+    """
+    validate_under_roots(manifest_path, allowed_roots)
+    if scope_paths is not None:
+        for sp in scope_paths:
+            validate_under_roots(sp, allowed_roots)
+    if not Path(manifest_path).is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Manifest not found: {manifest_path!r}",
+        )
+
+
 @router.post("/api/execute")
 async def post_execute(body: ExecuteRequest, request: Request) -> ExecuteResult:
     """Execute all decided rows in the manifest.
@@ -79,18 +103,15 @@ async def post_execute(body: ExecuteRequest, request: Request) -> ExecuteResult:
         422 on unexpected error
     """
     roots = _allowed_roots(request)
+    loop = asyncio.get_running_loop()
 
-    # Validate manifest_path.
-    _validate_manifest(body.manifest_path, roots)
-
-    # Validate all scope_paths (if provided).
-    if body.scope_paths is not None:
-        for sp in body.scope_paths:
-            validate_under_roots(sp, roots)
-
-    # Manifest must exist on disk.
-    if not Path(body.manifest_path).is_file():
-        raise HTTPException(status_code=404, detail=f"Manifest not found: {body.manifest_path!r}")
+    # Path validation + existence check are blocking stats — run them off the
+    # event loop. Any 400/403/404 HTTPException raised in the executor
+    # propagates through this await to FastAPI unchanged. This handler stays
+    # ``async`` because it holds the asyncio execute_lock below. See #790.
+    await loop.run_in_executor(
+        None, _validate_execute_inputs, body.manifest_path, body.scope_paths, roots
+    )
 
     # Concurrency gate — try to acquire without blocking.
     execute_lock: asyncio.Lock = getattr(request.app.state, "execute_lock", None)
@@ -106,7 +127,6 @@ async def post_execute(body: ExecuteRequest, request: Request) -> ExecuteResult:
         )
 
     async with execute_lock:
-        loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(
                 None,
@@ -152,8 +172,12 @@ def _run_execute(
 
 
 @router.post("/api/remove")
-async def post_remove(body: RemoveRequest, request: Request) -> RemoveResult:
+def post_remove(body: RemoveRequest, request: Request) -> RemoveResult:
     """Remove files from the review manifest (outcome='ignored', files untouched on disk).
+
+    Plain ``def`` → FastAPI threadpool: the per-path ``validate_under_roots``
+    loop (a ``resolve()`` stat per client path, unbounded ``file_paths``) plus
+    the SQLite write all run off the event loop. See #790.
 
     Returns:
         200 RemoveResult
@@ -172,11 +196,8 @@ async def post_remove(body: RemoveRequest, request: Request) -> RemoveResult:
     if not Path(body.manifest_path).is_file():
         raise HTTPException(status_code=404, detail=f"Manifest not found: {body.manifest_path!r}")
 
-    loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None,
-            _run_remove,
+        result = _run_remove(
             body.manifest_path,
             body.file_paths,
             body.force_locked,
@@ -214,8 +235,10 @@ def _run_remove(
 
 
 @router.post("/api/prune")
-async def post_prune(body: PruneRequest, request: Request) -> PruneResult:
+def post_prune(body: PruneRequest, request: Request) -> PruneResult:
     """Remove singleton groups from the review manifest.
+
+    Plain ``def`` → FastAPI threadpool (path validation + SQLite off-loop). See #790.
 
     Returns:
         200 PruneResult
@@ -230,11 +253,8 @@ async def post_prune(body: PruneRequest, request: Request) -> PruneResult:
     if not Path(body.manifest_path).is_file():
         raise HTTPException(status_code=404, detail=f"Manifest not found: {body.manifest_path!r}")
 
-    loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None,
-            _run_prune,
+        result = _run_prune(
             body.manifest_path,
             body.include_actioned,
             body.paths,
@@ -264,7 +284,7 @@ def _run_prune(
 
 
 @router.post("/api/prune/candidates")
-async def post_prune_candidates(
+def post_prune_candidates(
     body: PruneCandidatesRequest, request: Request
 ) -> PruneCandidatesResult:
     """Classify the manifest's current singletons into plain/actioned/locked (#686).
@@ -286,11 +306,8 @@ async def post_prune_candidates(
     if not Path(body.manifest_path).is_file():
         raise HTTPException(status_code=404, detail=f"Manifest not found: {body.manifest_path!r}")
 
-    loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None,
-            _run_classify_singletons,
+        result = _run_classify_singletons(
             body.manifest_path,
             [str(r) for r in roots],
         )
@@ -308,8 +325,10 @@ def _run_classify_singletons(manifest_path: str, allowed_roots: list[str]) -> di
 
 
 @router.post("/api/save")
-async def post_save(body: SaveRequest, request: Request) -> SaveResult:
+def post_save(body: SaveRequest, request: Request) -> SaveResult:
     """Save manifest decisions in-place or as a copy.
+
+    Plain ``def`` → FastAPI threadpool (path validation + SQLite/copy off-loop). See #790.
 
     Returns:
         200 SaveResult
@@ -328,11 +347,8 @@ async def post_save(body: SaveRequest, request: Request) -> SaveResult:
     if not Path(body.manifest_path).is_file():
         raise HTTPException(status_code=404, detail=f"Manifest not found: {body.manifest_path!r}")
 
-    loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None,
-            _run_save,
+        result = _run_save(
             body.manifest_path,
             body.target_path,
         )
@@ -350,8 +366,10 @@ def _run_save(manifest_path: str, target_path: str | None) -> dict:
 
 
 @router.post("/api/reveal")
-async def post_reveal(body: RevealRequest, request: Request) -> RevealResult:
+def post_reveal(body: RevealRequest, request: Request) -> RevealResult:
     """Open Explorer to reveal a file (Windows-only, localhost-only).
+
+    Plain ``def`` → FastAPI threadpool (path validation ``resolve()`` off-loop). See #790.
 
     Returns:
         200 RevealResult
