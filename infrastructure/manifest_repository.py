@@ -237,8 +237,9 @@ def migrate_manifest_schema(conn: sqlite3.Connection) -> None:
         where a crash between the manifest write and a separate
         auto-select write left keepers unlocked.
 
-    Idempotent — every ALTER is wrapped in a try/except that silently
-    skips columns that already exist. Order matters: the additive
+    Idempotent — each ALTER's ``duplicate column name`` error (the column
+    already exists) is skipped; any OTHER OperationalError propagates so a
+    real migration failure is not masked. Order matters: the additive
     ADD-COLUMN migrations run FIRST so every modern column exists,
     THEN the #433 drop-move structural migration rebuilds the table
     without ``dest_path``.
@@ -255,8 +256,14 @@ def migrate_manifest_schema(conn: sqlite3.Connection) -> None:
                 f"ADD COLUMN {col} {ddl}"
             )
             conn.commit()
-        except Exception:
-            pass  # column already exists
+        except sqlite3.OperationalError as exc:
+            # Only the idempotency case — the column already exists — is
+            # benign. Any other OperationalError (missing table, locked DB,
+            # disk/IO failure, malformed DDL) means the schema did NOT
+            # migrate; swallowing it would leave a silently-missing column
+            # that fails far from the cause. Re-raise everything else.
+            if "duplicate column name" not in str(exc).lower():
+                raise
     _drop_move_dest_path(conn)
 
 
