@@ -267,7 +267,9 @@ jobs:
     # TestClient). Blocking since the Phase 4 cutover (2026-07-24).
     needs: detect-web-changes
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # 12 (was 8): headroom for slow apt mirrors now the job is blocking —
+    # the 8-min budget was consumed entirely by apt in PR #817's first run.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         if: needs.detect-web-changes.outputs.web == 'true'
@@ -298,7 +300,10 @@ jobs:
       # ffmpeg is added for the V2 transcode integration test (advisory).
       - name: Install exiftool and ffmpeg
         if: needs.detect-web-changes.outputs.web == 'true'
-        run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl ffmpeg
+        # --no-install-recommends: ffmpeg's recommends pull ~100 packages
+        # (pocketsphinx, SDL, VA drivers) that once pushed this install past
+        # the job timeout on a slow mirror (PR #817 first blocking run).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libimage-exiftool-perl ffmpeg
 
       # V2 transcode: verify a real HEVC→H.264 transcode produces valid output.
       # Blocking since the Phase 4 cutover (2026-07-24) — runs after sandbox build.
