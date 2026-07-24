@@ -49,6 +49,7 @@ from qa.web._invariants import (
     open_manifest_via_picker,
     right_click_row,
     run_scan,
+    wait_for_manifest,
 )
 from qa.web.testid_constants import (
     CTX_APPLY_BEST_COPY,
@@ -178,7 +179,17 @@ def run(*, base_url: str) -> None:
             )
             click_context_item(page, CTX_APPLY_BEST_COPY)
 
-            post = _collect(_get_manifest(base_url, db_path))
+            # The click triggers the keep+lock + non-keeper-delete writes
+            # asynchronously; poll until both facets are visible server-side
+            # instead of racing them (#815 s72 CI flake).
+            def _best_copy_settled(m: dict) -> bool:
+                s = _collect(m)
+                keeper = s.get(_EXPECTED_KEEPER, {})
+                return bool(keeper.get("is_locked")) and any(
+                    r["user_decision"] == "delete" for r in s.values()
+                )
+
+            post = _collect(wait_for_manifest(base_url, db_path, _best_copy_settled))
             _assert_best_copy_applied(post, context="post-click")
 
             # ── Durability: reload clears in-memory client state; reopen via

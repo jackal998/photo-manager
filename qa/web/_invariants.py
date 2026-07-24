@@ -10,9 +10,13 @@ importable in CI unit-test runs where playwright is not installed.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
-from typing import TYPE_CHECKING, Union
+import time
+import urllib.parse
+import urllib.request
+from typing import TYPE_CHECKING, Callable, Union
 
 if TYPE_CHECKING:
     # Only evaluated by type-checkers, never at runtime.
@@ -511,6 +515,38 @@ def set_row_decision(
     button.wait_for(state="visible", timeout=timeout)
     button.scroll_into_view_if_needed(timeout=timeout)
     button.click()
+
+
+def wait_for_manifest(
+    base_url: str,
+    db_path: str,
+    predicate: Callable[[dict], bool],
+    *,
+    timeout_s: float = 10.0,
+    interval_s: float = 0.25,
+) -> dict:
+    """Poll ``GET /api/manifest?path=<db_path>`` until ``predicate`` holds.
+
+    UI affordances stage state through asynchronous requests (a
+    DecisionControl click issues PATCH /api/decisions; Apply-best-copy issues
+    the keep+lock writes), so a manifest GET fired straight after the click
+    races the server-side write — the s12/s72 CI flakes tracked in #815.
+    Poll until the expected state appears, then return that settled snapshot
+    for the caller's strict assertions.
+
+    This helper never asserts: on timeout it returns the LAST snapshot, so a
+    genuine regression still fails through the scenario's own specific
+    assertion message — just after the grace window instead of instantly.
+    """
+    encoded = urllib.parse.quote(db_path, safe="")
+    url = f"{base_url.rstrip('/')}/api/manifest?path={encoded}"
+    deadline = time.monotonic() + timeout_s
+    while True:
+        with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310 (loopback)
+            manifest = json.loads(resp.read())
+        if predicate(manifest) or time.monotonic() >= deadline:
+            return manifest
+        time.sleep(interval_s)
 
 
 # ---------------------------------------------------------------------------
