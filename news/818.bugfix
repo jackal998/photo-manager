@@ -1,0 +1,1 @@
+Fix the s12/s72 web-scenario CI flakes: poll the manifest until staged decision/lock writes land instead of racing them (#818)
