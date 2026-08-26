@@ -370,6 +370,30 @@ Does NOT compose with:
 - **Batching the gate.** N issues = N `gh issue create` calls =
   N gates surfaced. "Let's go" approves only the next one, not the
   whole sweep — same per-gated-action rule as elsewhere in CLAUDE.md.
+- **In-preview numeric cross-refs before issue numbers exist.** When
+  filing N issues from a batched audit (sweep results, audit cluster),
+  do NOT write `Related: #5` / `Compounds with #6` in any body if
+  the digit is your in-preview-table index. GitHub assigns actual
+  issue numbers at `gh issue create` time, and your in-preview
+  indices will silently point at unrelated past issues that happen to
+  hold those low numbers (e.g. `#5` in a repo with 470 issues
+  resolves to whatever ancient #5 was, never your sibling draft).
+  Two safe patterns:
+  1. **Words first, edit later (preferred):** draft bodies with prose
+     refs ("the readline-timeout issue", "the wal/shm sidecar issue"),
+     file all N, then run one cross-ref correction edit pass with
+     `gh issue edit <N> --body-file -` once you know the assigned
+     numbers. Single edit pass; minimum round-trips.
+  2. **Two-phase filing:** file with placeholder bodies (no cross-refs),
+     collect assigned numbers, then edit each body. More round-trips;
+     useful only when the cross-ref web is dense enough that prose
+     refs become unwieldy.
+  Origin: 2026-05-30 audit-cluster filing of 15 sweep findings; bodies
+  referenced `#1`, `#5`, `#6`, `#14` as table indices — those map to
+  unrelated past issues in this repo. Caught + corrected via 7
+  `gh issue edit` calls before any subscriber notification landed,
+  but the cleaner discipline is to never write the broken refs in
+  the first place.
 - **Dumping research briefs / chat scrollback into the body.** The
   body should stand alone. Link to the source (`Related: PR #N`,
   `Context: filed during /work #X`) instead of pasting the full
