@@ -8,6 +8,7 @@ from typing import Any
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import QMainWindow, QMenuBar, QMessageBox
 
+from app.views import density
 from infrastructure.i18n import get_translator, t
 
 # Actions that are only meaningful with a manifest loaded. Both the
@@ -35,6 +36,8 @@ class MenuController:
         self.actions: dict[str, QAction] = {}
         # Per-locale QActions inside the View → Language submenu.
         self._language_actions: dict[str, QAction] = {}
+        # Per-density QActions inside the View → Density submenu.
+        self._density_actions: dict[str, QAction] = {}
 
     def setup_menus(self) -> dict[str, QAction]:
         """Create all menus and return action references.
@@ -113,6 +116,20 @@ class MenuController:
             # closure captures only the last code from the iteration.
             act.triggered.connect(lambda _checked=False, c=code: self._on_language_chosen(c))
             self._language_actions[code] = act
+
+        # View → Density submenu (Comfortable / Compact). Same exclusive
+        # radio semantics as Language; unlike Language it's an instant,
+        # non-destructive relayout so there's no confirm prompt.
+        density_menu = view_menu.addMenu(t("menu.view.density.title"))
+        self._density_group = QActionGroup(self.window)
+        self._density_group.setExclusive(True)
+        for code, label_key in density.available():
+            act = density_menu.addAction(t(label_key))
+            act.setCheckable(True)
+            act.setChecked(code == density.current())
+            self._density_group.addAction(act)
+            act.triggered.connect(lambda _checked=False, c=code: self._on_density_chosen(c))
+            self._density_actions[code] = act
 
         self.window.setMenuBar(menubar)
 
@@ -194,3 +211,23 @@ class MenuController:
         relocalize = getattr(self.window, "relocalize", None)
         if callable(relocalize):
             relocalize()
+
+    # ------------------------------------------------------------------ density
+
+    def _on_density_chosen(self, code: str) -> None:
+        """Persist the chosen density and ask the window to relayout.
+
+        No confirm prompt — switching density is instant and reversible,
+        unlike the language switch (which rebuilds the whole window).
+        """
+        if code == density.current():
+            return
+        if self.settings is not None:
+            try:
+                self.settings.set("ui.density", code)
+                self.settings.save()
+            except OSError:
+                pass  # Non-fatal — the in-memory density still applies this session.
+        apply_density = getattr(self.window, "apply_density", None)
+        if callable(apply_density):
+            apply_density(code)

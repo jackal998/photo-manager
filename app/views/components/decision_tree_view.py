@@ -19,9 +19,12 @@ for those two keys. All other letters still fall through to
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QColor, QKeyEvent, QPen
 from PySide6.QtWidgets import QTreeView
+
+from app.views.constants import DECISION_ROLE
+from app.views.theme import DAYLIGHT
 
 
 class DecisionTreeView(QTreeView):
@@ -51,6 +54,59 @@ class DecisionTreeView(QTreeView):
 
     decisionRequested = Signal(str)
     playPauseRequested = Signal()
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Pre-build the band/frame colours once (QColor parse per paint
+        # would be wasteful on a tree with thousands of rows).
+        self._group_band = QColor(DAYLIGHT["group_band"])
+        self._group_border = QColor(DAYLIGHT["group_border"])
+        self._group_accent = QColor(DAYLIGHT["accent"])
+        self._delete_row_bg = QColor(DAYLIGHT["delete_row_bg"])
+
+    def drawRow(self, painter, option, index) -> None:  # type: ignore[override]
+        """Paint full-row backgrounds + the group frame around the cells.
+
+        QSS can't target group-header vs file rows in a QTreeView, so the
+        structural cues live here:
+
+        * **Group-header rows** get a warm band, a top border, and a warm-
+          accent left strip — a clear frame so each group pops as a unit.
+        * The **last child** of a group gets a bottom border, closing the
+          frame.
+        * **File rows marked for deletion** get a soft red wash.
+
+        Backgrounds are filled *before* ``super().drawRow`` so the cell
+        text paints crisply on top and Qt's selection highlight still wins;
+        the frame lines are drawn *after* so they sit above the fills.
+        ``index`` is always the row's column-0 index (where the model
+        stores :data:`DECISION_ROLE`).
+        """
+        rect = option.rect
+        is_group = not index.parent().isValid()
+        if is_group:
+            painter.fillRect(rect, self._group_band)
+        elif index.data(DECISION_ROLE) == "delete":
+            painter.fillRect(rect, self._delete_row_bg)
+
+        super().drawRow(painter, option, index)
+
+        painter.save()
+        if is_group:
+            pen = QPen(self._group_border)
+            pen.setWidth(1)
+            painter.setPen(pen)
+            painter.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
+            # Warm-accent left strip marks the start of the group.
+            painter.fillRect(QRect(rect.left(), rect.top(), 4, rect.height()), self._group_accent)
+        else:
+            model = index.model()
+            if model is not None and index.row() == model.rowCount(index.parent()) - 1:
+                pen = QPen(self._group_border)
+                pen.setWidth(1)
+                painter.setPen(pen)
+                painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+        painter.restore()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         if event.modifiers() == Qt.NoModifier:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHeaderView, QTreeView
 from loguru import logger
 
@@ -14,6 +15,8 @@ from app.views.constants import (
     COL_GROUP_COUNT,
     COL_LOCK,
     COL_NAME,
+    COL_SCORE,
+    DECISION_ROLE,
     NUM_COLUMNS,
     PATH_ROLE,
     SORT_ROLE,
@@ -45,6 +48,8 @@ class TreeController:
         self.tree = tree_view
         self._model = None
         self._proxy = None
+        self._decision_delegate = None
+        self._lock_delegate = None
         self._current_sort_column: int = COL_GROUP
         self._current_sort_order: Qt.SortOrder = Qt.AscendingOrder
 
@@ -53,6 +58,22 @@ class TreeController:
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
         self.tree.setSelectionMode(QTreeView.ExtendedSelection)
+        # Daylight delegates: column 0 = 5-state similarity badge,
+        # COL_ACTION = inline Keep/Delete/Remove control, COL_SCORE = mini
+        # keep-worthiness bar + number, COL_LOCK = painted padlock. All defer
+        # to the default painter for group-header rows.
+        from app.views.delegates import (
+            DecisionControlDelegate,
+            LockIconDelegate,
+            ScoreBarDelegate,
+            SimilarityBadgeDelegate,
+        )
+        self.tree.setItemDelegateForColumn(COL_GROUP, SimilarityBadgeDelegate(self.tree))
+        self._decision_delegate = DecisionControlDelegate(self.tree)
+        self.tree.setItemDelegateForColumn(COL_ACTION, self._decision_delegate)
+        self.tree.setItemDelegateForColumn(COL_SCORE, ScoreBarDelegate(self.tree))
+        self._lock_delegate = LockIconDelegate(self.tree)
+        self.tree.setItemDelegateForColumn(COL_LOCK, self._lock_delegate)
         # Stop Qt auto-scrolling the viewport to the clicked cell on every
         # selection change. With autoScroll on, clicking a row whose cells
         # extend past the viewport made the view jerk horizontally to "align"
@@ -483,6 +504,19 @@ class TreeController:
                     continue
                 action_item.setText(_action_display(decision))
                 action_item.setData(_DECISION_SORT.get(decision, 3), SORT_ROLE)
+                action_item.setData(decision, DECISION_ROLE)
+                # Keep DECISION_ROLE on the col-0 item in sync so drawRow's
+                # delete-tint reflects the new decision without a full rebuild.
+                sim_item = group_item.child(m_i, COL_GROUP)
+                if sim_item is not None:
+                    sim_item.setData(decision, DECISION_ROLE)
+                # Strike through the file name for delete rows (clear it when
+                # the decision changes away from delete).
+                name_item = group_item.child(m_i, COL_NAME)
+                if name_item is not None:
+                    strike = QFont()
+                    strike.setStrikeOut(decision == "delete")
+                    name_item.setFont(strike)
             except Exception as exc:
                 logger.error("update_decision_cells failed at ({}, {}): {}", g_i, m_i, exc)
 
@@ -580,3 +614,17 @@ class TreeController:
     def proxy(self):
         """Get the current proxy model."""
         return self._proxy
+
+    @property
+    def decision_delegate(self):
+        """The inline Keep/Delete/Remove delegate on COL_ACTION (or None
+        before ``setup_tree_properties`` runs). MainWindow connects its
+        ``decisionPicked`` signal to apply the click to the row's path."""
+        return self._decision_delegate
+
+    @property
+    def lock_delegate(self):
+        """The clickable padlock delegate on COL_LOCK (or None before
+        ``setup_tree_properties`` runs). MainWindow connects its
+        ``lockToggled`` signal to flip the row's lock state."""
+        return self._lock_delegate

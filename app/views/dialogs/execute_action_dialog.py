@@ -429,14 +429,20 @@ class ExecuteActionDialog(QDialog):
         # Warning banner for complete-group deletions
         self._warning_banner = QFrame()
         self._warning_banner.setFrameShape(QFrame.StyledPanel)
+        # Warm amber caution that fits the Daylight palette (was a cold
+        # #fff3cd/#ffc107 yellow). Label bg is forced transparent because
+        # the app-level QSS gives every QWidget the paper background, which
+        # would otherwise paint over the banner fill.
         self._warning_banner.setStyleSheet(
-            "QFrame { background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; }"
+            "QFrame { background: #f9efd9; border: 1px solid #e3c98f; border-radius: 8px; }"
         )
         banner_layout = QVBoxLayout(self._warning_banner)
-        banner_layout.setContentsMargins(8, 6, 8, 6)
+        banner_layout.setContentsMargins(10, 8, 10, 8)
         self._warning_label = QLabel()
         self._warning_label.setWordWrap(True)
-        self._warning_label.setStyleSheet("color: #856404; font-weight: bold;")
+        self._warning_label.setStyleSheet(
+            "color: #7d5e1f; font-weight: bold; background: transparent;"
+        )
         # Group numbers in the banner are rendered as HTML anchors so the
         # user can click one to jump straight to that group in the tree
         # (#166). RichText must be enabled before setText; linkActivated

@@ -49,6 +49,14 @@ menu:
     title: "&View"
     language:
       title: "Language"
+    density:
+      title: "Density"
+      comfortable: "Comfortable"
+      compact: "Compact"
+
+toolbar:
+  title: "Main"
+  selected_label: "Selected:"
 
 main_window:
   title: "Photo Manager"
@@ -106,6 +114,12 @@ decision:
   remove_from_list: "remove from list"
   lock: "lock"
   unlock: "unlock"
+  # Short labels for the inline decision control painted in each tree row
+  # (the segmented Keep / Delete / Remove buttons). Kept terse so the three
+  # segments fit the Action column.
+  keep_short: "Keep"
+  delete_short: "Delete"
+  remove_short: "Remove"
 
 # Friendly row labels for the scan-dialog progress log's action-count
 # summary table (scanner.manifest.print_summary). The raw action
@@ -454,6 +468,13 @@ status:
 # Preview pane text and inline labels.
 preview:
   header: "Preview"
+  legend:
+    title: "Similarity key"
+    ref: "Reference — the chosen keeper of the group"
+    exact: "Exact, byte-identical duplicate"
+    near: "Near match by visual similarity"
+    passenger: "Linked indirectly (lower confidence)"
+    none: "No comparable image (e.g. a Live Photo video)"
   placeholder: "(preview)"
   loading: "Loading…"
   failed: "(failed)"

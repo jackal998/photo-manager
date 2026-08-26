@@ -543,6 +543,14 @@ def run_one(name: str) -> tuple[int, str]:
     env = os.environ.copy()
     env["PHOTO_MANAGER_HOME"] = "qa"
     env["QT_ACCESSIBILITY"] = "1"
+    # Open maximized so the wide results-tree columns (Daylight redesign)
+    # don't push the File Name column off the small CI screen's visible
+    # area — _row_anchor / read helpers need the name cells exposed. Only
+    # affects qa launches (real users keep the normal window). Excluded for
+    # s39, which drives the window to explicit geometries for its
+    # round-trip assertion — a maximized launch would fight that.
+    if name != "s39_window_geometry_persist":
+        env["PHOTO_MANAGER_MAXIMIZE"] = "1"
     proc = subprocess.Popen(
         [PY, "main.py"], cwd=REPO, env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

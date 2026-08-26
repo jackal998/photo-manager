@@ -34,6 +34,25 @@ NUM_COLUMNS: int = 11
 # Data roles
 PATH_ROLE: int = Qt.UserRole  # store full path on name item
 SORT_ROLE: int = Qt.UserRole + 1  # used by QSortFilterProxyModel
+# Raw user_decision ('' / 'delete' / 'ignore') stored on the COL_GROUP
+# (column 0) item of each file row, so DecisionTreeView.drawRow can read
+# the row's decision directly off the index it's handed (which is always
+# column 0) to paint the delete-row tint — without re-parsing the
+# localized Action-column label. Updated incrementally by
+# TreeController.update_decision_cells alongside the COL_ACTION label.
+DECISION_ROLE: int = Qt.UserRole + 2
+# Coarse similarity kind enum stored on the COL_GROUP item of each file
+# row so the similarity-badge delegate can pick colour/icon without
+# re-parsing the percentage text. Values are the SIM_* constants below.
+SIMILARITY_KIND_ROLE: int = Qt.UserRole + 3
+
+# Similarity kinds (value of SIMILARITY_KIND_ROLE). One per distinct
+# visual treatment the badge delegate paints.
+SIM_REF: int = 0        # the group's chosen keeper ("Ref")
+SIM_EXACT: int = 1      # byte-identical duplicate ("100%")
+SIM_NEAR: int = 2       # direct near-match ("95%")
+SIM_PASSENGER: int = 3  # transitive / indirect member ("97*%")
+SIM_NONE: int = 4       # no comparable image ("—", e.g. Live Photo MOV)
 
 
 # Preview/grid defaults

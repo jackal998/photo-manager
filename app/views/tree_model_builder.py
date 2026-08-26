@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from PySide6.QtCore import QSortFilterProxyModel, Qt
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtGui import QFont, QStandardItem, QStandardItemModel
 
 from app.views.constants import (
     COL_ACTION,
@@ -19,11 +19,20 @@ from app.views.constants import (
     COL_SCORE,
     COL_SHOT_DATE,
     COL_SIZE_BYTES,
+    DECISION_ROLE,
     IGNORE_DECISION,
     PATH_ROLE,
+    SIM_EXACT,
+    SIM_NEAR,
+    SIM_NONE,
+    SIM_PASSENGER,
+    SIM_REF,
+    SIMILARITY_KIND_ROLE,
     SORT_ROLE,
     headers,
 )
+from app.views.delegates.lock_icon import make_lock_icon
+from app.views.theme import DAYLIGHT
 from infrastructure.i18n import t
 from scanner.phash_distance import hamming_distance as _phash_hamming
 
@@ -274,6 +283,27 @@ def build_model(
     """
     model = QStandardItemModel()
     model.setHorizontalHeaderLabels(headers())
+    # Show a padlock glyph in the Lock column header instead of the word.
+    try:
+        model.setHeaderData(COL_LOCK, Qt.Horizontal, "", Qt.DisplayRole)
+        model.setHeaderData(
+            COL_LOCK, Qt.Horizontal, make_lock_icon(DAYLIGHT["text_muted"]), Qt.DecorationRole
+        )
+    except Exception:
+        pass
+
+    # Bold font for group-header rows so the group reads as the scannable
+    # spine of the view (the audit's #2 structural gap). Constructed here
+    # (post-QApplication) rather than at module import; a bare QFont()
+    # inherits the app default family — Segoe UI on Windows — so it stays
+    # consistent with the QSS theme font. The full-row warm band behind
+    # group headers is painted separately by DecisionTreeView.drawRow.
+    group_font = QFont()
+    group_font.setBold(True)
+    # Strike-through font for the file name of a row marked for deletion —
+    # reinforces the delete state alongside the red row tint.
+    strike_font = QFont()
+    strike_font.setStrikeOut(True)
 
     for g in groups:
         group_number = int(getattr(g, "group_number", 0) or 0)
@@ -299,6 +329,9 @@ def build_model(
         ]
         for it in group_row:
             it.setEditable(False)
+        # Group-header weight: bold the label + the count cell.
+        group_item.setFont(group_font)
+        group_row[COL_GROUP_COUNT].setFont(group_font)
 
         # Group-level SORT_ROLE: aggregate across all files so that sorting a column
         # reorders groups by their "best" file's value (first file after in-group sort).
@@ -442,6 +475,21 @@ def build_model(
                 ref_phash=ref_winner_phash,
             )
 
+            # Coarse similarity kind for the badge delegate — derived from
+            # the same inputs (and the rendered label's "*%" suffix) so it
+            # never disagrees with the text. ref_winner is always Ref-tier
+            # (priority 1), so a winner is always SIM_REF.
+            if p is ref_winner:
+                similarity_kind = SIM_REF
+            elif file_action == "EXACT":
+                similarity_kind = SIM_EXACT
+            elif file_action == "REVIEW_DUPLICATE":
+                similarity_kind = SIM_NEAR
+            elif file_match.endswith("*%"):
+                similarity_kind = SIM_PASSENGER
+            else:
+                similarity_kind = SIM_NONE
+
             # Col 1: user's decision (delete / keep / "" / ignore).
             # Lock state moved to its own COL_LOCK column in #182 so the
             # Action column stays sortable / searchable as just the
@@ -491,6 +539,17 @@ def build_model(
 
             try:
                 child_row[COL_GROUP].setData(_ACTION_SORT.get(file_action, 1), SORT_ROLE)
+            except Exception:
+                pass
+            try:
+                # Decision + similarity kind on the col-0 item: drawRow reads
+                # DECISION_ROLE off the column-0 index it's handed to paint
+                # the delete tint; the badge delegate reads SIMILARITY_KIND_ROLE.
+                child_row[COL_GROUP].setData(item_decision, DECISION_ROLE)
+                child_row[COL_GROUP].setData(similarity_kind, SIMILARITY_KIND_ROLE)
+                # Also on COL_ACTION so the inline decision-control delegate
+                # reads the active segment off its own cell.
+                child_row[COL_ACTION].setData(item_decision, DECISION_ROLE)
             except Exception:
                 pass
             try:
@@ -545,6 +604,9 @@ def build_model(
                 child_row[COL_NAME].setData(getattr(p, "file_path", ""), PATH_ROLE)
             except Exception:
                 pass
+
+            if item_decision == "delete":
+                child_row[COL_NAME].setFont(strike_font)
 
             for it in child_row:
                 it.setEditable(False)

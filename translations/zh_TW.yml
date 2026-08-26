@@ -33,6 +33,14 @@ menu:
     title: "檢視(&V)"
     language:
       title: "語言"
+    density:
+      title: "密度"
+      comfortable: "寬鬆"
+      compact: "緊湊"
+
+toolbar:
+  title: "主要"
+  selected_label: "已選:"
 
 main_window:
   title: "Photo Manager"
@@ -80,6 +88,11 @@ decision:
   remove_from_list: "從清單移除"
   lock: "鎖定"
   unlock: "解除鎖定"
+  # 內嵌於每列的決策控制(保留 / 刪除 / 移除 分段按鈕)用的精簡標籤,
+  # 讓三個分段塞得進「動作」欄。
+  keep_short: "保留"
+  delete_short: "刪除"
+  remove_short: "移除"
 
 manifest_summary:
   keep: "已保留 (無動作)"
@@ -363,6 +376,13 @@ status:
 
 preview:
   header: "預覽"
+  legend:
+    title: "相似度圖例"
+    ref: "參考 — 群組中選定的保留檔"
+    exact: "完全相同(位元級重複)"
+    near: "視覺相似的近似比對"
+    passenger: "間接關聯(信心較低)"
+    none: "無可比對影像(例如 Live Photo 影片)"
   placeholder: "(預覽)"
   loading: "載入中…"
   failed: "(失敗)"

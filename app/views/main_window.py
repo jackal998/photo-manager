@@ -6,6 +6,7 @@ and handlers while preserving all existing public interfaces for backward compat
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +204,18 @@ class MainWindow(QMainWindow):
         self._img = image_service
         self._settings = settings
 
+        # Row density (Comfortable / Compact) — set before the tree + its
+        # delegates are built so the first layout uses the right row height.
+        from app.views import density
+        try:
+            density.set_density(
+                self._settings.get("ui.density", density.DEFAULT)
+                if self._settings is not None
+                else density.DEFAULT
+            )
+        except Exception:
+            density.set_density(density.DEFAULT)
+
         # #468 — defense-in-depth flag for closeEvent. Set/cleared by
         # ScanDialog.scan_started / scan_finished signals wired up in
         # :meth:`on_scan_sources`. Stays False whenever no scan dialog
@@ -368,6 +381,18 @@ class MainWindow(QMainWindow):
         # Setup menus
         self.menu_controller.setup_menus()
 
+        # Toolbar surfacing the core verbs (Scan / Open / bulk decision /
+        # Execute). Built after menus so it can reuse their QActions and
+        # inherit the manifest-load gating on Execute (#audit gap C/5).
+        from app.views.components.toolbar_builder import build_main_toolbar
+        self._toolbar = build_main_toolbar(
+            self,
+            self.menu_controller.actions,
+            on_bulk_keep=self._bulk_keep_selected,
+            on_bulk_delete=self._bulk_delete_selected,
+            on_bulk_remove=self._bulk_remove_selected,
+        )
+
         # Setup context menu
         self.context_menu_handler.setup_context_menu()
 
@@ -407,6 +432,20 @@ class MainWindow(QMainWindow):
         # Open Folder and double-click share the same OS-cascade impl.
         from app.views.handlers.file_opener import open_file_in_default_viewer
         self.tree_controller.setup_double_click(open_file_in_default_viewer)
+
+        # Inline decision control (Phase 2d): a click on a row's
+        # Keep/Delete/Remove segment applies that decision to the row's
+        # path via the same single-row set_decision path the right-click
+        # menu uses. Guarded — the delegate only exists after
+        # setup_tree_properties, which _setup_ui already ran.
+        delegate = self.tree_controller.decision_delegate
+        if delegate is not None:
+            delegate.decisionPicked.connect(self._on_inline_decision)
+
+        # Inline lock toggle: clicking a row's padlock flips its lock state.
+        lock_delegate = self.tree_controller.lock_delegate
+        if lock_delegate is not None:
+            lock_delegate.lockToggled.connect(self._on_lock_toggled)
 
         # Image loading signal
         self.imageLoaded.connect(self._on_image_loaded)
@@ -836,6 +875,64 @@ class MainWindow(QMainWindow):
         """
         self._preview.on_image_loaded(token, path, image)
 
+    def apply_density(self, code: str) -> None:
+        """Switch row density and relayout the tree (View → Density).
+
+        The delegates read the new row height from
+        :mod:`app.views.density` in their ``sizeHint``; we set it then
+        force the view to recompute item layout (uniform-row-height caches
+        the old height otherwise).
+        """
+        from app.views import density
+        density.set_density(code)
+        try:
+            self.tree.scheduleDelayedItemsLayout()
+            self.tree.doItemsLayout()
+            self.tree.viewport().update()
+        except Exception:
+            pass
+
+    def _bulk_keep_selected(self) -> None:
+        """Toolbar: set every selected file row to Keep (no-action)."""
+        self.file_operations.set_decision_to_highlighted("")
+
+    def _bulk_delete_selected(self) -> None:
+        """Toolbar: mark every selected file row for deletion."""
+        self.file_operations.set_decision_to_highlighted("delete")
+
+    def _bulk_remove_selected(self) -> None:
+        """Toolbar: set every selected file row to Remove-from-list (ignore)."""
+        from app.views.constants import IGNORE_DECISION
+        self.file_operations.set_decision_to_highlighted(IGNORE_DECISION)
+
+    def _on_inline_decision(self, index: Any, decision: str) -> None:
+        """Apply a Keep/Delete/Remove click from the inline row control.
+
+        ``index`` is the proxy index of the clicked Action cell. We resolve
+        it to the row's file path and route through the shared single-row
+        ``set_decision`` dispatcher — the same path the right-click menu
+        uses (deliberate per-row action, so it bypasses the bulk lock
+        pre-filter by design, #164). ``set_decision`` no-ops cleanly when no
+        manifest is loaded and pushes an incremental cell update that
+        repaints the control's active segment + any delete tint.
+        """
+        path = self.tree_controller.get_file_path_from_index(index)
+        if not path:
+            return
+        self.file_operations.set_decision([{"type": "file", "path": path}], decision)
+
+    def _on_lock_toggled(self, index: Any, locked: bool) -> None:
+        """Apply a lock/unlock click from a row's inline padlock.
+
+        Resolves the proxy index to the row's path and flips its lock via
+        the shared ``set_locked_state`` dispatcher (incremental cell update
+        repaints the padlock). No-op without a loaded manifest.
+        """
+        path = self.tree_controller.get_file_path_from_index(index)
+        if not path:
+            return
+        self.file_operations.set_locked_state([{"type": "file", "path": path}], locked)
+
     # Private methods
 
     def _remove_from_list_toolbar(self) -> None:
@@ -844,6 +941,17 @@ class MainWindow(QMainWindow):
         self.file_operations.remove_from_list_toolbar(highlighted_items)
 
     # ------------------------------------------------------------------ close-with-dirty-check
+
+    def createPopupMenu(self):  # type: ignore[override]
+        """Suppress QMainWindow's built-in toolbar/dock right-click menu.
+
+        Adding the toolbar made QMainWindow offer its default
+        show/hide-toolbars context menu on a right-click anywhere in the
+        menu-bar / toolbar chrome. The app has one fixed toolbar, so that
+        menu is noise — and it regressed s25 (which asserts the chrome
+        hosts no context menu). Returning None removes it.
+        """
+        return None
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         """Prompt the user when there are unsaved decisions before closing.
@@ -1131,6 +1239,10 @@ class MainWindow(QMainWindow):
         new_win = make_main_window(self._vm, self._img, self._settings)
         new_win._apply_relocalize_state(saved)
         new_win.show()
+        # Mirror main.main()'s qa-only maximize so a language switch during
+        # the qa batch keeps the wide results-tree columns on-screen.
+        if os.environ.get("PHOTO_MANAGER_MAXIMIZE") == "1":
+            new_win.showMaximized()
         # Close + delete this window. The new one owns the same vm /
         # image_service / settings; nothing of ours needs to outlive
         # the close.

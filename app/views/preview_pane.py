@@ -170,6 +170,12 @@ class PreviewPane(QWidget):
         self.preview_area.setWidget(self._preview_container)
         root.addWidget(self.preview_area)
 
+        # Static similarity legend footer — the audit asked for a key that
+        # decodes the five badge states (two were tooltip-only). It never
+        # changes with selection, so it lives below the scroll area.
+        from app.views.components.similarity_legend import build_similarity_legend
+        root.addWidget(build_similarity_legend())
+
         # state
         self._current_single_token: str | None = None
         self._grid_labels: dict[str, QLabel] = {}

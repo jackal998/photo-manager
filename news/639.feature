@@ -1,0 +1,1 @@
+Redesign the Review screen with a Daylight·light theme: colour/shape similarity badges, framed groups, delete tint + strikethrough, a keep-worthiness score bar, a clickable padlock, an inline Keep/Delete/Remove control, a Comfortable/Compact density toggle, a primary-verb toolbar, and a similarity legend in the preview (#639).

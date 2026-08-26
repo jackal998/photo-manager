@@ -11,6 +11,7 @@ from loguru import logger
 
 from app.viewmodels.main_vm import MainVM
 from app.views.main_window import MainWindow
+from app.views.theme import apply_theme
 from infrastructure.i18n import init_translator
 from infrastructure.image_service import ImageService
 from infrastructure.logging import init_logging
@@ -174,6 +175,11 @@ def main() -> int:
     # cleanup function gets the right QApplication instance.
     app.aboutToQuit.connect(lambda: _cleanup_on_quit(app))
 
+    # Daylight · light theme (feat/review-ux-daylight Phase 1). App-level so
+    # it cascades to every widget + child dialog. Purely visual — no
+    # behaviour change. The render harness installs the same stylesheet.
+    apply_theme(app)
+
     # Initialize translation catalogs (YAML + Qt's bundled qtbase_*.qm)
     # for the persisted ui.locale. Same helper used by the live
     # language switch.
@@ -266,6 +272,15 @@ def main() -> int:
 
     win = make_main_window(vm, img, settings)
     win.show()
+
+    # QA / CI accommodation (#129-style): the hosted runners launch the app
+    # on a small screen, so the default half-screen window leaves the wide
+    # results-tree columns (post-Daylight-redesign) overflowing — pushing
+    # the File Name column off the UIA-visible area and breaking the qa
+    # batch's row lookups. Maximizing only when this env var is set keeps
+    # real-user UX untouched (env unset → normal window).
+    if os.environ.get("PHOTO_MANAGER_MAXIMIZE") == "1":
+        win.showMaximized()
 
     # Probe: auto-load manifest from --manifest <path> or PHOTO_MANAGER_PROBE_MANIFEST.
     # Supports PHOTO_MANAGER_PROBE_RELOAD_COUNT=N for N sequential reload measurements
