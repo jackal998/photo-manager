@@ -209,3 +209,9 @@ qa/fixtures/raw_local/
 .probe_598_artifacts/
 .probe_timeline_artifacts/
 .probe_monitor_artifacts/
+
+# Ground-truth labels for the visual auto-select study
+# (scripts/visual_gt). The CSV and the JSON sidecar both embed the
+# user's real library paths — personal data, never committed. The
+# visual-gt-thumbs/ cache beside them is regeneratable.
+qa/fixtures/visual-gt*
