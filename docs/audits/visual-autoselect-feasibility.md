@@ -343,6 +343,79 @@ Nothing here is measured. This section fixes **what** Phase 1 must produce so Ph
 
 **Contract note.** A metric that is only reported in aggregate hides exactly the failure mode this feature would ship with. All five are reported, or none of them is evidence.
 
+## 3a. Synthetic ground truth — degradation detection (measured)
+
+This subsection measures whether each T0 signal **detects** each degradation family, and whether it is **monotone in severity**. Every ranking below is true by construction — each group is a generated ladder of one undegraded reference plus three increasing severities of a single family — so no human and no model judged anything, and nothing left this machine.
+
+It does **not** measure human preference. That remains the human/proxy label set contracted above, and a signal scoring 1.00 here has **not** been shown to pick the frame a person would keep. The two questions are separate and this subsection answers only the first.
+
+**Corpus.** 60 sources copied read-only out of the user's own `J:\圖片\` library — any path outside that prefix aborts the run, each copy verified against its source by SHA-256 and size (60/60), and every source re-checked on `(size, mtime_ns)` after the run (60/60 unchanged). Formats **34 JPEG / 16 DNG / 10 HEIC**. Strata: `long_exposure` 19, burst 23 (`burst_id` 1, `_2` 8, `_3_5` 8, `_6_12` 6), `dup` 11, `bracket` 7. **13 distinct camera models**; **20 low-light**, meaning mean luminance of the 1024 px working decode below 70 on the 0-255 Rec.601 scale — an absolute threshold, not a quantile of this pool, so the label keeps its meaning if the pool changes. Eight families × three severities (mild / medium / severe): `gauss_blur` σ 1.0 / 2.5 / 5.0 px · `motion_blur` linear kernel 8 / 20 / 45 px at a random per-source angle · `over_exposure` +1 / +2 / +3 stops · `under_exposure` −1 / −2 / −3 stops · `noise` additive Gaussian σ 4 / 12 / 30 in 8-bit units on all channels · `jpeg_q` quality 60 / 25 / 8 · `colour_cast` per-channel gain R×1.10 B×0.90 / 1.20 0.80 / 1.35 0.65 · `soften` downscale ÷2 / ÷4 / ÷8 then bicubic back. Exposure and cast gains are applied in linear light so +3 stops genuinely clips rather than compresses. **The reference member is the undegraded decode re-encoded at the same `quality=95, subsampling=0` every variant is saved at**, so every family compares like with like; the untouched original stays in `sources/` and is never a group member, and no EXIF is carried into any variant. Totals: **480 groups of 4 · 1,500 distinct files · 4.70 GB**, and all 480 were scored (0 skipped, 0 with fewer than two ranked members, 0 missing features).
+
+**Top-1 (deploy) — does the signal's argmax pick the undegraded reference?** Four members per group, so **chance is 0.25**. Rows marked (ARB) have an arbitrary declared direction: read `x` as `1 − x` in the other direction.
+
+| signal | gauss blur | motion blur | over exposure | under exposure | noise | jpeg q | colour cast | soften | ALL |
+|---|---|---|---|---|---|---|---|---|---|
+| `vol_tile_topk` | 1.00 | 1.00 | 0.00 | 1.00 | 0.10 | 0.23 | 0.05 | 1.00 | 0.55 |
+| `vol_global` | 1.00 | 1.00 | 0.00 | 1.00 | 0.02 | 0.23 | 0.00 | 1.00 | 0.53 |
+| `tenengrad` | 1.00 | 1.00 | 0.02 | 1.00 | 0.37 | 0.17 | 0.00 | 0.98 | 0.57 |
+| `crete_roffet_blur` | 0.97 | 1.00 | 0.20 | 0.00 | 0.03 | 0.20 | 0.68 | 1.00 | 0.51 |
+| `structure_anisotropy` (ARB) | 0.95 | 0.97 | 0.37 | 0.03 | 0.00 | 0.17 | 0.45 | 0.92 | 0.48 |
+| `noise_sigma_mad` (ARB) | 0.00 | 0.00 | 0.52 | 0.00 | 0.98 | 0.05 | 0.58 | 0.00 | 0.27 |
+| `clip_hi_max` | 0.00 | 0.00 | 0.97 | 0.00 | 0.02 | 0.15 | 0.77 | 0.07 | 0.25 |
+| `clip_lo_max` | 0.12 | 0.10 | 0.02 | 0.73 | 0.13 | 0.53 | 0.25 | 0.20 | 0.26 |
+| `clip_hi_r` | 0.00 | 0.00 | 0.95 | 0.00 | 0.05 | 0.28 | 0.88 | 0.05 | 0.28 |
+| `clip_hi_g` | 0.00 | 0.00 | 0.97 | 0.00 | 0.03 | 0.08 | 0.20 | 0.03 | 0.16 |
+| `clip_hi_b` | 0.02 | 0.00 | 0.97 | 0.00 | 0.03 | 0.15 | 0.00 | 0.07 | 0.15 |
+| `clip_lo_r` | 0.08 | 0.08 | 0.02 | 0.58 | 0.22 | 0.48 | 0.13 | 0.12 | 0.21 |
+| `clip_lo_g` | 0.00 | 0.00 | 0.00 | 0.58 | 0.15 | 0.40 | 0.17 | 0.08 | 0.17 |
+| `clip_lo_b` | 0.08 | 0.05 | 0.00 | 0.80 | 0.10 | 0.57 | 0.25 | 0.13 | 0.25 |
+| `mean_luminance` (ARB) | 0.73 | 0.82 | 0.00 | 1.00 | 0.10 | 0.35 | 0.07 | 0.18 | 0.41 |
+| `luminance_entropy` (ARB) | 0.87 | 0.90 | 0.40 | 1.00 | 0.30 | 0.73 | 0.12 | 0.78 | 0.64 |
+| `rms_contrast` (ARB) | 0.97 | 1.00 | 0.88 | 0.68 | 0.70 | 0.22 | 0.53 | 0.95 | 0.74 |
+| `colourfulness` (ARB) | 0.83 | 0.93 | 0.02 | 1.00 | 0.08 | 0.02 | 0.23 | 0.85 | 0.50 |
+| `gray_world_cast` (ARB) | 0.65 | 0.65 | 0.30 | 0.40 | 0.03 | 0.05 | 0.67 | 0.53 | 0.41 |
+| `combo:tile_topk_vol` | 1.00 | 1.00 | 0.00 | 1.00 | 0.10 | 0.23 | 0.05 | 1.00 | 0.55 |
+| `combo:tile_topk_vol_minus_clip` | 1.00 | 1.00 | 0.07 | 1.00 | 0.10 | 0.22 | 0.07 | 1.00 | 0.56 |
+
+**Reverse-monotone fraction — the groups where the signal is strictly ordered the *wrong* way** across all four severities. This is the number that separates "the signal cannot see this family" from "the signal actively prefers the degraded frame", and only the second is a hazard. Cells listed are the four named below plus every cell at or above 0.40.
+
+| signal | families where the reverse-monotone fraction is ≥ 0.40 |
+|---|---|
+| `vol_tile_topk` | noise 0.82 · over exposure 0.75 · colour cast 0.73 · jpeg q 0.43 |
+| `mean_luminance` (ARB) | over exposure 1.00 · colour cast 0.93 · noise 0.73 |
+| `gray_world_cast` (ARB) | noise 0.55 |
+| `luminance_entropy` (ARB) | colour cast 0.52 · noise 0.50 |
+| `clip_hi_max` | motion blur 0.63 · gauss blur 0.58 · soften 0.45 |
+| `clip_lo_max` | motion blur 0.50 · noise 0.45 · gauss blur 0.43 · over exposure 0.43 |
+| `rms_contrast` (ARB) | none — its worst cell on any family is 0.13 (jpeg q) |
+
+**What this settles.**
+
+- **Sharpness alone prefers blown-out and cast frames.** `vol_tile_topk` picks the reference on 0.00 of over-exposure groups and 0.05 of colour-cast groups, and it is strictly reverse-ordered on 0.75 and 0.73 of them — it does not merely fail to see the degradation, it ranks the degraded frame highest. `vol_global` (0.00 / 0.00) and `tenengrad` (0.02 / 0.00) have the same shape.
+- **JPEG quality is detected by `luminance_entropy` and effectively nothing else.** It scores 0.73 top-1, 0.96 pairwise, ρ 0.95 and 0.73 monotone on `jpeg_q`, with a 0.00 reverse fraction. The next best is `clip_lo_b` at 0.57 and `clip_lo_max` at 0.53, and the whole sharpness family sits between 0.17 and 0.23.
+- **Noise is detected by `noise_sigma_mad` and by margin.** 0.98 top-1, 0.99 pairwise, 0.98 monotone on the `noise` family. The next best is `rms_contrast` at 0.70, then `tenengrad` at 0.37; every remaining signal is at or below 0.30.
+- **Clipping fractions detect over-exposure and colour cast.** `clip_hi_max` reaches 0.97 top-1 on `over_exposure` (ρ 1.00, 0.97 monotone, 0.00 reverse) and 0.77 on `colour_cast`, where `clip_hi_r` reaches 0.88. On the low side `clip_lo_b` reaches 0.80 and `clip_lo_max` 0.73 on `under_exposure`.
+- **`rms_contrast` is the broadest single signal measured.** ALL 0.74 top-1 / 0.84 pairwise / ρ 0.67 / 0.71 monotone — the highest ALL top-1 in the table — and it is the only signal whose reverse fraction never exceeds 0.13 on any family. Its weak family is `jpeg_q` at 0.22.
+- **Every family is detected by at least one signal, and no single signal detects all eight.** The per-family best runs 1.00 / 1.00 / 0.97 / 1.00 / 0.98 / 0.73 / 0.88 / 1.00 across the eight columns, yet the highest ALL score is `rms_contrast` at 0.74, and the two combinations tested score 0.55 and 0.56 — below their own best component.
+
+**Caveats that travel with every number above.**
+
+1. **Exposure clipping is source-limited, so two columns partly describe this corpus rather than the signal.** On the severe rung, 7 of 60 `over_exposure` variants and 27 of 60 `under_exposure` variants still clip on under 1 % of pixels, because a source that is already dark cannot reach the top rail in three stops and one that is already bright cannot reach the bottom. The ordering within each ladder is still correct, but the `clip_hi_max` / `clip_lo_max` scores on the two exposure families are partly a reading of this corpus's brightness distribution.
+2. **Additive-noise mean drift contaminates `mean_luminance` on the noise family, in a known direction.** Clipping the negative half of a symmetric noise distribution at 0 raises the mean, and more so at larger σ: on the severe rung the variant's mean luminance exceeds the reference by up to **11.58** levels (on the darkest source, whose reference mean is 1.92) with a median of **1.12** over the 60 sources. This is physical rather than a defect — removing it would require unphysical noise — and it is what gives `mean_luminance` a 0.73 reverse fraction on `noise`.
+3. **The exposure and colour-cast transfer is a plain gamma-2.2 power law, not the sRGB piecewise curve.**
+4. **Blur severities are stated at a 4000 px long edge and scaled per source** by `scale = max(long_edge, 1024) / 4000`, so blur measured at the probe's 1024 px working resolution is `σ_nominal × 1024/4000` for every source regardless of native size. The floor at the working resolution is load-bearing: the probe never upsamples, so the unclamped `long_edge / 4000` rule would silently under-blur a source already below 1024 px. Non-spatial severities (stops, noise σ in 8-bit units, JPEG quality, channel gains) are resolution-independent and are not scaled.
+
+**Generator-artefact history.** Three generator sites truncated instead of rounding: integer floor division in the `motion_blur` accumulator (costing `(n−1)/(2n)` levels per pixel — a bias that *grows* with tap count, so it darkened monotonically with severity), `PIL.ImageFilter.GaussianBlur`'s three uint8 box passes, and `astype(np.uint8)` truncation at the end of the `noise` path. They were found by chasing one anomaly — `mean_luminance` scoring a free 1.00 top-1 on `motion_blur` — and the first written explanation (gamma, via Jensen's inequality) was wrong and is recorded as wrong, because convolution with a normalised kernel over reflect-padded data preserves the mean of the array it filters in any space. All three now compute in float32 and round once through `np.rint`, both blur families pad with `reflect`, and every spatial family was regenerated: `mean_luminance` on `motion_blur` fell 1.00 → 0.82, `rms_contrast` on `noise` rose 0.08 → 0.70 (a repair — the truncation had been corrupting the reading), `vol_tile_topk` was unchanged on every family, and the `soften` rows are byte-identical before and after.
+
+**4-tuple for every number in this subsection.**
+
+- **Corpus** — `generate.py` · `sha256 = 7c5a41b83917f78ffee90121054026f03d41361959c20835f5bab1a9b61449cf` · args `generate.py --picked <picked.json> --out . --threads 2`, seeded per source from `SEED = 20260902` so the same pick list reproduces the same bytes · outputs **`synth-groups.json`** (480 groups, the schema of `qa/fixtures/visual-gt-groups.json`), **`synth-gt.csv`** (1,920 rows), **`generation-records.json`**, **`generate.log`**. The final run logs `copied 60 sources, sha256-verified 60/60`, `LADDER CHECK: 0 degenerate rungs across 1440 generated variants`, `SOURCE READ-ONLY CHECK: 60/60 unchanged (size+mtime_ns)`, `test folder size: 4.70 GB`. Two static-analysis fixes were proven inert by regenerating the whole corpus and diffing the hash manifest: **0 of 1,500 files changed**.
+- **Features** — probe `probes/t0_features.py` · `script_sha256 = 018e8c61be36bc16ec757cc283b1a2e32797aad3765cf80f137719bc7b3c6281` · `common_sha256 = bc6a5b244c03eecdb645af22f4c3f69c466d2decdebe7109d1816853c8547ce6` (`t0_common.py`) · `signals_sha256 = d1f2d1a25e21aa47a502af8e4da4e9d90385b58026ed43ccce1b9af3469844b8` (`t0_signals.py`) · args `t0_features.py --groups synth-groups.json --out synth-features.json --threads 4 --note "synthetic GT final"` · output **`synth-features.json`**, `provenance.utc = 2026-09-02T06:18:42Z`, `provenance.working_long_edge = 1024`.
+- **Agreement** — probe `probes/t0_agree.py` · `script_sha256 = c58221ea1bf1319488e6f4f99d37ec106e989c6157b5d35fc7b29914b9cf8ae6` · same `common_sha256` and `signals_sha256` as the features run · `labels_sha256 = 3fbf39c2661410901ba40f39d5373f4aeda3f2e3312ea760c82cb15d7a53fb3c` (`synth-gt.csv`) · args `t0_agree.py --groups synth-groups.json --csv synth-gt.csv --signals synth-features.json --out synth-agree.json --note "synthetic GT final"` · output **`synth-agree.json`**, `provenance.utc = 2026-09-02T06:18:46Z`. Both probes carry the same `common_sha256` and `signals_sha256` as the §2 timing run, so the formulas and constants behind these tables are the ones costed there.
+- **Scorecard** — `synth_report.py` · `sha256 = edcfe81ed800ebe96a74cd1af002626607170fb98c8a72dde8212587f4bdf8ec` · reads `synth-agree.json` only · output **`synth-report.md`**. Paths above are shown relative to the test folder; the artefacts' `provenance.argv` store them absolute.
+- **Derived cells, and what validates them.** `synth-report.md` prints a `rev` column only for its six detailed signals, so the reverse-monotone table above was recomputed from `synth-agree.json` `results.per_group` by the report's own rule — four ranked members give six ordered pairs, so `concordant == 6` is strictly monotone in the declared direction and `discordant == 6` is strictly monotone the wrong way. That recomputation reproduces `synth-report.md`'s monotonicity table cell-for-cell across all 21 signals × 9 columns, and reproduces the printed `rev` values of all six detailed signals exactly. Every other number in this subsection is copied from `synth-report.md` unrounded.
+- **Review** — a fresh-context reviewer APPROVEd the corpus and the scorecard, checking 48 severity cells of which 47 pass; the exception is the 7 dark-source over-exposure ladders of caveat 1, explained rather than defective.
+
 ---
 
 # 4. Pareto frontier (Phase 2 placeholder)
