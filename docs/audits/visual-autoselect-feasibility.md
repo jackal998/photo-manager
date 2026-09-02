@@ -262,7 +262,7 @@ Two caveats the numbers carry. First, camera identity is **ignored** in the burs
 
 # 2. Cost table — per KEEP signal
 
-**The T0 (numpy-only) local timings are now measured; every other tier is still TBD Phase 2.** The `ms/image local` column carries the **median over the labelling sample, per format**, from the run cited under the table. It stays TBD wherever no such run exists: no ms/image figure for any classical operator was found in the literature, and every learned figure is on hardware that is not this rig. **The `Scan-time delta on NAS` column stays TBD for every row without exception** — a per-image compute figure taken on a quiet machine is not a scan-time delta, and only the end-to-end Phase 2 run settles that. The MB column is the literature/registry figure with its URL.
+**The T0 (numpy-only) local timings are now measured; every other tier is still TBD Phase 2.** The `ms/image local` column carries the **median over the labelling sample, per format**, from the run cited under the table. It stays TBD wherever no such run exists: no ms/image figure for any classical operator was found in the literature, and every learned figure is on hardware that is not this rig. **The `Scan-time delta on NAS` column now carries exactly one measured cell — the T0 lean set's end-to-end A/B in §2b — and stays TBD for every other row without exception**, because a per-image compute figure taken on a quiet machine is not a scan-time delta and only an end-to-end run settles it. The MB column is the literature/registry figure with its URL.
 
 | Signal | Tier | ms/image local — median JPEG / HEIC / DNG | Scan-time delta on NAS | ms (lit.) + hardware | MB (source) |
 |---|---|---|---|---|---|
@@ -283,6 +283,7 @@ Two caveats the numbers carry. First, camera identity is **ignored** in the burs
 | Hasler–Süsstrunk colourfulness (§1b #31, "—") | T0 "—" | 9.94705 / 10.1717 / 10.2043 | TBD Phase 2 | none found | 0 |
 | Gray-world cast (§1b #29, "—") | T0 "—" | 7.4068 / 7.604 / 7.5383 | TBD Phase 2 | none found | 0 |
 | **All 19 T0 signals, one pass** (`compute_all_ms`) | T0 | **184.01655 / 185.58945 / 185.7302** | TBD Phase 2 | none found | 0 |
+| **T0 lean set — the six signals `vol_tile_topk` + `clip_hi_max` + `clip_lo_max` + `noise_sigma_mad` + `mean_luminance` + `rms_contrast`, run inside the real scan** | T0 KEEP | TBD Phase 2 — §2b measures the set's end-to-end wall cost, not a per-image compute median | **+8.0 % wall (upper bound; pessimistic +4.4 %)** — §2b | none found | 0 |
 | DIS optical flow (burst dynamics) | T1 | TBD Phase 2 | TBD Phase 2 — per adjacent-frame *pair*, bursts only | none found | **43.8** (opencv-python-headless wheel, https://pypi.org/project/opencv-python-headless/#files ) |
 | YuNet face detection | T2 | TBD Phase 2 | TBD Phase 2 | **0.69 ms @160×120, i7-12700K** — cost at 320×320+ is unknown | **0.23** (232,589 B, https://huggingface.co/api/models/opencv/opencv_zoo/tree/main/models?recursive=true ) |
 | FER expression | T2 | TBD Phase 2 | TBD Phase 2 | **1.79 ms @112×112, i7-12700K** — *per face crop* | **4.79** (4,791,892 B; int8 1.36) |
@@ -322,6 +323,28 @@ Both ratios are **partial** — that is the entire interpretation offered, and n
 4. **Machine state.** Quiet machine, no labelling server on port 8765 (`config.note`). Windows-10-10.0.19045-SP0, Python 3.12.9, `Intel64 Family 6 Model 167 Stepping 1, GenuineIntel`, `cpu_count = 12`; numpy 2.4.4 · scipy 1.17.1 · Pillow 12.2.0 · pillow_heif 1.3.0 · rawpy 0.26.1 · imagehash 4.3.2 · pywt 1.8.0.
 
 **Precision convention.** Every figure is the artefact's own stored value. The probe stores each raw timing at 4 decimals, so a median over an even-sized sample can legitimately need a 5th; anything past that is IEEE double-representation noise and is dropped. Example: the structure tensor's HEIC median is stored `61.085499999999996` and written **61.0855**. The trim was checked to be lossless to 1e-9 on all 68 figures quoted in this section. The thread-scaling table above is verbatim, untrimmed.
+
+## 2b. Methods — NAS A/B pilot (measured)
+
+**What was measured.** A prototype worktree (`visual-t0-e2e` @ `e0a3c33`) hooks the six lean signals into the real scan at `scanner/hasher.py:200-201` — inside `_hashes_from_data`, after the decode branch, where the file bytes are still in RAM — computes them and **discards every result**. It is a measurement probe and is not proposed as a feature. `PM_VISUAL_T0=lean` turns it on, an empty value off. The number below is therefore end-to-end scan wall time with the six signals against the same scan without them, over real files on the NAS, through `run_pipeline` with `hash_pool=process`.
+
+**The target, and what it does not cover.** Symlinks are unavailable on this box (`os.symlink` → WinError 1314, `os.link` → WinError 17), so the 150-group labelling sample could not be materialised as a file list. The target is instead **20 real directories walked non-recursively** through `ScanConfig.sources` plus `recursive_map`, picked by `select_target.py` under a 3,000-file budget, with one 2024 HEIC/JPEG directory pinned so the selection is not all legacy JPEG; `$RECYCLE.BIN` paths are absent because the walker skips them (`scanner/walker.py:22`). **Coverage caveat, stated because it bounds what the delta means:** the walk sees 2,966 media files (2,765 images + 201 videos) and writes 2,961 manifest rows, but it reaches only **125 of the 491 sample members and 49 of the 150 groups** — 430 members sit under `J:\圖片`, 121 of those inside `$RECYCLE.BIN`, and 61 on `H:\Photos`. This is a NAS-load pilot on real files, not a run over the labelling corpus.
+
+| run | mode | wall s | manifest rows | probe pids | probe files | probe failures | probe s |
+|---|---|---|---|---|---|---|---|
+| `p150_warm` | OFF (cache prime, **discarded**) | 411.65 | 2961 | — | — | — | — |
+| `p150_a1` | OFF | 413.57 | 2961 | — | — | — | — |
+| `p150_b1` | lean | 443.84 | 2961 | 8 | 2742 | 23 | 671.33 |
+| `p150_b2` | lean | 431.91 | 2961 | 8 | 2742 | 23 | 668.04 |
+| `p150_a2` | OFF | 397.54 | 2961 | — | — | — | — |
+
+**ABBA, first run discarded.** OFF mean **405.56 s** (spread 16.03 s, 4.0 %), lean mean **437.88 s** (spread 11.93 s, 2.7 %), delta **+32.32 s = +8.0 %** (ratio 1.080). Each arm's spread is smaller than the delta, which is the only reason a two-runs-per-arm design says anything at all; **the pessimistic bound — fastest lean run against slowest OFF run — is +4.4 %**, and that is the figure to quote if only one is quoted. **The delta is an upper bound by construction:** the probe decodes the bytes a *second* time at 1024 px because the hash stage drafts to 256 px (`scanner/hasher.py:188`), so a fused build sharing one decode is cheaper by an amount this run does not measure. Two sequences were **not run** — `all` (19 signals) and the `thread` pool — because four more measured runs is ≈ 28 min against a 20-min ceiling on one command; both stay TBD Phase 2, and the probe's own docstring records that `all` mode would overstate a fused build by about one Laplacian pass.
+
+**The probe changed nothing it measured.** `compare_manifests.py` compares 13 hash-bearing columns row by row: `a1`-vs-`b1` **IDENTICAL**, `a2`-vs-`b2` **IDENTICAL**, and the `a1`-vs-`a2` drift control **IDENTICAL** — 2,961 rows each side, 0 rows on one side only, 0 differing rows. The probe counters reconcile with the walk: 2,742 computed + 23 failures = **2,765** attempted, exactly the images walked; the manifest holds 2,760 image rows, so 5 are dropped downstream of the hash stage, and the 201 videos never reach the probe at all.
+
+**Most of that compute was free, on this link.** The eight worker processes spent **671.33 s** and **668.04 s** of summed in-probe CPU across the two lean runs, against a wall delta of 32.32 s — about 95 % of the probe's own CPU hid behind NAS read latency. That is a statement about this target over this link on this rig, and it does not transfer to a local-disk source or to a compute-bound tier.
+
+**4-tuple.** Harness `e2e/probe_scan_wall_ab_multi.py` · `script_sha256 = fcbfd17ef3672d48ccc1b5158031c92dca3bf8b249db81fe45c5b217032ad0d5` · target selector `e2e/select_target.py` · `sha256 = afa19cf09183ef7ee548387f46b52eafdafbb683bdf193f5122ac648c622665d` · target spec `e2e/target_dirs.json` · `sha256 = 2a3e73a2e8095406a6a7214f2571ddbf5fee0a91cfd95eda831b2b08fe4c3ed6`. Args, once per run: `<venv python> probe_scan_wall_ab_multi.py <visual-t0-e2e worktree> target_dirs.json p150_<run>.db p150_<run>.json process`, with `PM_VISUAL_T0` empty (OFF) or `lean`. Outputs: **`e2e/p150_{warm,a1,b1,b2,a2}.json`** and the per-process counter lines in **`e2e/p150_b1.stderr`** / **`e2e/p150_b2.stderr`** (8 lines each, one per worker). Prototype: worktree `visual-t0-e2e` @ `e0a3c33`, probe module `scanner/visual_t0_probe.py`, hook `scanner/hasher.py:200-201`.
 
 ---
 
@@ -502,6 +525,106 @@ A second selector, `loo_select`, re-chooses which *composite* wins on 7 families
 
 **4-tuple for every number in this subsection.** Probe `probes/t0_grouping.py` · `script_sha256 = a2db42a35ce8dac5b3e04e6c15cc877b74191f2395786e9521d8de439b097a32` · `common_sha256 = bc6a5b244c03eecdb645af22f4c3f69c466d2decdebe7109d1816853c8547ce6` (`t0_common.py`) · `signals_sha256 = d1f2d1a25e21aa47a502af8e4da4e9d90385b58026ed43ccce1b9af3469844b8` (`t0_signals.py`) — the same two modules §2, §3a and §3b run on. Inputs by digest: `synth-features.json = 5670ce4869de0cd9b8368fac44200cb7fb6c2ed13964bfca445af10f3e07e1ef`, `synth-groups.json = 00ec524f2561f8a4adde2ba3749cb8bf3d17cca1004ff6c527a6a2d7d38007db`, `sources/manifest.json = 18d83af89d5cdfd4e353d1e14f07fec59507264282f30ddaa42f7bd778fe1ec8`. Args: `t0_grouping.py --features <testdata>/synth-features.json --groups <testdata>/synth-groups.json --manifest <testdata>/sources/manifest.json --out t0_grouping.json --md t0_grouping.md --threads 8 --note "T0 grouping robustness, full synthetic GT"`. Outputs: **`t0_grouping.json`** and **`t0_grouping.md`**, `provenance.utc = 2026-09-02T09:21:36Z`, `provenance.working_long_edge = 1024`, `imagehash 4.3.2`. **Review** — a fresh-context reviewer reproduced the run independently, re-decoding all 1,500 files from scratch rather than reusing `synth-features.json`, and confirmed the `<=` comparison matches the app (`scanner/dedup.py:594`, `:685`): APPROVE.
 
+## 3d. Real groups vs proxy labels (measured; proxy = Opus vision, low effort; human calibration pending)
+
+**What the labels are, before any number is read.** 150 groups drawn from the user's own library — 102 burst, 48 dup — ranked by an Opus vision judge at low effort, every row carrying a `labeller:opus` token. **These are not human labels**, so a figure here measures agreement with one model's stated preference and nothing more; the 30-group human spot-check that would calibrate it is built and its verdicts are not back. Every number below is provisional on that.
+
+| audited quantity | value |
+|---|---|
+| sidecar groups / CSV row-sets read / complete row-sets | 150 / 150 / 150, with 0 incomplete, 0 unknown-key, 0 superseded |
+| member rows in the CSV | 491 |
+| judge confidence: clear winner / toss-up / all bad | 75 / 74 / 1 |
+| judge exclusions (its `moment_id` verdicts) | **35 members in 32 groups** — burst 34 in 31 of 102, dup 1 in 1 of 48 |
+| unscorable (≤ 1 ranked member) | 29 — 28 one-kept, 1 none-kept → **121 groups scored** |
+| partial rankings · duplicate rank values | 0 · 0 |
+| case tags | near-identical edits 66 · other 42 · burst/action 36 · long exposure 17 · group portrait 11 |
+| judge run | 15 calls · 150/150 passed · 851.7 s wall · USD 9.6989 · `opus`, effort `low`, batch 10 |
+
+**Chance is 0.378, and it is a Poisson binomial rather than a number.** Each scored group has its own success probability 1/n_kept over a kept-member histogram of {2: 66, 3: 22, 4: 8, 5: 2, 6: 7, 7: 3, 8: 5, 9: 2, 10: 1, 11: 3, 12: 2}, so the chance line is 0.378 overall, 0.500 on the 66 two-candidate groups, 0.231 on the 55 with three or more, 0.358 on clear winners, 0.394 on toss-ups, 0.340 on burst and 0.437 on dup. A lift of a few points over 121 groups is a handful of groups, so every slice below is tested against that exact null rather than against 0.25.
+
+**Every scorer, all 121 scored groups** (`full_agree.json`, sorted by top-1). `top1` is deploy order; **the ordered variant is identical on every row**, because no group carried a partial ranking. `ties` counts groups whose argmax was a tie (scored a miss, meaning undecided); `ρ` is the mean per-group Spearman over the groups large enough to have one; `dir` is whether the signal's polarity was fixed in advance rather than chosen here.
+
+| scorer | top1 (hits) | pairwise | ρ (n) | ties | 2-kept | ≥3-kept | dir |
+|---|---:|---:|---:|---:|---:|---:|:--:|
+| `combo:tile_topk_vol_minus_clip` | **0.405** (49) | 0.539 | 0.215 (53) | 20 | 0.470 | 0.327 | yes |
+| `gray_world_cast` | 0.388 (47) | 0.527 | 0.135 (53) | 20 | 0.485 | 0.273 | no |
+| `vol_tile_topk` | 0.364 (44) | 0.533 | 0.177 (53) | 20 | 0.424 | 0.291 | yes |
+| `combo:tile_topk_vol` | 0.364 (44) | 0.533 | 0.177 (53) | 20 | 0.424 | 0.291 | yes |
+| `vol_global` | 0.331 (40) | 0.523 | 0.083 (53) | 18 | 0.379 | 0.273 | yes |
+| `luminance_entropy` | 0.331 (40) | 0.548 | 0.171 (53) | 18 | 0.348 | 0.309 | no |
+| `clip_lo_max` | 0.331 (40) | 0.466 | 0.008 (48) | 31 | 0.455 | 0.182 | yes |
+| `mean_luminance` | 0.322 (39) | 0.488 | −0.004 (53) | 19 | 0.424 | 0.200 | no |
+| `tenengrad` | 0.314 (38) | 0.540 | 0.115 (53) | 18 | 0.364 | 0.255 | yes |
+| `structure_anisotropy` | 0.314 (38) | 0.515 | −0.070 (53) | 18 | 0.409 | 0.200 | no |
+| `noise_sigma_mad` | 0.314 (38) | 0.411 | −0.087 (52) | 31 | 0.455 | 0.145 | no |
+| `crete_roffet_blur` | 0.314 (38) | 0.500 | −0.003 (53) | 17 | 0.394 | 0.218 | yes |
+| `colourfulness` | 0.298 (36) | 0.502 | −0.051 (53) | 18 | 0.364 | 0.218 | no |
+| `clip_lo_r` | 0.273 (33) | 0.411 | −0.009 (47) | 41 | 0.364 | 0.164 | yes |
+| `clip_lo_g` | 0.273 (33) | 0.377 | 0.060 (44) | 47 | 0.424 | 0.091 | yes |
+| `clip_hi_max` | 0.273 (33) | 0.405 | 0.115 (50) | 36 | 0.379 | 0.145 | yes |
+| `rms_contrast` | 0.256 (31) | 0.444 | −0.190 (53) | 19 | 0.364 | 0.127 | no |
+| `clip_lo_b` | 0.256 (31) | 0.464 | −0.015 (48) | 35 | 0.364 | 0.127 | yes |
+| `clip_hi_r` | 0.256 (31) | 0.350 | 0.061 (46) | 44 | 0.379 | 0.109 | yes |
+| `clip_hi_b` | 0.240 (29) | 0.370 | 0.068 (49) | 41 | 0.333 | 0.127 | yes |
+| `clip_hi_g` | 0.231 (28) | 0.344 | −0.006 (49) | 44 | 0.348 | 0.091 | yes |
+
+**The §3b composites re-scored on the same 121 groups**, normalisation `z`, with the two `t0_agree` combos folded in so both registries are enumerated. `lift` is top-1 minus that slice's chance; `hits/exp` and `p` are the exact Poisson-binomial null; `ms` is the §3b shared-pass cost convention, unchanged.
+
+| scorer | kind | top1 | chance | lift | hits/exp | p | tie | pairwise | ms |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `combo:tile_topk_vol_minus_clip` | combo | **0.405** | 0.378 | +0.027 | 49/45.7 | 0.290 | 0.165 | 0.539 | 13.48 |
+| `c:b+noise` | composite | 0.372 | 0.378 | −0.006 | 45/45.7 | 0.592 | 0.182 | 0.555 | 24.92 |
+| `e:ranksum5` | composite | 0.372 | 0.378 | −0.006 | 45/45.7 | 0.592 | 0.182 | 0.555 | 24.92 |
+| `f:veto3` | composite | 0.364 | 0.378 | −0.014 | 44/45.7 | 0.667 | 0.165 | 0.533 | 21.85 |
+| `g3:veto4` | composite | 0.364 | 0.378 | −0.014 | 44/45.7 | 0.667 | 0.165 | 0.533 | 24.92 |
+| `ctl:vol_tile_topk` | control | 0.364 | 0.378 | −0.014 | 44/45.7 | 0.667 | 0.165 | 0.533 | 8.05 |
+| `combo:tile_topk_vol` | combo | 0.364 | 0.378 | −0.014 | 44/45.7 | 0.667 | 0.165 | 0.533 | 8.05 |
+| `b:a+entropy+cliplo` | composite | 0.314 | 0.378 | −0.064 | 38/45.7 | 0.948 | 0.306 | 0.557 | 16.55 |
+| `d:c+rms` | composite | 0.289 | 0.378 | −0.089 | 35/45.7 | 0.987 | 0.314 | 0.515 | 26.32 |
+| `g2:median6` | composite | 0.273 | 0.378 | −0.105 | 33/45.7 | 0.996 | 0.314 | 0.516 | 26.32 |
+| `ctl:rms_contrast` | control | 0.256 | 0.378 | −0.122 | 31/45.7 | 0.999 | 0.157 | 0.444 | 1.41 |
+| `a:vol+cliphi` | composite | 0.240 | 0.378 | −0.138 | 29/45.7 | 1.000 | 0.405 | 0.529 | 13.49 |
+| `g1:cheap4` | composite | 0.240 | 0.378 | −0.138 | 29/45.7 | 1.000 | 0.314 | 0.486 | 9.90 |
+| `g5:rms_veto_entropy` | composite | 0.240 | 0.378 | −0.138 | 29/45.7 | 1.000 | 0.157 | 0.443 | 4.47 |
+| `g4:rms+entropy` | composite | 0.198 | 0.378 | −0.179 | 24/45.7 | 1.000 | 0.364 | 0.472 | 4.47 |
+| _chance_ | — | 0.378 | — | — | — | — | — | 0.500 | — |
+
+**The exact null, slice by slice.** `p` is the one-sided probability of at least this many hits under independent per-group coins at p = 1/n_kept, by convolution; `sd` is the null's standard deviation in groups, so the excess reads in units of the noise it must clear.
+
+| scorer | slice | n | top1 | chance | hits/exp | excess | sd | p |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `combo:tile_topk_vol_minus_clip` | ALL | 121 | 0.405 | 0.378 | 49/45.7 | +3.3 | 5.1 | **0.2904** |
+| `combo:tile_topk_vol_minus_clip` | clear winner | 46 | 0.587 | 0.358 | 27/16.5 | +10.5 | 3.1 | **0.0006** |
+| `combo:tile_topk_vol_minus_clip` | burst | 74 | 0.486 | 0.340 | 36/25.2 | +10.8 | 3.8 | **0.0041** |
+| `combo:tile_topk_vol_minus_clip` | toss-up | 74 | 0.297 | 0.394 | 22/29.2 | −7.2 | 4.0 | 0.9725 |
+| `combo:tile_topk_vol_minus_clip` | dup | 47 | 0.277 | 0.437 | 13/20.5 | −7.5 | 3.3 | 0.9933 |
+| `ctl:vol_tile_topk` | ALL | 121 | 0.364 | 0.378 | 44/45.7 | −1.7 | 5.1 | 0.6670 |
+| `ctl:vol_tile_topk` | clear winner | 46 | 0.565 | 0.358 | 26/16.5 | +9.5 | 3.1 | **0.0018** |
+| `ctl:vol_tile_topk` | burst | 74 | 0.459 | 0.340 | 34/25.2 | +8.8 | 3.8 | **0.0161** |
+| `ctl:vol_tile_topk` | toss-up | 74 | 0.243 | 0.394 | 18/29.2 | −11.2 | 4.0 | 0.9985 |
+| `ctl:vol_tile_topk` | dup | 47 | 0.213 | 0.437 | 10/20.5 | −10.5 | 3.3 | 0.9997 |
+| `c:b+noise`, `f:veto3` (identical) | clear winner | 46 | 0.500 | 0.358 | 23/16.5 | +6.5 | 3.1 | **0.0253** |
+| `ctl:rms_contrast` | clear winner | 46 | 0.326 | 0.358 | 15/16.5 | −1.5 | 3.1 | 0.7385 |
+| `combo:tile_topk_vol_minus_clip` | clear winner ∧ ≥3 kept | 22 | 0.500 | 0.203 | 11/4.5 | +6.5 | — | **0.0013** |
+| `ctl:vol_tile_topk` | clear winner ∧ ≥3 kept | 22 | 0.455 | 0.203 | 10/4.5 | +5.5 | — | **0.0053** |
+
+**What this settles.**
+
+- **The headline, stated as the fresh-context reviewer approved it:** the best scorer, `combo:tile_topk_vol_minus_clip`, reaches 0.405 against a 0.378 chance line; under an exact one-sided Poisson-binomial null with per-group p = 1/n_kept the excess is 3.3 groups (49 vs 45.7, sd 5.1, p = 0.290) — no scorer beats chance overall by a margin this corpus can resolve, and the overall figure is two significant effects cancelling.
+- **Where the signal is real: clear winners and bursts.** The combo scores 0.587 on the 46 groups the judge called a clear winner (p = 0.0006) and 0.486 on the 74 burst groups (p = 0.0041); plain `vol_tile_topk` reproduces both (0.565, p = 0.0018; 0.459, p = 0.0161), so this is not one composite's artefact. Restricting to clear winners with three or more candidates, where chance falls to 0.203, the combo scores 0.500 and `vol_tile_topk` 0.455 — 11 and 10 hits of 22, exact null p = 0.0013 and 0.0053 (those two p-values are not stored in the artefact; they were recomputed here from the label CSV by the same convolution, and the chance line 0.2032 reproduced exactly).
+- **The mirror, which is why the overall figure is flat.** The same scorers sit *below* chance on the halves where the judge itself was unsure or the group was a near-identical edit: the combo runs 0.277 vs 0.437 on dup (p = 0.9933) and 0.297 vs 0.394 on toss-ups (p = 0.9725), `vol_tile_topk` 0.213 and 0.243. A sharpness signal helps exactly where a person can already tell, and hurts where they cannot.
+- **The synthetic winner is the worst scorer on real groups.** `rms_contrast` topped §3b's degradation table at 0.74 ALL for 1.41 ms; here it is 0.256 overall, below chance in every slice, and 0.326 on clear winners against a 0.358 chance line (p = 0.74). Detecting a generated degradation and predicting a preference are different tasks, and this is the measurement that shows it.
+- **Cost ordering inverts too.** The cheapest scorer is the worst and the best costs 13.48 ms: the combo is `vol_tile_topk` divided by its group mean, minus a penalty on whatever part of `clip_hi_max` / `clip_lo_max` exceeds 5 % of the frame (`clip_tolerance = 0.05`, `clip_weight = 1.0`) — the same absolute-margin shape §3b found was the only thing that rescued a clipping term.
+- **Read one slice at a time, none of these would survive a Bonferroni correction over ~21 scorers × 5 axes.** The evidence is not any single p-value; it is that related scorers move together — the combo, its ungated twin and the bare signal all rise on clear winners and bursts and all fall on dup and toss-ups. Human calibration is what would turn that coherence into a fact about preference.
+
+- **The grouping axis, on the same labels: the judge disagreed with the app's existing grouping on 30.4 % of burst groups** — 31 of 102 held at least one member it called a different moment, 34 members in all — while dup is nearly clean at 1 excluded member in 1 of 48 groups. The exclusions are a `moment_id` finding, not a selection one, and they are also why 29 groups became unscorable.
+- **The `bracket` stratum is mostly mis-grouping:** 18 of its 22 groups drew an exclusion, with judge reasons of the "different scene" kind. A largest-`shot_date`-gap split reproduces the exclusion set exactly in **0.774** of exclusion groups against a **0.476** random baseline — but fired blindly it would flag a minority block in all 102 burst groups against the judge's 31, so it is a diagnostic, not a rule.
+- **pHash distance does not become a member-level rule.** The single most distant frame is the excluded one in **1.000** of the 30 measurable groups, but that is degenerate on two-member groups; scored over the 266 non-anchor burst members (32 excluded), the threshold sweep tops out at F1 **0.341** at t = 26 (precision 0.208, recall 0.938) and at best precision **0.233** at t = 32 (recall 0.531). Median Hamming to the rank-1 frame is 32 for excluded members against 18 for kept.
+
+**Human calibration — built, not returned.** A 30-group spot-check sheet exists (`vision_label/real/spotcheck-30.{json,md,html}`, seed 20260902), drawn against `c:b+noise` in `z` mode *before* the combo was added to the candidate set. Its strata: 14 disagree-clear-winner (12 planned plus 2 backfilled from the all-bad shortfall, since only one all-bad group exists in the corpus), 6 agree-clear-winner, 6 toss-up, 3 with an exclusion, 1 all-bad. **0 of 30 human verdicts are filled in.** Until they are, every agreement figure in this subsection is agreement with a model.
+
+**4-tuple for every number in this subsection.** Probes `probes/audit_real_labels.py` · `sha256 = cab20c85dba6a5c27739a3a4e8c9279448048233ae234b0ab1311e2f5d34fa53`; `probes/t0_agree.py` · `sha256 = c58221ea1bf1319488e6f4f99d37ec106e989c6157b5d35fc7b29914b9cf8ae6`; `probes/t0_composite_real.py` · `sha256 = a8646567daa6ec81426a07752490709a0b48b2f72bddfd4ec0f545122d3ded01`; `probes/real_grouping.py` · `sha256 = e064b821ac4d377306879f12218411c5472f621e3c39009e6b38bd7ef9b07158`; `probes/make_spotcheck.py` · `sha256 = 53c3d4d5e364f713d54ef66470d54eeb845b2ab1b5c96ec2e35416bf2dc12011` — all over `common_sha256 = bc6a5b244c03eecdb645af22f4c3f69c466d2decdebe7109d1816853c8547ce6` (`t0_common.py`) and `signals_sha256 = d1f2d1a25e21aa47a502af8e4da4e9d90385b58026ed43ccce1b9af3469844b8` (`t0_signals.py`). Inputs by digest: label CSV `qa/fixtures/visual-gt.csv = ec9a02316be6cb35eebe48634be19f3e1e9b45cbc8af35f06c7e4304a6bede8e` (re-hashed on disk while writing this), sidecar `visual-gt-groups.json = 7fd3b06cd27b726676d5b6be13560dcb8b8729044591a761cf15948af3ca2054`, features `full_features.json = d797d36438cd13b1c8d16dd26b6fbed5a65d05f5b0e537358e6df848b918b138`, timing `full_timing.json = feb5da6f5876c25deeedda13c6982cd954d2198596d86ae6553cefb13c52f13d`. Args, in run order: `audit_real_labels.py --groups <sidecar> --csv <CSV> --logs vision_label/real/logs --out real_label_audit.json`; `t0_agree.py --groups <sidecar> --csv <CSV> --signals full_features.json --out full_agree.json`; `t0_composite_real.py --groups <sidecar> --csv <CSV> --signals full_features.json --timing full_timing.json --out full_composite_real.json --md full_composite_real.md`; `real_grouping.py --groups <sidecar> --csv <CSV> --signals full_features.json --out real_grouping.json`. Outputs: **`real_label_audit.json`/`.txt`**, **`full_agree.json`**, **`full_composite_real.json`/`.md`**, **`real_grouping.json`/`.txt`**, `provenance.utc` 2026-09-02T10:19:01Z / 13:12:24Z / 13:12:38Z, `working_long_edge = 1024`. `probes/verify_real_provenance.py` re-hashes each artefact's recorded script and module set against disk and reports `ALL REAL-CORPUS PROVENANCE CURRENT`, with the label CSV `CURRENT` for all three real-corpus artefacts. **Review** — a fresh-context reviewer reimplemented the scorer by hand and reproduced the table: APPROVE, after a correction to the headline sentence, which is quoted above in its corrected form. *(Attribution note, per evidence rule 4: `full_agree.json` and `full_composite_real.json` both store `provenance.labels_sha256 = 3fbf39…`, which is the digest of `t0_labels.py`, not of the label CSV — the same mislabelled field §3b flagged. The CSV's real digest is the `ec9a02…` recorded under `input_sha256.csv` and re-verified here.)*
+
 ---
 
 # 4. Pareto frontier (Phase 2 placeholder)
@@ -517,7 +640,7 @@ Each plotted point carries its 4-tuple. A point without one is not on the chart.
 
 ## 4a. A first frontier — synthetic degradation detection only
 
-**Y here is not the Y above.** These points score degradation detection on the §3a/§3b synthetic corpus, not agreement with a human. They are plotted because both coordinates are measured today; the human/proxy-label frontier is pending Phase 1 labels and will be a separate table with its own confidence-conditioned split, never a redraw of this one. Cost is the §3b `ms` convention — summed isolated compute median, shared clipping pass charged once, count-weighted over the 491-file mixed timing corpus, **read and decode excluded** (§2a gives the per-format medians and §1d the decode). All five rows are tier T0: `numpy`/`scipy`/PIL, **0 MB** added, so the dependency-footprint marker does not separate them.
+**Y here is not the Y above.** These points score degradation detection on the §3a/§3b synthetic corpus, not agreement with a human. They are plotted because both coordinates are measured today; the human/proxy-label frontier is pending Phase 1 labels and will be a separate table with its own confidence-conditioned split, never a redraw of this one. **Its Y-axis input now exists in proxy form — §3d scores the same rows against the 121 real labelled groups, and it reorders them, so no frontier is drawn here until the human spot-check calibrates those labels.** Cost is the §3b `ms` convention — summed isolated compute median, shared clipping pass charged once, count-weighted over the 491-file mixed timing corpus, **read and decode excluded** (§2a gives the per-format medians and §1d the decode). All five rows are tier T0: `numpy`/`scipy`/PIL, **0 MB** added, so the dependency-footprint marker does not separate them.
 
 | point | cost (ms) | ALL top-1 | held-out ALL | source |
 |---|---|---|---|---|
@@ -585,6 +708,22 @@ Item 3 above wants the curve of agreement against the rank-1 minus rank-2 gap. O
 For the best composite, `g5:rms_veto_entropy` under `z`, the median margin is **0.19 when it picks the reference correctly and 0.42 when it does not**. That is the wrong way round: on this corpus "confident" and "correct" are anti-correlated for the very row that tops §3b. No threshold rescues it — **no margin cut reaches 0.95 agreement on 20 or more groups**, and the ceiling any cut buys is **0.76 agreement at margin 0.033, covering 0.89** of groups, which is barely above the row's own unconditional 0.75. The two nearest rows behave the same way: `ctl:rms_contrast` shows 0.17 correct against 0.34 wrong, and `g4:rms+entropy` 0.19 against 0.25.
 
 This is the strongest evidence assembled so far against a margin-gated auto-delete, and it is worth stating why it bites: an abstain band of the PhotoPrism `FACE_MATCH_MARGIN` shape assumes a small gap means "coin toss, refuse to decide". Here a small gap is where the scorer is *right*, so that band would abstain on the cases it gets right and act on the cases it gets wrong. The finding is about degradation detection on generated ladders, so it does not transfer to human preference by itself — §5.3 items 1–3 on the human/proxy labels are still the measurements that settle the question, and this one tells them where to look.
+
+## 5.5 Real-group margin evidence (proxy labels)
+
+§5.4 measured item 3's curve on generated ladders. The same curve now exists on the 121 real groups of §3d, against proxy labels rather than a construction. Margin is `(top1 − top2) / (max − min)` under `z`. **Only the `clear winner ∧ ≥3 kept` rows are readable:** on a two-candidate group that quantity is 1.0 whenever the two scores differ at all and 0.0 when they do not — measured on `c:b+noise`, 50 of 66 at 1.0 and 16 at 0.0 — and the `all` and `clear winner` slices are 55 % and 52 % such groups, so their agree-medians of 1.000 are that degeneracy and not confidence.
+
+| scorer | top1 (ALL) | ≥3-kept clear winners | top1 there | median margin when right | median margin when wrong | t @ .95 | best agreement any cut buys |
+|---|---:|---:|---:|---:|---:|:--:|---:|
+| `combo:tile_topk_vol_minus_clip` | 0.405 | 22 | 0.500 | 0.537 (n 11) | 0.214 (n 11) | none | 0.550 |
+| `ctl:vol_tile_topk` | 0.364 | 22 | 0.455 | 0.537 (n 10) | 0.158 (n 12) | none | 0.500 |
+| `c:b+noise`, `e:ranksum5` (identical) | 0.372 | 22 | 0.409 | 0.406 (n 9) | 0.114 (n 13) | none | 0.409 |
+| `g5:rms_veto_entropy` | 0.240 | 22 | 0.182 | 0.150 (n 4) | 0.078 (n 18) | none | 0.182 |
+| `ctl:rms_contrast` | 0.256 | 22 | 0.136 | 0.129 (n 3) | 0.081 (n 19) | none | 0.136 |
+
+**No threshold reaches 0.95 agreement at any coverage, for any scorer, in any slice.** `threshold_at_0.95` is null in all 36 rows of the artefact's autonomy block — 6 scorers × 3 slices in each of the two normalisations, 8 distinct scorers in all, since `rank` carries the two veto rows where `z` carries `c:b+noise` and `e:ranksum5`. The best agreement *any* cut buys anywhere is 0.714 (the combo on clear winners, at 0.761 coverage), and that slice is half two-candidate groups; in the readable `≥3 kept` rows the ceiling is 0.550. An abstain band built on this margin would still be wrong about one pick in three at its most selective setting.
+
+**The synthetic sign does not reproduce, and that changes what the finding is.** On the synthetic corpus §5.4 found confidence anti-correlated with correctness — `g5` at 0.19 when right against 0.42 when wrong. On real groups the order flips back: every one of the six scorers has a higher median margin when it agrees with the judge than when it does not, weakly for the two worst rows and by a factor of two to three for the top three. So the margin does carry *some* information here; what it does not do is reach a level at which anything could be automated. **This is the strongest evidence assembled so far on the autonomy question**, because it is the first measurement of item 3 on real photographs rather than on generated degradations — and it is evidence against a margin-gated auto-action from both directions at once, an unusable ceiling on real groups and an inverted sign on synthetic ones. It stands on proxy labels, so the human spot-check of §3d is the thing that would promote or retire it.
 
 ---
 
