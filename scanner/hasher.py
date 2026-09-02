@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
+from scanner import visual_t0_probe as _t0_probe
 from scanner.dedup import HashResult
 from scanner.exif import extract_pil_scoring_signals, parse_exif_date
 
@@ -189,6 +190,15 @@ def _hashes_from_data(
                 img.load()
         except (OSError, ValueError):
             img = None
+
+    # MEASUREMENT PROBE — not a feature, never merged as one. Off unless
+    # PM_VISUAL_T0 is set, in which case it decodes `data` a second time at
+    # 1024 px and runs the T0 signal set, discarding every result. Placed
+    # after the if/else so RAW and non-RAW files are both covered from the
+    # one place the bytes are still in RAM. See scanner/visual_t0_probe.py
+    # for what the ON-minus-OFF wall-time delta does and does not include.
+    if _t0_probe.PROBE_MODE:
+        _t0_probe.compute_probe(data, path)
 
     if img is None:
         return sha, None, None, None, raw_date, None, None, inmemory_signals
