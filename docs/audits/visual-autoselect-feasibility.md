@@ -262,19 +262,27 @@ Two caveats the numbers carry. First, camera identity is **ignored** in the burs
 
 # 2. Cost table — per KEEP signal
 
-Every local timing cell is **TBD Phase 2** by construction: no ms/image figure for any classical operator was found in the literature, and every learned figure is on hardware that is not this rig. The MB column is the literature/registry figure with its URL.
+**The T0 (numpy-only) local timings are now measured; every other tier is still TBD Phase 2.** The `ms/image local` column carries the **median over the labelling sample, per format**, from the run cited under the table. It stays TBD wherever no such run exists: no ms/image figure for any classical operator was found in the literature, and every learned figure is on hardware that is not this rig. **The `Scan-time delta on NAS` column stays TBD for every row without exception** — a per-image compute figure taken on a quiet machine is not a scan-time delta, and only the end-to-end Phase 2 run settles that. The MB column is the literature/registry figure with its URL.
 
-| Signal | Tier | ms/image local | Scan-time delta on NAS | ms (lit.) + hardware | MB (source) |
+| Signal | Tier | ms/image local — median JPEG / HEIC / DNG | Scan-time delta on NAS | ms (lit.) + hardware | MB (source) |
 |---|---|---|---|---|---|
-| SubSec / Offset / BurstUUID / ContentIdentifier / Make-Model-Lens / ISO-Exp-FNum-Focal / seq counters | FREE | TBD Phase 2 | TBD Phase 2 | — | **0** — same exiftool call, no extra process, no extra file open (§7) |
-| Colour histogram | T0 | TBD Phase 2 | TBD Phase 2 | — | 0 (PIL, installed) |
-| Loose pHash via BK-tree | T0 | TBD Phase 2 | TBD Phase 2 — expected ~0, no second file read | — | 0 (already computed and persisted) |
-| Tile-topk variance of Laplacian | T0 | TBD Phase 2 | TBD Phase 2 | none found | 0 (numpy/scipy, installed) |
-| Clipping % per channel | T0 | TBD Phase 2 | TBD Phase 2 | none found | 0 |
-| Crete–Roffet re-blur | T0 | TBD Phase 2 | TBD Phase 2 | none found | 0 |
-| Structure-tensor anisotropy | T0 | TBD Phase 2 | TBD Phase 2 | none found | 0 |
-| MAD-wavelet noise sigma | T0 | TBD Phase 2 | TBD Phase 2 | none found | 0 (`pywt` present transitively; an explicit `PyWavelets` requirement line, not a download) |
-| **The 1024 px re-decode these five need** | T0 | TBD Phase 2 | TBD Phase 2 | — | 0 — but ~4× the current JPEG decode work (§1d) |
+| SubSec / Offset / BurstUUID / ContentIdentifier / Make-Model-Lens / ISO-Exp-FNum-Focal / seq counters | FREE | TBD Phase 2 — not a pixel signal, not in the T0 timing run | TBD Phase 2 | — | **0** — same exiftool call, no extra process, no extra file open (§7) |
+| Colour histogram | T0 | TBD Phase 2 — not timed by `t0_timing.py` (`t0_features.py --with-hist` emits it) | TBD Phase 2 | — | 0 (PIL, installed) |
+| Loose pHash via BK-tree | T0 | TBD Phase 2 — not timed by `t0_timing.py` | TBD Phase 2 — expected ~0, no second file read | — | 0 (already computed and persisted) |
+| **Decode to the 1024 px working resolution (shared by all T0 signals)** | T0 | **29.9973 / 248.4997 / 79.859** | TBD Phase 2 | — | 0 — but **not fully additive** to today's scan; see §2a caveat (b) and §1d |
+| Tile-topk variance of Laplacian | T0 KEEP | **8.0197 / 8.24645 / 8.1748** | TBD Phase 2 | none found | 0 (numpy/scipy, installed) |
+| Clipping % per channel — the **eight** entries `clip_{hi,lo}_{r,g,b}` + `clip_{hi,lo}_max`, each timed standalone | T0 KEEP | **5.41025–5.4319 / 5.46055–5.54085 / 5.4493–5.4827** — range over the eight, each recomputing the whole channel set | TBD Phase 2 | none found | 0 |
+| Crete–Roffet re-blur | T0 KEEP | **16.30275 / 16.52185 / 16.61** | TBD Phase 2 | none found | 0 |
+| Structure-tensor anisotropy | T0 KEEP | **60.63745 / 61.0855 / 61.2624** — the most expensive single T0 signal measured | TBD Phase 2 | none found | 0 |
+| MAD-wavelet noise sigma | T0 KEEP | **8.2639 / 8.7429 / 8.7949** | TBD Phase 2 | none found | 0 (`pywt` present transitively; an explicit `PyWavelets` requirement line, not a download) |
+| Global variance of Laplacian — the probe's **control**, dropped as a global metric at §1b #1 | T0 control | 7.65055 / 7.7593 / 7.7638 | TBD Phase 2 | none found | 0 |
+| Tenengrad (§1b #2, status "—") | T0 "—" | 13.7801 / 13.89165 / 13.9546 | TBD Phase 2 | none found | 0 |
+| Mean luminance (§1b #23, "—") | T0 "—" | 0.2044 / 0.21685 / 0.2082 | TBD Phase 2 | none found | 0 |
+| Luminance entropy (§1b #25, "—") | T0 "—" | 3.0287 / 3.15845 / 3.1943 | TBD Phase 2 | none found | 0 |
+| RMS contrast (§1b #36, "—") | T0 "—" | 1.39255 / 1.5101 / 1.4385 | TBD Phase 2 | none found | 0 |
+| Hasler–Süsstrunk colourfulness (§1b #31, "—") | T0 "—" | 9.94705 / 10.1717 / 10.2043 | TBD Phase 2 | none found | 0 |
+| Gray-world cast (§1b #29, "—") | T0 "—" | 7.4068 / 7.604 / 7.5383 | TBD Phase 2 | none found | 0 |
+| **All 19 T0 signals, one pass** (`compute_all_ms`) | T0 | **184.01655 / 185.58945 / 185.7302** | TBD Phase 2 | none found | 0 |
 | DIS optical flow (burst dynamics) | T1 | TBD Phase 2 | TBD Phase 2 — per adjacent-frame *pair*, bursts only | none found | **43.8** (opencv-python-headless wheel, https://pypi.org/project/opencv-python-headless/#files ) |
 | YuNet face detection | T2 | TBD Phase 2 | TBD Phase 2 | **0.69 ms @160×120, i7-12700K** — cost at 320×320+ is unknown | **0.23** (232,589 B, https://huggingface.co/api/models/opencv/opencv_zoo/tree/main/models?recursive=true ) |
 | FER expression | T2 | TBD Phase 2 | TBD Phase 2 | **1.79 ms @112×112, i7-12700K** — *per face crop* | **4.79** (4,791,892 B; int8 1.36) |
@@ -283,7 +291,37 @@ Every local timing cell is **TBD Phase 2** by construction: no ms/image figure f
 | Embedding cosine (DINOv2 ViT-S/14, quantised + pinned) | T3 | TBD Phase 2 | TBD Phase 2 | unknown | **~84** — *arithmetic from 21M params at fp32, not a published file size* (https://github.com/facebookresearch/dinov2/blob/main/MODEL_CARD.md ) |
 | *Runtime* onnxruntime | T2 prerequisite | — | — | — | **14.0** (https://pypi.org/project/onnxruntime/#files ) |
 
-**Phase 2 must produce, per row: probe path + SHA + args + JSON output.** Two structural facts the measurements must respect. (a) The compute runs on a worker thread (`compute_pool = ThreadPoolExecutor(os.cpu_count() or 4)`, `core/app_service/scan_runner.py:931`) or a worker process (`core/app_service/scan_runner.py:844`), selected by `scan.hash_pool` whose live value on the user's rig is `"auto"` — never on the GUI thread. (b) On the process path a new signal must return as plain picklable data; a numpy array is picklable but pays a full copy per file across the boundary.
+**4-tuple for every `ms/image local` number above.** Probe `probes/t0_timing.py` · `script_sha256 = 49a876d4029488b6f68f284d88e1c0fe9c3454ec0c350f464227551357df829c` · `common_sha256 = bc6a5b244c03eecdb645af22f4c3f69c466d2decdebe7109d1816853c8547ce6` (`t0_common.py`, which owns `decode_working`) · `signals_sha256 = d1f2d1a25e21aa47a502af8e4da4e9d90385b58026ed43ccce1b9af3469844b8` (`t0_signals.py`, which owns every formula and every constant — `TILE_GRID`, `REBLUR_SIZE`, `STRUCTURE_SIGMA`, so a changed tile grid could not leave the citation silently unchanged). Args: `t0_timing.py --files <worktree>/qa/fixtures/visual-gt-groups.json --threads 1,2,4,8 --repeat 3 --scale-files 32 --out full_timing.json --note "full run, quiet machine, 2026-09-02, no labelling server on 8765"` — paths shown relative to the worktree and to the session scratchpad; the artefact's `provenance.argv` stores them absolute. Output: **`full_timing.json`**, `provenance.utc = 2026-09-02T03:53:31Z`, `provenance.working_long_edge = 1024`.
+
+**Phase 2 must still produce, for every row above still marked TBD: probe path + SHA + args + JSON output.** Two structural facts the measurements must respect. (a) The compute runs on a worker thread (`compute_pool = ThreadPoolExecutor(os.cpu_count() or 4)`, `core/app_service/scan_runner.py:931`) or a worker process (`core/app_service/scan_runner.py:844`), selected by `scan.hash_pool` whose live value on the user's rig is `"auto"` — never on the GUI thread. (b) On the process path a new signal must return as plain picklable data; a numpy array is picklable but pays a full copy per file across the boundary.
+
+## 2a. Methods — T0 timing
+
+**Sample.** 491 files — every member row of the labelling sidecar `qa/fixtures/visual-gt-groups.json`: **366 JPEG, 50 HEIC, 73 DNG, 2 other**, **0 failures** (no entry in the artefact's `files[]` carries a truthy `error`, and none is missing a `decode_ms`). Decode routes actually taken: 366 `pil-draft`, 73 `raw-thumb`, 52 `pil`. 19 files arrived below 1024 px on the long edge and were flagged `below_working_res` rather than up-sampled (§1d).
+
+**What is timed, and what is excluded.** Bytes are read **once** per file, and that `read_ms` is **excluded from every compute figure in the table above** — its median is 41.53545 / 89.5832 / 239.6173 ms (JPEG / HEIC / DNG), and every file in the sidecar lives on `J:` or `H:`, both SMB mounts. Decode to the 1024 px working array is timed separately from the signals. Each signal is then timed **individually on that same already-decoded array, best-of-3** (`--repeat 3`), so `vol_global` and `vol_tile_topk` each recompute the Laplacian and each of the eight clipping entries recomputes the whole channel set. That is why the per-signal **sum** (182.064 / 183.88195 / 184.7517 ms) and the one-pass `compute_all` (184.01655 / 185.58945 / 185.7302 ms) are both upper bounds: the probe's README calls `compute_all_ms` "the one-pass number and is still an upper bound, not a fused estimate". A real implementation sharing one Laplacian and one channel pass would be cheaper by an amount this run does not measure.
+
+**Spread.** p90 tracks the median on every compute row — the widest is the structure tensor at 63.66656–64.6167 ms p90 across the three formats, and one-pass p90 is 189.69445–193.93929 ms. The heavy tails are I/O and decode only: read p90 102.5681 / 133.23981 / 444.71702 ms, decode p90 45.1975 / 389.49618 / 223.51058 ms.
+
+**Thread scaling — reported exactly as measured, as GIL-release evidence and nothing more.** 32 files retained (raw 124 952 371 B + arrays 141 937 152 B = 266 889 523 B, against a 268 435 456 B budget); 12 logical CPUs.
+
+| threads | compute wall ms/image | ratio vs 1 | decode wall ms/image | ratio vs 1 |
+|---|---|---|---|---|
+| 1 | 150.201078125 | 1.0 | 38.6740375 | 1.0 |
+| 2 | 85.81185 | 1.7503535715055671 | 22.309465625 | 1.733525945895443 |
+| 4 | 54.8180625 | 2.7399924637066477 | 14.4278375 | 2.6805151846213957 |
+| 8 | 43.5750125 | 3.4469543324858485 | 12.033103125 | 3.2139704196210817 |
+
+Both ratios are **partial** — that is the entire interpretation offered, and none is added. A ratio near the thread count and a ratio near 1 would both be just numbers; this repo's own recorded lesson is that Python-thread timing evidence here asserts a latency collapse, never throughput scaling.
+
+**Four caveats that travel with every number above.**
+
+1. **The read figures are optimistic.** The OS/SMB cache may have been warm from the labelling server's earlier thumbnail pass over the same files. That warmth cannot leak into the compute figures, which never touch the disk — it bears only on `read_ms`, which is excluded from the table.
+2. **The decode-to-1024 cost is *not* fully additive to today's scan.** JPEG today decodes via `draft()` at 1/8 scale and HEIC already decodes full-size (§1d), so the true delta is *decode-to-1024 minus today's decode*, which is a different and smaller quantity per format. Only the end-to-end NAS run in Phase 2 settles it.
+3. **The timing tests do not prove these numbers non-zero.** The suite's assertions on the compute timers are upper bounds, so they would pass with every compute timer hardcoded to zero; the artefact is therefore trusted to be free of *upward* contamination, but its non-zero-ness rests on the run itself, not on a test.
+4. **Machine state.** Quiet machine, no labelling server on port 8765 (`config.note`). Windows-10-10.0.19045-SP0, Python 3.12.9, `Intel64 Family 6 Model 167 Stepping 1, GenuineIntel`, `cpu_count = 12`; numpy 2.4.4 · scipy 1.17.1 · Pillow 12.2.0 · pillow_heif 1.3.0 · rawpy 0.26.1 · imagehash 4.3.2 · pywt 1.8.0.
+
+**Precision convention.** Every figure is the artefact's own stored value. The probe stores each raw timing at 4 decimals, so a median over an even-sized sample can legitimately need a 5th; anything past that is IEEE double-representation noise and is dropped. Example: the structure tensor's HEIC median is stored `61.085499999999996` and written **61.0855**. The trim was checked to be lossless to 1e-9 on all 68 figures quoted in this section. The thread-scaling table above is verbatim, untrimmed.
 
 ---
 
