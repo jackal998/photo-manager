@@ -665,3 +665,308 @@ class TestImageDraftPhashSafety:
             assert dh_drift <= DHASH_THRESHOLD, (
                 f"seed {seed}: Image.draft shifted dhash by {dh_drift} > {DHASH_THRESHOLD}"
             )
+
+
+# ---------------------------------------------------------------------------
+# #822 — EXIF Orientation applied before phash/dhash
+# #826 — RAW: one LibRaw open, embedded preview hashed at working resolution
+# ---------------------------------------------------------------------------
+
+
+def _photo_array(w: int, h: int):
+    """Photo-like pixels: two smooth gradients + 64 px colour blocks.
+
+    Deliberately NOT flat colour and NOT white noise — a flat image collides on
+    ``8000000000000000`` for every input (so it would pass whatever the hasher
+    did), and per-pixel noise aliases under any downscale. The gradients carry
+    the low-frequency energy phash keys on; the blocks give dhash a gradient
+    sign to read.
+    """
+    import numpy as np
+
+    gy, gx = np.mgrid[0:h, 0:w]
+    r = (gx * 255 // w).astype(np.uint8)
+    g = (gy * 255 // h).astype(np.uint8)
+    b = (((gx // 64) * 37 + (gy // 64) * 91) % 256).astype(np.uint8)
+    return np.stack([r, g, b], axis=-1)
+
+
+def _write_oriented_pair(tmp_path: Path) -> "tuple[Path, Path, Image.Image]":
+    """One photo, two files whose CONTENT is pixel-identical up to the rotation.
+
+    * ``rotated_ori6.jpg`` — pixels stored rotated, ``Orientation=6``. That tag
+      means "rotate the stored pixels 90° CW to display", which is exactly what
+      ``ImageOps.exif_transpose`` applies. This is a phone portrait.
+    * ``upright.png`` — the same photo with the rotation baked into the pixels:
+      an export, an edit, a messenger re-save. Derived by decoding the JPEG and
+      rotating it, so the two files decode to exactly rotation-equivalent
+      arrays and a correct hasher must produce the *same* hash, distance 0.
+
+    The second file is lossless on purpose. Two independent JPEG encodes of
+    90°-rotated arrays do NOT decode to rotation-equivalent pixels — the DCT
+    blocks land differently against the content — which measured 2 bits of
+    phash drift here and would put JPEG fidelity, not the Orientation tag, in
+    the assertion. The JPEG-vs-JPEG case is asserted separately below against
+    the threshold the grouping tier actually uses. Cross-format hash identity
+    is already an invariant of this recipe
+    (``TestComputePhash::test_jpeg_png_same_content_same_hash``).
+
+    Returns ``(upright_path, rotated_path, stored_pixels)``.
+    """
+    exif = Image.Exif()
+    exif[0x0112] = 6  # Orientation
+    rot_path = tmp_path / "rotated_ori6.jpg"
+    Image.fromarray(_photo_array(512, 384), "RGB").transpose(
+        Image.Transpose.ROTATE_90
+    ).save(rot_path, "JPEG", quality=95, exif=exif)
+
+    with Image.open(rot_path) as im:
+        stored = im.convert("RGB")  # what the file really holds, post-JPEG
+    up_path = tmp_path / "upright.png"
+    stored.transpose(Image.Transpose.ROTATE_270).save(up_path, "PNG")
+    return up_path, rot_path, stored
+
+
+def _write_jpeg_jpeg_oriented_pair(tmp_path: Path) -> "tuple[Path, Path]":
+    """The same pair as two independent JPEG encodes — the lossy real-world case."""
+    upright = Image.fromarray(_photo_array(512, 384), "RGB")
+    up_path = tmp_path / "upright.jpg"
+    upright.save(up_path, "JPEG", quality=95)
+
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    rot_path = tmp_path / "rotated_ori6.jpg"
+    upright.transpose(Image.Transpose.ROTATE_90).save(
+        rot_path, "JPEG", quality=95, exif=exif
+    )
+    return up_path, rot_path
+
+
+class TestExifOrientationBeforeHashing:
+    """#822 — a rotated copy and its upright original must land in the same
+    near-duplicate tier.
+
+    Before this fix ``scanner/hasher.py`` applied no orientation at all
+    (``grep -rn "exif_transpose\\|ImageOps" scanner/`` returned zero hits),
+    so 19.4 % of this library — every file carrying a non-identity Orientation
+    tag — hashed as if it were sideways. The pair simply never met, and a
+    near-duplicate miss reports nothing, so the gap was invisible.
+    """
+
+    def test_fixture_really_is_rotated(self, tmp_path):
+        """The fixture must actually exercise the bug (no vacuous pass).
+
+        If the two files' *stored* pixels hashed the same anyway, the test
+        below would pass without the hasher doing anything — so pin both
+        halves: the tag is really 6, and the un-oriented pixels really differ.
+        """
+        import imagehash
+
+        up_path, rot_path, stored = _write_oriented_pair(tmp_path)
+
+        with Image.open(rot_path) as im:
+            assert im.getexif().get(0x0112) == 6, "fixture lost its Orientation tag"
+
+        with Image.open(up_path) as im:
+            upright_hash = imagehash.phash(im.convert("RGB"))
+        stored_hash = imagehash.phash(stored)
+        assert upright_hash - stored_hash > 0, (
+            "fixture is orientation-blind: the stored pixels hash the same as "
+            "the upright ones, so the orientation assertion would be vacuous"
+        )
+
+    def test_rotated_copy_and_upright_hash_to_distance_zero(self, tmp_path):
+        import imagehash
+
+        from scanner.hasher import compute_hashes
+
+        up_path, rot_path, _stored = _write_oriented_pair(tmp_path)
+
+        _sha_u, ph_u, dh_u, *_ = compute_hashes(up_path, "png")
+        _sha_r, ph_r, dh_r, *_ = compute_hashes(rot_path, "jpeg")
+
+        ph_dist = imagehash.hex_to_hash(ph_u) - imagehash.hex_to_hash(ph_r)
+        dh_dist = imagehash.hex_to_hash(dh_u) - imagehash.hex_to_hash(dh_r)
+        assert ph_dist == 0, (
+            f"phash distance {ph_dist} between an upright copy and the same "
+            f"photo stored with Orientation=6 ({ph_u} vs {ph_r}) — EXIF "
+            "orientation is not applied before hashing (#822)"
+        )
+        assert dh_dist == 0, (
+            f"dhash distance {dh_dist} between the same two files "
+            f"({dh_u} vs {dh_r}) — EXIF orientation is not applied (#822)"
+        )
+
+    def test_jpeg_pair_lands_inside_the_near_duplicate_tier(self, tmp_path):
+        """The lossy real-world case: two independent JPEG encodes.
+
+        This is what #822 actually promises the user — a phone portrait and a
+        rotation-baked re-save MEET in the near-duplicate tier. On the base
+        recipe this pair measured **30** bits of phash distance, far outside
+        the scan's default threshold of 10, so the pair never met and nothing
+        was ever reported. Asserting against the threshold rather than 0 keeps
+        JPEG re-encode noise (measured: 2 bits) out of the assertion.
+        """
+        import imagehash
+
+        from scanner.hasher import compute_hashes
+
+        PHASH_THRESHOLD = 10  # scan default (config.threshold)
+
+        up_path, rot_path = _write_jpeg_jpeg_oriented_pair(tmp_path)
+        _sha_u, ph_u, dh_u, *_ = compute_hashes(up_path, "jpeg")
+        _sha_r, ph_r, dh_r, *_ = compute_hashes(rot_path, "jpeg")
+
+        ph_dist = imagehash.hex_to_hash(ph_u) - imagehash.hex_to_hash(ph_r)
+        dh_dist = imagehash.hex_to_hash(dh_u) - imagehash.hex_to_hash(dh_r)
+        assert ph_dist < PHASH_THRESHOLD, (
+            f"phash distance {ph_dist} >= {PHASH_THRESHOLD}: the rotated copy "
+            f"misses the near-duplicate tier ({ph_u} vs {ph_r}, #822)"
+        )
+        assert dh_dist < PHASH_THRESHOLD, f"dhash distance {dh_dist} (#822)"
+
+    def test_compute_from_bytes_path_is_oriented_too(self, tmp_path):
+        """The #566 read→compute pipeline must get the same treatment.
+
+        ``compute_from_bytes`` is the stage a real thread-mode scan actually
+        runs; ``compute_hashes`` is the fused/process-mode path. A fix applied
+        to only one of them would leave real scans broken while the test above
+        stayed green.
+        """
+        from scanner.hasher import compute_from_bytes
+
+        up_path, rot_path, _stored = _write_oriented_pair(tmp_path)
+
+        _i, up_res = compute_from_bytes(0, _record(up_path, "png"), up_path.read_bytes())
+        _j, rot_res = compute_from_bytes(1, _record(rot_path, "jpeg"), rot_path.read_bytes())
+
+        assert up_res.phash == rot_res.phash
+        assert up_res.dhash == rot_res.dhash
+
+
+def _fake_rawpy(thumb_bytes: bytes, width: int, height: int, opens: list):
+    """A stand-in ``rawpy`` module that counts LibRaw opens.
+
+    Real camera RAW is not in this repo's fixtures (a ProRAW DNG is 124–129 MB),
+    so the open COUNT — the quantity #826 is about — is observed against a fake
+    handle. The real exception classes are kept so the production ``except``
+    clauses still match.
+    """
+    import rawpy as _rawpy
+
+    class _Sizes:
+        def __init__(self):
+            self.width = width
+            self.height = height
+
+    class _Thumb:
+        format = _rawpy.ThumbFormat.JPEG
+        data = thumb_bytes
+
+    class _Handle:
+        def __init__(self):
+            self.sizes = _Sizes()
+
+        def extract_thumb(self):
+            return _Thumb()
+
+        def postprocess(self, **_kw):
+            raise AssertionError("embedded JPEG present — full decode must not run")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    class _FakeRawpy:
+        ThumbFormat = _rawpy.ThumbFormat
+        LibRawError = _rawpy.LibRawError
+        LibRawNoThumbnailError = _rawpy.LibRawNoThumbnailError
+
+        @staticmethod
+        def imread(source):
+            opens.append(source)
+            return _Handle()
+
+    return _FakeRawpy
+
+
+class TestRawSingleLibRawOpen:
+    """#826 — one LibRaw open per RAW file, and hash the preview at working size.
+
+    Measured on this library's three largest DNGs (iPhone ProRAW, 124–129 MB,
+    8064×6048): the embedded preview is a full-sensor 48.8 MP JPEG, and the two
+    LibRaw opens alone cost 0.34–0.38 s per file with the bytes already in RAM.
+    """
+
+    def test_raw_single_libraw_open_and_downscaled_preview(self, tmp_path, monkeypatch):
+        import imagehash
+
+        from scanner import hasher
+
+        buf = io.BytesIO()
+        # Stands in for the real 8064×6048 embedded preview; 2048×1536 is the
+        # smallest size that still distinguishes "hashed the preview as-is"
+        # (2048 px) from "reduced to the JPEG path's working size" (512 px).
+        Image.fromarray(_photo_array(2048, 1536), "RGB").save(buf, "JPEG", quality=85)
+
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(hasher, "rawpy", _fake_rawpy(buf.getvalue(), 8064, 6048, opens))
+
+        hashed_sizes: list = []
+        real_phash = imagehash.phash
+
+        def _spy_phash(image, *a, **kw):
+            hashed_sizes.append(image.size)
+            return real_phash(image, *a, **kw)
+
+        monkeypatch.setattr(hasher.imagehash, "phash", _spy_phash)
+
+        f = tmp_path / "shot.dng"
+        f.write_bytes(b"\x00" * 64)
+        sha, ph, dh, _mc, _date, px_w, px_h, _sig = hasher.compute_hashes(f, "raw")
+
+        assert len(opens) == 1, (
+            f"LibRaw opened {len(opens)}× for one RAW file — #826 wants exactly 1 "
+            f"(sources: {opens})"
+        )
+        assert (px_w, px_h) == (8064, 6048), (
+            "sensor dimensions must still come from rawpy metadata, off the same handle"
+        )
+        assert ph and dh and len(sha) == 64
+        assert hashed_sizes, "imagehash.phash was never called for the RAW path"
+        assert max(hashed_sizes[0]) <= 1024, (
+            f"RAW preview hashed at {hashed_sizes[0]} — #826 wants it reduced to "
+            "the JPEG path's ~1024 px working resolution before hashing"
+        )
+
+
+# Pinned outputs of the hash recipe for an Orientation-1 JPEG, captured on the
+# BASE recipe (HASH_RECIPE_VERSION "3", commit b14b59f) before #822/#826 landed.
+# A file with no orientation to apply must hash EXACTLY as it did before, or the
+# recipe change was not the surgical one it claims to be. If a future change to
+# the recipe (or a Pillow decoder change) moves these, that must be a loud,
+# deliberate re-pin accompanied by a HASH_RECIPE_VERSION bump — not a silent drift.
+_PARITY_PHASH = "881a4f1b0b19f56f"
+_PARITY_DHASH = "fbe7befbefbef7ff"
+_PARITY_MEAN = "127,127,117"
+
+
+class TestHashRecipeParity:
+    def test_orientation1_jpeg_matches_pinned_base_recipe(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "parity.jpg"
+        Image.fromarray(_photo_array(640, 480), "RGB").save(f, "JPEG", quality=90)
+
+        with Image.open(f) as im:
+            assert im.getexif().get(0x0112) is None, "parity fixture must carry no Orientation"
+
+        _sha, ph, dh, mean_color, *_ = compute_hashes(f, "jpeg")
+        assert (ph, dh, mean_color) == (_PARITY_PHASH, _PARITY_DHASH, _PARITY_MEAN), (
+            f"hash recipe drifted for an Orientation-1 JPEG: got "
+            f"phash={ph} dhash={dh} mean_color={mean_color}, pinned "
+            f"phash={_PARITY_PHASH} dhash={_PARITY_DHASH} mean_color={_PARITY_MEAN}"
+        )

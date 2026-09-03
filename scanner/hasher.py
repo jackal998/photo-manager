@@ -20,8 +20,14 @@ module-level ``rawpy.open_buffer`` the older code called, so that call
 dead-ended on ``AttributeError`` and silently re-read the file from disk
 (3 touches per RAW). The single-read guarantee therefore holds for valid
 camera RAW; a non-camera TIFF routed to the ``raw`` branch (#75) still
-falls back to a path re-read in ``_load_raw_preview`` so it skips
-cleanly rather than crashing.
+falls back to a path re-read (``_raw_preview_and_sizes(str(path))``) so it
+skips cleanly rather than crashing.
+
+#826: that in-memory decode now also yields ``raw.sizes`` off the SAME
+LibRaw handle. The path used to open LibRaw twice per RAW file — once for
+the embedded preview, once more purely for the sensor dimensions — which
+cost 0.34-0.38 s per file on 124-129 MB ProRAW DNGs with the bytes already
+in RAM, on the pipeline's most expensive pixel path.
 
 The video path (``mp4`` / ``mov``) already streams via 64 KB chunks
 in ``compute_sha256`` — peak heap is ~64 KB regardless of file size.
@@ -69,7 +75,7 @@ class ReadFailure:
     exc_msg: str
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
     import imagehash
     _HASH_AVAILABLE = True
 except ImportError:
@@ -105,7 +111,20 @@ except ImportError:
 # (exif_date/exif_tag_count/gps_present/xmp_derived) from the already-open
 # PIL image, added as an 8th return element; per-file JPEG cost shifts
 # (adds EXIF/XMP parsing, removes the exiftool round-trip downstream).
-HASH_RECIPE_VERSION = "3"
+# "4" (#822 + #826) — one bump for two recipe moves, so stored hashes are
+# invalidated once rather than twice: EXIF Orientation is now applied before
+# phash/dhash on every path that carries it (#822), and the RAW path opens
+# LibRaw once and reduces the embedded preview to the JPEG path's working
+# resolution before hashing (#826). Both shift hash values for the affected
+# files; an Orientation-1 non-RAW file is bit-identical to recipe "3"
+# (pinned by tests/test_hasher.py::TestHashRecipeParity).
+HASH_RECIPE_VERSION = "4"
+
+# Shrink-on-load target shared by every pixel path, so RAW and JPEG hash at the
+# same working resolution (#569 chose it; #826 pointed the RAW path at it).
+# For a 4032×3024 JPEG libjpeg's DCT scaler picks 1/8 → ~504 px on the long
+# side; for a 8064×6048 ProRAW embedded preview, ~1008 px.
+_DRAFT_TARGET = (256, 256)
 
 
 def compute_sha256(path: Path) -> str:
@@ -145,26 +164,25 @@ def _hashes_from_data(
     inmemory_signals: Optional[dict] = None
 
     if file_type == "raw":
-        img = _load_raw_preview_from_bytes(data)
+        # #826 — ONE LibRaw open yields both the embedded preview and the true
+        # sensor dimensions. The old shape opened LibRaw twice per file (once
+        # in _load_raw_preview_from_bytes, once more just for raw.sizes); on
+        # this library's iPhone ProRAW DNGs (124–129 MB, 8064×6048) the two
+        # opens alone cost 0.34–0.38 s per file with the bytes already in RAM.
+        # #591 — the in-memory source is a fresh io.BytesIO over the bytes we
+        # already read (rawpy 0.26.1 has no module-level open_buffer); no disk
+        # re-read.
+        img, px_w, px_h = _raw_preview_and_sizes(io.BytesIO(data))
         if img is None:
             # In-memory decode failed (genuine LibRaw error / non-camera TIFF
-            # routed to 'raw', #75) — fall back to the path-based loader so the
-            # file still skips cleanly.
-            img = _load_raw_preview(path)
-        # True sensor dimensions come from rawpy metadata, not the embedded thumbnail.
-        # Thumbnails are typically low-res previews (e.g. 1024×768 for a 12 MP DNG).
-        if _RAWPY_AVAILABLE:
-            try:
-                # #591 — decode the already-read bytes via a fresh io.BytesIO
-                # (rawpy 0.26.1 has no module-level open_buffer); no disk re-read.
-                with rawpy.imread(io.BytesIO(data)) as raw:
-                    px_w, px_h = raw.sizes.width, raw.sizes.height
-            except (OSError, ValueError, AttributeError, rawpy.LibRawError):
-                try:
-                    with rawpy.imread(str(path)) as raw:
-                        px_w, px_h = raw.sizes.width, raw.sizes.height
-                except (OSError, ValueError, rawpy.LibRawError):
-                    pass
+            # routed to 'raw', #75) — retry from the path so the file still
+            # skips cleanly. Same recipe on both routes.
+            img, fallback_w, fallback_h = _raw_preview_and_sizes(str(path))
+            if px_w is None:
+                px_w, px_h = fallback_w, fallback_h
+        # True sensor dimensions come from rawpy metadata, never from the
+        # embedded preview — on ProRAW the preview is the full 8064×6048 frame,
+        # on other bodies it can be a small thumbnail; neither is authoritative.
         # RAW EXIF dates are not reliably readable via PIL — caller uses exiftool.
     else:
         try:
@@ -184,7 +202,18 @@ def _hashes_from_data(
                 # grouping threshold, 0 group-membership flips — while cutting JPEG
                 # decode ~4×. The win lands on warm re-scans (~5–6×) and
                 # compute-bound hardware; a read-bound first scan is unchanged.
-                pil_img.draft("RGB", (256, 256))
+                pil_img.draft("RGB", _DRAFT_TARGET)
+                # #822 — apply EXIF Orientation BEFORE hashing. Without it a
+                # copy whose rotation was baked into its pixels (an export, an
+                # edit, a messenger re-save) hashes differently from its
+                # EXIF-rotated original, so the pair misses the near-duplicate
+                # tier entirely — a false negative that reports nothing. 19.4 %
+                # of this library carries a non-identity Orientation tag.
+                # Runs AFTER the EXIF reads above, which need the original tags.
+                # ``in_place=True`` transposes the already-decoded buffer instead
+                # of returning a copy, so an Orientation-1 file (the common case)
+                # costs nothing extra against the #453 per-worker RAM ceiling.
+                ImageOps.exif_transpose(pil_img, in_place=True)
                 img = pil_img.convert("RGB")
                 img.load()
         except (OSError, ValueError):
@@ -458,8 +487,13 @@ def _load_raw_preview(path: Path) -> Optional[Image.Image]:
     """Load a PIL Image from a RAW file's embedded JPEG thumbnail (path-based).
 
     Falls back to full rawpy decode if no thumbnail is present.
-    Used directly by ``compute_phash``; ``compute_hashes`` prefers
-    ``_load_raw_preview_from_bytes`` to avoid a second file read.
+
+    Returns the preview at FULL resolution and WITHOUT applying EXIF
+    Orientation — that contract is relied on by ``compute_phash`` and by
+    ``scripts/visual_gt/server.py`` (which sizes and orients the image itself).
+    The hash path does not use this function: it goes through
+    :func:`_raw_preview_and_sizes`, which opens LibRaw once (#826) and hashes
+    an oriented, draft-reduced preview (#822).
     """
     if not _RAWPY_AVAILABLE:
         return None
@@ -480,36 +514,73 @@ def _load_raw_preview(path: Path) -> Optional[Image.Image]:
         return None
 
 
-def _load_raw_preview_from_bytes(data: bytes) -> Optional[Image.Image]:
-    """Load a PIL Image from RAW bytes via ``rawpy.imread(io.BytesIO(data))`` (no second file read).
+def _raw_preview_from_jpeg_bytes(thumb_data: bytes) -> Optional[Image.Image]:
+    """Decode an embedded RAW preview JPEG at hash working resolution, oriented.
 
-    #591 — feeds the already-read bytes straight to ``rawpy.imread`` through a
-    fresh ``io.BytesIO`` (a file-like object, which ``imread`` accepts). This
-    replaces the dead ``rawpy.open_buffer`` call: rawpy 0.26.1 has no
-    module-level ``open_buffer``, so the old code raised ``AttributeError`` and
-    the caller silently re-read the file from disk. Decode is bit-identical to
-    the path-based loader (same LibRaw, same bytes).
+    #826 — the embedded preview is NOT the small thumbnail the old comment
+    assumed: on this library's iPhone ProRAW DNGs it is the full sensor frame
+    (8064×6048 = 48.8 MP, 21–22 MB), so hashing it as-is ran phash/dhash on
+    ~260× the pixels of a drafted 12 MP JPEG for no gain (phash reduces to
+    32×32 regardless). It now goes through the same :data:`_DRAFT_TARGET`
+    shrink-on-load the JPEG path uses.
 
-    Returns None on any decode failure (genuine ``LibRawError`` / non-camera
-    TIFF, #75); the caller falls back to ``_load_raw_preview(path)`` then.
+    #822 — the preview carries the camera's Orientation in its own EXIF while
+    its pixels are stored unrotated (measured across the sampled DNGs:
+    ``raw.sizes.flip`` equals the preview's EXIF Orientation on every file), so
+    ``exif_transpose`` here is what applies ``sizes.flip``.
+    """
+    try:
+        with Image.open(io.BytesIO(thumb_data)) as preview:
+            preview.draft("RGB", _DRAFT_TARGET)
+            ImageOps.exif_transpose(preview, in_place=True)
+            img = preview.convert("RGB")
+            img.load()
+            return img
+    except (OSError, ValueError):
+        return None
+
+
+def _raw_preview_and_sizes(
+    source: "io.BytesIO | str",
+) -> "tuple[Optional[Image.Image], Optional[int], Optional[int]]":
+    """ONE LibRaw open → ``(hash-ready preview, sensor width, sensor height)``.
+
+    #826 — replaces the old pair of opens (``_load_raw_preview_from_bytes`` for
+    the preview, then a second ``rawpy.imread`` purely for ``raw.sizes``). The
+    two opens alone cost 0.34–0.38 s per file on 124–129 MB ProRAW DNGs with
+    the bytes already in RAM.
+
+    ``source`` is either an ``io.BytesIO`` over already-read bytes (the normal
+    single-read path — #446's single read, #591's ``imread``-over-BytesIO: rawpy
+    0.26.1 has no module-level ``open_buffer``, and the dead call it replaced
+    made the caller silently re-read the file from disk) or a ``str`` path (the
+    degraded fallback, so both routes hash by the same recipe). Pass a FRESH
+    ``io.BytesIO`` per call — a reused/non-zero-position buffer raises
+    ``LibRawIOError``.
+
+    Returns ``(None, None, None)`` on any LibRaw failure (incl.
+    ``LibRawFileUnsupportedError`` for a non-camera TIFF routed to ``raw``,
+    #75), so the caller can fall back or skip the file cleanly.
+
+    The full-decode fallback needs no ``exif_transpose``: LibRaw applies
+    ``sizes.flip`` inside ``postprocess`` itself (measured — a ``flip=6`` DNG
+    returns a portrait 8064×6048 array from an 8064×6048 landscape sensor).
     """
     if not _RAWPY_AVAILABLE:
-        return None
+        return None, None, None
     try:
-        # Fresh io.BytesIO per call — a reused/non-zero-position buffer would
-        # raise LibRawIOError and silently degrade to a path re-read.
-        with rawpy.imread(io.BytesIO(data)) as raw:
+        with rawpy.imread(source) as raw:
+            px_w, px_h = raw.sizes.width, raw.sizes.height
             try:
                 thumb = raw.extract_thumb()
                 if thumb.format == rawpy.ThumbFormat.JPEG:
-                    img = Image.open(io.BytesIO(thumb.data)).convert("RGB")
-                    img.load()
-                    return img
+                    img = _raw_preview_from_jpeg_bytes(thumb.data)
+                    if img is not None:
+                        return img, px_w, px_h
             except rawpy.LibRawNoThumbnailError:
                 pass
+            # Full decode fallback — slower but always works.
             rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
-            return Image.fromarray(rgb).convert("RGB")
+            return Image.fromarray(rgb).convert("RGB"), px_w, px_h
     except (OSError, ValueError, AttributeError, rawpy.LibRawError):
-        # Any LibRaw decode failure (incl. LibRawFileUnsupportedError for a
-        # non-camera TIFF, #75) → None so the caller's path fallback runs.
-        return None
+        return None, None, None
