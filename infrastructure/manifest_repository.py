@@ -146,9 +146,31 @@ _FINALIZE_OUTCOME_SQL = """
 UPDATE migration_manifest SET outcome = ?, executed = ? WHERE source_path = ?
 """
 
-# #821 — every in-review path, for the open-time skip-directory reconcile.
-_LIVE_PATHS_SQL = """
-SELECT source_path FROM migration_manifest WHERE outcome = ''
+# #821 — every in-review row, for the open-time skip-directory reconcile.
+_LIVE_ROWS_SQL = """
+SELECT id, source_path FROM migration_manifest WHERE outcome = ''
+"""
+
+# #821 — the reconcile's own dismissal write. Two deliberate differences
+# from ``_FINALIZE_OUTCOME_SQL``:
+#
+#   * ``AND outcome = ''`` — the candidate rows are read on an earlier,
+#     already-closed connection, so between the SELECT and this UPDATE an
+#     execute batch may have finalised one of them as 'deleted'. The guard
+#     re-checks the SELECT's own predicate inside the writing statement, so
+#     this housekeeping write LOSES that race instead of winning it.
+#     ``finalize_outcome`` keeps its unguarded semantics for its own
+#     callers, which legitimately overwrite state they just read.
+#   * keyed on ``id`` (INTEGER PRIMARY KEY, i.e. rowid) rather than
+#     ``source_path``, which carries no index — measured on the author's
+#     40,774-row manifest, the same 3,952-row batch takes 36.0 s keyed by
+#     path and 0.013 s keyed by id. It is also more precise: source_path
+#     has no uniqueness constraint, so a path-keyed write would touch every
+#     row sharing that path, not the row the SELECT actually saw.
+_RECONCILE_DISMISS_SQL = """
+UPDATE migration_manifest
+   SET outcome = 'ignored', executed = 0
+ WHERE id = ? AND outcome = ''
 """
 
 
@@ -418,16 +440,25 @@ class ManifestRepository:
         than frozen into a one-off migration, so a prefix added later is
         applied to manifests that were opened before it existed.
 
+        **Fail-soft, unlike ``finalize_outcome``.** This is housekeeping the
+        user did not ask for, running inside someone else's ``load()``; a
+        read-only manifest (or any other write failure) must not turn an
+        openable manifest into an unopenable one. The write is delegated to
+        :meth:`_dismiss_skipped_paths`, which logs a WARNING and returns 0
+        rather than raising — the stale rows simply stay live for that open,
+        which is exactly the pre-#821 behaviour.
+
         Returns:
-            The number of rows dismissed by this call (0 on a clean or
-            already-reconciled manifest).
+            The number of rows actually dismissed by this call — 0 on a
+            clean manifest, on an already-reconciled one, and when the
+            write could not be performed.
         """
         from scanner.walker import has_skip_directory_ancestor
 
         self.ensure_schema(manifest_path)
         conn = _connect(manifest_path)
         try:
-            candidates = conn.execute(_LIVE_PATHS_SQL).fetchall()
+            candidates = conn.execute(_LIVE_ROWS_SQL).fetchall()
         finally:
             conn.close()
 
@@ -437,20 +468,69 @@ class ManifestRepository:
         # from a folder), and on the author's real 40,774-row manifest
         # the pre-filter saved 71 ms of a once-per-open cost (66 ms vs
         # 137 ms, best of 3) — not worth the dynamic SQL.
-        paths = [
-            row[0] for row in candidates
-            if has_skip_directory_ancestor(row[0])
+        row_ids = [
+            row_id for row_id, source_path in candidates
+            if has_skip_directory_ancestor(source_path)
         ]
-        if not paths:
+        return self._dismiss_skipped_rows(manifest_path, row_ids)
+
+    def _dismiss_skipped_rows(
+        self, manifest_path: str, row_ids: list[int]
+    ) -> int:
+        """Write ``outcome='ignored'`` for ``row_ids``, guarded + fail-soft.
+
+        Split out of :meth:`reconcile_skip_directory_rows` for two reasons
+        that are both testable in isolation:
+
+          * the guard — ``row_ids`` was read on a connection that is
+            already closed, so each row is re-checked for ``outcome = ''``
+            inside the UPDATE itself (``_RECONCILE_DISMISS_SQL``). A row
+            that an execute batch finalised as ``deleted`` in that window
+            keeps its outcome and its ``executed=1``; only still-in-review
+            rows move.
+          * the fail-soft — every ``sqlite3.Error`` is logged as a WARNING
+            naming the manifest and how many rows could not be dismissed,
+            and 0 is returned. A read-only manifest still opens.
+
+        ``executed`` is written as 0 alongside, matching
+        ``finalize_outcome``'s ``ignored`` mapping so the redundant
+        cross-check stays coherent. (Measured on the author's live
+        manifest: 0 rows carry ``executed=1`` with ``outcome=''``, so no
+        legacy pre-#584 state is lost by writing it.)
+
+        Returns:
+            Rows actually modified (``cursor.rowcount`` over the batch).
+        """
+        if not row_ids:
             return 0
-        self.remove_from_review(manifest_path, paths)
-        logger.info(
-            "Dismissed {} row(s) under a skip directory "
-            "(recycle bin / system folder) in {}",
-            len(paths),
-            manifest_path,
-        )
-        return len(paths)
+        try:
+            conn = _connect(manifest_path)
+            try:
+                cur = conn.executemany(
+                    _RECONCILE_DISMISS_SQL, [(rid,) for rid in row_ids]
+                )
+                dismissed = cur.rowcount
+                conn.commit()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            # Housekeeping must never break the open that triggered it.
+            logger.warning(
+                "Could not dismiss {} skip-directory row(s) in {}: {!r} — "
+                "they stay in review for this session",
+                len(row_ids),
+                manifest_path,
+                exc,
+            )
+            return 0
+        if dismissed:
+            logger.info(
+                "Dismissed {} row(s) under a skip directory "
+                "(recycle bin / system folder) in {}",
+                dismissed,
+                manifest_path,
+            )
+        return dismissed
 
     # ------------------------------------------------------------------ load
 
@@ -485,10 +565,20 @@ class ManifestRepository:
         # ensure_schema() docstring for the contract.
         self.ensure_schema(manifest_path)
         # #821 — dismiss recycle-bin / system-folder rows left behind by a
-        # pre-#482 scan before they are grouped. Runs once per manifest
-        # open (NOT inside ensure_schema, which finalize_outcome calls
-        # per execute batch), and is a no-op on an already-reconciled or
-        # never-affected manifest.
+        # pre-#482 scan before they are grouped. Runs on EVERY load(), not
+        # once per manifest open: review_service.py:169 calls load() again
+        # on every decision PATCH. That is affordable because the pass is
+        # one SELECT plus a string scan with no filesystem access —
+        # measured 0.127 s (median of 5) on the author's 40,774-row
+        # manifest, against ~4.4 s for the load() around it — and it is a
+        # no-op write-wise on an already-reconciled manifest, which is the
+        # steady state after the first open. Do NOT add caching: a cache
+        # would have to be invalidated by every writer of `outcome`,
+        # including the execute routes in another thread. It stays out of
+        # ensure_schema(), which finalize_outcome
+        # calls per execute batch (and per deleted FILE in
+        # execute_service.py), where a full-table pass would be per-row I/O.
+        # Fail-soft: a write failure logs a WARNING and leaves the rows.
         self.reconcile_skip_directory_rows(manifest_path)
         conn = _connect(manifest_path)
         conn.row_factory = sqlite3.Row

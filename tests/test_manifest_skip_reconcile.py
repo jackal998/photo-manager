@@ -20,7 +20,10 @@ three things that can actually go wrong:
 
 from __future__ import annotations
 
+import logging
+import os
 import sqlite3
+import stat
 from pathlib import Path
 
 from infrastructure.manifest_repository import ManifestRepository
@@ -228,3 +231,134 @@ class TestSkipDirectoryReconcile:
         repo.finalize_outcome(str(db), [str(trashed)], "deleted")
         assert repo.reconcile_skip_directory_rows(str(db)) == 0
         assert _outcomes(db)[str(trashed)] == "deleted"
+
+    def test_read_only_manifest_still_opens(self, tmp_path, caplog):
+        """A manifest the process cannot write to must still LOAD.
+
+        The reconcile is housekeeping the user never asked for, running
+        inside someone else's ``load()``. Before the fail-soft guard the
+        write raised ``sqlite3.OperationalError: attempt to write a
+        readonly database`` straight out of ``load()`` — which
+        ``app/web/routes/review.py:58-62`` turns into an HTTP 422 and which
+        aborts the Qt load worker. A read-only manifest opened fine on
+        base; making it unopenable would be a regression caused purely by
+        the cleanup.
+
+        Contract: the rows stay live for that open (exactly the pre-#821
+        behaviour), and a WARNING names the manifest.
+        """
+        from loguru import logger
+
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        trashed = recycle_dir / "a.jpg"
+        keep = tmp_path / "b.jpg"
+        trashed.write_bytes(b"")
+        keep.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(db, [(str(trashed), "g1"), (str(keep), "g1")])
+        # Migrate BEFORE freezing the file: ensure_schema's ALTERs are a
+        # pre-existing write on the load() path, not the behaviour under
+        # test here. Without this the test would be pinning the schema
+        # migration's failure mode instead of the reconcile's.
+        ManifestRepository().ensure_schema(str(db))
+
+        os.chmod(db, stat.S_IREAD)
+        handler_id = logger.add(
+            caplog.handler, format="{message}", level="WARNING"
+        )
+        try:
+            with caplog.at_level(logging.WARNING):
+                loaded = {
+                    r.file_path for r in ManifestRepository().load(str(db))
+                }
+        finally:
+            logger.remove(handler_id)
+            os.chmod(db, stat.S_IWRITE | stat.S_IREAD)
+
+        assert loaded == {str(trashed), str(keep)}, (
+            "a read-only manifest must still open, with its rows intact"
+        )
+        assert _outcomes(db)[str(trashed)] == "", (
+            "nothing was dismissed — the DB could not be written"
+        )
+        warnings = [
+            r.message for r in caplog.records
+            if "Could not dismiss" in r.message
+        ]
+        assert len(warnings) == 1, (
+            f"expected one WARNING naming the failure, got: "
+            f"{[r.message for r in caplog.records]}"
+        )
+        assert str(db) in warnings[0]
+
+    def test_row_finalised_deleted_after_the_select_is_not_reopened(
+        self, tmp_path
+    ):
+        """The candidates are read on a connection that is then CLOSED, so
+        there is a window before the dismissal write.
+
+        If an execute batch finalises one of those candidates as
+        ``deleted`` (``executed=1``) inside that window — reachable in the
+        web threadpool, where ``GET /api/manifest`` and the execute route
+        run concurrently — an unguarded write would overwrite it with
+        ``ignored`` and flip ``executed`` back to 0, defeating serially
+        what ``test_deleted_rows_are_not_reopened_as_ignored`` pins.
+
+        This encodes that window without threads: take the candidate list,
+        finalise one of them out of band, then run the write step with the
+        now-stale list.
+        """
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        raced = recycle_dir / "raced.jpg"
+        other = recycle_dir / "other.jpg"
+        keep = tmp_path / "keep.jpg"
+        for f in (raced, other, keep):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(
+            db,
+            [(str(raced), "g1"), (str(other), "g1"), (str(keep), "g1")],
+        )
+
+        repo = ManifestRepository()
+        repo.ensure_schema(str(db))
+        conn = sqlite3.connect(str(db))
+        try:
+            ids = {
+                row[1]: row[0]
+                for row in conn.execute(
+                    "SELECT id, source_path FROM migration_manifest"
+                )
+            }
+        finally:
+            conn.close()
+        candidates = [ids[str(raced)], ids[str(other)]]   # what the SELECT saw
+
+        # …the window: an execute batch trashes one of them for real.
+        repo.finalize_outcome(str(db), [str(raced)], "deleted")
+
+        dismissed = repo._dismiss_skipped_rows(str(db), candidates)
+
+        assert dismissed == 1, (
+            "only the still-in-review candidate may be dismissed"
+        )
+        conn = sqlite3.connect(str(db))
+        try:
+            state = {
+                row[0]: (row[1], row[2])
+                for row in conn.execute(
+                    "SELECT source_path, outcome, executed "
+                    "FROM migration_manifest"
+                )
+            }
+        finally:
+            conn.close()
+        assert state[str(raced)] == ("deleted", 1), (
+            "the real deletion was overwritten by the stale reconcile"
+        )
+        assert state[str(other)] == ("ignored", 0)
+        assert state[str(keep)] == ("", 0)
