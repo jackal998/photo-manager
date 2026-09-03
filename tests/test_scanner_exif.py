@@ -33,6 +33,7 @@ from scanner.exif import (
     _read_chunk,
     _parse_exiftool_json,
     extract_pil_scoring_signals,
+    _subsec_text,
     _xmp_has_local_name,
     _xmp_tag_value,
     _xmp_date_string,
@@ -1339,6 +1340,32 @@ class TestSubsecExiftoolPath:
     path. ``shot_date`` is truncated to whole seconds by design, so these
     two values are the ONLY thing separating frames of a burst shot in the
     same second — dropping either one loses the ordering entirely."""
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            (None, None),        # tag absent — the only case that may be None
+            (0, "0"),            # 0 ms IS a value; falsy in Python, real in EXIF
+            (5, "5"),            # exiftool's int form (728 of 824 real files)
+            ("05", "05"),        # its str form — leading zero is 50 ms, not 500
+            ("087", "087"),
+            ("", None),          # tag present but empty → no signal
+            ("   ", None),       # whitespace-only, same
+            ("  414  ", "414"),  # real value with padding survives
+        ],
+    )
+    def test_subsec_exiftool_value_domain(self, raw, expected):
+        """The whole value domain of ``_subsec_text``, including the halves
+        the implementing sample never hit.
+
+        ``0`` is the trap: it is the one falsy input that must NOT become
+        ``None``. Simplifying the guard to ``if not raw: return None`` — the
+        obvious tidy-up — would silently drop the 0 ms frame of a burst, and
+        without this case no test would go red. ``''`` and whitespace are the
+        opposite corner: present-but-empty is genuinely no signal, so it must
+        NOT be stored as a sub-second that would sort ahead of every real one.
+        """
+        assert _subsec_text(raw) == expected
 
     def test_subsec_exiftool_int_json_value_lands_on_extract(self):
         """exiftool's ``-j`` emits SubSecTimeOriginal as a JSON **int**

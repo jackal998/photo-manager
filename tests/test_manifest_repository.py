@@ -487,7 +487,15 @@ class TestSubsecTimeOriginalMigration:
         hardcoded DDL and copies only the columns named in
         ``_POST_DROP_COLUMNS``. A column added to ``_MIGRATIONS`` but
         forgotten there is created by the ALTER and then dropped again on
-        the very next open — silently, on exactly the oldest manifests."""
+        the very next open — silently, on exactly the oldest manifests.
+
+        The fixture row carries REAL sub-second values, not NULLs, because
+        the two halves of the bug are separable and only one of them is a
+        missing column: forgetting the name in the rebuild's ``CREATE TABLE``
+        drops the column, while forgetting it in ``_POST_DROP_COLUMNS``
+        keeps the column and silently drops every VALUE in it. A NULL
+        fixture passes that second case, so it would certify half a guard.
+        """
         ddl_with_dest_path = _DDL_PRE_820.replace(
             "outcome          TEXT    NOT NULL DEFAULT ''",
             "outcome          TEXT    NOT NULL DEFAULT '',\n    dest_path        TEXT",
@@ -508,17 +516,43 @@ class TestSubsecTimeOriginalMigration:
             ],
             ddl=ddl_with_dest_path,
         )
+        # Populate the new columns BEFORE the rebuild: they don't exist on
+        # the dest_path-era schema, so the ALTER has to run first. This is
+        # the state a user reaches by opening an ancient manifest once
+        # (columns added, values written by a re-scan) and then opening it
+        # again — the second open is what runs the dance.
+        conn = sqlite3.connect(str(db))
+        try:
+            for col in ("subsec_time_original", "offset_time_original"):
+                conn.execute(
+                    f"ALTER TABLE migration_manifest ADD COLUMN {col} TEXT"
+                )
+            conn.execute(
+                "UPDATE migration_manifest "
+                "SET subsec_time_original = ?, offset_time_original = ? "
+                "WHERE source_path = ?",
+                ("087", "+09:00", "/legacy/c.jpg"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
         ManifestRepository().ensure_schema(str(db))
+
         with sqlite3.connect(str(db)) as conn:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
-            action = conn.execute(
-                "SELECT action FROM migration_manifest "
-                "WHERE source_path = '/legacy/c.jpg'"
-            ).fetchone()[0]
+            row = conn.execute(
+                "SELECT action, subsec_time_original, offset_time_original "
+                "FROM migration_manifest WHERE source_path = '/legacy/c.jpg'"
+            ).fetchone()
         assert "dest_path" not in cols          # the dance really ran
-        assert action == ""                     # …and did its MOVE→'' work
-        assert "subsec_time_original" in cols   # …without eating the new columns
+        assert row[0] == ""                     # …and did its MOVE→'' work
+        assert "subsec_time_original" in cols   # …without eating the columns
         assert "offset_time_original" in cols
+        # …and without eating their CONTENTS — this is the half a NULL
+        # fixture cannot see, and the half _POST_DROP_COLUMNS protects.
+        assert row[1] == "087"
+        assert row[2] == "+09:00"
 
 
 class TestManifestRepositorySave:
