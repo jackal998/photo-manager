@@ -787,6 +787,79 @@ class TestComplementaryGroupEdge:
         assert rows["/cam/DSC_0021.nef"].group_id is None
         assert rows["/exports/holiday-01.jpg"].group_id is None
 
+    def _reviewer_trio(self) -> list[HashResult]:
+        """RAW + a JPEG that is itself the EXACT duplicate of a byte-identical
+        sibling. Note which JPEG carries EXACT: ``_classify_exact`` keeps the
+        lex-min path, and "/p/A copy.JPG" < "/p/A.JPG" (space sorts before
+        '.'), so the SHA keeper is the *copy* and "/p/A.JPG" is the EXACT."""
+        return [
+            _hr("/p/A.DNG", sha256="dng-sha", phash=self.PH, file_type="raw",
+                source_label="src", exif_date=_dt()),
+            _hr("/p/A.JPG", sha256="jpg-sha", phash=self.PH, file_type="jpeg",
+                source_label="src", exif_date=_dt()),
+            _hr("/p/A copy.JPG", sha256="jpg-sha", phash=self.PH,
+                file_type="jpeg", source_label="src", exif_date=_dt()),
+        ]
+
+    def test_raw_merging_into_a_sha_group_adds_no_delete_candidate(self):
+        """#824 regression — the RAW joins a component that already held a
+        SHA-duplicate pair and outscores its keeper. Grouping must not enlarge
+        the aggressive-delete set: before the guard this returned
+        {"/p/A.JPG"}, while the same trio on the pre-#824 code returns set()
+        because the RAW was not in the group at all."""
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+
+        result = classify(self._reviewer_trio())
+        rows = _rows(result)
+        assert rows["/p/A.JPG"].action == "EXACT"
+        # One component now: the complementary edge unions the RAW in.
+        gids = {rows[p].group_id for p in ("/p/A.DNG", "/p/A.JPG", "/p/A copy.JPG")}
+        assert len(gids) == 1 and None not in gids
+
+        rows["/p/A.DNG"].score = 0.95
+        rows["/p/A.JPG"].score = 0.50
+        rows["/p/A copy.JPG"].score = 0.40
+
+        keepers = top_score_path_per_group(result)
+        assert keepers == {rows["/p/A.DNG"].source_path}
+        assert non_keepers_for_aggressive_delete(result, keepers) == set()
+
+    def test_apply_best_copy_leaves_the_jpeg_export_untouched(self, tmp_path):
+        """#824 regression, review-time twin of the test above. Before the
+        guard, ``apply_best_copy`` wrote ``user_decision='delete'`` onto
+        /p/A.JPG — a JPEG export nothing had asked to delete."""
+        from core.app_service.action_service import apply_best_copy
+        from scanner.manifest import write_manifest
+
+        result = classify(self._reviewer_trio())
+        rows = _rows(result)
+        rows["/p/A.DNG"].score = 0.95
+        rows["/p/A.JPG"].score = 0.50
+        rows["/p/A copy.JPG"].score = 0.40
+
+        manifest = tmp_path / "m.sqlite"
+        write_manifest(result, manifest)
+        apply_best_copy(str(manifest), 1)
+
+        import sqlite3
+        conn = sqlite3.connect(str(manifest))
+        try:
+            state = {
+                Path(sp).as_posix(): (ud, lk)
+                for sp, ud, lk in conn.execute(
+                    "SELECT source_path, user_decision, is_locked"
+                    "  FROM migration_manifest"
+                )
+            }
+        finally:
+            conn.close()
+        assert state["/p/A.DNG"] == ("", 1), "RAW should be the locked keeper"
+        assert state["/p/A.JPG"][0] == "", "JPEG export must not be marked delete"
+        assert state["/p/A copy.JPG"][0] == ""
+
     def test_complementary_group_id_is_order_independent(self):
         """The new edge is anchored on the lex-min member, so the component's
         group_id (the rescore determinism anchor) cannot depend on the order
