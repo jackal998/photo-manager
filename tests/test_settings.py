@@ -193,6 +193,182 @@ def test_concurrent_saves_keep_both_updates(settings_file):
     assert reread.get("thumbnail_size") == 512
 
 
+def test_save_succeeds_while_a_reader_holds_the_file_open(settings_file):
+    """A reader's open handle must not fail the writer (#790 review r2, HIGH).
+
+    Python opens files without FILE_SHARE_DELETE, so on Windows an open read
+    handle makes ``os.replace`` fail with PermissionError/WinError 5. Four
+    readers share FastAPI's threadpool with the writer here
+    (``app/web/routes/settings.py``, ``review_service``, ``routes/scan.py``,
+    ``action_service``), and ``patch_settings`` maps the failure to HTTP 422
+    while ScanDialog's fire-and-forget PATCH discards it.
+    """
+    import threading
+
+    import time
+
+    holding = threading.Event()
+    errors: list[BaseException] = []
+    # Held long enough that the writer's first os.replace attempt lands during
+    # the window, short enough that the bounded retry absorbs it — this models
+    # the transient out-of-process handle (Qt app, AV scanner) the retry exists
+    # for, not a permanent lock, which is correctly still an error.
+    hold_s = 0.05
+
+    def _hold_open() -> None:
+        with settings_file.open("r", encoding="utf-8"):
+            holding.set()
+            time.sleep(hold_s)
+
+    reader = threading.Thread(target=_hold_open)
+    reader.start()
+    try:
+        assert holding.wait(timeout=10), "reader never opened the file"
+
+        s = JsonSettings(settings_file)
+        s.set("ui.locale", "zh-TW")
+        try:
+            s.save()
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`
+            errors.append(exc)
+    finally:
+        reader.join(timeout=10)
+
+    assert not errors, f"save failed while a reader held the file: {errors!r}"
+    assert JsonSettings(settings_file).get("ui.locale") == "zh-TW"
+
+
+def test_saves_survive_readers_hammering_the_same_file(settings_file):
+    """Four spinning readers + one writer: zero exceptions, last value wins."""
+    import threading
+
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def _reader() -> None:
+        try:
+            while not stop.is_set():
+                JsonSettings(settings_file).get("thumbnail_size")
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`
+            errors.append(exc)
+
+    readers = [threading.Thread(target=_reader) for _ in range(4)]
+    for t in readers:
+        t.start()
+    try:
+        for i in range(50):
+            try:
+                s = JsonSettings(settings_file)
+                s.set("ui.locale", f"loc-{i}")
+                s.save()
+            except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`
+                errors.append(exc)
+                break
+    finally:
+        stop.set()
+        for t in readers:
+            t.join(timeout=10)
+
+    assert not errors, f"reader/writer contention raised: {errors!r}"
+    assert JsonSettings(settings_file).get("ui.locale") == "loc-49"
+
+
+def test_save_refuses_to_clobber_a_scalar_intermediate_on_disk(settings_file):
+    """The merge must honour #658, not just `set()` (#790 review r2).
+
+    `set()` raises rather than destroy a scalar sitting where a dict is
+    needed. The save-time merge writes against the file's CURRENT content, so
+    it has to make the same promise — otherwise the scalar dies there instead,
+    with the route reporting 200.
+    """
+    settings_file.write_text(
+        json.dumps({"n": "scalar", "other": 7}), encoding="utf-8"
+    )
+    s = JsonSettings(settings_file)
+    # Fresh instance whose own snapshot has `n` as a dict, so the conflict
+    # arises only at merge time against what is on disk.
+    s._data = {}
+    s.set("n.b", 2)
+    settings_file.write_text(
+        json.dumps({"n": "scalar", "other": 7}), encoding="utf-8"
+    )
+
+    with pytest.raises(TypeError, match="non-dict value"):
+        s.save()
+
+    on_disk = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert on_disk == {"n": "scalar", "other": 7}, "the file must be untouched"
+
+
+def test_get_result_mutation_is_not_persisted_without_set(settings_file):
+    """Pins the documented contract: only `set()` marks a change dirty.
+
+    `get()` returns the live nested object, and since #790 `save()` writes only
+    keys passed to `set()`. Mutating a `get()` result therefore does NOT
+    persist — the pre-#790 whole-snapshot write did. No caller relies on the
+    old behaviour (all nine `save()` sites call `set()` first), but the change
+    is invisible at the call site, so it is pinned here rather than left for
+    someone to discover through lost data.
+    """
+    s = JsonSettings(settings_file)
+    sources = s.get("sources")
+    sources["iphone"] = "/mutated/in/place"  # no set() call
+    s.set("thumbnail_size", 256)  # an unrelated, properly-marked change
+    s.save()
+
+    reread = JsonSettings(settings_file)
+    assert reread.get("thumbnail_size") == 256
+    assert reread.get("sources.iphone") == "/nas/iphone", (
+        "mutating a get() result must NOT persist — route changes through set()"
+    )
+
+
+def test_set_parent_after_child_persists_both(settings_file):
+    """`set('a.b', 1)` then `set('a', {...})` must not raise (#790 review r2).
+
+    The parent's subtree supersedes the pending child path; replaying the
+    stale child afterwards used to raise KeyError, where the pre-#790
+    whole-snapshot write persisted the parent fine.
+    """
+    s = JsonSettings(settings_file)
+    s.set("a.b", 1)
+    s.set("a", {"c": 2})
+    s.save()
+
+    reread = JsonSettings(settings_file)
+    assert reread.get("a") == {"c": 2}
+    assert reread.get("thumbnail_size") == 512  # untouched keys survive
+
+
+def test_set_child_after_parent_persists_both(settings_file):
+    """The other order: the later child must land inside the new subtree."""
+    s = JsonSettings(settings_file)
+    s.set("a", {"c": 2})
+    s.set("a.b", 1)
+    s.save()
+
+    reread = JsonSettings(settings_file)
+    assert reread.get("a") == {"c": 2, "b": 1}
+
+
+def test_save_heals_a_file_truncated_after_construction(settings_file):
+    """Valid at construction, corrupt at save time → save still writes (#790 r2).
+
+    Pre-#790 `save()` wrote `_data` wholesale and so healed the file. The
+    read-merge-write must not regress that into a raise, nor merge onto `{}`
+    and drop every other key.
+    """
+    s = JsonSettings(settings_file)
+    settings_file.write_text("{ truncated", encoding="utf-8")
+
+    s.set("ui.locale", "zh-TW")
+    s.save()
+
+    reread = JsonSettings(settings_file)  # would raise if still corrupt
+    assert reread.get("ui.locale") == "zh-TW"
+    assert reread.get("thumbnail_size") == 512, "pre-corruption keys must survive"
+
+
 def test_save_crash_mid_write_keeps_original_intact(settings_file, monkeypatch):
     # A kill mid-write used to truncate settings.json itself (plain
     # open("w") + dump). With tmp + os.replace, a failure during the dump
