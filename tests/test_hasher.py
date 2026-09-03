@@ -175,12 +175,34 @@ class TestComputeHashes:
         assert sha_combined == compute_sha256(f)
 
     def test_phash_matches_compute_phash(self, tmp_path):
-        """pHash from compute_hashes equals compute_phash on same file."""
+        """pHash from compute_hashes equals compute_phash on same file.
+
+        Since #822/#826 ``compute_phash`` delegates to ``_hashes_from_data``,
+        so this holds by construction rather than by two implementations being
+        kept in step. It is kept as the pin that fails loudly if anyone forks
+        the decode paths again: they had already silently drifted apart once
+        (draft in #569, orientation in #822 — both landed in the hash recipe
+        only), and this test did not catch it, because its fixture carries no
+        Orientation tag and is too small for draft to bite.
+        """
         from scanner.hasher import compute_hashes, compute_phash
         f = tmp_path / "img.jpg"
         _write_jpeg(f, color=(200, 80, 40))
         _, ph_combined, *_ = compute_hashes(f, "jpeg")
         assert ph_combined == compute_phash(f, "jpeg")
+
+    def test_compute_phash_agrees_on_an_oriented_file(self, tmp_path):
+        """The case the fixture above cannot see: a real Orientation=6 file.
+
+        Before #822/#826 `compute_phash` applied neither draft nor orientation,
+        so on this input the two APIs disagreed by up to 30 bits while the test
+        above stayed green.
+        """
+        from scanner.hasher import compute_hashes, compute_phash
+
+        _up_path, rot_path, _stored = _write_oriented_pair(tmp_path)
+        _sha, ph_combined, *_ = compute_hashes(rot_path, "jpeg")
+        assert ph_combined == compute_phash(rot_path, "jpeg")
 
     def test_video_returns_none_phash_and_none_date(self, tmp_path):
         """Videos: pHash, colorhash, and date are None; SHA-256 is still computed."""
@@ -844,13 +866,75 @@ class TestExifOrientationBeforeHashing:
         assert up_res.dhash == rot_res.dhash
 
 
-def _fake_rawpy(thumb_bytes: bytes, width: int, height: int, opens: list):
+class TestMalformedExifDoesNotDropTheFile:
+    """#822 follow-up — a bad Orientation tag must not turn a readable file into
+    a decode failure.
+
+    ``ImageOps.exif_transpose`` raises on malformed EXIF. Unguarded, that
+    exception is caught by the surrounding ``except (OSError, ValueError)``,
+    which sets ``img = None``; ``compute_from_bytes`` then returns
+    ``HashFailure("ImageDecodeError", …)`` and the caller logs the file as
+    truncated/corrupt and drops it from the manifest. The same file hashed fine
+    on recipe "3", so this would be a regression *introduced by the orientation
+    fix* — the worst kind, because it silently shrinks the manifest.
+
+    The repo already guards the identical call for the same reason at
+    ``infrastructure/image_service.py:716-722``; this mirrors it.
+    """
+
+    @pytest.mark.parametrize(
+        "exc",
+        [OSError("malformed exif"), ValueError("malformed exif"), AttributeError("malformed exif")],
+        ids=["oserror", "valueerror", "attributeerror"],
+    )
+    def test_malformed_exif_hashes_untransposed_instead_of_failing(
+        self, tmp_path, monkeypatch, exc
+    ):
+        import imagehash
+
+        from scanner import hasher
+        from scanner.dedup import HashResult
+
+        _up_path, rot_path, stored = _write_oriented_pair(tmp_path)
+
+        def _boom(*_a, **_kw):
+            raise exc
+
+        monkeypatch.setattr(hasher.ImageOps, "exif_transpose", _boom)
+
+        idx, outcome = hasher.compute_from_bytes(
+            3, _record(rot_path, "jpeg"), rot_path.read_bytes()
+        )
+
+        assert idx == 3
+        assert isinstance(outcome, HashResult), (
+            f"malformed EXIF ({type(exc).__name__}) turned a readable JPEG into "
+            f"{outcome!r} — the file would be logged corrupt and dropped from the "
+            "manifest, though recipe \"3\" hashed it fine (#822)"
+        )
+        assert outcome.phash is not None and outcome.dhash is not None
+        # And it fell through to the UN-transposed pixels, exactly as base did —
+        # not to some third value.
+        assert outcome.phash == str(imagehash.phash(stored))
+        assert outcome.dhash == str(imagehash.dhash(stored))
+
+
+def _fake_rawpy(
+    thumb_bytes: "bytes | None",
+    width: int,
+    height: int,
+    opens: list,
+    postprocess_array=None,
+):
     """A stand-in ``rawpy`` module that counts LibRaw opens.
 
     Real camera RAW is not in this repo's fixtures (a ProRAW DNG is 124–129 MB),
     so the open COUNT — the quantity #826 is about — is observed against a fake
     handle. The real exception classes are kept so the production ``except``
     clauses still match.
+
+    ``thumb_bytes=None`` makes ``extract_thumb`` raise ``LibRawNoThumbnailError``
+    so the full-decode (``postprocess``) route is exercised instead.
     """
     import rawpy as _rawpy
 
@@ -868,10 +952,14 @@ def _fake_rawpy(thumb_bytes: bytes, width: int, height: int, opens: list):
             self.sizes = _Sizes()
 
         def extract_thumb(self):
+            if thumb_bytes is None:
+                raise _rawpy.LibRawNoThumbnailError("no embedded thumbnail")
             return _Thumb()
 
         def postprocess(self, **_kw):
-            raise AssertionError("embedded JPEG present — full decode must not run")
+            if postprocess_array is None:
+                raise AssertionError("embedded JPEG present — full decode must not run")
+            return postprocess_array
 
         def __enter__(self):
             return self
@@ -940,6 +1028,51 @@ class TestRawSingleLibRawOpen:
         assert max(hashed_sizes[0]) <= 1024, (
             f"RAW preview hashed at {hashed_sizes[0]} — #826 wants it reduced to "
             "the JPEG path's ~1024 px working resolution before hashing"
+        )
+
+    def test_full_decode_fallback_hashes_at_the_same_working_size(
+        self, tmp_path, monkeypatch
+    ):
+        """A RAW with NO embedded preview must hash by the same recipe.
+
+        Otherwise one recipe has two answers: a preview-less RAW hashes at full
+        sensor resolution while its sibling with a preview hashes at ~1008 px,
+        and the #826 A/B measured those two resolutions up to 38 phash bits
+        apart — enough to split a group.
+        """
+        import imagehash
+
+        from scanner import hasher
+
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(
+            hasher,
+            "rawpy",
+            _fake_rawpy(None, 8064, 6048, opens, postprocess_array=_photo_array(2048, 1536)),
+        )
+
+        hashed_sizes: list = []
+        real_phash = imagehash.phash
+
+        def _spy_phash(image, *a, **kw):
+            hashed_sizes.append(image.size)
+            return real_phash(image, *a, **kw)
+
+        monkeypatch.setattr(hasher.imagehash, "phash", _spy_phash)
+
+        f = tmp_path / "nothumb.dng"
+        f.write_bytes(b"\x00" * 64)
+        _sha, ph, dh, _mc, _date, px_w, px_h, _sig = hasher.compute_hashes(f, "raw")
+
+        assert len(opens) == 1, f"LibRaw opened {len(opens)}× on the full-decode route"
+        assert (px_w, px_h) == (8064, 6048)
+        assert ph and dh
+        assert hashed_sizes, "imagehash.phash was never called for the fallback route"
+        assert max(hashed_sizes[0]) <= 1024, (
+            f"full-decode fallback hashed at {hashed_sizes[0]} — it must be reduced "
+            "to the same working resolution the embedded-preview route produces, or "
+            "one recipe yields two different hashes for the same sensor"
         )
 
 

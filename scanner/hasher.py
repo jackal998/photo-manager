@@ -111,13 +111,20 @@ except ImportError:
 # (exif_date/exif_tag_count/gps_present/xmp_derived) from the already-open
 # PIL image, added as an 8th return element; per-file JPEG cost shifts
 # (adds EXIF/XMP parsing, removes the exiftool round-trip downstream).
-# "4" (#822 + #826) — one bump for two recipe moves, so stored hashes are
-# invalidated once rather than twice: EXIF Orientation is now applied before
-# phash/dhash on every path that carries it (#822), and the RAW path opens
-# LibRaw once and reduces the embedded preview to the JPEG path's working
-# resolution before hashing (#826). Both shift hash values for the affected
-# files; an Orientation-1 non-RAW file is bit-identical to recipe "3"
-# (pinned by tests/test_hasher.py::TestHashRecipeParity).
+# "4" (#822 + #826) — one bump covering two recipe moves: EXIF Orientation is
+# now applied before phash/dhash on every path that carries it (#822), and the
+# RAW path opens LibRaw once and reduces the embedded preview to the JPEG
+# path's working resolution before hashing (#826). Both change hash VALUES for
+# the files they affect; an Orientation-1 non-RAW file is bit-identical to
+# recipe "3" (pinned by tests/test_hasher.py::TestHashRecipeParity).
+#
+# What the bump does and does NOT do: this token is consumed by exactly one
+# code path — ``scan_runner.hash_pool_fingerprint`` (core/app_service/
+# scan_runner.py:271-278) — so bumping it invalidates the #486 calibration
+# cache and nothing else. NOTHING keys stored manifest rows to it. An existing
+# manifest keeps its recipe-"3" hashes with no staleness signal, so its rotated
+# pairs stay ungrouped until the user re-scans that library; the two changes are
+# folded into ONE bump so that re-scan is needed once, not twice.
 HASH_RECIPE_VERSION = "4"
 
 # Shrink-on-load target shared by every pixel path, so RAW and JPEG hash at the
@@ -213,7 +220,18 @@ def _hashes_from_data(
                 # ``in_place=True`` transposes the already-decoded buffer instead
                 # of returning a copy, so an Orientation-1 file (the common case)
                 # costs nothing extra against the #453 per-worker RAM ceiling.
-                ImageOps.exif_transpose(pil_img, in_place=True)
+                try:
+                    ImageOps.exif_transpose(pil_img, in_place=True)
+                except (OSError, ValueError, AttributeError):
+                    # exif_transpose only raises on malformed EXIF — hash the
+                    # un-rotated pixels (exactly what recipe "3" produced for
+                    # this file) rather than letting a bad Orientation tag
+                    # escape to the outer handler, null the image, and turn a
+                    # perfectly readable file into
+                    # HashFailure("ImageDecodeError") — which drops it from the
+                    # manifest. Mirrors the identical guard on the identical
+                    # call at infrastructure/image_service.py:716-722.
+                    pass
                 img = pil_img.convert("RGB")
                 img.load()
         except (OSError, ValueError):
@@ -453,34 +471,29 @@ def compute_phash(path: Path, file_type: str) -> Optional[str]:
 
     Returns None for videos and on any loading failure.
 
-    RAW files: try embedded JPEG preview first (fast), fall back to full decode.
-    HEIC: requires pillow-heif registered (done at module import).
+    Delegates to :func:`_hashes_from_data` — the SAME recipe
+    :func:`compute_hashes` uses — so the two can never disagree. They used to
+    have independent decode paths, and once #569 added ``Image.draft`` and #822
+    added ``exif_transpose`` to the hash recipe only, this function silently
+    diverged: it returned a different pHash for the same file, by up to 30 bits
+    on an Orientation-6 JPEG. Delegating removes the divergence by construction
+    rather than by keeping two implementations in step by hand.
 
-    Prefer ``compute_hashes()`` when SHA-256 is also needed — it reads the file
-    only once instead of twice.
+    The cost is a wasted SHA-256 over bytes already in memory; this helper has
+    no production caller (only tests and, indirectly, nothing else — the
+    labelling harness uses :func:`_load_raw_preview` directly), so paying it is
+    cheaper than the drift. Prefer :func:`compute_hashes` anywhere both hashes
+    are wanted.
     """
     if not _HASH_AVAILABLE:
         return None
     if file_type in ("mp4", "mov", "gif", "skip"):
         return None
-
-    img: Optional[Image.Image] = None
-    if file_type == "raw":
-        img = _load_raw_preview(path)
-    else:
-        try:
-            with Image.open(path) as pil_img:
-                img = pil_img.convert("RGB")
-                img.load()
-        except (OSError, ValueError):
-            return None
-
-    if img is None:
-        return None
     try:
-        return str(imagehash.phash(img))
-    except (ValueError, TypeError):
+        data = path.read_bytes()
+    except OSError:
         return None
+    return _hashes_from_data(path, file_type, data)[1]
 
 
 def _load_raw_preview(path: Path) -> Optional[Image.Image]:
@@ -514,6 +527,23 @@ def _load_raw_preview(path: Path) -> Optional[Image.Image]:
         return None
 
 
+def _draft_equivalent_scale(size: "tuple[int, int]") -> int:
+    """The reduction factor :meth:`Image.draft` would pick for ``size``.
+
+    libjpeg's DCT scaler offers only 1/1, 1/2, 1/4 and 1/8, and PIL picks the
+    largest of those that leaves the image at least :data:`_DRAFT_TARGET` on
+    both axes. The RAW full-decode fallback has no JPEG to draft, so it
+    reproduces the same factor with ``Image.reduce`` — the goal is one working
+    RESOLUTION across both RAW routes, not bit-identical pixels (a demosaic and
+    an embedded JPEG are different images by construction).
+    """
+    scale = min(size[0] // _DRAFT_TARGET[0], size[1] // _DRAFT_TARGET[1])
+    for step in (8, 4, 2, 1):
+        if scale >= step:
+            return step
+    return 1
+
+
 def _raw_preview_from_jpeg_bytes(thumb_data: bytes) -> Optional[Image.Image]:
     """Decode an embedded RAW preview JPEG at hash working resolution, oriented.
 
@@ -532,7 +562,14 @@ def _raw_preview_from_jpeg_bytes(thumb_data: bytes) -> Optional[Image.Image]:
     try:
         with Image.open(io.BytesIO(thumb_data)) as preview:
             preview.draft("RGB", _DRAFT_TARGET)
-            ImageOps.exif_transpose(preview, in_place=True)
+            try:
+                ImageOps.exif_transpose(preview, in_place=True)
+            except (OSError, ValueError, AttributeError):
+                # Same guard as the non-RAW path: a malformed Orientation tag in
+                # the embedded preview must cost us the rotation, not the file.
+                # Without it this returns None and the caller falls through to a
+                # 3.5-4.1 s full-sensor demosaic for no benefit.
+                pass
             img = preview.convert("RGB")
             img.load()
             return img
@@ -581,6 +618,13 @@ def _raw_preview_and_sizes(
                 pass
             # Full decode fallback — slower but always works.
             rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
-            return Image.fromarray(rgb).convert("RGB"), px_w, px_h
+            img = Image.fromarray(rgb).convert("RGB")
+            # Reduce to the SAME working resolution the preview route yields.
+            # Without this a RAW with no embedded preview hashes at full sensor
+            # resolution while its sibling with a preview hashes at ~1008 px —
+            # one recipe with two answers, and the #826 A/B measured those two
+            # resolutions up to 38 phash bits apart.
+            factor = _draft_equivalent_scale(img.size)
+            return (img.reduce(factor) if factor > 1 else img), px_w, px_h
     except (OSError, ValueError, AttributeError, rawpy.LibRawError):
         return None, None, None
