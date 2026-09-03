@@ -114,6 +114,8 @@ class HashResult:
         exif_tag_count = None
         gps_present = None
         xmp_derived = None
+        subsec_time_original = None
+        offset_time_original = None
         if self.inmemory_signals is not None:
             extracted.add("pil_exif_inmemory")
             exif_date = self.inmemory_signals["exif_date"]
@@ -121,6 +123,12 @@ class HashResult:
             exif_tag_count = self.inmemory_signals["exif_tag_count"]
             gps_present = self.inmemory_signals["gps_present"]
             xmp_derived = self.inmemory_signals["xmp_derived"]
+            # #820 — ``.get`` (not ``[]``) for the two newest keys: an
+            # inmemory_signals dict built before this field existed must still
+            # produce an extract rather than a KeyError that would turn the
+            # file into a HashFailure and drop it from the manifest.
+            subsec_time_original = self.inmemory_signals.get("subsec_time_original")
+            offset_time_original = self.inmemory_signals.get("offset_time_original")
 
         return MediaExtract(
             path=self.record.path,
@@ -135,6 +143,8 @@ class HashResult:
             exif_tag_count=exif_tag_count,
             gps_present=gps_present,
             xmp_derived=xmp_derived,
+            subsec_time_original=subsec_time_original,
+            offset_time_original=offset_time_original,
             extracted_by=extracted,
         )
 
@@ -154,6 +164,12 @@ class ManifestRow:
     # Cached at scan time — eliminates all filesystem I/O at load time
     file_size_bytes: Optional[int] = None
     shot_date: Optional[str] = None      # ISO 8601 from EXIF DateTimeOriginal
+    # #820 — sub-second digits and UTC offset of DateTimeOriginal, which
+    # ``shot_date`` cannot carry (parse_exif_date truncates to 19 chars by
+    # design). NULL on every pre-#820 row and on files whose camera wrote
+    # neither tag. Text, not numeric: "05" (50 ms) must not become 5.
+    subsec_time_original: Optional[str] = None
+    offset_time_original: Optional[str] = None
     creation_date: Optional[str] = None  # ISO 8601 filesystem ctime
     mtime: Optional[str] = None          # ISO 8601 filesystem mtime
     group_id: Optional[str] = None       # canonical root path of connected component; written to DB

@@ -28,6 +28,7 @@ Selection dialog and the automatic version triggered here:
 from __future__ import annotations
 
 from collections import defaultdict
+from itertools import groupby
 from pathlib import Path
 from typing import Iterable
 
@@ -161,6 +162,61 @@ def apply_auto_select_decisions(
     repo.batch_update_decisions_and_lock(manifest_path, decisions, lock_states)
 
 
+def top_n_paths(
+    ranked: Iterable[tuple[float, str]], n: int, order: str
+) -> list[str]:
+    """Return the paths of the top (or bottom) ``n`` of ONE group's
+    ``(value, path)`` pairs.
+
+    #778 — the single home of the top-N-by-score ranking rule. Both
+    surfaces that pick "the best copy in this group" call it:
+
+    * :func:`top_score_path_per_group` (``n=1``, ``order="desc"``) — the
+      post-scan auto-select and ``POST /api/action/apply-best-copy``.
+    * ``core.app_service.action_resolve.select_paths_top_n`` — the
+      ``__top_n__:`` pattern behind ``POST /api/action/bulk-decide``.
+
+    Previously each had its own copy of the rule, so a scoring-semantics
+    change (e.g. the #187 two-tier scorer) had to be applied twice and a
+    miss produced a DIFFERENT keeper on one surface than the other.
+    ``tests/test_topn_keeper_parity.py`` pins the two against each other.
+
+    The sort key is total: ties on ``value`` break on ``path``, and paths
+    within a group are unique, so the result never depends on input order
+    (#792 — a nondeterministic tie-break in dedup; do not reintroduce one).
+
+    Args:
+        ranked: ``(value, path)`` pairs for a single group. Callers filter
+            out unrankable records (``value is None``) BEFORE calling —
+            what counts as unrankable differs per surface.
+        n: How many to take. ``n <= 0`` yields ``[]``. A group with fewer
+            than ``n`` pairs yields all of them.
+        order: ``"desc"`` takes the LARGEST values (the keepers),
+            ``"asc"`` the smallest (the deletables). Any other value
+            yields ``[]``.
+
+    Returns:
+        Paths in selection order — value-ranked, then path-ascending
+        within each equal-value bucket.
+    """
+    if n <= 0 or order not in ("asc", "desc"):
+        return []
+    # Sort ascending by (value, path), then for desc reverse and restore the
+    # ascending path tiebreak within each equal-value bucket. Equivalent to a
+    # (-value, path) key for every real score, but kept in this exact form so
+    # the rule stays bit-for-bit identical to the Qt original it was extracted
+    # from (app/views/dialogs/select_dialog.py::select_paths_top_n), which
+    # tests/test_action_resolve_parity.py pins.
+    ordered = sorted(ranked, key=lambda t: (t[0], t[1]))
+    if order == "desc":
+        ordered.reverse()
+        fixed: list[tuple[float, str]] = []
+        for _val, grp in groupby(ordered, key=lambda t: t[0]):
+            fixed.extend(sorted(grp, key=lambda t: t[1]))
+        ordered = fixed
+    return [path for _val, path in ordered[:n]]
+
+
 def top_score_path_per_group(rows: Iterable) -> set[str]:
     """Return source_paths of the top-scoring row in each duplicate group.
 
@@ -188,13 +244,9 @@ def top_score_path_per_group(rows: Iterable) -> set[str]:
 
     keepers: set[str] = set()
     for ranked in by_group.values():
-        # Sort by (score, source_path) ascending — taking the last entry
-        # gives the highest score, with ties broken by lexicographically-
-        # latest path. To match select_paths_top_n's "ascending path
-        # within a tied score bucket" rule, sort by (-score, path) so the
-        # first entry is the highest score with the earliest path.
-        ranked.sort(key=lambda t: (-t[0], t[1]))
-        keepers.add(ranked[0][1])
+        # #778 — one shared ranking rule (highest score, ties by earliest
+        # path) instead of a second private copy of it.
+        keepers.update(top_n_paths(ranked, 1, "desc"))
     return keepers
 
 
