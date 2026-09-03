@@ -430,6 +430,14 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
 - **Batch EXIF** — exiftool `-stay_open` chunked at 500 files/call for speed
 - **Cached metadata** — `file_size_bytes`, `shot_date`, `creation_date`, `mtime` written
   to the manifest at scan time; load reads from SQLite with zero filesystem round-trips
+- **Sub-second shot time** — `subsec_time_original` and `offset_time_original`
+  columns (#820) hold EXIF `SubSecTimeOriginal` / `OffsetTimeOriginal` as text
+  (e.g. `"087"`, `"+09:00"`), read on both extraction paths: the exiftool tag
+  list for HEIC/RAW/video and the in-memory PIL pass for JPEG. `shot_date`
+  keeps its whole-second format on purpose, so these are what separate frames
+  of a burst shot inside the same second. Both are `NULL` on manifests written
+  before #820 and on files whose camera wrote neither tag — a re-scan fills
+  them. No scoring weight reads them yet
 - **Keep-worthiness scoring** — composite score in `[0.0, 1.0]` per file (#187);
   highest-scoring copy lands at the top of each group, "Apply best-copy"
   right-click action marks it `keep` and the rest `delete` in one batch
