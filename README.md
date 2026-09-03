@@ -539,6 +539,7 @@ photo-manager/
     ├── test_hasher.py
     ├── test_walker.py
     ├── test_manifest_repository.py
+    ├── test_manifest_skip_reconcile.py  # #821 recycle-bin rows dismissed on open
     ├── test_settings.py
     ├── test_utils.py
     ├── test_delete_service.py

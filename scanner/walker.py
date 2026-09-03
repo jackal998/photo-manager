@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -19,29 +20,65 @@ from scanner.media import (
 )
 
 
-def _is_in_skip_directory(path: Path, root: Path) -> bool:
-    """Return True if any ancestor of ``path`` between ``root`` and
-    ``path`` is in :data:`SKIP_DIRECTORIES` (case-insensitive).
+_PATH_SEPARATOR_RE = re.compile(r"[\\/]+")
+
+
+def _path_segments(path: "Path | str") -> list[str]:
+    """Split ``path`` into its non-empty components on either separator.
+
+    Pure string work — deliberately NOT ``PurePath``: manifest rows hold
+    Windows paths (``J:\\圖片\\…``) that a ``PurePosixPath`` would collapse
+    into a single component, and the reconcile caller must parse them the
+    same way on any platform.
+    """
+    return [seg for seg in _PATH_SEPARATOR_RE.split(str(path)) if seg]
+
+
+def has_skip_directory_ancestor(
+    path: "Path | str", root: "Path | None" = None
+) -> bool:
+    """Return True if any ancestor DIRECTORY of ``path`` is in
+    :data:`SKIP_DIRECTORIES` (case-insensitive).
 
     Catches files inside Windows ``$RECYCLE.BIN`` / ``System Volume
-    Information`` / ``.Trashes`` regardless of where the user pointed
-    the scan root. The walker's normal filename / extension filters
-    would happily pull a recycle-bin ``$Rxxxxxx.jpg`` into the
-    manifest — leading to the user-reported "send2trash WinError
+    Information`` / ``.Trashes`` / Synology ``#recycle`` regardless of
+    where the user pointed the scan root. The walker's normal filename /
+    extension filters would happily pull a recycle-bin ``$Rxxxxxx.jpg``
+    into the manifest — leading to the user-reported "send2trash WinError
     -2147024809" cluster when the user tries to delete via Execute
     Action (already-in-recycle-bin files can't be sent to the
     recycle bin again).
 
+    This is the SINGLE definition of the skip-prefix rule. Two callers:
+
+      * the walker (below), which passes its scan ``root`` so a source
+        deliberately pointed AT a recycle bin still walks its contents;
+      * the #821 manifest reconcile
+        (``ManifestRepository.reconcile_skip_directory_rows``), which has
+        no root to bound with and passes ``None`` — every ancestor is
+        checked. Divergence, stated because it is real: a manifest whose
+        source root sits INSIDE a skip directory has its rows dismissed
+        on open, where the walker would have indexed them.
+
+    The final component of ``path`` is never tested — it is the file's
+    own name, and this is an *ancestor* predicate. No filesystem access:
+    safe to call per manifest row for paths on an offline NAS.
+
     Args:
-        path: The candidate file path (any descendant of ``root``).
-        root: The scan root for the current source.
+        path: The candidate file path.
+        root: Scan root to bound the ancestor walk at (exclusive), or
+            ``None`` to check every ancestor.
     """
-    current = path.parent if path.is_file() else path
-    while current != root and current != current.parent:
-        if current.name.lower() in SKIP_DIRECTORIES:
-            return True
-        current = current.parent
-    return False
+    segments = _path_segments(path)
+    start = 0
+    if root is not None:
+        root_segments = _path_segments(root)
+        prefix = [s.lower() for s in segments[: len(root_segments)]]
+        if prefix == [s.lower() for s in root_segments]:
+            start = len(root_segments)
+    return any(
+        seg.lower() in SKIP_DIRECTORIES for seg in segments[start:-1]
+    )
 
 
 def _has_win32_unsafe_name(name: str) -> bool:
@@ -241,7 +278,7 @@ def _scan_dir(
             continue
         if _traverses_symlink(path, root):
             continue
-        if _is_in_skip_directory(path, root):
+        if has_skip_directory_ancestor(path, root):
             continue
         if path.name.lower() in SKIP_FILENAMES:
             continue

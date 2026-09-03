@@ -13,7 +13,10 @@ Load flow:
   EXIF date is only read for REVIEW_DUPLICATE rows (performance).
 
   If the DB pre-dates any column, an ALTER TABLE migration runs
-  automatically so older manifests open without error.
+  automatically so older manifests open without error.  Rows left behind
+  by a pre-#482 scan of a recycle bin / system folder are dismissed to
+  outcome='ignored' at the same point — see
+  ``reconcile_skip_directory_rows`` (#821).
 
 Save flow:
   Writes rec.user_decision for every record back to the manifest. Lock
@@ -141,6 +144,11 @@ UPDATE migration_manifest SET is_locked = ? WHERE source_path = ?
 
 _FINALIZE_OUTCOME_SQL = """
 UPDATE migration_manifest SET outcome = ?, executed = ? WHERE source_path = ?
+"""
+
+# #821 — every in-review path, for the open-time skip-directory reconcile.
+_LIVE_PATHS_SQL = """
+SELECT source_path FROM migration_manifest WHERE outcome = ''
 """
 
 
@@ -387,6 +395,63 @@ class ManifestRepository:
         finally:
             conn.close()
 
+    # --------------------------------------------------------- reconcile
+
+    def reconcile_skip_directory_rows(self, manifest_path: str) -> int:
+        """#821 — dismiss rows sitting under a walker skip directory.
+
+        The walker has refused to index anything under ``$RECYCLE.BIN`` /
+        ``System Volume Information`` / ``.Trashes`` / ``#recycle`` since
+        #482, but that only stops NEW rows. A manifest built before the
+        skip landed keeps its recycle-bin rows live: scored, groupable,
+        selectable as a group's keeper, and offered as delete targets that
+        ``send2trash`` then refuses (WinError -2147024809). Nothing
+        reconciles them, because a rescan does not merge — it replaces the
+        whole manifest file (``scanner.manifest.write_manifest`` writes a
+        temp DB and ``os.replace``s it), so the only way to reach an
+        existing row is here, when the manifest is opened.
+
+        Idempotent: only rows with ``outcome=''`` are considered, and they
+        leave with ``outcome='ignored'``, so a second open finds nothing to
+        do. Re-derived from the walker's own rule
+        (``scanner.media.SKIP_DIRECTORIES``) on every open rather
+        than frozen into a one-off migration, so a prefix added later is
+        applied to manifests that were opened before it existed.
+
+        Returns:
+            The number of rows dismissed by this call (0 on a clean or
+            already-reconciled manifest).
+        """
+        from scanner.walker import has_skip_directory_ancestor
+
+        self.ensure_schema(manifest_path)
+        conn = _connect(manifest_path)
+        try:
+            candidates = conn.execute(_LIVE_PATHS_SQL).fetchall()
+        finally:
+            conn.close()
+
+        # One component-wise pass in Python rather than a substring
+        # pre-filter in SQL: a substring match would also have to be
+        # re-checked here (it cannot tell a file NAMED "#recycle.jpg"
+        # from a folder), and on the author's real 40,774-row manifest
+        # the pre-filter saved 71 ms of a once-per-open cost (66 ms vs
+        # 137 ms, best of 3) — not worth the dynamic SQL.
+        paths = [
+            row[0] for row in candidates
+            if has_skip_directory_ancestor(row[0])
+        ]
+        if not paths:
+            return 0
+        self.remove_from_review(manifest_path, paths)
+        logger.info(
+            "Dismissed {} row(s) under a skip directory "
+            "(recycle bin / system folder) in {}",
+            len(paths),
+            manifest_path,
+        )
+        return len(paths)
+
     # ------------------------------------------------------------------ load
 
     def load(self, manifest_path: str) -> Iterator[PhotoRecord]:
@@ -395,6 +460,9 @@ class ManifestRepository:
         Rows are grouped by group_id; each group is assigned a sequential
         group_number.  Only rows with outcome='' (in-review) are considered —
         the WHERE clause in _LOAD_ALL_SQL is the single visibility predicate.
+        Rows under a walker skip directory are dismissed to
+        outcome='ignored' first, so they never reach the grouping below
+        (#821 — see reconcile_skip_directory_rows).
         Groups that end up with only one surviving member are skipped.
         Singleton rows (group_id IS NULL) are not yielded — the UI focuses
         on files that need review.
@@ -416,6 +484,12 @@ class ManifestRepository:
         # Auto-migrate: add any missing columns. Idempotent — see
         # ensure_schema() docstring for the contract.
         self.ensure_schema(manifest_path)
+        # #821 — dismiss recycle-bin / system-folder rows left behind by a
+        # pre-#482 scan before they are grouped. Runs once per manifest
+        # open (NOT inside ensure_schema, which finalize_outcome calls
+        # per execute batch), and is a no-op on an already-reconciled or
+        # never-affected manifest.
+        self.reconcile_skip_directory_rows(manifest_path)
         conn = _connect(manifest_path)
         conn.row_factory = sqlite3.Row
         try:
