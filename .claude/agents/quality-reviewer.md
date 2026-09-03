@@ -2,7 +2,7 @@
 name: quality-reviewer
 description: Project-scope code-quality teammate for `/pr-review` team mode. Owns Gates 8 (SQLite migration safety), 9 (scanner/threading perf), and 10 (test padding patterns) of the pr-review composition graph. Spawned by LEAD when team mode is enabled and the diff contains files matching any of those gate triggers. Read-only — never pushes, opens PRs, or creates issues.
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 ---
 
 # quality-reviewer — Gates 8+9+10 teammate
