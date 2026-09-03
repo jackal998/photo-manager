@@ -375,6 +375,152 @@ class TestMigrateSchemaErrorHandling:
             conn.close()
 
 
+# The complete canonical schema as it stood immediately BEFORE #820 — the
+# post-#584 `scanner.manifest._DDL` plus the `is_locked` / `outcome` columns
+# the additive migrations had already added. This is what is on every user's
+# disk today, so it is what the new migration has to open.
+_DDL_PRE_820 = """
+CREATE TABLE migration_manifest (
+    id               INTEGER PRIMARY KEY,
+    source_path      TEXT    NOT NULL,
+    source_label     TEXT    NOT NULL,
+    action           TEXT    NOT NULL,
+    source_hash      TEXT,
+    phash            TEXT,
+    hamming_distance INTEGER,
+    group_id         TEXT,
+    reason           TEXT,
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    file_size_bytes  INTEGER,
+    shot_date        TEXT,
+    creation_date    TEXT,
+    mtime            TEXT,
+    pixel_width      INTEGER,
+    pixel_height     INTEGER,
+    exif_tag_count   INTEGER,
+    gps_present      INTEGER NOT NULL DEFAULT 0,
+    xmp_derived      INTEGER NOT NULL DEFAULT 0,
+    score            REAL,
+    is_locked        INTEGER NOT NULL DEFAULT 0,
+    outcome          TEXT    NOT NULL DEFAULT ''
+);
+"""
+
+
+class TestSubsecTimeOriginalMigration:
+    """#820 — the two new columns land on a manifest that predates them.
+
+    A user's existing `migration_manifest.sqlite` must keep opening, keep
+    every stored value, and report NULL for the new columns until a re-scan
+    fills them. A failure here is not a test failure, it is "the app can no
+    longer open the library you already scanned".
+    """
+
+    def _pre_820_db(self, tmp_path: Path) -> Path:
+        return _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/a.jpg",
+                    "source_label": "jdrive",
+                    "action": "REVIEW_DUPLICATE",
+                    "hamming_distance": 3,
+                    "group_id": "/group/a",
+                    "reason": "near-dup",
+                    "executed": 0,
+                    "user_decision": "delete",
+                    "shot_date": "2024-06-27T21:34:03",
+                    "score": 0.42,
+                }
+            ],
+            ddl=_DDL_PRE_820,
+        )
+
+    def test_subsec_columns_added_to_pre_820_manifest(self, tmp_path):
+        db = self._pre_820_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+        assert "subsec_time_original" in cols
+        assert "offset_time_original" in cols
+
+    def test_subsec_pre_820_rows_read_back_null(self, tmp_path):
+        """No DEFAULT on the ADD COLUMN, so the stored rows genuinely say
+        "unknown" rather than pretending to a sub-second of ''/0 that would
+        sort ahead of every real value."""
+        db = self._pre_820_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute(
+                "SELECT subsec_time_original, offset_time_original, "
+                "       shot_date, user_decision, score "
+                "FROM migration_manifest WHERE source_path = '/legacy/a.jpg'"
+            ).fetchone()
+        assert row[0] is None
+        assert row[1] is None
+        # And the migration disturbed nothing that was already there.
+        assert row[2] == "2024-06-27T21:34:03"
+        assert row[3] == "delete"
+        assert row[4] == pytest.approx(0.42)
+
+    def test_subsec_value_round_trips_after_migration(self, tmp_path):
+        """Leading zero survives storage: "087" must not come back as 87."""
+        db = self._pre_820_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                "INSERT INTO migration_manifest "
+                "(source_path, source_label, action, subsec_time_original,"
+                " offset_time_original) VALUES (?, ?, ?, ?, ?)",
+                ("/new/b.jpg", "jdrive", "", "087", "+09:00"),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT subsec_time_original, offset_time_original "
+                "FROM migration_manifest WHERE source_path = '/new/b.jpg'"
+            ).fetchone()
+        assert row == ("087", "+09:00")
+
+    def test_subsec_columns_survive_the_drop_move_rebuild(self, tmp_path):
+        """The #433 copy-table dance rebuilds the whole table from a
+        hardcoded DDL and copies only the columns named in
+        ``_POST_DROP_COLUMNS``. A column added to ``_MIGRATIONS`` but
+        forgotten there is created by the ALTER and then dropped again on
+        the very next open — silently, on exactly the oldest manifests."""
+        ddl_with_dest_path = _DDL_PRE_820.replace(
+            "outcome          TEXT    NOT NULL DEFAULT ''",
+            "outcome          TEXT    NOT NULL DEFAULT '',\n    dest_path        TEXT",
+        )
+        db = _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/c.jpg",
+                    "source_label": "jdrive",
+                    "action": "MOVE",
+                    "hamming_distance": None,
+                    "group_id": "/group/c",
+                    "reason": "legacy",
+                    "executed": 0,
+                    "user_decision": "",
+                }
+            ],
+            ddl=ddl_with_dest_path,
+        )
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+            action = conn.execute(
+                "SELECT action FROM migration_manifest "
+                "WHERE source_path = '/legacy/c.jpg'"
+            ).fetchone()[0]
+        assert "dest_path" not in cols          # the dance really ran
+        assert action == ""                     # …and did its MOVE→'' work
+        assert "subsec_time_original" in cols   # …without eating the new columns
+        assert "offset_time_original" in cols
+
+
 class TestManifestRepositorySave:
     def _make_record(
         self, path: str, action: str, user_decision: str = "", locked: bool = False

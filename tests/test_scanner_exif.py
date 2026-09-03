@@ -85,6 +85,20 @@ class TestParseExifDateEdgeCases:
         result = _parse_exif_date("2024:05:02 09:30:00.500")
         assert result == datetime(2024, 5, 2, 9, 30, 0)
 
+    def test_parse_exif_date_still_truncates_now_subsec_is_persisted(self):
+        """#820 pinned the OTHER half of the decision: the sub-second digits
+        and offset are now persisted in their own columns, and the price of
+        that is that ``shot_date`` must NOT change format. Every consumer
+        reads it back with ``datetime.fromisoformat`` and the whole
+        cached-column load path assumes the 19-char shape, so a future
+        "improvement" that lets the fraction through here would silently
+        widen the stored string. Uses the exact combined shape the real NAS
+        files carry (sub-seconds AND a +09:00 offset)."""
+        result = _parse_exif_date("2024:06:27 21:34:03.958+09:00")
+        assert result == datetime(2024, 6, 27, 21, 34, 3)
+        assert result.microsecond == 0
+        assert len(result.isoformat()) == 19
+
     def test_negative_timezone_offset_stripped(self):
         result = _parse_exif_date("2024:06:01 12:00:00-05:00")
         assert result == datetime(2024, 6, 1, 12, 0, 0)
@@ -1317,6 +1331,93 @@ class TestBatchReadExtracts:
         assert "-XMP:Rating" in called_args
 
 
+# ── Sub-second / offset on the exiftool path (#820) ────────────────────────
+
+
+class TestSubsecExiftoolPath:
+    """``SubSecTimeOriginal`` / ``OffsetTimeOriginal`` on the HEIC/RAW/video
+    path. ``shot_date`` is truncated to whole seconds by design, so these
+    two values are the ONLY thing separating frames of a burst shot in the
+    same second — dropping either one loses the ordering entirely."""
+
+    def test_subsec_exiftool_int_json_value_lands_on_extract(self):
+        """exiftool's ``-j`` emits SubSecTimeOriginal as a JSON **int**
+        whenever the value has no leading zero — 728 of 824 dated files
+        measured on the real NAS library. A str-only guard would drop 88 %
+        of them silently, so the coercion must accept an int."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/burst1.heic")]
+        et = _make_mock_et([
+            (paths[0], {
+                "EXIF:DateTimeOriginal": "2024:06:27 21:34:03",
+                "EXIF:SubSecTimeOriginal": 958,
+                "EXIF:OffsetTimeOriginal": "+09:00",
+            }),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].subsec_time_original == "958"
+        assert result[paths[0]].offset_time_original == "+09:00"
+
+    def test_subsec_exiftool_leading_zero_string_kept_verbatim(self):
+        """The other 96 of 824: exiftool quotes exactly the values whose
+        leading zero JSON cannot express. ``"087"`` is 87 ms; parsing it as
+        a number and re-rendering would make it 870 ms and reorder the
+        burst, so the digits are stored as text, unnormalised."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/burst2.heic")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:SubSecTimeOriginal": "087"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].subsec_time_original == "087"
+
+    def test_subsec_exiftool_absent_tag_is_none(self):
+        """A camera that writes no sub-second tag must leave the column
+        NULL, not "" — "" would sort as a real sub-second value below every
+        other frame."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/plain.heic")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:DateTimeOriginal": "2024:06:15 10:30:00"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].subsec_time_original is None
+        assert result[paths[0]].offset_time_original is None
+
+    def test_subsec_exiftool_selectors_reach_exiftool(self):
+        """Same rationale as ``test_args_include_gps_and_xmp_selectors``:
+        drop the selector and the field is silently None for every file,
+        with nothing in the manifest to show the tag was never asked for."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.heic")]
+        et = _make_mock_et([(paths[0], None)])
+        batch_read_extracts(paths, et)
+        called_args = et.execute.call_args[0][0]
+        assert "-EXIF:SubSecTimeOriginal" in called_args
+        assert "-EXIF:OffsetTimeOriginal" in called_args
+
+    def test_subsec_exiftool_does_not_change_exif_tag_count(self):
+        """The two new tags must stay OUT of the completeness census. If
+        they joined it, every re-scanned file would gain up to 2 tags,
+        which moves the EXIF-completeness sub-score and therefore the
+        keeper pick for groups that were previously tied — a scoring
+        change disguised as a metadata addition."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/a.heic"), Path("/fake/b.heic")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:Make": "Apple", "EXIF:Model": "iPhone 15"}),
+            (paths[1], {
+                "EXIF:Make": "Apple", "EXIF:Model": "iPhone 15",
+                "EXIF:SubSecTimeOriginal": 958,
+                "EXIF:OffsetTimeOriginal": "+09:00",
+            }),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert (
+            result[paths[0]].exif_tag_count == result[paths[1]].exif_tag_count == 2
+        )
+
+
 # ── HashResult.to_media_extract adapter (#187 — PR 2) ──────────────────────
 
 
@@ -1818,6 +1919,64 @@ class TestExtractPilScoringSignalsDateChain:
         _synthetic_jpeg(p, main_ifd={36867: "-"})
         result = _open_and_extract(p)
         assert result["exif_date"] is None
+
+
+class TestSubsecPilBypassPath:
+    """#820 on the JPEG side. Since #786 a JPEG never reaches exiftool
+    (``_INMEMORY_EXIF_TYPES``), and JPEG is 56 % of the user's library — so
+    without this the format that most needs sub-second ordering is the one
+    format that would not have it."""
+
+    def test_subsec_pil_reads_exif_ifd(self, tmp_path):
+        """Where real cameras put them: the ExifIFD sub-block (0x8769).
+        The leading zero is preserved end-to-end — "087" must not become
+        "87" or 87, either of which reorders the burst by 10x."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(p, exif_ifd={
+            36867: "2024:06:27 21:34:03",
+            0x9291: "087",
+            0x9011: "+09:00",
+        })
+        result = _open_and_extract(p)
+        assert result["subsec_time_original"] == "087"
+        assert result["offset_time_original"] == "+09:00"
+        # The date itself is unaffected: still whole seconds.
+        assert result["exif_date"] == datetime(2024, 6, 27, 21, 34, 3)
+
+    def test_subsec_pil_reads_main_ifd_fallback(self, tmp_path):
+        """Some writers (incl. this repo's own qa/sandbox generators) put
+        EXIF tags straight on IFD0; exiftool's ``-G`` reports both
+        placements as ``EXIF:``, so the PIL port must check both or the two
+        paths disagree on the same file."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(p, main_ifd={0x9291: "512", 0x9011: "-05:00"})
+        result = _open_and_extract(p)
+        assert result["subsec_time_original"] == "512"
+        assert result["offset_time_original"] == "-05:00"
+
+    def test_subsec_pil_absent_tag_is_none(self, tmp_path):
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(p, exif_ifd={36867: "2024:06:27 21:34:03"})
+        result = _open_and_extract(p)
+        assert result["subsec_time_original"] is None
+        assert result["offset_time_original"] is None
+
+    def test_subsec_pil_does_not_change_exif_tag_count(self, tmp_path):
+        """Census parity with the exiftool path — see the exiftool-side
+        twin of this test. Two JPEGs identical but for the sub-second tags
+        must score identically."""
+        plain = tmp_path / "plain.jpg"
+        tagged = tmp_path / "tagged.jpg"
+        _synthetic_jpeg(plain, exif_ifd={36867: "2024:06:27 21:34:03"})
+        _synthetic_jpeg(tagged, exif_ifd={
+            36867: "2024:06:27 21:34:03",
+            0x9291: "087",
+            0x9011: "+09:00",
+        })
+        assert (
+            _open_and_extract(plain)["exif_tag_count"]
+            == _open_and_extract(tagged)["exif_tag_count"]
+        )
 
 
 class TestExtractPilScoringSignalsGps:
