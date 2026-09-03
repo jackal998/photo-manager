@@ -1,0 +1,1 @@
+Pin the six project agent definitions and their spawn sites to `model: opus` so dispatches stop failing the opus-only model guard (#825).
