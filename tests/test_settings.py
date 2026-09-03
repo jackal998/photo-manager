@@ -137,8 +137,60 @@ def test_save_leaves_no_tmp_file_and_persists(settings_file):
     s = JsonSettings(settings_file)
     s.set("ui.locale", "zh-TW")
     s.save()
-    assert not settings_file.with_suffix(".json.tmp").exists()
+    # Glob rather than the old fixed `settings.json.tmp` name: since the #790
+    # review the temp name is unique per call, so asserting that one literal
+    # path is absent would pass without checking anything.
+    leftovers = list(settings_file.parent.glob("*.tmp"))
+    assert leftovers == [], f"temp files left behind: {leftovers}"
     assert JsonSettings(settings_file).get("ui.locale") == "zh-TW"
+
+
+def test_concurrent_saves_keep_both_updates(settings_file):
+    """Two threads saving different keys must not crash or lose an update.
+
+    Real failure mode this catches (#790 review): ``patch_settings`` used to be
+    ``async def`` with no awaits, so its load-modify-save ran atomically on the
+    single event-loop thread. Dispatched to FastAPI's threadpool it no longer
+    does, and the UI genuinely fires two PATCHes at once — ScanDialog's
+    fire-and-forget ``void patchSettings(...)`` on close, plus the always-visible
+    locale toggle. The scan worker thread is a third concurrent writer
+    (``scanner/autotune.py`` ``store_read_knee``).
+
+    Before the fix this failed two ways: a fixed sibling temp name made the
+    second ``os.replace`` raise ``PermissionError: [WinError 32]`` on Windows,
+    and even without the crash each saver wrote its own whole-file snapshot, so
+    the slower writer silently erased the faster one's key.
+    """
+    import threading
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+
+    def _writer(key: str, value: str) -> None:
+        try:
+            s = JsonSettings(settings_file)
+            s.set(key, value)
+            barrier.wait(timeout=10)  # maximise overlap on the write itself
+            s.save()
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=_writer, args=("ui.locale", "zh-TW")),
+        threading.Thread(target=_writer, args=("ui.prune_singletons", "yes")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"concurrent save raised: {errors!r}"
+
+    reread = JsonSettings(settings_file)
+    assert reread.get("ui.locale") == "zh-TW", "first writer's key was lost"
+    assert reread.get("ui.prune_singletons") == "yes", "second writer's key was lost"
+    # Pre-existing content must survive both merges.
+    assert reread.get("thumbnail_size") == 512
 
 
 def test_save_crash_mid_write_keeps_original_intact(settings_file, monkeypatch):

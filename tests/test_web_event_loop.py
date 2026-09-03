@@ -38,6 +38,20 @@ _ROUTES_DIR = Path(__file__).resolve().parent.parent / "app" / "web" / "routes"
 # Matched on the *called* name only (``x.stat()`` → ``stat``), so a bare
 # reference handed to an executor (``run_in_executor(None, _load_settings)``)
 # is correctly NOT a call and never matches.
+#
+# KNOWN LIMITS — this is a name-matching probe, not a call-graph analysis:
+#
+# * It is a DENYLIST. Blocking work reached through a helper whose name is not
+#   listed here is invisible. When you add a route helper that touches disk,
+#   add its name. (`_load_settings` is listed for exactly this reason.)
+# * It matches names, not bindings: a local variable that happens to be called
+#   ``save`` produces a false positive, and ``getattr(p, "stat")()`` a false
+#   negative. Both are rare enough in this codebase to be worth the simplicity.
+# * It only reasons one level deep. A handler calling a project function that
+#   itself blocks is caught only if that function's NAME is listed.
+#
+# The behavioural test below is what covers the gaps this leaves: it exercises
+# the real ASGI stack rather than the source text.
 _BLOCKING_CALLEES = frozenset(
     {
         # pathlib / os stat-family and directory walks
@@ -118,11 +132,30 @@ def _executor_exempt_nodes(func_node: ast.AST) -> set[int]:
     return exempt
 
 
+def _router_handlers(path: Path) -> list[ast.AST]:
+    """Every ``@router.*``-decorated handler in *path*, sync or async.
+
+    Used by the fail-closed check: if this returns nothing for a module that
+    plainly has routes, the probe's decorator detection has stopped working
+    (e.g. the router was renamed) and the violation scan below would report a
+    silent, meaningless "clean".
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and _is_router_handler(node)
+    ]
+
+
 def _blocking_violations(path: Path) -> list[str]:
     """Return ``file:line handler → callee`` for each on-loop blocking call."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     violations: list[str] = []
-    for node in tree.body:
+    # ast.walk, not tree.body: a handler nested inside a class body or an `if`
+    # would otherwise be skipped silently.
+    for node in ast.walk(tree):
         if not isinstance(node, ast.AsyncFunctionDef) or not _is_router_handler(node):
             continue
         exempt = _executor_exempt_nodes(node)
@@ -164,6 +197,29 @@ class TestNoBlockingCallsInAsyncHandlers:
         assert not missing, (
             f"route modules the #790 probe should be scanning are gone: {sorted(missing)} "
             "— if a module was renamed, update this list so the probe keeps watching it"
+        )
+
+    @pytest.mark.parametrize(
+        "module",
+        sorted(p.name for p in _ROUTES_DIR.glob("*.py") if p.name != "__init__.py"),
+    )
+    def test_probe_still_recognises_handlers_in_each_module(self, module: str):
+        """Fail closed: every route module must yield at least one handler.
+
+        ``_is_router_handler`` matches on the literal receiver name ``router``.
+        Rename that (or move the decorator behind an alias) and every handler in
+        the module becomes invisible — the violation scan would then report
+        "clean" for a file it is no longer reading. This assertion turns that
+        silent blindness into a loud failure.
+        """
+        if module == "_path_guard.py":
+            pytest.skip("helper module, holds no routes by design")
+        handlers = _router_handlers(_ROUTES_DIR / module)
+        assert handlers, (
+            f"{module}: the probe found no @router-decorated handlers. Either the "
+            "module genuinely has none, or _is_router_handler has gone blind (the "
+            "router variable was renamed / aliased) and the blocking-call scan is "
+            "silently passing over this file."
         )
 
     def test_probe_catches_a_known_violation(self, tmp_path):
