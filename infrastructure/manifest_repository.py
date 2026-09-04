@@ -102,6 +102,14 @@ _MIGRATIONS = [
     # '' = in-review (default), 'deleted' = trashed, 'ignored' = dismissed.
     # This is the single visibility predicate in _LOAD_ALL_SQL (WHERE outcome='').
     ("outcome",         "TEXT    NOT NULL DEFAULT ''"),
+    # Sub-second + timezone companions of shot_date (#820). Nullable with NO
+    # DEFAULT, so every existing row reads NULL and no stored value changes.
+    # TEXT because the digits are positional — "05" is 50 ms, "5" is 500 ms —
+    # and because OffsetTimeOriginal is "+09:00", not a number. shot_date
+    # itself keeps its 19-char second-resolution format; a consumer that needs
+    # ordering inside a burst combines the columns.
+    ("subsec_time_original", "TEXT"),
+    ("offset_time_original", "TEXT"),
 ]
 
 # #433 — drop the legacy ``dest_path`` column and migrate ``action='MOVE'``
@@ -129,6 +137,12 @@ _POST_DROP_COLUMNS = (
     "file_size_bytes", "shot_date", "creation_date", "mtime",
     "pixel_width", "pixel_height",
     "exif_tag_count", "gps_present", "xmp_derived", "score",
+    # #820 — a column added to _MIGRATIONS but omitted here would be created
+    # by the ALTER and then silently DROPPED again by the copy-table dance
+    # below (which rebuilds the table from a hardcoded DDL and copies only
+    # the columns named here). The additive migrations run first, so these
+    # always exist on the source table by the time the dance reads it.
+    "subsec_time_original", "offset_time_original",
 )
 
 _UPDATE_DECISION_SQL = """
@@ -204,6 +218,8 @@ def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
             gps_present      INTEGER NOT NULL DEFAULT 0,
             xmp_derived      INTEGER NOT NULL DEFAULT 0,
             score            REAL,
+            subsec_time_original TEXT,
+            offset_time_original TEXT,
             is_locked        INTEGER NOT NULL DEFAULT 0,
             outcome          TEXT    NOT NULL DEFAULT ''
         );

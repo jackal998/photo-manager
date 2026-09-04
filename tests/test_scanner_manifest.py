@@ -67,6 +67,37 @@ class TestWriteManifest:
             action = conn.execute("SELECT action FROM migration_manifest").fetchone()[0]
         assert action == "REVIEW_DUPLICATE"
 
+    def test_subsec_and_offset_written_to_new_manifest(self, tmp_path):
+        """#820 — a fresh manifest carries the columns from its own DDL,
+        not only via the lazy ALTER on first read, and `write_manifest`
+        actually inserts the two ManifestRow fields. The pair (same
+        `shot_date`, different sub-second) is the burst case the issue is
+        about: at second resolution these two rows are indistinguishable."""
+        out = tmp_path / "manifest.sqlite"
+        first = _row("/a/burst1.heic", "")
+        first.shot_date = "2024-06-27T21:34:03"
+        first.subsec_time_original = "154"
+        first.offset_time_original = "+09:00"
+        second = _row("/a/burst2.heic", "")
+        second.shot_date = "2024-06-27T21:34:03"
+        second.subsec_time_original = "958"
+        second.offset_time_original = "+09:00"
+        plain = _row("/a/plain.jpg", "")
+
+        write_manifest([first, second, plain], out)
+
+        with sqlite3.connect(out) as conn:
+            stored = conn.execute(
+                "SELECT source_path, shot_date, subsec_time_original,"
+                "       offset_time_original "
+                "FROM migration_manifest ORDER BY source_path"
+            ).fetchall()
+        assert stored == [
+            ("/a/burst1.heic", "2024-06-27T21:34:03", "154", "+09:00"),
+            ("/a/burst2.heic", "2024-06-27T21:34:03", "958", "+09:00"),
+            ("/a/plain.jpg", None, None, None),
+        ]
+
     def test_overwrites_existing_file(self, tmp_path):
         import gc
         out = tmp_path / "manifest.sqlite"
