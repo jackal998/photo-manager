@@ -2216,3 +2216,141 @@ class TestInMemoryJpegWiring:
         me = hr.to_media_extract()
         assert "pil_exif_inmemory" not in me.extracted_by
         assert me.exif_tag_count is None
+
+
+# ── #793 acceptance — a REAL malformed-EXIF JPEG ───────────────────────────
+#
+# PR #811 guarded ``img.getexif()`` inside ``extract_pil_scoring_signals``
+# (scanner/exif.py:645-655). The test that shipped with it drives a MagicMock
+# whose ``getexif`` raises (``TestExtractPilScoringSignalsRobustness`` above);
+# #793's acceptance asks for a REAL malformed-EXIF JPEG, proven to still be
+# hashed rather than silently dropped from the manifest. That is what the
+# fixture and tests below supply.
+
+
+def _malformed_exif_jpeg(path) -> None:
+    """Write a REAL JPEG that decodes fine but whose EXIF cannot be parsed.
+
+    Both halves of the recipe are load-bearing (verified against Pillow
+    12.2 — see the assertions in ``test_fixture_getexif_really_raises``,
+    which fail loudly if a Pillow upgrade makes the file benign):
+
+    * Build a normal EXIF payload, then zero the two-byte TIFF byte-order
+      mark that follows the ``Exif\\0\\0`` prefix. The APP1 segment is still
+      recognised as EXIF (the prefix survives), but ``ImageFileDirectory_v2``
+      rejects the header — ``SyntaxError: not a TIFF file``. Nothing else is
+      touched, so the entropy-coded scan data still decodes: the "malformed
+      base IFD on an otherwise-decodable image" shape #793 describes.
+
+    * ``dpi=(72, 72)`` is REQUIRED, not cosmetic. Without a JFIF DPI,
+      ``JpegImageFile._open`` calls ``_read_dpi_from_exif`` → ``getexif()``
+      at OPEN time and swallows the ``SyntaxError`` itself
+      (``PIL/JpegImagePlugin.py`` 402 → 507); ``Exif.load`` assigns
+      ``_loaded_exif`` *before* parsing, so the failed parse is cached and
+      every later ``getexif()`` quietly returns ``{}``. With a JFIF DPI
+      present that pre-warm returns early, and the first ``getexif()`` a
+      caller makes is the one that raises.
+    """
+    from PIL import Image
+    import numpy as np
+
+    arr = np.zeros((32, 32, 3), dtype=np.uint8)
+    arr[:16] = 200          # two bands so the image has real pHash entropy
+    arr[:, :8] = 90
+    img = Image.fromarray(arr)
+    exif = img.getexif()
+    exif.get_ifd(0x8769)[36867] = "2024:08:01 12:00:00"
+    payload = bytearray(exif.tobytes())
+    assert payload[:6] == b"Exif\x00\x00", (
+        f"unexpected EXIF payload prefix {payload[:6]!r} — corruption offset "
+        "below assumes the Exif\\0\\0 header"
+    )
+    payload[6:8] = b"\x00\x00"          # destroy the TIFF byte-order mark
+    img.save(str(path), "JPEG", quality=90, exif=bytes(payload), dpi=(72, 72))
+
+
+class TestMalformedExifJpegIsNotDropped:
+    """#793 — a JPEG with a malformed base EXIF IFD must survive the scan.
+
+    User-visible failure being pinned: a perfectly viewable photo whose EXIF
+    block happens to be damaged (a truncated card write, a buggy editor)
+    vanishes from the manifest entirely — the user sees a folder of 500
+    photos scan to 499 rows with no way to tell which one went missing.
+    """
+
+    def test_fixture_getexif_really_raises(self, tmp_path):
+        """Precondition for the two tests below: the fixture is genuinely
+        malformed on THIS Pillow. Asserted here rather than assumed, so a
+        Pillow upgrade that starts swallowing the error turns this into a
+        red test instead of silently making the guard tests vacuous."""
+        from PIL import Image
+
+        p = tmp_path / "malformed.jpg"
+        _malformed_exif_jpeg(p)
+
+        with Image.open(p) as img:
+            img.load()
+            assert img.size == (32, 32), "the fixture's pixels must still decode"
+
+        with Image.open(p) as img:
+            with pytest.raises(SyntaxError, match="not a TIFF file"):
+                img.getexif()
+
+    def test_extract_pil_scoring_signals_degrades_on_real_malformed_exif(
+        self, tmp_path
+    ):
+        """``extract_pil_scoring_signals`` must return empty-EXIF signals
+        rather than propagating — the unguarded call (pre-#811) raises
+        ``SyntaxError`` here, which ``compute_from_bytes``' broad except
+        turns into a ``HashFailure`` and drops the file (#793)."""
+        from PIL import Image
+
+        p = tmp_path / "malformed.jpg"
+        _malformed_exif_jpeg(p)
+
+        with Image.open(p) as img:
+            signals = extract_pil_scoring_signals(img)   # must NOT raise
+
+        assert signals["exif_date"] is None
+        assert signals["exif_date_tag"] is None
+        assert signals["exif_tag_count"] == 0
+        assert signals["gps_present"] is False
+        assert signals["xmp_derived"] is False
+
+    def test_malformed_exif_jpeg_still_hashes_via_compute_from_bytes(
+        self, tmp_path
+    ):
+        """The real COMPUTE entry the scan pipeline uses must return a
+        ``HashResult`` with a pHash — not a ``HashFailure``, which is what
+        routes a file into the ``skipped`` log and out of the manifest.
+
+        Scope, stated honestly: this pins the user-visible OUTCOME, and it
+        passes even with the #811 guard removed — because ``hasher.
+        _raw_exif_date`` runs first on the same ``Image`` object and its own
+        ``except Exception`` leaves PIL's failed parse cached (``Exif.load``
+        assigns ``_loaded_exif`` before parsing). That is precisely the
+        "crash-safe today only because" mechanism #793 describes, and it is
+        one reorder away from being untrue. The guard's own non-vacuous test
+        is ``test_extract_pil_scoring_signals_degrades_on_real_malformed_exif``
+        above, which fails with ``SyntaxError`` when the guard is removed.
+        """
+        from scanner.dedup import HashResult
+        from scanner.hasher import compute_from_bytes
+        from scanner.walker import FileRecord
+
+        p = tmp_path / "malformed.jpg"
+        _malformed_exif_jpeg(p)
+        rec = FileRecord(path=p, source_label="src", file_type="jpeg")
+
+        _idx, outcome = compute_from_bytes(0, rec, p.read_bytes())
+
+        assert isinstance(outcome, HashResult), (
+            f"malformed EXIF must not turn a decodable JPEG into a "
+            f"HashFailure; got {outcome!r}"
+        )
+        assert outcome.phash, "a decodable JPEG must still yield a pHash"
+        assert outcome.inmemory_signals is not None, (
+            "JPEG is in _INMEMORY_EXIF_TYPES — the in-memory signal pass must "
+            "still have run (degraded), not been skipped"
+        )
+        assert outcome.inmemory_signals["exif_date"] is None

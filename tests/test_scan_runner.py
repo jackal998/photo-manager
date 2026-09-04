@@ -12,6 +12,11 @@ Tests:
    writes KEEP locks for the top keeper in each dup group.
 5. Auto-select aggressive delete — with auto_select_aggressive_delete=True
    non-keepers get user_decision='delete'.
+6. exiftool-missing in-memory date backfill (#793/#811) — a JPEG dated only
+   in XMP keeps its shot_date and is not filed as UNDATED when exiftool is
+   absent; a JPEG with no EXIF at all still lands, UNDATED, shot_date NULL.
+7. Malformed-EXIF robustness (#793/#811) — a decodable JPEG whose EXIF block
+   is corrupt still reaches the manifest instead of being silently dropped.
 """
 from __future__ import annotations
 
@@ -476,4 +481,191 @@ class TestAutoSelectPipeline:
         )
         assert self._read_manifest_rows(out) == good_rows, (
             "prior rows/locks must survive a failed re-scan intact"
+        )
+
+
+# ── #793 acceptance — exiftool-missing mode + malformed EXIF ───────────────
+#
+# PR #811 moved the ``exif_date`` backfill out of ``elif et_records:`` so it
+# runs regardless of exiftool availability (core/app_service/scan_runner.py
+# :1152-1166), and guarded ``getexif()`` in ``extract_pil_scoring_signals``
+# (scanner/exif.py:645-655). Its own Scope note deferred the scan_runner-level
+# test as "a full-pipeline scenario"; #793's acceptance asks for it. These
+# tests drive the real ``run_pipeline`` over real files on disk.
+
+
+def _write_xmp_only_dated_jpeg(path: Path, iso: str = "2024-07-15T10:30:00") -> None:
+    """Write a real JPEG whose capture date exists ONLY in XMP, not EXIF.
+
+    This is the shape that makes the backfill load-bearing. ``hasher.
+    _raw_exif_date`` reads EXIF only, so ``HashResult.exif_date`` comes back
+    ``None``; the date is recovered solely by the in-memory PIL pass (#786),
+    which lands it in ``extracts[path].exif_date`` via the XMP fallback chain
+    in ``extract_pil_scoring_signals``. Only the backfill copies it back onto
+    the record that ``classify`` reads — so a JPEG dated in EXIF would make
+    this test vacuous.
+
+    Real editing pipelines produce exactly this file (Lightroom / Photoshop
+    writing XMP sidecar metadata into the JPEG without touching EXIF).
+    """
+    packet = (
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        b'<rdf:Description rdf:about=""'
+        b' xmlns:exif="http://ns.adobe.com/exif/1.0/"'
+        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/" '
+        b'exif:DateTimeOriginal="' + iso.encode() + b'"'
+        b'/></rdf:RDF></x:xmpmeta>'
+    )
+    Image.new("RGB", (32, 32), (12, 200, 90)).save(path, "JPEG", xmp=packet)
+
+
+def _write_malformed_exif_jpeg(path: Path) -> None:
+    """Write a real, decodable JPEG whose EXIF block cannot be parsed.
+
+    Mirror of ``tests/test_scanner_exif.py::_malformed_exif_jpeg`` — see that
+    docstring for why the TIFF byte-order mark is the byte to destroy and why
+    ``dpi=(72, 72)`` is required to keep Pillow's own open-time pre-warm from
+    swallowing the parse error.
+    """
+    img = Image.new("RGB", (32, 32), (200, 30, 30))
+    exif = img.getexif()
+    exif.get_ifd(0x8769)[36867] = "2024:08:01 12:00:00"
+    payload = bytearray(exif.tobytes())
+    assert payload[:6] == b"Exif\x00\x00", payload[:6]
+    payload[6:8] = b"\x00\x00"
+    img.save(str(path), "JPEG", quality=90, exif=bytes(payload), dpi=(72, 72))
+
+
+class TestExiftoolMissingDateBackfill:
+    """#793 — in exiftool-missing mode a JPEG whose date the in-memory pass
+    DID recover must not be filed as UNDATED.
+
+    User-visible failure being pinned: on a machine without exiftool, a photo
+    the app itself dated (it is scored with that date, and the date shows in
+    the scoring) is nonetheless listed under UNDATED with an empty Date
+    column — an internally contradictory row the user cannot act on.
+
+    ``scanner/dedup.py:293-294`` is where a ``HashResult`` with
+    ``exif_date is None`` becomes ``action='UNDATED'``, and
+    ``scanner/dedup.py:893`` is where ``shot_date`` is written from the same
+    field — so both manifest columns are decided by whether the backfill ran.
+    """
+
+    def _rows(self, db_path: Path) -> list[dict]:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            return [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT source_path, action, shot_date FROM migration_manifest"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def _run(self, tmp_path: Path, monkeypatch) -> tuple[list[dict], _SpyBus]:
+        """Run the real pipeline over ``tmp_path/src`` with exiftool absent.
+
+        ``ExiftoolProcess()`` raising ``FileNotFoundError`` is the exact seam
+        the pipeline latches ``exiftool_missing`` on (scan_runner.py:743) —
+        patched rather than relying on the host lacking exiftool, so the test
+        means the same thing on a developer machine that has it installed.
+        """
+        import scanner.exif as _exif
+        from core.app_service.cancel_token import _CancelToken
+        from core.app_service.dtos import ScanConfig
+        from core.app_service.scan_runner import run_pipeline
+
+        def _raise_missing(*_a, **_kw):
+            raise FileNotFoundError("exiftool not found")
+
+        monkeypatch.setattr(_exif, "ExiftoolProcess", _raise_missing)
+
+        out = tmp_path / "manifest.sqlite"
+        config = ScanConfig(
+            sources={"src": tmp_path / "src"},
+            output_path=out,
+            recursive_map={"src": False},
+            workers=1,
+            exif_workers=1,
+            hash_pool="thread",
+        )
+        bus = _SpyBus()
+        run_pipeline(config, _CancelToken(), bus)
+
+        assert bus.failed_msgs == [], (
+            f"run_pipeline must not fail; got {bus.failed_msgs!r}"
+        )
+        assert any("exiftool not found on PATH" in m for m in bus.logs), (
+            "precondition: the run must actually be in exiftool-missing mode; "
+            f"logs={bus.logs!r}"
+        )
+        return self._rows(out), bus
+
+    def test_xmp_only_date_is_backfilled_and_row_is_not_undated(
+        self, tmp_path, monkeypatch
+    ):
+        """The #793 regression itself: exiftool missing + a JPEG dated only in
+        XMP. The manifest row must carry the date and must NOT be UNDATED."""
+        src = tmp_path / "src"
+        src.mkdir()
+        _write_xmp_only_dated_jpeg(src / "edited.jpg")
+
+        rows, _bus = self._run(tmp_path, monkeypatch)
+
+        assert len(rows) == 1, f"expected the one scanned JPEG; got {rows!r}"
+        row = rows[0]
+        assert row["shot_date"] == "2024-07-15T10:30:00", (
+            "the XMP date recovered by the in-memory pass must reach the "
+            f"manifest's shot_date column; got {row!r}"
+        )
+        assert row["action"] != "UNDATED", (
+            "a row the pipeline DID date must not also be filed as UNDATED — "
+            f"that is the internally inconsistent row #793 reports; got {row!r}"
+        )
+
+    def test_jpeg_with_no_exif_at_all_stays_undated(self, tmp_path, monkeypatch):
+        """The other half of the value domain: with no date anywhere, the row
+        must still land in the manifest and must legitimately be UNDATED with
+        an empty shot_date. The backfill rescues dates that EXIST; it must not
+        invent one."""
+        src = tmp_path / "src"
+        src.mkdir()
+        _write_jpeg(src / "plain.jpg")
+
+        rows, _bus = self._run(tmp_path, monkeypatch)
+
+        assert len(rows) == 1, f"expected the one scanned JPEG; got {rows!r}"
+        row = rows[0]
+        assert row["shot_date"] is None, f"no date anywhere -> NULL; got {row!r}"
+        assert row["action"] == "UNDATED", (
+            f"a genuinely undated photo must still be flagged; got {row!r}"
+        )
+
+    def test_malformed_exif_jpeg_still_reaches_the_manifest(
+        self, tmp_path, monkeypatch
+    ):
+        """#793's other fix, end to end: a decodable JPEG whose EXIF block is
+        corrupt must appear in the manifest. Unguarded, ``getexif()`` raises
+        inside ``extract_pil_scoring_signals`` → ``compute_from_bytes``' broad
+        except → ``HashFailure`` → the photo is dropped from the scan with
+        only a line in the skipped log.
+
+        Same scope caveat as its unit sibling in ``tests/test_scanner_exif.py``
+        (``test_malformed_exif_jpeg_still_hashes_via_compute_from_bytes``):
+        this pins the end-to-end OUTCOME and passes even with the #811 guard
+        removed, because ``hasher._raw_exif_date`` pre-warms PIL's cached
+        parse first. The guard's non-vacuous test lives in that file.
+        """
+        src = tmp_path / "src"
+        src.mkdir()
+        _write_malformed_exif_jpeg(src / "damaged.jpg")
+
+        rows, _bus = self._run(tmp_path, monkeypatch)
+
+        assert [Path(r["source_path"]).name for r in rows] == ["damaged.jpg"], (
+            "a decodable JPEG with a malformed EXIF block must not be dropped "
+            f"from the manifest; got {rows!r}"
         )
