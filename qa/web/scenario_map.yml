@@ -226,7 +226,16 @@ scenarios:
       needs_rework parity per web-port-tech-design.md:2485 — the assertion
       weakens from screen-pixel window position to "panel width survives a
       reload". Result-tree column widths remain covered separately by s47
-      (#685, done).
+      (#685, done). SECOND HALF added by the #739 sign-off (2026-07-17): the
+      full-res VIEWER is now a movable/resizable overlay with persisted
+      geometry, so the window-position half of the Qt scenario finally has a
+      web analog — on the app's own overlay, not on browser chrome. The
+      scenario now also opens the viewer, drags its title bar (which
+      un-maximizes the viewport-filling default and moves it), asserts the
+      rect landed in localStorage under the viewer's OWN key
+      'pm.overlay-geometry.fullres.v1', reloads, reopens the viewer and
+      asserts the saved rect comes back. The Execute / Set Action dialogs ride
+      the same mechanism and are covered by s48.
 
   - scenario: s40_results_tree_double_click
     playwright_module: qa.web.scenarios.s40_results_tree_double_click
@@ -275,9 +284,9 @@ scenarios:
       server reset). s46 intentionally absent from ALL_SCENARIOS.
 
   - scenario: s48_dialog_geometry_persist
-    playwright_module: null
-    status: skip
-    notes: "SKIP — desktop-only (#688). Qt dialog-geometry persistence: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. Web dialogs are Radix / DOM overlays with no user-resizable geometry and no persistence contract, so there is nothing to round-trip. NOTE: s47 (#685) and s39 (#739) ARE real web features (column-width and preview-panel-width persistence) — NOT skips; only this dialog-geometry scenario (s48) remains desktop-only."
+    playwright_module: qa.web.scenarios.s48_dialog_geometry_persist
+    status: done
+    notes: "#739 re-flip from SKIP (owner sign-off 2026-07-17). Qt side: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. The old SKIP reason — 'web dialogs are Radix/DOM overlays with no user-resizable geometry and no persistence contract' — no longer holds: #739 built ONE drag/resize/persist overlay mechanism (frontend/src/hooks/useOverlayGeometry.ts + frontend/src/lib/overlayGeometry.ts) and applied it to the full-res viewer, the Execute Action dialog and the Set Action dialog, closing divergence rows D6/D7/D12. This driver covers the two DIALOGS: for each, drag the title bar (asserts it moved), drag the bottom-right grip (asserts it grew), Escape-close and reopen (the Qt close-and-reopen round-trip, same session), assert the rect is in that surface's OWN localStorage key (pm.overlay-geometry.execute.v1 / .action.v1), then page.reload() and assert both still restore — plus that the two keys hold different rects, so one shared key cannot pass. Divergences: real mouse gestures instead of Win32 MoveWindow (the drag IS the feature; no browser API moves a DOM overlay from outside); localStorage instead of QSettings INI; the desktop scenario's THIRD dialog (ScanDialog) is deliberately NOT ported — #739's sign-off scoped the mechanism to the viewer + these two dialogs, and the Scan dialog stays a centered non-movable Radix dialog; the viewer's half of the same mechanism lives in s39."
 
   - scenario: s49_scan_auto_select
     playwright_module: qa.web.scenarios.s49_scan_auto_select

@@ -1,4 +1,4 @@
-"""Web scenario s39 — preview-panel width persists across a reload (#739).
+"""Web scenario s39 — preview-panel width + viewer geometry persist (#739).
 
 Re-flip of the desktop-only s39_window_geometry_persist, which was SKIP on
 the web (#688 — a browser tab has no OS-controlled window position/size or
@@ -17,6 +17,23 @@ end-to-end through real user gestures:
   4. Assert the preview pane restores to the resized width (the restore path
      reads localStorage at store creation; nothing on manifest load resets it).
   5. Assert the localStorage key survives the reload.
+
+Second half (#739 sign-off, 2026-07-17) — the FULL-RES VIEWER is now the web's
+real analog of the desktop's movable/resizable window, so the half of the Qt
+scenario that had no browser equivalent (window position/size round-trip) now
+does have one, on the app's own overlay rather than on browser chrome:
+
+  6. Open the viewer (double-click the preview tile) and drag its TITLE BAR.
+     The viewer opens filling the viewport, so the drag un-maximizes it to a
+     floating window and moves it — assert both (size shrank, origin moved).
+  7. Assert the geometry was written to localStorage under
+     ``pm.overlay-geometry.fullres.v1`` (its OWN key — not ``panelWidths``).
+  8. ``page.reload()`` + reopen the viewer, and assert the window comes back
+     at the saved rect rather than filling the viewport again.
+
+The Execute / Set Action dialogs ride the same mechanism; their round-trip is
+covered by s48_dialog_geometry_persist (the Qt companion scenario, re-flipped
+from SKIP by the same change).
 
 Per-scenario isolation is free here: each scenario runs in its own Playwright
 browser context, so localStorage starts empty and cannot leak between
@@ -46,11 +63,27 @@ from qa.web._invariants import (
     start_scan,
     wait_manifest_loaded,
 )
-from qa.web.testid_constants import PREVIEW_PANE, PREVIEW_RESIZE_HANDLE
+from qa.web.testid_constants import (
+    FULLRES_DIALOG,
+    FULLRES_IMAGE,
+    FULLRES_TITLE_BAR,
+    PREVIEW_PANE,
+    PREVIEW_RESIZE_HANDLE,
+    PREVIEW_SINGLE_IMAGE,
+)
 
 _REPO = Path(__file__).resolve().parents[3]
 _SRC = str(_REPO / "qa" / "sandbox" / "near-duplicates")
 _STORAGE_KEY = "panelWidths"
+# Per-surface overlay-geometry key (frontend/src/lib/overlayGeometry.ts).
+_GEOMETRY_KEY = "pm.overlay-geometry.fullres.v1"
+
+# Title-bar drag delta for the viewer. Geometry is clamped fully inside the
+# viewport and the un-maximized window is 80% of it, so the usable drag range
+# is 10% of each axis on each side — this delta stays well inside that.
+_MOVE_DX = 90
+_MOVE_DY = 40
+_GEOM_TOL_PX = 6
 
 # Drag the handle LEFT (widens the preview pane — see App.tsx's
 # handlePreviewResizeStart) by this far; assert the pane grew by clearly more
@@ -66,6 +99,25 @@ def _preview_width(page) -> float:
     if box is None:
         raise AssertionError("preview pane has no bounding box")
     return box["width"]
+
+
+def _open_full_res_viewer(page) -> None:
+    """Select the first file row, then double-click its preview tile."""
+    row = page.locator('[data-testid^="row-file-"]').first
+    row.wait_for(state="visible", timeout=10_000)
+    row.click()
+    tile = page.get_by_test_id(PREVIEW_SINGLE_IMAGE)
+    tile.wait_for(state="visible", timeout=10_000)
+    tile.dblclick()
+    page.get_by_test_id(FULLRES_DIALOG).wait_for(state="visible", timeout=10_000)
+    page.get_by_test_id(FULLRES_IMAGE).wait_for(state="visible", timeout=15_000)
+
+
+def _viewer_box(page) -> dict:
+    box = page.get_by_test_id(FULLRES_DIALOG).bounding_box()
+    if box is None:
+        raise AssertionError("full-res viewer has no bounding box")
+    return box
 
 
 def _wait_rows(page, n: int = 5) -> None:
@@ -151,6 +203,96 @@ def run(*, base_url: str) -> None:
                 failures.append(
                     f"localStorage['{_STORAGE_KEY}'] was wiped by the reload."
                 )
+
+            # ── #739 second half: full-res viewer window geometry ────────────
+            _open_full_res_viewer(page)
+            open_box = _viewer_box(page)
+            print(
+                f"probe_status: s39 fullres default box="
+                f"{open_box['x']},{open_box['y']},"
+                f"{open_box['width']},{open_box['height']}"
+            )
+
+            title = page.get_by_test_id(FULLRES_TITLE_BAR)
+            tb = title.bounding_box()
+            if tb is None:
+                raise AssertionError("full-res title bar has no bounding box")
+            tx = tb["x"] + tb["width"] / 2
+            ty = tb["y"] + tb["height"] / 2
+            page.mouse.move(tx, ty)
+            page.mouse.down()
+            page.mouse.move(tx + _MOVE_DX, ty + _MOVE_DY, steps=8)
+            page.mouse.up()
+            page.wait_for_timeout(150)
+
+            moved_box = _viewer_box(page)
+            print(
+                f"probe_status: s39 fullres moved box="
+                f"{moved_box['x']},{moved_box['y']},"
+                f"{moved_box['width']},{moved_box['height']}"
+            )
+            # Dragging a viewport-filling window un-maximizes it AND moves it.
+            # Both halves matter: a window that shrinks but stays at 0,0 means
+            # the drag delta never reached the geometry.
+            if moved_box["width"] >= open_box["width"]:
+                failures.append(
+                    f"title-bar drag did not un-maximize the viewer: "
+                    f"width {open_box['width']} -> {moved_box['width']} — the "
+                    f"useOverlayGeometry un-maximize rule regressed."
+                )
+            if moved_box["x"] <= 0 and moved_box["y"] <= 0:
+                failures.append(
+                    f"title-bar drag did not move the viewer: origin is still "
+                    f"{moved_box['x']},{moved_box['y']} — the drag delta is "
+                    f"not reaching the persisted geometry."
+                )
+
+            geom = page.evaluate(
+                "(key) => { const v = localStorage.getItem(key); "
+                "return v ? JSON.parse(v) : null; }",
+                _GEOMETRY_KEY,
+            )
+            print(f"probe_status: s39 fullres persisted={geom}")
+            if geom is None:
+                failures.append(
+                    f"viewer geometry not written to localStorage"
+                    f"['{_GEOMETRY_KEY}'] after the drag."
+                )
+            elif (
+                abs(geom["x"] - moved_box["x"]) > _GEOM_TOL_PX
+                or abs(geom["y"] - moved_box["y"]) > _GEOM_TOL_PX
+            ):
+                failures.append(
+                    f"persisted viewer geometry {geom} does not match the "
+                    f"rendered box {moved_box}."
+                )
+
+            # ── Reload = cross-launch boundary; reopen the viewer ────────────
+            page.reload()
+            load_manifest(page, db_path)
+            _wait_rows(page)
+            _open_full_res_viewer(page)
+            page.wait_for_timeout(150)
+
+            restored_box = _viewer_box(page)
+            print(
+                f"probe_status: s39 fullres restored box="
+                f"{restored_box['x']},{restored_box['y']},"
+                f"{restored_box['width']},{restored_box['height']}"
+            )
+            for axis in ("x", "y", "width", "height"):
+                if abs(restored_box[axis] - moved_box[axis]) > _GEOM_TOL_PX:
+                    failures.append(
+                        f"viewer {axis} not restored after reload: "
+                        f"{restored_box[axis]} != {moved_box[axis]} "
+                        f"(+-{_GEOM_TOL_PX}) — the geometry hydration from "
+                        f"localStorage on open regressed."
+                    )
+
+            page.keyboard.press("Escape")
+            page.get_by_test_id(FULLRES_DIALOG).wait_for(
+                state="hidden", timeout=5_000
+            )
 
         if failures:
             for f in failures:
