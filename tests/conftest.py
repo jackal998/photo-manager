@@ -54,6 +54,75 @@ def _isolate_unc_resolution(monkeypatch):
     _workers._unc_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _revive_wic_executor():
+    """Undo the process-wide WIC-executor shutdown a lifespan test performs (#781).
+
+    ``infrastructure.image_service`` owns a module-global STA thread pool
+    (``_wic_executor``, image_service.py:139) that ``ImageService.
+    _load_via_shell_thumbnail`` submits to. Every test that enters the FastAPI
+    app's lifespan — ``with TestClient(app)`` in the ten ``tests/test_web_*``
+    modules — runs the real ``_drain_wic_executor`` on exit (app/web/main.py:101),
+    which calls ``ThreadPoolExecutor.shutdown``. The pool is per-process and
+    never rebuilt, so any *later* test that reaches the Shell/WIC path gets
+    ``RuntimeError: cannot schedule new futures after shutdown``. With the
+    default collection order that victim is
+    ``tests/test_image_service.py::TestBytesContract::
+    test_placeholder_returned_when_load_fails``; which test loses depends purely
+    on file order, which is why it reads as a flake.
+
+    Same shape, same remedy as ``_isolate_unc_resolution`` above: reset the
+    module global around each test. The replacement is built from the dead
+    executor's own construction parameters, so it is production's configuration
+    by definition — in particular ``thread_name_prefix='wic-sta'``, which
+    ``_shell_thumbnail_sync``'s STA assertion (image_service.py:779) checks.
+
+    This cannot mask a real failure: it runs only in teardown, only when the
+    pool is already shut down, and it does not touch a live pool. A genuine
+    "we shut the pool down and then used it" bug in production code would still
+    fail inside the test that does it.
+    """
+    yield
+
+    mod = sys.modules.get("infrastructure.image_service")
+    if mod is None:  # module never imported by this test — nothing to revive
+        return
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    executor = mod._wic_executor
+    if not isinstance(executor, ThreadPoolExecutor):
+        # A test swapped in its own double; its own teardown restores the real
+        # pool, and reviving someone else's stub would be wrong.
+        return
+
+    # Fail closed: if CPython ever renames these, revive silently becoming a
+    # no-op would resurrect the #781 flake with no signal at all.
+    missing = [
+        attr
+        for attr in ("_shutdown", "_max_workers", "_thread_name_prefix",
+                     "_initializer", "_initargs")
+        if not hasattr(executor, attr)
+    ]
+    if missing:
+        raise RuntimeError(
+            f"#781 fixture cannot inspect ThreadPoolExecutor internals {missing} "
+            f"on {sys.version_info[:3]} — update tests/conftest.py::"
+            "_revive_wic_executor instead of letting the order-dependent "
+            "_wic_executor flake come back silently"
+        )
+
+    if not executor._shutdown:
+        return
+
+    mod._wic_executor = ThreadPoolExecutor(
+        max_workers=executor._max_workers,
+        thread_name_prefix=executor._thread_name_prefix,
+        initializer=executor._initializer,
+        initargs=executor._initargs,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Playwright live-server fixture — web_probe tests only
 # ---------------------------------------------------------------------------
