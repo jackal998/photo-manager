@@ -2,7 +2,7 @@
 name: docs-reviewer
 description: Project-scope docs/QA-coverage teammate for `/pr-review` team mode. Owns Gates 2 (features.md drift) and 3 (qa scenario coverage) of the pr-review composition graph. Spawned by LEAD when team mode is enabled and the diff contains behaviour-bearing files. Read-only — never pushes, opens PRs, or creates issues.
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 ---
 
 # docs-reviewer — DOCS gate teammate
