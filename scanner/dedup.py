@@ -3,7 +3,9 @@
 Classification rules:
   SHA-256 match                          → EXACT (exact duplicate)
   pHash hamming == 0, both lossy         → EXACT lower priority (format duplicate)
-  pHash hamming == 0, one RAW + lossy    → "" both (complementary, undecided)
+  pHash hamming == 0, one RAW + lossy    → "" both (complementary, undecided,
+                                            but one group_id — #824)
+  pHash hamming == 0, all RAW            → "" all (same, #824)
   pHash hamming 1–threshold AND dHash agrees → REVIEW_DUPLICATE (#524 gate)
   no EXIF date                           → UNDATED
   otherwise                              → "" (undecided non-duplicate file)
@@ -292,10 +294,11 @@ def classify(
     # Pass 1: exact SHA-256 duplicates
     _classify_exact(records, rows, source_priority)
 
-    # Pass 2: pHash-based (cross-format + near-duplicate). Returns the near-dup
+    # Pass 2: pHash-based (cross-format + near-duplicate). Returns the pHash
     # union-find edges (#538 — a true transitive closure, decoupled from
-    # classification so a genuine near-dup is never orphaned).
-    near_dup_edges = _classify_phash(
+    # classification so a genuine near-dup is never orphaned; #824 — plus the
+    # complementary edges for exact buckets that get no dedup decision).
+    phash_edges = _classify_phash(
         records, rows, threshold, source_priority, mean_color_threshold,
         min_phash_entropy_bits, dhash_threshold, min_phash_dimension,
         bktree_min_candidates,
@@ -318,8 +321,8 @@ def classify(
     pair_edges = _collect_pair_edges(records, rows, threshold)
 
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
-    # near-dup transitive edges (#538).
-    _assign_group_ids(rows, pair_edges + near_dup_edges)
+    # pHash transitive edges (#538 near-dup, #824 complementary).
+    _assign_group_ids(rows, pair_edges + phash_edges)
 
     return list(rows.values())
 
@@ -426,7 +429,8 @@ def _classify_phash(
     bktree_min_candidates: int | None = None,
 ) -> list[tuple[str, str]]:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE, and
-    return the near-duplicate union-find edges (#538).
+    return the pHash union-find edges — near-duplicate (#538) plus
+    complementary exact-bucket (#824).
 
     Records are excluded from BOTH the exact-pHash format-group path and the
     near-duplicate scan when their pHash is degenerate (flat image — see
@@ -450,18 +454,21 @@ def _classify_phash(
     for hr in candidates:
         by_phash.setdefault(hr.phash, []).append(hr)
 
-    # Exact pHash match (hamming == 0) → FORMAT_DUPLICATE or complementary RAW+lossy
+    # Exact pHash match (hamming == 0) → FORMAT_DUPLICATE or complementary
+    # RAW+lossy. Complementary buckets take no dedup decision but still return
+    # their union-find edges (#824).
+    exact_edges: list[tuple[str, str]] = []
     for group in by_phash.values():
         if len(group) < 2:
             continue
-        _classify_format_group(
+        exact_edges.extend(_classify_format_group(
             group, rows, source_priority, mean_color_threshold, dhash_threshold
-        )
+        ))
 
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold.
     # Returns the union-find edges (#538 — a true transitive closure, decoupled
     # from classification).
-    return _classify_near_duplicates(
+    return exact_edges + _classify_near_duplicates(
         candidates, rows, threshold, source_priority, mean_color_threshold,
         dhash_threshold, bktree_min_candidates,
     )
@@ -473,17 +480,36 @@ def _classify_format_group(
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
-) -> None:
-    """Within a pHash==0 group, apply RAW+lossy exception and format priority."""
+) -> list[tuple[str, str]]:
+    """Within a pHash==0 group, apply RAW+lossy exception and format priority.
+
+    Returns the union-find edges the bucket contributes. The all-lossy path
+    returns none — its ``duplicate_of`` links already carry the component.
+    The two branches that take NO dedup decision return complementary edges
+    instead (#824): the bucket is one shot, so it is one group, even though
+    nothing in it is a duplicate to be discarded.
+    """
     has_raw = any(hr.record.file_type == "raw" for hr in group)
     lossy = [hr for hr in group if hr.record.file_type in LOSSY_TYPES]
 
     if has_raw and lossy:
-        # RAW + lossy: complementary — all MOVE, don't skip anything
-        return
+        # RAW + lossy: complementary — no dedup decision, both stay undecided
+        # (''). #824: emit the union-find edge anyway. The action policy is
+        # the deliberate part (cfa4f41: "never mark as FORMAT_DUPLICATE");
+        # the missing edge was a side effect of a function that predated
+        # group_id, and it orphaned the RAW original and its export into two
+        # invisible singletons — ManifestRepository.load only yields rows with
+        # a group_id. Same decoupling #88 made for Live Photo pairs and #538
+        # for bridged near-dups: group together, decide independently.
+        return _complementary_edges(group, mean_color_threshold, dhash_threshold)
 
     if len(lossy) < 2:
-        return
+        # Reachable only for an ALL-RAW bucket: a video carries no pHash so it
+        # is never a candidate, and every other image type with a pHash is in
+        # LOSSY_TYPES — so ``has_raw`` False would imply ``len(lossy) >= 2``.
+        # A CR2 and its DNG conversion hash identically with different SHAs;
+        # same shot, same group, still no dedup decision (#824).
+        return _complementary_edges(group, mean_color_threshold, dhash_threshold)
 
     # All lossy FORMAT_DUPLICATE: keep highest-format × highest-source-priority
     lossy.sort(key=lambda h: (
@@ -521,6 +547,42 @@ def _classify_format_group(
                    f"({duplicate.record.file_type} vs {keeper.record.file_type})",
             match_confidence="high" if vote == "agree" else "low",
         )
+    # The component is already carried by the duplicate_of links written above.
+    return []
+
+
+def _complementary_edges(
+    group: list[HashResult],
+    mean_color_threshold: int,
+    dhash_threshold: int,
+) -> list[tuple[str, str]]:
+    """#824 — union-find edges for an exact-pHash bucket that takes no dedup
+    decision (RAW+lossy complementary, or all-RAW).
+
+    A star from the lexicographically smallest member to every peer: one
+    connected component, and an anchor that cannot depend on the order the
+    hasher finished files in — the same lex-min rule ``_assign_group_ids``
+    uses, so the rescore determinism invariant is preserved by construction.
+
+    The same two precision gates the all-lossy path applies decide each spoke,
+    because an edge asserts "these are the same shot" just as an ``EXACT`` row
+    does: #462's mean-color check (skipped when either side lacks a mean color
+    — RAW thumbnails routinely do) and #524's dHash vote, where a definite
+    ``disagree`` means the pHash match is a false positive and there is no
+    pair to draw. No row is written and no action changes.
+    """
+    ordered = sorted(group, key=lambda h: str(h.record.path))
+    anchor = ordered[0]
+    anchor_key = str(anchor.record.path)
+    edges: list[tuple[str, str]] = []
+    for peer in ordered[1:]:
+        if mean_color_threshold > 0 and anchor.mean_color and peer.mean_color:
+            if _mean_color_distance(anchor.mean_color, peer.mean_color) > mean_color_threshold:
+                continue
+        if _dhash_vote(anchor, peer, dhash_threshold) == "disagree":
+            continue
+        edges.append((anchor_key, str(peer.record.path)))
+    return edges
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +597,9 @@ def _classify_format_group(
 # way that shifts cost or verdict: e.g. the BK-tree metric, the threshold
 # defaults, or adding/removing a gate (mean-color #462, dHash #524, entropy
 # #516, dimension #523). Opaque cache-keying token; only equality matters.
-GROUPING_STRATEGY_VERSION = "2"
+# "3" (#824): the exact tier now emits complementary edges for RAW+lossy and
+# all-RAW buckets, so the grouping verdict moved.
+GROUPING_STRATEGY_VERSION = "3"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.

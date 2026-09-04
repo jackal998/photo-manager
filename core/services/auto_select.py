@@ -29,7 +29,25 @@ from __future__ import annotations
 
 from collections import defaultdict
 from itertools import groupby
+from pathlib import Path
 from typing import Iterable
+
+from scanner.media import RAW_EXTENSIONS
+
+# #824 — extensions the scanner types as ``raw``. This is
+# ``scanner.media.RAW_EXTENSIONS`` PLUS ``.tif`` / ``.tiff``, which
+# ``scanner.media.get_file_type``'s table maps to ``"raw"`` even though
+# ``LOSSY_EXTENSIONS`` also lists them; the dedup engine's ``file_type`` is
+# what decides complementary-vs-format-duplicate, so match that table.
+# Extension-only on purpose: neither ``ManifestRow`` nor ``PhotoRecord``
+# carries ``file_type``, and a magic-byte-retyped file (a Takeout JPEG named
+# ``.DNG``) only makes this guard MORE conservative — the safe direction for
+# something that gates auto-DELETE.
+_RAW_SUFFIXES = RAW_EXTENSIONS | {".tif", ".tiff"}
+
+
+def _is_raw_path(source_path: str) -> bool:
+    return Path(source_path).suffix.lower() in _RAW_SUFFIXES
 
 
 def build_auto_select_writes(
@@ -246,6 +264,52 @@ def top_score_path_per_group(rows: Iterable) -> set[str]:
 _DUPLICATE_ACTIONS = frozenset({"EXACT", "REVIEW_DUPLICATE"})
 
 
+def _raw_displaced_keepers(rows: Iterable, keepers: set[str]) -> set[str]:
+    """#824 — paths a RAW keeper must not be allowed to demote into the
+    aggressive-delete set.
+
+    Since #824 an exact-pHash RAW+lossy bucket draws a ``group_id`` edge, so a
+    RAW can now merge into a component it was previously absent from. If that
+    RAW outscores the incumbent, it takes keepership — and the lossy row that
+    WAS the keeper loses the only protection it had. #536's action allowlist
+    does not cover it: that row is often a genuine ``EXACT`` (a byte-identical
+    sibling exists), which is exactly what makes it eligible once it stops
+    being the keeper. Measured on the reviewer's trio: base delete-set ``[]`` →
+    ``['/p/A.JPG']``, and ``apply_best_copy`` wrote ``decision=delete`` on it.
+
+    The rule is therefore the narrowest one that reproduces the pre-#824
+    outcome: **when a group's keeper is a RAW, the row that would have been
+    keeper among the group's non-RAW members stays protected too.** Same
+    ``(-score, source_path)`` ordering :func:`top_score_path_per_group` uses,
+    so "would have been keeper" is decided identically.
+
+    Deliberately narrow — it does NOT spare every member of a RAW-containing
+    group. A genuine duplicate that was never the keeper stays deletable, which
+    is what ``tests/test_auto_select.py::TestNonKeepersForAggressiveDelete::
+    test_ref_tier_passenger_excluded_from_aggressive_delete`` (#536, a RAW
+    keeper with a real ``REVIEW_DUPLICATE`` peer) pins.
+    """
+    by_group: dict[str, list] = defaultdict(list)
+    for row in rows:
+        if row.group_id is None or row.score is None:
+            continue
+        by_group[row.group_id].append(row)
+
+    protected: set[str] = set()
+    for group_rows in by_group.values():
+        keeper = next(
+            (r for r in group_rows if r.source_path in keepers), None
+        )
+        if keeper is None or not _is_raw_path(keeper.source_path):
+            continue
+        lossy = [r for r in group_rows if not _is_raw_path(r.source_path)]
+        if not lossy:
+            continue
+        lossy.sort(key=lambda r: (-r.score, r.source_path))
+        protected.add(lossy[0].source_path)
+    return protected
+
+
 def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[str]:
     """Return source_paths to auto-mark ``user_decision='delete'`` in the
     aggressive auto-select path (#393).
@@ -266,6 +330,13 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
     Rows lacking ``match_confidence`` (older shapes) are treated as not-low and
     remain eligible *provided* their action is a duplicate action.
 
+    #824 — when a group's keeper is a RAW, the best non-RAW row is protected
+    alongside it (:func:`_raw_displaced_keepers`). A RAW joining a component
+    via the new exact-tier complementary edge must not demote the lossy row it
+    outscored into the delete set; without this, the review-time
+    ``apply_best_copy`` path wrote ``decision='delete'`` onto a JPEG export
+    that nothing had asked to delete before.
+
     Args:
         rows: Iterable of ``ManifestRow``-shaped objects (``group_id``,
             ``source_path``, ``score``, ``action``, ``match_confidence``).
@@ -274,11 +345,13 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
     Returns:
         Set of ``source_path`` strings eligible for aggressive auto-delete.
     """
+    rows = list(rows)
+    protected = set(keepers) | _raw_displaced_keepers(rows, keepers)
     return {
         row.source_path for row in rows
         if row.group_id is not None
         and row.score is not None
-        and row.source_path not in keepers
+        and row.source_path not in protected
         and getattr(row, "action", "") in _DUPLICATE_ACTIONS
         and getattr(row, "match_confidence", None) != "low"
     }
