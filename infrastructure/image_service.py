@@ -18,9 +18,10 @@ import hashlib
 import io
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import uuid
 
 # wintypes is a Windows-only ctypes module; guard so the module imports on Linux
@@ -252,12 +253,81 @@ def _compute_cache_key(path: str, size_key: int, source_mtime_ns: int = 0) -> st
     return hashlib.sha1(sig).hexdigest()
 
 
-def _source_mtime_ns(path: str) -> int:
+def _stat_mtime_ns(path: str) -> int:
     """Best-effort source-file mtime_ns; 0 if the stat fails (e.g. deleted)."""
     try:
         return Path(path).stat().st_mtime_ns
     except OSError:
         return 0
+
+
+# How long one path's mtime may be reused before the source is stat'd again.
+# 5 s is the #622 Phase 2 figure: long enough that a burst of requests for the
+# same file (rapid clicks, a grid tile plus the single view, an ETag lookup
+# beside its own decode) costs ONE stat, short enough that a user who edits a
+# photo in another application sees the new version almost immediately.
+_MTIME_TTL_SECONDS = 5.0
+
+
+class _MtimeStatCache:
+    """Per-path TTL cache over the source-file mtime stat (#622 Phase 2).
+
+    Every preview request folds ``source_mtime_ns`` into its cache key, which
+    means every request stats the source — and on a NAS that stat is a network
+    round trip, paid even on a memory-cache hit. Requests arrive in bursts for
+    the same path, so a short TTL collapses the burst to one stat.
+
+    The TTL is deliberately NOT "cache the mtime forever": a path-only key
+    would never notice an external edit (the user re-exports a photo over the
+    same filename on the NAS) and the pane would serve the pre-edit pixels
+    indefinitely. After the TTL the source is stat'd again, the new mtime
+    produces a different cache key, and the edit shows up.
+
+    A failed stat (0) is cached like any other value: a deleted file is
+    re-checked once the TTL lapses.
+
+    Thread-safe — decode workers call this from several QThreadPool threads.
+    ``clock`` and ``stat_fn`` are injected so the TTL behaviour is testable
+    without sleeping or monkeypatching the standard library.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = _MTIME_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        stat_fn: Callable[[str], int] = _stat_mtime_ns,
+    ) -> None:
+        self._ttl = float(ttl_seconds)
+        self._clock = clock
+        self._stat = stat_fn
+        self._entries: dict[str, tuple[float, int]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, path: str) -> int:
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(path)
+            if entry is not None and (now - entry[0]) < self._ttl:
+                return entry[1]
+        # Stat outside the lock: it is the slow network call, and holding the
+        # lock across it would serialise every path behind the slowest one.
+        value = self._stat(path)
+        with self._lock:
+            self._entries[path] = (now, value)
+        return value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_mtime_cache = _MtimeStatCache()
+
+
+def _source_mtime_ns(path: str) -> int:
+    """Source-file mtime_ns, TTL-cached per path (see :class:`_MtimeStatCache`)."""
+    return _mtime_cache.get(path)
 
 
 def _ensure_dir(p: Path) -> None:

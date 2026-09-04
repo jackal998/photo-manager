@@ -448,3 +448,234 @@ class TestRequestResolution:
         runner.set_resolution_receiver(second)
 
         assert runner._resolution_receiver is second
+
+
+# ── #622 Phase 2 — coordinator handle wiring ─────────────────────────────
+
+
+class _StubHandle:
+    """Minimal stand-in for a coordinator RequestHandle."""
+
+    def __init__(self, cancelled: bool = False) -> None:
+        self._cancelled = cancelled
+        self.finish_calls = 0
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def finish(self) -> None:
+        self.finish_calls += 1
+
+
+class TestImageTaskCancelledHandle:
+    """A cancelled request must deliver nothing and still free its device."""
+
+    def test_cancelled_handle_does_not_emit(self):
+        """The user navigated away mid-decode: do not paint the stale image.
+
+        Real failure mode without this: the late image overwrites the preview
+        of the file the user has since selected, so the pane shows one
+        filename's metadata beside another photo's pixels.
+        """
+        service = MagicMock()
+        service.get_preview.return_value = _make_jpeg()
+        receiver = MagicMock()
+        handle = _StubHandle()
+        task = _ImageTask(
+            path="a.jpg", side=512, is_preview=True, service=service,
+            receiver=receiver, token="single|a.jpg|512", handle=handle,
+        )
+
+        handle.cancel()
+        task.run()
+
+        receiver.imageLoaded.emit.assert_not_called()
+        assert handle.finish_calls == 1, "a cancelled task must still free its slot"
+
+    def test_cancelled_during_the_decode_discards_the_finished_image(self):
+        """Cancelled WHILE decoding → the finished image is thrown away.
+
+        This is the branch that matters most, because it is the only one the
+        coordinator cannot prevent: rawpy / Shell-WIC decodes are
+        uninterruptible, so a click-away mid-decode always produces an image
+        that nobody wants. Real failure mode if it were delivered: it paints
+        over the file the user has since selected, so the pane shows one
+        photo's pixels under another's metadata.
+
+        The cancel fires from inside the service call — exactly when the real
+        one arrives, rather than being staged before ``run()``.
+        """
+        handle = _StubHandle()
+        service = MagicMock()
+
+        def _decode_then_user_clicks_away(path, side):
+            handle.cancel()
+            return _make_jpeg()
+
+        service.get_preview.side_effect = _decode_then_user_clicks_away
+        receiver = MagicMock()
+        task = _ImageTask(
+            path="a.jpg", side=512, is_preview=True, service=service,
+            receiver=receiver, token="single|a.jpg|512", handle=handle,
+        )
+
+        task.run()
+
+        service.get_preview.assert_called_once()  # the decode did happen
+        receiver.imageLoaded.emit.assert_not_called()  # but nothing was painted
+        assert handle.finish_calls == 1
+
+    def test_cancelled_before_start_skips_the_decode_entirely(self):
+        """Cancelled before it ran → the service is never asked to decode.
+
+        This is the read that the coordinator exists to avoid: on a NAS the
+        decode IS the network transfer, so skipping the emit but doing the
+        read would give up the whole benefit.
+        """
+        service = MagicMock()
+        handle = _StubHandle(cancelled=True)
+        task = _ImageTask(
+            path="a.jpg", side=512, is_preview=True, service=service,
+            receiver=MagicMock(), token="single|a.jpg|512", handle=handle,
+        )
+
+        task.run()
+
+        service.get_preview.assert_not_called()
+        assert handle.finish_calls == 1
+
+    def test_handle_is_finished_even_when_the_decode_raises(self):
+        """A decode that blows up must not wedge its device.
+
+        Real failure mode: one corrupt file would stop every later preview on
+        that drive, because its slot would never be released.
+        """
+        service = MagicMock()
+        service.get_preview.side_effect = OSError("truncated file")
+        handle = _StubHandle()
+        task = _ImageTask(
+            path="bad.jpg", side=512, is_preview=True, service=service,
+            receiver=MagicMock(), token="single|bad.jpg|512", handle=handle,
+        )
+
+        task.run()
+
+        assert handle.finish_calls == 1
+
+    def test_prefetch_task_decodes_but_does_not_deliver(self):
+        """``deliver=False`` warms the cache without painting anything.
+
+        The 1-ahead prefetch has no widget waiting for it; emitting would push
+        an image for a group that is not on screen through the pane's token
+        routing for no reason.
+        """
+        service = MagicMock()
+        service.get_thumbnail.return_value = _make_jpeg()
+        receiver = MagicMock()
+        handle = _StubHandle()
+        task = _ImageTask(
+            path="next.jpg", side=256, is_preview=False, service=service,
+            receiver=receiver, token="grid|next.jpg|256", handle=handle,
+            deliver=False,
+        )
+
+        task.run()
+
+        service.get_thumbnail.assert_called_once_with("next.jpg", 256)
+        receiver.imageLoaded.emit.assert_not_called()
+        assert handle.finish_calls == 1
+
+
+class TestRunnerCoordinatorRouting:
+    """``ImageTaskRunner`` must route through the coordinator, not the pool."""
+
+    def test_second_request_on_one_device_waits_for_the_first(self):
+        """Two previews on the same device → only one task reaches the pool.
+
+        Real failure mode this pins: a runner that called ``pool.start``
+        directly would put both decodes on the NAS at once — the regression
+        the coordinator exists to prevent, and one that no other test in this
+        file would notice because both images would still eventually appear.
+        """
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        runner.request_grid_thumbnail("J:/nas/a.jpg", 256)
+        runner.request_grid_thumbnail("J:/nas/b.jpg", 256)
+
+        assert runner._pool.start.call_count == 1, (
+            "both decodes were dispatched at once — per-device serialisation "
+            "is not in the request path"
+        )
+
+    def test_finishing_the_first_releases_the_second(self):
+        """The queued request starts once the first task finishes."""
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        runner.request_grid_thumbnail("J:/nas/a.jpg", 256)
+        runner.request_grid_thumbnail("J:/nas/b.jpg", 256)
+        first_task = runner._pool.start.call_args.args[0]
+        first_task._handle.finish()
+
+        assert runner._pool.start.call_count == 2
+        second_task = runner._pool.start.call_args.args[0]
+        assert second_task._path == "J:/nas/b.jpg"
+
+    def test_begin_selection_drops_the_queued_request(self):
+        """A new selection cancels the previous one's queued decode."""
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        runner.request_grid_thumbnail("J:/nas/a.jpg", 256)
+        runner.request_grid_thumbnail("J:/nas/stale.jpg", 256)
+        runner.begin_selection()
+        runner.request_grid_thumbnail("J:/nas/fresh.jpg", 256)
+        first_task = runner._pool.start.call_args.args[0]
+        first_task._handle.finish()
+
+        started = [
+            call.args[0]._path for call in runner._pool.start.call_args_list
+        ]
+        assert started == ["J:/nas/a.jpg", "J:/nas/fresh.jpg"], (
+            f"stale request decoded anyway: {started}"
+        )
+
+    def test_prefetch_is_suppressed_behind_a_user_request(self):
+        """``request_prefetch`` never pre-empts a queued user request."""
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        runner.request_grid_thumbnail("J:/nas/a.jpg", 256)
+        runner.request_prefetch("J:/nas/next.jpg", 256)
+        runner.request_single_preview("J:/nas/clicked.jpg")
+        first_task = runner._pool.start.call_args.args[0]
+        first_task._handle.finish()
+
+        second_task = runner._pool.start.call_args.args[0]
+        assert second_task._path == "J:/nas/clicked.jpg"
+        assert second_task._deliver is True
+
+    def test_prefetch_task_is_built_with_delivery_off(self):
+        """A prefetch that does run must not deliver its image."""
+        runner = ImageTaskRunner(service=MagicMock(), receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        runner.request_prefetch("J:/nas/next.jpg", 256)
+
+        task = runner._pool.start.call_args.args[0]
+        assert task._deliver is False
+        assert task._side == 256
+        assert task._is_preview is False
+
+    def test_service_none_prefetch_starts_nothing(self):
+        runner = ImageTaskRunner(service=None, receiver=MagicMock())
+        runner._pool = MagicMock()
+
+        token = runner.request_prefetch("a.jpg", 128)
+
+        assert token == "grid|a.jpg|128"
+        runner._pool.start.assert_not_called()

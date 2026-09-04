@@ -29,6 +29,7 @@ from app.views.main_window_helpers import (
     extract_keeper_paths,
     find_path_in_model,
     find_paths_in_model,
+    next_group_first_path,
 )
 
 
@@ -61,6 +62,70 @@ def _build_two_group_model(qapp):
         group_item.appendRow(_make_row(f"b{group_n}.jpg", f"/photos/g{group_n}/b.jpg"))
 
     return model
+
+
+# ── next_group_first_path (#622 Phase 2 — 1-ahead prefetch target) ───────
+
+
+def test_next_group_first_path_returns_the_following_groups_first_file(qapp):
+    """Selecting group 1 makes group 2's first file the prefetch target.
+
+    Catches the off-by-one that makes the whole feature useless in the
+    quiet direction: returning the CURRENT group's path prefetches
+    something already decoded, so the cache is warm for nothing and no
+    test would otherwise notice — the app stays correct, just as slow
+    as before.
+    """
+    model = _build_two_group_model(qapp)
+
+    assert next_group_first_path(model, 0) == "/photos/g2/a.jpg"
+
+
+def test_next_group_first_path_at_the_last_group_returns_none(qapp):
+    """The last group has no successor — prefetch nothing.
+
+    Catches an IndexError / wrapped-around read at the end of the tree,
+    which would fire on every selection of the final group.
+    """
+    model = _build_two_group_model(qapp)
+
+    assert next_group_first_path(model, 1) is None
+
+
+def test_next_group_first_path_skips_a_childless_next_group(qapp):
+    """A next group with no file rows yields None rather than raising."""
+    from PySide6.QtGui import QStandardItem
+
+    model = _build_two_group_model(qapp)
+    empty = [QStandardItem("") for _ in range(NUM_COLUMNS)]
+    empty[COL_GROUP].setText("Group 3 (empty)")
+    model.appendRow(empty)
+
+    assert next_group_first_path(model, 1) is None
+
+
+def test_next_group_first_path_without_a_stored_path_returns_none(qapp):
+    """A first child carrying no PATH_ROLE declines instead of guessing.
+
+    Catches the variant that would hand the runner an empty string and
+    send a decode request for path "" on every selection.
+    """
+    from PySide6.QtGui import QStandardItem
+
+    model = _build_two_group_model(qapp)
+    group = [QStandardItem("") for _ in range(NUM_COLUMNS)]
+    group[COL_GROUP].setText("Group 3")
+    model.appendRow(group)
+    child = [QStandardItem("") for _ in range(NUM_COLUMNS)]
+    child[COL_NAME].setText("no-path.jpg")
+    group[COL_GROUP].appendRow(child)
+
+    assert next_group_first_path(model, 1) is None
+
+
+def test_next_group_first_path_none_model_returns_none():
+    """Called before the tree is populated — must not raise."""
+    assert next_group_first_path(None, 0) is None
 
 
 # ── find_path_in_model ────────────────────────────────────────────────────
