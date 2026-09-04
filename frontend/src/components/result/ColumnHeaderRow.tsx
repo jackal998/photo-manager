@@ -21,8 +21,8 @@ interface ColumnHeaderRowProps {
   sortColumn: ColumnId | null;
   sortDirection: SortDirection;
   onToggleSort: (column: ColumnId) => void;
-  /** Live-updates the width per move (persist=false) and commits on mouseup
-   *  (persist=true) — see ColumnHeaderRow.handleResizeStart. */
+  /** Live-updates the width per move (persist=false) and commits once at the
+   *  end of the drag (persist=true) — see ColumnHeaderRow's drag useEffect. */
   onResize: (column: ColumnId, width: number, persist?: boolean) => void;
 }
 
@@ -39,7 +39,9 @@ export function ColumnHeaderRow({
   // (keyed on this state) instead of adding them imperatively in the mousedown
   // handler means React removes them on unmount too — not only on mouseup — so
   // unmounting the tree mid-drag no longer leaks a window mousemove/mouseup
-  // listener holding a stale onResize closure (#796).
+  // listener holding a stale onResize closure (#796). The drag also ends on
+  // `blur` / `pointercancel` / a move with the button already released, so a
+  // mouse-up the window never receives cannot leave the drag armed (#796).
   const [drag, setDrag] = useState<{
     column: ColumnId;
     startX: number;
@@ -51,24 +53,44 @@ export function ColumnHeaderRow({
     if (drag === null) return;
     const { column, startX, startWidth } = drag;
     latestWidthRef.current = startWidth;
+    // Commit the final width to localStorage once (persist=true) — avoids a
+    // localStorage write per mousemove — then end the drag. Shared by every
+    // end-of-drag trigger below so all of them keep the #685 contract of
+    // exactly ONE persisted write per drag.
+    function endDrag() {
+      onResize(column, latestWidthRef.current, true);
+      setDrag(null);
+    }
     // Track the pointer on the window so the drag keeps working when the cursor
     // leaves the 6px handle. Each move updates the width in-memory only
     // (persist=false) for live feedback.
     function onMove(ev: globalThis.MouseEvent) {
+      // The button is already up: it was released somewhere we never heard
+      // about — outside the window, with no focus change, so neither `mouseup`
+      // nor `blur` reached us (#796). Without this the next move over the page
+      // would keep resizing the column with no button held.
+      if (ev.buttons === 0) {
+        endDrag();
+        return;
+      }
       latestWidthRef.current = startWidth + (ev.clientX - startX);
       onResize(column, latestWidthRef.current, false);
     }
-    // Commit the final width to localStorage once (persist=true) — avoids a
-    // localStorage write per mousemove — then end the drag.
-    function onUp() {
-      onResize(column, latestWidthRef.current, true);
-      setDrag(null);
-    }
     window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mouseup", endDrag);
+    // A release outside the window usually takes focus with it, and a
+    // system-level gesture (touch/pen cancel, native drag) cancels the pointer
+    // without a mouseup — end the drag on both rather than leaving the window
+    // listeners live (#796).
+    window.addEventListener("blur", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+    // Unconditional removal: the cleanup runs on every drag-state change AND on
+    // unmount, so no path can leave a window listener behind.
     return () => {
       window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("mouseup", endDrag);
+      window.removeEventListener("blur", endDrag);
+      window.removeEventListener("pointercancel", endDrag);
     };
   }, [drag, onResize]);
 
