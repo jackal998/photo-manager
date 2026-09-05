@@ -86,6 +86,7 @@ from qa.web._invariants import (
     run_scan,
     set_row_decision,
     load_manifest,
+    wait_for_manifest,
 )
 from qa.web.testid_constants import (
     MAIN_EMPTY_STATE,
@@ -232,7 +233,11 @@ def run(*, base_url: str) -> None:
             gid = _group_id_for(manifest, ROW_TARGET)
             set_row_decision(page, row_decision_testid(gid, ROW_TARGET), "Delete")
 
-            manifest = _get_manifest(base_url, db_path)
+            # The click stages the decision via an async PATCH; poll until it
+            # lands server-side instead of racing it (#815 s12 CI flake).
+            manifest = wait_for_manifest(
+                base_url, db_path, lambda m: _decision_count(m) == 1
+            )
             assert _decision_count(manifest) == 1, (
                 "Expected exactly 1 pending decision after staging Delete; "
                 f"got {_decision_count(manifest)}"
