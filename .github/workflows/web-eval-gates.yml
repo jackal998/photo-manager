@@ -1,6 +1,6 @@
 name: web-eval-gates
-# Advisory gate during Phases 1–3; REQUIRED at Phase 4 cutover.
-# Controls whether the eval gate is blocking via the repo variable WEB_PORT_PHASE.
+# BLOCKING since the Phase 4 cutover (2026-07-24); was advisory during Phases 1–3.
+# The parity target is controlled by the repo variable WEB_PORT_PHASE (set to 4 at cutover).
 # The bench-sanity job runs the web-port perf benches (bench_web_port.py web arm
 # + bench_thumbnail_latency.py cap/latency) on the qa sandbox, advisory like its
 # siblings; the Qt-arm A/B and the real-ProRAW OOM-bound check are dev-rig
@@ -12,9 +12,10 @@ name: web-eval-gates
 #   job-always-runs + step-level-`if` diff-filter pattern tests.yml uses in
 #   its "Determine changed-file scope" step. This is what lets a later
 #   REQUIRED flip avoid a skipped-but-required check stuck pending forever on
-#   non-web PRs. Removing continue-on-error / setting WEB_PORT_PHASE per the
-#   cutover sequence remains a SEPARATE step (#773 step 3, not done here),
-#   sized by the advisory-run flake history.
+#   non-web PRs. #773 step 3 executed at cutover (2026-07-24): continue-on-error
+#   removed from all four jobs, WEB_PORT_PHASE=4 set in repo vars. Flake sizing
+#   basis: the last 20 advisory web-scenario-batch outcomes were 19 green /
+#   1 failure — the one failure being the known s72 race tracked in #815.
 on:
   pull_request:
   workflow_dispatch:
@@ -96,19 +97,15 @@ jobs:
       - name: QA parity counter
         if: needs.detect-web-changes.outputs.web == 'true'
         run: python scripts/check_qa_parity.py --phase ${{ env.WEB_PORT_PHASE }}
-        # Non-blocking until Phase 4: continue-on-error: true
-        # At Phase 4 cutover: remove continue-on-error
-        continue-on-error: true
+        # Blocking since the Phase 4 cutover (2026-07-24).
 
   web-dom-probe:
-    # Advisory: builds the frontend, launches uvicorn, and runs the live
-    # Playwright DOM probe (tests/test_web_dom_probes.py -m web_probe).
-    # Failures surface in the job log and PR checks but do NOT block merge
-    # during Phases 1–3 (continue-on-error: true).
+    # Builds the frontend, launches uvicorn, and runs the live Playwright
+    # DOM probe (tests/test_web_dom_probes.py -m web_probe).
+    # Blocking since the Phase 4 cutover (2026-07-24).
     needs: detect-web-changes
     runs-on: ubuntu-latest
     timeout-minutes: 12
-    continue-on-error: true
     env:
       # Un-gates the live probe (skipif PHOTO_MANAGER_RUN_WEB_PROBE in the test).
       PHOTO_MANAGER_RUN_WEB_PROBE: "1"
@@ -174,12 +171,10 @@ jobs:
     # runs the full web scenario batch (qa.web._batch).
     # Only scenarios with status: done in scenario_map.yml run — todo/skip entries
     # degrade to SKIP so the job always finishes cleanly.
-    # Failures surface in the job log and PR checks but do NOT block merge
-    # during Phases 1–3 (continue-on-error: true).
+    # Blocking since the Phase 4 cutover (2026-07-24).
     needs: detect-web-changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         if: needs.detect-web-changes.outputs.web == 'true'
@@ -269,12 +264,12 @@ jobs:
     #     guard + warm size=thumb p95 <= 200 ms. The real-ProRAW OOM-bound check
     #     auto-skips (no RAW codecs / fixtures in CI) — also a dev-rig checkpoint.
     # No frontend build / Playwright needed (the latency check uses an in-process
-    # TestClient). Non-blocking during Phases 1-3 (continue-on-error: true); the
-    # flip to blocking is the Phase 4 cutover.
+    # TestClient). Blocking since the Phase 4 cutover (2026-07-24).
     needs: detect-web-changes
     runs-on: ubuntu-latest
-    timeout-minutes: 8
-    continue-on-error: true
+    # 12 (was 8): headroom for slow apt mirrors now the job is blocking —
+    # the 8-min budget was consumed entirely by apt in PR #817's first run.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         if: needs.detect-web-changes.outputs.web == 'true'
@@ -305,10 +300,13 @@ jobs:
       # ffmpeg is added for the V2 transcode integration test (advisory).
       - name: Install exiftool and ffmpeg
         if: needs.detect-web-changes.outputs.web == 'true'
-        run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl ffmpeg
+        # --no-install-recommends: ffmpeg's recommends pull ~100 packages
+        # (pocketsphinx, SDL, VA drivers) that once pushed this install past
+        # the job timeout on a slow mirror (PR #817 first blocking run).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libimage-exiftool-perl ffmpeg
 
       # V2 transcode: verify a real HEVC→H.264 transcode produces valid output.
-      # Advisory (continue-on-error on the parent job) — runs after sandbox build.
+      # Blocking since the Phase 4 cutover (2026-07-24) — runs after sandbox build.
       - name: Run transcode integration test
         if: needs.detect-web-changes.outputs.web == 'true'
         run: >
