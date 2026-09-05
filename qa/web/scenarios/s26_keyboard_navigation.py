@@ -33,7 +33,11 @@ Web slice — the DECISION shortcuts (step 0) and the ROVING CURSOR (steps 1/3):
                       what the user sees: which row carries aria-selected after
                       N presses, that the preview image swaps to that file, that
                       a group header is a stop which does NOT collapse its
-                      group, and — with the window deliberately shrunk so the
+                      group but DOES clear the file selection (so 'd'/'k' can't
+                      write to the row the cursor left — Qt's
+                      set_decision_to_highlighted filters type=="file" out of
+                      the current selection, making the desktop a no-op there),
+                      and — with the window deliberately shrunk so the
                       5-row fixture no longer fits — that arrowing back up to a
                       row above the viewport scrolls it in BELOW the sticky
                       column header rather than underneath it (#699/#846: the
@@ -496,12 +500,13 @@ def run(*, base_url: str) -> None:
                 f"branch D: arrowing onto the group header collapsed it — "
                 f"{at_header['row_count']} file rows left of {len(_ALL)}."
             )
-            assert at_header["selected_testids"] == [
-                row_file_testid(gid, _Q95)
-            ], (
+            assert at_header["selected_testids"] == [], (
                 f"branch D: a group header is not part of the multi-selection, "
-                f"so the file selection must be untouched; got "
-                f"{at_header['selected_testids']}"
+                f"so moving the cursor onto one must CLEAR the file selection — "
+                f"otherwise 'd' would stage a decision on the row the cursor "
+                f"just left (Qt's set_decision_to_highlighted filters "
+                f"type=='file' out of the current selection, so the desktop is "
+                f"a no-op here). Still selected: {at_header['selected_testids']}"
             )
     finally:
         try:

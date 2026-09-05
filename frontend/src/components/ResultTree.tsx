@@ -264,6 +264,12 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       // the target really lands in the middle of the viewport (before #699 it
       // settled one header-height below centre).
       virtualizer.scrollToIndex(idx, { align: "center" });
+      // The auto-select already put the SELECTION on the keeper rows; seed the
+      // keyboard cursor at the same row (#849 review) so the first ArrowDown
+      // continues from the row the app just scrolled to instead of jumping
+      // back to the top of the manifest. One-shot contract unchanged — this
+      // runs inside the same guarded branch and clearScrollTarget still fires.
+      setActiveRow({ kind: "file", filePath: scrollToPath });
     }
     // Clear even when the target isn't currently in vrows (e.g. its group is
     // collapsed) so a stale signal can't fire on a later unrelated render.
@@ -294,6 +300,23 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     });
   }, [activeRow, vrows, orderedItemsByGroup]);
 
+  // Put the cursor on a GROUP header — from an arrow press or from a click on
+  // the header, which must behave identically. The group becomes the preview
+  // target, and the FILE selection is cleared: a group header is not part of
+  // the multi-selection model, and Qt's `set_decision_to_highlighted`
+  // (`app/views/handlers/file_operations.py:1071`) filters `type=="file"` out
+  // of the CURRENT selection — so with the cursor on a header, `d`/`k` are
+  // no-ops there too. Leaving the old file selection behind would let a
+  // decision land on a row the user has visibly moved off.
+  const activateGroupRow = useCallback(
+    (groupNumber: number) => {
+      setActiveRow({ kind: "group", groupNumber });
+      setSelectedGroup(groupNumber);
+      setSelection([]);
+    },
+    [setSelectedGroup, setSelection]
+  );
+
   // Move the cursor to `index` and mirror what a CLICK on that row does, so the
   // preview pane and the d/k decision shortcuts follow the keyboard exactly as
   // they follow the mouse. A group header is a stop (Qt's QTreeView traverses
@@ -304,8 +327,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       const vrow = vrows[index];
       if (vrow === undefined) return;
       if (vrow.kind === "group-header") {
-        setActiveRow({ kind: "group", groupNumber: vrow.groupNumber });
-        setSelectedGroup(vrow.groupNumber);
+        activateGroupRow(vrow.groupNumber);
       } else {
         const filePath = orderedItemsByGroup.get(vrow.groupNumber)?.[
           vrow.fileIndex
@@ -322,7 +344,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     [
       vrows,
       orderedItemsByGroup,
-      setSelectedGroup,
+      activateGroupRow,
       setSelection,
       setSelectedFile,
       virtualizer,
@@ -419,6 +441,12 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       y: number,
       col?: string
     ) => {
+      // A right-click is also a cursor move (#849 review): App resets the
+      // selection to this row when it is outside the current one
+      // (`App.tsx:109-120`), so the cursor has to follow or the next ArrowDown
+      // continues from wherever the last LEFT click was — scrolling the tree
+      // back to a row the user has since moved away from.
+      setActiveRow({ kind: "file", filePath });
       onContextMenu?.({ filePath, isLocked, x, y, col, groupNumber });
     },
     [onContextMenu]
@@ -434,6 +462,18 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   // ---------------------------------------------------------------------------
   // Render states: loading / empty-path / no-groups / virtualised list
   // ---------------------------------------------------------------------------
+
+  // The mounted window. `aria-activedescendant` must name an element that is
+  // actually in the DOM: the cursor survives being virtualized away (that is
+  // the whole point of the pattern), but a dangling IDREF is invalid ARIA and
+  // makes a screen reader announce nothing, so the attribute is dropped while
+  // the active row is outside the window and comes back when it re-mounts.
+  const virtualItems = virtualizer.getVirtualItems();
+  const activeDomId =
+    activeIndex >= 0 &&
+    virtualItems.some((virtualItem) => virtualItem.index === activeIndex)
+      ? rowDomId(vrows[activeIndex])
+      : undefined;
 
   if (manifest.loading) {
     return (
@@ -482,9 +522,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       // a virtualized row can be unmounted while it is still the cursor.
       tabIndex={0}
       role="tree"
-      aria-activedescendant={
-        activeIndex >= 0 ? rowDomId(vrows[activeIndex]) : undefined
-      }
+      aria-activedescendant={activeDomId}
       onKeyDown={handleKeyDown}
       className="h-full overflow-auto border border-neutral-200 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400"
       style={{ contain: "strict" }}
@@ -501,8 +539,16 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       />
       {/* Total height spacer for the virtualizer */}
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-        {virtualizer.getVirtualItems().map((virtualItem) => {
+        {virtualItems.map((virtualItem) => {
           const vrow = vrows[virtualItem.index];
+          // Resolved once: the wrapper needs the row's state for ARIA, and the
+          // FileRow branch below needs the row itself.
+          const fileRow =
+            vrow.kind === "file"
+              ? orderedItemsByGroup.get(vrow.groupNumber)?.[vrow.fileIndex]
+              : undefined;
+          const isSelected =
+            fileRow !== undefined && selectedPaths.includes(fileRow.file_path);
 
           return (
             <div
@@ -510,6 +556,16 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
               // The row identity aria-activedescendant points at (#709).
               id={rowDomId(vrow)}
               role="treeitem"
+              // The treeitem is this wrapper, so the state a screen reader
+              // reads off it has to live here — `aria-selected` sits on the
+              // FileRow div and `aria-expanded` on the GroupRow button, both
+              // CHILDREN of the treeitem, which exposes neither on its own.
+              aria-selected={vrow.kind === "file" ? isSelected : undefined}
+              aria-expanded={
+                vrow.kind === "group-header"
+                  ? !collapsed.has(vrow.groupNumber)
+                  : undefined
+              }
               data-index={virtualItem.index}
               ref={virtualizer.measureElement}
               style={{
@@ -537,36 +593,29 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                   onToggle={() => {
                     toggleGroup(vrow.groupNumber);
                     // GROUP-row click also selects the group for grid preview
-                    // (mirrors Qt main_window.py:756 — GROUP selection → show_grid).
-                    setSelectedGroup(vrow.groupNumber);
-                    // …and is where the keyboard cursor resumes from (#709).
-                    setActiveRow({
-                      kind: "group",
-                      groupNumber: vrow.groupNumber,
-                    });
+                    // (mirrors Qt main_window.py:756 — GROUP selection → show_grid),
+                    // and is where the keyboard cursor resumes from (#709).
+                    // Same helper the arrow path uses, so a header reached by
+                    // mouse and by keyboard leaves the app in one state.
+                    activateGroupRow(vrow.groupNumber);
                   }}
                   onContextMenu={handleGroupContextMenu}
                 />
               ) : (
-                (() => {
-                  const items = orderedItemsByGroup.get(vrow.groupNumber);
-                  const fileRow = items?.[vrow.fileIndex];
-                  if (!fileRow) return null;
-                  return (
-                    <FileRow
-                      row={fileRow}
-                      groupId={String(vrow.groupNumber)}
-                      groupNumber={vrow.groupNumber}
-                      columnWidths={columnWidths}
-                      onDecision={handleDecision}
-                      onLock={handleLock}
-                      onSelect={handleRowSelect}
-                      onOpenFullRes={handleOpenFullRes}
-                      onContextMenu={handleContextMenu}
-                      isSelected={selectedPaths.includes(fileRow.file_path)}
-                    />
-                  );
-                })()
+                fileRow !== undefined && (
+                  <FileRow
+                    row={fileRow}
+                    groupId={String(vrow.groupNumber)}
+                    groupNumber={vrow.groupNumber}
+                    columnWidths={columnWidths}
+                    onDecision={handleDecision}
+                    onLock={handleLock}
+                    onSelect={handleRowSelect}
+                    onOpenFullRes={handleOpenFullRes}
+                    onContextMenu={handleContextMenu}
+                    isSelected={isSelected}
+                  />
+                )
               )}
             </div>
           );

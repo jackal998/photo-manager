@@ -25,7 +25,7 @@
 // virtualizer reads (offsetHeight, scrollHeight/clientHeight, scrollTop) — the
 // same technique as ResultTree.scrollMargin.test.tsx.
 
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // The virtualizer instance is the authority on where a scroll would land, so
@@ -52,6 +52,7 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
 });
 
 import { ResultTree } from "./ResultTree";
+import { useDecisionShortcuts } from "@/hooks/useDecisionShortcuts";
 import { useAppStore } from "@/store/useAppStore";
 import {
   MAIN_RESULT_TREE,
@@ -289,8 +290,132 @@ describe("ResultTree roving arrow-key cursor (#709)", () => {
     expect(screen.getByTestId(rowFileTestid("2", "b1.jpg"))).toBeInTheDocument();
     expect(useAppStore.getState().preview.selectedGroupId).toBe(2);
     // A header is not part of the multi-selection model (docs/features.md:782),
-    // so the file selection is left exactly as it was.
-    expect(selectedPaths()).toEqual(["/photos/a2.jpg"]);
+    // and Qt's set_decision_to_highlighted filters type=="file" out of the
+    // CURRENT selection — so moving onto a header CLEARS the file selection.
+    // Leaving a2 selected here is what let `d` write a decision to a row the
+    // cursor had visibly left (#849 review, finding 2).
+    expect(selectedPaths()).toEqual([]);
+    expect(useAppStore.getState().preview.selectedFilePath).toBeNull();
+  });
+
+  it("makes d/k no-ops while the cursor sits on a group header", () => {
+    // The decision shortcuts act on selection.selectedPaths, so this is the
+    // user-visible half of the rule above: with the cursor on a header there is
+    // nothing selected and `d` must not stage a delete anywhere.
+    const originalSetDecisions = useAppStore.getState().setDecisions;
+    const decideSpy = vi.fn();
+    useAppStore.setState({
+      setDecisions: decideSpy as unknown as typeof originalSetDecisions,
+    });
+    try {
+      render(<ResultTree />);
+      renderHook(() => useDecisionShortcuts());
+
+      fireEvent.click(screen.getByTestId(rowFileTestid("1", "a2.jpg")));
+      arrow("ArrowDown"); // → group 2 header
+      act(() => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "d",
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      });
+
+      expect(decideSpy).not.toHaveBeenCalled();
+
+      // Control: arrowing back onto a file row re-selects it, so `d` works
+      // again — the rule above must not have disabled the shortcut outright.
+      arrow("ArrowDown"); // → b1
+      expect(selectedPaths()).toEqual(["/photos/b1.jpg"]);
+      act(() => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "d",
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      });
+      expect(decideSpy).toHaveBeenCalledWith(["/photos/b1.jpg"], "delete");
+    } finally {
+      useAppStore.setState({ setDecisions: originalSetDecisions });
+    }
+  });
+
+  it("moves the cursor to a right-clicked row", () => {
+    // App resets the selection to the right-clicked row when it is outside the
+    // current selection (App.tsx:109-120); if the cursor did not follow, the
+    // next ArrowDown would continue from the last LEFT-clicked row and scroll
+    // the tree back there (#849 review, finding 1).
+    render(<ResultTree onContextMenu={() => {}} />);
+    fireEvent.click(screen.getByTestId(rowFileTestid("1", "a1.jpg")));
+
+    fireEvent.contextMenu(screen.getByTestId(rowFileTestid("2", "b1.jpg")));
+    arrow("ArrowDown");
+
+    expect(selectedPaths()).toEqual(["/photos/b2.jpg"]);
+    expect(activeRowElement()).toContainElement(
+      screen.getByTestId(rowFileTestid("2", "b2.jpg"))
+    );
+  });
+
+  it("exposes each treeitem's own selection / expansion state", () => {
+    render(<ResultTree />);
+    fireEvent.click(screen.getByTestId(rowFileTestid("1", "a1.jpg")));
+
+    const wrapperOf = (testid: string): HTMLElement => {
+      const el = screen.getByTestId(testid).closest("[role='treeitem']");
+      if (el === null) throw new Error(`${testid} has no treeitem wrapper`);
+      return el as HTMLElement;
+    };
+
+    // aria-selected lives on the FileRow div and aria-expanded on the GroupRow
+    // button — both CHILDREN of the treeitem, so without this the treeitem
+    // announces no state at all.
+    expect(wrapperOf(rowFileTestid("1", "a1.jpg"))).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    expect(wrapperOf(rowFileTestid("1", "a2.jpg"))).toHaveAttribute(
+      "aria-selected",
+      "false"
+    );
+    expect(wrapperOf(rowGroupTestid("1"))).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+
+    // Collapsing the group must flip it on the wrapper too.
+    fireEvent.click(screen.getByTestId(rowGroupTestid("1")));
+    expect(wrapperOf(rowGroupTestid("1"))).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+  });
+
+  it("resumes from the post-scan keeper the app scrolled to", () => {
+    // loadManifest({ selectKeepers }) selects the KEEP rows and arms
+    // selection.scrollToPath at the first one. Without seeding the cursor there
+    // the first ArrowDown activates vrow 0 and scrolls back to the top of the
+    // manifest, undoing the scan's own scroll (#849 review, finding 5).
+    useAppStore.setState((s) => ({
+      selection: {
+        ...s.selection,
+        selectedPaths: ["/photos/a2.jpg"],
+        anchorPath: "/photos/a2.jpg",
+        scrollToPath: "/photos/a2.jpg",
+      },
+    }));
+    render(<ResultTree />);
+    // The one-shot signal is still consumed exactly once.
+    expect(useAppStore.getState().selection.scrollToPath).toBeNull();
+
+    arrow("ArrowDown");
+    expect(activeRowElement()).toContainElement(
+      screen.getByTestId(rowGroupTestid("2"))
+    );
   });
 
   it("names the active row through aria-activedescendant on a focusable tree", () => {
@@ -428,6 +553,54 @@ describe("ResultTree arrow-key scroll-into-view (#709 over #699/#846)", () => {
     expect(captured.options.at(-1)?.scrollPaddingStart).toBe(HEADER_H);
     // Same number the #699 windowing offset uses — they are the same header.
     expect(captured.options.at(-1)?.scrollMargin).toBe(HEADER_H);
+  });
+
+  it("never leaves aria-activedescendant naming an unmounted row", () => {
+    // The cursor deliberately survives its row being virtualized away — that is
+    // why activedescendant was chosen over roving tabindex. But an IDREF that
+    // resolves to nothing is invalid ARIA and announces nothing, so while the
+    // active row is outside the mounted window the attribute must be absent
+    // rather than dangling (#849 review, finding 3).
+    seed([
+      mkGroup(
+        1,
+        Array.from({ length: 60 }, (_unused, i) => `t${String(i).padStart(2, "0")}.jpg`)
+      ),
+    ]);
+    render(<ResultTree />);
+    const container = tree();
+
+    fireEvent.click(screen.getByTestId(rowFileTestid("1", "t00.jpg")));
+    // Mounted: the attribute is present and resolves.
+    const idNear = container.getAttribute("aria-activedescendant");
+    expect(idNear).toBeTruthy();
+    expect(document.getElementById(idNear as string)).not.toBeNull();
+
+    // Scroll ~50 rows away — far past `overscan: 10`, so row 1 unmounts.
+    Object.defineProperty(container, "scrollHeight", {
+      configurable: true,
+      value: HEADER_H + 61 * ROW_H,
+    });
+    Object.defineProperty(container, "clientHeight", {
+      configurable: true,
+      value: VIEWPORT_H,
+    });
+    Object.defineProperty(container, "scrollTop", {
+      configurable: true,
+      value: HEADER_H + 50 * ROW_H,
+    });
+    act(() => {
+      fireEvent.scroll(container);
+    });
+
+    expect(
+      document.querySelector(`[data-testid="${rowFileTestid("1", "t00.jpg")}"]`)
+    ).toBeNull(); // non-vacuity: the active row really did unmount
+    const idFar = container.getAttribute("aria-activedescendant");
+    if (idFar !== null) {
+      expect(document.getElementById(idFar)).not.toBeNull();
+    }
+    expect(idFar).toBeNull();
   });
 
   it("ArrowUp onto a row above the viewport lands it below the sticky header", () => {
