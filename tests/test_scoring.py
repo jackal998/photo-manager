@@ -445,6 +445,28 @@ class TestLivePhotoMovPassengerRule:
         heic_score = compute_score(heic, [heic, mov])
         assert isinstance(heic_score, float)
 
+    def test_mov_with_jpg_peer_returns_none(self):
+        """#738: iPhone 'Most Compatible' mode exports Live Photos as JPG+MOV.
+        The MOV is a passenger exactly like the HEIC+MOV case — before #738 the
+        jpg suffix was excluded and the MOV got a real composite score."""
+        jpg = _row("/x/IMG_001.jpg")
+        mov = _row("/x/IMG_001.mov")
+        assert compute_score(mov, [jpg, mov]) is None
+
+    def test_mov_with_jpeg_peer_returns_none(self):
+        """#738: the `.jpeg` spelling is recognised the same as `.jpg`."""
+        jpeg = _row("/x/IMG_001.jpeg")
+        mov = _row("/x/IMG_001.mov")
+        assert compute_score(mov, [jpeg, mov]) is None
+
+    def test_jpg_orphan_not_penalised_as_live_photo(self):
+        """#738 regression guard: broadening the MOV-passenger rule must NOT
+        broaden the orphan penalty. A lone JPG (no paired video) is an ordinary
+        photo — it keeps the 1.0 dimension baseline, never the 0.5 HEIC orphan
+        penalty (which stays HEIC/HEIF-only, `_HEIC_SUFFIXES`)."""
+        jpg = _row("/x/IMG_777.jpg")
+        assert _score_live_photo(jpg, [jpg]) == 1.0
+
 
 # ── Tier 1 — Format penalty ─────────────────────────────────────────────────
 
@@ -685,6 +707,34 @@ class TestApplyScoringToRows:
         assert row.gps_present is True
         assert row.xmp_derived is False
         assert row.exif_tag_count == 12
+
+    def test_subsec_backfilled_onto_row_and_score_unmoved(self):
+        """#820 — the read-but-never-written trap (the one `xmp_rating`
+        fell into: parsed since #187, no column, silently useless). The
+        value has to reach ManifestRow, which is the only thing
+        `write_manifest` inserts from. And it must not disturb the score:
+        no weight reads it, so two otherwise-identical rows that differ
+        only in sub-second must still score the same."""
+        from pathlib import Path
+        from scanner.scoring import apply_scoring_to_rows
+        from scanner.media_extract import MediaExtract
+
+        row = _row("/x/a.jpg", pixel_width=4000, pixel_height=3000)
+        bare = _row("/x/a.jpg", pixel_width=4000, pixel_height=3000)
+        extracts = {
+            Path("/x/a.jpg"): MediaExtract(
+                path=Path("/x/a.jpg"),
+                subsec_time_original="087",
+                offset_time_original="+09:00",
+                extracted_by={"exiftool"},
+            )
+        }
+        apply_scoring_to_rows([row], extracts)
+        apply_scoring_to_rows([bare], {})
+        assert row.subsec_time_original == "087"
+        assert row.offset_time_original == "+09:00"
+        assert bare.subsec_time_original is None
+        assert row.score == bare.score
 
     def test_none_extracts_preserve_defaults(self):
         """A MediaExtract with gps_present=None (extractor didn't check)

@@ -1,0 +1,1 @@
+Harden the scan EXIF pass: survive a malformed base EXIF IFD instead of dropping the file, and backfill in-memory JPEG dates even when exiftool is absent (#811).

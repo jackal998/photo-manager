@@ -1,0 +1,1 @@
+Add `scripts/bench_web_port.py`, a Qt-vs-web scan-throughput A/B bench that drives the shared Qt-free `run_pipeline` through both arms and asserts each arm's `files_per_s > 0` — the Phase-0 exit gate and T6 baseline for the web-port cutover (#725)

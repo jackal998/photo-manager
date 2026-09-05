@@ -388,6 +388,118 @@ class TestBehaviouralModifyTrigger:
         assert rc == 0
 
 
+# ── manifest_repository.py semantics-aware schema gate ────────────────────
+
+
+class TestManifestRepositorySchemaGate:
+    """The manifest_repository.py MODIFIED trigger is semantics-aware: it
+    only fires when the diff actually touches schema-defining content
+    (``_MIGRATIONS``, ``CREATE TABLE``, ``ADD COLUMN``,
+    ``_POST_DROP_COLUMNS``, ``_DDL``). A pure refactor of that file with
+    none of those tokens in the +/- lines previously false-positived and
+    blocked a PR asking for an unwarranted README schema-table update.
+
+    These tests exercise the real ``_manifest_repository_touches_schema``
+    function (via a mocked ``subprocess.check_output``), not a
+    reimplementation.
+    """
+
+    def _run_manifest(self, monkeypatch, diff_text: str, command: str) -> int:
+        mod = _load_hook()
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "infrastructure/manifest_repository.py",
+        ])
+        monkeypatch.setattr(mod, "_new_files", lambda: set())  # modified, not new
+
+        def fake_check_output(cmd, **kwargs):
+            return diff_text
+
+        monkeypatch.setattr(mod.subprocess, "check_output", fake_check_output)
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+        return mod.main()
+
+    def test_non_schema_refactor_not_flagged(self, monkeypatch):
+        """Extracting an existing migration into a shared helper (or any
+        other refactor that never touches a schema marker) must NOT
+        require a doc update — this is the regression the gate fixes."""
+        diff_text = (
+            "--- a/infrastructure/manifest_repository.py\n"
+            "+++ b/infrastructure/manifest_repository.py\n"
+            "@@ -40,3 +40,4 @@\n"
+            "-def _old_helper(conn):\n"
+            "+def _shared_helper(conn, extra):\n"
+            "+    return extra\n"
+        )
+        rc = self._run_manifest(
+            monkeypatch,
+            diff_text,
+            "gh pr create --title 'refactor: extract shared helper'",
+        )
+        assert rc == 0
+
+    def test_migrations_marker_still_flagged(self, monkeypatch, capsys):
+        """A diff that adds a ``_MIGRATIONS`` entry must still block
+        without a doc update."""
+        diff_text = (
+            "--- a/infrastructure/manifest_repository.py\n"
+            "+++ b/infrastructure/manifest_repository.py\n"
+            "@@ -84,3 +84,4 @@\n"
+            '+    ("new_col", "TEXT"),  # _MIGRATIONS entry\n'
+        )
+        rc = self._run_manifest(
+            monkeypatch, diff_text, "gh pr create --title 'feat: add column'"
+        )
+        assert rc == 2
+        assert "manifest_repository.py" in capsys.readouterr().err
+
+    def test_add_column_marker_still_flagged(self, monkeypatch):
+        """``ADD COLUMN`` in the diff is a schema marker on its own,
+        independent of ``_MIGRATIONS``."""
+        diff_text = (
+            "--- a/infrastructure/manifest_repository.py\n"
+            "+++ b/infrastructure/manifest_repository.py\n"
+            "@@ -250,2 +250,3 @@\n"
+            '+        f"ADD COLUMN {col} {ddl}"\n'
+        )
+        rc = self._run_manifest(
+            monkeypatch, diff_text, "gh pr create --title 'feat: add column'"
+        )
+        assert rc == 2
+
+    def test_diff_unavailable_fails_safe(self, monkeypatch):
+        """If the diff can't be computed, treat the file as doc-relevant
+        (the prior, coarser behaviour) rather than risk silently passing
+        a real schema change."""
+        mod = _load_hook()
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "infrastructure/manifest_repository.py",
+        ])
+        monkeypatch.setattr(mod, "_new_files", lambda: set())
+
+        def raising_check_output(cmd, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(mod.subprocess, "check_output", raising_check_output)
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "tool_input": {"command": "gh pr create --title 'feat'"},
+        })
+        monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+        assert mod.main() == 2
+
+    def test_dialog_change_still_triggers_unaffected(self, monkeypatch):
+        """Sanity: the new schema-marker gate is scoped ONLY to
+        manifest_repository.py — other doc-relevant patterns (e.g. a
+        new dialog file) are unaffected by this change."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: new dialog'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 2
+
+
 # ── CI mode (#273) ────────────────────────────────────────────────────────
 
 

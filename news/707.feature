@@ -1,0 +1,1 @@
+Cancel the in-progress scan worker when the user leaves the web app mid-scan (best-effort pagehide beacon), so a leftover scan no longer 409-blocks the next one; ports the desktop close-guard's "Yes = cancel + close" branch (#703)

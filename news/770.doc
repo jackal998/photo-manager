@@ -1,0 +1,1 @@
+Full Qt->web parity matrix + 51-issue census committed to docs/audits/web-parity-matrix-2026-07.md: zero unrecorded feature gaps; 28 issues identified as fixed-but-administratively-open with per-row evidence; perf cutover gate reduced to #737 (#652 verified done).

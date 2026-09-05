@@ -28,7 +28,75 @@ Selection dialog and the automatic version triggered here:
 from __future__ import annotations
 
 from collections import defaultdict
+from itertools import groupby
+from pathlib import Path
 from typing import Iterable
+
+from scanner.media import RAW_EXTENSIONS
+
+# #824 — extensions the scanner types as ``raw``. This is
+# ``scanner.media.RAW_EXTENSIONS`` PLUS ``.tif`` / ``.tiff``, which
+# ``scanner.media.get_file_type``'s table maps to ``"raw"`` even though
+# ``LOSSY_EXTENSIONS`` also lists them; the dedup engine's ``file_type`` is
+# what decides complementary-vs-format-duplicate, so match that table.
+# Extension-only on purpose: neither ``ManifestRow`` nor ``PhotoRecord``
+# carries ``file_type``, and a magic-byte-retyped file (a Takeout JPEG named
+# ``.DNG``) only makes this guard MORE conservative — the safe direction for
+# something that gates auto-DELETE.
+_RAW_SUFFIXES = RAW_EXTENSIONS | {".tif", ".tiff"}
+
+
+def _is_raw_path(source_path: str) -> bool:
+    return Path(source_path).suffix.lower() in _RAW_SUFFIXES
+
+
+def build_auto_select_writes(
+    keepers: set[str],
+    non_keepers_for_delete: set[str] | None = None,
+) -> tuple[dict[str, str], dict[str, bool]]:
+    """Build the ``(decisions, lock_states)`` write-sets for the post-scan
+    auto-select pass. Pure — no I/O, no schema access.
+
+    #651 — extracted from :func:`apply_auto_select_decisions` so
+    ``scanner.manifest.write_manifest`` can fold the SAME write-set
+    into the manifest's own tmp connection (closing the incoherence
+    window where a crash between the manifest write and a separate
+    auto-select write left keepers unlocked), while
+    ``apply_auto_select_decisions`` keeps working standalone for any
+    other caller.
+
+    The canonical stored value for "keep" is the **empty string** —
+    matches what ``settable_decisions()`` returns and what the right-
+    click "Set Action → keep" path writes. Earlier versions wrote the
+    literal ``"keep"`` string which then leaked into the tree's Action
+    column as raw text instead of an empty cell (#425). The lock badge
+    in COL_LOCK is what signals the user that a row was auto-selected
+    as the keeper.
+
+    Args:
+        keepers: Paths of the per-group top-scored rows from
+            :func:`top_score_path_per_group`. Each receives
+            ``user_decision=""`` AND ``is_locked=1``.
+        non_keepers_for_delete: Paths to receive
+            ``user_decision='delete'``. ``None`` (the default) leaves
+            non-keepers' decision untouched — that's the non-aggressive
+            behaviour. Pass an empty set or ``None`` interchangeably;
+            both skip the delete writes.
+
+    Returns:
+        ``(decisions, lock_states)`` — ``decisions`` maps
+        ``source_path -> user_decision``; ``lock_states`` maps
+        ``source_path -> True`` for every keeper.
+    """
+    # #425 — was {p: "keep" ...} which leaked as raw "keep" text in the
+    # tree's Action column. "" is the canonical keep state per
+    # settable_decisions(); the lock badge in COL_LOCK is the user-
+    # visible signal that the row was auto-selected.
+    decisions: dict[str, str] = {p: "" for p in keepers}
+    if non_keepers_for_delete:
+        decisions.update({p: "delete" for p in non_keepers_for_delete})
+    lock_states: dict[str, bool] = {p: True for p in keepers}
+    return decisions, lock_states
 
 
 def apply_auto_select_decisions(
@@ -47,13 +115,12 @@ def apply_auto_select_decisions(
     in a scored group (Live Photo MOV passengers, isolated files) are
     NOT included by callers — the caller filters before passing in.
 
-    The canonical stored value for "keep" is the **empty string** —
-    matches what ``settable_decisions()`` returns and what the right-
-    click "Set Action → keep" path writes. Earlier versions of this
-    helper wrote the literal ``"keep"`` string which then leaked into
-    the tree's Action column as raw text instead of an empty cell
-    (#425). The lock badge in COL_LOCK is what signals the user that
-    a row was auto-selected as the keeper.
+    #651 — the scan pipeline itself no longer calls this function (it
+    passes ``keepers`` / ``non_keepers_for_delete`` into
+    ``scanner.manifest.write_manifest`` so the writes land atomically
+    with the manifest). This function remains for any other caller
+    that needs to apply auto-select decisions to an ALREADY-WRITTEN
+    manifest as a separate, non-atomic step.
 
     Args:
         manifest_path: Absolute path to the SQLite manifest just
@@ -78,13 +145,9 @@ def apply_auto_select_decisions(
         # caller can invoke unconditionally without an outer guard.
         return
 
-    # #425 — was {p: "keep" ...} which leaked as raw "keep" text in the
-    # tree's Action column. "" is the canonical keep state per
-    # settable_decisions(); the lock badge in COL_LOCK is the user-
-    # visible signal that the row was auto-selected.
-    decisions: dict[str, str] = {p: "" for p in keepers}
-    if non_keepers_for_delete:
-        decisions.update({p: "delete" for p in non_keepers_for_delete})
+    decisions, lock_states = build_auto_select_writes(
+        keepers, non_keepers_for_delete
+    )
 
     repo = ManifestRepository()
     # Lazy-migrate the schema before writing — ``write_manifest`` uses
@@ -96,9 +159,62 @@ def apply_auto_select_decisions(
     # Single-transaction write — saves one connection-open + one fsync
     # vs the original split call pair. Microsecond gain on local SSD,
     # measurable over SMB/NAS.
-    repo.batch_update_decisions_and_lock(
-        manifest_path, decisions, {p: True for p in keepers}
-    )
+    repo.batch_update_decisions_and_lock(manifest_path, decisions, lock_states)
+
+
+def top_n_paths(
+    ranked: Iterable[tuple[float, str]], n: int, order: str
+) -> list[str]:
+    """Return the paths of the top (or bottom) ``n`` of ONE group's
+    ``(value, path)`` pairs.
+
+    #778 — the single home of the top-N-by-score ranking rule. Both
+    surfaces that pick "the best copy in this group" call it:
+
+    * :func:`top_score_path_per_group` (``n=1``, ``order="desc"``) — the
+      post-scan auto-select and ``POST /api/action/apply-best-copy``.
+    * ``core.app_service.action_resolve.select_paths_top_n`` — the
+      ``__top_n__:`` pattern behind ``POST /api/action/bulk-decide``.
+
+    Previously each had its own copy of the rule, so a scoring-semantics
+    change (e.g. the #187 two-tier scorer) had to be applied twice and a
+    miss produced a DIFFERENT keeper on one surface than the other.
+    ``tests/test_topn_keeper_parity.py`` pins the two against each other.
+
+    The sort key is total: ties on ``value`` break on ``path``, and paths
+    within a group are unique, so the result never depends on input order
+    (#792 — a nondeterministic tie-break in dedup; do not reintroduce one).
+
+    Args:
+        ranked: ``(value, path)`` pairs for a single group. Callers filter
+            out unrankable records (``value is None``) BEFORE calling —
+            what counts as unrankable differs per surface.
+        n: How many to take. ``n <= 0`` yields ``[]``. A group with fewer
+            than ``n`` pairs yields all of them.
+        order: ``"desc"`` takes the LARGEST values (the keepers),
+            ``"asc"`` the smallest (the deletables). Any other value
+            yields ``[]``.
+
+    Returns:
+        Paths in selection order — value-ranked, then path-ascending
+        within each equal-value bucket.
+    """
+    if n <= 0 or order not in ("asc", "desc"):
+        return []
+    # Sort ascending by (value, path), then for desc reverse and restore the
+    # ascending path tiebreak within each equal-value bucket. Equivalent to a
+    # (-value, path) key for every real score, but kept in this exact form so
+    # the rule stays bit-for-bit identical to the Qt original it was extracted
+    # from (app/views/dialogs/select_dialog.py::select_paths_top_n), which
+    # tests/test_action_resolve_parity.py pins.
+    ordered = sorted(ranked, key=lambda t: (t[0], t[1]))
+    if order == "desc":
+        ordered.reverse()
+        fixed: list[tuple[float, str]] = []
+        for _val, grp in groupby(ordered, key=lambda t: t[0]):
+            fixed.extend(sorted(grp, key=lambda t: t[1]))
+        ordered = fixed
+    return [path for _val, path in ordered[:n]]
 
 
 def top_score_path_per_group(rows: Iterable) -> set[str]:
@@ -128,13 +244,9 @@ def top_score_path_per_group(rows: Iterable) -> set[str]:
 
     keepers: set[str] = set()
     for ranked in by_group.values():
-        # Sort by (score, source_path) ascending — taking the last entry
-        # gives the highest score, with ties broken by lexicographically-
-        # latest path. To match select_paths_top_n's "ascending path
-        # within a tied score bucket" rule, sort by (-score, path) so the
-        # first entry is the highest score with the earliest path.
-        ranked.sort(key=lambda t: (-t[0], t[1]))
-        keepers.add(ranked[0][1])
+        # #778 — one shared ranking rule (highest score, ties by earliest
+        # path) instead of a second private copy of it.
+        keepers.update(top_n_paths(ranked, 1, "desc"))
     return keepers
 
 
@@ -150,6 +262,52 @@ def top_score_path_per_group(rows: Iterable) -> set[str]:
 # (not a Ref-tier denylist) is deliberate: any future non-duplicate action is
 # excluded by default — fail-safe.
 _DUPLICATE_ACTIONS = frozenset({"EXACT", "REVIEW_DUPLICATE"})
+
+
+def _raw_displaced_keepers(rows: Iterable, keepers: set[str]) -> set[str]:
+    """#824 — paths a RAW keeper must not be allowed to demote into the
+    aggressive-delete set.
+
+    Since #824 an exact-pHash RAW+lossy bucket draws a ``group_id`` edge, so a
+    RAW can now merge into a component it was previously absent from. If that
+    RAW outscores the incumbent, it takes keepership — and the lossy row that
+    WAS the keeper loses the only protection it had. #536's action allowlist
+    does not cover it: that row is often a genuine ``EXACT`` (a byte-identical
+    sibling exists), which is exactly what makes it eligible once it stops
+    being the keeper. Measured on the reviewer's trio: base delete-set ``[]`` →
+    ``['/p/A.JPG']``, and ``apply_best_copy`` wrote ``decision=delete`` on it.
+
+    The rule is therefore the narrowest one that reproduces the pre-#824
+    outcome: **when a group's keeper is a RAW, the row that would have been
+    keeper among the group's non-RAW members stays protected too.** Same
+    ``(-score, source_path)`` ordering :func:`top_score_path_per_group` uses,
+    so "would have been keeper" is decided identically.
+
+    Deliberately narrow — it does NOT spare every member of a RAW-containing
+    group. A genuine duplicate that was never the keeper stays deletable, which
+    is what ``tests/test_auto_select.py::TestNonKeepersForAggressiveDelete::
+    test_ref_tier_passenger_excluded_from_aggressive_delete`` (#536, a RAW
+    keeper with a real ``REVIEW_DUPLICATE`` peer) pins.
+    """
+    by_group: dict[str, list] = defaultdict(list)
+    for row in rows:
+        if row.group_id is None or row.score is None:
+            continue
+        by_group[row.group_id].append(row)
+
+    protected: set[str] = set()
+    for group_rows in by_group.values():
+        keeper = next(
+            (r for r in group_rows if r.source_path in keepers), None
+        )
+        if keeper is None or not _is_raw_path(keeper.source_path):
+            continue
+        lossy = [r for r in group_rows if not _is_raw_path(r.source_path)]
+        if not lossy:
+            continue
+        lossy.sort(key=lambda r: (-r.score, r.source_path))
+        protected.add(lossy[0].source_path)
+    return protected
 
 
 def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[str]:
@@ -172,6 +330,13 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
     Rows lacking ``match_confidence`` (older shapes) are treated as not-low and
     remain eligible *provided* their action is a duplicate action.
 
+    #824 — when a group's keeper is a RAW, the best non-RAW row is protected
+    alongside it (:func:`_raw_displaced_keepers`). A RAW joining a component
+    via the new exact-tier complementary edge must not demote the lossy row it
+    outscored into the delete set; without this, the review-time
+    ``apply_best_copy`` path wrote ``decision='delete'`` onto a JPEG export
+    that nothing had asked to delete before.
+
     Args:
         rows: Iterable of ``ManifestRow``-shaped objects (``group_id``,
             ``source_path``, ``score``, ``action``, ``match_confidence``).
@@ -180,11 +345,13 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
     Returns:
         Set of ``source_path`` strings eligible for aggressive auto-delete.
     """
+    rows = list(rows)
+    protected = set(keepers) | _raw_displaced_keepers(rows, keepers)
     return {
         row.source_path for row in rows
         if row.group_id is not None
         and row.score is not None
-        and row.source_path not in keepers
+        and row.source_path not in protected
         and getattr(row, "action", "") in _DUPLICATE_ACTIONS
         and getattr(row, "match_confidence", None) != "low"
     }

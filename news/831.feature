@@ -1,0 +1,1 @@
+Persist EXIF sub-second and timezone (`subsec_time_original` / `offset_time_original`) alongside `shot_date`, which keeps its whole-second format — the ordering within a burst that ties at second resolution is now available to future consumers without a re-scan (#831)

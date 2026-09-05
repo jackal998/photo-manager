@@ -19,7 +19,20 @@ modules and dev-only stdlib; entries that turn out to be required
 will show up as missing-module errors at runtime.
 """
 
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
+
+# The web shell serves the built SPA from inside the bundle; a missing
+# build here would otherwise surface only as a dead page at runtime.
+# Fail the BUILD instead (#772).
+_frontend_dist = Path(SPECPATH) / "frontend" / "dist"
+if not (_frontend_dist / "index.html").exists():
+    raise SystemExit(
+        "frontend/dist/index.html not found — build the frontend first "
+        "(cd frontend && npm ci && npm run build). The release bundle "
+        "ships the built SPA; PyInstaller must not run without it."
+    )
 
 # pillow-heif ships a compiled extension plus libheif/libde265/etc
 # native DLLs. collect_all picks up the Python package, data files,
@@ -36,7 +49,12 @@ block_cipher = None
 
 
 a = Analysis(
-    ["main.py"],
+    # launcher.py dispatches: Qt desktop by default, web shell when
+    # PHOTO_MANAGER_WEB is truthy, server-only smoke when
+    # PHOTO_MANAGER_WEB_SMOKE is truthy (#772). The old main.py Qt
+    # entry is what launcher's default path runs, so classic behaviour
+    # is unchanged.
+    ["launcher.py"],
     pathex=[],
     binaries=heif_binaries + rawpy_binaries,
     datas=heif_datas + [
@@ -45,8 +63,33 @@ a = Analysis(
         # layer reads at startup. No icons/PNGs are loaded by the app
         # today (verified by grep) so only translations/ is bundled.
         ("translations", "translations"),
+        # Built SPA for the web shell. app/web/main.py resolves
+        # Path(__file__).parents[2]/frontend/dist, which under a frozen
+        # onedir build is <_internal>/frontend/dist — exactly this dest.
+        ("frontend/dist", "frontend/dist"),
     ],
-    hiddenimports=heif_hiddenimports,
+    hiddenimports=heif_hiddenimports + [
+        # pywebview's Windows backends are selected at runtime by string,
+        # invisible to static analysis. winforms is the .NET host window,
+        # edgechromium the WebView2 embedding; clr_loader/pythonnet are
+        # the .NET bridge both ride on.
+        "webview.platforms.winforms",
+        "webview.platforms.edgechromium",
+        "clr_loader",
+        "pythonnet",
+        # uvicorn resolves its event loop / protocol / lifespan classes
+        # from config STRINGS (uvicorn/config.py), so static analysis
+        # misses them. The .auto modules then import their concrete
+        # siblings dynamically as well.
+        "uvicorn.logging",
+        "uvicorn.loops.auto",
+        "uvicorn.loops.asyncio",
+        "uvicorn.protocols.http.auto",
+        "uvicorn.protocols.http.h11_impl",
+        "uvicorn.protocols.http.httptools_impl",
+        "uvicorn.protocols.websockets.auto",
+        "uvicorn.lifespan.on",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -4,12 +4,19 @@ name: qa-batch
 # label drift and state-transition regressions before merge, instead of
 # relying on a manual `python -m qa.scenarios._batch` discipline (#74).
 #
-# No `paths:` filter — the principle is "every PR, every check." Tooling /
-# docs / hook PRs pay the runner cost (~15–20 min on windows-latest) for
-# the consistency of a single uniform CI posture. Same shape as
-# .github/workflows/tests.yml. If runner cost ever bites, the right fix
-# is to make the batch faster (parallelise scenarios, prune slow ones),
-# not to silently skip it on a class of PRs.
+# paths-ignore (#622 follow-up) skips all 5 shards atomically for PRs that
+# only touch frontend/docs/news/*.md — pure-Qt scenarios have nothing to
+# exercise there, and the ~15-20 min windows-latest runner cost isn't worth
+# paying on every such PR. This is safe SPECIFICALLY because qa-batch is
+# NON-REQUIRED (see Status below): a `paths-ignore` match makes GitHub
+# Actions skip the check entirely rather than report a status, so this
+# workflow must never become a required check while this filter is in
+# place — a skipped-but-required check gets stuck pending forever (see
+# tests.yml, which needed the job-always-runs + step-`if:` pattern instead
+# for exactly that reason). Any other class of PR (including tooling/hook
+# changes) still runs the full uniform posture. If runner cost ever bites
+# further, the right fix is to make the batch faster (parallelise
+# scenarios, prune slow ones), not to widen this skip list carelessly.
 #
 # Status: NON-REQUIRED, informational. Per #74's acceptance criteria, this
 # workflow needs ≥10 consecutive flake-free runs on real PRs before being
@@ -36,6 +43,11 @@ on:
   # Without this, intermediate PRs in a multi-PR feature chain bypass
   # qa-batch entirely. See tests.yml for the matching change.
   pull_request:
+    paths-ignore:
+      - 'frontend/**'
+      - 'docs/**'
+      - 'news/**'
+      - '**.md'
   workflow_dispatch: {}   # allow manual trigger from the Actions UI for debugging
 
 # Public-repo hardening: workflow is read-only, no write back to the repo,

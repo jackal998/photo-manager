@@ -3,20 +3,10 @@
 import os
 from pathlib import Path
 
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
-
-
-def is_video(path: str) -> bool:
-    """Check if a file path is a video based on extension.
-
-    Args:
-        path: File path to check
-
-    Returns:
-        bool: True if the file is a video format
-    """
-    ext = Path(path).suffix.lower()
-    return ext in VIDEO_EXTENSIONS
+# Re-export canonical sources from scanner.media so the walked set and
+# the display set stay in sync.  The Qt player previously extended this
+# with .webm/.mkv; those extensions are not walked so they were dead.
+from scanner.media import VIDEO_EXTENSIONS, is_video  # noqa: F401 — re-export
 
 
 def format_duration(milliseconds: int) -> str:

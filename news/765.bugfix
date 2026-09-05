@@ -1,0 +1,1 @@
+Cancelling the lock-confirm prompt during Execute Actions now keeps the Execute review dialog open (matching the desktop app) so you can adjust and retry, instead of dropping you back to the review tree. (#721)

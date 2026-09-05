@@ -1,0 +1,1 @@
+Add web video playback (V1): a new `GET /api/media` endpoint streams video bytes with HTTP Range/206 support, and the web preview pane + full-res viewer render a native `<video>` player for video rows — restoring parity with the Qt desktop's inline player (#729)

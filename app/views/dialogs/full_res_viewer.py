@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QPoint, QSize, Qt
-from PySide6.QtGui import QPixmap, QWheelEvent
+from PySide6.QtGui import QImage, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QDialog,
     QLabel,
@@ -123,9 +123,14 @@ class FullResViewerDialog(QDialog):
                 # which is idempotent once the v1/ sub-dir is populated.
                 from infrastructure.image_service import ImageService
                 svc = ImageService()
-            # side=0 → full resolution (bypass viewport cap)
-            img = svc.get_preview(self._path, 0)
-            if img is None or img.isNull():
+            # side=0 → full resolution (bypass viewport cap).
+            # ImageService returns JPEG bytes (Qt-free); convert here — the only
+            # non-image_tasks.py QImage construction site outside app/views/.
+            jpeg = svc.get_preview(self._path, 0)
+            img = QImage()
+            if jpeg:
+                img.loadFromData(jpeg)
+            if img.isNull():
                 self._label.setText(f"Could not load:\n{os.path.basename(self._path)}")
                 return
             self._full_qimage = img

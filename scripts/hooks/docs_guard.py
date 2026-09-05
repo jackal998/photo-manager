@@ -100,6 +100,16 @@ _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD = 10
 
 _BYPASS_PATTERN = re.compile(r"\[docs-not-needed:[^\]]*\]")
 
+# Schema-defining markers for the manifest_repository.py semantics-aware
+# gate (below). A modify to that file only needs a README schema-table
+# update when its diff hunks actually touch one of these — a plain
+# refactor (helper extraction, renames, control-flow cleanup) with none
+# of these tokens in the +/- lines is not a schema change.
+_SCHEMA_MARKER_PATTERN = re.compile(
+    r"_MIGRATIONS|CREATE\s+TABLE|ADD\s+COLUMN|_POST_DROP_COLUMNS|_DDL",
+    re.IGNORECASE,
+)
+
 
 def _diff_base() -> str:
     """Resolve the base ref for the branch-diff. CI mode sets DIFF_BASE
@@ -190,13 +200,46 @@ def _behavioural_modify_qualifies(path: str) -> bool:
     return bool(re.search(r"^[+-]\s*(async\s+)?def\s", diff_out, re.MULTILINE))
 
 
+def _manifest_repository_touches_schema(path: str) -> bool:
+    """Decide whether a MODIFY to ``infrastructure/manifest_repository.py``
+    actually touches schema-defining content.
+
+    Semantics-aware gate: a plain refactor of this file (e.g. extracting
+    an existing migration into a shared helper, renaming a local,
+    reordering functions) with zero schema impact should NOT require a
+    README schema-table update — that was a real false positive that
+    blocked a PR. Only diffs whose added/removed lines contain a schema
+    marker (see :data:`_SCHEMA_MARKER_PATTERN`) warrant the doc nudge.
+
+    FAILS SAFE: if the diff can't be computed for any reason, treat the
+    file as doc-relevant (the prior, coarser behaviour) rather than risk
+    silently passing a real schema change.
+    """
+    base = _diff_base()
+    try:
+        diff_out = subprocess.check_output(
+            ["git", "diff", "-U0", f"{base}...HEAD", "--", path],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return True
+    changed_lines = (
+        line for line in diff_out.splitlines()
+        if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+    )
+    return any(_SCHEMA_MARKER_PATTERN.search(line) for line in changed_lines)
+
+
 def _doc_relevant(changed: list[str], added: set[str]) -> list[tuple[str, str]]:
     """Return ``[(path, suggested_doc), …]`` for changes that need docs.
 
     NEW files under doc-relevant directories always trigger. MODIFIED
     files trigger for:
       * qa scenarios — name / coverage table updates;
-      * ``infrastructure/manifest_repository.py`` — migration list;
+      * ``infrastructure/manifest_repository.py`` — only when the diff
+        actually touches schema-defining content (see
+        :func:`_manifest_repository_touches_schema`); a pure refactor
+        of that file does NOT trigger;
       * files under ``app/views/{dialogs,handlers}/`` that pass
         :func:`_behavioural_modify_qualifies` — these shift
         user-visible behaviour and require
@@ -217,7 +260,8 @@ def _doc_relevant(changed: list[str], added: set[str]) -> list[tuple[str, str]]:
                 out.append((f, suggested))
                 break
             if f == "infrastructure/manifest_repository.py":
-                out.append((f, "README.md schema table (if _MIGRATIONS changed)"))
+                if _manifest_repository_touches_schema(f):
+                    out.append((f, "README.md schema table (if _MIGRATIONS changed)"))
                 break
             # Behavioural-modify trigger (#262).
             if (

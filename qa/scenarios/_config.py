@@ -292,6 +292,16 @@ SCENARIO_SOURCES: dict[str, list[str] | None] = {
     # group) — huge sandbox is one isolated file which never appears as
     # a TreeItem (singletons are status-bar-only).
     "s68_full_res_viewer_double_click": ["qa/sandbox/near-duplicates"],
+    # s69 — V1 web video playback: GET /api/media + <video> element.
+    # Uses qa/sandbox/video-playback (clip.webm WebM/VP9 fixture).
+    "s69_video_playback": ["qa/sandbox/video-playback"],
+    # s70 — V2 video transcode fallback: synthetic error → transcode=h264 swap.
+    # Same video-playback fixture as s69 (clip.mp4); the Qt driver mirrors s69.
+    "s70_video_transcode_fallback": ["qa/sandbox/video-playback"],
+    # s71 — GroupGrid multi-tile video: scan a byte-identical clip.mp4 pair into
+    # a 2-member EXACT-dup video group. Same video-playback fixture as s69/s70;
+    # the Qt driver is a lightweight group-loads guard.
+    "s71_grid_video_tiles": ["qa/sandbox/video-playback"],
 }
 
 # Per-scenario overrides for ui.prune_singletons. build_settings maps a

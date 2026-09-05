@@ -1,0 +1,1 @@
+Scaffold the React frontend toolchain (Vite/React 19/Tailwind 4/Vitest) and the Python->TS testid generator for the localhost web port. (#657)

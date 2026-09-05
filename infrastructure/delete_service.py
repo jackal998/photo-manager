@@ -16,6 +16,24 @@ from send2trash import send2trash
 from core.models import PhotoGroup
 from core.services.interfaces import DeletePlan, DeletePlanGroupSummary, DeleteResult
 from infrastructure.logging import write_delete_log
+from infrastructure.winerror_reasons import decode_winerror
+
+
+def _decoded_reason(fallback: str, *exceptions: BaseException) -> str:
+    """Return the first decodable winerror reason among ``exceptions``.
+
+    Checked in the given order (callers pass the most-recent/most-authoritative
+    attempt first) so the final failure mode wins when several fallback
+    attempts raised different errors. Falls back to ``fallback`` (the
+    pre-#742 message) when none of the exceptions carry a known winerror —
+    additive only, never changes behaviour for an unmapped/non-OSError case.
+    """
+    for exc in exceptions:
+        if isinstance(exc, OSError):
+            decoded = decode_winerror(exc)
+            if decoded is not None:
+                return decoded
+    return fallback
 
 
 class DeleteService:
@@ -138,7 +156,12 @@ class DeleteService:
                             failed.append(
                                 (
                                     p,
-                                    f"Multiple delete failures: {str(ex)}, {str(ex2)}, {str(ex3)}",
+                                    _decoded_reason(
+                                        f"Multiple delete failures: {str(ex)}, {str(ex2)}, {str(ex3)}",
+                                        ex3,
+                                        ex2,
+                                        ex,
+                                    ),
                                 )
                             )
                     except RuntimeError as ex2:
@@ -152,7 +175,7 @@ class DeleteService:
 
             except (UnicodeEncodeError, OSError, RuntimeError) as ex:
                 logger.error("Unexpected error deleting {}: {}", p, ex)
-                failed.append((p, f"Unexpected error: {str(ex)}"))
+                failed.append((p, _decoded_reason(f"Unexpected error: {str(ex)}", ex)))
         return DeleteResult(success_paths=success, failed=failed)
 
     def execute_delete(

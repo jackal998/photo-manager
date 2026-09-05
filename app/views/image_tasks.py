@@ -3,9 +3,29 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool
+from PySide6.QtGui import QImage
 from loguru import logger
 
+
+def _bytes_to_qimage(jpeg: bytes) -> QImage:
+    """Convert JPEG bytes from ImageService to a QImage for Qt signal delivery.
+
+    This is the only QImage construction site allowed outside app/views/ after
+    the Qt-free refactor of infrastructure/image_service.py. EXIF orientation
+    is already baked in by Pillow's exif_transpose during encode, so
+    loadFromData (which ignores Orientation tags) is correct here.
+    """
+    q = QImage()
+    q.loadFromData(jpeg)
+    return q
+
 from app.views.image_tasks_helpers import make_grid_token, make_single_token
+from app.views.preview_coordinator import (
+    KIND_BATCH,
+    KIND_PREFETCH,
+    KIND_SINGLE,
+    PreviewRequestCoordinator,
+)
 
 # Cached viewport cap — computed once on first call, then reused.
 _VIEWPORT_CAP: int | None = None
@@ -40,10 +60,21 @@ class _ImageTask(QRunnable):
     Emits `receiver.imageLoaded(token, path, image)` upon completion. The
     receiver is expected to own a Qt `Signal(str, str, object)` named
     `imageLoaded`.
+
+    ``handle`` is the :class:`~app.views.preview_coordinator.RequestHandle`
+    that owns this task's device slot (#622 Phase 2). Two duties: skip the
+    emit when the request was cancelled mid-decode (the user has navigated
+    away — painting the stale image would overwrite what they are now looking
+    at), and release the device slot in a ``finally`` so the next queued
+    decode for that device starts even if this one raised.
+
+    ``deliver=False`` runs the decode purely to warm the cache — used by the
+    1-ahead prefetch, which has no widget waiting for pixels.
     """
 
     def __init__(
-        self, *, path: str, side: int, is_preview: bool, service: Any, receiver: QObject, token: str
+        self, *, path: str, side: int, is_preview: bool, service: Any, receiver: QObject,
+        token: str, handle: Any = None, deliver: bool = True,
     ) -> None:
         super().__init__()
         self._path = path
@@ -52,21 +83,34 @@ class _ImageTask(QRunnable):
         self._service = service
         self._receiver = receiver
         self._token = token
+        self._handle = handle
+        self._deliver = deliver
 
     def run(self) -> None:  # type: ignore[override]
         try:
-            if self._is_preview:
-                img = self._service.get_preview(self._path, self._side)
-            else:
-                img = self._service.get_thumbnail(self._path, self._side)
-        except Exception as ex:
-            logger.error("Image task failed: {}", ex)
-            img = None
-        try:
-            # Forward to main receiver (MainWindow) to keep the signal path
-            self._receiver.imageLoaded.emit(self._token, self._path, img)  # type: ignore[attr-defined]
-        except Exception:  # pragma: no cover - best effort
-            pass
+            if self._handle is not None and self._handle.is_cancelled():
+                return
+            try:
+                if self._is_preview:
+                    jpeg = self._service.get_preview(self._path, self._side)
+                else:
+                    jpeg = self._service.get_thumbnail(self._path, self._side)
+                img = _bytes_to_qimage(jpeg) if jpeg else QImage()
+            except Exception as ex:
+                logger.error("Image task failed: {}", ex)
+                img = QImage()
+            if not self._deliver:
+                return
+            if self._handle is not None and self._handle.is_cancelled():
+                return
+            try:
+                # Forward to main receiver (MainWindow) to keep the signal path
+                self._receiver.imageLoaded.emit(self._token, self._path, img)  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - best effort
+                pass
+        finally:
+            if self._handle is not None:
+                self._handle.finish()
 
 
 class _ResolutionTask(QRunnable):
@@ -122,6 +166,26 @@ class ImageTaskRunner:
         # the runner, so it self-registers in its ``__init__``.
         self._resolution_receiver: QObject | None = None
         self._pool = QThreadPool.globalInstance()
+        # #622 Phase 2 — every image request goes through the coordinator so
+        # at most one decode per physical device is in flight and superseded
+        # clicks never reach the disk. Resolution reads are NOT routed: they
+        # are header-only (a few KB) and must stay responsive.
+        self._coordinator = PreviewRequestCoordinator()
+
+    def begin_selection(self, owner: Any = None) -> None:
+        """Tell the coordinator a new file/group is now selected.
+
+        Cancels that owner's queued-but-not-started decodes, so a fast
+        click-through spends NAS bandwidth only on the group the user
+        actually landed on. Called by ``PreviewPane`` at the top of
+        ``show_single`` / ``show_grid``, passing itself as ``owner``.
+
+        The scope is not decoration: one runner is shared between the main
+        window's pane and the Execute Action dialog's (#409), so an unscoped
+        reset would strand the main pane's queued tiles on "Loading…" the
+        moment that dialog previewed a row.
+        """
+        self._coordinator.begin_selection(owner)
 
     def set_resolution_receiver(self, receiver: QObject) -> None:
         """Register the receiver for off-thread resolution reads.
@@ -147,35 +211,68 @@ class ImageTaskRunner:
         task = _ResolutionTask(path=path, receiver=recv)
         self._pool.start(task)
 
-    def request_single_preview(self, path: str) -> str:
+    def _dispatch(
+        self, *, path: str, side: int, is_preview: bool, token: str, kind: str,
+        deliver: bool = True, owner: Any = None,
+    ) -> None:
+        """Queue one image decode through the per-device coordinator.
+
+        The task is built inside ``start`` so it always knows its own
+        cancellation handle; ``start`` runs only when this request wins its
+        device slot, and never at all if it was superseded first.
+        """
+        def _start(handle: Any) -> None:
+            task = _ImageTask(
+                path=path,
+                side=side,
+                is_preview=is_preview,
+                service=self._service,
+                receiver=self._receiver,
+                token=token,
+                handle=handle,
+                deliver=deliver,
+            )
+            self._pool.start(task)
+
+        self._coordinator.submit(path=path, start=_start, kind=kind, owner=owner)
+
+    def request_single_preview(self, path: str, owner: Any = None) -> str:
         """Request a single-image preview. Returns the token string."""
         side = _compute_viewport_cap()
         token = make_single_token(path, side)
         if self._service is None:
             return token
-        task = _ImageTask(
-            path=path,
-            side=side,
-            is_preview=True,
-            service=self._service,
-            receiver=self._receiver,
-            token=token,
+        self._dispatch(
+            path=path, side=side, is_preview=True, token=token,
+            kind=KIND_SINGLE, owner=owner,
         )
-        self._pool.start(task)
         return token
 
-    def request_grid_thumbnail(self, path: str, thumb_side: int) -> str:
+    def request_grid_thumbnail(self, path: str, thumb_side: int, owner: Any = None) -> str:
         """Request a grid thumbnail for `path` with given `thumb_side`. Returns token."""
         token = make_grid_token(path, thumb_side)
         if self._service is None:
             return token
-        task = _ImageTask(
-            path=path,
-            side=thumb_side,
-            is_preview=False,
-            service=self._service,
-            receiver=self._receiver,
-            token=token,
+        self._dispatch(
+            path=path, side=thumb_side, is_preview=False, token=token,
+            kind=KIND_BATCH, owner=owner,
         )
-        self._pool.start(task)
+        return token
+
+    def request_prefetch(self, path: str, thumb_side: int, owner: Any = None) -> str:
+        """Warm the cache for ``path`` at prefetch priority (#622 Phase 2).
+
+        Same decode as a grid thumbnail, but at the lowest priority and with
+        delivery suppressed — nothing is on screen waiting for it. The
+        coordinator starts it only when no user request is queued for that
+        device, and drops it the moment the user selects anything else, so a
+        speculative read can never delay the image being waited on.
+        """
+        token = make_grid_token(path, thumb_side)
+        if self._service is None:
+            return token
+        self._dispatch(
+            path=path, side=thumb_side, is_preview=False, token=token,
+            kind=KIND_PREFETCH, deliver=False, owner=owner,
+        )
         return token

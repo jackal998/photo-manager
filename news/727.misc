@@ -1,0 +1,1 @@
+Run the web-port perf benches in CI via an advisory `bench-sanity` job in `web-eval-gates.yml`: `bench_web_port.py` (web-arm scan-throughput liveness) and `bench_thumbnail_latency.py` (full-res 40 MiB cap + warm `size=thumb` p95) (#727)

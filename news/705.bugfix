@@ -1,0 +1,1 @@
+Fix the web result-tree "Remove from list" to FINALIZE `outcome='ignored'` — the row now leaves the review tree immediately, matching the desktop result-tree "Remove from List" (it previously only staged a reversible ignore decision until Execute) (#694)

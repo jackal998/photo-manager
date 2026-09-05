@@ -14,7 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# `/lib/` is anchored to the repo root (the Python template's top-level
+# setuptools build dir). Left unanchored, `lib/` also matched nested
+# directories like frontend/src/lib/ (home of ShadCN's cn() helper) and
+# silently dropped them from `git add` — see Phase 2 web-port scaffold.
+/lib/
 lib64/
 parts/
 sdist/
@@ -190,9 +194,24 @@ testdata/
 # scripts/bench_autotune_604.py and scripts/probe_*.py.
 # Summary writeups live under docs/audits/; the raw JSON is local-only.
 bench_604_*.json
+bench_web_port*.json
 probe_*.json
 monitor_*.json
 .bench_604_artifacts/
+.bench_web_port_artifacts/
+
+# Local-only real-RAW fixtures for the T4 full-res-decode OOM bench. Real
+# ProRAW DNGs are 70-120 MB each (repo bloat) and personal photos (PII), so
+# they are never committed — the bench skips its cold-OOM sub-run when this
+# dir is empty (CI has no RAW codecs anyway; the OOM check is a dev-rig
+# checkpoint). Populate locally via make_qa_large_source.py --include-large-raw.
+qa/fixtures/raw_local/
 .probe_598_artifacts/
 .probe_timeline_artifacts/
 .probe_monitor_artifacts/
+
+# Ground-truth labels for the visual auto-select study
+# (scripts/visual_gt). The CSV and the JSON sidecar both embed the
+# user's real library paths — personal data, never committed. The
+# visual-gt-thumbs/ cache beside them is regeneratable.
+qa/fixtures/visual-gt*

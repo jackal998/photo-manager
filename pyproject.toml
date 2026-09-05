@@ -50,6 +50,7 @@ addopts = "-q --cov=. --cov-report=term-missing --cov-report=json --cov-config=p
 testpaths = ["tests"]
 markers = [
     "integration: layer-2 test needing real timing or binaries; skipped in CI, run locally with PHOTO_MANAGER_RUN_INTEGRATION=1 (see docs/testing.md)",
+    "web_probe: live Playwright probe needing a built frontend + chromium; gated behind PHOTO_MANAGER_RUN_WEB_PROBE=1 (set by the web-eval-gates CI job) so it never pollutes the main suite's asyncio tests; also auto-skips when playwright/dist absent (see docs/testing.md).",
 ]
 
 [tool.coverage.run]
@@ -109,6 +110,7 @@ omit = [
   # the rest at L3."
   "app/views/preview_pane.py",                       # Heavy Qt widget assembly; testable surface extracted to preview_pane_helpers.py (99%); rest is QGridLayout/QLabel construction covered by L3 (s01/s05/s11/s48)
   "app/views/dialogs/singleton_prune_confirm_dialog.py",  # Two-button Qt confirm + checkbox (#426); decision contract layer-1 tested via TestSingletonPruneOffer with the dialog's `.ask` classmethod patched (same pattern locked_rows / execute_action dialogs use). The widget assembly itself needs a real QApplication; L3 coverage is the s13/s44 destructive-flow tail.
+  "core/app_service/events.py",                          # ScanProgressBus is a runtime_checkable Protocol; its stub method bodies (`...`) cannot be invoked in unit tests — covered by _QtBus (scan_worker.py) and _SpyBus (test_scan_runner.py)
 ]
 
 [tool.towncrier]

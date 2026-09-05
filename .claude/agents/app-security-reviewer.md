@@ -2,7 +2,7 @@
 name: app-security-reviewer
 description: Project-scope application-security teammate for `/pr-review` team mode. Owns Gate 7 (app-level security patterns) of the pr-review composition graph. Spawned by LEAD when team mode is enabled and the diff contains behaviour-bearing Python source files. Distinct from user-level `security-reviewer` (which targets generic OWASP); this teammate composes the project's `app-security-patterns` skill. Read-only — never pushes, opens PRs, or creates issues.
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 ---
 
 # app-security-reviewer — Gate 7 teammate

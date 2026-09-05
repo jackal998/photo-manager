@@ -470,3 +470,302 @@ preview:
   click_to_pause: "(Click to pause)"
   video_not_available: "(Video not available)"
   rebuilding_cache: "Rebuilding thumbnail cache (version {version}) — this is a one-time operation."
+
+# Web UI strings — used by the browser-based port only.
+# Dotted-key prefix: web.*
+web:
+  toolbar:
+    scan: "Scan"
+    execute: "Execute"
+    settings: "Settings"
+    open: "Open"
+  status:
+    summary: "{groups} groups · {files} files"
+    loading_manifest: "Loading manifest…"
+    scanning: "Scanning{stage}"
+    scan_failed: "Scan failed: {error}"
+    manifest_failed: "Manifest error: {error}"
+    execute_failed: "Action error: {error}"
+    ready: "Ready"
+  empty_state:
+    no_manifest: "No manifest loaded — Scan or Open a manifest to begin."
+    scan: "Scan…"
+    open: "Open Manifest…"
+  manifest:
+    input_placeholder: "Path to manifest .db…"
+    input_aria: "Manifest path"
+  # Mirror of column.* keys for web-only usage (no Qt mnemonic stripping needed).
+  column:
+    similarity: "Similarity"
+    action: "Action"
+    lock: "Lock"
+    file_name: "File Name"
+    folder: "Folder"
+    size_bytes: "Size (Bytes)"
+    group_count: "Group Count"
+    creation_date: "Creation Date"
+    shot_date: "Shot Date"
+    resolution: "Resolution"
+    score: "Score"
+    # Web result tree shows a human-readable size (e.g. "1.2 MB"), so its
+    # header reads "Size" — distinct from the desktop's raw-byte "Size (Bytes)".
+    size: "Size"
+  # Mirror of decision.* keys for web-only usage.
+  decision:
+    delete: "delete"
+    keep: "keep"
+    remove_from_list: "remove from list"
+    lock: "lock"
+    unlock: "unlock"
+  # Action dialog (Set Action by Field) — web port strings.
+  action_dialog:
+    title: "Set Action by Field"
+    field_label: "Field:"
+    regex_label: "Regex:"
+    regex_placeholder: "e.g. ^IMG_\\d+\\.HEIC$"
+    set_action_label: "Set action for each match:"
+    apply_button: "Apply"
+    simple_prefix: "Find rows where it"
+    simple_op_contains: "contains"
+    simple_op_starts_with: "starts with"
+    simple_op_ends_with: "ends with"
+    simple_op_exact: "exactly matches"
+    simple_text_placeholder: "type the text to match…"
+    simple_disabled_no_match_fn: "Write-through preview unavailable — Simple inputs are read-only on this entry point."
+    match_counter: "{matched} of {total} match"
+    match_counter_topn: "{matched} matched (≤{n} per group × {group_count} groups)"
+    match_counter_invalid: "—"
+    match_counter_applied: "Applied to {matched} rows"
+    invalid_regex: "Invalid regex: {error}"
+    invalid_threshold: "Couldn't parse '{input}' as a value for this field"
+    preview_label: "Preview"
+    preview_truncated: "…and {n} more"
+    preview_empty: "No matches"
+    numeric_mode_threshold: "Threshold"
+    numeric_mode_topn: "Top N per group"
+    numeric_threshold_label: "Where the value is"
+    numeric_topn_label: "Pick the"
+    numeric_topn_suffix: "in each group"
+    numeric_order_top: "Top"
+    numeric_order_bottom: "Bottom"
+    numeric_value_placeholder_number: "type a number…"
+    numeric_value_placeholder_date: "type a date (YYYY-MM-DD)…"
+    cmp_op_gt: ">"
+    cmp_op_ge: ">="
+    cmp_op_lt: "<"
+    cmp_op_le: "<="
+    cmp_op_eq: "=="
+    cmp_op_ne: "!="
+    cancel: "Cancel"
+    applying: "Applying…"
+    lock_conflict_title: "Locked rows would be affected"
+    lock_conflict_body: "{n} locked row(s) would be affected. Unlock and apply anyway?"
+    unlock_and_apply: "Unlock & Apply"
+    unlocked_only: "Apply to Unlocked Only"
+    # #741 sub-item B — Recent patterns (mirrors Qt's action_dialog.recent_*).
+    recent_button: "Recent:"
+    recent_empty: "(no recent patterns)"
+    recent_clear: "Clear"
+    # #741 sub-item C — pattern-to-human-summary (mirrors Qt's
+    # action_dialog.pattern_summary_* and delete_regex_confirm.*).
+    pattern_summary_simple: "{field} {op} '{text}'"
+    pattern_summary_regex: "{field} regex '{pattern}'"
+    pattern_summary_numeric_threshold: "{field} {op} {value}"
+    pattern_summary_numeric_topn: "{order} {n} per group by {field}"
+    delete_confirm_title: "Confirm bulk-delete decision"
+    delete_confirm_body: "This will mark {matched} file(s) for deletion via {summary}. Files move to the Recycle Bin only once you run Execute Action."
+    delete_confirm_button: "Mark {matched} files for deletion"
+  # Menu bar (Qt MenuController parity — File / Action / View).
+  menu:
+    file: "File"
+    file_scan: "Scan Sources…"
+    file_open: "Open Manifest…"
+    action: "Action"
+    action_set: "Set Action by Regex"
+    action_execute: "Execute…"
+    action_execute_selected: "Execute (only selected)…"
+    list: "List"
+    list_remove: "Remove from List"
+    view: "View"
+    view_language: "Language"
+    lang_en: "English"
+    lang_zh: "中文 (繁體)"
+  # Filesystem picker (FsBrowser).
+  browse:
+    up: "↑ Up"
+    roots: "This PC"
+    loading: "Loading…"
+    empty: "Empty folder"
+    manifest_tag: "manifest"
+    filename: "File name:"
+    cancel: "Cancel"
+    select_folder: "Select folder"
+    select_file: "Open"
+    save: "Save"
+    title_source: "Select source folder"
+    title_output: "Save manifest as"
+    title_manifest: "Open manifest"
+  # Scan dialog — web-only strings added alongside the browse picker.
+  scan:
+    browse: "Browse…"
+    # #740 — localized stage labels for the SSE `stage_name` values
+    # (WALK/HASH/EXIFTOOL/CLASSIFY/SCORE/WRITE, core/app_service/scan_runner.py
+    # STAGE_* constants). Mirrors the desktop scan_dialog.stage_* wording above.
+    stage_walk: "Walking sources"
+    stage_hash: "Hashing files"
+    stage_exiftool: "Reading EXIF + scoring signals"
+    stage_classify: "Classifying duplicates"
+    stage_score: "Scoring keepers"
+    stage_write: "Writing manifest"
+  rescan_confirm:
+    title: "Discard pending decisions?"
+    body: "You have {pending} on the loaded manifest. Starting a new scan will discard them."
+    noun_singular: "pending decision"
+    noun_plural: "pending decisions"
+    cancel: "Cancel"
+    discard_and_rescan: "Discard & Rescan"
+  # ExecuteResultSummary (#742) — inline Files-Not-Found / Files-Failed-to-Delete
+  # split rendered after Execute, mirroring the desktop's two QMessageBox.warning
+  # dialogs (execute_dialog.files_not_found_*/files_failed_* above) as inline
+  # sections instead of blocking dialogs.
+  execute_dialog:
+    files_not_found_title: "Files Not Found"
+    files_failed_title: "Files Failed to Delete"
+    # Dialog chrome (web audit fix 5 — was hardcoded English).
+    title: "Execute Actions"
+    show_label: "Show:"
+    file_count: "{n} {fileWord}"
+    select_row_to_preview: "Select a row to preview"
+    cancel: "Cancel"
+    execute_selected: "Execute selected"
+    execute: "Execute"
+    executing: "Executing…"
+    # Singular/plural translated separately, not flattened to "(s)" (review
+    # finding — the flattened form read "1 file(s)" for n=1).
+    file_singular: "file"
+    file_plural: "files"
+  # Main result-tree + Execute-dialog right-click menus (ContextMenu.tsx +
+  # execute/ExecuteContextMenu.tsx share this namespace — identical verbs,
+  # web audit fix 5: was hardcoded English in both).
+  context_menu:
+    keep: "Keep (clear decision)"
+    delete: "Delete"
+    remove: "Remove from list"
+    lock: "Lock"
+    unlock: "Unlock"
+    open_folder: "Open folder"
+    set_action_by_field: "Set Action by Field…"
+    execute_selected: "Execute Action (only selected)…"
+    apply_best_copy: "Apply best-copy decisions to this group"
+  # LockConfirmDialog — was hardcoded English (web audit fix 1 + fix 5).
+  lock_confirm:
+    title_execute: "Locked files in delete scope"
+    title_remove: "Locked files in remove scope"
+    title_decision: "Locked rows affected"
+    title_apply_best_copy: "Locked rows in this group"
+    title_prune: "Locked singleton groups"
+    body_execute: "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only."
+    body_remove: "{n} locked {fileWord} {isWord} in the remove list. Unlock and remove, or remove unlocked files only."
+    body_decision: "Setting this decision would change {originalPathsLen} row(s); {n} {isWord} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel."
+    body_apply_best_copy: "Applying best-copy to this group would affect rows that include {n} locked {rowWord}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel."
+    body_prune: "{n} locked singleton {groupWord} would be pruned. Unlock and prune {pronoun}, or keep {pronoun} in the list."
+    cancel: "Cancel"
+    unlocked_only: "Unlocked only"
+    unlock_apply: "Unlock & Apply"
+    # Singular/plural translated separately, not flattened to "(s)" (review
+    # finding — the flattened templates above previously read "1 locked
+    # file(s) are"). zh_TW has no plural marking, so its singular/plural
+    # values are identical — that's correct, not lazy.
+    file_singular: "file"
+    file_plural: "files"
+    is_singular: "is"
+    is_plural: "are"
+    row_singular: "row"
+    row_plural: "rows"
+    group_singular: "group"
+    group_plural: "groups"
+    pronoun_singular: "it"
+    pronoun_plural: "them"
+  # PruneConfirmDialog (web audit fix 5 — was hardcoded English).
+  prune_confirm:
+    title: "Prune singleton groups?"
+    body_mixed: "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete/ignore action. Remove the plain singleton {plainGroupWord} from the list?"
+    body_actioned_only: "{actioned} singleton {actionedGroupWord} with an un-executed delete/ignore action remain. Remove {pronoun} from the list?"
+    body_plain_only: "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Remove {phrase} from the list?"
+    include_actioned: "Also remove {n} actioned {singletonWord}"
+    dont_ask_again: "Don't ask again"
+    keep_all: "Keep all"
+    remove_count: "Remove {n}"
+    # Singular/plural translated separately, not flattened to "(s)" (review
+    # finding). zh_TW has no plural marking, so its singular/plural values
+    # are identical — that's correct, not lazy.
+    group_singular: "group"
+    group_plural: "groups"
+    has_singular: "has"
+    has_plural: "have"
+    carry_singular: "carries"
+    carry_plural: "carry"
+    pronoun_singular: "it"
+    pronoun_plural: "them"
+    singleton_singular: "singleton"
+    singleton_plural: "singletons"
+    this_group: "this singleton group"
+    these_groups: "these singleton groups"
+  # RemoveFromListConfirmDialog (web audit fix 5 — was hardcoded English).
+  remove_confirm:
+    title: "Remove from list?"
+    body: "Remove {basename} from the list? This only updates the manifest — no file on disk is touched. The removed row will not appear in the review tree until you re-scan."
+    this_item: "this item"
+    cancel: "Cancel"
+    yes_remove: "Yes, remove"
+  # SettingsDialog (web audit fix 5 — was hardcoded English).
+  settings:
+    title: "Settings"
+    prune_singletons_label: "Prune singletons (ui.prune_singletons)"
+    prune_ask: "Ask each time"
+    prune_always: "Always prune"
+    prune_never: "Never prune"
+    autotune_read_knee_label: "Auto-tune read knee (ui.scan_dialog.autotune_read_knee)"
+    sorting_defaults_label: "Sorting defaults (sorting.defaults — JSON)"
+    sorting_invalid_json: "Invalid JSON for sorting.defaults"
+    cancel: "Cancel"
+    save: "Save"
+  # FullResViewer (web audit fix 5 — was partially hardcoded English).
+  fullres:
+    close: "Close"
+    video_cannot_be_played: "Video cannot be played"
+    preparing_video: "Preparing video…"
+    too_large: "File too large for in-browser full-res preview."
+    open_in_default_app: "Open in default app"
+    zoom_hint: "Ctrl+scroll to zoom · Drag to pan · Esc to close"
+  # Shared movable/resizable overlay chrome (#739) — full-res viewer,
+  # Execute Action dialog, Set Action dialog.
+  overlay:
+    resize: "Resize window"
+  # PreviewPane (web audit fix 5 — was hardcoded English).
+  preview:
+    select_file: "Select a file to preview"
+    video_cannot_be_played: "Video cannot be played"
+    preparing_video: "Preparing video…"
+    meta_name: "Name"
+    meta_folder: "Folder"
+    meta_size: "Size"
+    meta_score: "Score"
+    meta_dims: "Dims"
+    meta_shot: "Shot"
+    meta_created: "Created"
+  # lib/format.ts similarityLabel() — the one natural-language word among its
+  # symbol-only outputs (web audit fix 5).
+  format:
+    similarity_ref: "Ref"
+  # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —
+  # the patternSummary branch above was already translated).
+  delete_confirm:
+    title_groups: "Entire group(s) will be deleted"
+    title_all: "Delete all files?"
+    yes_delete_all: "Yes, delete all"
+    body_groups: "Group(s) {groups} will have EVERY file deleted ({n} {fileWord} will be deleted). Files will be sent to the Recycle Bin. Continue?"
+    body_all: "{n} {fileWord} will be deleted. This operation moves files to the recycle bin and cannot easily be undone in bulk. Are you sure?"
+    file_singular: "file"
+    file_plural: "files"
+    cancel: "Cancel"

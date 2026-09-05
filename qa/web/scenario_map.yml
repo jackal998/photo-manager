@@ -1,0 +1,481 @@
+# qa/web/scenario_map.yml
+#
+# Mapping from Qt qa-explore scenario names to their Phase-2+ web driver
+# modules.  This file is the single source of truth for which scenarios
+# have been ported to the web harness.
+#
+# Fields per entry
+# ----------------
+# scenario        : key matching ALL_SCENARIOS in qa/scenarios/_batch.py
+# playwright_module: dotted Python module path under qa.web.scenarios, or
+#                    null when not yet ported (Phase 1 default)
+# status          : todo | in_progress | done | skip
+# notes           : free-text, empty string when nothing to say
+#
+# Invariant: the number of rows in this file must equal len(ALL_SCENARIOS).
+# Enforced by scripts/check_qa_parity.py.
+
+scenarios:
+  - scenario: s01_happy_path
+    playwright_module: qa.web.scenarios.s01_happy_path
+    status: done
+    notes: "Full happy-path: pre-scan empty-state visible + Action-menu items disabled (Radix data-disabled), scan near-duplicates, post-load asserts status bar 'N groups · M files' + empty-state unmounts + result tree visible + Action-menu items flip enabled. Bundles Qt probes #42/#52/#58. Divergences: web status wording differs from Qt 'Loaded manifest:'; #52 gating asserted on the Action menu (web has no List menu); Radix portals menus lazily so the trigger is clicked before each item-state probe."
+
+  - scenario: s02_empty_folder
+    playwright_module: qa.web.scenarios.s02_empty_folder
+    status: done
+    notes: "Scans a fresh empty tempdir; asserts 0 file rows and '0 groups · 0 files' status bar."
+
+  - scenario: s03_cancel_scan
+    playwright_module: qa.web.scenarios.s03_cancel_scan
+    status: done
+    notes: "Cancel a scan mid-run; two samples, both scanning make_large_source(6000) stubs (the tiny near-dups fixture hashed too fast to land a mid-run cancel on headless CI). Sample 1 (HASH-stage): wait_log_line 'Hashing' (past WALK), click scan-cancel-button, assert scan-dialog hides + main-empty-state visible + 0 rows (app usable, no manifest auto-loaded). Sample 2 (WALK-stage): wait_log_line 'Walking' BEFORE cancel (log unmounts on close), click cancel, assert the never-written output .db is absent on disk AND GET /api/manifest 404s (absence-based manifest-untouched). Divergences: web has an explicit Cancel button (Qt used title-bar-X close == cancel); no OS process/window survival check (SPA page persisting is the proof); large source for both samples (Qt used small sandbox for Sample 1); FAIL-on-fast guards turn a too-fast scan into a clear failure (Qt FAIL-on-Done parity)."
+
+  - scenario: s04_corrupted
+    playwright_module: qa.web.scenarios.s04_corrupted
+    status: done
+    notes: "Scans corrupted sandbox; asserts 0 file rows (truncated JPEG skipped). Log unavailable post-unmount — see divergence note in module."
+
+  - scenario: s05_huge_preview
+    playwright_module: qa.web.scenarios.s05_huge_preview
+    status: done
+    notes: "Heavy-image (50 MP / 1.48 MB) preview + full-res. The lone huge file is a singleton the scanner drops (dedup len(group)<2), so the port copies it twice into a tmpdir to form a 2-member EXACT-hash group with a selectable row, scans, clicks the row, asserts preview-single-image + preview-info visible (bounded size=512 decode) then double-clicks -> fullres-image visible (native size=0 decode, under the 40 MiB 413 guard). STRENGTHENS Qt s05 (zero asserts, tolerates 'no file row found'). Divergences: duplicated fixture; no rapid-click timing micro-benchmark (Qt printed it, never asserted); testid reads vs Qt automation_id."
+
+  - scenario: s06_formats
+    playwright_module: qa.web.scenarios.s06_formats
+    status: done
+    notes: "Multi-format scan (gif/heic/png/tiff/webp). Each format file gets a byte-identical twin so it forms an EXACT-dup pair and survives the manifest singleton-drop — without this only png/heic/webp (which share a pHash) group; gif/tiff get NO pHash from the scanner (verified live) and singleton-drop. Asserts all 5 extensions appear (10 rows). UPGRADES Qt s06 (print-only, no asserts). Divergences: duplicate-to-observe (s05 pattern); manifest file_path read vs Qt tree-cell text; gif/tiff no-pHash surfaced (probe_status) not asserted."
+
+  - scenario: s07_format_dup
+    playwright_module: qa.web.scenarios.s07_format_dup
+    status: done
+    notes: "Format-dup pair (scene_a.heic + scene_a.jpg, same scene). run_scan then GET /api/manifest: 1 group/2 items, HEIC is_ref_winner=True (similarity kind 'ref'), JPG is_ref_winner=False action='REVIEW_DUPLICATE' with near-dup percent in (0,100] (84% live). UPGRADES Qt s07 (print-only). Divergences: HEIC/JPG are near-dup (~10 hamming) not pHash-identical, so REVIEW_DUPLICATE not EXACT (dedup EXACT/format-dup needs hamming==0; the build agent's EXACT/100 assumption was wrong, caught at live-verify); no scan-log probe (ScanProgress unmounts on SSE finished — racy on fast CI), classification asserted from manifest; percent kind+range asserted, not the exact value."
+
+  - scenario: s08_exif_edge
+    playwright_module: qa.web.scenarios.s08_exif_edge
+    status: done
+    notes: "EXIF edge-case dates (6 JPEGs: tz_offset/subsecond/createdate_only/datetime_tag_only/zero_date_sentinel/dash_sentinel). All 6 are distinct singletons (raw fixture → EMPTY manifest = a hollow test), so each is duplicated (byte-identical twin → EXACT-dup pair) to become observable (12 rows). HARD-asserts the 2 DateTimeOriginal-primary files (tz_offset/subsecond) parse non-null and the 2 sentinels (0000-date/dash) parse null; the 2 fallback-tag files (CreateDate/DateTime-only) are OBSERVED not asserted — exiftool-version dependent (createdate_only is null on CI exiftool, dated on local; caught at CI live-verify). UPGRADES Qt s08 (print-only). Divergences: duplicate-to-observe (s05 pattern); canonical shot_date read vs Qt tree text; no UNDATED log probe (log unmounts on SSE finished — racy), undated asserted via sentinel null shot_date."
+
+  - scenario: s09_walker_exclusions
+    playwright_module: qa.web.scenarios.s09_walker_exclusions
+    status: done
+    notes: "Walker exclusion rules. Copies the 2 real photos + a byte-identical twin each (s08 duplicate-to-observe — the raw distinct reals are singletons → empty grouped manifest) plus the excluded non-media files (Thumbs.db/desktop.ini/.json sidecar) into a tmpdir, scans, then asserts the manifest basenames are EXACTLY the 4 real-media files (reals+twins) and each excluded file is absent. The symlink-skip guard is asserted only when os.symlink succeeds (Linux CI); skipped with a probe note on unprivileged Windows. UPGRADES Qt s09 (print-only). Divergences: manifest-JSON basenames vs Qt UIA cell scrape; no scan-log walker-count probe (ScanProgress unmounts on SSE finished — a fast-CI flake per s08 D4)."
+
+  - scenario: s10_multi_source
+    playwright_module: qa.web.scenarios.s10_multi_source
+    status: done
+    notes: "Multi-source priority + cross-source dedup. Scans multi-source-a then multi-source-b in configured order (load-bearing — A first wins ties); shared.jpg is byte-identical across both sources. Asserts via GET /api/manifest: non-empty manifest, >=1 Ref winner, EVERY is_ref_winner item's file_path contains 'multi-source-a' (source-order priority — A's copy is the cross-source keeper), and >=1 group spans both sources (cross-source dedup happened, so the priority assert isn't vacuous). Live: 1 group/3 files, ref=a/shared.jpg. UPGRADES Qt s10 (print-only). Divergences: is_ref_winner+file_path from manifest JSON vs Qt 'Ref' cell scrape; priority asserted by path-marker substring; no scan-log probe."
+
+  - scenario: s11_video_live
+    playwright_module: qa.web.scenarios.s11_video_live
+    status: done
+    notes: "Live Photo HEIC+MOV pair (#88 regression guard). Scans the live-photo fixture; asserts both IMG_0001.HEIC and IMG_0001.MOV appear (the MOV-presence check is the pre-#88 regression guard — the MOV was silently dropped before hashing), both share one group_number, and user_decision=='' post-scan. Divergences: GET /api/manifest JSON vs Qt sqlite read; group_number (int) vs Qt group_id; strict user_decision=='' assert (Qt only WARNed)."
+
+  - scenario: s12_save_manifest
+    playwright_module: qa.web.scenarios.s12_save_manifest
+    status: done
+    notes: "Save Manifest reframed as the live-persistence durability GUARANTEE (#673 Save-Manifest sub-item). The web has no explicit Save step + no dirty state: PATCH /api/decision commits to the manifest DB synchronously (executemany+commit+close, manifest_repository.py:462-471), GET /api/manifest is stateless ('SQLite is the only source of truth'), and POST /api/save is a pure WAL-checkpoint/copy whose docstring says 'decisions are already persisted per-PATCH' (execute_service.py:504-546). So Qt's Save-Manifest intent (decisions survive the session) is met by construction; this scenario verifies it STRICTER than Qt s12: stage Delete via the DecisionControl, assert the VALUE round-trips (Qt only checks table-exists + row counts), then reload (wipes the Zustand store → empty state) + reopen the same .db and assert the decision survives THREE ways — re-rendered control shows 'Delete', GET /api/manifest still 1 decision, and a read-only sqlite read confirms migration_manifest + 'SQLite format 3' header + user_decision='delete' committed on disk. Divergences: no File>Save click / 'Saved N' status (web has no Save step — not the persistence mechanism); decision read via GET /api/manifest + sqlite vs Qt's saved-copy sqlite read. The save-as/export-snapshot product question (POST /api/save target_path as a UI flow) is unevidenced → filed as a deferred follow-up, not built here."
+
+  - scenario: s13_execute_action
+    playwright_module: qa.web.scenarios.s13_execute_action
+    status: done
+    notes: "Destructive execute round-trip. Scans disposable tmpdir copies of near-duplicates, marks all 5 rows delete via context menu, Execute -> all-delete confirm -> Yes, then asserts (absence-based) all 5 files gone from disk AND GET /api/manifest total_files==0 — deleted rows are filtered out by WHERE outcome='' in _LOAD_ALL_SQL, so the contract is ABSENCE, not outcome=='deleted'. Qt regex bulk-mark + executed=1 SQLite read have no web equivalent — context-menu marking + absence assertion used instead. #733 MIXED-MANIFEST phase: two exif-edge groups (A all-delete, B one ignore + two undecided) prove the pre-execute confirm fires per Qt's _complete_delete_groups (ANY qualifying group), not only on a 100%-delete whole scope; asserts Cancel is a no-op and Yes commits group A's deletes + finalizes B's ignore row while B's undecided files survive untouched."
+
+  - scenario: s14_action_by_regex
+    playwright_module: qa.web.scenarios.s14_action_by_regex
+    status: done
+    notes: "Field+regex bulk-decide via the Action menu (2nd ActionDialog entry point). Asserts manifest-gating (menu item disabled pre-scan, enabled post-scan), regex q[89]\\d → delete on the 3 matched rows with the 2 non-matched unchanged, via GET /api/manifest. Qt #397 apply-stays-enabled + folder-regex UIA preview probes have no web equivalent — omitted."
+
+  - scenario: s15_context_menu
+    playwright_module: qa.web.scenarios.s15_context_menu
+    status: done
+    notes: "Right-click → delete / keep; asserts user_decision via GET /api/manifest. Multi-select Ctrl+click not yet implemented in web; drives two single-row operations instead. #735: file-row phase asserts 'Set Action by Field…' (opens ActionDialog, best-effort column-prefill to 'Size (Bytes)' from the size cell) and 'Execute Action (only selected)…' (opens ExecuteDialog); group-row phase right-clicks the group header and asserts the REDUCED menu (By-Field + Remove present, Execute-selected/Keep/Delete/Lock/Open-folder absent)."
+
+  - scenario: s16_open_manifest
+    playwright_module: qa.web.scenarios.s16_open_manifest
+    status: done
+    notes: "Scan→reload→reopen the .db manifest through the FsBrowser file picker (empty-state Open); asserts post-reopen status bar equals post-scan. Exercises .db manifest flagging. Qt's native QFileDialog replaced by the in-DOM picker."
+
+  - scenario: s17_scan_dialog_widgets
+    playwright_module: qa.web.scenarios.s17_scan_dialog_widgets
+    status: done
+    notes: "Drives the scan dialog Browse buttons through the NESTED FsBrowser (directory mode for source, save mode for output); asserts the scan dialog survives the nested layer and both fields are written back. Qt native QFileDialog → in-DOM picker. #736: also proves the three grouping-sensitivity threshold inputs (pHash/dHash/mean-color) land in the POST /api/scan request body (captured via page.expect_request, not a grouping-count delta), and that sources added out of order render alphabetized (display-only) while the POST body's source order stays original insertion order — guarding BUILD RISKS #1 (dedup keeper priority) and #3 (testid idx binding)."
+
+  - scenario: s18_log_menu
+    playwright_module: null
+    status: skip
+    notes: "SKIP — no web equivalent surface. Desktop s18 drives the menu-bar Log menu's four items (Open Latest Log / Open Latest Delete Log / Open Log Directory / Open Delete Log Directory), each shelling os.startfile/xdg-open (infrastructure/logging.py) or popping a QMessageBox. The web MenuBar is File/Action/View only and has NO Log menu (deliberate deferral — MenuBar.tsx:14 'Log menu: depends on the web OS-integration (reveal/open) story'); app/web/routes/ has no /api/log* endpoint and the web layer writes no on-disk app log file. Unlike s19 (Open folder), whose POST /api/reveal already existed for revealing a user PHOTO, there is no analog for revealing the app's own diagnostic logs. Building one needs a product decision on exposing server-side diagnostics through a browser UI plus net-new endpoints + a new menu — new product scope, not a scenario port. Same combined shape as s39 (desktop-only OS integration) + s21 (deliberate MenuBar deferral)."
+
+  - scenario: s19_context_menu_open_folder
+    playwright_module: qa.web.scenarios.s19_context_menu_open_folder
+    status: done
+    notes: "Context-menu 'Open folder' reveal round-trip. Right-click neardup_00_q95.jpg → CTX_OPEN_FOLDER fires POST /api/reveal {file_path}; asserts exactly one reveal request carrying the target basename + a recognised status. Status is platform-dependent: 200 on Windows (Explorer actually spawns, fire-and-forget) / 501 platform_unsupported on the Linux CI runner — both accepted (each proves menu→store→endpoint wiring + path). Qt's CabinetWClass EnumWindows check has no browser analog; asserted on the intercepted request instead. revealInExplorer swallows the 501 as a non-fatal executeError so nothing crashes off-Windows."
+
+  - scenario: s20_multi_remove_from_list
+    playwright_module: qa.web.scenarios.s20_multi_remove_from_list
+    status: done
+    notes: "Cluster D / PR-D1 + #694. Main-tree multi-selection: Ctrl/Cmd+click toggles rows into an ordered selection set; one right-click context-menu verb fans out over the WHOLE selection (App target-resolution rule: right-clicked-in-selection → the selection, else just that row — which also resets the selection to that one row). Branch A: Ctrl-multi-select 3 rows → Delete → all 3 staged 'delete' (fan-out, non-destructive, leaves all 5 rows for later branches). Branch B: a fresh [q72,q65] selection → right-click q95 OUTSIDE → Keep clears only q95 (guards the single-row target-resolution rule that keeps s15/s25/s35/s53 valid). Branch C (#694 headline): the [q72,q65] selection → Remove from list FINALIZES — one click fans out and BOTH rows leave the manifest (outcome='ignored', WHERE outcome='' excludes them) while their files stay on disk (ignored ≠ deleted), matching desktop. #694: the result-tree 'Remove from list' previously only STAGED user_decision='ignore'; it now finalizes, and staging a reversible ignore moved to the per-row DecisionControl dropdown (s53/s60 use that path). DIVERGENCE: the web GroupRow is collapse-only, so the desktop group→file-expansion sub-branch is dropped. /api/remove enforces the allowed-roots guard, so (like s54) the fixtures are copied into a tmpdir and scanned THERE, db written under that root."
+
+  - scenario: s21_list_menu_remove
+    playwright_module: qa.web.scenarios.s21_list_menu_remove
+    status: done
+    notes: "Ported (#678-D closed the List-menu deferral this entry used to record). Drives the MENU-BAR path — distinct from s20's context-menu path — across the Qt branches: single + multi remove finalize outcome='ignored' (asserted via manifest absence AND a direct sqlite outcome read), files stay on disk, untouched rows keep their staged decisions. Deliberate web variant of branch (a): the item is DISABLED without a selection (same gating idiom as s44's Execute-only-selected) instead of Qt's 'No items selected' QMessageBox; the 'Removed N items' status-bar echo remains desktop-only."
+
+  - scenario: s22_language_switch
+    playwright_module: qa.web.scenarios.s22_language_switch
+    status: done
+    notes: "Click main-lang-toggle EN→zh_TW; asserts toolbar re-renders live ('掃描'/'執行'), persistence across page.reload(), and restore to 'en' via PATCH /api/settings. No confirm dialog (web divergence from Qt)."
+
+  - scenario: s23a_set_settings
+    playwright_module: qa.web.scenarios.s23a_set_settings
+    status: done
+    notes: "WRITE side of ScanDialog source persistence (#678-E). Drives 2 sources (one Recursive toggled) + output, Start Scan fires PATCH /api/settings (web analog of Qt _save_to_settings); asserts GET /api/settings has both entries with per-row recursive flags + the output path. Per-scenario reset in _batch.py (reset_scan_persistence) isolates this from later scan scenarios."
+
+  - scenario: s23b_verify_settings
+    playwright_module: qa.web.scenarios.s23b_verify_settings
+    status: done
+    notes: "LOAD side of ScanDialog source persistence (#678-E). Full self-contained round-trip: UI write (Start Scan) -> page.reload() (web cross-launch boundary) -> reopen dialog -> assert load-on-open rebuilt the 2 source rows + recursive flags + output. Also asserts pHash/color thresholds NOT in /api/settings (Qt FORBIDDEN_KEYS parity)."
+
+  - scenario: s24_stale_manifest_paths
+    playwright_module: qa.web.scenarios.s24_stale_manifest_paths
+    status: done
+    notes: "Open a valid sqlite manifest whose SOURCE files were deleted. Scans 3 near-dups copied into a tmpdir subdir (db kept beside, not inside), captures basenames, rmtree's the source subdir, reloads + reopens the manifest. Asserts: load doesn't crash, status_stale == status_scan ('N groups · M files'), PRIMARY every scanned basename still present in GET /api/manifest with total_files unchanged (source-existence-agnostic load — rows not silently dropped), Action-menu items stay enabled. Non-destructive (Qt scopes execute-on-stale-row out). Divergences: basenames asserted via authoritative manifest JSON not Qt DOM TreeItem scraping; web status phrasing vs Qt 'Opened manifest:'."
+
+  - scenario: s25_empty_area_context_menu
+    playwright_module: qa.web.scenarios.s25_empty_area_context_menu
+    status: done
+    notes: "Context menu only on rows, never on empty surfaces (4 branches). A: right-click empty area below the last row (self-validates the viewport is taller than the rows) → CONTEXT_MENU count==0. B: right-click the far-right menu-bar gap → count==0. C: right-click a row with no prior left-click → menu appears with Delete item (indexAt-driven). D: left-click then right-click same row → menu appears (positive control). The web guard is structural: MAIN_RESULT_TREE viewport + MAIN_MENU_BAR carry no onContextMenu; only FileRow does. C/D overlap s15 and are kept as the detector-sanity controls. Browser-native menus have no testid and are Escaped, so they never confound the absence assertion."
+
+  - scenario: s26_keyboard_navigation
+    playwright_module: qa.web.scenarios.s26_keyboard_navigation
+    status: done
+    notes: "HONEST PARTIAL — the DECISION shortcuts (Qt step 0, #615) only. Ports app/views/components/decision_tree_view.py (bare 'd' → user_decision='delete', bare 'k' → '' / no-decision per #584; modifier-bearing presses fall through, Qt NoModifier guard) onto a document-level hook (frontend/src/hooks/useDecisionShortcuts.ts) that drives the SAME store.setDecisions the multi-select context menu uses — true parity, no new mutation path. Three branches over the near-duplicates group: A 'd' single (q95 → 'delete', others clean), B 'k' single (same selection → clears q95 back to '' — the d-vs-k discriminator: a stuck-on-delete/no-op handler fails B, a stuck-on-keep handler fails A), C 'd' multi (q80 + Ctrl+q72 → both 'delete', fan-out over the whole selection). Asserted by user_decision VALUE via GET /api/manifest (a staged 'delete' keeps outcome='' so the row stays visible, no Execute). /api/decision skips the allowed-roots guard so the repo fixture dir is scanned directly with a temp db (s30/s53 precedent). HONEST OMITS (no web equivalent / separate item): ArrowDown roving focus through the virtualizer = a separate FE item (D3b); Alt+F menu mnemonic + Tab-cycle + Esc-dismiss = Qt-native UIA menu/dialog keyboard traversal (Radix owns dialog focus + Esc, the browser owns Tab order); 'p' play/pause = a PreviewPane concern. The hook's guards (modifier held / editable-field target / open-modal inertness) are covered by useDecisionShortcuts.test.ts."
+
+  - scenario: s27_rescan_confirm
+    playwright_module: qa.web.scenarios.s27_rescan_confirm
+    status: done
+    notes: "Re-scan while the loaded manifest has pending decisions → 'Discard pending decisions?' gate (#142). Stage a delete on a row, click Start Scan: Branch A Cancel keeps the decision, runs NO scan, and the scan dialog STAYS OPEN (true Qt parity — the new RescanConfirmDialog is a nested Radix modal, but ScanDialog's onInteractOutside/onEscapeKeyDown guards keep the dialog open while it's up — the same outside-dismiss guarding ExecuteDialog received for its sibling lock-confirm in #721). Branch B Discard & Rescan rebuilds the manifest and clears the decisions. FE feature build: ScanDialog.handleStart now gates on a pendingDecisionCount store selector + a RescanConfirmDialog (en/zh_TW, pluralized count). Pending count verified through GET /api/manifest (the persisted authority the store mirrors)."
+
+  - scenario: s28_exit_dirty_prompt
+    playwright_module: null
+    status: skip
+    notes: "SKIP — desktop-only (#688). Qt MainWindow.closeEvent fires a 3-button QMessageBox (Save / Leave / Back) on dirty-exit, read via pywinauto UIA accessible names. A browser tab has no interceptable OS close with a custom dialog — the only close-time hook is the native beforeunload, which can ARM the browser's own Leave/Stay prompt but cannot replicate a 3-button Save/Leave/Back. The web close-during-scan guard + Leave→cancel are covered by s63 (#687/#703, done); there is no web analog for the Save / Back branches."
+
+  - scenario: s29_remove_from_list_by_regex
+    playwright_module: qa.web.scenarios.s29_remove_from_list_by_regex
+    status: done
+    notes: "Regex bulk 'remove from list' (action-combo wireValue __ignore__) → asserts the regex-matched rows carry user_decision=='ignore' with non-matched unchanged, via GET /api/manifest. No delete-confirm sheet for ignore (web divergence: only delete confirms). Match partition derived from the regex, not hardcoded."
+
+  - scenario: s30_execute_dialog_regex_right_click
+    playwright_module: qa.web.scenarios.s30_execute_dialog_regex_right_click
+    status: done
+    notes: "Cluster B. Execute-dialog row menu 'Set Action by Field…' (CTX_SET_ACTION_BY_FIELD) opens the manifest-wide ActionDialog via store.openActionDialog (same dialog the toolbar opens); File Name regex matches 3 of 5 → delete, 2 unchanged. Seeds one decision to expose a row in the decided-rows-only execute tree (#676). Bulk-decide skips the manifest_path root guard, so scans the repo fixture dir directly (s43 precedent)."
+
+  - scenario: s31_simple_mode_regex
+    playwright_module: qa.web.scenarios.s31_simple_mode_regex
+    status: done
+    notes: "Simple-mode write-through (action-simple-op/text → action-regex-input) + bulk-decide apply → delete confirm → asserts user_decision via GET /api/manifest. Qt mode-toggle radio + keyboard probes omitted (no web equivalent). #741: asserts action-btn-apply stays enabled with an empty pattern, and the delete-confirm shows the pattern-aware summary (action-delete-confirm-summary) + 'Mark N files for deletion' button copy."
+
+  - scenario: s32_lock_confirm_bulk_regex
+    playwright_module: qa.web.scenarios.s32_lock_confirm_bulk_regex
+    status: done
+    notes: "Bulk-regex lock-confirm — Cancel-keeps-open (#764) + 'Apply to Unlocked Only' (#674). Locks q95 via File-Name regex (lock is free, no confirm), bulk-deletes q[89]\\d (matches q95 LOCKED + q88 + q80) → DeleteConfirm sheet → 409 locked_paths → the ActionDialog inline lock dialog (ACTION_LOCK_CONFIRM_DIALOG, distinct from the execute-flow LockConfirmDialog s36 uses). #764 sub-check: clicks ACTION_LOCK_CONFIRM_BTN_CANCEL → asserts the lock dialog hides, the ACTION_DIALOG STAYS visible (pre-fix bug cascade-closed it — the inline lock-confirm is a Radix modal portaled as a SIBLING of ActionDialog so its dismissal fired an outside-interaction the actionRunning-only guard let through, the twin of #721; fix = unconditional preventDefault on ActionDialog.onInteractOutside, Escape left alone), and nothing was applied (sqlite == post-lock snapshot). Then re-Applies on the still-open dialog → back to the lock dialog → 'Apply to Unlocked Only' (skip_locked re-POST) → asserts q95 stays decision='' is_locked=1, q88/q80 'delete', q72/q65 untouched — via sqlite (authoritative) AND GET /api/manifest (serialization). jsdom can't fire the cancel cascade so #764 is proven live here. Unblocked by FE #674 (backend skip_locked + 3rd verdict + testids)."
+
+  - scenario: s33_execute_dialog_jump_to_all_delete
+    playwright_module: qa.web.scenarios.s33_execute_dialog_jump_to_all_delete
+    status: done
+    notes: "All-delete warning banner + per-group jump link. NON-destructive: marks all 5 delete, opens execute dialog, asserts EXECUTE_ALL_DELETE_BANNER visible + the execute-all-delete-jump-{group_number} button visible, clicks the real <button> (web IMPROVES on Qt, which couldn't click the QLabel <a> on hosted CI), Escape-closes, asserts rows unchanged. No file deletion."
+
+  - scenario: s34_lock_confirm_at_execute
+    playwright_module: qa.web.scenarios.s34_lock_confirm_at_execute
+    status: done
+    notes: "Execute-time lock-confirm, Cancel verdict (#182). Scans the 5 near-dups, marks all 5 'delete' via per-row CTX_SET_ACTION_DELETE, locks q95 via CTX_LOCK → Execute → all-delete confirm (web ordering: fires BEFORE the POST) → POST /api/execute 409 locked_paths → LOCK_CONFIRM_DIALOG. Asserts the body contains 'DELETE' (IMMEDIATE/execute context — the web has no per-context apply-button label, so the delete-now cue is asserted on the dialog BODY, not on a Qt-style LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE label). Drives LOCK_CONFIRM_BTN_CANCEL → asserts (a) the lock-confirm dialog is hidden, (b) EXECUTE_DIALOG is STILL visible (handleCancel for op=='execute' clears only lockConflict, never executeOpen — LockConfirmDialog.tsx:108), (c) GET /api/manifest == the pre-execute snapshot (all 5 still 'delete', q95 still is_locked, total_files==5), (d) all 5 tmpdir files remain on disk (the 409 pre-flight + Cancel delete nothing). Sister to s36 (Unlock & Apply) and s32 (Unlocked-Only in the ActionDialog flow); s34 exclusively exercises the Cancel verdict. DIVERGENCE: Qt fires the lock-confirm BEFORE the all-delete confirm; the web reverses the ordering (DeleteConfirmSheet → 409 → LockConfirmDialog) with an identical outcome. Templated on s36."
+
+  - scenario: s35_lock_via_context_menu
+    playwright_module: qa.web.scenarios.s35_lock_via_context_menu
+    status: done
+    notes: "Lock/Unlock a row via the right-click context menu. (a) lock q95 → only q95 is_locked; (b) re-right-click q95 (menu now offers Unlock per the live is_locked) → unlock → all clear; (c) lock q88 then q80 (two sequential single-row ops = web multi-select divergence, s15 precedent) → both locked, q95/q72/q65 stay unlocked; (d) unlock both → all clear. Asserts is_locked via GET /api/manifest with a short poll absorbing the async PATCH /api/lock; is_locked stays orthogonal to user_decision. Uses CTX_LOCK/CTX_UNLOCK (the mutually-exclusive ContextMenu item, also used by s36)."
+
+  - scenario: s36_lock_confirm_destructive_execute
+    playwright_module: qa.web.scenarios.s36_lock_confirm_destructive_execute
+    status: done
+    notes: "Lock-confirm -> Unlock & Apply -> delete fires on the previously-locked row. Locks q95, marks all 5 delete, Execute -> all-delete confirm -> POST returns 409 locked_paths -> LOCK_CONFIRM_DIALOG -> Unlock & Apply (re-POST force_locked=true) -> asserts all 5 gone from disk + total_files==0. Web modal ordering (all-delete confirm BEFORE lock-confirm) differs from Qt; final outcome identical. Uses the EXECUTE-flow LockConfirmDialog (testid'd), distinct from the ActionDialog inline lock dialog that blocks s32."
+
+  - scenario: s37_status_bar_baseline
+    playwright_module: qa.web.scenarios.s37_status_bar_baseline
+    status: done
+    notes: "Asserts idle on startup then 'N groups · M files' after scan. Qt #138 3s-sleep and #140 menu-hover probes have no web equivalent — omitted with divergence note."
+
+  - scenario: s38_scan_dialog_invalid_path
+    playwright_module: qa.web.scenarios.s38_scan_dialog_invalid_path
+    status: done
+    notes: "#144 ported via the web-idiomatic scan-FAILURE surface (validation-timing divergence). Desktop validates a typed source path UP FRONT on '+ Add' (Path.is_dir() in _FolderTreePanel._on_add_typed, scan_dialog.py) and blocks before any scan; the web SourceRow is a bare text input with no pre-scan check, so a bad path is accepted by POST /api/scan and then scan_sources raises FileNotFoundError 'Source directory not found: <path>' (scanner/walker.py) → SSE failed → store scan.status='failed' + scan.error (useAppStore.ts) → ScanDialog renders a role='alert' that NAMES the path, dialog stays open. Same user-facing guarantee (bad path → visible named error, never a silent no-op), web-idiomatically. Scenario: bad path → alert names the offending leaf + dialog stays open; corrected path (empty temp dir) → alert clears + dialog closes (recovery — failed state not sticky). Anchors on role='alert' scoped to scan-dialog (no testid/FE source change). DIVERGENCES: (a) validation TIMING — web fails the running scan, desktop blocks pre-add; the exact-parity pre-scan inline error (a GET /api/fs/stat probe) is deferred as #678 item C, declined to avoid a filesystem-info-disclosure endpoint for a timing-only nicety (mirrors #677's honest single-select s64 port). (b) #216 (output Browse opens a native 'Save Manifest As' window) has no web analog — the web output Browse uses the in-DOM FsBrowser save-mode picker already covered by s17."
+
+  - scenario: s39_window_geometry_persist
+    playwright_module: qa.web.scenarios.s39_layout_persist
+    status: done
+    notes: >-
+      #739 re-flip from SKIP. Qt window-geometry round-trip (ctypes
+      MoveWindow/GetWindowRect + QSettings INI persistence) still has no
+      browser analog — window chrome belongs to the browser, not the app —
+      but this scenario's OTHER half (the splitter/floor guard, #136) now has
+      a real web feature to port: the resizable preview-pane width. Drags the
+      preview-resize handle, asserts the width grew, asserts
+      localStorage.getItem('panelWidths') persists the new width,
+      page.reload()s, reopens the manifest, and asserts the width restores.
+      needs_rework parity per web-port-tech-design.md:2485 — the assertion
+      weakens from screen-pixel window position to "panel width survives a
+      reload". Result-tree column widths remain covered separately by s47
+      (#685, done). SECOND HALF added by the #739 sign-off (2026-07-17): the
+      full-res VIEWER is now a movable/resizable overlay with persisted
+      geometry, so the window-position half of the Qt scenario finally has a
+      web analog — on the app's own overlay, not on browser chrome. The
+      scenario now also opens the viewer, drags its title bar (which
+      un-maximizes the viewport-filling default and moves it), asserts the
+      rect landed in localStorage under the viewer's OWN key
+      'pm.overlay-geometry.fullres.v1', reloads, reopens the viewer and
+      asserts the saved rect comes back. The Execute / Set Action dialogs ride
+      the same mechanism and are covered by s48.
+
+  - scenario: s40_results_tree_double_click
+    playwright_module: qa.web.scenarios.s40_results_tree_double_click
+    status: done
+    notes: "Group-header expand/collapse toggle. Asserts the GroupRow button aria-expanded='true' initially + member row visible, clicks to collapse → aria-expanded='false' + member row detaches (hidden), clicks again to re-expand → aria-expanded='true' + member visible. Qt DIVERGENCE: Qt double-clicks the header (its native single-click expand is disabled + a custom dispatcher handles it); the web GroupRow toggles on SINGLE click (onClick, no onDoubleClick) — scenario uses click() not dblclick() for the identical observable outcome. NOT the file-row double-click (that's s68's full-res open)."
+
+  - scenario: s41_empty_state_action_buttons
+    playwright_module: qa.web.scenarios.s41_empty_state_action_buttons
+    status: done
+    notes: "Fresh page: asserts main-empty-state shows Scan + Open buttons; Scan opens scan-dialog, Open opens fs-browser. No scan needed (pure UI affordance check)."
+
+  - scenario: s42_scoring
+    playwright_module: qa.web.scenarios.s42_scoring
+    status: done
+    notes: "Scoring pipeline (near-duplicates quality ordering + scoring-mixed penalties + per-dimension signals). Two sequential scans into separate temp manifests; asserts every grouped item has score in [0,1] (>=1 non-null, guards silent scoring failure), score-DESC array order (neardup_00_q95 before neardup_04_q65), and scoring_clean outscores Copy/Downloads/no_gps variants. PER-DIMENSION PARITY REACHED (#680): _build_file_row now serialises gps_present/exif_tag_count/xmp_derived, and the driver asserts the three keys are present, gps_present true on the three GPS-bearing variants + false on scoring_no_gps, exif_tag_count non-null everywhere (null = extended EXIF census pass never ran, the #556 symptom), xmp_derived false everywhere — the same checks the Qt driver makes from SQLite. Divergences: GET /api/manifest vs Qt sqlite (stronger: a signal that stops crossing the API fails here while the Qt driver stays green); per-fixture temp manifest for per-group ordering; SQLite-backdoor for per-dimension rejected (API-only principle)."
+
+  - scenario: s43_numeric_condition
+    playwright_module: qa.web.scenarios.s43_numeric_condition
+    status: done
+    notes: "ActionDialog numeric threshold on Size (Bytes) (#209). Mirrors s56's numeric flow with field=Size. Boundary derived at runtime from the fixture's on-disk sizes (== file_size_bytes the server thresholds on; 2nd-smallest = 17908) so '> boundary' splits the 5 near-dups into exactly 3 matched + 2 unchanged regardless of regen. Drives toolbar ActionDialog → field Size (Bytes) (numeric panel mounts) → cmp '>' + value boundary → counter non-zero (asserted pre-Apply) → action delete → Apply → delete-confirm, then asserts the EXACT 3-vs-2 split via GET /api/manifest (q95/q88/q80 delete, q72/q65 unchanged). Non-destructive. Divergences: counter asserted pre-Apply (the dialog auto-closes post-Apply — s56 precedent); Qt Wave-11 soft probes (A4 threshold icon / B6 Top-N counter / A14 spinbox-5000) omitted (NumericPanel has no validation-icon element)."
+
+  - scenario: s44_execute_highlighted_rows
+    playwright_module: qa.web.scenarios.s44_execute_selected_only
+    status: done
+    notes: "Execute (only selected) — main-tree selection scopes the execute dialog to the selected rows' GROUPS (#430 group-pull) + #410 static label (cluster D / PR-D2). Faithful port of the desktop menu-gated, selection-scoped flow (distinct from in-dialog multi-select — s64's single→multi port was completed in #697). Adds the gated Action → 'Execute (only selected)…' entry (menu-action-execute-selected, disabled until ≥1 main-tree row is selected — web analog of _refresh_execute_selected_only_enabled) + ExecuteState.scopeGroupNumbers. Uses s60's deterministic 2-EXACT-dup-group exif-edge fixture (tz_offset×2 = group A, subsecond×2 = group B) so scope CONFINEMENT is observable: mark all 4 delete, select ONE group-A row, open the entry → dialog shows BOTH group-A rows (group-pull) and ZERO group-B rows (confinement); Execute → all-delete confirm → group A deleted (absent from disk + manifest) while group B survives on disk with user_decision='delete' intact (the load-bearing discriminator the single-group desktop fixture can't make). Divergences: GET /api/manifest JSON vs Qt SQLite; deleted row detected by manifest absence (outcome='deleted') not executed=1; static label is structural on the web (no 'highlighted' variant ever existed) but asserted to guard a future scoped-label regression. Destructive: each run recycles group A's 2 tmpdir copies."
+
+  - scenario: s45_sort_persistence
+    playwright_module: qa.web.scenarios.s45_sort_persistence
+    status: done
+    notes: >-
+      #685 column model. Sticky header File Name / Size cells toggle a
+      per-group client-side sort; File Name = case-folded string, Size =
+      numeric (verified vs a SQL oracle on the manifest .db). Sort lives in
+      the resultView store slice so it survives an in-session manifest reopen
+      (Qt refresh_model replay analog). near-duplicates fixture (q95→q65): one
+      group, name-ASC differs from size-ASC.
+
+  - scenario: s47_column_layout_persist
+    playwright_module: qa.web.scenarios.s47_column_layout_persist
+    status: done
+    notes: >-
+      #685 column model. Real mouse-drag of the File Name resize handle →
+      localStorage persist → page.reload() (web cross-launch) → re-load
+      manifest → width restores. localStorage is the per-browser analog of the
+      desktop window_state.ini; auto-isolated per Playwright context (no
+      server reset). s46 intentionally absent from ALL_SCENARIOS.
+      #699 PHASE 6 (tall-manifest scroll — the web suite's only scrolling
+      coverage; every sandbox fixture fits on screen, largest is 5 rows). Loads
+      a SYNTHETIC 30-group / 60-row manifest built in-scenario with the
+      production scanner.manifest.write_manifest over 60 copies of a real
+      near-dup JPEG (the scan pipeline cannot emit 30 groups from any existing
+      fixture, and 30 pHash-distinct generated images would be a slow,
+      collision-prone sandbox addition), then scrolls the result tree and
+      asserts: the tree really scrolls (~4.9k px of overflow — non-vacuity);
+      the first row is not occluded by the sticky header at scrollTop 0; the
+      header stays pinned to the container's content top mid-scroll while rows
+      move; and — the load-bearing check — every rendered row's offset from the
+      container's content top equals the virtualizer's own coordinate for it
+      (recovered from the DOM as translateY + data-scroll-margin), at
+      scrollTop 0, mid-scroll and back at top. On the pre-#699 build that
+      difference is 25.00px (the header height) at all three positions; it is
+      0.00px after. Divergence: no Qt counterpart — Qt's QTreeView owns its own
+      scrolling, so this phase is web-native and adds no desktop obligation.
+
+  - scenario: s48_dialog_geometry_persist
+    playwright_module: qa.web.scenarios.s48_dialog_geometry_persist
+    status: done
+    notes: "#739 re-flip from SKIP (owner sign-off 2026-07-17). Qt side: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. The old SKIP reason — 'web dialogs are Radix/DOM overlays with no user-resizable geometry and no persistence contract' — no longer holds: #739 built ONE drag/resize/persist overlay mechanism (frontend/src/hooks/useOverlayGeometry.ts + frontend/src/lib/overlayGeometry.ts) and applied it to the full-res viewer, the Execute Action dialog and the Set Action dialog, closing divergence rows D6/D7/D12. This driver covers the two DIALOGS: for each, drag the title bar (asserts it moved), drag the bottom-right grip (asserts it grew), Escape-close and reopen (the Qt close-and-reopen round-trip, same session), assert the rect is in that surface's OWN localStorage key (pm.overlay-geometry.execute.v1 / .action.v1), then page.reload() and assert both still restore — plus that the two keys hold different rects, so one shared key cannot pass. Divergences: real mouse gestures instead of Win32 MoveWindow (the drag IS the feature; no browser API moves a DOM overlay from outside); localStorage instead of QSettings INI; the desktop scenario's THIRD dialog (ScanDialog) is deliberately NOT ported — #739's sign-off scoped the mechanism to the viewer + these two dialogs, and the Scan dialog stays a centered non-movable Radix dialog; the viewer's half of the same mechanism lives in s39. Round-2 review additions: a MOVE must not pin the height (drag, then type a matching pattern and assert the dialog GREW and Apply is still inside the box — this failed before the fix at dialog bottom 606 vs Apply bottom 716); a floor-height RESIZE must make the body scroll rather than evict the footer (asserts action-body scrollHeight > clientHeight, measured 448 vs 162); a seeded 236px height must be raised to the 280px minimum with a usable tree (was 36px, now 80px); and a drag started 50ms after open must seed from the settled layout."
+
+  - scenario: s49_scan_auto_select
+    playwright_module: qa.web.scenarios.s49_scan_auto_select
+    status: done
+    notes: "Auto-select after scan (#212/#393). Expands the ScanDialog 'Advanced settings' section, asserts the 'Auto select after scan' checkbox defaults OFF, toggles ON, scans near-duplicates, then asserts via GET /api/manifest: keeper q95 action='KEEP' + is_locked + user_decision='' (#425 canonical-keep), exactly 1 KEEP, non-keepers retain their classifier action (EXACT/REVIEW_DUPLICATE) + unlocked + undecided. Qt #239 VISUAL tree-selection IS NOW PORTED (#692): after the auto-select scan the keeper FileRow carries aria-selected='true' and a non-keeper does not (loadManifest({selectKeepers}) selects the action='KEEP' rows + scrolls the first into view — the web port of main_window's post-scan tree selection). Manifest state remains the load-bearing data assertion. Divergence: manifest JSON vs Qt SQLite."
+
+  - scenario: s50_select_numeric_panel_from_main_window
+    playwright_module: qa.web.scenarios.s50_select_numeric_panel_from_main_window
+    status: done
+    notes: "Menu bar Action menu = 2nd ActionDialog entry point; asserts manifest-gating (disabled pre-scan, enabled post-scan), opens ActionDialog via menu, selects numeric field (Score) → numeric panel visible. Qt keyboard menu nav omitted."
+
+  - scenario: s51_execute_dialog_preview
+    playwright_module: qa.web.scenarios.s51_execute_dialog_preview
+    status: done
+    notes: "Opens execute dialog, clicks a row, asserts execute-preview-image visible. Non-destructive (Escape to close). Qt QSplitter + PreviewPane header UIA checks replaced by DOM testid assertions."
+
+  - scenario: s52_similarity_against_displayed_ref
+    playwright_module: qa.web.scenarios.s52_similarity_against_displayed_ref
+    status: done
+    notes: "#253 render-time similarity recompute. Scans near-duplicates; asserts every grouped item has a non-empty phash, exactly one is_ref_winner across all groups, and each REVIEW_DUPLICATE's server-computed similarity.percent == round((64-hamming)/64*100) recomputed (via imagehash) between the Ref's phash and the dup's phash (range-only [0,100] fallback when imagehash is absent). Divergences: asserts the server-computed similarity the user sees vs Qt local imagehash recompute; GET /api/manifest vs Qt sqlite; is_ref_winner read directly vs Qt _pick_displayed_ref replication."
+
+  - scenario: s53_execute_dialog_lock_decision
+    playwright_module: qa.web.scenarios.s53_execute_dialog_lock_decision
+    status: done
+    notes: "Cluster B. Lock / Unlock / Set-Action-delete via the execute-dialog row menu (ExecuteContextMenu). Seeds two decisions (delete + ignore) through the result-tree menu to expose rows in the decided-rows-only execute tree (#676), then drives the EXECUTE menu (PATCH /api/lock, PATCH /api/decision); asserts is_locked / user_decision via GET /api/manifest. No multi-row select (web targets the right-clicked row only, s35 precedent). #733 LOCKED-ROW DECISION phase: re-locks q88, then right-click Set-Action-delete on the SAME locked row proves PATCH /api/decision is now lock-gated (409 -> LOCK_CONFIRM_DIALOG op='decision' DEFERRED wording) instead of silently overwriting; asserts Cancel leaves decision+lock unchanged and Unlock & Apply writes 'delete' while force-unlocking."
+
+  - scenario: s54_execute_dialog_remove_from_list
+    playwright_module: qa.web.scenarios.s54_execute_dialog_remove_from_list
+    status: done
+    notes: "Cluster B. Execute-dialog menu 'Remove from list' FINALIZES the row (outcome='ignored' via store.removeFromList → POST /api/remove) behind RemoveFromListConfirmDialog (default No) — distinct from the result menu's stage-ignore. Uses the s13 db-in-scanned-dir pattern so manifest_path passes the /api/remove allowed-roots guard. Asserts the row is gone from GET /api/manifest and its copied file is still on disk (ignored, not deleted)."
+
+  - scenario: s55_action_dialog_no_match_fn
+    playwright_module: qa.web.scenarios.s55_action_dialog_no_match_fn
+    status: done
+    notes: "ActionDialog C1 no-match_fn placeholder (#689). Scan qa/sandbox/unique (10 unique JPEGs) → 0 dedup groups; RegexPanel hasGroups=false disables ACTION_SIMPLE_OP/TEXT + shows ACTION_SIMPLE_DISABLED_NOTE while ACTION_REGEX_INPUT stays enabled (mirrors select_dialog.py:854-861 match_fn=None). Divergence: web orphan-drops singletons so GET /api/manifest total_groups==0 (10 SQLite rows invisible); precondition asserted via total_groups==0, not a row count. ActionDialog stays reachable (manifest.path set — a real scan, not completed_empty). Out of scope: web cheatsheet chips are always shown (desktop hides them when match_fn is None, select_dialog.py:910) — a pre-existing minor divergence."
+
+  - scenario: s56_action_dialog_apply_by_score
+    playwright_module: qa.web.scenarios.s56_action_dialog_apply_by_score
+    status: done
+    notes: "ActionDialog field=Score numeric threshold >0.5 → delete; #392 regression guard. Derives the expected split from REAL server-side scores, asserts ≥1 row flipped (the silent-no-op #392 bug) + every score>0.5 row deleted and every ≤0.5 unchanged, via GET /api/manifest. Combines the numeric panel (s50) with the delete-confirm (s31)."
+
+  - scenario: s57_scan_auto_select_aggressive
+    playwright_module: qa.web.scenarios.s57_scan_auto_select_aggressive
+    status: done
+    notes: "Auto-select aggressive mode (#393). Expands Advanced settings, asserts the 'Also mark all other files for delete' sub-checkbox defaults OFF (and is disabled until the parent auto-select is on), enables parent auto-select then the sub, scans near-duplicates, then asserts via GET /api/manifest: keeper q95 is_locked + user_decision=''; every non-keeper DUPLICATE (action REVIEW_DUPLICATE/EXACT/MOVE) user_decision='delete'; no non-keeper locked; aggressive fired on >=1 row. PLATFORM-DEPENDENT classification (D3): which quality variant lands as a duplicate vs the ref-tier reference (action='') depends on the JPEG pHash — q88 is EXACT on Windows but ref-tier on Linux CI — so the assertion keys off the classifier action (ref-tier non-keepers are observed, not asserted-delete, the s08 pattern), not a hardcoded delete set. FE Advanced Settings built in this PR. Divergence: manifest JSON vs Qt SQLite; no scan-log probe (SSE-finished unmount flake)."
+
+  - scenario: s58_language_switch_preserves_manifest
+    playwright_module: qa.web.scenarios.s58_language_switch_preserves_manifest
+    status: done
+    notes: "Scans near-duplicates, captures pre-switch row order, clicks lang toggle, asserts result tree count+order unchanged (#428 regression guard). Restore to 'en' via PATCH /api/settings."
+
+  - scenario: s59_execute_dialog_select_by_main_tree_sync
+    playwright_module: null
+    status: skip
+    notes: "SKIP — web-architecture-eliminated (NOT blocked). Qt s59 pins the pre-#444 bug where the MAIN result tree showed stale Action cells after the Execute dialog was closed on the Set-Action-by-Field path WITHOUT executing (refresh_tree was never called on that reject path). The root cause is Qt-specific: the QStandardItemModel backing the main tree is a SEPARATE render artifact from vm.groups, so an in-dialog mutation needs an explicit refresh_tree to resync the tree cells. The web has no such split — state.manifest.groups is the SINGLE source of truth for both the main ResultTree and the ExecuteDialog; every decision mutation (setDecision / setDecisions / applyBulkDecide) writes that one Zustand slice and both views re-render reactively, so the tree is already current the moment the decision applies (before the dialog even closes). A web s59 could only assert React's own reactivity (assert-true-by-construction) = metric-gaming, banned by the project no-padding rule. The load-bearing DATA assertion (manifest split after the Set-Action-by-Field regex) is already covered by s30_execute_dialog_regex_right_click. Scoped 2026-06-27 via the 4-candidate parity workflow."
+
+  - scenario: s60_execute_filter_by_action_type
+    playwright_module: qa.web.scenarios.s60_execute_filter_by_action_type
+    status: done
+    notes: "#502/#676 execute type-filter 'visible = committed'. UNBLOCKED by the FE fix shipped in the same PR: handleExecute now scopes the commit to the visible rows (decidedPaths) when filter!='all' — previously it sent scope_paths=null and committed ALL decided rows regardless of filter (the data-safety bug); plus a new HiddenDestructiveBanner (execute-hidden-destructive-banner) when 'Remove only' hides pending deletes, and findAllDeleteGroupIds is filter-narrowed. Fixture: two byte-identical copies each of two DISTINCT exif-edge JPEGs (tz_offset/subsecond — verified non-pairing per s08) → two EXACT-dup groups (A delete via CTX_SET_ACTION_DELETE, B ignore via CTX_SET_ACTION_REMOVE). Asserts Delete-only shows only A + no hidden banner; Remove-only shows only B + hidden banner visible; Execute under Delete-only deletes A on disk while B SURVIVES on disk with decision='ignore' (manifest drops to B's 2 rows). Divergences: 2 rows/group (Qt 4); per-row context-menu marking (Qt regex bulk); banner asserted by testid not text; post-execute read via GET /api/manifest absence (Qt SQLite executed=0)."
+
+  - scenario: s61_actioned_singleton_prune
+    playwright_module: qa.web.scenarios.s61_actioned_singleton_prune
+    status: done
+    notes: >-
+      #686 mixed-bucket singleton prune on the "ask" path. Seven variants
+      (remove_plain / remove_both / keep / lock_cancel / lock_unlocked_only /
+      lock_apply / lock_apply_remove). #702 Cancel-discriminator: lock_cancel and lock_unlocked_only
+      both HOLD the locked A_keep (identical sqlite state); the discriminating
+      assertion is a POST /api/prune/candidates read confirming A_keep stays in
+      the `locked` bucket (an accidental unlock is caught there, not by sqlite).
+      The web execute-tree + remove are single-select, so the mixed (plain+actioned)
+      offer is built by ACCUMULATION: under prune="never" finalize-remove A_drop
+      (collapses cluster A to the plain/locked A_keep singleton, silently), then
+      flip to "ask" and finalize-remove B_drop (collapses cluster B to the
+      actioned B_keep) — maybeOfferPrune classifies ALL current singletons via
+      the backend POST /api/prune/candidates (the web review view drops
+      single-member groups, so the FE can't classify them itself). Asserts the
+      actioned opt-in checkbox + dynamic "Remove N" label in the mixed layout,
+      and the D6 lock gate (lock_cancel/lock_apply) routes locked A_keep through
+      LockConfirmDialog op="prune" before the actioned-only prune dialog.
+      #713 (= #702 item 4) lock_apply_remove is the only live drive of REMOVE on
+      the lock-confirmed path: Unlock&Apply then Remove prunes BOTH singletons
+      (A_keep via the non-empty lockedToPrune fold, B_keep via the actioned
+      bucket). That lock-resolved dialog is ACTIONED-ONLY, so isMixed is false
+      and NO opt-in checkbox is rendered (verified live) — Remove itself opts the
+      actioned bucket in and the "Remove 1" label counts ACTIONED, not plain.
+      Outcomes read via sqlite (a held singleton is invisible to the manifest
+      API). Two generated clusters (qa/web/_prune_fixtures). Removes finalize to
+      outcome='ignored' (no file delete). Divergence: accumulation + execute-
+      dialog re-open (the dialog auto-closes after each remove).
+
+  - scenario: s63_late_cancel_and_main_window_guard
+    playwright_module: qa.web.scenarios.s63_late_cancel_and_main_window_guard
+    status: done
+    notes: >-
+      #687 late-stage cancel + beforeunload scan-guard. ONE scenario, TWO parts
+      sharing one running scan (the s03 large disposable source so the HASH stage
+      lasts seconds on fast CI). Part 2 (close-guard #468): the web has no
+      interceptable custom close dialog, so the Qt "Scan in progress" Yes/No
+      QMessageBox is ported to useBeforeUnloadGuard (App-mounted) — a native
+      `beforeunload` handler that blocks unload ONLY while scan.status==='running'
+      (idle/finished/failed/cancelled navigate freely). We cannot wire
+      "Leave → cancel the worker" (beforeunload has no async continuation); the
+      guard only warns, and cancellation stays on the ScanDialog Cancel button.
+      Asserted via page.evaluate dispatching a cancelable beforeunload + reading
+      event.defaultPrevented (NOT page.on('dialog')/page.close(run_before_unload)
+      — those test browser chrome and risk a CI hang, playwright#20624). The
+      armed (true-while-running) assertion is bracketed by TWO negatives — idle
+      baseline (false before any scan) and released (false after cancel) — so a
+      broken / always-on / never-on guard cannot pass (non-vacuity). Part 1
+      (late cancel): cancel at the HASH stage → dialog hides cleanly + output .db
+      never written (absent on disk + GET /api/manifest 404, the WRITE gate
+      skips on cancel). Divergences D1 (no custom dialog, assert unload-blocked
+      not button labels) / D2 (Cancel button, not title-bar X) / D3
+      (absence-based untouched) / D4 (large source). "s62 intentionally absent
+      from ALL_SCENARIOS."
+
+  - scenario: s64_execute_selected_partial
+    playwright_module: qa.web.scenarios.s64_execute_selected_partial
+    status: done
+    notes: "Partial (scoped) execute leaves other rows intact. Web execute-tree multi-select (#697 — Ctrl/Cmd+click toggle, Shift+click range via lib/multiSelect) now matches Qt's two-row Ctrl+click; scope_paths on POST /api/execute handles 1-or-N rows identically. Marks all 5 delete, plain-clicks row[0] + Ctrl+clicks row[1] (asserts BOTH carry aria-selected='true'), Execute selected (all-delete confirm accepted), asserts the 2 targets are gone from disk+manifest while the 3 survivors remain on disk with user_decision=='delete' and the dialog stays open; a second full Execute clears the rest (total_files==0). No longer an honest-partial port — the single→multi FE-parity gap is closed."
+
+  - scenario: s65_passenger_bridge
+    playwright_module: qa.web.scenarios.s65_passenger_bridge
+    status: done
+    notes: "#538 passenger-bridge real-photo invariant. Scans passenger-bridge-a (scene_left/scene_right) and passenger-bridge-b (scene_bridge) as TWO ordered FLAT sources — source ORDER encodes priority (bridge-a Ref-tier, bridge-b -> REVIEW_DUPLICATE). Verified live: a single flattened source flips scene_bridge to Ref winner, and a parent-of-subdirs source walks 0 files (web add-source is non-recursive, recursive defaults false). Asserts total_files==3, all in one group_number, 2 Ref-tier (UNDATED: scene_left+scene_right) + 1 REVIEW_DUPLICATE (scene_bridge.jpg), every item has a non-empty phash (passenger renders a real %, not '—'). Divergences: GET /api/manifest vs Qt sqlite; group_number (int) vs Qt group_id; two-source order is load-bearing."
+
+  - scenario: s66_autotune_read_knee
+    playwright_module: qa.web.scenarios.s66_autotune_read_knee
+    status: done
+    notes: "Read-knee autotune default-ON / opt-out (#551 Phase 4). Expands Advanced settings, asserts the 'Auto-tune reader concurrency' checkbox is checked by DEFAULT (opt-out), scans near-duplicates leaving autotune ON, then asserts grouping is unchanged via GET /api/manifest (total_groups==1, total_files==5, the lone group holds all 5 with a non-null group_number). Reader concurrency must never change group assignment (#526/#538 idx-passthrough). FE Advanced Settings built in this PR. Divergence: manifest JSON group read vs Qt SQLite group_id."
+
+  - scenario: s67_locked_singleton_prune_always
+    playwright_module: qa.web.scenarios.s67_locked_singleton_prune_always
+    status: done
+    notes: >-
+      #686 D6 regression guard: a locked singleton under prune="always" must
+      STILL pass the lock gate before pruning (the "always" instruction never
+      silently sweeps locked rows). One generated cluster; lock KEEP, stage DROP
+      delete, set prune="always", finalize-remove DROP via the execute dialog →
+      group collapses to the locked KEEP singleton → maybeOfferPrune("always")
+      fires the LockConfirmDialog op="prune". V1 Cancel holds KEEP (outcome='');
+      V2 Unlock&Apply prunes it (outcome='ignored'). In BOTH, the
+      PruneConfirmDialog must NEVER appear (absence-checked) — the "always" path
+      skips it; that absence check is forward-defensive (#702): the "always" path
+      provably never builds a prunePrompt, so the dialog can only appear via a
+      future regression. Outcomes via sqlite (held singleton invisible to the
+      manifest API); KEEP stays on disk (ignored, not deleted). Sister of s61's
+      "ask" path.
+
+  - scenario: s68_full_res_viewer_double_click
+    playwright_module: qa.web.scenarios.s68_full_res_viewer_double_click
+    status: done
+    notes: "Double-click the inline preview tile opens the full-res viewer; Escape closes; main window stays responsive. Scans near-duplicates, selects neardup_00_q95.jpg, waits preview-single-image, double-clicks the TILE (not the row), asserts fullres-dialog + fullres-image visible + the dialog title contains the basename (soft-probes the 'W x H' dims), Escape -> dialog hidden, then asserts result tree + row still present. Divergences: web uses Playwright native dblclick on the tile (Qt synthesized OS WM_LBUTTONDBLCLK with a seed-click); same-document Radix overlay vs Qt top-level OS window; deliberately the preview tile, not the FileRow onDoubleClick shortcut, to match Qt intent."
+
+  - scenario: s69_video_playback
+    playwright_module: qa.web.scenarios.s69_video_playback
+    status: done
+    notes: "V1 web video playback: GET /api/media Range streaming + <video> element in PreviewPane. Scans a 2-second WebM/VP9 synthetic clip (qa/sandbox/video-playback/clip.webm, generated once with ffmpeg lavfi) duplicated at runtime into a tmpdir to survive singleton-drop (s05 duplicate-to-observe). Asserts: manifest media_type=='video'; row click renders <video> (not <img>) in preview-single-image; readyState >= 2 (HAVE_CURRENT_DATA) AND duration > 0 (real decode); currentTime > 0 after play() (frames advance). VP8/VP9 = open codec always in headless Chromium — no proprietary-codec gate. Divergences: WebM fixture (not .MOV/H.264) for CI independence; readyState/currentTime via page.evaluate (no UIA analog); duplicate-to-observe avoids singleton-drop."
+
+  - scenario: s70_video_transcode_fallback
+    playwright_module: qa.web.scenarios.s70_video_transcode_fallback
+    status: done
+    notes: "V2 video transcode fallback: synthetic onError → src swap to transcode=h264. Scans clip.mp4 + twin (s05 pattern), selects the row, asserts <video> src does NOT contain transcode=h264 initially, dispatches a synthetic error event via page.evaluate, then asserts the src GAINS &transcode=h264 (the React key-change remounts the element so we poll for the updated src). Codec-independent: the backend's 501 (ffmpeg absent) or 200 (cached H.264) are both acceptable; only the FE swap fires. The real H.264 quality proof is in tests/integration/test_transcode_integration.py. Divergences: VP9-in-MP4 fixture (same as s69, not .MOV/H.264); synthetic error not a real codec-incompatible source; duplicate-to-observe singleton-drop pattern."
+
+  - scenario: s71_grid_video_tiles
+    playwright_module: qa.web.scenarios.s71_grid_video_tiles
+    status: done
+    notes: "GroupGrid multi-tile video: scan a byte-identical clip.mp4 + clip_twin.mp4 pair (s05 duplicate-to-observe; both are VP9-in-MP4) so the scanner produces a 2-member EXACT-dup VIDEO group. Click the GROUP row (row-group-{N}) → assert grid-container renders with exactly N VideoTile containers (grid-video-tile-{gid}-{basename}) + gmc-bar controller bar present (group has >= 1 video). The web grid is FAITHFUL to Qt: each tile is a static poster until CLICKED; clicking mounts a native <video data-testid='{tile_testid}-video'> that autoplays and registers with the controller. Click tile 1 → assert its <video> reaches readyState >= 2 (HAVE_CURRENT_DATA), duration > 0, currentTime > 0. Click tile 2 → assert it mounts + plays. Group PAUSE (gmc-play-pause) → assert BOTH videos become paused. Record a paused baseline, group PLAY → assert BOTH videos advance beyond baseline (broadcast reached both mounted tiles). Master scrub: set gmc-progress-slider to ~50% via the React-tracked native value setter + fire input/keyup (a raw range-input pointer drag is unreliable in headless Chromium; keyup exercises the real onKeyUp→seekAll release path) → assert BOTH tiles' <video>.currentTime converge within 1.5 s of the read-back target (keyframe-tolerance; seek commits on release). Open risks documented in module header: GROUP_ROW_NOT_SELECTABLE (store field selectedGroupId + group-row click handler), THUMBNAIL_SOURCE (video tiles show placeholder, not poster frame), CLICK_TO_MOUNT_BROADCAST (broadcast reaches only mounted tiles; both must be clicked first — matches Qt thumbnail-until-click and avoids an N-way HEVC decode storm on load), MASTER_SCRUB (release-commit via keyup; React-tracked slider setter). Qt counterpart (qa/scenarios/s71_grid_video_tiles.py) is a lightweight group-loads guard (scan → group in manifest, no QMediaPlayer playback)."
+
+  - scenario: s72_apply_best_copy
+    playwright_module: qa.web.scenarios.s72_apply_best_copy
+    status: done
+    notes: "WEB-ONLY (#744) — no Qt driver exists; the equivalent Qt right-click action was REMOVED in PR #224 (closed #210), superseded on desktop by the Set Action dialog's 'top 1 by score within group' numeric condition. Scans qa/sandbox/near-duplicates/ (5 JPEGs, plain scan, auto-select OFF) so every row starts undecided/unlocked, right-clicks the GROUP row, asserts ctx-apply-best-copy is present, clicks it, then asserts via GET /api/manifest: the top-score row (neardup_00_q95.jpg) is the keeper (user_decision='' + is_locked=True), every non-keeper the classifier positively identified as a duplicate (action in {EXACT, REVIEW_DUPLICATE}) gets user_decision='delete' and stays unlocked, and the ref-tier non-keeper (action='') is left untouched — same expected split as s57_scan_auto_select_aggressive's scan-time path, exercised here via the review-time context-menu action instead. Then reloads the page (clears in-memory client state), reopens the SAME manifest via the FsBrowser picker, and re-fetches GET /api/manifest to assert the identical per-file state — proving the write is a durable SQLite commit, not client-side-only. Deliberately NO match_confidence filtering (transient scan-time data, never persisted to the manifest DB — core.app_service.action_service.apply_best_copy)."

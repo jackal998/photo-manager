@@ -1,126 +1,128 @@
 """Layer-1 tests for :mod:`infrastructure.image_service` (#622 Phase 1).
 
 Covers:
-- _ByteBudgetLRUCache byte-budget eviction logic
+- _ByteBudgetLRUCache byte-budget eviction logic (bytes interface)
 - Two-tier split (thumb vs preview cache) independence
 - DNG embedded JPEG fast path via rawpy.extract_thumb
 - PREVIEW_RECIPE_VERSION disk cache path namespace
 - Legacy disk cache migration (wipe on first launch)
 - _compute_cache_budgets RAM probe integration
+- bytes return contract: get_thumbnail / get_preview return valid JPEG bytes
+- Full-res OOM semaphore: caps concurrent rawpy.postprocess() at 2
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
+import io
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication
+from PIL import Image as PILImage
 
 import infrastructure.image_service as svc_mod
 from infrastructure.image_service import (
     PREVIEW_RECIPE_VERSION,
     ImageService,
     _ByteBudgetLRUCache,
+    _FULLRES_DECODE_SEM,
+    _PLACEHOLDER_JPEG,
+    _SHELL_GETIMAGE_FLAG_ATTEMPTS,
+    _SIIGBF_BIGGERSIZEOK,
+    _SIIGBF_RESIZETOFIT,
+    _SIIGBF_SCALEUP,
+    _SIIGBF_THUMBNAILONLY,
     _compute_cache_key,
 )
 
 
-# ── QApplication fixture ─────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────
 
 
-@pytest.fixture(scope="module")
-def qapp_m():
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
-def _make_qimage(w: int, h: int) -> QImage:
-    """Return a valid ARGB32 QImage filled with an opaque pixel."""
-    img = QImage(w, h, QImage.Format_ARGB32)
-    img.fill(0xFF_80_80_80)
-    assert not img.isNull()
-    return img
+def _make_jpeg(w: int = 4, h: int = 4, color: tuple[int, int, int] = (80, 80, 80)) -> bytes:
+    """Return minimal JPEG bytes for a w×h solid-color image."""
+    pil = PILImage.new("RGB", (w, h), color=color)
+    buf = io.BytesIO()
+    pil.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
 
 
 # ── _ByteBudgetLRUCache ──────────────────────────────────────────────────
 
 
 class TestByteBudgetLRU:
-    def test_eviction_when_over_byte_budget(self, qapp_m):
-        """Inserting images that sum to > budget triggers LRU eviction.
+    def test_eviction_when_over_byte_budget(self):
+        """Inserting items that sum to > budget triggers LRU eviction.
 
         Real failure mode: without eviction the cache grows unbounded,
         eventually OOMing on large DNG libraries (the #590 regression class
         re-applied to the preview cache).
         """
-        # Budget = 4 bytes: forces eviction after 2 small images
-        cache = _ByteBudgetLRUCache(budget_bytes=4)
+        jpeg_a = _make_jpeg()
+        jpeg_b = _make_jpeg()
 
-        img_a = _make_qimage(1, 1)  # sizeInBytes = 4 (ARGB32)
-        img_b = _make_qimage(1, 1)
+        # Budget tight enough that only one item fits
+        cache = _ByteBudgetLRUCache(budget_bytes=len(jpeg_a))
 
-        cache.put("a", img_a)
+        cache.put("a", jpeg_a)
         assert cache.get("a") is not None
-        assert cache.total_bytes <= 4 + img_a.sizeInBytes()
 
-        cache.put("b", img_b)
+        cache.put("b", jpeg_b)
         # "a" should have been evicted (budget exceeded)
         assert cache.get("a") is None
         assert cache.get("b") is not None
 
-    def test_get_moves_item_to_mru_position(self, qapp_m):
+    def test_get_moves_item_to_mru_position(self):
         """Accessing a key promotes it to MRU so it survives the next eviction.
 
         Real failure mode: an LRU that doesn't update access order would evict
         recently-accessed items, causing unnecessary cache misses (flicker) for
         images the user is actively viewing.
         """
-        # Budget tight: one ARGB32 1×1 image = 4 bytes
-        cache = _ByteBudgetLRUCache(budget_bytes=8)
+        jpeg_a = _make_jpeg()
+        jpeg_b = _make_jpeg()
+        jpeg_c = _make_jpeg()
 
-        img_a = _make_qimage(1, 1)
-        img_b = _make_qimage(1, 1)
-        img_c = _make_qimage(1, 1)
+        # Budget fits two items
+        cache = _ByteBudgetLRUCache(budget_bytes=len(jpeg_a) * 2)
 
-        cache.put("a", img_a)
-        cache.put("b", img_b)
+        cache.put("a", jpeg_a)
+        cache.put("b", jpeg_b)
         # Touch "a" → now MRU; "b" becomes LRU
         cache.get("a")
         # Adding "c" should evict "b", not "a"
-        cache.put("c", img_c)
+        cache.put("c", jpeg_c)
 
         assert cache.get("a") is not None, "MRU item 'a' should survive eviction"
         assert cache.get("b") is None, "LRU item 'b' should be evicted"
         assert cache.get("c") is not None
 
-    def test_total_bytes_never_negative(self, qapp_m):
+    def test_total_bytes_never_negative(self):
         """Removing all items must not leave total_bytes negative.
 
         A negative total would defeat the budget guard and allow unbounded growth.
         """
-        cache = _ByteBudgetLRUCache(budget_bytes=100)
-        img = _make_qimage(1, 1)
-        cache.put("x", img)
+        cache = _ByteBudgetLRUCache(budget_bytes=100_000)
+        jpeg = _make_jpeg()
+        cache.put("x", jpeg)
         # Simulate rapid put of same key
-        cache.put("x", img)
+        cache.put("x", jpeg)
         assert cache.total_bytes >= 0
 
-    def test_clear_evicts_all_entries_and_resets_total_bytes(self, qapp_m):
+    def test_clear_evicts_all_entries_and_resets_total_bytes(self):
         """clear() must drop every entry AND reset _total_bytes to 0 so the
         budget accountant doesn't drift. #616 — RAM not released across
         manifest reloads is the user-visible symptom."""
-        cache = _ByteBudgetLRUCache(budget_bytes=100)
-        img = _make_qimage(1, 1)
-        cache.put("a", img)
-        cache.put("b", img)
-        cache.put("c", img)
+        cache = _ByteBudgetLRUCache(budget_bytes=100_000)
+        jpeg = _make_jpeg()
+        cache.put("a", jpeg)
+        cache.put("b", jpeg)
+        cache.put("c", jpeg)
         assert cache.total_bytes > 0
         assert cache.get("a") is not None
 
@@ -131,51 +133,51 @@ class TestByteBudgetLRU:
         assert cache.get("c") is None
         assert cache.total_bytes == 0
 
-    def test_clear_is_safe_on_empty_cache(self, qapp_m):
+    def test_clear_is_safe_on_empty_cache(self):
         """clear() on an empty cache must not raise — it's the default
         state on first construction, and an unconditional clear() on
         manifest unload should be a no-op there."""
-        cache = _ByteBudgetLRUCache(budget_bytes=100)
+        cache = _ByteBudgetLRUCache(budget_bytes=100_000)
         cache.clear()
         assert cache.total_bytes == 0
 
-    def test_thumb_vs_preview_split_independent(self, qapp_m):
+    def test_thumb_vs_preview_split_independent(self):
         """Filling the thumb tier must not evict from the preview tier.
 
         Real failure mode: a shared cache would evict preview images when
         thumbnails are bulk-loaded during grid rendering — causing full-res
         preview flicker as the user scrolls the result tree.
         """
+        jpeg_preview = _make_jpeg(8, 8)
+        jpeg_thumb1 = _make_jpeg()
+        jpeg_thumb2 = _make_jpeg()
+
         # Use the real ImageService's two separate caches with a known budget
         svc = ImageService.__new__(ImageService)
-        svc._thumb_cache = _ByteBudgetLRUCache(4)   # 4-byte budget (fits 1 image)
-        svc._preview_cache = _ByteBudgetLRUCache(100)  # 100-byte budget
+        svc._thumb_cache = _ByteBudgetLRUCache(len(jpeg_thumb1))   # fits 1 item
+        svc._preview_cache = _ByteBudgetLRUCache(100_000)
 
-        img_preview = _make_qimage(1, 1)
-        img_thumb1 = _make_qimage(1, 1)
-        img_thumb2 = _make_qimage(1, 1)
-
-        svc._preview_cache.put("pv_key", img_preview)
-        svc._thumb_cache.put("th_key_1", img_thumb1)
-        # Filling/overflowing the thumb cache:
-        svc._thumb_cache.put("th_key_2", img_thumb2)
+        svc._preview_cache.put("pv_key", jpeg_preview)
+        svc._thumb_cache.put("th_key_1", jpeg_thumb1)
+        # Overflowing the thumb cache:
+        svc._thumb_cache.put("th_key_2", jpeg_thumb2)
 
         # Preview cache is untouched
         assert svc._preview_cache.get("pv_key") is not None, (
             "preview cache evicted by thumb overflow — caches must be independent"
         )
 
-    def test_image_service_clear_cache_clears_both_tiers(self, qapp_m):
+    def test_image_service_clear_cache_clears_both_tiers(self):
         """ImageService.clear_cache() must clear both _thumb_cache AND
         _preview_cache so RAM from the previous manifest is fully
         released on unload (#616). Clearing only one tier would leak
         whichever side held the larger working set."""
         svc = ImageService.__new__(ImageService)
-        svc._thumb_cache = _ByteBudgetLRUCache(1024)
-        svc._preview_cache = _ByteBudgetLRUCache(1024)
-        img = _make_qimage(1, 1)
-        svc._thumb_cache.put("th", img)
-        svc._preview_cache.put("pv", img)
+        svc._thumb_cache = _ByteBudgetLRUCache(100_000)
+        svc._preview_cache = _ByteBudgetLRUCache(100_000)
+        jpeg = _make_jpeg()
+        svc._thumb_cache.put("th", jpeg)
+        svc._preview_cache.put("pv", jpeg)
         assert svc._thumb_cache.get("th") is not None
         assert svc._preview_cache.get("pv") is not None
 
@@ -185,6 +187,165 @@ class TestByteBudgetLRU:
         assert svc._preview_cache.get("pv") is None
         assert svc._thumb_cache.total_bytes == 0
         assert svc._preview_cache.total_bytes == 0
+
+
+# ── Bytes return contract ────────────────────────────────────────────────
+
+
+class TestBytesContract:
+    def test_get_image_bytes_returns_jpeg(self, tmp_path):
+        """get_thumbnail / get_preview must return bytes that start with the
+        JPEG SOI marker (0xFF 0xD8).
+
+        Real failure mode: any code path that returned None or a QImage object
+        would cause _ImageTask.run() to pass a non-bytes value to _bytes_to_qimage,
+        raising TypeError deep in Qt signal dispatch and silently breaking preview.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._disk_path = tmp_path
+        svc._versioned_disk_path = tmp_path / f"v{PREVIEW_RECIPE_VERSION}"
+        svc._versioned_disk_path.mkdir()
+        svc._thumb_cache = _ByteBudgetLRUCache(10_000_000)
+        svc._preview_cache = _ByteBudgetLRUCache(10_000_000)
+        svc._pillow_available = True
+        svc._pillow_heif_available = False
+        svc._rawpy_available = False
+
+        jpeg = _make_jpeg(64, 64, color=(100, 150, 200))
+        jpeg_path = tmp_path / "test_photo.jpg"
+        jpeg_path.write_bytes(jpeg)
+
+        result = svc.get_thumbnail(str(jpeg_path), 128)
+
+        assert isinstance(result, bytes), f"get_thumbnail must return bytes, got {type(result)}"
+        assert result[:2] == b"\xff\xd8", "Result must start with JPEG SOI marker"
+
+    def test_get_preview_bytes_returns_jpeg(self, tmp_path):
+        """get_preview also returns JPEG bytes (same contract as get_thumbnail)."""
+        svc = ImageService.__new__(ImageService)
+        svc._disk_path = tmp_path
+        svc._versioned_disk_path = tmp_path / f"v{PREVIEW_RECIPE_VERSION}"
+        svc._versioned_disk_path.mkdir()
+        svc._thumb_cache = _ByteBudgetLRUCache(10_000_000)
+        svc._preview_cache = _ByteBudgetLRUCache(10_000_000)
+        svc._pillow_available = True
+        svc._pillow_heif_available = False
+        svc._rawpy_available = False
+
+        jpeg = _make_jpeg(128, 128, color=(200, 100, 50))
+        jpeg_path = tmp_path / "preview_photo.jpg"
+        jpeg_path.write_bytes(jpeg)
+
+        result = svc.get_preview(str(jpeg_path), 512)
+
+        assert isinstance(result, bytes), f"get_preview must return bytes, got {type(result)}"
+        assert result[:2] == b"\xff\xd8", "Result must start with JPEG SOI marker"
+
+    def test_placeholder_returned_when_load_fails(self, tmp_path):
+        """When source load fails, _PLACEHOLDER_JPEG (bytes) is returned —
+        never None, never a QImage.
+
+        Real failure mode: downstream _bytes_to_qimage would crash on None;
+        cache.put would store None and report len(None) TypeError.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._disk_path = tmp_path
+        svc._versioned_disk_path = tmp_path / f"v{PREVIEW_RECIPE_VERSION}"
+        svc._versioned_disk_path.mkdir()
+        svc._thumb_cache = _ByteBudgetLRUCache(10_000_000)
+        svc._preview_cache = _ByteBudgetLRUCache(10_000_000)
+        svc._pillow_available = False
+        svc._pillow_heif_available = False
+        svc._rawpy_available = False
+
+        # Non-existent path — load must fail gracefully
+        result = svc.get_thumbnail("/nonexistent/photo.jpg", 128)
+
+        assert isinstance(result, bytes), "Must return bytes even on load failure"
+        assert result[:2] == b"\xff\xd8", "Placeholder must be valid JPEG"
+
+    def test_full_res_decode_stays_under_byte_budget(self, tmp_path):
+        """N concurrent size=0 (full-res) rawpy decodes are capped at 2 by
+        _FULLRES_DECODE_SEM — at most 2 postprocess() calls may run concurrently.
+
+        Real failure mode: without the semaphore, a 60 MP DNG with 4 concurrent
+        preview requests allocates ~2.4 GB transiently, triggering OOM on
+        systems with 8 GB RAM already partially consumed (#590 class).
+
+        We verify the semaphore constrains concurrency to 2 by instrumenting
+        a synthetic rawpy.postprocess() that blocks until released. We launch
+        4 threads and assert the peak concurrent acquires never exceeds 2.
+
+        Isolation note: patch("rawpy.imread") is applied ONCE at test scope and
+        stopped after all threads finish. Patching inside each thread is unsafe —
+        concurrent __enter__/__exit__ calls on the same patcher interleave and
+        can leave rawpy.imread as a MagicMock after the test, leaking into
+        subsequent tests that call rawpy.imread for real (e.g. test_scan_worker).
+        """
+        import numpy as np
+
+        # Track peak concurrent acquires
+        peak_concurrent = [0]
+        current_concurrent = [0]
+        lock = threading.Lock()
+        barrier = threading.Barrier(4)  # 4 threads, all start together
+
+        def fake_postprocess(**kwargs):
+            # Synthetic "heavy decode" that measures concurrency
+            with lock:
+                current_concurrent[0] += 1
+                peak_concurrent[0] = max(peak_concurrent[0], current_concurrent[0])
+            try:
+                # Small sleep to allow all threads to run inside postprocess
+                import time
+                time.sleep(0.05)
+            finally:
+                with lock:
+                    current_concurrent[0] -= 1
+            # Return a 48 MB synthetic RGB array (400×400×3)
+            return np.zeros((400, 400, 3), dtype=np.uint8)
+
+        def _make_rawpy_mock():
+            raw = MagicMock()
+            raw.extract_thumb.side_effect = svc_mod.LibRawNoThumbnailError("no thumb")
+            raw.__enter__ = lambda s: s
+            raw.__exit__ = MagicMock(return_value=False)
+            raw.postprocess = fake_postprocess
+            return raw
+
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+        svc._pillow_heif_available = False
+
+        errors: list[Exception] = []
+
+        def _run_decode():
+            try:
+                barrier.wait(timeout=5)  # All 4 threads launch together
+                # size=0 triggers full-res path + semaphore acquire.
+                # rawpy.imread is already patched at test scope (see below).
+                result = svc._load_via_rawpy("/fake/photo.dng", 0)
+                assert isinstance(result, bytes), f"Must return bytes, got {type(result)}"
+            except Exception as ex:
+                errors.append(ex)
+
+        # Apply the patch ONCE at the test level, not inside each thread.
+        # patch() is NOT thread-safe: concurrent __enter__/__exit__ on the same
+        # patcher race each other and can leave rawpy.imread as a MagicMock
+        # after the test ends (isolation leak into downstream tests).
+        with patch("rawpy.imread", side_effect=lambda path, **kw: _make_rawpy_mock()):
+            threads = [threading.Thread(target=_run_decode) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+        assert not errors, f"Decode threads raised: {errors}"
+        assert peak_concurrent[0] <= 2, (
+            f"_FULLRES_DECODE_SEM should cap concurrent postprocess() at 2, "
+            f"but peak was {peak_concurrent[0]}"
+        )
 
 
 # ── DNG embedded JPEG fast path ──────────────────────────────────────────
@@ -203,18 +364,10 @@ class TestDngEmbeddedJpegFastPath:
         """Mock rawpy raw object whose extract_thumb returns a JPEG of w×h."""
         import rawpy as _rawpy
 
-        img = _make_qimage(width, height)
-        jpeg_bytes = bytearray()
-        buf = QImage(1, 1, QImage.Format_RGB888)
-        buf.fill(0xFF_80_80_80)
-        # Build minimal JPEG bytes via QImage.save
-        from PySide6.QtCore import QByteArray, QBuffer
-        ba = QByteArray()
-        qbuf = QBuffer(ba)
-        qbuf.open(QBuffer.WriteOnly)
-        img.save(qbuf, "JPEG")
-        qbuf.close()
-        jpeg_bytes = bytes(ba.data())
+        pil = PILImage.new("RGB", (width, height), color=(128, 128, 128))
+        buf = io.BytesIO()
+        pil.save(buf, "JPEG", quality=85)
+        jpeg_bytes = buf.getvalue()
 
         thumb = SimpleNamespace(
             format=_rawpy.ThumbFormat.JPEG,
@@ -232,9 +385,9 @@ class TestDngEmbeddedJpegFastPath:
         raw.extract_thumb.side_effect = LibRawNoThumbnailError("no thumb")
         return raw
 
-    def test_extract_thumb_used_when_large_enough(self, qapp_m):
+    def test_extract_thumb_used_when_large_enough(self):
         """When the embedded JPEG is ≥ viewport_cap in longest side,
-        _try_rawpy_embedded_thumb returns a QImage and postprocess is
+        _try_rawpy_embedded_thumb returns bytes and postprocess is
         NOT called on the raw object.
 
         Real failure mode: always calling postprocess for DNG is ~10×
@@ -249,10 +402,11 @@ class TestDngEmbeddedJpegFastPath:
         result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
 
         assert result is not None, "Should use embedded JPEG when thumb is large enough"
-        assert not result.isNull()
+        assert isinstance(result, bytes), "Must return bytes"
+        assert result[:2] == b"\xff\xd8", "Must return valid JPEG"
         raw.postprocess.assert_not_called()
 
-    def test_fallback_when_thumb_too_small(self, qapp_m):
+    def test_fallback_when_thumb_too_small(self):
         """When the embedded JPEG longest side < viewport_cap,
         _try_rawpy_embedded_thumb returns None so the caller falls
         through to postprocess.
@@ -273,7 +427,7 @@ class TestDngEmbeddedJpegFastPath:
             "allowing caller to fall through to postprocess"
         )
 
-    def test_fallback_when_no_thumbnail_error(self, qapp_m):
+    def test_fallback_when_no_thumbnail_error(self):
         """When LibRawNoThumbnailError is raised, return None gracefully.
 
         Real failure mode: propagating the exception would crash the preview
@@ -289,7 +443,7 @@ class TestDngEmbeddedJpegFastPath:
 
         assert result is None
 
-    def test_viewport_cap_zero_uses_thumb_regardless_of_size(self, qapp_m):
+    def test_viewport_cap_zero_uses_thumb_regardless_of_size(self):
         """viewport_cap=0 means full-res requested — use the embedded thumb
         regardless of its dimensions (it's the full-res escape hatch for
         the FullResViewerDialog).
@@ -308,18 +462,18 @@ class TestDngEmbeddedJpegFastPath:
         assert result is not None, (
             "With viewport_cap=0 (full-res), even a small embedded JPEG should be used"
         )
+        assert isinstance(result, bytes)
+        assert result[:2] == b"\xff\xd8"
 
     def _make_raw_mock_jpeg_with_orientation(
         self, pixel_width: int, pixel_height: int, orientation: int
     ) -> MagicMock:
         """Build a rawpy mock whose embedded JPEG carries a real EXIF
         Orientation tag. Distinct from ``_make_raw_mock_jpeg`` (which
-        uses ``QImage.save`` and writes NO EXIF) — this one uses PIL
-        so ``ImageOps.exif_transpose`` has something to act on.
+        writes NO EXIF) — this one uses PIL so ``ImageOps.exif_transpose``
+        has something to act on.
         """
-        import io
         import rawpy as _rawpy
-        from PIL import Image as PILImage
 
         pil_im = PILImage.new(
             "RGB", (pixel_width, pixel_height), color=(200, 100, 50)
@@ -337,18 +491,15 @@ class TestDngEmbeddedJpegFastPath:
         raw.extract_thumb.return_value = thumb
         return raw
 
-    def test_exif_orientation_corrected_for_dng_thumb(self, qapp_m):
+    def test_exif_orientation_corrected_for_dng_thumb(self):
         """Embedded JPEG with Orientation=6 (rotate 90 CW, the iPhone
-        portrait-grip case) must be transposed so the returned QImage
-        comes out landscape (width > height).
+        portrait-grip case) must be transposed so the returned JPEG bytes
+        decode to a landscape image (width > height).
 
         Real failure mode (the bug reported on 2026-06-10): PR #624's
         fast path called ``QImage.loadFromData`` which never reads the
         Orientation tag, so portrait-grip ProRAW DNGs displayed 90°
         rotated relative to Lightroom / File Explorer.
-
-        Pre-fix: ``QImage.loadFromData`` returns a 3000×4000 QImage
-        regardless of orientation → assertion ``width > height`` fails.
 
         Post-fix: PIL decode + ``ImageOps.exif_transpose`` swaps the
         dimensions according to the Orientation tag → 4000×3000 → passes.
@@ -364,11 +515,13 @@ class TestDngEmbeddedJpegFastPath:
         )
         result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=0)
 
-        assert result is not None and not result.isNull()
-        assert result.width() > result.height(), (
-            f"DNG embedded JPEG with Orientation=6 must come out landscape "
-            f"after exif_transpose; got {result.width()}×{result.height()}"
-        )
+        assert result is not None and isinstance(result, bytes)
+        # Decode the returned JPEG to verify dimensions
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.width > decoded.height, (
+                f"DNG embedded JPEG with Orientation=6 must come out landscape "
+                f"after exif_transpose; got {decoded.width}×{decoded.height}"
+            )
 
 
 # ── PREVIEW_RECIPE_VERSION disk cache path ───────────────────────────────
@@ -388,18 +541,20 @@ class TestPreviewRecipeVersion:
         svc._versioned_disk_path.mkdir()
         svc._thumb_cache = _ByteBudgetLRUCache(100_000)
         svc._preview_cache = _ByteBudgetLRUCache(100_000)
-        svc._pillow_available = False
+        svc._pillow_available = True
         svc._pillow_heif_available = False
         svc._rawpy_available = False
 
-        # Stub _load_from_source to return a known QImage
+        jpeg = _make_jpeg(4, 4)
+
+        # Stub _load_from_source to return known bytes
         with patch.object(svc, "_load_from_source") as mock_load:
-            img = _make_qimage(4, 4)
-            mock_load.return_value = img
+            mock_load.return_value = jpeg
 
             # Request a thumbnail (side <= 256 → thumb tier)
-            svc._get_image("/fake/photo.jpg", 128)
+            result = svc._get_image("/fake/photo.jpg", 128)
 
+        assert isinstance(result, bytes)
         key = _compute_cache_key("/fake/photo.jpg", 128)
         expected_path = tmp_path / f"v{PREVIEW_RECIPE_VERSION}" / f"{key}.jpg"
         assert expected_path.exists(), (
@@ -443,6 +598,276 @@ class TestPreviewRecipeVersion:
         changing it without bumping the constant causes stale-cache misses.
         """
         assert PREVIEW_RECIPE_VERSION == "1"
+
+
+# ── Source-mtime cache-key freshness (Correction #11) ────────────────────
+
+
+class _FakeClock:
+    """Monotonic clock under test control — no sleeping for a 5 s TTL."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = float(start)
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += float(seconds)
+
+
+class _CountingStat:
+    """Stat stub that counts calls and can change its answer mid-test."""
+
+    def __init__(self, value: int = 111) -> None:
+        self.value = value
+        self.calls: list[str] = []
+
+    def __call__(self, path: str) -> int:
+        self.calls.append(path)
+        return self.value
+
+
+class TestMtimeStatCacheTTL:
+    """The 5 s per-path stat TTL (#622 Phase 2).
+
+    Every preview request folds the source mtime into its cache key, so before
+    the TTL each request stat'd the source — a network round trip per request
+    on a NAS, paid even when the decoded bytes were already in RAM. Requests
+    arrive in bursts for one path (rapid clicks, the grid tile plus the single
+    view), so the burst is what the TTL collapses.
+    """
+
+    def test_two_requests_inside_ttl_issue_one_stat(self):
+        """Burst of requests for one path → exactly ONE stat.
+
+        Real failure mode: clicking through a group on the NAS issues one SMB
+        stat per preview request. Each is a network round trip in front of a
+        cache hit that would otherwise be instant.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=555)
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=stat)
+
+        first = cache.get("J:/nas/photo.dng")
+        clock.advance(4.9)
+        second = cache.get("J:/nas/photo.dng")
+
+        assert first == 555 and second == 555
+        assert len(stat.calls) == 1, (
+            f"expected one stat inside the TTL, got {len(stat.calls)}"
+        )
+
+    def test_ttl_expiry_sees_external_edit(self):
+        """After the TTL, the source is stat'd again and a changed mtime wins.
+
+        Real failure mode this guards: the user re-exports a photo over the
+        same filename (Lightroom / Photoshop writing back to the NAS). If the
+        mtime were cached without expiry, the key would never change and the
+        pane would serve the pre-edit pixels for the rest of the session.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=100)
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=stat)
+
+        assert cache.get("J:/nas/photo.dng") == 100
+        stat.value = 200  # the external edit
+        clock.advance(5.1)
+
+        assert cache.get("J:/nas/photo.dng") == 200
+        assert len(stat.calls) == 2
+
+    def test_distinct_paths_do_not_share_an_entry(self):
+        """Two paths must never share one cached mtime.
+
+        Real failure mode: a single-slot cache would hand file B the mtime of
+        file A, so B's cache key would collide with a key computed for a
+        different mtime — the pane would show one photo's pixels under the
+        other's filename.
+        """
+        clock = _FakeClock()
+        values = {"a.jpg": 11, "b.jpg": 22}
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=lambda p: values[p])
+
+        assert cache.get("a.jpg") == 11
+        assert cache.get("b.jpg") == 22
+        assert cache.get("a.jpg") == 11
+
+    def test_source_mtime_ns_reads_through_the_module_cache(self, monkeypatch):
+        """``_source_mtime_ns`` must go through the TTL cache, not stat directly.
+
+        Real failure mode: a refactor that called ``_stat_mtime_ns`` from
+        ``_get_image`` again would silently restore the per-request NAS stat.
+        Nothing else would go red — the images would still be correct, just
+        slower on exactly the setup that cannot afford it.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=777)
+        monkeypatch.setattr(
+            svc_mod, "_mtime_cache",
+            svc_mod._MtimeStatCache(clock=clock, stat_fn=stat),
+        )
+
+        assert svc_mod._source_mtime_ns("J:/nas/photo.dng") == 777
+        assert svc_mod._source_mtime_ns("J:/nas/photo.dng") == 777
+        assert len(stat.calls) == 1
+
+    def test_entries_stay_bounded_across_many_distinct_paths(self):
+        """10k distinct paths must not leave 10k entries behind.
+
+        Real failure mode: an entry is useless after its 5 s TTL, but nothing
+        revisits it to evict it. Browsing a large library would grow the map
+        by one entry per distinct file previewed and never shrink it for the
+        life of the process — an unbounded leak that no test would notice,
+        because every cache lookup keeps returning the right answer.
+        """
+        clock = _FakeClock()
+        cache = svc_mod._MtimeStatCache(
+            clock=clock, stat_fn=_CountingStat(), max_entries=64
+        )
+
+        for i in range(10_000):
+            cache.get(f"J:/nas/photo_{i}.dng")
+            clock.advance(6.0)  # each path is stale before the next arrives
+
+        assert len(cache._entries) <= 64, (
+            f"cache grew to {len(cache._entries)} entries with a cap of 64"
+        )
+
+    def test_bound_holds_even_when_nothing_has_expired(self):
+        """A burst wider than the cap inside ONE TTL still stays bounded.
+
+        The expiry sweep finds nothing to drop here (no time passes), so this
+        is the path where oldest-first eviction has to carry the bound on its
+        own — the case a sweep-only implementation would leak through.
+        """
+        clock = _FakeClock()
+        cache = svc_mod._MtimeStatCache(
+            clock=clock, stat_fn=_CountingStat(), max_entries=32
+        )
+
+        for i in range(500):
+            cache.get(f"J:/nas/burst_{i}.dng")  # clock never advances
+
+        assert len(cache._entries) <= 32
+
+    def test_eviction_does_not_break_the_burst_saving(self):
+        """Bounding must not cost the one-stat-per-burst property.
+
+        Guards the obvious wrong fix — evicting on every insert would make
+        each repeat request a miss again, quietly restoring the per-request
+        NAS stat this cache exists to remove.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=42)
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=stat, max_entries=64)
+
+        for _ in range(10):
+            assert cache.get("J:/nas/hot.dng") == 42
+
+        assert len(stat.calls) == 1
+
+    def test_missing_source_still_degrades_to_zero(self, monkeypatch):
+        """A stat failure is cached like any other value and stays 0.
+
+        The real stat function is used here (no stub) so this also pins that
+        the TTL layer did not change the missing-file contract: a deleted
+        source yields a deterministic key rather than raising.
+        """
+        monkeypatch.setattr(
+            svc_mod, "_mtime_cache", svc_mod._MtimeStatCache(clock=_FakeClock())
+        )
+        assert svc_mod._source_mtime_ns("/definitely/does/not/exist.jpg") == 0
+
+
+class TestSourceMtimeCacheFreshness:
+    """Correction #11: overwriting a source file in place (same path + size)
+    must not keep serving the old cached bytes forever.
+
+    Before the fix, ``_compute_cache_key`` was ``sha1(path|size)`` only, so
+    an in-place edit (crop/re-export writing to the same path) resolved to
+    the SAME disk-cache file and was served/304'd indefinitely. Folding
+    source mtime_ns into the key means an edit produces a fresh key.
+    """
+
+    def test_compute_cache_key_changes_with_source_mtime_same_path_and_size(self):
+        """Same path + size_key, different source_mtime_ns -> different key."""
+        key_a = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=1000)
+        key_b = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=2000)
+        assert key_a != key_b
+
+    def test_compute_cache_key_stable_for_same_inputs(self):
+        """Same (path, size, mtime) -> deterministic, reproducible key."""
+        key_a = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=1000)
+        key_b = _compute_cache_key("/photos/photo.jpg", 256, source_mtime_ns=1000)
+        assert key_a == key_b
+
+    def test_get_image_uses_a_fresh_key_after_source_overwritten_in_place(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end: _get_image on an overwritten source (same path, same
+        size arg) must NOT return the stale disk-cached bytes.
+
+        Real failure mode this pins: a user crops photo.jpg and re-exports
+        to the SAME path. Before the fix, _get_image's cache key was
+        path+size only, so the old disk-cache entry (or in-mem entry) was
+        returned unchanged — the crop was invisible in the UI.
+
+        #622 Phase 2 made the time dimension explicit rather than weakening
+        this guarantee: the mtime stat is TTL-cached for 5 s, so the edit
+        becomes visible once the TTL lapses (a burst inside the window
+        deliberately reuses one stat — see ``TestMtimeStatCacheTTL``). The
+        injected clock below is what advances past the TTL; without it this
+        test would be asserting the pre-Phase-2 "instantly visible" contract
+        that the coordinator work knowingly traded away.
+        """
+        clock = _FakeClock()
+        monkeypatch.setattr(
+            svc_mod, "_mtime_cache", svc_mod._MtimeStatCache(clock=clock)
+        )
+        svc = ImageService.__new__(ImageService)
+        svc._versioned_disk_path = tmp_path
+        svc._thumb_cache = _ByteBudgetLRUCache(1_000_000)
+        svc._preview_cache = _ByteBudgetLRUCache(1_000_000)
+        svc._pillow_available = True
+        svc._pillow_heif_available = False
+        svc._rawpy_available = False
+
+        source = tmp_path / "photo.jpg"
+        source.write_bytes(b"original-bytes")
+
+        old_jpeg = _make_jpeg(4, 4)
+        new_jpeg = _make_jpeg(8, 8)
+
+        with patch.object(svc, "_load_from_source") as mock_load:
+            mock_load.return_value = old_jpeg
+            first = svc._get_image(str(source), 128)
+        assert first == old_jpeg
+
+        # Simulate an in-place overwrite: same path, new content, later mtime.
+        import os
+        import time
+
+        time.sleep(0.01)
+        source.write_bytes(b"cropped-bytes-same-path")
+        os.utime(source, ns=(time.time_ns(), time.time_ns()))
+        # Past the 5 s stat TTL — the next request re-stats and sees the edit.
+        clock.advance(6.0)
+
+        with patch.object(svc, "_load_from_source") as mock_load:
+            mock_load.return_value = new_jpeg
+            second = svc._get_image(str(source), 128)
+
+        assert second == new_jpeg, (
+            "after an in-place source overwrite, _get_image must decode "
+            "fresh bytes instead of returning the stale disk/mem cache entry"
+        )
+
+    def test_source_mtime_ns_defaults_to_zero_when_source_missing(self):
+        """A stat failure (deleted/moved source) degrades to mtime=0 rather
+        than raising — the cache key stays deterministic for a missing file
+        instead of crashing the request."""
+        assert svc_mod._source_mtime_ns("/definitely/does/not/exist.jpg") == 0
 
 
 # ── status_reporter wiring (#622 Phase 1) ────────────────────────────────
@@ -608,3 +1033,51 @@ class TestStatusReporterWiring:
             msg = svc._build_rebuilding_cache_message()
         assert "Rebuilding thumbnail cache" in msg
         assert PREVIEW_RECIPE_VERSION in msg
+
+
+# ── Shell/WIC GetImage flag attempt sequence (#734) ──────────────────────
+
+
+class TestShellGetImageFlagAttempts:
+    """Pins the ordered flag-combo sequence _shell_thumbnail_sync tries
+    against IShellItemImageFactory::GetImage.
+
+    This is a structural pin, not a live COM test (COM behavior can't be
+    faked without test padding — see photo-manager CLAUDE.md). The failure
+    mode it guards: a well-meaning refactor silently dropping or reordering
+    the bare-RESIZETOFIT rescue would re-break video thumbnails (they'd
+    revert to the grey placeholder) with no CI signal, since ubuntu CI has
+    no WIC and Windows CI has no guaranteed video codec support — only a
+    static assertion on the tuple's shape catches this.
+    """
+
+    def test_legacy_two_combos_are_first_in_original_order(self):
+        """The two pre-existing flag combos must stay first and in order —
+        this is exactly the behavior images already relied on before #734,
+        and reordering them would change which attempt succeeds for images
+        with a live thumbcache entry.
+        """
+        legacy_first = (
+            _SIIGBF_RESIZETOFIT | _SIIGBF_THUMBNAILONLY | _SIIGBF_BIGGERSIZEOK | _SIIGBF_SCALEUP
+        )
+        legacy_second = _SIIGBF_RESIZETOFIT | _SIIGBF_BIGGERSIZEOK | _SIIGBF_SCALEUP
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[0] == legacy_first
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[1] == legacy_second
+
+    def test_bare_resizetofit_rescue_is_last(self):
+        """The rescue attempt (flags=0, i.e. bare RESIZETOFIT) must be the
+        final attempt in the sequence.
+
+        Failure mode: dropping this attempt, or placing it before the
+        legacy combos, silently re-breaks video thumbnails — the Media
+        Foundation video provider rejects BIGGERSIZEOK|SCALEUP with
+        hr=0x80004005 (E_FAIL) and only succeeds with flags=0.
+        """
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[-1] == _SIIGBF_RESIZETOFIT
+        assert _SHELL_GETIMAGE_FLAG_ATTEMPTS[-1] == 0x00
+
+    def test_exactly_three_attempts_no_extras(self):
+        """Pins the sequence length so a stray 4th attempt (or an
+        accidental duplicate) doesn't slip in unnoticed.
+        """
+        assert len(_SHELL_GETIMAGE_FLAG_ATTEMPTS) == 3
