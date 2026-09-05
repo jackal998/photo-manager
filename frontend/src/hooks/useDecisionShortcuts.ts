@@ -26,10 +26,14 @@
 // closure) and is registered ONCE in a single useEffect whose cleanup removes it
 // (StrictMode add→cleanup→add ⇒ one listener).
 //
-// Deliberately scoped to the DECISION shortcuts only. The other keys in the Qt
-// keyPressEvent are out of scope here: 'p' (play/pause) is a PreviewPane concern,
-// and the arrow-key roving focus through the virtualizer is a separate FE item
-// (D3b). See qa/web/scenarios/s26_keyboard_navigation.py for the honest-omit list.
+// Deliberately scoped to the DECISION shortcuts only. 'p' (play/pause) is a
+// PreviewPane concern and stays out of scope here. The arrow-key roving cursor
+// (#709) shipped separately and deliberately did NOT join this hook: it lives on
+// ResultTree's own scroll container as an onKeyDown, because — unlike d/k, which
+// must act on the live selection from anywhere — a cursor that moves the
+// selection has to be inert while the user is typing elsewhere, and container
+// scoping gives that for free. See qa/web/scenarios/s26_keyboard_navigation.py
+// for the remaining honest-omit list.
 
 import { useEffect } from "react";
 
