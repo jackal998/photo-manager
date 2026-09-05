@@ -76,8 +76,8 @@ export interface UseOverlayGeometry {
    * its portalled Content in a later commit than the one where `open` flips,
    * so a layout effect keyed on `open` alone runs while the ref is still null
    * and its clamp silently does nothing. Measured live: a saved height of
-   * 236px stayed 236px instead of being raised to the 260px floor. The
-   * callback tells us exactly when the node exists.
+   * 236px stayed 236px instead of being raised to the MIN_OVERLAY_HEIGHT
+   * floor (280px). The callback tells us exactly when the node exists.
    */
   containerRef: (el: HTMLDivElement | null) => void;
   /**
@@ -111,10 +111,18 @@ export function useOverlayGeometry(
   const [geometry, setGeometry] = useState<OverlayGeometry | null>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
 
-  // Hydrate on every open. NOT clamped here: clamping the position needs the
-  // element's rendered size, which does not exist until it is laid out — the
-  // layout effect below does it against the real box.
-  useEffect(() => {
+  // Hydrate on every open, BEFORE the browser paints. A passive useEffect runs
+  // after paint, so reopening a previously moved overlay showed one frame at
+  // the CSS default and then jumped to the stored position — nothing masks it,
+  // since the `animate-in` / `zoom-in-95` classes on dialog.tsx emit no CSS
+  // (no Tailwind animate plugin is installed).
+  //
+  // Ordering matters and is by construction: React runs layout effects in
+  // declaration order within a commit, and this one is declared above the
+  // clamp below — so hydrate lands first, the clamp corrects it second, and
+  // both finish before paint. NOT clamped here: clamping the position needs
+  // the element's rendered size, which does not exist until it is laid out.
+  useLayoutEffect(() => {
     if (!open) return;
     setGeometry(loadOverlayGeometry(id));
   }, [id, open]);
