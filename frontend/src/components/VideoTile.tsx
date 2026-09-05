@@ -24,6 +24,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { mediaUrl } from "@/api/client";
+import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
 import { useGroupMedia } from "@/hooks/useGroupMedia";
 import type { FileRow } from "@/api/types";
 
@@ -61,6 +62,9 @@ export function VideoTile({
 
   // Reset transcode state whenever the file path changes (e.g. grid refresh).
   useEffect(() => {
+    // #787: start the memoized HEVC capability probe while the tile is still a
+    // static poster, so the answer is ready by the time the user clicks.
+    void canPlayHevc();
     setUseTranscode(false);
     setVideoFailed(false);
     setCanPlay(false);
@@ -99,9 +103,14 @@ export function VideoTile({
 
   const handleClick = useCallback(() => {
     if (!playerMounted) {
+      // The <video> is created HERE, not at tile mount, so the #787 capability
+      // hint is read here too — by click time the probe started in the effect
+      // above has normally resolved. "unknown" (jsdom, absent API, a throwing
+      // probe) keeps the original-bytes start and the reactive error swap.
+      setUseTranscode(prefersTranscodedVideo(row.file_path));
       setPlayerMounted(true);
     }
-  }, [playerMounted]);
+  }, [playerMounted, row.file_path]);
 
   // ---------------------------------------------------------------------------
   // Render

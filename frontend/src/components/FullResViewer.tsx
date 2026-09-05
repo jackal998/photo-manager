@@ -35,6 +35,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { fullResUrl, mediaUrl } from "@/api/client";
+import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
 import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
 import { OverlayResizeHandle } from "@/components/ui/overlay-resize-handle";
 import {
@@ -93,18 +94,32 @@ export function FullResViewer() {
     h: number;
   } | null>(null);
 
-  // Transcode fallback state (video only).
-  const [useTranscode, setUseTranscode] = useState(false);
+  // Transcode fallback state (video only). The initial value is the #787
+  // capability hint — "unknown" (today's behaviour) unless the engine has
+  // positively reported it cannot decode HEVC and this is an HEVC-in-practice
+  // container. handleVideoError below is unchanged and still the safety net.
+  const [useTranscode, setUseTranscode] = useState(
+    () => fullResPath !== null && prefersTranscodedVideo(fullResPath)
+  );
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoCanPlay, setVideoCanPlay] = useState(false);
 
+  // Re-made during RENDER on every path change — see the same note in
+  // PreviewPane.tsx: an effect-based reset commits one render on the
+  // original-bytes src, which starts the fetch this pre-check exists to skip.
+  const [hintedPath, setHintedPath] = useState<string | null>(fullResPath);
+  if (hintedPath !== fullResPath) {
+    setHintedPath(fullResPath);
+    setUseTranscode(fullResPath !== null && prefersTranscodedVideo(fullResPath));
+  }
+
   useEffect(() => {
+    void canPlayHevc(); // memoized — one decodingInfo call per page life
     setLoading(true);
     setLoadError(false);
     setNaturalDims(null);
     setScale(1);
     setPan({ x: 0, y: 0 });
-    setUseTranscode(false);
     setVideoFailed(false);
     setVideoCanPlay(false);
   }, [fullResPath]);
