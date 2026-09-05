@@ -97,10 +97,15 @@ export function FullResViewer() {
   // Transcode fallback state (video only). The initial value is the #787
   // capability hint — "unknown" (today's behaviour) unless the engine has
   // positively reported it cannot decode HEVC and this is an HEVC-in-practice
-  // container. handleVideoError below is unchanged and still the safety net.
+  // container. handleVideoError below makes it a two-attempt contract:
+  // whichever source we start on, the first error swaps to the other one.
   const [useTranscode, setUseTranscode] = useState(
     () => fullResPath !== null && prefersTranscodedVideo(fullResPath)
   );
+  // See the same note in PreviewPane.tsx: useTranscode alone is ambiguous once
+  // the hint can choose the STARTING source, so "have we already swapped?" is
+  // tracked explicitly.
+  const [swapAttempted, setSwapAttempted] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoCanPlay, setVideoCanPlay] = useState(false);
 
@@ -111,6 +116,7 @@ export function FullResViewer() {
   if (hintedPath !== fullResPath) {
     setHintedPath(fullResPath);
     setUseTranscode(fullResPath !== null && prefersTranscodedVideo(fullResPath));
+    setSwapAttempted(false);
   }
 
   useEffect(() => {
@@ -187,15 +193,18 @@ export function FullResViewer() {
     setLoadError(true);
   }, []);
 
-  // Video-specific error: swap to transcode on first error, terminal on second.
+  // Video-specific error: first error swaps to the OTHER source (transcode if
+  // we started native; original bytes if the #787 hint started us on the
+  // transcode and it 501'd or failed), second error is terminal.
   const handleVideoError = useCallback(() => {
-    if (!useTranscode) {
-      setUseTranscode(true);
+    if (!swapAttempted) {
+      setSwapAttempted(true);
+      setUseTranscode((prev) => !prev);
       setVideoCanPlay(false);
     } else {
       setVideoFailed(true);
     }
-  }, [useTranscode]);
+  }, [swapAttempted]);
 
   const handleReveal = useCallback(() => {
     if (fullResPath !== null) {

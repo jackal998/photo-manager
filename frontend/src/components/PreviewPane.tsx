@@ -76,11 +76,19 @@ export function PreviewPane() {
   // container, start on the transcode instead of paying a guaranteed-to-fail
   // original-bytes attempt first. The probe answers "unknown" until it
   // resolves (and always, in jsdom), so this is `false` — today's behaviour —
-  // unless we positively know better. The error handler below is untouched and
-  // remains the safety net for everything the hint gets wrong.
+  // unless we positively know better. The error handler below turns this into
+  // a two-attempt contract: whichever source we start on, the first error
+  // swaps to the OTHER one.
   const [useTranscode, setUseTranscode] = useState(
     () => selectedFilePath !== null && prefersTranscodedVideo(selectedFilePath)
   );
+  // Whether the one allowed swap has been spent. Tracked separately from
+  // useTranscode because that flag alone is ambiguous once the #787 hint can
+  // choose the STARTING source: `useTranscode === true` no longer implies "we
+  // already fell back", and reading it that way made a hint-started transcode
+  // terminal on its first error (an ffmpeg-less server 501s, so a perfectly
+  // playable H.264 .mov died without ever trying the original bytes).
+  const [swapAttempted, setSwapAttempted] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [canPlay, setCanPlay] = useState(false);
 
@@ -96,6 +104,7 @@ export function PreviewPane() {
     setUseTranscode(
       selectedFilePath !== null && prefersTranscodedVideo(selectedFilePath)
     );
+    setSwapAttempted(false);
   }
 
   useEffect(() => {
@@ -108,15 +117,20 @@ export function PreviewPane() {
   }, [selectedFilePath]);
 
   const handleVideoError = useCallback(() => {
-    if (!useTranscode) {
-      // First error: swap to the H.264 transcode fallback.
-      setUseTranscode(true);
+    if (!swapAttempted) {
+      // First error: swap to the OTHER source. Started on the original bytes
+      // → try the H.264 transcode (the long-standing fallback). Started on the
+      // transcode because the #787 hint chose it → try the original bytes,
+      // which is the recovery path when the transcode is unavailable (ffmpeg
+      // missing → HTTP 501) or when the hint was simply wrong about the file.
+      setSwapAttempted(true);
+      setUseTranscode((prev) => !prev);
       setCanPlay(false);
     } else {
-      // Second error (transcode also failed): show terminal state.
+      // Second error (both sources failed): show terminal state.
       setVideoFailed(true);
     }
-  }, [useTranscode]);
+  }, [swapAttempted]);
 
   const handleDoubleClick = useCallback(() => {
     if (selectedFilePath !== null) {

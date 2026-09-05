@@ -57,6 +57,10 @@ export function VideoTile({
   // Per-tile independent transcode-fallback state — same pattern as
   // PreviewPane.tsx:62-69 and FullResViewer.tsx:76-89.
   const [useTranscode, setUseTranscode] = useState(false);
+  // "Have we already spent the one allowed swap?" — see PreviewPane.tsx: once
+  // the #787 hint can choose the STARTING source, useTranscode alone no longer
+  // means "we already fell back".
+  const [swapAttempted, setSwapAttempted] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [canPlay, setCanPlay] = useState(false);
 
@@ -66,6 +70,7 @@ export function VideoTile({
     // static poster, so the answer is ready by the time the user clicks.
     void canPlayHevc();
     setUseTranscode(false);
+    setSwapAttempted(false);
     setVideoFailed(false);
     setCanPlay(false);
     setPosterFailed(false);
@@ -91,15 +96,18 @@ export function VideoTile({
     [row.file_path, register, unregister]
   );
 
-  // Transcode-fallback error handler — identical contract to PreviewPane.
+  // Two-attempt error handler — identical contract to PreviewPane: the first
+  // error swaps to whichever source we did NOT start on, the second is
+  // terminal.
   const handleVideoError = useCallback(() => {
-    if (!useTranscode) {
-      setUseTranscode(true);
+    if (!swapAttempted) {
+      setSwapAttempted(true);
+      setUseTranscode((prev) => !prev);
       setCanPlay(false);
     } else {
       setVideoFailed(true);
     }
-  }, [useTranscode]);
+  }, [swapAttempted]);
 
   const handleClick = useCallback(() => {
     if (!playerMounted) {
@@ -108,6 +116,7 @@ export function VideoTile({
       // above has normally resolved. "unknown" (jsdom, absent API, a throwing
       // probe) keeps the original-bytes start and the reactive error swap.
       setUseTranscode(prefersTranscodedVideo(row.file_path));
+      setSwapAttempted(false);
       setPlayerMounted(true);
     }
   }, [playerMounted, row.file_path]);

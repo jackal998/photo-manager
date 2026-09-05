@@ -231,6 +231,88 @@ describe("VideoTile", () => {
     expect(video.getAttribute("src") ?? "").toContain("transcode=h264");
   });
 
+  // Two-attempt contract, both directions. Same regression as the other two
+  // surfaces: with the hint choosing the STARTING source, a first error on a
+  // hint-started transcode used to be terminal, so an ffmpeg-less server's 501
+  // killed a tile that would have played the original bytes fine.
+
+  const MOV_ROW: FileRow = {
+    ...VIDEO_ROW,
+    file_path: "/clips/holiday.mov",
+    basename: "holiday.mov",
+  };
+
+  function mountPlayer(row: FileRow) {
+    const rendered = render(
+      <GroupMediaProvider>
+        <VideoTile row={row} data-testid={TILE_TESTID} />
+      </GroupMediaProvider>
+    );
+    act(() => {
+      fireEvent.click(
+        rendered.container.querySelector(`[data-testid="${TILE_TESTID}"]`)!
+      );
+    });
+    return rendered;
+  }
+
+  function tileSrc(container: HTMLElement): string {
+    return container.querySelector("video")?.getAttribute("src") ?? "";
+  }
+
+  function fireTileError(container: HTMLElement): void {
+    act(() => {
+      fireEvent.error(container.querySelector("video")!);
+    });
+  }
+
+  it("hint → error → falls back to the ORIGINAL bytes (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    const { container } = mountPlayer(MOV_ROW);
+    expect(tileSrc(container)).toContain("transcode=h264");
+
+    fireTileError(container);
+
+    expect(container.textContent).not.toContain("Video cannot be played");
+    expect(tileSrc(container)).not.toContain("transcode=h264");
+    expect(tileSrc(container)).toContain("/api/media?path=");
+  });
+
+  it("native → error → swaps to the transcode (unchanged behaviour)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    const { container } = mountPlayer(VIDEO_ROW);
+    expect(tileSrc(container)).not.toContain("transcode=h264");
+
+    fireTileError(container);
+
+    expect(container.textContent).not.toContain("Video cannot be played");
+    expect(tileSrc(container)).toContain("transcode=h264");
+  });
+
+  it("hint → error → native → error → terminal (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    const { container } = mountPlayer(MOV_ROW);
+
+    fireTileError(container);
+    expect(tileSrc(container)).not.toContain("transcode=h264");
+    fireTileError(container);
+
+    expect(container.textContent).toContain("Video cannot be played");
+    expect(container.querySelector("video")).toBeNull();
+  });
+
+  it("native → error → transcode → error → terminal (unchanged behaviour)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    const { container } = mountPlayer(VIDEO_ROW);
+
+    fireTileError(container);
+    expect(tileSrc(container)).toContain("transcode=h264");
+    fireTileError(container);
+
+    expect(container.textContent).toContain("Video cannot be played");
+    expect(container.querySelector("video")).toBeNull();
+  });
+
   it("mounts the original-bytes src when the probe has no verdict (#787)", () => {
     // Pre-#787 behaviour, and what jsdom / the qa VP9-in-MP4 fixtures get.
     capabilities.prefersTranscodedVideo.mockReturnValue(false);

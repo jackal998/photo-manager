@@ -347,6 +347,76 @@ describe("PreviewPane", () => {
     expect(srcs.filter((src) => !src.includes("transcode=h264"))).toEqual([]);
   });
 
+  // The two-attempt contract, both directions. The hint chooses which source
+  // we START on; the single allowed swap then goes to the OTHER one. Reading
+  // "have we swapped?" off useTranscode alone made a hint-started transcode
+  // terminal on its first error — which on a packaged build (no ffmpeg → the
+  // route 501s) killed every .mov that would have played natively.
+
+  function fireVideoError(): void {
+    act(() => {
+      fireEvent.error(screen.getByTestId(PREVIEW_SINGLE_IMAGE));
+    });
+  }
+
+  function currentSrc(): string {
+    return screen.getByTestId(PREVIEW_SINGLE_IMAGE).getAttribute("src") ?? "";
+  }
+
+  it("hint → error → falls back to the ORIGINAL bytes (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedVideo("/photos/clip.mov");
+    render(<PreviewPane />);
+    expect(currentSrc()).toContain("transcode=h264");
+
+    fireVideoError();
+
+    // The transcode 501'd (or failed); the original bytes have never been
+    // tried, so they must be, not a terminal message.
+    expect(screen.queryByText(/video cannot be played/i)).not.toBeInTheDocument();
+    expect(currentSrc()).not.toContain("transcode=h264");
+    expect(currentSrc()).toContain("/api/media?path=");
+  });
+
+  it("native → error → swaps to the transcode (unchanged behaviour)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    seedVideo("/photos/clip.mp4");
+    render(<PreviewPane />);
+    expect(currentSrc()).not.toContain("transcode=h264");
+
+    fireVideoError();
+
+    expect(screen.queryByText(/video cannot be played/i)).not.toBeInTheDocument();
+    expect(currentSrc()).toContain("transcode=h264");
+  });
+
+  it("hint → error → native → error → terminal (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedVideo("/photos/clip.mov");
+    render(<PreviewPane />);
+
+    fireVideoError();
+    expect(currentSrc()).not.toContain("transcode=h264");
+    fireVideoError();
+
+    // Both sources have now failed — exactly one swap is allowed either way.
+    expect(screen.getByText(/video cannot be played/i)).toBeInTheDocument();
+    expect(screen.queryByTestId(PREVIEW_SINGLE_IMAGE)).not.toBeInTheDocument();
+  });
+
+  it("native → error → transcode → error → terminal (unchanged behaviour)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    seedVideo("/photos/clip.mp4");
+    render(<PreviewPane />);
+
+    fireVideoError();
+    expect(currentSrc()).toContain("transcode=h264");
+    fireVideoError();
+
+    expect(screen.getByText(/video cannot be played/i)).toBeInTheDocument();
+    expect(screen.queryByTestId(PREVIEW_SINGLE_IMAGE)).not.toBeInTheDocument();
+  });
+
   it("starts on the original bytes when the probe has no verdict (#787)", () => {
     // The default in jsdom, in any browser before the probe resolves, and for
     // every container the gate excludes — i.e. the pre-#787 behaviour, which
@@ -559,5 +629,83 @@ describe("FullResViewer", () => {
     // The transcode is being prepared from the start, so the same indicator
     // the reactive path shows must already be up — not a blank player.
     expect(screen.getByText(/preparing video/i)).toBeInTheDocument();
+  });
+
+  // Two-attempt contract, both directions — same rationale as PreviewPane's.
+
+  function seedFullResVideo(path: string): void {
+    useAppStore.setState({
+      manifest: {
+        path: "/manifests/test.db",
+        groups: [
+          {
+            group_number: 1,
+            member_count: 1,
+            items: [
+              {
+                ...testRow,
+                file_path: path,
+                basename: path.split("/").pop() ?? path,
+                media_type: "video" as const,
+              },
+            ],
+          },
+        ],
+        totalGroups: 1,
+        totalFiles: 1,
+        loading: false,
+        error: null,
+      },
+      preview: { selectedFilePath: null, fullResPath: path, selectedGroupId: null },
+    });
+  }
+
+  function fireFullResVideoError(): void {
+    act(() => {
+      fireEvent.error(screen.getByTestId(FULLRES_IMAGE));
+    });
+  }
+
+  function fullResSrc(): string {
+    return screen.getByTestId(FULLRES_IMAGE).getAttribute("src") ?? "";
+  }
+
+  it("hint → error → falls back to the ORIGINAL bytes (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedFullResVideo("/photos/clip.mov");
+    render(<FullResViewer />);
+    expect(fullResSrc()).toContain("transcode=h264");
+
+    fireFullResVideoError();
+
+    expect(screen.queryByText(/video cannot be played/i)).not.toBeInTheDocument();
+    expect(fullResSrc()).not.toContain("transcode=h264");
+    expect(fullResSrc()).toContain("/api/media?path=");
+  });
+
+  it("hint → error → native → error → terminal (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedFullResVideo("/photos/clip.mov");
+    render(<FullResViewer />);
+
+    fireFullResVideoError();
+    expect(fullResSrc()).not.toContain("transcode=h264");
+    fireFullResVideoError();
+
+    expect(screen.getByText(/video cannot be played/i)).toBeInTheDocument();
+    expect(screen.queryByTestId(FULLRES_IMAGE)).not.toBeInTheDocument();
+  });
+
+  it("native → error → transcode → error → terminal (unchanged behaviour)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    seedFullResVideo("/photos/clip.mp4");
+    render(<FullResViewer />);
+
+    fireFullResVideoError();
+    expect(fullResSrc()).toContain("transcode=h264");
+    fireFullResVideoError();
+
+    expect(screen.getByText(/video cannot be played/i)).toBeInTheDocument();
+    expect(screen.queryByTestId(FULLRES_IMAGE)).not.toBeInTheDocument();
   });
 });

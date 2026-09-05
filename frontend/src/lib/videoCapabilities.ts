@@ -17,9 +17,9 @@
 // navigator.mediaCapabilities.decodingInfo with a `type: "file"` HEVC config
 // matching what the backend actually serves natively: /api/media streams the
 // original bytes with a container Content-Type (`video/mp4`, `video/quicktime`
-// — app/web/routes/media.py `_CONTENT_TYPE`), and the owner's library is
-// ~99% HEVC. Both HEVC fourCCs are tried: `hvc1` (Apple's, what iPhone .MOV /
-// .MP4 carry) and `hev1`. Either one supported ⇒ the engine can play HEVC.
+// — app/web/routes/media.py `_CONTENT_TYPE`). Both HEVC fourCCs are tried:
+// `hvc1` (Apple's, what iPhone .MOV / .MP4 carry) and `hev1`. Either one
+// supported ⇒ the engine can play HEVC.
 //
 // THREE-STATE, NOT BOOLEAN
 // ------------------------
@@ -40,13 +40,20 @@
 //   - false negative (an HEVC file we did not preempt) → today's behaviour:
 //     one failed attempt, then the reactive swap. Cheap.
 //   - false positive (a natively-playable file we preempted) → a pointless
-//     ffmpeg encode, a multi-second stall, worse quality, and a terminal
-//     "Video cannot be played" if ffmpeg is missing (the route 501s and the
-//     swap-once handler has no second chance left). Expensive.
+//     ffmpeg encode, a multi-second stall and worse quality when ffmpeg is
+//     present; when it is absent the route 501s and the element falls back to
+//     the original bytes, costing one wasted request. Expensive either way.
 // So preemption is limited to the Apple containers that are HEVC in practice
-// (.mov / .m4v). .mp4 is deliberately excluded — it is the one extension that
-// genuinely carries anything (the qa fixtures are VP9-in-MP4), so its files
-// keep the reactive path.
+// (.mov / .m4v) for this library — see the "~99%-HEVC library" characterisation
+// recorded in docs/features.md:987 (from #737), which is the source for that
+// claim; this module does not re-assert it independently. .mp4 is deliberately
+// excluded — it is the one extension that genuinely carries anything (the qa
+// fixtures are VP9-in-MP4), so its files keep the reactive path.
+//
+// A wrong preempt is survivable either way: since #787 round 2 the surfaces
+// run a direction-aware two-attempt contract, so a transcode start that errors
+// (an ffmpeg-less server answers HTTP 501) falls back to the original bytes
+// before anything terminal is shown.
 
 /** What we know about this engine's HEVC decoding. */
 export type HevcSupport = "supported" | "unsupported" | "unknown";
