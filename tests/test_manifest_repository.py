@@ -1754,6 +1754,85 @@ class TestScoringSchemaMigration:
         assert records[str(ref)].score is None
         assert records[str(cand)].score == pytest.approx(0.75)
 
+    def test_scoring_signals_load_from_db_into_photo_record(self, tmp_path):
+        """#680 — the three per-dimension signals must be SELECTed and threaded
+        onto PhotoRecord, not left at their dataclass defaults.
+
+        This is the load-bearing test for the whole ticket: PhotoRecord defaults
+        ``gps_present``/``xmp_derived`` to False and ``exif_tag_count`` to None,
+        which are also legitimate real values. So if the columns fall out of
+        ``_LOAD_ALL_SQL`` (or the yield stops passing them), every row in the
+        web UI reports "no GPS, no XMP, no census" and nothing raises — the
+        serialisation test in tests/test_review_view.py would still pass.
+        """
+        gps_file = tmp_path / "with_gps.jpg"
+        plain = tmp_path / "no_gps.jpg"
+        gps_file.write_bytes(b""); plain.write_bytes(b"")
+        gid = "/group/a"
+        from scanner.dedup import ManifestRow
+        from scanner.manifest import write_manifest
+
+        rows = [
+            ManifestRow(
+                source_path=str(gps_file), source_label="src", action="",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="", group_id=gid, score=0.9,
+                exif_tag_count=12, gps_present=True, xmp_derived=True,
+            ),
+            ManifestRow(
+                source_path=str(plain), source_label="src",
+                action="REVIEW_DUPLICATE",
+                source_hash="bbb", phash=None, hamming_distance=4,
+                duplicate_of=None, reason="", group_id=gid, score=0.5,
+                exif_tag_count=0, gps_present=False, xmp_derived=False,
+            ),
+        ]
+        db = tmp_path / "m.sqlite"
+        write_manifest(rows, db)
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(gps_file)].exif_tag_count == 12
+        assert records[str(gps_file)].gps_present is True
+        assert records[str(gps_file)].xmp_derived is True
+        # The other row must NOT inherit the first row's values, and its 0 /
+        # False must survive as real readings rather than as "unset".
+        assert records[str(plain)].exif_tag_count == 0
+        assert records[str(plain)].gps_present is False
+        assert records[str(plain)].xmp_derived is False
+
+    def test_exif_tag_count_null_survives_load(self, tmp_path):
+        """A NULL exif_tag_count means the extended exiftool census pass did
+        not run for that file (#556's starvation symptom). It must stay None
+        through the load, not become 0 — 0 is "ran, counted nothing"."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        from scanner.dedup import ManifestRow
+        from scanner.manifest import write_manifest
+
+        rows = [
+            ManifestRow(
+                source_path=str(cand), source_label="src", action="",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="", group_id=gid,
+                exif_tag_count=None,
+            ),
+            ManifestRow(
+                source_path=str(ref), source_label="src",
+                action="REVIEW_DUPLICATE",
+                source_hash="bbb", phash=None, hamming_distance=2,
+                duplicate_of=None, reason="", group_id=gid,
+                exif_tag_count=None,
+            ),
+        ]
+        db = tmp_path / "m.sqlite"
+        write_manifest(rows, db)
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].exif_tag_count is None
+        assert records[str(ref)].exif_tag_count is None
+
 
 # ---------------------------------------------------------------------------
 # #433 — drop-move / dest_path migration

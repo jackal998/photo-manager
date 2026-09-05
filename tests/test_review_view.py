@@ -63,6 +63,11 @@ class _FakeRecord:
     pixel_height: int | None = None
     shot_date: object = None
     creation_date: object = None
+    # #680 — per-dimension scoring signals; same types/defaults as
+    # core.models.PhotoRecord so the fake cannot drift from the real record.
+    exif_tag_count: int | None = None
+    gps_present: bool = False
+    xmp_derived: bool = False
 
 
 # Phashes for deterministic hamming-distance tests
@@ -290,6 +295,7 @@ class TestSerializeGroups:
             "file_size_bytes", "pixel_width", "pixel_height",
             "shot_date", "creation_date", "phash", "hamming_distance",
             "thumbnail_url",
+            "exif_tag_count", "gps_present", "xmp_derived",
         }
         items = [_FakeRecord("/x.jpg", action="")]
         group = self._make_group(items)
@@ -316,3 +322,63 @@ class TestSerializeGroups:
 
     def test_empty_groups_list(self):
         assert rv.serialize_groups([]) == []
+
+
+# ---------------------------------------------------------------------------
+# #680 — per-dimension scoring signals cross the API boundary
+# ---------------------------------------------------------------------------
+
+class TestScoringSignalSerialisation:
+    """The three raw signals behind ``score`` must reach GET /api/manifest.
+
+    Without them the web s42 driver can only assert the composite score, so a
+    regression that silently kills ONE dimension (e.g. the exiftool args lose
+    ``-GPSLatitude``, or the extended census pass is starved as in #556) still
+    produces a plausible composite and goes unnoticed — the desktop s42 driver
+    catches it only because it reads the SQLite columns directly.
+    """
+
+    def _row(self, record):
+        class _Group:
+            def __init__(self, its):
+                self.group_number = 1
+                self.items = its
+        return rv.serialize_groups([_Group([record])])[0]["items"][0]
+
+    def test_signals_serialised_from_record(self):
+        row = self._row(_FakeRecord(
+            "/photos/clean.jpg", action="", score=0.8,
+            exif_tag_count=11, gps_present=True, xmp_derived=True,
+        ))
+        assert row["exif_tag_count"] == 11
+        assert row["gps_present"] is True
+        assert row["xmp_derived"] is True
+
+    def test_gps_absent_is_false_not_missing(self):
+        """A GPS-stripped file must serialise ``false``, not drop the key —
+        that distinction is what lets s42 assert the no-GPS variant."""
+        row = self._row(_FakeRecord(
+            "/photos/no_gps.jpg", action="", score=0.4,
+            exif_tag_count=6, gps_present=False,
+        ))
+        assert "gps_present" in row
+        assert row["gps_present"] is False
+
+    def test_exif_tag_count_none_is_preserved(self):
+        """None ("census pass did not run") must NOT collapse to 0 ("ran,
+        found nothing"). #556 was exactly a NULL exif_tag_count on a
+        non-deterministic subset of files; coercing it to 0 would hide that
+        class of failure behind a legitimate-looking count."""
+        row = self._row(_FakeRecord("/photos/x.jpg", action=""))
+        assert row["exif_tag_count"] is None
+
+    def test_signals_present_on_unscored_row(self):
+        """Live Photo MOV passengers and isolated rows get score=NULL, but
+        extraction still ran, so the signals must still be serialised."""
+        row = self._row(_FakeRecord(
+            "/photos/IMG_0001.MOV", action="", score=None,
+            exif_tag_count=3, gps_present=True,
+        ))
+        assert row["score"] is None
+        assert row["exif_tag_count"] == 3
+        assert row["gps_present"] is True

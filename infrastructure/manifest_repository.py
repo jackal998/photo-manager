@@ -58,7 +58,12 @@ SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        file_size_bytes, shot_date, creation_date, mtime,
        pixel_width, pixel_height,
        phash,
-       score
+       score,
+       -- #680 — the raw per-dimension inputs behind ``score``. Selected
+       -- (not derived) so GET /api/manifest can serialise them; a column
+       -- missing here silently becomes the PhotoRecord default, which is
+       -- indistinguishable from a genuine "no GPS" reading.
+       exif_tag_count, gps_present, xmp_derived
 FROM   migration_manifest
 WHERE  outcome = ''
 ORDER  BY
@@ -330,6 +335,9 @@ def _photo_record(
     db_pixel_height: "int | None" = None,
     db_phash: "str | None" = None,
     db_score: "float | None" = None,
+    db_exif_tag_count: "int | None" = None,
+    db_gps_present: "int | None" = None,
+    db_xmp_derived: "int | None" = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
@@ -395,6 +403,12 @@ def _photo_record(
         pixel_height=db_pixel_height,
         phash=db_phash,
         score=db_score,
+        # #680 — SQLite hands back INTEGER 0/1 for the two NOT NULL columns;
+        # coerce to bool so the API serialises JSON true/false rather than
+        # 0/1 (the Qt s42 driver applies the same bool() at its own read).
+        exif_tag_count=db_exif_tag_count,
+        gps_present=bool(db_gps_present),
+        xmp_derived=bool(db_xmp_derived),
     )
 
 
@@ -644,6 +658,9 @@ class ManifestRepository:
                         db_pixel_height=row["pixel_height"],
                         db_phash=row["phash"],
                         db_score=row["score"],
+                        db_exif_tag_count=row["exif_tag_count"],
+                        db_gps_present=row["gps_present"],
+                        db_xmp_derived=row["xmp_derived"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)
