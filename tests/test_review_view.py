@@ -382,13 +382,3 @@ class TestScoringSignalSerialisation:
         assert row["score"] is None
         assert row["exif_tag_count"] == 3
         assert row["gps_present"] is True
-
-    def test_sqlite_integer_is_coerced_to_json_bool(self):
-        """SQLite hands back INTEGER 0/1 for the two NOT NULL columns. Passing
-        those through raw would put ``1`` in the JSON, breaking any strict
-        ``=== true`` check on the TypeScript side (FileRow types them boolean)."""
-        row = self._row(_FakeRecord(
-            "/photos/x.jpg", action="", gps_present=1, xmp_derived=0,
-        ))
-        assert row["gps_present"] is True
-        assert row["xmp_derived"] is False

@@ -300,8 +300,9 @@ def run(*, base_url: str) -> None:
                 sm_items.extend(group.get("items", []))
 
             assert len(sm_items) >= 2, (
-                f"scoring-mixed manifest has {sm_items} items; expected >= 2 "
-                f"(fixture has 4 files)"
+                f"scoring-mixed manifest has {len(sm_items)} items; expected "
+                f">= 2, i.e. that the scan produced a real duplicate group at "
+                f"all. The exact row set is asserted below, per variant"
             )
 
             # Build {suffix -> score} and {suffix -> full row} maps so we can
