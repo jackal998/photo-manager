@@ -10,6 +10,7 @@ import {
   useState,
   useEffect,
   useLayoutEffect,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAppStore } from "@/store/useAppStore";
@@ -64,6 +65,28 @@ type FileVRow = {
 type VRow = GroupHeaderVRow | FileVRow;
 
 // ---------------------------------------------------------------------------
+// Roving keyboard cursor (#709)
+// ---------------------------------------------------------------------------
+
+/** The row the keyboard cursor sits on, held by IDENTITY rather than by index:
+ *  a decision write rebuilds `manifest.groups` (new array, new row objects) and
+ *  a sort/collapse renumbers `vrows`, so an index would silently point at a
+ *  different row afterwards. Qt s26 step 1/3 pins the desktop equivalent
+ *  ("selected row preserved across model rebuilds"). */
+type ActiveRow =
+  | { kind: "group"; groupNumber: number }
+  | { kind: "file"; filePath: string };
+
+/** Stable DOM id for a virtual row — the target of `aria-activedescendant`.
+ *  Keyed on the row's identity (group number, index within the group's ordered
+ *  items) rather than the virtual index so it survives scrolling. */
+function rowDomId(vrow: VRow): string {
+  return vrow.kind === "group-header"
+    ? `result-row-g${vrow.groupNumber}`
+    : `result-row-g${vrow.groupNumber}-i${vrow.fileIndex}`;
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -97,6 +120,11 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
 
   // Collapse state: Set of group_number values that are collapsed.
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+
+  // #709 — the roving keyboard cursor. Component state (like `collapsed`), not
+  // store state: it is a view concern, and the store already carries what the
+  // cursor WRITES (selection / preview).
+  const [activeRow, setActiveRow] = useState<ActiveRow | null>(null);
 
   const toggleGroup = useCallback((groupNumber: number) => {
     setCollapsed((prev) => {
@@ -206,6 +234,13 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     // The row list starts `scrollMargin` px into the scroll container's
     // content (the sticky header above it) — see the measurement effect.
     scrollMargin,
+    // #709 — the sticky header COVERS the first `scrollMargin` px of the
+    // viewport, so a row scrolled to the top edge would land underneath it.
+    // `scrollPaddingStart` is the virtualizer's "keep this much clear at the
+    // start": with it, `align: "auto"` both counts a row hidden behind the
+    // header as off-screen AND targets `item.start - scrollPaddingStart`, so
+    // the row's top comes to rest exactly at the header's bottom.
+    scrollPaddingStart: scrollMargin,
     // initialRect ensures the virtualizer renders rows in jsdom where
     // ResizeObserver and getBoundingClientRect both return zeroes.
     initialRect: { width: 1024, height: 4000 },
@@ -229,11 +264,124 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       // the target really lands in the middle of the viewport (before #699 it
       // settled one header-height below centre).
       virtualizer.scrollToIndex(idx, { align: "center" });
+      // The auto-select already put the SELECTION on the keeper rows; seed the
+      // keyboard cursor at the same row (#849 review) so the first ArrowDown
+      // continues from the row the app just scrolled to instead of jumping
+      // back to the top of the manifest. One-shot contract unchanged — this
+      // runs inside the same guarded branch and clearScrollTarget still fires.
+      setActiveRow({ kind: "file", filePath: scrollToPath });
     }
     // Clear even when the target isn't currently in vrows (e.g. its group is
     // collapsed) so a stale signal can't fire on a later unrelated render.
     clearScrollTarget();
   }, [scrollToPath, vrows, orderedItemsByGroup, virtualizer, clearScrollTarget]);
+
+  // ---------------------------------------------------------------------------
+  // Roving arrow-key cursor (#709) — Qt s26 steps 1/3 parity
+  // ---------------------------------------------------------------------------
+
+  // Where the cursor currently sits in the VISIBLE row order. -1 when nothing
+  // is active yet, or when the active row left the tree (its group collapsed,
+  // a rescan dropped the path) — the next arrow press then starts from an end.
+  const activeIndex = useMemo(() => {
+    if (activeRow === null) return -1;
+    return vrows.findIndex((vrow) => {
+      if (activeRow.kind === "group") {
+        return (
+          vrow.kind === "group-header" &&
+          vrow.groupNumber === activeRow.groupNumber
+        );
+      }
+      return (
+        vrow.kind === "file" &&
+        orderedItemsByGroup.get(vrow.groupNumber)?.[vrow.fileIndex]
+          ?.file_path === activeRow.filePath
+      );
+    });
+  }, [activeRow, vrows, orderedItemsByGroup]);
+
+  // Put the cursor on a GROUP header — from an arrow press or from a click on
+  // the header, which must behave identically. The group becomes the preview
+  // target, and the FILE selection is cleared: a group header is not part of
+  // the multi-selection model, and Qt's `set_decision_to_highlighted`
+  // (`app/views/handlers/file_operations.py:1071`) filters `type=="file"` out
+  // of the CURRENT selection — so with the cursor on a header, `d`/`k` are
+  // no-ops there too. Leaving the old file selection behind would let a
+  // decision land on a row the user has visibly moved off.
+  const activateGroupRow = useCallback(
+    (groupNumber: number) => {
+      setActiveRow({ kind: "group", groupNumber });
+      setSelectedGroup(groupNumber);
+      setSelection([]);
+    },
+    [setSelectedGroup, setSelection]
+  );
+
+  // Move the cursor to `index` and mirror what a CLICK on that row does, so the
+  // preview pane and the d/k decision shortcuts follow the keyboard exactly as
+  // they follow the mouse. A group header is a stop (Qt's QTreeView traverses
+  // its top-level rows too) but arrowing onto one never expands/collapses it —
+  // it only selects the group, the way clicking its header already does.
+  const activateIndex = useCallback(
+    (index: number) => {
+      const vrow = vrows[index];
+      if (vrow === undefined) return;
+      if (vrow.kind === "group-header") {
+        activateGroupRow(vrow.groupNumber);
+      } else {
+        const filePath = orderedItemsByGroup.get(vrow.groupNumber)?.[
+          vrow.fileIndex
+        ]?.file_path;
+        if (filePath === undefined) return;
+        setActiveRow({ kind: "file", filePath });
+        setSelection([filePath]);
+        setSelectedFile(filePath);
+      }
+      // "auto" only scrolls when the row is outside the padded viewport, so an
+      // arrow press inside the visible window leaves the scroll position alone.
+      virtualizer.scrollToIndex(index, { align: "auto" });
+    },
+    [
+      vrows,
+      orderedItemsByGroup,
+      activateGroupRow,
+      setSelection,
+      setSelectedFile,
+      virtualizer,
+    ]
+  );
+
+  // Scoped to the tree container, NOT to `document` (which is where the d/k
+  // shortcuts had to live — `useDecisionShortcuts.ts:12-18`). That scoping IS
+  // the "don't hijack typing" guard: a keystroke in the manifest-path field, a
+  // dialog input or any other surface never reaches this handler, and no
+  // predicate can rot. Nothing INSIDE the tree claims the arrow keys either —
+  // the per-row decision control is three plain buttons (#744) and the lock
+  // toggle a Radix checkbox — so a press with focus on one of those still moves
+  // the cursor, which is what the Qt tree does. An in-tree editable control
+  // (a filter box in the column header, say) would need a target check here.
+  const handleKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      // Bare arrows only — mirrors the Qt NoModifier guard the d/k shortcuts
+      // use, and leaves Shift+arrow free for a future range-extend.
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (vrows.length === 0) return;
+
+      // The container is scrollable, so an unhandled arrow would ALSO scroll it
+      // natively and fight the scrollToIndex below.
+      e.preventDefault();
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      const next =
+        activeIndex < 0
+          ? delta === 1
+            ? 0
+            : vrows.length - 1
+          : Math.min(vrows.length - 1, Math.max(0, activeIndex + delta));
+      activateIndex(next);
+    },
+    [activeIndex, vrows.length, activateIndex]
+  );
 
   // Decision + lock callbacks — stable references via the store.
   const handleDecision = useCallback(
@@ -263,6 +411,10 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
         setSelection([filePath]);
       }
       setSelectedFile(filePath);
+      // The clicked row is where the keyboard cursor picks up from (#709) —
+      // under every modifier, matching "the clicked row is always the
+      // preview/focus target" above.
+      setActiveRow({ kind: "file", filePath });
     },
     [
       extendSelection,
@@ -289,6 +441,12 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       y: number,
       col?: string
     ) => {
+      // A right-click is also a cursor move (#849 review): App resets the
+      // selection to this row when it is outside the current one
+      // (`App.tsx:109-120`), so the cursor has to follow or the next ArrowDown
+      // continues from wherever the last LEFT click was — scrolling the tree
+      // back to a row the user has since moved away from.
+      setActiveRow({ kind: "file", filePath });
       onContextMenu?.({ filePath, isLocked, x, y, col, groupNumber });
     },
     [onContextMenu]
@@ -304,6 +462,18 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   // ---------------------------------------------------------------------------
   // Render states: loading / empty-path / no-groups / virtualised list
   // ---------------------------------------------------------------------------
+
+  // The mounted window. `aria-activedescendant` must name an element that is
+  // actually in the DOM: the cursor survives being virtualized away (that is
+  // the whole point of the pattern), but a dangling IDREF is invalid ARIA and
+  // makes a screen reader announce nothing, so the attribute is dropped while
+  // the active row is outside the window and comes back when it re-mounts.
+  const virtualItems = virtualizer.getVirtualItems();
+  const activeDomId =
+    activeIndex >= 0 &&
+    virtualItems.some((virtualItem) => virtualItem.index === activeIndex)
+      ? rowDomId(vrows[activeIndex])
+      : undefined;
 
   if (manifest.loading) {
     return (
@@ -347,7 +517,14 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       // caught even while `overscan` hides its visual effect.
       data-scroll-margin={scrollMargin}
       ref={scrollRef}
-      className="h-full overflow-auto border border-neutral-200 rounded"
+      // #709 — the container is the keyboard focus target; the active row is
+      // named by aria-activedescendant rather than by moving DOM focus, because
+      // a virtualized row can be unmounted while it is still the cursor.
+      tabIndex={0}
+      role="tree"
+      aria-activedescendant={activeDomId}
+      onKeyDown={handleKeyDown}
+      className="h-full overflow-auto border border-neutral-200 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400"
       style={{ contain: "strict" }}
     >
       {/* Sticky sort/resize column header (#685). Inside the scroll container so
@@ -362,12 +539,33 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       />
       {/* Total height spacer for the virtualizer */}
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-        {virtualizer.getVirtualItems().map((virtualItem) => {
+        {virtualItems.map((virtualItem) => {
           const vrow = vrows[virtualItem.index];
+          // Resolved once: the wrapper needs the row's state for ARIA, and the
+          // FileRow branch below needs the row itself.
+          const fileRow =
+            vrow.kind === "file"
+              ? orderedItemsByGroup.get(vrow.groupNumber)?.[vrow.fileIndex]
+              : undefined;
+          const isSelected =
+            fileRow !== undefined && selectedPaths.includes(fileRow.file_path);
 
           return (
             <div
               key={virtualItem.key}
+              // The row identity aria-activedescendant points at (#709).
+              id={rowDomId(vrow)}
+              role="treeitem"
+              // The treeitem is this wrapper, so the state a screen reader
+              // reads off it has to live here — `aria-selected` sits on the
+              // FileRow div and `aria-expanded` on the GroupRow button, both
+              // CHILDREN of the treeitem, which exposes neither on its own.
+              aria-selected={vrow.kind === "file" ? isSelected : undefined}
+              aria-expanded={
+                vrow.kind === "group-header"
+                  ? !collapsed.has(vrow.groupNumber)
+                  : undefined
+              }
               data-index={virtualItem.index}
               ref={virtualizer.measureElement}
               style={{
@@ -395,31 +593,29 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                   onToggle={() => {
                     toggleGroup(vrow.groupNumber);
                     // GROUP-row click also selects the group for grid preview
-                    // (mirrors Qt main_window.py:756 — GROUP selection → show_grid).
-                    setSelectedGroup(vrow.groupNumber);
+                    // (mirrors Qt main_window.py:756 — GROUP selection → show_grid),
+                    // and is where the keyboard cursor resumes from (#709).
+                    // Same helper the arrow path uses, so a header reached by
+                    // mouse and by keyboard leaves the app in one state.
+                    activateGroupRow(vrow.groupNumber);
                   }}
                   onContextMenu={handleGroupContextMenu}
                 />
               ) : (
-                (() => {
-                  const items = orderedItemsByGroup.get(vrow.groupNumber);
-                  const fileRow = items?.[vrow.fileIndex];
-                  if (!fileRow) return null;
-                  return (
-                    <FileRow
-                      row={fileRow}
-                      groupId={String(vrow.groupNumber)}
-                      groupNumber={vrow.groupNumber}
-                      columnWidths={columnWidths}
-                      onDecision={handleDecision}
-                      onLock={handleLock}
-                      onSelect={handleRowSelect}
-                      onOpenFullRes={handleOpenFullRes}
-                      onContextMenu={handleContextMenu}
-                      isSelected={selectedPaths.includes(fileRow.file_path)}
-                    />
-                  );
-                })()
+                fileRow !== undefined && (
+                  <FileRow
+                    row={fileRow}
+                    groupId={String(vrow.groupNumber)}
+                    groupNumber={vrow.groupNumber}
+                    columnWidths={columnWidths}
+                    onDecision={handleDecision}
+                    onLock={handleLock}
+                    onSelect={handleRowSelect}
+                    onOpenFullRes={handleOpenFullRes}
+                    onContextMenu={handleContextMenu}
+                    isSelected={isSelected}
+                  />
+                )
               )}
             </div>
           );
