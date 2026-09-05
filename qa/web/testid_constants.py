@@ -31,7 +31,20 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 MAIN_RESULT_TREE = "main-result-tree"
-"""The outer container of the grouped-file result tree."""
+"""The outer container of the grouped-file result tree.
+
+Also carries ``data-scroll-margin`` (#699): the pixel offset the virtualizer
+was told the row list starts at, which must equal the sticky column-header
+row's measured height.  A scenario compares the two to prove the virtualizer's
+coordinate space matches the real layout."""
+
+RESULT_COL_HEADER_ROW = "result-col-header-row"
+"""Root of the sticky column-header row inside the result tree (#685/#699).
+
+Its height is what the tree measures at runtime and feeds to the virtualizer
+as ``scrollMargin``; s47 reads its bounding box both to check that value and to
+assert the header stays pinned to the top of the scroll container while rows
+scroll underneath it."""
 
 MAIN_STATUS_BAR = "main-status-bar"
 """Status-bar paragraph shown at the bottom of the main page."""

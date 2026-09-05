@@ -9,12 +9,12 @@
 // horizontally with the body when columns are widened past the viewport while
 // staying pinned to the top vertically.
 
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, Ref } from "react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
 import { COLUMNS, type ColumnId, type SortDirection } from "@/lib/resultColumns";
-import { colHeaderTestid, colResizeTestid } from "@/testids";
+import { colHeaderTestid, colResizeTestid, RESULT_COL_HEADER_ROW } from "@/testids";
 
 interface ColumnHeaderRowProps {
   columnWidths: Record<ColumnId, number>;
@@ -24,6 +24,11 @@ interface ColumnHeaderRowProps {
   /** Live-updates the width per move (persist=false) and commits once at the
    *  end of the drag (persist=true) — see ColumnHeaderRow's drag useEffect. */
   onResize: (column: ColumnId, width: number, persist?: boolean) => void;
+  /** Root-element ref (React 19 ref-as-prop). ResultTree measures this row's
+   *  height and hands it to the virtualizer as `scrollMargin` (#699) — the
+   *  header occupies the first N px of the scroll container's content, so the
+   *  row list does not start at scrollTop 0. */
+  ref?: Ref<HTMLDivElement>;
 }
 
 export function ColumnHeaderRow({
@@ -32,6 +37,7 @@ export function ColumnHeaderRow({
   sortDirection,
   onToggleSort,
   onResize,
+  ref,
 }: ColumnHeaderRowProps) {
   const t = useT();
 
@@ -103,6 +109,8 @@ export function ColumnHeaderRow({
 
   return (
     <div
+      ref={ref}
+      data-testid={RESULT_COL_HEADER_ROW}
       className="sticky top-0 z-10 flex items-center gap-3 px-4 py-1 bg-neutral-100 border-b border-neutral-200 text-xs font-semibold text-neutral-600 select-none"
     >
       {/* Thumbnail spacer — aligns header cells with FileRow's metadata cells. */}
