@@ -3,7 +3,14 @@
 // (thousands of files). Rows are heterogeneous: a group header row
 // followed by the group's file rows (hidden when collapsed).
 
-import { useRef, useMemo, useCallback, useState, useEffect } from "react";
+import {
+  useRef,
+  useMemo,
+  useCallback,
+  useState,
+  useEffect,
+  useLayoutEffect,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAppStore } from "@/store/useAppStore";
 import { MAIN_RESULT_TREE } from "@/testids";
@@ -156,6 +163,37 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
 
   // Virtualizer
   const scrollRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+
+  // #699 — the sticky ColumnHeaderRow is a normal-flow sibling ABOVE the row
+  // list inside the same scroll container, so the list origin sits one
+  // header-height below the container's content top. `scrollMargin` is exactly
+  // that offset: without it the virtualizer's windowing math compares
+  // scrollTop (measured from the content top, header included) against row
+  // coordinates measured from the list origin, and every row is off by the
+  // header height. Measured at runtime rather than hardcoded — the header's
+  // height follows its font, padding and the browser's text metrics.
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (header === null) return;
+    const measure = () => {
+      const next = header.getBoundingClientRect().height;
+      // Skip no-op state updates — a ResizeObserver fires on every layout
+      // pass that touches the header (a column drag is one per mousemove).
+      setScrollMargin((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
+    // manifest.groups gates which branch renders below: the header only exists
+    // in the virtualized branch, so re-run once a manifest replaces a
+    // loading/empty placeholder and the ref becomes non-null.
+  }, [groups]);
+
   const virtualizer = useVirtualizer({
     count: vrows.length,
     getScrollElement: () => scrollRef.current,
@@ -165,6 +203,9 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       return vrow.kind === "group-header" ? 34 : 72;
     },
     overscan: 10,
+    // The row list starts `scrollMargin` px into the scroll container's
+    // content (the sticky header above it) — see the measurement effect.
+    scrollMargin,
     // initialRect ensures the virtualizer renders rows in jsdom where
     // ResizeObserver and getBoundingClientRect both return zeroes.
     initialRect: { width: 1024, height: 4000 },
@@ -183,7 +224,10 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
           ?.file_path === scrollToPath
     );
     if (idx >= 0) {
-      // "center" keeps the row clear of the sticky column header.
+      // "center" keeps the row clear of the sticky column header. With #699's
+      // scrollMargin the virtualizer's coordinates are the container's own, so
+      // the target really lands in the middle of the viewport (before #699 it
+      // settled one header-height below centre).
       virtualizer.scrollToIndex(idx, { align: "center" });
     }
     // Clear even when the target isn't currently in vrows (e.g. its group is
@@ -297,6 +341,11 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   return (
     <div
       data-testid={MAIN_RESULT_TREE}
+      // The offset the virtualizer was told the row list starts at (#699).
+      // It must equal the sticky header's rendered height — s47 reads both and
+      // compares, which is how a silently-reintroduced coordinate offset is
+      // caught even while `overscan` hides its visual effect.
+      data-scroll-margin={scrollMargin}
       ref={scrollRef}
       className="h-full overflow-auto border border-neutral-200 rounded"
       style={{ contain: "strict" }}
@@ -304,6 +353,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       {/* Sticky sort/resize column header (#685). Inside the scroll container so
           it scrolls horizontally with the body but stays pinned vertically. */}
       <ColumnHeaderRow
+        ref={headerRef}
         columnWidths={columnWidths}
         sortColumn={sortColumn}
         sortDirection={sortDirection}
@@ -325,7 +375,11 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                 top: 0,
                 left: 0,
                 width: "100%",
-                transform: `translateY(${virtualItem.start}px)`,
+                // `start` is measured from the scroll container's content top
+                // (it includes scrollMargin); this spacer already begins one
+                // header-height in, so subtract the margin exactly once or the
+                // rows render a header-height too low (#699).
+                transform: `translateY(${virtualItem.start - scrollMargin}px)`,
               }}
             >
               {vrow.kind === "group-header" ? (

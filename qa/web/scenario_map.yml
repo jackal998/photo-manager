@@ -282,6 +282,23 @@ scenarios:
       manifest → width restores. localStorage is the per-browser analog of the
       desktop window_state.ini; auto-isolated per Playwright context (no
       server reset). s46 intentionally absent from ALL_SCENARIOS.
+      #699 PHASE 6 (tall-manifest scroll — the web suite's only scrolling
+      coverage; every sandbox fixture fits on screen, largest is 5 rows). Loads
+      a SYNTHETIC 30-group / 60-row manifest built in-scenario with the
+      production scanner.manifest.write_manifest over 60 copies of a real
+      near-dup JPEG (the scan pipeline cannot emit 30 groups from any existing
+      fixture, and 30 pHash-distinct generated images would be a slow,
+      collision-prone sandbox addition), then scrolls the result tree and
+      asserts: the tree really scrolls (~4.9k px of overflow — non-vacuity);
+      the first row is not occluded by the sticky header at scrollTop 0; the
+      header stays pinned to the container's content top mid-scroll while rows
+      move; and — the load-bearing check — every rendered row's offset from the
+      container's content top equals the virtualizer's own coordinate for it
+      (recovered from the DOM as translateY + data-scroll-margin), at
+      scrollTop 0, mid-scroll and back at top. On the pre-#699 build that
+      difference is 25.00px (the header height) at all three positions; it is
+      0.00px after. Divergence: no Qt counterpart — Qt's QTreeView owns its own
+      scrolling, so this phase is web-native and adds no desktop obligation.
 
   - scenario: s48_dialog_geometry_persist
     playwright_module: qa.web.scenarios.s48_dialog_geometry_persist
