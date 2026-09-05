@@ -30,7 +30,7 @@ time.) To assemble a MIXED offer we ACCUMULATE:
 This exercises the SAME behaviour the desktop pins — the dialog offers every
 current singleton, not just the one the last op collapsed.
 
-Six variants:
+Seven variants:
   * remove_plain — mixed, checkbox UNCHECKED, Remove → only A_keep (plain)
     pruned; B_keep (actioned) held with its 'delete' decision intact.
   * remove_both  — mixed, checkbox CHECKED, Remove → both pruned.
@@ -45,6 +45,14 @@ Six variants:
   * lock_apply   — lock gate Unlock&Apply → A_keep pruned; prune dialog Keep →
     B_keep held (the Qt to_prune.extend(prunable_locked) tail: A_keep prunes
     regardless of the prune-dialog verdict).
+  * lock_apply_remove — lock gate Unlock&Apply, then the prune dialog is dismissed
+    with REMOVE (not Keep) → BOTH singletons prune: A_keep via the lockedToPrune
+    fold and B_keep via the actioned bucket. The lock-resolved dialog is
+    ACTIONED-ONLY (A_keep has left the unlocked buckets), so `isMixed` is false,
+    no opt-in checkbox is rendered, and Remove itself opts the actioned bucket in
+    — the label counts the ACTIONED bucket, not the plain one. This is the only
+    live drive of the Remove-with-non-empty-`lockedToPrune` path and the
+    `onOpenChange` double-`applyPrune` guard (#713 / #702 item 4).
 
 Assertions read sqlite directly — a held singleton (outcome='') is a
 single-member group the web review view filters out (orphan-skip), so GET
@@ -203,12 +211,14 @@ def _execute_remove(page, base_url, db_path, basename):
 
 
 def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) -> None:
-    """prune_action ∈ {"remove_plain", "remove_both", "keep"}.
+    """prune_action ∈ {"remove_plain", "remove_both", "keep", "remove_actioned"}.
 
     For lock=True, the lock gate is driven first (Cancel for keep-ish holds,
-    Unlock&Apply otherwise — encoded by the caller via label) and the prune
-    dialog is always dismissed with Keep so the assertion isolates the lock
-    effect on A_keep while B_keep (actioned) stays intact.
+    Unlock&Apply otherwise — encoded by the caller via label). The prune dialog
+    is then dismissed with Keep for prune_action="keep", which isolates the lock
+    effect on A_keep while B_keep (actioned) stays intact; "remove_actioned"
+    instead clicks Remove on that lock-resolved (actioned-only) dialog, which is
+    the one prune-flow combination the Keep-only lock variants cannot reach.
     """
     tmpdir = tempfile.mkdtemp(prefix="qa_s61_")
     try:
@@ -258,9 +268,25 @@ def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) ->
                 else:  # lock_apply
                     lock_btn = LOCK_CONFIRM_BTN_UNLOCK_APPLY
                 page.get_by_test_id(lock_btn).click()
-                # Then the prune dialog (actioned-only B_keep) — dismiss with Keep.
+                # Then the prune dialog. The lock-resolved offer is ACTIONED-ONLY
+                # (B_keep): A_keep has left the unlocked buckets either way —
+                # Unlock&Apply folded it into lockedToPrune, Cancel/Unlocked-only
+                # held it out entirely — so `plain` is empty, PruneConfirmDialog's
+                # `isMixed` is false, and it renders NO opt-in checkbox; Remove
+                # itself opts the actioned bucket in.
                 page.get_by_test_id(PRUNE_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
-                page.get_by_test_id(PRUNE_BTN_KEEP).click()
+                if prune_action == "remove_actioned":
+                    # Pin the layout, not just the verdict: were the lock fold to
+                    # regress and leave A_keep in the PLAIN bucket, the dialog
+                    # would render the mixed opt-in checkbox and Remove would
+                    # prune only the plain bucket — caught here.
+                    assert page.get_by_test_id(PRUNE_INCLUDE_ACTIONED).count() == 0, \
+                        "lock-resolved offer must be actioned-only (no mixed opt-in checkbox)"
+                    assert "Remove 1" in page.get_by_test_id(PRUNE_BTN_REMOVE).inner_text(), \
+                        "dynamic Remove label should show the ACTIONED count (1) here"
+                    page.get_by_test_id(PRUNE_BTN_REMOVE).click()
+                else:
+                    page.get_by_test_id(PRUNE_BTN_KEEP).click()
             else:
                 # Mixed dialog: assert the opt-in checkbox is present + the label.
                 page.get_by_test_id(PRUNE_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
@@ -306,6 +332,21 @@ def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) ->
                     f"{A_KEEP} must remain a LOCKED prune candidate after {verb} — "
                     f"buckets: locked={sorted(_locked_candidates(base_url, db))}"
                 )
+            elif label == "lock_apply_remove":
+                # The only variant that drives Remove on the lock-confirmed path
+                # (#713 / #702 item 4): computePruneSet folds A_keep in via the
+                # non-empty lockedToPrune AND the actioned bucket via Remove, so
+                # BOTH singletons finalize. The existing lock_apply variant proves
+                # the lockedToPrune tail survives a KEEP verdict; this one proves
+                # the two prune sources compose on a REMOVE verdict.
+                _await(lambda: _sqlite(db, A_KEEP)[0] == "ignored" and _sqlite(db, B_KEEP)[0] == "ignored")
+                assert _sqlite(db, A_KEEP)[0] == "ignored", \
+                    f"Unlock&Apply must prune the locked A_keep, got {_sqlite(db, A_KEEP)}"
+                assert _sqlite(db, A_KEEP)[2] == 0, "Unlock&Apply must have UNLOCKED A_keep"
+                assert _sqlite(db, B_KEEP)[0] == "ignored", \
+                    f"Remove must prune the actioned B_keep, got {_sqlite(db, B_KEEP)}"
+                assert _sqlite(db, B_KEEP)[1] == "delete", \
+                    "pruning B_keep must not clear its staged 'delete' decision"
             else:  # lock_apply
                 _await(lambda: _sqlite(db, A_KEEP)[0] == "ignored")
                 assert _sqlite(db, A_KEEP)[0] == "ignored", "Unlock&Apply must prune the locked A_keep"
@@ -323,3 +364,4 @@ def run(*, base_url: str) -> None:
     _run_variant(base_url, label="lock_cancel", lock=True, prune_action="keep")
     _run_variant(base_url, label="lock_unlocked_only", lock=True, prune_action="keep")
     _run_variant(base_url, label="lock_apply", lock=True, prune_action="keep")
+    _run_variant(base_url, label="lock_apply_remove", lock=True, prune_action="remove_actioned")

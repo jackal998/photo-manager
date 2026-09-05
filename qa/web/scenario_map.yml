@@ -352,9 +352,9 @@ scenarios:
     playwright_module: qa.web.scenarios.s61_actioned_singleton_prune
     status: done
     notes: >-
-      #686 mixed-bucket singleton prune on the "ask" path. Six variants
+      #686 mixed-bucket singleton prune on the "ask" path. Seven variants
       (remove_plain / remove_both / keep / lock_cancel / lock_unlocked_only /
-      lock_apply). #702 Cancel-discriminator: lock_cancel and lock_unlocked_only
+      lock_apply / lock_apply_remove). #702 Cancel-discriminator: lock_cancel and lock_unlocked_only
       both HOLD the locked A_keep (identical sqlite state); the discriminating
       assertion is a POST /api/prune/candidates read confirming A_keep stays in
       the `locked` bucket (an accidental unlock is caught there, not by sqlite).
@@ -368,6 +368,12 @@ scenarios:
       actioned opt-in checkbox + dynamic "Remove N" label in the mixed layout,
       and the D6 lock gate (lock_cancel/lock_apply) routes locked A_keep through
       LockConfirmDialog op="prune" before the actioned-only prune dialog.
+      #713 (= #702 item 4) lock_apply_remove is the only live drive of REMOVE on
+      the lock-confirmed path: Unlock&Apply then Remove prunes BOTH singletons
+      (A_keep via the non-empty lockedToPrune fold, B_keep via the actioned
+      bucket). That lock-resolved dialog is ACTIONED-ONLY, so isMixed is false
+      and NO opt-in checkbox is rendered (verified live) — Remove itself opts the
+      actioned bucket in and the "Remove 1" label counts ACTIONED, not plain.
       Outcomes read via sqlite (a held singleton is invisible to the manifest
       API). Two generated clusters (qa/web/_prune_fixtures). Removes finalize to
       outcome='ignored' (no file delete). Divergence: accumulation + execute-
