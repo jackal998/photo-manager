@@ -818,11 +818,37 @@ class MainWindow(QMainWindow):
                             p = str(Path(folder) / name)
                         group_items.append((p, name, folder, size_txt, creation_txt, shot_txt))
             self._preview.show_grid(group_items)
+            # #622 Phase 2 — the selection has settled on this group; warm the
+            # next group's first image at prefetch priority. The coordinator
+            # only runs it while nothing the user is waiting for is queued,
+            # and drops it on the next selection, so this can cost latency
+            # nowhere. Best-effort: a failed guess must never break selection.
+            try:
+                self._prefetch_next_group(model, idx.row())
+            except Exception:
+                pass
             # Request autoplay for all videos after loading tiles
             try:
                 self._preview.autoplay_all_videos_when_ready()
             except Exception:
                 pass
+
+    def _prefetch_next_group(self, model: Any, group_row: int) -> None:
+        """Warm the next group's first thumbnail (#622 Phase 2, 1-ahead).
+
+        Thin proxy: the "which path" decision is
+        :func:`app.views.main_window_helpers.next_group_first_path` (unit
+        tested there against a plain model); this only forwards it to the
+        runner at prefetch priority.
+        """
+        from app.views.main_window_helpers import next_group_first_path
+
+        path = next_group_first_path(model, group_row)
+        if not path:
+            return
+        self._runner.request_prefetch(
+            path, self._preview.current_thumb_side(), owner=self._preview
+        )
 
     # PRESERVED: Image loading slot
 

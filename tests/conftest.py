@@ -45,13 +45,38 @@ def _isolate_unc_resolution(monkeypatch):
     test, so grouping resolves to the bare drive letter — matching CI. Tests
     that exercise the resolution logic itself inject their own resolver via
     ``device_key(unc_resolver=...)`` and are unaffected by this patch.
-    """
-    import scanner.workers as _workers
 
-    _workers._unc_cache.clear()
-    monkeypatch.setattr(_workers, "_resolve_unc_via_win32", lambda letter: None)
+    #622 Phase 2 moved ``device_key`` and its memo to
+    ``infrastructure.device_key`` (``scanner.workers`` re-exports them). This
+    fixture MUST patch the defining module: patching the re-exporting one
+    would rebind a name ``device_key`` no longer reads, so the fixture would
+    go quietly inert and the real ``WNetGetConnectionW`` would resolve a live
+    ``J:`` back to ``\\\\LINXIAOYUN`` on the dev machine — the exact
+    dev-passes/CI-differs asymmetry described above.
+    """
+    import infrastructure.device_key as _dk
+
+    _dk._unc_cache.clear()
+    monkeypatch.setattr(_dk, "_resolve_unc_via_win32", lambda letter: None)
     yield
-    _workers._unc_cache.clear()
+    _dk._unc_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_source_mtime_ttl_cache():
+    """Drop the module-global source-mtime TTL cache between tests (#622 Phase 2).
+
+    ``infrastructure.image_service._mtime_cache`` memoises each path's mtime
+    for 5 s of real monotonic time. Without this reset, one test's stat of a
+    ``tmp_path`` file would still be cached when the next test writes a
+    different file to the same reused path within 5 s — an order-dependent
+    failure that only shows up in a full-suite run.
+    """
+    import infrastructure.image_service as _img
+
+    _img._mtime_cache.clear()
+    yield
+    _img._mtime_cache.clear()
 
 
 @pytest.fixture(autouse=True)

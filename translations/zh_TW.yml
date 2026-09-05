@@ -629,6 +629,8 @@ web:
     too_large: "檔案過大，無法在瀏覽器中預覽原始解析度。"
     open_in_default_app: "以預設應用程式開啟"
     zoom_hint: "Ctrl+滾輪縮放 · 拖曳平移 · Esc 關閉"
+  overlay:
+    resize: "調整視窗大小"
   preview:
     select_file: "選擇檔案以預覽"
     video_cannot_be_played: "影片無法播放"

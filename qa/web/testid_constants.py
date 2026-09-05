@@ -262,6 +262,20 @@ rebuilds the manifest and clears the pending decisions."""
 EXECUTE_DIALOG = "execute-dialog"
 """The execute-action dialog wrapper."""
 
+EXECUTE_TITLE_BAR = "execute-title-bar"
+"""Drag target that moves the execute dialog (#739).  Mousedown here starts a
+move gesture; the new {x, y, w, h} is written once on mouseup to
+localStorage key ``pm.overlay-geometry.execute.v1``.  s48 drags this."""
+
+EXECUTE_RESIZE_HANDLE = "execute-resize-handle"
+"""Bottom-right corner grip that resizes the execute dialog (#739).  Same
+mechanism and storage key as EXECUTE_TITLE_BAR."""
+
+EXECUTE_BODY = "execute-body"
+"""Scrollable body between the execute dialog's header and its footer (#739
+round 2).  Everything that can grow lives here, so at a pinned height the
+body scrolls and the Execute / Cancel buttons stay inside the box."""
+
 EXECUTE_ALL_DELETE_BANNER = "execute-all-delete-banner"
 """Warning banner shown when every scoped row is a delete."""
 
@@ -402,6 +416,16 @@ FULLRES_DIALOG = "fullres-dialog"
 FULLRES_IMAGE = "fullres-image"
 """The <img> element inside the full-res dialog."""
 
+FULLRES_TITLE_BAR = "fullres-title-bar"
+"""Drag target that moves the full-res viewer window (#739).  The viewer
+still OPENS filling the viewport; the first drag here turns it into a
+floating window whose {x, y, w, h} persists under localStorage key
+``pm.overlay-geometry.fullres.v1``.  s39 drags this."""
+
+FULLRES_RESIZE_HANDLE = "fullres-resize-handle"
+"""Bottom-right corner grip that resizes the full-res viewer (#739).  Same
+mechanism and storage key as FULLRES_TITLE_BAR."""
+
 # ---------------------------------------------------------------------------
 # Right-click context menu
 # ---------------------------------------------------------------------------
@@ -454,6 +478,20 @@ ACTION_MAIN_BUTTON = "main-action-button"
 
 ACTION_DIALOG = "action-dialog"
 """The action dialog wrapper (Set Action by Field)."""
+
+ACTION_TITLE_BAR = "action-title-bar"
+"""Drag target that moves the Set Action dialog (#739).  Mousedown here
+starts a move gesture; the new {x, y, w, h} is written once on mouseup to
+localStorage key ``pm.overlay-geometry.action.v1``.  s48 drags this."""
+
+ACTION_RESIZE_HANDLE = "action-resize-handle"
+"""Bottom-right corner grip that resizes the Set Action dialog (#739).  Same
+mechanism and storage key as ACTION_TITLE_BAR."""
+
+ACTION_BODY = "action-body"
+"""Scrollable body between the Set Action dialog's header and its footer
+(#739 round 2).  The preview block grows here, so at a pinned height the body
+scrolls and the Apply / Cancel buttons stay inside the box."""
 
 ACTION_FIELD_COMBO = "action-field-combo"
 """Combo box for selecting the field to match against (File Name, Score, …)."""

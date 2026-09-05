@@ -738,6 +738,10 @@ web:
     too_large: "File too large for in-browser full-res preview."
     open_in_default_app: "Open in default app"
     zoom_hint: "Ctrl+scroll to zoom · Drag to pan · Esc to close"
+  # Shared movable/resizable overlay chrome (#739) — full-res viewer,
+  # Execute Action dialog, Set Action dialog.
+  overlay:
+    resize: "Resize window"
   # PreviewPane (web audit fix 5 — was hardcoded English).
   preview:
     select_file: "Select a file to preview"

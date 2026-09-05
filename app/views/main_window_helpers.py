@@ -17,6 +17,8 @@ What lives here:
   ``MainWindow._select_rows_by_paths`` (#239 auto-select highlight).
 * :func:`extract_keeper_paths` — pulls ``rec.action == "KEEP"`` file
   paths from a VM ``groups`` list (#239 scan-complete handler).
+* :func:`next_group_first_path` — the 1-ahead prefetch target for
+  ``MainWindow.on_tree_selection_changed`` (#622 Phase 2).
 * :func:`count_isolated_rows` — SQLite query for un-grouped manifest
   rows; used by the status-bar baseline text after a manifest load
   (#138, #140).
@@ -119,6 +121,32 @@ def extract_first_selected_file_path(items: Iterable[Any]) -> str | None:
         if item.get("type") == "file" and item.get("path"):
             return item["path"]
     return None
+
+
+def next_group_first_path(model: Any, group_row: int) -> str | None:
+    """Return the first file path of the group AFTER ``group_row``.
+
+    The 1-ahead prefetch target (#622 Phase 2): once the pane settles on
+    group N, the preview coordinator warms group N+1's first image at
+    prefetch priority, so the most likely next click is already decoded.
+
+    Returns ``None`` when there is no next group, when it has no
+    children, or when the first child carries no ``PATH_ROLE`` — the
+    caller then simply prefetches nothing. Speculation must never be
+    able to break navigation, so every uncertain case declines rather
+    than guesses a path.
+    """
+    if model is None:
+        return None
+    next_row = int(group_row) + 1
+    if next_row < 0 or next_row >= model.rowCount():
+        return None
+    group_idx = model.index(next_row, COL_GROUP)
+    if not group_idx.isValid() or model.rowCount(group_idx) < 1:
+        return None
+    name_idx = model.index(0, COL_NAME, group_idx)
+    path = model.data(name_idx, PATH_ROLE)
+    return path or None
 
 
 def count_isolated_rows(manifest_path: str, grouped_count: int) -> int:
