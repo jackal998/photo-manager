@@ -11,13 +11,24 @@
 // registry entry) — no "branch was reached" padding, per CLAUDE.md.
 
 import { act, render, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { useEffect } from "react";
 
 import { VideoTile } from "./VideoTile";
 import { GroupMediaProvider } from "./GroupMediaProvider";
 import { useGroupMedia } from "@/hooks/useGroupMedia";
 import type { FileRow } from "@/api/types";
+
+// #787 — the HEVC capability probe, mocked so these tests exercise the wiring
+// (does the tile consult it, with its own path, when the <video> is created on
+// click?). The probe's own logic is tested in lib/videoCapabilities.test.ts.
+// The default `false` mirrors what the real module reports under jsdom, so
+// every pre-existing test below is unaffected.
+const capabilities = vi.hoisted(() => ({
+  canPlayHevc: vi.fn(() => Promise.resolve(false)),
+  prefersTranscodedVideo: vi.fn<(filePath: string) => boolean>(() => false),
+}));
+vi.mock("@/lib/videoCapabilities", () => capabilities);
 
 // jsdom does not implement HTMLMediaElement playback methods; stub them so the
 // autoPlay <video> mount doesn't emit "Not implemented" errors.
@@ -77,6 +88,10 @@ function RegistryProbe({ paths }: { paths: string[] }) {
 }
 
 describe("VideoTile", () => {
+  beforeEach(() => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+  });
+
   it("renders no <video> before the tile is clicked (click-to-mount, no eager decode)", () => {
     const { container } = render(
       <GroupMediaProvider>
@@ -186,5 +201,132 @@ describe("VideoTile", () => {
       unmount();
     });
     expect(paths).not.toContain(VIDEO_ROW.file_path);
+  });
+
+  // -------------------------------------------------------------------------
+  // #787 — HEVC capability pre-check picks the INITIAL src
+  // -------------------------------------------------------------------------
+
+  it("mounts the transcode src when the engine is known HEVC-incapable (#787)", () => {
+    // The decision is read at CLICK time (the moment the <video> is created),
+    // not at tile mount — by then the probe kicked off on mount has resolved.
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    const movRow: FileRow = {
+      ...VIDEO_ROW,
+      file_path: "/clips/holiday.mov",
+      basename: "holiday.mov",
+    };
+
+    const { container } = render(
+      <GroupMediaProvider>
+        <VideoTile row={movRow} data-testid={TILE_TESTID} />
+      </GroupMediaProvider>
+    );
+    act(() => {
+      fireEvent.click(container.querySelector(`[data-testid="${TILE_TESTID}"]`)!);
+    });
+
+    expect(capabilities.prefersTranscodedVideo).toHaveBeenCalledWith("/clips/holiday.mov");
+    const video = container.querySelector<HTMLVideoElement>("video")!;
+    expect(video.getAttribute("src") ?? "").toContain("transcode=h264");
+  });
+
+  // Two-attempt contract, both directions. Same regression as the other two
+  // surfaces: with the hint choosing the STARTING source, a first error on a
+  // hint-started transcode used to be terminal, so an ffmpeg-less server's 501
+  // killed a tile that would have played the original bytes fine.
+
+  const MOV_ROW: FileRow = {
+    ...VIDEO_ROW,
+    file_path: "/clips/holiday.mov",
+    basename: "holiday.mov",
+  };
+
+  function mountPlayer(row: FileRow) {
+    const rendered = render(
+      <GroupMediaProvider>
+        <VideoTile row={row} data-testid={TILE_TESTID} />
+      </GroupMediaProvider>
+    );
+    act(() => {
+      fireEvent.click(
+        rendered.container.querySelector(`[data-testid="${TILE_TESTID}"]`)!
+      );
+    });
+    return rendered;
+  }
+
+  function tileSrc(container: HTMLElement): string {
+    return container.querySelector("video")?.getAttribute("src") ?? "";
+  }
+
+  function fireTileError(container: HTMLElement): void {
+    act(() => {
+      fireEvent.error(container.querySelector("video")!);
+    });
+  }
+
+  it("hint → error → falls back to the ORIGINAL bytes (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    const { container } = mountPlayer(MOV_ROW);
+    expect(tileSrc(container)).toContain("transcode=h264");
+
+    fireTileError(container);
+
+    expect(container.textContent).not.toContain("Video cannot be played");
+    expect(tileSrc(container)).not.toContain("transcode=h264");
+    expect(tileSrc(container)).toContain("/api/media?path=");
+  });
+
+  it("native → error → swaps to the transcode (unchanged behaviour)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    const { container } = mountPlayer(VIDEO_ROW);
+    expect(tileSrc(container)).not.toContain("transcode=h264");
+
+    fireTileError(container);
+
+    expect(container.textContent).not.toContain("Video cannot be played");
+    expect(tileSrc(container)).toContain("transcode=h264");
+  });
+
+  it("hint → error → native → error → terminal (#787 round 2)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    const { container } = mountPlayer(MOV_ROW);
+
+    fireTileError(container);
+    expect(tileSrc(container)).not.toContain("transcode=h264");
+    fireTileError(container);
+
+    expect(container.textContent).toContain("Video cannot be played");
+    expect(container.querySelector("video")).toBeNull();
+  });
+
+  it("native → error → transcode → error → terminal (unchanged behaviour)", () => {
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    const { container } = mountPlayer(VIDEO_ROW);
+
+    fireTileError(container);
+    expect(tileSrc(container)).toContain("transcode=h264");
+    fireTileError(container);
+
+    expect(container.textContent).toContain("Video cannot be played");
+    expect(container.querySelector("video")).toBeNull();
+  });
+
+  it("mounts the original-bytes src when the probe has no verdict (#787)", () => {
+    // Pre-#787 behaviour, and what jsdom / the qa VP9-in-MP4 fixtures get.
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+
+    const { container } = render(
+      <GroupMediaProvider>
+        <VideoTile row={VIDEO_ROW} data-testid={TILE_TESTID} />
+      </GroupMediaProvider>
+    );
+    act(() => {
+      fireEvent.click(container.querySelector(`[data-testid="${TILE_TESTID}"]`)!);
+    });
+
+    const video = container.querySelector<HTMLVideoElement>("video")!;
+    expect(video.getAttribute("src") ?? "").not.toContain("transcode=h264");
   });
 });

@@ -35,6 +35,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { fullResUrl, mediaUrl } from "@/api/client";
+import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
 import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
 import { OverlayResizeHandle } from "@/components/ui/overlay-resize-handle";
 import {
@@ -93,18 +94,38 @@ export function FullResViewer() {
     h: number;
   } | null>(null);
 
-  // Transcode fallback state (video only).
-  const [useTranscode, setUseTranscode] = useState(false);
+  // Transcode fallback state (video only). The initial value is the #787
+  // capability hint — "unknown" (today's behaviour) unless the engine has
+  // positively reported it cannot decode HEVC and this is an HEVC-in-practice
+  // container. handleVideoError below makes it a two-attempt contract:
+  // whichever source we start on, the first error swaps to the other one.
+  const [useTranscode, setUseTranscode] = useState(
+    () => fullResPath !== null && prefersTranscodedVideo(fullResPath)
+  );
+  // See the same note in PreviewPane.tsx: useTranscode alone is ambiguous once
+  // the hint can choose the STARTING source, so "have we already swapped?" is
+  // tracked explicitly.
+  const [swapAttempted, setSwapAttempted] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoCanPlay, setVideoCanPlay] = useState(false);
 
+  // Re-made during RENDER on every path change — see the same note in
+  // PreviewPane.tsx: an effect-based reset commits one render on the
+  // original-bytes src, which starts the fetch this pre-check exists to skip.
+  const [hintedPath, setHintedPath] = useState<string | null>(fullResPath);
+  if (hintedPath !== fullResPath) {
+    setHintedPath(fullResPath);
+    setUseTranscode(fullResPath !== null && prefersTranscodedVideo(fullResPath));
+    setSwapAttempted(false);
+  }
+
   useEffect(() => {
+    void canPlayHevc(); // memoized — one decodingInfo call per page life
     setLoading(true);
     setLoadError(false);
     setNaturalDims(null);
     setScale(1);
     setPan({ x: 0, y: 0 });
-    setUseTranscode(false);
     setVideoFailed(false);
     setVideoCanPlay(false);
   }, [fullResPath]);
@@ -172,15 +193,18 @@ export function FullResViewer() {
     setLoadError(true);
   }, []);
 
-  // Video-specific error: swap to transcode on first error, terminal on second.
+  // Video-specific error: first error swaps to the OTHER source (transcode if
+  // we started native; original bytes if the #787 hint started us on the
+  // transcode and it 501'd or failed), second error is terminal.
   const handleVideoError = useCallback(() => {
-    if (!useTranscode) {
-      setUseTranscode(true);
+    if (!swapAttempted) {
+      setSwapAttempted(true);
+      setUseTranscode((prev) => !prev);
       setVideoCanPlay(false);
     } else {
       setVideoFailed(true);
     }
-  }, [useTranscode]);
+  }, [swapAttempted]);
 
   const handleReveal = useCallback(() => {
     if (fullResPath !== null) {
