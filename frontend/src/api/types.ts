@@ -80,21 +80,29 @@ export interface ScanCompletedEmptyEvent {
   event: "completed_empty";
 }
 
+// The two calibration events carry NO `event` key: the backend sends the name
+// in the SSE frame's `event:` line and `data:` is the bare payload dict
+// (app/web/routes/scan.py — `_append_and_fanout("hash_pool_measured", rates)`),
+// so the name reaches the client as the EventSource listener name, never as a
+// payload field (#796).
 export interface ScanHashPoolMeasuredEvent {
-  event: "hash_pool_measured";
   // Informational payload — surface in the log; shape varies by pool type.
   [key: string]: unknown;
 }
 
 export interface ScanReadKneeMeasuredEvent {
-  event: "read_knee_measured";
   device: string;
   knee: number;
   // Additional fields may be present; forward-compatible.
   [key: string]: unknown;
 }
 
-/** Discriminated union of all SSE event types. Discriminant is `event`. */
+/**
+ * Union of all SSE payload shapes. The first five carry an `event` field the
+ * client fills in (useScanSSE synthesises it for its own log/failed events);
+ * the two calibration payloads above carry none — the event NAME always comes
+ * from the SSE frame, so the listener name is the real discriminant (#796).
+ */
 export type ScanEvent =
   | ScanLogEvent
   | ScanStageEvent
