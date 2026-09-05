@@ -203,13 +203,17 @@ class TestCancellation:
             "actually preventing the work"
         )
 
-    def test_cancelled_in_flight_does_not_deliver(self, decoder):
-        """A request cancelled mid-decode reports cancelled to its worker.
+    def test_cancelling_in_flight_marks_it_without_stopping_the_decode(self, decoder):
+        """Cancelling a running request marks it; the decode keeps going.
 
-        The decode itself cannot be interrupted (rawpy / WIC are
-        uninterruptible — issue #622's acknowledged limit), so the contract is
-        that the worker asks before delivering. Real failure mode if it did
-        not: the stale image paints over the file the user has since selected.
+        Scope note: this asserts only the coordinator's half — the flag is set
+        and the work is NOT aborted (rawpy / WIC are uninterruptible, issue
+        #622's acknowledged limit). The delivery half of the contract — that a
+        marked request emits nothing to the pane — belongs to ``_ImageTask``
+        and is owned by ``TestImageTaskCancelledHandle`` and
+        ``TestRunnerCancelsInFlightWork`` in ``tests/test_image_tasks.py``,
+        which drive it through the real runner. Asserting delivery here would
+        be asserting a flag this test just set.
         """
         coord = PreviewRequestCoordinator(device_key_fn=_fixed_device({}))
 

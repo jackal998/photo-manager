@@ -712,6 +712,61 @@ class TestMtimeStatCacheTTL:
         assert svc_mod._source_mtime_ns("J:/nas/photo.dng") == 777
         assert len(stat.calls) == 1
 
+    def test_entries_stay_bounded_across_many_distinct_paths(self):
+        """10k distinct paths must not leave 10k entries behind.
+
+        Real failure mode: an entry is useless after its 5 s TTL, but nothing
+        revisits it to evict it. Browsing a large library would grow the map
+        by one entry per distinct file previewed and never shrink it for the
+        life of the process — an unbounded leak that no test would notice,
+        because every cache lookup keeps returning the right answer.
+        """
+        clock = _FakeClock()
+        cache = svc_mod._MtimeStatCache(
+            clock=clock, stat_fn=_CountingStat(), max_entries=64
+        )
+
+        for i in range(10_000):
+            cache.get(f"J:/nas/photo_{i}.dng")
+            clock.advance(6.0)  # each path is stale before the next arrives
+
+        assert len(cache._entries) <= 64, (
+            f"cache grew to {len(cache._entries)} entries with a cap of 64"
+        )
+
+    def test_bound_holds_even_when_nothing_has_expired(self):
+        """A burst wider than the cap inside ONE TTL still stays bounded.
+
+        The expiry sweep finds nothing to drop here (no time passes), so this
+        is the path where oldest-first eviction has to carry the bound on its
+        own — the case a sweep-only implementation would leak through.
+        """
+        clock = _FakeClock()
+        cache = svc_mod._MtimeStatCache(
+            clock=clock, stat_fn=_CountingStat(), max_entries=32
+        )
+
+        for i in range(500):
+            cache.get(f"J:/nas/burst_{i}.dng")  # clock never advances
+
+        assert len(cache._entries) <= 32
+
+    def test_eviction_does_not_break_the_burst_saving(self):
+        """Bounding must not cost the one-stat-per-burst property.
+
+        Guards the obvious wrong fix — evicting on every insert would make
+        each repeat request a miss again, quietly restoring the per-request
+        NAS stat this cache exists to remove.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=42)
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=stat, max_entries=64)
+
+        for _ in range(10):
+            assert cache.get("J:/nas/hot.dng") == 42
+
+        assert len(stat.calls) == 1
+
     def test_missing_source_still_degrades_to_zero(self, monkeypatch):
         """A stat failure is cached like any other value and stays 0.
 

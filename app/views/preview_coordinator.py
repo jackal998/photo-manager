@@ -23,12 +23,14 @@ The contract implemented here:
 * **1-ahead prefetch** — the pane may enqueue the next group's first image at
   prefetch priority. A prefetch is only ever started when nothing the user is
   waiting for is pending, and any new selection drops a prefetch that has not
-  started. It can never starve a real request.
+  started. It can therefore never *queue* ahead of a user request; the one
+  cost it can still impose is the tail of a prefetch that had already begun,
+  since that decode is uninterruptible like any other (below).
 
 Acknowledged limit (issue #622, "out-of-budget surfaces"): an in-flight
 ``rawpy`` / Shell-WIC decode is uninterruptible. Cancellation therefore means
 "never starts" or "result discarded" — at most one already-running decode
-burns through per device.
+burns through per device, and the request waiting behind it pays that tail.
 
 Design notes
 ------------
@@ -71,7 +73,7 @@ class RequestHandle:
         device: str,
         path: str,
         kind: str,
-        start: Callable[[], None],
+        start: Callable[["RequestHandle"], None],
         owner: object = None,
     ) -> None:
         self._coordinator = coordinator
@@ -190,17 +192,33 @@ class PreviewRequestCoordinator:
         still queued belongs to a selection the user has left, so running it
         would spend NAS bandwidth on an image nobody is going to look at.
 
+        The request already RUNNING on each device is marked cancelled too.
+        Its decode cannot be stopped (rawpy / Shell-WIC are uninterruptible)
+        and is allowed to finish — the bytes still land in the cache — but it
+        delivers nothing, because by the time it returns the user is looking
+        at something else. Marking the running request is what makes the
+        issue's "cancelled in flight delivers nothing" contract a property of
+        THIS class rather than of the pane's stale-token check downstream;
+        without it, both cancellation guards in ``_ImageTask.run`` would be
+        unreachable in production.
+
         ``owner`` scopes the cancellation to requests submitted by that owner.
         This matters because ONE runner is shared between the main window's
         preview pane and the one embedded in the Execute Action dialog
         (#409): without the scope, opening that dialog would cancel the main
-        pane's still-queued thumbnails, and those tiles would sit on
-        "Loading…" until the user re-selected the group. ``None`` cancels
-        everything queued, which is what a whole-runner reset wants.
+        pane's still-queued thumbnails — and now its in-flight one too — and
+        those tiles would sit on "Loading…" until the user re-selected the
+        group. ``None`` cancels everything, which is what a whole-runner
+        reset wants.
         """
         with self._lock:
             stale: list[RequestHandle] = []
             for slot in self._devices.values():
+                if slot.running is not None and _owned_by(slot.running, owner):
+                    # Left in ``running``: the slot stays occupied until the
+                    # decode returns and calls finish(). Cancelling it must
+                    # not let a second decode onto the same device.
+                    stale.append(slot.running)
                 if slot.pending_single is not None and _owned_by(
                     slot.pending_single, owner
                 ):
@@ -223,7 +241,7 @@ class PreviewRequestCoordinator:
         self,
         *,
         path: str,
-        start: Callable[[], None],
+        start: Callable[[RequestHandle], None],
         kind: str = KIND_SINGLE,
         owner: object = None,
     ) -> RequestHandle:

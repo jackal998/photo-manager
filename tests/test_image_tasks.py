@@ -679,3 +679,122 @@ class TestRunnerCoordinatorRouting:
 
         assert token == "grid|a.jpg|128"
         runner._pool.start.assert_not_called()
+
+
+class TestRunnerCancelsInFlightWork:
+    """``begin_selection`` must suppress delivery of the RUNNING request.
+
+    These drive the real production path — real ``PreviewRequestCoordinator``
+    inside a real ``ImageTaskRunner``, building a real ``_ImageTask`` with the
+    real handle — so they fail if the coordinator stops marking the in-flight
+    request. That matters: nothing else in the app calls ``handle.cancel()``,
+    so without the running-cancel in ``begin_selection`` both cancellation
+    guards in ``_ImageTask.run`` are unreachable in production and the
+    "cancelled in flight delivers nothing" contract would in truth be
+    delivered by the pane's stale-token check, not by the coordinator.
+    """
+
+    def test_selection_change_during_the_decode_suppresses_delivery(self):
+        """User clicks away mid-decode → the finished image is not painted.
+
+        The decode is uninterruptible, so it still runs to completion and its
+        bytes still reach the cache; only the emit is skipped. Real failure
+        mode: the late image paints over the file the user has since selected.
+        """
+        pane = object()  # stands in for the PreviewPane that owns the request
+        service = MagicMock()
+        receiver = MagicMock()
+        runner = ImageTaskRunner(service=service, receiver=receiver)
+        runner._pool = MagicMock()
+
+        # The decode itself is when the user clicks elsewhere.
+        def _decode_then_user_selects_another_file(path, side):
+            runner.begin_selection(pane)
+            return _make_jpeg()
+
+        service.get_preview.side_effect = _decode_then_user_selects_another_file
+
+        runner.request_single_preview("J:/nas/a.jpg", owner=pane)
+        task = runner._pool.start.call_args.args[0]
+        task.run()
+
+        service.get_preview.assert_called_once()  # decode ran to completion
+        receiver.imageLoaded.emit.assert_not_called()
+
+    def test_selection_change_before_the_worker_runs_skips_the_decode(self):
+        """Cancelled between dispatch and the pool picking it up → no read.
+
+        Same production sequence, one beat earlier: the request has won its
+        device slot but its QRunnable has not begun. Here the read itself is
+        still avoidable, and skipping it is the whole point on a NAS.
+        """
+        pane = object()
+        service = MagicMock()
+        service.get_preview.return_value = _make_jpeg()
+        receiver = MagicMock()
+        runner = ImageTaskRunner(service=service, receiver=receiver)
+        runner._pool = MagicMock()
+
+        runner.request_single_preview("J:/nas/a.jpg", owner=pane)
+        task = runner._pool.start.call_args.args[0]
+        runner.begin_selection(pane)
+        task.run()
+
+        service.get_preview.assert_not_called()
+        receiver.imageLoaded.emit.assert_not_called()
+
+    def test_another_panes_selection_does_not_suppress_this_panes_delivery(self):
+        """The Execute dialog's selection must not blank the main pane.
+
+        The scope guard, asserted on delivery rather than on a flag: one
+        runner is shared between the two panes (#409), so an unscoped
+        running-cancel would discard the main window's in-flight image every
+        time the dialog previewed a row.
+        """
+        main_pane = object()
+        dialog_pane = object()
+        service = MagicMock()
+        receiver = MagicMock()
+        runner = ImageTaskRunner(service=service, receiver=receiver)
+        runner._pool = MagicMock()
+
+        def _decode_while_the_dialog_moves(path, side):
+            runner.begin_selection(dialog_pane)
+            return _make_jpeg()
+
+        service.get_preview.side_effect = _decode_while_the_dialog_moves
+
+        runner.request_single_preview("J:/nas/a.jpg", owner=main_pane)
+        task = runner._pool.start.call_args.args[0]
+        task.run()
+
+        receiver.imageLoaded.emit.assert_called_once()
+
+    def test_the_device_is_released_after_a_cancelled_in_flight_request(self):
+        """A cancelled in-flight decode still frees its device for the next one.
+
+        Real failure mode: if the suppressed request never released its slot,
+        that drive's preview pane would stop updating for the rest of the
+        session — every later request queueing behind a ghost.
+        """
+        pane = object()
+        service = MagicMock()
+        service.get_preview.return_value = _make_jpeg()
+        service.get_thumbnail.return_value = _make_jpeg()
+        receiver = MagicMock()
+        runner = ImageTaskRunner(service=service, receiver=receiver)
+        runner._pool = MagicMock()
+
+        runner.request_single_preview("J:/nas/a.jpg", owner=pane)
+        first_task = runner._pool.start.call_args.args[0]
+        runner.begin_selection(pane)
+        runner.request_single_preview("J:/nas/b.jpg", owner=pane)
+        # b.jpg is queued behind the still-running a.jpg on the same device.
+        assert runner._pool.start.call_count == 1
+        first_task.run()
+
+        assert runner._pool.start.call_count == 2
+        second_task = runner._pool.start.call_args.args[0]
+        assert second_task._path == "J:/nas/b.jpg"
+        second_task.run()
+        receiver.imageLoaded.emit.assert_called_once()
