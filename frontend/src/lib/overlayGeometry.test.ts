@@ -6,6 +6,11 @@
 // saved size bigger than the viewport (footer buttons unreachable), a corrupt
 // blob, and the three surfaces sharing storage (moving one would move the
 // others). The clamp is the only thing standing between those and a stuck UI.
+//
+// Round 2 added the size-is-optional rule: `w`/`h` are null until the user
+// actually RESIZES, so moving a dialog can never freeze its height. The tests
+// below pin both halves — a null size survives a round-trip, and the position
+// clamp still works using the element's measured size in its place.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +24,8 @@ import {
 } from "./overlayGeometry";
 
 const VIEWPORT = { width: 1280, height: 800 };
+/** Stands in for the rendered box of an overlay with no pinned size. */
+const MEASURED = { w: 600, h: 400 };
 
 beforeEach(() => {
   localStorage.clear();
@@ -38,45 +45,40 @@ describe("overlayStorageKey", () => {
   });
 });
 
-describe("clampGeometry", () => {
+describe("clampGeometry — pinned size", () => {
   it("leaves a geometry that already fits untouched", () => {
-    expect(clampGeometry({ x: 100, y: 60, w: 800, h: 600 }, VIEWPORT)).toEqual({
-      x: 100,
-      y: 60,
-      w: 800,
-      h: 600,
-    });
+    expect(
+      clampGeometry({ x: 100, y: 60, w: 800, h: 600 }, VIEWPORT, MEASURED)
+    ).toEqual({ x: 100, y: 60, w: 800, h: 600 });
   });
 
   it("pulls a window saved past the right/bottom edge fully back into view", () => {
     // Saved on a 2560x1440 monitor, reopened at 1280x800.
-    const clamped = clampGeometry({ x: 2200, y: 1300, w: 600, h: 400 }, VIEWPORT);
-    expect(clamped.x + clamped.w).toBeLessThanOrEqual(VIEWPORT.width);
-    expect(clamped.y + clamped.h).toBeLessThanOrEqual(VIEWPORT.height);
+    const clamped = clampGeometry(
+      { x: 2200, y: 1300, w: 600, h: 400 },
+      VIEWPORT,
+      MEASURED
+    );
+    expect(clamped.x + clamped.w!).toBeLessThanOrEqual(VIEWPORT.width);
+    expect(clamped.y + clamped.h!).toBeLessThanOrEqual(VIEWPORT.height);
     expect(clamped).toEqual({ x: 680, y: 400, w: 600, h: 400 });
   });
 
   it("pulls a window saved at negative coordinates back to the origin", () => {
     // The title bar is the ONLY drag affordance; above y=0 it is unreachable.
-    expect(clampGeometry({ x: -500, y: -120, w: 600, h: 400 }, VIEWPORT)).toEqual({
-      x: 0,
-      y: 0,
-      w: 600,
-      h: 400,
-    });
+    expect(
+      clampGeometry({ x: -500, y: -120, w: 600, h: 400 }, VIEWPORT, MEASURED)
+    ).toEqual({ x: 0, y: 0, w: 600, h: 400 });
   });
 
   it("shrinks a saved size larger than the viewport", () => {
-    expect(clampGeometry({ x: 0, y: 0, w: 4000, h: 3000 }, VIEWPORT)).toEqual({
-      x: 0,
-      y: 0,
-      w: VIEWPORT.width,
-      h: VIEWPORT.height,
-    });
+    expect(
+      clampGeometry({ x: 0, y: 0, w: 4000, h: 3000 }, VIEWPORT, MEASURED)
+    ).toEqual({ x: 0, y: 0, w: VIEWPORT.width, h: VIEWPORT.height });
   });
 
   it("enforces the minimum size floor", () => {
-    const clamped = clampGeometry({ x: 10, y: 10, w: 5, h: 5 }, VIEWPORT);
+    const clamped = clampGeometry({ x: 10, y: 10, w: 5, h: 5 }, VIEWPORT, MEASURED);
     expect(clamped.w).toBe(MIN_OVERLAY_WIDTH);
     expect(clamped.h).toBe(MIN_OVERLAY_HEIGHT);
   });
@@ -86,7 +88,8 @@ describe("clampGeometry", () => {
     // window rather than a zero-width one.
     const clamped = clampGeometry(
       { x: 40, y: 40, w: 600, h: 400 },
-      { width: 200, height: 150 }
+      { width: 200, height: 150 },
+      MEASURED
     );
     expect(clamped.w).toBe(MIN_OVERLAY_WIDTH);
     expect(clamped.h).toBe(MIN_OVERLAY_HEIGHT);
@@ -95,10 +98,42 @@ describe("clampGeometry", () => {
   });
 });
 
+describe("clampGeometry — unpinned (position-only) size", () => {
+  it("never invents a size for an overlay the user only moved", () => {
+    const clamped = clampGeometry({ x: 100, y: 60, w: null, h: null }, VIEWPORT, MEASURED);
+    // Pinning here is the round-2 HIGH: a dialog whose height was frozen by a
+    // drag cannot grow when its preview appears, and the footer leaves the box.
+    expect(clamped.w).toBeNull();
+    expect(clamped.h).toBeNull();
+  });
+
+  it("clamps the position using the MEASURED size in place of a stored one", () => {
+    // x=1200 with a 600px-wide rendered box would hang 520px off the right.
+    const clamped = clampGeometry(
+      { x: 1200, y: 700, w: null, h: null },
+      VIEWPORT,
+      MEASURED
+    );
+    expect(clamped.x).toBe(VIEWPORT.width - MEASURED.w); // 680
+    expect(clamped.y).toBe(VIEWPORT.height - MEASURED.h); // 400
+  });
+
+  it("clamps a half-pinned geometry against the measured size on the free axis", () => {
+    const clamped = clampGeometry(
+      { x: 1200, y: 700, w: 900, h: null },
+      VIEWPORT,
+      MEASURED
+    );
+    expect(clamped.x).toBe(VIEWPORT.width - 900);
+    expect(clamped.y).toBe(VIEWPORT.height - MEASURED.h);
+    expect(clamped.h).toBeNull();
+  });
+});
+
 describe("save/load round-trip", () => {
   it("restores what was saved", () => {
     saveOverlayGeometry("execute", { x: 120, y: 90, w: 700, h: 500 });
-    expect(loadOverlayGeometry("execute", VIEWPORT)).toEqual({
+    expect(loadOverlayGeometry("execute")).toEqual({
       x: 120,
       y: 90,
       w: 700,
@@ -106,38 +141,57 @@ describe("save/load round-trip", () => {
     });
   });
 
+  it("round-trips a position-only geometry without inventing a size", () => {
+    saveOverlayGeometry("action", { x: 120, y: 90, w: null, h: null });
+    expect(loadOverlayGeometry("action")).toEqual({
+      x: 120,
+      y: 90,
+      w: null,
+      h: null,
+    });
+  });
+
   it("keeps the three surfaces independent", () => {
     saveOverlayGeometry("execute", { x: 10, y: 10, w: 700, h: 500 });
     saveOverlayGeometry("action", { x: 300, y: 200, w: 500, h: 400 });
-    expect(loadOverlayGeometry("execute", VIEWPORT)).toMatchObject({ x: 10 });
-    expect(loadOverlayGeometry("action", VIEWPORT)).toMatchObject({ x: 300 });
+    expect(loadOverlayGeometry("execute")).toMatchObject({ x: 10 });
+    expect(loadOverlayGeometry("action")).toMatchObject({ x: 300 });
     // The viewer was never moved — it must still use its own default layout.
-    expect(loadOverlayGeometry("fullres", VIEWPORT)).toBeNull();
-  });
-
-  it("clamps on LOAD, so a geometry saved on a bigger screen still opens in view", () => {
-    saveOverlayGeometry("fullres", { x: 2000, y: 1200, w: 900, h: 700 });
-    const restored = loadOverlayGeometry("fullres", VIEWPORT);
-    expect(restored).not.toBeNull();
-    expect(restored!.x + restored!.w).toBeLessThanOrEqual(VIEWPORT.width);
-    expect(restored!.y + restored!.h).toBeLessThanOrEqual(VIEWPORT.height);
+    expect(loadOverlayGeometry("fullres")).toBeNull();
   });
 
   it("returns null (=> surface default) for a missing key", () => {
-    expect(loadOverlayGeometry("action", VIEWPORT)).toBeNull();
+    expect(loadOverlayGeometry("action")).toBeNull();
   });
 
   it.each([
     ["not json at all", "{{{"],
     ["a non-object", "42"],
-    ["a partial rect", '{"x":10,"y":10,"w":600}'],
-    ["a non-numeric field", '{"x":"10","y":10,"w":600,"h":400}'],
-    ["NaN-producing nulls", '{"x":null,"y":null,"w":null,"h":null}'],
-    ["a zero-sized rect", '{"x":10,"y":10,"w":0,"h":0}'],
-  ])("discards %s rather than rendering an unusable window", (_label, raw) => {
+    ["a non-numeric position", '{"x":"10","y":10,"w":600,"h":400}'],
+    ["NaN-producing nulls in the position", '{"x":null,"y":null,"w":600,"h":400}'],
+  ])("discards %s rather than placing the overlay somewhere nobody chose", (_label, raw) => {
     localStorage.setItem(overlayStorageKey("execute"), raw);
-    expect(loadOverlayGeometry("execute", VIEWPORT)).toBeNull();
+    expect(loadOverlayGeometry("execute")).toBeNull();
   });
+
+  it.each([
+    ["a missing size", '{"x":10,"y":20}'],
+    ["a zero size", '{"x":10,"y":20,"w":0,"h":0}'],
+    ["a non-numeric size", '{"x":10,"y":20,"w":"wide","h":null}'],
+  ])(
+    "keeps the chosen position and degrades %s to auto",
+    (_label, raw) => {
+      // The position is the part the user chose deliberately; an unusable size
+      // must not throw it away — it just means "never resized".
+      localStorage.setItem(overlayStorageKey("execute"), raw);
+      expect(loadOverlayGeometry("execute")).toEqual({
+        x: 10,
+        y: 20,
+        w: null,
+        h: null,
+      });
+    }
+  );
 
   it("survives a storage backend that throws (private mode / quota)", () => {
     const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
@@ -155,7 +209,7 @@ describe("save/load round-trip", () => {
       .mockImplementation(() => {
         throw new DOMException("SecurityError");
       });
-    expect(loadOverlayGeometry("action", VIEWPORT)).toBeNull();
+    expect(loadOverlayGeometry("action")).toBeNull();
     getSpy.mockRestore();
   });
 });

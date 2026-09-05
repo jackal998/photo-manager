@@ -17,8 +17,8 @@
 // what guarantees React tears them down when the overlay unmounts mid-drag
 // instead of leaking a window listener holding a stale closure.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent, RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 
 import {
   clampGeometry,
@@ -29,6 +29,7 @@ import {
   MIN_OVERLAY_WIDTH,
   type OverlayGeometry,
   type OverlayId,
+  type OverlaySize,
   type Viewport,
 } from "@/lib/overlayGeometry";
 
@@ -44,8 +45,8 @@ type GestureKind = "move" | "resize";
 const UNMAXIMIZE_RATIO = 0.8;
 
 /** True when the rect covers the whole viewport (the full-res viewer's default). */
-function fillsViewport(g: OverlayGeometry, viewport: Viewport): boolean {
-  return g.w >= viewport.width - 1 && g.h >= viewport.height - 1;
+function fillsViewport(size: OverlaySize, viewport: Viewport): boolean {
+  return size.w >= viewport.width - 1 && size.h >= viewport.height - 1;
 }
 
 /** A centered window at UNMAXIMIZE_RATIO of the viewport. */
@@ -68,8 +69,17 @@ interface Gesture {
 }
 
 export interface UseOverlayGeometry {
-  /** Attach to the overlay's Radix Content element. */
-  containerRef: RefObject<HTMLDivElement | null>;
+  /**
+   * Attach to the overlay's Radix Content element.
+   *
+   * A CALLBACK ref, not a RefObject, and that is load-bearing: Radix mounts
+   * its portalled Content in a later commit than the one where `open` flips,
+   * so a layout effect keyed on `open` alone runs while the ref is still null
+   * and its clamp silently does nothing. Measured live: a saved height of
+   * 236px stayed 236px instead of being raised to the 260px floor. The
+   * callback tells us exactly when the node exists.
+   */
+  containerRef: (el: HTMLDivElement | null) => void;
   /**
    * Spread onto the Content's `style`. Empty while the overlay has never been
    * moved/resized in this browser, so the surface's own CSS layout applies.
@@ -79,8 +89,6 @@ export interface UseOverlayGeometry {
   onMoveStart: (e: ReactMouseEvent) => void;
   /** Corner-handle `onMouseDown` — starts a resize gesture. */
   onResizeStart: (e: ReactMouseEvent) => void;
-  /** True while a move/resize is in flight (used to suppress text selection). */
-  dragging: boolean;
 }
 
 /**
@@ -96,37 +104,78 @@ export function useOverlayGeometry(
   id: OverlayId,
   open: boolean
 ): UseOverlayGeometry {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const containerRef = useCallback((el: HTMLDivElement | null) => {
+    setNode(el);
+  }, []);
   const [geometry, setGeometry] = useState<OverlayGeometry | null>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
 
-  // Hydrate on every open (and re-clamp against the viewport as it is NOW).
+  // Hydrate on every open. NOT clamped here: clamping the position needs the
+  // element's rendered size, which does not exist until it is laid out — the
+  // layout effect below does it against the real box.
   useEffect(() => {
     if (!open) return;
     setGeometry(loadOverlayGeometry(id));
   }, [id, open]);
 
-  // Keep a moved/resized overlay reachable when the browser window shrinks:
-  // re-clamp in place. A never-moved overlay (geometry === null) is left to
-  // its own responsive CSS.
+  // The element's live rect — the stand-in size for an overlay the user has
+  // moved but never resized, and the seed for each surface's own default.
+  const readRect = useCallback((): {
+    position: { x: number; y: number };
+    size: OverlaySize;
+  } | null => {
+    if (node === null) return null;
+    const r = node.getBoundingClientRect();
+    return { position: { x: r.left, y: r.top }, size: { w: r.width, h: r.height } };
+  }, [node]);
+
+  const clampToViewport = useCallback(() => {
+    setGeometry((prev) => {
+      if (prev === null) return prev;
+      const rect = readRect();
+      if (rect === null) return prev;
+      const next = clampGeometry(prev, currentViewport(), rect.size);
+      // Object identity churn re-renders forever; only replace on a real change.
+      if (
+        next.x === prev.x &&
+        next.y === prev.y &&
+        next.w === prev.w &&
+        next.h === prev.h
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [readRect]);
+
+  // Clamp against the RENDERED box once it exists — this is what guarantees a
+  // geometry saved on a bigger monitor never opens with its title bar or its
+  // footer off-screen, including for a position-only (auto-sized) overlay.
+  useLayoutEffect(() => {
+    if (!open || node === null) return;
+    clampToViewport();
+  }, [open, node, geometry, clampToViewport]);
+
+  // An overlay the user only MOVED has no pinned height, so it grows with its
+  // content — and a dialog that grows near the bottom of the screen would push
+  // its own footer off the viewport (measured: the Set Action dialog reached
+  // bottom 740 in a 720px viewport once its preview block appeared). Watch the
+  // box and re-clamp, which slides it back up instead.
+  useEffect(() => {
+    if (!open || node === null) return;
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => clampToViewport());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [open, node, clampToViewport]);
+
+  // Keep a moved/resized overlay reachable when the browser window shrinks.
   useEffect(() => {
     if (!open) return;
-    function onResize() {
-      setGeometry((prev) =>
-        prev === null ? prev : clampGeometry(prev, currentViewport())
-      );
-    }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [open]);
-
-  // Seed from the element's current rect so each surface keeps its own default.
-  const readCurrentRect = useCallback((): OverlayGeometry | null => {
-    const el = containerRef.current;
-    if (el === null) return null;
-    const r = el.getBoundingClientRect();
-    return { x: r.left, y: r.top, w: r.width, h: r.height };
-  }, []);
+    window.addEventListener("resize", clampToViewport);
+    return () => window.removeEventListener("resize", clampToViewport);
+  }, [open, clampToViewport]);
 
   const startGesture = useCallback(
     (kind: GestureKind, e: ReactMouseEvent) => {
@@ -140,28 +189,47 @@ export function useOverlayGeometry(
       ) {
         return;
       }
-      const seed = geometry ?? readCurrentRect();
-      if (seed === null) return;
+      const rect = readRect();
+      if (rect === null) return;
       const viewport = currentViewport();
+      const position = geometry ?? rect.position;
+
+      // A MOVE carries the size forward EXACTLY as it was — null stays null.
+      // Pinning a height here is what let a dragged Set Action dialog refuse
+      // to grow when its preview appeared, pushing Apply out of the box.
+      // A RESIZE is the only gesture that may pin a size, seeding from the
+      // stored one or, first time, from what is on screen.
+      let origin: OverlayGeometry =
+        kind === "move"
+          ? { x: position.x, y: position.y, w: geometry?.w ?? null, h: geometry?.h ?? null }
+          : {
+              x: position.x,
+              y: position.y,
+              w: geometry?.w ?? rect.size.w,
+              h: geometry?.h ?? rect.size.h,
+            };
+
       // Dragging a window that fills the whole viewport must un-maximize it
       // and follow the cursor — the OS window-manager convention. Without
       // this the full-res viewer, whose default layout IS the whole viewport,
       // would be clamped to x=0,y=0 and the title-bar drag would silently do
-      // nothing, which is the exact complaint #739 was filed for. Inert for
-      // the two dialogs: they never span the viewport.
-      const origin =
-        kind === "move" && fillsViewport(seed, viewport)
-          ? unmaximized(viewport)
-          : seed;
+      // nothing, which is the exact complaint #739 was filed for. This is the
+      // ONE case where a move sets a size, and it is safe: the viewer is a
+      // flex column whose image area scrolls. Inert for the two dialogs —
+      // they never span the viewport.
+      if (kind === "move" && fillsViewport(rect.size, viewport)) {
+        origin = unmaximized(viewport);
+      }
+
       e.preventDefault();
       // Stop a title-bar drag from also reaching whatever the title bar hosts
       // (the viewer's close button lives there, and Radix listens for
       // pointerdown on the content for its focus handling).
       e.stopPropagation();
-      setGeometry(clampGeometry(origin, currentViewport()));
+      setGeometry(clampGeometry(origin, viewport, rect.size));
       setGesture({ kind, startX: e.clientX, startY: e.clientY, origin });
     },
-    [geometry, readCurrentRect]
+    [geometry, readRect]
   );
 
   const onMoveStart = useCallback(
@@ -176,9 +244,13 @@ export function useOverlayGeometry(
   useEffect(() => {
     if (gesture === null) return;
     const { kind, startX, startY, origin } = gesture;
+    // Size fallback for the position clamp while the gesture runs: for a
+    // position-only overlay the box keeps whatever size its content gives it.
+    const fallbackSize = (): OverlaySize =>
+      readRect()?.size ?? { w: origin.w ?? 0, h: origin.h ?? 0 };
     // The last geometry the move handler computed. mouseup persists THIS —
     // reading React state in the mouseup closure would persist a stale value.
-    let latest = clampGeometry(origin, currentViewport());
+    let latest = clampGeometry(origin, currentViewport(), fallbackSize());
 
     // ONE localStorage write per gesture — not one per mousemove. Shared by
     // EVERY end-of-gesture trigger below so all of them keep that contract.
@@ -198,15 +270,16 @@ export function useOverlayGeometry(
       }
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
-      const next =
+      const next: OverlayGeometry =
         kind === "move"
           ? { ...origin, x: origin.x + dx, y: origin.y + dy }
           : {
               ...origin,
-              w: Math.max(MIN_OVERLAY_WIDTH, origin.w + dx),
-              h: Math.max(MIN_OVERLAY_HEIGHT, origin.h + dy),
+              // origin.w/h are non-null for a resize (startGesture seeds them).
+              w: Math.max(MIN_OVERLAY_WIDTH, (origin.w ?? 0) + dx),
+              h: Math.max(MIN_OVERLAY_HEIGHT, (origin.h ?? 0) + dy),
             };
-      latest = clampGeometry(next, currentViewport());
+      latest = clampGeometry(next, currentViewport(), fallbackSize());
       setGeometry(latest);
     }
 
@@ -226,7 +299,7 @@ export function useOverlayGeometry(
       window.removeEventListener("blur", endGesture);
       window.removeEventListener("pointercancel", endGesture);
     };
-  }, [gesture, id]);
+  }, [gesture, id, readRect]);
 
   const style: CSSProperties =
     geometry === null
@@ -241,10 +314,21 @@ export function useOverlayGeometry(
           top: geometry.y,
           right: "auto",
           bottom: "auto",
-          width: geometry.w,
-          height: geometry.h,
-          maxWidth: "none",
-          maxHeight: "none",
+          // Size is applied ONLY where the user pinned one. An unpinned axis
+          // keeps the surface's own CSS, so a moved dialog still grows and
+          // shrinks with its content exactly as it does on base.
+          ...(geometry.w === null ? {} : { width: geometry.w, maxWidth: "none" }),
+          ...(geometry.h === null
+            ? {}
+            : {
+                height: geometry.h,
+                maxHeight: "none",
+                // A pinned height needs somewhere for the overflow to go: the
+                // column lets each dialog's scrollable body absorb it instead
+                // of pushing the footer buttons out of the box.
+                display: "flex",
+                flexDirection: "column",
+              }),
           // BOTH are required. Tailwind v4 compiles `-translate-x-1/2` to the
           // individual `translate` property (`translate: var(--tw-translate-x)
           // var(--tw-translate-y)`), which `transform` does NOT cancel — so
@@ -257,11 +341,5 @@ export function useOverlayGeometry(
           transform: "none",
         };
 
-  return {
-    containerRef,
-    style,
-    onMoveStart,
-    onResizeStart,
-    dragging: gesture !== null,
-  };
+  return { containerRef, style, onMoveStart, onResizeStart };
 }

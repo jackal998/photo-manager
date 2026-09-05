@@ -39,6 +39,7 @@ import {
 import { buildPatternSummary } from "@/lib/patternSummary";
 import {
   ACTION_DIALOG,
+  ACTION_BODY,
   ACTION_TITLE_BAR,
   ACTION_RESIZE_HANDLE,
   ACTION_FIELD_COMBO,
@@ -484,13 +485,24 @@ export function ActionDialog() {
           {/* Header doubles as the window drag bar (#739) */}
           <DialogHeader
             data-testid={ACTION_TITLE_BAR}
-            className="cursor-move select-none"
+            className="cursor-move select-none flex-shrink-0"
             onMouseDown={overlay.onMoveStart}
           >
             <DialogTitle>
               {t("web.action_dialog.title", "Set Action by Field")}
             </DialogTitle>
           </DialogHeader>
+
+          {/* Scrollable body (#739 round 2). `flex-auto` is flex:1 1 auto, so
+              its hypothetical size is its CONTENT size — the dialog's natural
+              height is unchanged — while a pinned height makes this shrink and
+              scroll. Without it, the Preview block that appears when a pattern
+              matches pushed Cancel/Apply straight out of the box (measured:
+              dialog bottom 606, Apply bottom 716). */}
+          <div
+            data-testid={ACTION_BODY}
+            className="flex-auto min-h-0 overflow-y-auto"
+          >
 
           {/* Recent patterns (#741 sub-item B) — mirrors Qt's Recent row
               positioned above the Field combo. A jump-menu <select>: picking
@@ -648,8 +660,12 @@ export function ActionDialog() {
             </p>
           )}
 
-          {/* Footer */}
-          <DialogFooter className="mt-4 gap-2 sm:gap-2">
+          </div>
+          {/* end scrollable body */}
+
+          {/* Footer — never scrolls away: flex-shrink-0 keeps Apply reachable
+              at any pinned height. */}
+          <DialogFooter className="mt-4 gap-2 sm:gap-2 flex-shrink-0">
             <Button
               type="button"
               variant="outline"

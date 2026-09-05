@@ -18,10 +18,26 @@
 /** Stable id for each overlay whose geometry persists. */
 export type OverlayId = "fullres" | "execute" | "action";
 
-/** Viewport-relative overlay rectangle, in CSS pixels. */
+/**
+ * Viewport-relative overlay geometry, in CSS pixels.
+ *
+ * `w`/`h` are **null until the user actually resizes**. That asymmetry is the
+ * whole point: moving a window must not freeze its size. A dialog whose height
+ * was pinned by a mere drag cannot grow when new content appears (the Set
+ * Action preview block), so the content spills past the footer and the Apply
+ * button ends up outside the box — measured live before this rule existed:
+ * dialog bottom 606, Apply bottom 716. Null size means "let the surface's own
+ * CSS decide", which is also what keeps an unresized overlay identical to base.
+ */
 export interface OverlayGeometry {
   x: number;
   y: number;
+  w: number | null;
+  h: number | null;
+}
+
+/** A concrete rendered size, used as the fallback when `w`/`h` are null. */
+export interface OverlaySize {
   w: number;
   h: number;
 }
@@ -39,7 +55,14 @@ export interface Viewport {
  * clamped back up so an overlay can never be shrunk to unreachable.
  */
 export const MIN_OVERLAY_WIDTH = 320;
-export const MIN_OVERLAY_HEIGHT = 200;
+/**
+ * Chosen from a live measurement, not by feel: with the Execute dialog's
+ * fixed chrome (header + toolbar + all-delete banner + footer ≈ 200px) a
+ * 260px box left the file tree 60px — exactly one row, and exactly on the
+ * scenario's failure threshold. 280 leaves ~80px of body, so the floor keeps
+ * a usable body rather than only just fitting the chrome.
+ */
+export const MIN_OVERLAY_HEIGHT = 280;
 
 /** localStorage key for one overlay. Per-surface, versioned. */
 export function overlayStorageKey(id: OverlayId): string {
@@ -64,23 +87,35 @@ export function overlayStorageKey(id: OverlayId): string {
  */
 export function clampGeometry(
   geometry: OverlayGeometry,
-  viewport: Viewport
+  viewport: Viewport,
+  measured: OverlaySize
 ): OverlayGeometry {
-  const w = Math.min(
-    Math.max(MIN_OVERLAY_WIDTH, Math.round(geometry.w)),
-    Math.max(MIN_OVERLAY_WIDTH, Math.round(viewport.width))
-  );
-  const h = Math.min(
-    Math.max(MIN_OVERLAY_HEIGHT, Math.round(geometry.h)),
-    Math.max(MIN_OVERLAY_HEIGHT, Math.round(viewport.height))
-  );
+  // A pinned size is clamped to [MIN, viewport]; an unpinned one stays null and
+  // the element's CURRENT rendered size stands in for the position maths, so a
+  // restore can place an auto-sized dialog correctly without ever pinning it.
+  const w =
+    geometry.w === null
+      ? null
+      : Math.min(
+          Math.max(MIN_OVERLAY_WIDTH, Math.round(geometry.w)),
+          Math.max(MIN_OVERLAY_WIDTH, Math.round(viewport.width))
+        );
+  const h =
+    geometry.h === null
+      ? null
+      : Math.min(
+          Math.max(MIN_OVERLAY_HEIGHT, Math.round(geometry.h)),
+          Math.max(MIN_OVERLAY_HEIGHT, Math.round(viewport.height))
+        );
+  const effectiveW = w ?? Math.round(measured.w);
+  const effectiveH = h ?? Math.round(measured.h);
   const x = Math.min(
     Math.max(0, Math.round(geometry.x)),
-    Math.max(0, Math.round(viewport.width) - w)
+    Math.max(0, Math.round(viewport.width) - effectiveW)
   );
   const y = Math.min(
     Math.max(0, Math.round(geometry.y)),
-    Math.max(0, Math.round(viewport.height) - h)
+    Math.max(0, Math.round(viewport.height) - effectiveH)
   );
   return { x, y, w, h };
 }
@@ -104,23 +139,26 @@ function isFiniteNumber(v: unknown): v is number {
  * "use this surface's own default layout" — that is what keeps the first open
  * of each overlay pixel-identical to before this change.
  */
-export function loadOverlayGeometry(
-  id: OverlayId,
-  viewport: Viewport = currentViewport()
-): OverlayGeometry | null {
+export function loadOverlayGeometry(id: OverlayId): OverlayGeometry | null {
   try {
     const raw = localStorage.getItem(overlayStorageKey(id));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
     const { x, y, w, h } = parsed as Record<string, unknown>;
-    // All four must be finite numbers, and the size positive — a partial or
-    // corrupt blob is discarded whole rather than merged over a default,
-    // which would place the overlay somewhere nobody chose.
+    // Position is mandatory: a blob without a usable x/y is discarded whole
+    // rather than merged over a default, which would place the overlay
+    // somewhere nobody chose.
     if (!isFiniteNumber(x) || !isFiniteNumber(y)) return null;
-    if (!isFiniteNumber(w) || !isFiniteNumber(h)) return null;
-    if (w <= 0 || h <= 0) return null;
-    return clampGeometry({ x, y, w, h }, viewport);
+    // Size is OPTIONAL — absent means "never resized, use the surface's own
+    // layout". A present-but-nonsense size degrades to null (auto) rather than
+    // discarding the position the user did choose.
+    const usableW = isFiniteNumber(w) && w > 0 ? w : null;
+    const usableH = isFiniteNumber(h) && h > 0 ? h : null;
+    // NOT clamped here: clamping the position needs the element's rendered
+    // size, which only exists once it is on screen. useOverlayGeometry clamps
+    // in a layout effect, against the real box.
+    return { x, y, w: usableW, h: usableH };
   } catch {
     // fail-open — the surface renders at its default layout
     return null;

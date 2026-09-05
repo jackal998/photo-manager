@@ -36,6 +36,7 @@ import {
   EXECUTE_BTN_EXECUTE_SELECTED,
   EXECUTE_PREVIEW_PANE,
   EXECUTE_PREVIEW_IMAGE,
+  EXECUTE_BODY,
   EXECUTE_RESIZE_HANDLE,
   EXECUTE_TITLE_BAR,
 } from "@/testids";
@@ -459,14 +460,23 @@ export function ExecuteDialog() {
         {/* Header doubles as the window drag bar (#739) */}
         <DialogHeader
           data-testid={EXECUTE_TITLE_BAR}
-          className="cursor-move select-none"
+          className="cursor-move select-none flex-shrink-0"
           onMouseDown={overlay.onMoveStart}
         >
           <DialogTitle>{t("web.execute_dialog.title", "Execute Actions")}</DialogTitle>
         </DialogHeader>
 
+        {/* Scrollable body (#739 round 2). `flex-auto` is flex:1 1 auto, so its
+            hypothetical size is its CONTENT size: at the dialog's natural
+            (unpinned) height nothing changes, and when the user pins a shorter
+            height this shrinks and scrolls instead of squeezing the tree to
+            nothing and pushing the footer out of the box. */}
+        <div
+          data-testid={EXECUTE_BODY}
+          className="flex flex-auto min-h-0 flex-col overflow-y-auto"
+        >
         {/* Toolbar row: TypeFilter */}
-        <div className="flex items-center gap-3 mt-2">
+        <div className="flex items-center gap-3 mt-2 flex-shrink-0">
           <span className="text-sm text-neutral-600">
             {t("web.execute_dialog.show_label", "Show:")}
           </span>
@@ -548,9 +558,12 @@ export function ExecuteDialog() {
             failed={executeResult.failed}
           />
         )}
+        </div>
+        {/* end scrollable body */}
 
-        {/* Footer */}
-        <DialogFooter className="mt-3 gap-2 sm:gap-2">
+        {/* Footer — never scrolls away: flex-shrink-0 keeps Execute reachable
+            at any pinned height. */}
+        <DialogFooter className="mt-3 gap-2 sm:gap-2 flex-shrink-0">
           <Button
             type="button"
             variant="outline"

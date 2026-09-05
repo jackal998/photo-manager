@@ -109,9 +109,28 @@ describe("moving", () => {
     mouseMove(500, 330);
     expect(boxStyle().left).toBe("400px"); // 300 + 100
     expect(boxStyle().top).toBe("280px"); // 200 + 80
-    // Size is untouched by a move.
-    expect(boxStyle().width).toBe("640px");
-    expect(boxStyle().height).toBe("480px");
+    // A move must not write ANY size — not even the size the element happens
+    // to have right now. Pinning here is the round-2 HIGH: a dialog whose
+    // height a drag froze cannot grow when new content appears, so its footer
+    // buttons leave the box (measured: dialog bottom 606, Apply bottom 716).
+    expect(boxStyle().width).toBe("");
+    expect(boxStyle().height).toBe("");
+  });
+
+  it("leaves the pinned size alone when moving an already-resized window", () => {
+    render(<Harness />);
+    // Resize first — that is the only gesture allowed to pin a size.
+    mouseDown("grip", 940, 680);
+    mouseMove(1040, 760);
+    mouseUp();
+    expect(boxStyle().width).toBe("740px");
+    // Now move it: position changes, the pinned size is carried through.
+    mouseDown("titlebar", 400, 250);
+    mouseMove(430, 270);
+    mouseUp();
+    expect(boxStyle().width).toBe("740px");
+    expect(boxStyle().height).toBe("560px");
+    expect(loadOverlayGeometry("execute")).toMatchObject({ w: 740, h: 560 });
   });
 
   it("cancels BOTH the transform- and translate-based centering", () => {
@@ -226,11 +245,11 @@ describe("persistence", () => {
     mouseMove(410, 260);
     mouseMove(500, 330);
     mouseUp();
-    expect(loadOverlayGeometry("execute", VIEWPORT)).toEqual({
+    expect(loadOverlayGeometry("execute")).toEqual({
       x: 400,
       y: 280,
-      w: 640,
-      h: 480,
+      w: null,
+      h: null,
     });
   });
 
@@ -258,12 +277,13 @@ describe("persistence", () => {
       window.innerHeight = 500;
       window.dispatchEvent(new Event("resize"));
     });
+    // The overlay was only MOVED, so it has no pinned size — the clamp must
+    // use the element's RENDERED box (the stubbed RECT) to keep it on screen.
     const left = Number.parseInt(boxStyle().left, 10);
     const top = Number.parseInt(boxStyle().top, 10);
-    const w = Number.parseInt(boxStyle().width, 10);
-    const h = Number.parseInt(boxStyle().height, 10);
-    expect(left + w).toBeLessThanOrEqual(700);
-    expect(top + h).toBeLessThanOrEqual(500);
+    expect(boxStyle().width).toBe("");
+    expect(left + RECT.width).toBeLessThanOrEqual(700);
+    expect(top + RECT.height).toBeLessThanOrEqual(500);
   });
 
   it("re-clamps a stored geometry against a viewport that shrank while closed", () => {
@@ -277,10 +297,8 @@ describe("persistence", () => {
     rerender(<Harness open={true} />);
     const left = Number.parseInt(boxStyle().left, 10);
     const top = Number.parseInt(boxStyle().top, 10);
-    const w = Number.parseInt(boxStyle().width, 10);
-    const h = Number.parseInt(boxStyle().height, 10);
-    expect(left + w).toBeLessThanOrEqual(800);
-    expect(top + h).toBeLessThanOrEqual(600);
+    expect(left + RECT.width).toBeLessThanOrEqual(800);
+    expect(top + RECT.height).toBeLessThanOrEqual(600);
   });
 });
 
@@ -337,7 +355,7 @@ describe("ending a gesture the window never saw released (#796)", () => {
       window.dispatchEvent(new Event("blur"));
     });
     expect(setItem).toHaveBeenCalledTimes(1);
-    expect(loadOverlayGeometry("execute", VIEWPORT)).toMatchObject({ x: 400 });
+    expect(loadOverlayGeometry("execute")).toMatchObject({ x: 400 });
     setItem.mockRestore();
   });
 });
