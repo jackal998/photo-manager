@@ -1,0 +1,1 @@
+Make the web full-res viewer, Execute Action dialog and Set Action dialog movable and resizable, each remembering its own position and size across reloads and clamping back into view on a smaller screen (#739).

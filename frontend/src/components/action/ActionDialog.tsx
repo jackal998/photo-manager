@@ -23,9 +23,11 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { OverlayResizeHandle } from "@/components/ui/overlay-resize-handle";
 
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
+import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
 import { ApiConflictError, getSettings, patchSettings } from "@/api/client";
 import {
   parseRecentPatterns,
@@ -37,6 +39,9 @@ import {
 import { buildPatternSummary } from "@/lib/patternSummary";
 import {
   ACTION_DIALOG,
+  ACTION_BODY,
+  ACTION_TITLE_BAR,
+  ACTION_RESIZE_HANDLE,
   ACTION_FIELD_COMBO,
   ACTION_ACTION_COMBO,
   ACTION_BTN_APPLY,
@@ -111,6 +116,12 @@ export function ActionDialog() {
 
   // Store state
   const actionDialogOpen = useAppStore((s) => s.action.actionDialogOpen);
+
+  // Movable/resizable window geometry (#739, divergence D7) — the SAME
+  // mechanism the full-res viewer and the Execute dialog use. The centered
+  // `max-w-2xl` layout below stays the default until the user moves/resizes.
+  const overlay = useOverlayGeometry("action", actionDialogOpen);
+
   const field = useAppStore((s) => s.action.field);
   const pattern = useAppStore((s) => s.action.pattern);
   const action = useAppStore((s) => s.action.action);
@@ -446,8 +457,12 @@ export function ActionDialog() {
 
       <Dialog open={actionDialogOpen} onOpenChange={handleOpenChange}>
         <DialogContent
+          ref={overlay.containerRef}
           data-testid={ACTION_DIALOG}
+          // Classes are the DEFAULT layout (unchanged first open); once moved
+          // or resized, overlay.style pins explicit left/top/width/height.
           className="max-w-2xl w-full"
+          style={overlay.style}
           onInteractOutside={(e) => {
             // #764 (twin of #721) — never dismiss the Action dialog via an
             // interaction OUTSIDE it. The inline lock-confirm (rendered just
@@ -467,11 +482,27 @@ export function ActionDialog() {
             if (actionRunning) e.preventDefault();
           }}
         >
-          <DialogHeader>
+          {/* Header doubles as the window drag bar (#739) */}
+          <DialogHeader
+            data-testid={ACTION_TITLE_BAR}
+            className="cursor-move select-none flex-shrink-0"
+            onMouseDown={overlay.onMoveStart}
+          >
             <DialogTitle>
               {t("web.action_dialog.title", "Set Action by Field")}
             </DialogTitle>
           </DialogHeader>
+
+          {/* Scrollable body (#739 round 2). `flex-auto` is flex:1 1 auto, so
+              its hypothetical size is its CONTENT size — the dialog's natural
+              height is unchanged — while a pinned height makes this shrink and
+              scroll. Without it, the Preview block that appears when a pattern
+              matches pushed Cancel/Apply straight out of the box (measured:
+              dialog bottom 606, Apply bottom 716). */}
+          <div
+            data-testid={ACTION_BODY}
+            className="flex-auto min-h-0 overflow-y-auto"
+          >
 
           {/* Recent patterns (#741 sub-item B) — mirrors Qt's Recent row
               positioned above the Field combo. A jump-menu <select>: picking
@@ -629,8 +660,12 @@ export function ActionDialog() {
             </p>
           )}
 
-          {/* Footer */}
-          <DialogFooter className="mt-4 gap-2 sm:gap-2">
+          </div>
+          {/* end scrollable body */}
+
+          {/* Footer — never scrolls away: flex-shrink-0 keeps Apply reachable
+              at any pinned height. */}
+          <DialogFooter className="mt-4 gap-2 sm:gap-2 flex-shrink-0">
             <Button
               type="button"
               variant="outline"
@@ -650,6 +685,14 @@ export function ActionDialog() {
                 : t("web.action_dialog.apply_button", "Apply")}
             </Button>
           </DialogFooter>
+
+          {/* Resize grip (#739) */}
+          <OverlayResizeHandle
+            data-testid={ACTION_RESIZE_HANDLE}
+            onMouseDown={overlay.onResizeStart}
+            className="text-neutral-500"
+            label={t("web.overlay.resize", "Resize window")}
+          />
         </DialogContent>
       </Dialog>
     </>

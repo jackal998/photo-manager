@@ -24,7 +24,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { OverlayResizeHandle } from "@/components/ui/overlay-resize-handle";
 import { useT } from "@/i18n/useT";
+import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
 
 import { useAppStore } from "@/store/useAppStore";
 import { nextSelection, type SelectionResult } from "@/lib/multiSelect";
@@ -34,6 +36,9 @@ import {
   EXECUTE_BTN_EXECUTE_SELECTED,
   EXECUTE_PREVIEW_PANE,
   EXECUTE_PREVIEW_IMAGE,
+  EXECUTE_BODY,
+  EXECUTE_RESIZE_HANDLE,
+  EXECUTE_TITLE_BAR,
 } from "@/testids";
 
 import { AllDeleteBanner } from "./AllDeleteBanner";
@@ -148,6 +153,12 @@ export function ExecuteDialog() {
   const executeDecisions = useAppStore((s) => s.executeDecisions);
   const removeFromList = useAppStore((s) => s.removeFromList);
   const t = useT();
+
+  // Movable/resizable window geometry (#739, divergence D6) — the SAME
+  // mechanism the full-res viewer and the Set Action dialog use. No default is
+  // passed: the centered `max-w-4xl` layout below IS the default, and the
+  // first gesture seeds from the rendered rect.
+  const overlay = useOverlayGeometry("execute", executeOpen);
 
   // -------------------------------------------------------------------------
   // Local dialog state
@@ -414,8 +425,16 @@ export function ExecuteDialog() {
     />
     <Dialog open={executeOpen} onOpenChange={handleOpenChange}>
       <DialogContent
+        ref={overlay.containerRef}
         data-testid={EXECUTE_DIALOG}
+        // The classes are the DEFAULT layout (unchanged first open); once the
+        // user moves/resizes, overlay.style pins explicit left/top/width/
+        // height and clears the centering transform + max-width.
+        // NOT overflow-hidden: the row context-menu layer below is an
+        // `absolute inset-0` child whose menu may legitimately extend past the
+        // dialog edge (s30) — clipping it would be a regression.
         className="max-w-4xl w-full max-h-[90vh] flex flex-col"
+        style={overlay.style}
         onInteractOutside={(e) => {
           // #721 — never dismiss the Execute review dialog via an interaction
           // OUTSIDE it. Two reasons: (1) it stages destructive actions, so a
@@ -438,12 +457,26 @@ export function ExecuteDialog() {
           if (executeRunning) e.preventDefault();
         }}
       >
-        <DialogHeader>
+        {/* Header doubles as the window drag bar (#739) */}
+        <DialogHeader
+          data-testid={EXECUTE_TITLE_BAR}
+          className="cursor-move select-none flex-shrink-0"
+          onMouseDown={overlay.onMoveStart}
+        >
           <DialogTitle>{t("web.execute_dialog.title", "Execute Actions")}</DialogTitle>
         </DialogHeader>
 
+        {/* Scrollable body (#739 round 2). `flex-auto` is flex:1 1 auto, so its
+            hypothetical size is its CONTENT size: at the dialog's natural
+            (unpinned) height nothing changes, and when the user pins a shorter
+            height this shrinks and scrolls instead of squeezing the tree to
+            nothing and pushing the footer out of the box. */}
+        <div
+          data-testid={EXECUTE_BODY}
+          className="flex flex-auto min-h-0 flex-col overflow-y-auto"
+        >
         {/* Toolbar row: TypeFilter */}
-        <div className="flex items-center gap-3 mt-2">
+        <div className="flex items-center gap-3 mt-2 flex-shrink-0">
           <span className="text-sm text-neutral-600">
             {t("web.execute_dialog.show_label", "Show:")}
           </span>
@@ -525,9 +558,12 @@ export function ExecuteDialog() {
             failed={executeResult.failed}
           />
         )}
+        </div>
+        {/* end scrollable body */}
 
-        {/* Footer */}
-        <DialogFooter className="mt-3 gap-2 sm:gap-2">
+        {/* Footer — never scrolls away: flex-shrink-0 keeps Execute reachable
+            at any pinned height. */}
+        <DialogFooter className="mt-3 gap-2 sm:gap-2 flex-shrink-0">
           <Button
             type="button"
             variant="outline"
@@ -577,6 +613,14 @@ export function ExecuteDialog() {
             />
           )}
         </div>
+
+        {/* Resize grip (#739) */}
+        <OverlayResizeHandle
+          data-testid={EXECUTE_RESIZE_HANDLE}
+          onMouseDown={overlay.onResizeStart}
+          className="text-neutral-500"
+          label={t("web.overlay.resize", "Resize window")}
+        />
       </DialogContent>
     </Dialog>
     <RemoveFromListConfirmDialog
