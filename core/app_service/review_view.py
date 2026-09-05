@@ -139,6 +139,17 @@ def _build_file_row(
         "is_ref_winner": is_ref_winner,
         "similarity": compute_similarity(action, record, is_ref_winner, ref_phash),
         "score": getattr(record, "score", None),
+        # #680 — the per-dimension signals the composite ``score`` is built
+        # from, so the web QA harness can assert extraction→scoring→storage
+        # wiring per dimension instead of only through the aggregate.
+        # Nullability mirrors the manifest columns (core.models.PhotoRecord):
+        # exif_tag_count may be null (census pass did not run); the other two
+        # are NOT NULL in SQLite and so are always a bool here. They are
+        # populated by extraction, not by scoring, so a row with score=null
+        # still carries real values.
+        "exif_tag_count": getattr(record, "exif_tag_count", None),
+        "gps_present": bool(getattr(record, "gps_present", False)),
+        "xmp_derived": bool(getattr(record, "xmp_derived", False)),
         "file_size_bytes": int(getattr(record, "file_size_bytes", 0) or 0),
         "pixel_width": getattr(record, "pixel_width", None),
         "pixel_height": getattr(record, "pixel_height", None),

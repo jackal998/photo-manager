@@ -14,6 +14,8 @@ import os
 import re
 from typing import TYPE_CHECKING, Union
 
+from qa.web.testid_constants import scan_source_recursive_testid
+
 if TYPE_CHECKING:
     # Only evaluated by type-checkers, never at runtime.
     from playwright.sync_api import Page
@@ -301,6 +303,7 @@ def run_scan(
     sources: list[Union[str, tuple[str, str]]],
     output_path: str,
     scan_timeout: float = 120_000,
+    recursive: bool = False,
 ) -> str:
     """Full scan flow: open dialog → add sources → set output → start → wait.
 
@@ -326,6 +329,12 @@ def run_scan(
     scan_timeout:
         Maximum milliseconds to wait for the manifest-loaded status bar text.
         Scans on large directories can take several minutes.
+    recursive:
+        Tick every source row's "recursive" checkbox before starting.  The
+        ScanDialog default is UNCHECKED (``ScanDialog.tsx:60`` —
+        ``recursive: false``), so a scenario whose fixture has a nested
+        subdirectory gets that subdirectory silently skipped unless it passes
+        ``recursive=True``.  Default False so existing callers are unchanged.
 
     Returns
     -------
@@ -340,6 +349,13 @@ def run_scan(
             add_scan_source(page, pth, idx=idx, label=lbl)
         else:
             add_scan_source(page, spec, idx=idx)
+        if recursive:
+            box = page.get_by_test_id(scan_source_recursive_testid(idx))
+            box.check()
+            assert box.is_checked(), (
+                f"recursive checkbox for source row {idx} did not tick — the "
+                f"scan would silently skip every subdirectory of that source"
+            )
     set_output_path(page, output_path)
     start_scan(page)
     return wait_manifest_loaded(page, timeout=scan_timeout)

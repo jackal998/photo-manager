@@ -32,6 +32,18 @@ export interface FileRow {
   thumbnail_url: string;
   /** Added V1 video-playback: "image" for photos, "video" for video files. */
   media_type?: "image" | "video";
+  /**
+   * #680 — per-dimension scoring signals: the raw inputs behind `score`.
+   * Nullability mirrors the manifest columns: `exif_tag_count` is nullable
+   * (null = the extended exiftool census pass did not run for this file,
+   * which is NOT the same as 0 tags), while `gps_present` / `xmp_derived`
+   * are NOT NULL in SQLite and always arrive as booleans. Optional here
+   * because a manifest payload from a pre-#680 backend omits them entirely.
+   * Populated by extraction, so a row with `score: null` still carries them.
+   */
+  exif_tag_count?: number | null;
+  gps_present?: boolean;
+  xmp_derived?: boolean;
 }
 
 export interface Group {
