@@ -31,6 +31,15 @@ does have one, on the app's own overlay rather than on browser chrome:
   8. ``page.reload()`` + reopen the viewer, and assert the window comes back
      at the saved rect rather than filling the viewport again.
 
+Third half (#851, 2026-09-06) — the splitter drag must also END when the mouse
+is released somewhere the page never hears about:
+
+  9. Start a drag, assert it is live (the pane widened), then deliver a window
+     ``blur`` and keep moving with the button held — the pane must not move.
+ 10. Repeat with the issue's literal repro: a ``mousemove`` carrying
+     ``buttons == 0``, the only signal left when the release takes no focus.
+     In both cases the width standing on screen must be the one persisted.
+
 The Execute / Set Action dialogs ride the same mechanism; their round-trip is
 covered by s48_dialog_geometry_persist (the Qt companion scenario, re-flipped
 from SKIP by the same change).
@@ -92,6 +101,16 @@ _GEOM_TOL_PX = 6
 _DELTA_PX = 100
 _MIN_GROWTH_PX = 40
 _TOL_PX = 6
+
+# #851 off-window-release checks. Kept small enough that even the buggy
+# behaviour stays clear of the 60%-of-viewport clamp (1280px context → 768px
+# ceiling), so a masked clamp can never be mistaken for "the drag ended".
+_OFFWINDOW_DRAG_PX = 60
+_MIN_OFFWINDOW_GROWTH_PX = 30
+_AFTER_RELEASE_PX = 80
+# clientX for the synthetic no-button move — far left of the handle, so a still
+# live drag would widen the pane by a lot rather than by rounding noise.
+_RELEASED_MOVE_X = 40
 
 
 def _preview_width(page) -> float:
@@ -203,6 +222,79 @@ def run(*, base_url: str) -> None:
                 failures.append(
                     f"localStorage['{_STORAGE_KEY}'] was wiped by the reload."
                 )
+
+            # ── #851: an off-window release must END the splitter drag ───────
+            # Two gestures, each with its own control (the drag must be shown to
+            # be live before the end-of-drag signal, or "the width did not move"
+            # would pass by the drag never having started):
+            #   A. window `blur` — the release took focus with it, so no mouseup
+            #      is ever delivered to the page.
+            #   B. a move that arrives with `buttons == 0` — the release took no
+            #      focus either, so blur never fires and the ONLY signal left is
+            #      that the next move carries no held button.
+            # Before #851 both left the window mousemove/mouseup listeners
+            # attached and the pane kept following the cursor with nothing held.
+            for label, end_drag in (
+                ("blur", lambda: page.evaluate("() => window.dispatchEvent(new Event('blur'))")),
+                (
+                    "buttons=0 move",
+                    lambda: page.evaluate(
+                        "(x) => window.dispatchEvent(new MouseEvent('mousemove', "
+                        "{clientX: x, clientY: 200, buttons: 0, bubbles: true}))",
+                        _RELEASED_MOVE_X,
+                    ),
+                ),
+            ):
+                before = _preview_width(page)
+                hb = handle.bounding_box()
+                if hb is None:
+                    raise AssertionError("preview-resize handle has no bounding box")
+                cx = hb["x"] + hb["width"] / 2
+                cy = hb["y"] + hb["height"] / 2
+                page.mouse.move(cx, cy)
+                page.mouse.down()
+                page.mouse.move(cx - _OFFWINDOW_DRAG_PX, cy, steps=4)
+                page.wait_for_timeout(120)
+                in_drag = _preview_width(page)
+                print(f"probe_status: s39 {label} in-drag width={in_drag}")
+                if in_drag < before + _MIN_OFFWINDOW_GROWTH_PX:
+                    failures.append(
+                        f"[{label}] control failed: the drag never widened the "
+                        f"pane (before={before} in_drag={in_drag}); the "
+                        f"end-of-drag assertion below would be vacuous."
+                    )
+
+                end_drag()
+                page.wait_for_timeout(120)
+                # The SAME held-button move that was resizing a moment ago must
+                # now do nothing at all.
+                page.mouse.move(cx - _OFFWINDOW_DRAG_PX - _AFTER_RELEASE_PX, cy, steps=4)
+                page.wait_for_timeout(120)
+                after = _preview_width(page)
+                print(f"probe_status: s39 {label} width after release={after}")
+                if abs(after - in_drag) > _TOL_PX:
+                    failures.append(
+                        f"[{label}] the preview pane kept resizing after the "
+                        f"drag should have ended: {in_drag} -> {after} "
+                        f"(+-{_TOL_PX}). The window listeners were not removed, "
+                        f"so the layout sticks to the cursor after a release the "
+                        f"page never hears about (#851)."
+                    )
+                page.mouse.up()
+                page.wait_for_timeout(120)
+
+                persisted_after = page.evaluate(
+                    "(key) => { const v = localStorage.getItem(key); "
+                    "return v ? (JSON.parse(v).preview ?? null) : null; }",
+                    _STORAGE_KEY,
+                )
+                print(f"probe_status: s39 {label} persisted={persisted_after}")
+                if persisted_after is None or abs(persisted_after - after) > _TOL_PX:
+                    failures.append(
+                        f"[{label}] the width standing on screen ({after}) was "
+                        f"not the one persisted ({persisted_after}) — the "
+                        f"end-of-drag commit is missing or wrote a stale width."
+                    )
 
             # ── #739 second half: full-res viewer window geometry ────────────
             _open_full_res_viewer(page)
