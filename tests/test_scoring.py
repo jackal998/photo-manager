@@ -708,6 +708,34 @@ class TestApplyScoringToRows:
         assert row.xmp_derived is False
         assert row.exif_tag_count == 12
 
+    def test_subsec_backfilled_onto_row_and_score_unmoved(self):
+        """#820 — the read-but-never-written trap (the one `xmp_rating`
+        fell into: parsed since #187, no column, silently useless). The
+        value has to reach ManifestRow, which is the only thing
+        `write_manifest` inserts from. And it must not disturb the score:
+        no weight reads it, so two otherwise-identical rows that differ
+        only in sub-second must still score the same."""
+        from pathlib import Path
+        from scanner.scoring import apply_scoring_to_rows
+        from scanner.media_extract import MediaExtract
+
+        row = _row("/x/a.jpg", pixel_width=4000, pixel_height=3000)
+        bare = _row("/x/a.jpg", pixel_width=4000, pixel_height=3000)
+        extracts = {
+            Path("/x/a.jpg"): MediaExtract(
+                path=Path("/x/a.jpg"),
+                subsec_time_original="087",
+                offset_time_original="+09:00",
+                extracted_by={"exiftool"},
+            )
+        }
+        apply_scoring_to_rows([row], extracts)
+        apply_scoring_to_rows([bare], {})
+        assert row.subsec_time_original == "087"
+        assert row.offset_time_original == "+09:00"
+        assert bare.subsec_time_original is None
+        assert row.score == bare.score
+
     def test_none_extracts_preserve_defaults(self):
         """A MediaExtract with gps_present=None (extractor didn't check)
         must NOT overwrite ManifestRow.gps_present's default (False).

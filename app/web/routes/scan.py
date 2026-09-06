@@ -232,7 +232,12 @@ async def start_scan(req: WebScanRequest) -> JSONResponse:
     # #652 — read back hash-pool / read-knee calibration + exif_workers from
     # settings.json for any field the request left unset, matching the Qt
     # ScanDialog's per-scan resolution instead of the old hardcoded defaults.
-    req = req.resolved_with(_load_settings())
+    #
+    # #790 — the settings read (Path.exists() + open() + json.load()) is
+    # blocking, so it goes to the executor. This handler must stay ``async``:
+    # it captured the running loop above for SseScanBus. Same idiom as
+    # execute.py's offloaded validation.
+    req = req.resolved_with(await loop.run_in_executor(None, _load_settings))
 
     # Store config on task so hash_pool_measured can compute the fingerprint.
     config = req.to_config()

@@ -14,6 +14,13 @@
 #
 # Invariant: the number of rows in this file must equal len(ALL_SCENARIOS).
 # Enforced by scripts/check_qa_parity.py.
+#
+# Write-settling contract (#850): the write helpers in qa/web/_invariants.py
+# (set_row_decision, click_context_item for the items in _CTX_ITEM_WRITES) do
+# not return until the API write their click caused has responded.  A driver
+# may therefore read GET /api/manifest straight after a write helper without
+# racing it; per-scenario polls that predate this contract are belt-and-braces,
+# not the mechanism.
 
 scenarios:
   - scenario: s01_happy_path
@@ -149,7 +156,7 @@ scenarios:
   - scenario: s26_keyboard_navigation
     playwright_module: qa.web.scenarios.s26_keyboard_navigation
     status: done
-    notes: "HONEST PARTIAL — the DECISION shortcuts (Qt step 0, #615) only. Ports app/views/components/decision_tree_view.py (bare 'd' → user_decision='delete', bare 'k' → '' / no-decision per #584; modifier-bearing presses fall through, Qt NoModifier guard) onto a document-level hook (frontend/src/hooks/useDecisionShortcuts.ts) that drives the SAME store.setDecisions the multi-select context menu uses — true parity, no new mutation path. Three branches over the near-duplicates group: A 'd' single (q95 → 'delete', others clean), B 'k' single (same selection → clears q95 back to '' — the d-vs-k discriminator: a stuck-on-delete/no-op handler fails B, a stuck-on-keep handler fails A), C 'd' multi (q80 + Ctrl+q72 → both 'delete', fan-out over the whole selection). Asserted by user_decision VALUE via GET /api/manifest (a staged 'delete' keeps outcome='' so the row stays visible, no Execute). /api/decision skips the allowed-roots guard so the repo fixture dir is scanned directly with a temp db (s30/s53 precedent). HONEST OMITS (no web equivalent / separate item): ArrowDown roving focus through the virtualizer = a separate FE item (D3b); Alt+F menu mnemonic + Tab-cycle + Esc-dismiss = Qt-native UIA menu/dialog keyboard traversal (Radix owns dialog focus + Esc, the browser owns Tab order); 'p' play/pause = a PreviewPane concern. The hook's guards (modifier held / editable-field target / open-modal inertness) are covered by useDecisionShortcuts.test.ts."
+    notes: "HONEST PARTIAL — the DECISION shortcuts (Qt step 0, #615) plus the ROVING ARROW CURSOR (Qt steps 1/3, #709). Ports app/views/components/decision_tree_view.py (bare 'd' → user_decision='delete', bare 'k' → '' / no-decision per #584; modifier-bearing presses fall through, Qt NoModifier guard) onto a document-level hook (frontend/src/hooks/useDecisionShortcuts.ts) that drives the SAME store.setDecisions the multi-select context menu uses — true parity, no new mutation path. Three branches over the near-duplicates group: A 'd' single (q95 → 'delete', others clean), B 'k' single (same selection → clears q95 back to '' — the d-vs-k discriminator: a stuck-on-delete/no-op handler fails B, a stuck-on-keep handler fails A), C 'd' multi (q80 + Ctrl+q72 → both 'delete', fan-out over the whole selection). Asserted by user_decision VALUE via GET /api/manifest (a staged 'delete' keeps outcome='' so the row stays visible, no Execute). /api/decision skips the allowed-roots guard so the repo fixture dir is scanned directly with a temp db (s30/s53 precedent). Branch D (#709) drives the roving cursor: the virtualized rows are non-focusable absolutely-positioned <div>s, so MAIN_RESULT_TREE itself is the focus target (tabIndex=0, role='tree') and aria-activedescendant names the active row. The window is shrunk to 1280x420 first so the 5-row fixture no longer fits (a non-scrolling tree would make every on-screen assertion free, and the branch fails loudly if the scroll range is under 60px). Asserts user-visible outcomes: ArrowDown x2 from q95 lands on q80 with aria-selected AND the store selection AND the preview image src following; ArrowUp walks back; running past the last row CLAMPS on q65 with the row inside the viewport; ArrowUp x4 back onto the now-off-screen q95 scrolls it in with its top at/below the sticky column header's bottom (#699/#846 — without scrollPaddingStart the virtualizer parks it UNDER the header); one more ArrowUp stops on the GROUP HEADER without collapsing the group and CLEARS the file selection (Qt parity: set_decision_to_highlighted filters type=='file' out of the current selection, so d/k are no-ops on a header — leaving the old selection would let a decision land on the row the cursor left; clicking a header clears it the same way), and that last hop carries the UNCONDITIONAL clearance assertion (the group row is reliably hidden under the sticky header at that moment, measured per run — the q95 hop asserts clearance only when the measurement shows it was hidden, since this fixture overflows the tree by only ~40px). HONEST OMITS (no web equivalent / separate item): Shift+arrow range extension + Home/End/PageUp/PageDown + Left/Right collapse (QTreeView built-ins, out of #709's scope); Alt+F menu mnemonic + Tab-cycle + Esc-dismiss = Qt-native UIA menu/dialog keyboard traversal (Radix owns dialog focus + Esc, the browser owns Tab order); 'p' play/pause = a PreviewPane concern. The hook's guards (modifier held / editable-field target / open-modal inertness) are covered by useDecisionShortcuts.test.ts; the cursor's own guards (modifier-bearing arrows, arrows typed outside the tree, cursor survival across a manifest rebuild, the scrollPaddingStart geometry) by ResultTree.keyboard.test.tsx."
 
   - scenario: s27_rescan_confirm
     playwright_module: qa.web.scenarios.s27_rescan_confirm
@@ -194,7 +201,7 @@ scenarios:
   - scenario: s35_lock_via_context_menu
     playwright_module: qa.web.scenarios.s35_lock_via_context_menu
     status: done
-    notes: "Lock/Unlock a row via the right-click context menu. (a) lock q95 → only q95 is_locked; (b) re-right-click q95 (menu now offers Unlock per the live is_locked) → unlock → all clear; (c) lock q88 then q80 (two sequential single-row ops = web multi-select divergence, s15 precedent) → both locked, q95/q72/q65 stay unlocked; (d) unlock both → all clear. Asserts is_locked via GET /api/manifest with a short poll absorbing the async PATCH /api/lock; is_locked stays orthogonal to user_decision. Uses CTX_LOCK/CTX_UNLOCK (the mutually-exclusive ContextMenu item, also used by s36)."
+    notes: "Lock/Unlock a row via the right-click context menu. (a) lock q95 → only q95 is_locked; (b) re-right-click q95 (menu now offers Unlock per the live is_locked) → unlock → all clear; (c) lock q88 then q80 (two sequential single-row ops = web multi-select divergence, s15 precedent) → both locked, q95/q72/q65 stay unlocked; (d) unlock both → all clear. Asserts is_locked via GET /api/manifest with a short poll that used to absorb the async PATCH /api/lock (since #850 click_context_item itself waits for that response, so the poll is now redundant cover, not the mechanism); is_locked stays orthogonal to user_decision. Uses CTX_LOCK/CTX_UNLOCK (the mutually-exclusive ContextMenu item, also used by s36)."
 
   - scenario: s36_lock_confirm_destructive_execute
     playwright_module: qa.web.scenarios.s36_lock_confirm_destructive_execute
@@ -226,7 +233,16 @@ scenarios:
       needs_rework parity per web-port-tech-design.md:2485 — the assertion
       weakens from screen-pixel window position to "panel width survives a
       reload". Result-tree column widths remain covered separately by s47
-      (#685, done).
+      (#685, done). SECOND HALF added by the #739 sign-off (2026-07-17): the
+      full-res VIEWER is now a movable/resizable overlay with persisted
+      geometry, so the window-position half of the Qt scenario finally has a
+      web analog — on the app's own overlay, not on browser chrome. The
+      scenario now also opens the viewer, drags its title bar (which
+      un-maximizes the viewport-filling default and moves it), asserts the
+      rect landed in localStorage under the viewer's OWN key
+      'pm.overlay-geometry.fullres.v1', reloads, reopens the viewer and
+      asserts the saved rect comes back. The Execute / Set Action dialogs ride
+      the same mechanism and are covered by s48.
 
   - scenario: s40_results_tree_double_click
     playwright_module: qa.web.scenarios.s40_results_tree_double_click
@@ -241,7 +257,7 @@ scenarios:
   - scenario: s42_scoring
     playwright_module: qa.web.scenarios.s42_scoring
     status: done
-    notes: "Composite-score pipeline (near-duplicates quality ordering + scoring-mixed penalties). Two sequential scans into separate temp manifests; asserts every grouped item has score in [0,1] (>=1 non-null, guards silent scoring failure), score-DESC array order (neardup_00_q95 before neardup_04_q65), and scoring_clean outscores Copy/Downloads/no_gps variants. COMPOSITE-SCORE SCOPE ONLY — per-dimension signals gps_present/exif_tag_count/xmp_derived are NOT serialised in FileRow (review_view.py:131-149); deferred to #680. Divergences: GET /api/manifest vs Qt sqlite; per-fixture temp manifest for per-group ordering; SQLite-backdoor for per-dimension rejected (API-only principle)."
+    notes: "Scoring pipeline (near-duplicates quality ordering + scoring-mixed penalties + per-dimension signals). Two sequential scans into separate temp manifests; asserts every grouped item has score in [0,1] (>=1 non-null, guards silent scoring failure), score-DESC array order (neardup_00_q95 before neardup_04_q65), and scoring_clean outscores Copy/Downloads/no_gps variants. PER-DIMENSION PARITY REACHED (#680): _build_file_row now serialises gps_present/exif_tag_count/xmp_derived, and the driver asserts the three keys are present, gps_present true on the three GPS-bearing variants + false on scoring_no_gps, exif_tag_count non-null everywhere (null = extended EXIF census pass never ran, the #556 symptom), xmp_derived false everywhere — the same checks the Qt driver makes from SQLite. Divergences: GET /api/manifest vs Qt sqlite (stronger: a signal that stops crossing the API fails here while the Qt driver stays green); per-fixture temp manifest for per-group ordering; SQLite-backdoor for per-dimension rejected (API-only principle)."
 
   - scenario: s43_numeric_condition
     playwright_module: qa.web.scenarios.s43_numeric_condition
@@ -273,11 +289,28 @@ scenarios:
       manifest → width restores. localStorage is the per-browser analog of the
       desktop window_state.ini; auto-isolated per Playwright context (no
       server reset). s46 intentionally absent from ALL_SCENARIOS.
+      #699 PHASE 6 (tall-manifest scroll — the web suite's only scrolling
+      coverage; every sandbox fixture fits on screen, largest is 5 rows). Loads
+      a SYNTHETIC 30-group / 60-row manifest built in-scenario with the
+      production scanner.manifest.write_manifest over 60 copies of a real
+      near-dup JPEG (the scan pipeline cannot emit 30 groups from any existing
+      fixture, and 30 pHash-distinct generated images would be a slow,
+      collision-prone sandbox addition), then scrolls the result tree and
+      asserts: the tree really scrolls (~4.9k px of overflow — non-vacuity);
+      the first row is not occluded by the sticky header at scrollTop 0; the
+      header stays pinned to the container's content top mid-scroll while rows
+      move; and — the load-bearing check — every rendered row's offset from the
+      container's content top equals the virtualizer's own coordinate for it
+      (recovered from the DOM as translateY + data-scroll-margin), at
+      scrollTop 0, mid-scroll and back at top. On the pre-#699 build that
+      difference is 25.00px (the header height) at all three positions; it is
+      0.00px after. Divergence: no Qt counterpart — Qt's QTreeView owns its own
+      scrolling, so this phase is web-native and adds no desktop obligation.
 
   - scenario: s48_dialog_geometry_persist
-    playwright_module: null
-    status: skip
-    notes: "SKIP — desktop-only (#688). Qt dialog-geometry persistence: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. Web dialogs are Radix / DOM overlays with no user-resizable geometry and no persistence contract, so there is nothing to round-trip. NOTE: s47 (#685) and s39 (#739) ARE real web features (column-width and preview-panel-width persistence) — NOT skips; only this dialog-geometry scenario (s48) remains desktop-only."
+    playwright_module: qa.web.scenarios.s48_dialog_geometry_persist
+    status: done
+    notes: "#739 re-flip from SKIP (owner sign-off 2026-07-17). Qt side: a QDialog.done() geometry-save hook + QSettings INI keys (geometry/scan_dialog, geometry/action_dialog_splitter) restored on reopen. The old SKIP reason — 'web dialogs are Radix/DOM overlays with no user-resizable geometry and no persistence contract' — no longer holds: #739 built ONE drag/resize/persist overlay mechanism (frontend/src/hooks/useOverlayGeometry.ts + frontend/src/lib/overlayGeometry.ts) and applied it to the full-res viewer, the Execute Action dialog and the Set Action dialog, closing divergence rows D6/D7/D12. This driver covers the two DIALOGS: for each, drag the title bar (asserts it moved), drag the bottom-right grip (asserts it grew), Escape-close and reopen (the Qt close-and-reopen round-trip, same session), assert the rect is in that surface's OWN localStorage key (pm.overlay-geometry.execute.v1 / .action.v1), then page.reload() and assert both still restore — plus that the two keys hold different rects, so one shared key cannot pass. Divergences: real mouse gestures instead of Win32 MoveWindow (the drag IS the feature; no browser API moves a DOM overlay from outside); localStorage instead of QSettings INI; the desktop scenario's THIRD dialog (ScanDialog) is deliberately NOT ported — #739's sign-off scoped the mechanism to the viewer + these two dialogs, and the Scan dialog stays a centered non-movable Radix dialog; the viewer's half of the same mechanism lives in s39. Round-2 review additions: a MOVE must not pin the height (drag, then type a matching pattern and assert the dialog GREW and Apply is still inside the box — this failed before the fix at dialog bottom 606 vs Apply bottom 716); a floor-height RESIZE must make the body scroll rather than evict the footer (asserts action-body scrollHeight > clientHeight, measured 448 vs 162); a seeded 236px height must be raised to the 280px minimum with a usable tree (was 36px, now 80px); and a drag started 50ms after open must seed from the settled layout."
 
   - scenario: s49_scan_auto_select
     playwright_module: qa.web.scenarios.s49_scan_auto_select
@@ -343,9 +376,9 @@ scenarios:
     playwright_module: qa.web.scenarios.s61_actioned_singleton_prune
     status: done
     notes: >-
-      #686 mixed-bucket singleton prune on the "ask" path. Six variants
+      #686 mixed-bucket singleton prune on the "ask" path. Seven variants
       (remove_plain / remove_both / keep / lock_cancel / lock_unlocked_only /
-      lock_apply). #702 Cancel-discriminator: lock_cancel and lock_unlocked_only
+      lock_apply / lock_apply_remove). #702 Cancel-discriminator: lock_cancel and lock_unlocked_only
       both HOLD the locked A_keep (identical sqlite state); the discriminating
       assertion is a POST /api/prune/candidates read confirming A_keep stays in
       the `locked` bucket (an accidental unlock is caught there, not by sqlite).
@@ -359,6 +392,12 @@ scenarios:
       actioned opt-in checkbox + dynamic "Remove N" label in the mixed layout,
       and the D6 lock gate (lock_cancel/lock_apply) routes locked A_keep through
       LockConfirmDialog op="prune" before the actioned-only prune dialog.
+      #713 (= #702 item 4) lock_apply_remove is the only live drive of REMOVE on
+      the lock-confirmed path: Unlock&Apply then Remove prunes BOTH singletons
+      (A_keep via the non-empty lockedToPrune fold, B_keep via the actioned
+      bucket). That lock-resolved dialog is ACTIONED-ONLY, so isMixed is false
+      and NO opt-in checkbox is rendered (verified live) — Remove itself opts the
+      actioned bucket in and the "Remove 1" label counts ACTIONED, not plain.
       Outcomes read via sqlite (a held singleton is invisible to the manifest
       API). Two generated clusters (qa/web/_prune_fixtures). Removes finalize to
       outcome='ignored' (no file delete). Divergence: accumulation + execute-

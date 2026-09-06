@@ -54,13 +54,17 @@ async def post_bulk_decide(body: BulkDecideRequest, request: Request) -> BulkDec
         422 unknown action or other validation error
     """
     roots = _allowed_roots(request)
+    loop = asyncio.get_running_loop()
 
-    if not Path(body.manifest_path).is_file():
+    # #790 — this is a bare stat, and on a NAS-backed library the manifest
+    # lives on the NAS, so it is exactly the blocking call the issue is about.
+    # This handler stays ``async`` (the real work is already awaited on the
+    # executor below), so the pre-check joins it there.
+    if not await loop.run_in_executor(None, Path(body.manifest_path).is_file):
         raise HTTPException(
             status_code=404, detail=f"Manifest not found: {body.manifest_path!r}"
         )
 
-    loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(
             None,

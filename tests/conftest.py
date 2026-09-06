@@ -45,13 +45,107 @@ def _isolate_unc_resolution(monkeypatch):
     test, so grouping resolves to the bare drive letter — matching CI. Tests
     that exercise the resolution logic itself inject their own resolver via
     ``device_key(unc_resolver=...)`` and are unaffected by this patch.
-    """
-    import scanner.workers as _workers
 
-    _workers._unc_cache.clear()
-    monkeypatch.setattr(_workers, "_resolve_unc_via_win32", lambda letter: None)
+    #622 Phase 2 moved ``device_key`` and its memo to
+    ``infrastructure.device_key`` (``scanner.workers`` re-exports them). This
+    fixture MUST patch the defining module: patching the re-exporting one
+    would rebind a name ``device_key`` no longer reads, so the fixture would
+    go quietly inert and the real ``WNetGetConnectionW`` would resolve a live
+    ``J:`` back to ``\\\\LINXIAOYUN`` on the dev machine — the exact
+    dev-passes/CI-differs asymmetry described above.
+    """
+    import infrastructure.device_key as _dk
+
+    _dk._unc_cache.clear()
+    monkeypatch.setattr(_dk, "_resolve_unc_via_win32", lambda letter: None)
     yield
-    _workers._unc_cache.clear()
+    _dk._unc_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_source_mtime_ttl_cache():
+    """Drop the module-global source-mtime TTL cache between tests (#622 Phase 2).
+
+    ``infrastructure.image_service._mtime_cache`` memoises each path's mtime
+    for 5 s of real monotonic time. Without this reset, one test's stat of a
+    ``tmp_path`` file would still be cached when the next test writes a
+    different file to the same reused path within 5 s — an order-dependent
+    failure that only shows up in a full-suite run.
+    """
+    import infrastructure.image_service as _img
+
+    _img._mtime_cache.clear()
+    yield
+    _img._mtime_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _revive_wic_executor():
+    """Undo the process-wide WIC-executor shutdown a lifespan test performs (#781).
+
+    ``infrastructure.image_service`` owns a module-global STA thread pool
+    (``_wic_executor``, image_service.py:139) that ``ImageService.
+    _load_via_shell_thumbnail`` submits to. Every test that enters the FastAPI
+    app's lifespan — ``with TestClient(app)`` in the ten ``tests/test_web_*``
+    modules — runs the real ``_drain_wic_executor`` on exit (app/web/main.py:101),
+    which calls ``ThreadPoolExecutor.shutdown``. The pool is per-process and
+    never rebuilt, so any *later* test that reaches the Shell/WIC path gets
+    ``RuntimeError: cannot schedule new futures after shutdown``. With the
+    default collection order that victim is
+    ``tests/test_image_service.py::TestBytesContract::
+    test_placeholder_returned_when_load_fails``; which test loses depends purely
+    on file order, which is why it reads as a flake.
+
+    Same shape, same remedy as ``_isolate_unc_resolution`` above: reset the
+    module global around each test. The replacement is built from the dead
+    executor's own construction parameters, so it is production's configuration
+    by definition — in particular ``thread_name_prefix='wic-sta'``, which
+    ``_shell_thumbnail_sync``'s STA assertion (image_service.py:779) checks.
+
+    This cannot mask a real failure: it runs only in teardown, only when the
+    pool is already shut down, and it does not touch a live pool. A genuine
+    "we shut the pool down and then used it" bug in production code would still
+    fail inside the test that does it.
+    """
+    yield
+
+    mod = sys.modules.get("infrastructure.image_service")
+    if mod is None:  # module never imported by this test — nothing to revive
+        return
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    executor = mod._wic_executor
+    if not isinstance(executor, ThreadPoolExecutor):
+        # A test swapped in its own double; its own teardown restores the real
+        # pool, and reviving someone else's stub would be wrong.
+        return
+
+    # Fail closed: if CPython ever renames these, revive silently becoming a
+    # no-op would resurrect the #781 flake with no signal at all.
+    missing = [
+        attr
+        for attr in ("_shutdown", "_max_workers", "_thread_name_prefix",
+                     "_initializer", "_initargs")
+        if not hasattr(executor, attr)
+    ]
+    if missing:
+        raise RuntimeError(
+            f"#781 fixture cannot inspect ThreadPoolExecutor internals {missing} "
+            f"on {sys.version_info[:3]} — update tests/conftest.py::"
+            "_revive_wic_executor instead of letting the order-dependent "
+            "_wic_executor flake come back silently"
+        )
+
+    if not executor._shutdown:
+        return
+
+    mod._wic_executor = ThreadPoolExecutor(
+        max_workers=executor._max_workers,
+        thread_name_prefix=executor._thread_name_prefix,
+        initializer=executor._initializer,
+        initargs=executor._initargs,
+    )
 
 
 # ---------------------------------------------------------------------------

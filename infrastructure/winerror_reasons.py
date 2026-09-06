@@ -1,14 +1,14 @@
-"""Windows ``winerror`` → human-reason decoding, shared by the web delete path.
+"""Windows ``winerror`` → human-reason decoding, shared by both delete paths.
 
-Canonical home for the ``OSError.winerror`` -> plain-language reason table.
-The values below are copied VERBATIM from
-``app/views/dialogs/execute_action_dialog.py`` (``_WINERROR_REASON_TABLE`` /
-``_decode_winerror``, lines 92-116) so the web port's per-file failure
-messages read identically to the Qt desktop's "Files Failed to Delete"
-dialog. The Qt dialog keeps its own local copy of the table for now — its
-bypass loop is out of scope for #742 (app/views/** untouched); LEAD will
-file a follow-up to have it import from here instead of duplicating the
-table.
+Canonical — and since #757, the only — home for the ``OSError.winerror`` ->
+plain-language reason table. The web delete path
+(``infrastructure/delete_service.py``) and the Qt desktop dialog
+(``app/views/dialogs/execute_action_dialog.py``, whose ``_decode_winerror``
+is now a thin wrapper over ``decode_winerror``) both read the table here, so
+the web port's per-file failure messages read identically to the desktop's
+"Files Failed to Delete" dialog by construction rather than by copy. The
+table originated in the Qt dialog and was lifted here verbatim by #742; #757
+deleted the duplicate it had left behind.
 """
 
 from __future__ import annotations
@@ -33,17 +33,20 @@ WINERROR_REASON_TABLE: dict[int, str] = {
 }
 
 
-def decode_winerror(exc: OSError) -> str | None:
+def decode_winerror(exc: BaseException) -> str | None:
     """Return a plain-language reason for ``exc.winerror``, or ``None``.
 
     Looks up the signed HRESULT (``OSError.winerror``) in
     ``WINERROR_REASON_TABLE``. Returns ``None`` when ``exc`` has no
     ``winerror`` attribute, when it isn't an ``int``, or when the code is
     unmapped — the caller decides its own fallback (e.g. ``str(exc)``).
-    This differs slightly from the Qt dialog's ``_decode_winerror``, which
-    falls back to ``str(exc)`` internally; returning ``None`` here lets a
+    Accepts any ``BaseException``, not just ``OSError``: the lookup is
+    ``getattr``-based, and the Qt dialog's ``_decode_winerror`` wrapper
+    routes non-``OSError`` delete failures (the ``os.remove`` fallback path)
+    through here too. Returning ``None`` rather than a raw message lets each
     caller distinguish "no better information available" from "here is the
-    raw message" and choose its own fallback text.
+    raw message" and choose its own fallback text — the Qt dialog appends
+    ``or str(exc)``, the web path records the reason only when present.
     """
     winerror = getattr(exc, "winerror", None)
     if isinstance(winerror, int):

@@ -1,12 +1,13 @@
-"""Web scenario s42 — Keep-worthiness composite-score pipeline (#187).
+"""Web scenario s42 — Keep-worthiness scoring pipeline (#187).
 
 Ported from qa/scenarios/s42_scoring.py (Qt UIA / SQLite read).
 
-Scope: COMPOSITE-SCORE only.
-  Per-dimension signals gps_present / exif_tag_count / xmp_derived are NOT
-  serialized in GET /api/manifest (they are DB columns consumed by the scorer
-  but not included in _build_file_row, see core/app_service/review_view.py
-  lines 121-149).  Asserting them is deferred to issue #680.
+Scope: COMPOSITE SCORE + PER-DIMENSION SIGNALS.
+  #680 serialises gps_present / exif_tag_count / xmp_derived into every
+  FileRow (core/app_service/review_view.py:_build_file_row), so this driver
+  now asserts the same per-dimension signal propagation the Qt driver reads
+  out of SQLite — through GET /api/manifest, without a DB backdoor.  That
+  closes the assertion-scope parity gap this scenario shipped with.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 JPEG re-saves at qualities 95/88/80/72/65
@@ -34,17 +35,24 @@ Web slice:
   5. wait_manifest_loaded → GET /api/manifest for sm_manifest.db.
   6. Assert: all items have score in [0.0, 1.0]; scoring_clean.jpg outscores all
      three penalised variants (filename / path / GPS-stripped).
+  7. Assert per-dimension (#680, mirrors the Qt driver's SQLite reads):
+     gps_present true on the three GPS-bearing variants and false on
+     scoring_no_gps.jpg; exif_tag_count non-null everywhere (a null means the
+     extended EXIF census pass never ran — the #556 starvation symptom);
+     xmp_derived false everywhere (the fixture carries no xmpMM:DerivedFrom).
 
 Qt divergences:
   (i)   The Qt driver reads scores directly from SQLite
         (migration_manifest.score); the web port uses GET /api/manifest, which
         is the authoritative serialisation (strictly stronger — tests the full
         data pipeline).
-  (ii)  The Qt driver asserts per-dimension signals (gps_present,
-        exif_tag_count, xmp_derived) read directly from SQLite columns.  Those
-        columns exist in the DB but are NOT serialised by _build_file_row, so
-        they are unavailable through GET /api/manifest.  These assertions are
-        deferred to issue #680.
+  (ii)  The Qt driver reads the per-dimension signals (gps_present,
+        exif_tag_count, xmp_derived) straight out of the SQLite columns; the
+        web port reads the SAME three values out of GET /api/manifest, which
+        #680 made the serialisation carry.  Assertion scope is now equal; the
+        read path is strictly stronger here, because a signal that stops
+        crossing the API boundary fails this driver while leaving the DB (and
+        therefore the Qt driver) green.
   (iii) The Qt driver scans both fixtures in a single run (PRE_PHOTO_MANAGER
         manifest = qa/run-manifest.sqlite).  The web port does two sequential
         scans into separate tmp manifests so each fixture can be isolated and
@@ -261,11 +269,19 @@ def run(*, base_url: str) -> None:
             page.goto("/")
             page.wait_for_load_state("networkidle", timeout=10_000)
 
+            # recursive=True is REQUIRED here: the fixture's path-penalty
+            # variant lives in a Downloads/ subdirectory, and the ScanDialog's
+            # per-row recursive checkbox defaults to UNCHECKED. Without it the
+            # subdirectory is never walked, Downloads/scoring_clean.jpg never
+            # reaches the manifest, and the path-penalty comparison below
+            # silently compares nothing (found while adding the #680
+            # per-dimension assertions).
             run_scan(
                 page,
                 sources=[src_sm],
                 output_path=sm_db,
                 scan_timeout=120_000,
+                recursive=True,
             )
             assert os.path.exists(sm_db), f"scan did not write manifest: {sm_db}"
 
@@ -284,17 +300,21 @@ def run(*, base_url: str) -> None:
                 sm_items.extend(group.get("items", []))
 
             assert len(sm_items) >= 2, (
-                f"scoring-mixed manifest has {sm_items} items; expected >= 2 "
-                f"(fixture has 4 files)"
+                f"scoring-mixed manifest has {len(sm_items)} items; expected "
+                f">= 2, i.e. that the scan produced a real duplicate group at "
+                f"all. The exact row set is asserted below, per variant"
             )
 
-            # Build {suffix -> score} map so we can identify the two files that
-            # share the basename scoring_clean.jpg by their path suffix.
+            # Build {suffix -> score} and {suffix -> full row} maps so we can
+            # identify the two files that share the basename scoring_clean.jpg
+            # by their path suffix.
             sm_score_by_suffix: dict[str, float | None] = {}
+            sm_row_by_suffix: dict[str, dict] = {}
             for item in sm_items:
                 suffix = _sm_suffix(item["file_path"])
                 raw_score = item.get("score")
                 sm_score_by_suffix[suffix] = float(raw_score) if raw_score is not None else None
+                sm_row_by_suffix[suffix] = item
 
             # Guard: at least one non-null score.
             scored_sm = [v for v in sm_score_by_suffix.values() if v is not None]
@@ -328,6 +348,67 @@ def run(*, base_url: str) -> None:
                             f"({clean_score:.4f}) should outscore {penalised_key!r} "
                             f"({penalised_score:.4f}) due to {penalty_name}"
                         )
+
+            # ── Assert 3: per-dimension scoring signals (#680) ───────────────
+            # Mirrors qa/scenarios/s42_scoring.py::_verify_mixed_pre, which
+            # reads the same three values out of the SQLite columns. Reading
+            # them through GET /api/manifest is what makes this the API
+            # contract rather than a DB backdoor.
+            missing = [
+                key for key in (_SM_CLEAN, _SM_COPY_OF, _SM_NO_GPS, _SM_DOWNLOADS)
+                if key not in sm_row_by_suffix
+            ]
+            assert not missing, (
+                f"scoring-mixed rows missing from the manifest: {missing}; "
+                f"present={sorted(sm_row_by_suffix)}. The per-dimension signal "
+                f"assertions below need all four variants to be meaningful."
+            )
+
+            # The keys must be SERIALISED, not merely falsy. A backend that
+            # dropped them would make every `.get(...)` below return None and
+            # the value assertions would read as "no GPS anywhere".
+            for suffix, row in sm_row_by_suffix.items():
+                for key in ("gps_present", "exif_tag_count", "xmp_derived"):
+                    assert key in row, (
+                        f"FileRow for {suffix!r} has no {key!r} key — "
+                        f"core/app_service/review_view.py:_build_file_row must "
+                        f"serialise the per-dimension scoring signals (#680). "
+                        f"keys={sorted(row)}"
+                    )
+
+            # GPS extraction wiring (batch_read_extracts → apply_scoring_to_rows
+            # → gps_present column → FileRow). If the exiftool selectors ever
+            # lose -GPSLatitude, every file silently reads False and only this
+            # assertion notices — the composite score stays plausible.
+            for gps_key in (_SM_CLEAN, _SM_COPY_OF, _SM_DOWNLOADS):
+                assert sm_row_by_suffix[gps_key]["gps_present"] is True, (
+                    f"gps_present is "
+                    f"{sm_row_by_suffix[gps_key]['gps_present']!r} for {gps_key!r}, "
+                    f"expected True — that fixture carries GPS EXIF"
+                )
+            assert sm_row_by_suffix[_SM_NO_GPS]["gps_present"] is False, (
+                f"gps_present is "
+                f"{sm_row_by_suffix[_SM_NO_GPS]['gps_present']!r} for {_SM_NO_GPS!r}, "
+                f"expected False — that fixture has its GPS tags stripped"
+            )
+
+            # EXIF census wiring: a null count means the extended EXIF pass
+            # never ran for that file (#556 exiftool job-nesting starvation
+            # produced exactly this, on a non-deterministic subset).
+            for suffix, row in sm_row_by_suffix.items():
+                assert row["exif_tag_count"] is not None, (
+                    f"exif_tag_count is null for {suffix!r} — the extended EXIF "
+                    f"census pass did not run for this file (see #556)"
+                )
+
+            # xmp_derived must be False (not null) everywhere: the fixture sets
+            # no xmpMM:DerivedFrom, and False proves the column populated via
+            # the extraction pass rather than never being written.
+            for suffix, row in sm_row_by_suffix.items():
+                assert row["xmp_derived"] is False, (
+                    f"xmp_derived is {row['xmp_derived']!r} for {suffix!r}, "
+                    f"expected False — no fixture carries xmpMM:DerivedFrom"
+                )
 
     finally:
         shutil.rmtree(tmpdir_nd, ignore_errors=True)

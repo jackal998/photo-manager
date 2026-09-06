@@ -14,6 +14,12 @@
 //     broken regardless of cause, and revealing it in Explorer is always safe.)
 //   - Esc key and backdrop click close the overlay (store.closeFullRes).
 //   - Ctrl+wheel zoom + drag-to-pan via CSS transform (simple, no extra deps).
+//   - Movable + resizable window with persisted geometry (#739, owner sign-off
+//     2026-07-17): drag the title bar to move, the bottom-right grip to
+//     resize, both via the shared useOverlayGeometry mechanism. The viewer
+//     still OPENS filling the viewport (the `inset-0` default below), so a
+//     first open is unchanged; once moved/resized the geometry persists per
+//     browser and is re-clamped into the viewport on every open.
 
 import {
   useState,
@@ -29,7 +35,15 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { fullResUrl, mediaUrl } from "@/api/client";
-import { FULLRES_DIALOG, FULLRES_IMAGE } from "@/testids";
+import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
+import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
+import { OverlayResizeHandle } from "@/components/ui/overlay-resize-handle";
+import {
+  FULLRES_DIALOG,
+  FULLRES_IMAGE,
+  FULLRES_RESIZE_HANDLE,
+  FULLRES_TITLE_BAR,
+} from "@/testids";
 import type { FileRow } from "@/api/types";
 
 // ---------------------------------------------------------------------------
@@ -67,6 +81,11 @@ export function FullResViewer() {
 
   const isOpen = fullResPath !== null;
 
+  // Movable/resizable window geometry (#739) — shared with the Execute and
+  // Set Action dialogs. No default is passed: the viewer's own `inset-0`
+  // class IS the default, and the first drag seeds from its rendered rect.
+  const overlay = useOverlayGeometry("fullres", isOpen);
+
   // Reset image + video state whenever the path changes.
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -75,18 +94,38 @@ export function FullResViewer() {
     h: number;
   } | null>(null);
 
-  // Transcode fallback state (video only).
-  const [useTranscode, setUseTranscode] = useState(false);
+  // Transcode fallback state (video only). The initial value is the #787
+  // capability hint — "unknown" (today's behaviour) unless the engine has
+  // positively reported it cannot decode HEVC and this is an HEVC-in-practice
+  // container. handleVideoError below makes it a two-attempt contract:
+  // whichever source we start on, the first error swaps to the other one.
+  const [useTranscode, setUseTranscode] = useState(
+    () => fullResPath !== null && prefersTranscodedVideo(fullResPath)
+  );
+  // See the same note in PreviewPane.tsx: useTranscode alone is ambiguous once
+  // the hint can choose the STARTING source, so "have we already swapped?" is
+  // tracked explicitly.
+  const [swapAttempted, setSwapAttempted] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoCanPlay, setVideoCanPlay] = useState(false);
 
+  // Re-made during RENDER on every path change — see the same note in
+  // PreviewPane.tsx: an effect-based reset commits one render on the
+  // original-bytes src, which starts the fetch this pre-check exists to skip.
+  const [hintedPath, setHintedPath] = useState<string | null>(fullResPath);
+  if (hintedPath !== fullResPath) {
+    setHintedPath(fullResPath);
+    setUseTranscode(fullResPath !== null && prefersTranscodedVideo(fullResPath));
+    setSwapAttempted(false);
+  }
+
   useEffect(() => {
+    void canPlayHevc(); // memoized — one decodingInfo call per page life
     setLoading(true);
     setLoadError(false);
     setNaturalDims(null);
     setScale(1);
     setPan({ x: 0, y: 0 });
-    setUseTranscode(false);
     setVideoFailed(false);
     setVideoCanPlay(false);
   }, [fullResPath]);
@@ -154,15 +193,18 @@ export function FullResViewer() {
     setLoadError(true);
   }, []);
 
-  // Video-specific error: swap to transcode on first error, terminal on second.
+  // Video-specific error: first error swaps to the OTHER source (transcode if
+  // we started native; original bytes if the #787 hint started us on the
+  // transcode and it 501'd or failed), second error is terminal.
   const handleVideoError = useCallback(() => {
-    if (!useTranscode) {
-      setUseTranscode(true);
+    if (!swapAttempted) {
+      setSwapAttempted(true);
+      setUseTranscode((prev) => !prev);
       setVideoCanPlay(false);
     } else {
       setVideoFailed(true);
     }
-  }, [useTranscode]);
+  }, [swapAttempted]);
 
   const handleReveal = useCallback(() => {
     if (fullResPath !== null) {
@@ -195,14 +237,23 @@ export function FullResViewer() {
 
         {/* Content panel */}
         <DialogPrimitive.Content
+          ref={overlay.containerRef}
           data-testid={FULLRES_DIALOG}
-          className="fixed inset-0 z-50 flex flex-col focus:outline-none"
+          // `inset-0` is the DEFAULT layout (unchanged first open); once the
+          // user moves or resizes, overlay.style pins explicit left/top/
+          // width/height and neutralises right/bottom.
+          className="fixed inset-0 z-50 flex flex-col overflow-hidden focus:outline-none"
+          style={overlay.style}
           onEscapeKeyDown={closeFullRes}
           aria-label={`Full resolution: ${basename}`}
         >
-          {/* Title bar */}
+          {/* Title bar — also the window's drag handle (#739) */}
           <DialogPrimitive.Title asChild>
-            <div className="flex items-center justify-between px-4 py-2 bg-neutral-900 text-white text-sm flex-shrink-0">
+            <div
+              data-testid={FULLRES_TITLE_BAR}
+              className="flex items-center justify-between px-4 py-2 bg-neutral-900 text-white text-sm flex-shrink-0 cursor-move select-none"
+              onMouseDown={overlay.onMoveStart}
+            >
               <span className="font-medium truncate max-w-xl">
                 {basename}
                 {dimsLabel !== "" && (
@@ -332,6 +383,14 @@ export function FullResViewer() {
               )}
             </div>
           )}
+
+          {/* Resize grip (#739) — light-on-dark to match the viewer chrome */}
+          <OverlayResizeHandle
+            data-testid={FULLRES_RESIZE_HANDLE}
+            onMouseDown={overlay.onResizeStart}
+            className="text-white"
+            label={t("web.overlay.resize", "Resize window")}
+          />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

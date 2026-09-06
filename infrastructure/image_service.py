@@ -18,9 +18,10 @@ import hashlib
 import io
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import uuid
 
 # wintypes is a Windows-only ctypes module; guard so the module imports on Linux
@@ -252,12 +253,127 @@ def _compute_cache_key(path: str, size_key: int, source_mtime_ns: int = 0) -> st
     return hashlib.sha1(sig).hexdigest()
 
 
-def _source_mtime_ns(path: str) -> int:
+def _stat_mtime_ns(path: str) -> int:
     """Best-effort source-file mtime_ns; 0 if the stat fails (e.g. deleted)."""
     try:
         return Path(path).stat().st_mtime_ns
     except OSError:
         return 0
+
+
+# How long one path's mtime may be reused before the source is stat'd again.
+# 5 s is the #622 Phase 2 figure: long enough that a burst of requests for the
+# same file (rapid clicks, a grid tile plus the single view, an ETag lookup
+# beside its own decode) costs ONE stat, short enough that a user who edits a
+# photo in another application sees the new version almost immediately.
+_MTIME_TTL_SECONDS = 5.0
+
+# Hard ceiling on how many paths the mtime cache may hold. Entries are only
+# useful for _MTIME_TTL_SECONDS, but nothing re-visits a path once the user
+# has moved on, so without a cap the map would grow by one entry per distinct
+# file previewed and never shrink for the life of the process. 512 is far more
+# than any one grid or burst needs (a grid shows a few dozen files), so the
+# cap never evicts an entry that is still live in practice.
+_MTIME_CACHE_MAX_ENTRIES = 512
+
+
+class _MtimeStatCache:
+    """Per-path TTL cache over the source-file mtime stat (#622 Phase 2).
+
+    Every preview request folds ``source_mtime_ns`` into its cache key, which
+    means every request stats the source — and on a NAS that stat is a network
+    round trip, paid even on a memory-cache hit. Requests arrive in bursts for
+    the same path, so a short TTL collapses the burst to one stat.
+
+    The TTL is deliberately NOT "cache the mtime forever": a path-only key
+    would never notice an external edit (the user re-exports a photo over the
+    same filename on the NAS) and the pane would serve the pre-edit pixels
+    indefinitely. After the TTL the source is stat'd again, the new mtime
+    produces a different cache key, and the edit shows up.
+
+    A failed stat (0) is cached like any other value: a deleted file is
+    re-checked once the TTL lapses.
+
+    **Bounded.** An entry stops being useful after the TTL, but nothing comes
+    back to evict it — a session that browses N distinct files would otherwise
+    hold N entries until the process exits. Inserts therefore sweep expired
+    entries once the map reaches ``max_entries``, and fall back to
+    oldest-first eviction if a burst is genuinely wider than the cap. Size is
+    bounded by ``max_entries``, not by how long the app has been running.
+
+    Thread-safe — decode workers call this from several QThreadPool threads.
+    ``clock``, ``stat_fn`` and ``max_entries`` are injected so the TTL and the
+    eviction behaviour are testable without sleeping, without allocating the
+    production cap, and without monkeypatching the standard library.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = _MTIME_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        stat_fn: Callable[[str], int] = _stat_mtime_ns,
+        max_entries: int = _MTIME_CACHE_MAX_ENTRIES,
+    ) -> None:
+        self._ttl = float(ttl_seconds)
+        self._clock = clock
+        self._stat = stat_fn
+        self._max_entries = max(1, int(max_entries))
+        self._entries: dict[str, tuple[float, int]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, path: str) -> int:
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(path)
+            if entry is not None and (now - entry[0]) < self._ttl:
+                return entry[1]
+        # Stat outside the lock: it is the slow network call, and holding the
+        # lock across it would serialise every path behind the slowest one.
+        value = self._stat(path)
+        with self._lock:
+            self._evict_locked(now)
+            self._entries[path] = (now, value)
+        return value
+
+    def _evict_locked(self, now: float) -> None:
+        """Keep the map under ``max_entries``. Caller holds the lock.
+
+        Cheap in the common case: it does nothing at all until the cap is
+        reached, and the sweep it then runs is O(size) once per cap-worth of
+        new paths, not per request.
+        """
+        if len(self._entries) < self._max_entries:
+            return
+        # Normally the whole map is stale by now — entries live 5 s and the
+        # cap takes far longer than that to fill.
+        for stale in [
+            p for p, (stamp, _) in self._entries.items() if (now - stamp) >= self._ttl
+        ]:
+            del self._entries[stale]
+        # A burst wider than the cap within one TTL: drop oldest-first. dicts
+        # keep insertion order, so the first key is the oldest inserted.
+        while len(self._entries) >= self._max_entries:
+            del self._entries[next(iter(self._entries))]
+
+    def clear(self) -> None:
+        """Drop every entry.
+
+        Test-isolation hook (an autouse fixture in ``tests/conftest.py`` calls
+        it between tests so one test's ``tmp_path`` stat cannot answer the
+        next one's). Production relies on the TTL and on ``_evict_locked``,
+        not on anyone calling this.
+        """
+        with self._lock:
+            self._entries.clear()
+
+
+_mtime_cache = _MtimeStatCache()
+
+
+def _source_mtime_ns(path: str) -> int:
+    """Source-file mtime_ns, TTL-cached per path (see :class:`_MtimeStatCache`)."""
+    return _mtime_cache.get(path)
 
 
 def _ensure_dir(p: Path) -> None:

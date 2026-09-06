@@ -603,6 +603,183 @@ class TestPreviewRecipeVersion:
 # ── Source-mtime cache-key freshness (Correction #11) ────────────────────
 
 
+class _FakeClock:
+    """Monotonic clock under test control — no sleeping for a 5 s TTL."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = float(start)
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += float(seconds)
+
+
+class _CountingStat:
+    """Stat stub that counts calls and can change its answer mid-test."""
+
+    def __init__(self, value: int = 111) -> None:
+        self.value = value
+        self.calls: list[str] = []
+
+    def __call__(self, path: str) -> int:
+        self.calls.append(path)
+        return self.value
+
+
+class TestMtimeStatCacheTTL:
+    """The 5 s per-path stat TTL (#622 Phase 2).
+
+    Every preview request folds the source mtime into its cache key, so before
+    the TTL each request stat'd the source — a network round trip per request
+    on a NAS, paid even when the decoded bytes were already in RAM. Requests
+    arrive in bursts for one path (rapid clicks, the grid tile plus the single
+    view), so the burst is what the TTL collapses.
+    """
+
+    def test_two_requests_inside_ttl_issue_one_stat(self):
+        """Burst of requests for one path → exactly ONE stat.
+
+        Real failure mode: clicking through a group on the NAS issues one SMB
+        stat per preview request. Each is a network round trip in front of a
+        cache hit that would otherwise be instant.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=555)
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=stat)
+
+        first = cache.get("J:/nas/photo.dng")
+        clock.advance(4.9)
+        second = cache.get("J:/nas/photo.dng")
+
+        assert first == 555 and second == 555
+        assert len(stat.calls) == 1, (
+            f"expected one stat inside the TTL, got {len(stat.calls)}"
+        )
+
+    def test_ttl_expiry_sees_external_edit(self):
+        """After the TTL, the source is stat'd again and a changed mtime wins.
+
+        Real failure mode this guards: the user re-exports a photo over the
+        same filename (Lightroom / Photoshop writing back to the NAS). If the
+        mtime were cached without expiry, the key would never change and the
+        pane would serve the pre-edit pixels for the rest of the session.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=100)
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=stat)
+
+        assert cache.get("J:/nas/photo.dng") == 100
+        stat.value = 200  # the external edit
+        clock.advance(5.1)
+
+        assert cache.get("J:/nas/photo.dng") == 200
+        assert len(stat.calls) == 2
+
+    def test_distinct_paths_do_not_share_an_entry(self):
+        """Two paths must never share one cached mtime.
+
+        Real failure mode: a single-slot cache would hand file B the mtime of
+        file A, so B's cache key would collide with a key computed for a
+        different mtime — the pane would show one photo's pixels under the
+        other's filename.
+        """
+        clock = _FakeClock()
+        values = {"a.jpg": 11, "b.jpg": 22}
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=lambda p: values[p])
+
+        assert cache.get("a.jpg") == 11
+        assert cache.get("b.jpg") == 22
+        assert cache.get("a.jpg") == 11
+
+    def test_source_mtime_ns_reads_through_the_module_cache(self, monkeypatch):
+        """``_source_mtime_ns`` must go through the TTL cache, not stat directly.
+
+        Real failure mode: a refactor that called ``_stat_mtime_ns`` from
+        ``_get_image`` again would silently restore the per-request NAS stat.
+        Nothing else would go red — the images would still be correct, just
+        slower on exactly the setup that cannot afford it.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=777)
+        monkeypatch.setattr(
+            svc_mod, "_mtime_cache",
+            svc_mod._MtimeStatCache(clock=clock, stat_fn=stat),
+        )
+
+        assert svc_mod._source_mtime_ns("J:/nas/photo.dng") == 777
+        assert svc_mod._source_mtime_ns("J:/nas/photo.dng") == 777
+        assert len(stat.calls) == 1
+
+    def test_entries_stay_bounded_across_many_distinct_paths(self):
+        """10k distinct paths must not leave 10k entries behind.
+
+        Real failure mode: an entry is useless after its 5 s TTL, but nothing
+        revisits it to evict it. Browsing a large library would grow the map
+        by one entry per distinct file previewed and never shrink it for the
+        life of the process — an unbounded leak that no test would notice,
+        because every cache lookup keeps returning the right answer.
+        """
+        clock = _FakeClock()
+        cache = svc_mod._MtimeStatCache(
+            clock=clock, stat_fn=_CountingStat(), max_entries=64
+        )
+
+        for i in range(10_000):
+            cache.get(f"J:/nas/photo_{i}.dng")
+            clock.advance(6.0)  # each path is stale before the next arrives
+
+        assert len(cache._entries) <= 64, (
+            f"cache grew to {len(cache._entries)} entries with a cap of 64"
+        )
+
+    def test_bound_holds_even_when_nothing_has_expired(self):
+        """A burst wider than the cap inside ONE TTL still stays bounded.
+
+        The expiry sweep finds nothing to drop here (no time passes), so this
+        is the path where oldest-first eviction has to carry the bound on its
+        own — the case a sweep-only implementation would leak through.
+        """
+        clock = _FakeClock()
+        cache = svc_mod._MtimeStatCache(
+            clock=clock, stat_fn=_CountingStat(), max_entries=32
+        )
+
+        for i in range(500):
+            cache.get(f"J:/nas/burst_{i}.dng")  # clock never advances
+
+        assert len(cache._entries) <= 32
+
+    def test_eviction_does_not_break_the_burst_saving(self):
+        """Bounding must not cost the one-stat-per-burst property.
+
+        Guards the obvious wrong fix — evicting on every insert would make
+        each repeat request a miss again, quietly restoring the per-request
+        NAS stat this cache exists to remove.
+        """
+        clock = _FakeClock()
+        stat = _CountingStat(value=42)
+        cache = svc_mod._MtimeStatCache(clock=clock, stat_fn=stat, max_entries=64)
+
+        for _ in range(10):
+            assert cache.get("J:/nas/hot.dng") == 42
+
+        assert len(stat.calls) == 1
+
+    def test_missing_source_still_degrades_to_zero(self, monkeypatch):
+        """A stat failure is cached like any other value and stays 0.
+
+        The real stat function is used here (no stub) so this also pins that
+        the TTL layer did not change the missing-file contract: a deleted
+        source yields a deterministic key rather than raising.
+        """
+        monkeypatch.setattr(
+            svc_mod, "_mtime_cache", svc_mod._MtimeStatCache(clock=_FakeClock())
+        )
+        assert svc_mod._source_mtime_ns("/definitely/does/not/exist.jpg") == 0
+
+
 class TestSourceMtimeCacheFreshness:
     """Correction #11: overwriting a source file in place (same path + size)
     must not keep serving the old cached bytes forever.
@@ -626,7 +803,7 @@ class TestSourceMtimeCacheFreshness:
         assert key_a == key_b
 
     def test_get_image_uses_a_fresh_key_after_source_overwritten_in_place(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """End-to-end: _get_image on an overwritten source (same path, same
         size arg) must NOT return the stale disk-cached bytes.
@@ -635,7 +812,19 @@ class TestSourceMtimeCacheFreshness:
         to the SAME path. Before the fix, _get_image's cache key was
         path+size only, so the old disk-cache entry (or in-mem entry) was
         returned unchanged — the crop was invisible in the UI.
+
+        #622 Phase 2 made the time dimension explicit rather than weakening
+        this guarantee: the mtime stat is TTL-cached for 5 s, so the edit
+        becomes visible once the TTL lapses (a burst inside the window
+        deliberately reuses one stat — see ``TestMtimeStatCacheTTL``). The
+        injected clock below is what advances past the TTL; without it this
+        test would be asserting the pre-Phase-2 "instantly visible" contract
+        that the coordinator work knowingly traded away.
         """
+        clock = _FakeClock()
+        monkeypatch.setattr(
+            svc_mod, "_mtime_cache", svc_mod._MtimeStatCache(clock=clock)
+        )
         svc = ImageService.__new__(ImageService)
         svc._versioned_disk_path = tmp_path
         svc._thumb_cache = _ByteBudgetLRUCache(1_000_000)
@@ -662,6 +851,8 @@ class TestSourceMtimeCacheFreshness:
         time.sleep(0.01)
         source.write_bytes(b"cropped-bytes-same-path")
         os.utime(source, ns=(time.time_ns(), time.time_ns()))
+        # Past the 5 s stat TTL — the next request re-stats and sees the edit.
+        clock.advance(6.0)
 
         with patch.object(svc, "_load_from_source") as mock_load:
             mock_load.return_value = new_jpeg

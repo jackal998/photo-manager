@@ -62,8 +62,14 @@ def _load_settings():
 
 
 @router.get("/api/settings")
-async def get_settings() -> dict:
+def get_settings() -> dict:
     """Return the allowlisted web-facing settings as a dict.
+
+    Declared a plain ``def`` so FastAPI runs it in its worker threadpool:
+    ``_load_settings()`` does a real ``Path.exists()`` + ``open()`` +
+    ``json.load()``, and on ``async def`` that ran on the event loop and
+    stalled every other request (incl. the SSE scan stream) for the read's
+    duration. See #790.
 
     Only keys in _WEB_SETTINGS_KEYS are returned — this prevents GET from
     leaking any future sensitive key that might be added to settings.json.
@@ -88,11 +94,17 @@ async def get_settings() -> dict:
 
 
 @router.patch("/api/settings")
-async def patch_settings(body: SettingsUpdate) -> dict:
+def patch_settings(body: SettingsUpdate) -> dict:
     """Apply dotted-key updates and persist.
 
+    Plain ``def`` for the same reason as :func:`get_settings`, and more so:
+    ``settings.save()`` is an atomic write that ends in ``os.fsync()``, which
+    blocks until the disk acknowledges. On the event loop that froze the whole
+    server. See #790.
+
     Only keys in _WEB_SETTINGS_KEYS are accepted. All keys in the request
-    are validated before any write is applied (validate-all-then-apply).
+    are validated before any write is applied (validate-all-then-apply) —
+    the ordering is unchanged by the threadpool dispatch.
 
     Returns:
         200 {updated: int}

@@ -33,6 +33,7 @@ from scanner.exif import (
     _read_chunk,
     _parse_exiftool_json,
     extract_pil_scoring_signals,
+    _subsec_text,
     _xmp_has_local_name,
     _xmp_tag_value,
     _xmp_date_string,
@@ -84,6 +85,20 @@ class TestParseExifDateEdgeCases:
         strptime, so the fractional part is silently dropped."""
         result = _parse_exif_date("2024:05:02 09:30:00.500")
         assert result == datetime(2024, 5, 2, 9, 30, 0)
+
+    def test_parse_exif_date_still_truncates_now_subsec_is_persisted(self):
+        """#820 pinned the OTHER half of the decision: the sub-second digits
+        and offset are now persisted in their own columns, and the price of
+        that is that ``shot_date`` must NOT change format. Every consumer
+        reads it back with ``datetime.fromisoformat`` and the whole
+        cached-column load path assumes the 19-char shape, so a future
+        "improvement" that lets the fraction through here would silently
+        widen the stored string. Uses the exact combined shape the real NAS
+        files carry (sub-seconds AND a +09:00 offset)."""
+        result = _parse_exif_date("2024:06:27 21:34:03.958+09:00")
+        assert result == datetime(2024, 6, 27, 21, 34, 3)
+        assert result.microsecond == 0
+        assert len(result.isoformat()) == 19
 
     def test_negative_timezone_offset_stripped(self):
         result = _parse_exif_date("2024:06:01 12:00:00-05:00")
@@ -1317,6 +1332,119 @@ class TestBatchReadExtracts:
         assert "-XMP:Rating" in called_args
 
 
+# ── Sub-second / offset on the exiftool path (#820) ────────────────────────
+
+
+class TestSubsecExiftoolPath:
+    """``SubSecTimeOriginal`` / ``OffsetTimeOriginal`` on the HEIC/RAW/video
+    path. ``shot_date`` is truncated to whole seconds by design, so these
+    two values are the ONLY thing separating frames of a burst shot in the
+    same second — dropping either one loses the ordering entirely."""
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            (None, None),        # tag absent — the only case that may be None
+            (0, "0"),            # 0 ms IS a value; falsy in Python, real in EXIF
+            (5, "5"),            # exiftool's int form (728 of 824 real files)
+            ("05", "05"),        # its str form — leading zero is 50 ms, not 500
+            ("087", "087"),
+            ("", None),          # tag present but empty → no signal
+            ("   ", None),       # whitespace-only, same
+            ("  414  ", "414"),  # real value with padding survives
+        ],
+    )
+    def test_subsec_exiftool_value_domain(self, raw, expected):
+        """The whole value domain of ``_subsec_text``, including the halves
+        the implementing sample never hit.
+
+        ``0`` is the trap: it is the one falsy input that must NOT become
+        ``None``. Simplifying the guard to ``if not raw: return None`` — the
+        obvious tidy-up — would silently drop the 0 ms frame of a burst, and
+        without this case no test would go red. ``''`` and whitespace are the
+        opposite corner: present-but-empty is genuinely no signal, so it must
+        NOT be stored as a sub-second that would sort ahead of every real one.
+        """
+        assert _subsec_text(raw) == expected
+
+    def test_subsec_exiftool_int_json_value_lands_on_extract(self):
+        """exiftool's ``-j`` emits SubSecTimeOriginal as a JSON **int**
+        whenever the value has no leading zero — 728 of 824 dated files
+        measured on the real NAS library. A str-only guard would drop 88 %
+        of them silently, so the coercion must accept an int."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/burst1.heic")]
+        et = _make_mock_et([
+            (paths[0], {
+                "EXIF:DateTimeOriginal": "2024:06:27 21:34:03",
+                "EXIF:SubSecTimeOriginal": 958,
+                "EXIF:OffsetTimeOriginal": "+09:00",
+            }),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].subsec_time_original == "958"
+        assert result[paths[0]].offset_time_original == "+09:00"
+
+    def test_subsec_exiftool_leading_zero_string_kept_verbatim(self):
+        """The other 96 of 824: exiftool quotes exactly the values whose
+        leading zero JSON cannot express. ``"087"`` is 87 ms; parsing it as
+        a number and re-rendering would make it 870 ms and reorder the
+        burst, so the digits are stored as text, unnormalised."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/burst2.heic")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:SubSecTimeOriginal": "087"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].subsec_time_original == "087"
+
+    def test_subsec_exiftool_absent_tag_is_none(self):
+        """A camera that writes no sub-second tag must leave the column
+        NULL, not "" — "" would sort as a real sub-second value below every
+        other frame."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/plain.heic")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:DateTimeOriginal": "2024:06:15 10:30:00"}),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert result[paths[0]].subsec_time_original is None
+        assert result[paths[0]].offset_time_original is None
+
+    def test_subsec_exiftool_selectors_reach_exiftool(self):
+        """Same rationale as ``test_args_include_gps_and_xmp_selectors``:
+        drop the selector and the field is silently None for every file,
+        with nothing in the manifest to show the tag was never asked for."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/img.heic")]
+        et = _make_mock_et([(paths[0], None)])
+        batch_read_extracts(paths, et)
+        called_args = et.execute.call_args[0][0]
+        assert "-EXIF:SubSecTimeOriginal" in called_args
+        assert "-EXIF:OffsetTimeOriginal" in called_args
+
+    def test_subsec_exiftool_does_not_change_exif_tag_count(self):
+        """The two new tags must stay OUT of the completeness census. If
+        they joined it, every re-scanned file would gain up to 2 tags,
+        which moves the EXIF-completeness sub-score and therefore the
+        keeper pick for groups that were previously tied — a scoring
+        change disguised as a metadata addition."""
+        from scanner.exif import batch_read_extracts
+        paths = [Path("/fake/a.heic"), Path("/fake/b.heic")]
+        et = _make_mock_et([
+            (paths[0], {"EXIF:Make": "Apple", "EXIF:Model": "iPhone 15"}),
+            (paths[1], {
+                "EXIF:Make": "Apple", "EXIF:Model": "iPhone 15",
+                "EXIF:SubSecTimeOriginal": 958,
+                "EXIF:OffsetTimeOriginal": "+09:00",
+            }),
+        ])
+        result = batch_read_extracts(paths, et)
+        assert (
+            result[paths[0]].exif_tag_count == result[paths[1]].exif_tag_count == 2
+        )
+
+
 # ── HashResult.to_media_extract adapter (#187 — PR 2) ──────────────────────
 
 
@@ -1820,6 +1948,64 @@ class TestExtractPilScoringSignalsDateChain:
         assert result["exif_date"] is None
 
 
+class TestSubsecPilBypassPath:
+    """#820 on the JPEG side. Since #786 a JPEG never reaches exiftool
+    (``_INMEMORY_EXIF_TYPES``), and JPEG is 56 % of the user's library — so
+    without this the format that most needs sub-second ordering is the one
+    format that would not have it."""
+
+    def test_subsec_pil_reads_exif_ifd(self, tmp_path):
+        """Where real cameras put them: the ExifIFD sub-block (0x8769).
+        The leading zero is preserved end-to-end — "087" must not become
+        "87" or 87, either of which reorders the burst by 10x."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(p, exif_ifd={
+            36867: "2024:06:27 21:34:03",
+            0x9291: "087",
+            0x9011: "+09:00",
+        })
+        result = _open_and_extract(p)
+        assert result["subsec_time_original"] == "087"
+        assert result["offset_time_original"] == "+09:00"
+        # The date itself is unaffected: still whole seconds.
+        assert result["exif_date"] == datetime(2024, 6, 27, 21, 34, 3)
+
+    def test_subsec_pil_reads_main_ifd_fallback(self, tmp_path):
+        """Some writers (incl. this repo's own qa/sandbox generators) put
+        EXIF tags straight on IFD0; exiftool's ``-G`` reports both
+        placements as ``EXIF:``, so the PIL port must check both or the two
+        paths disagree on the same file."""
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(p, main_ifd={0x9291: "512", 0x9011: "-05:00"})
+        result = _open_and_extract(p)
+        assert result["subsec_time_original"] == "512"
+        assert result["offset_time_original"] == "-05:00"
+
+    def test_subsec_pil_absent_tag_is_none(self, tmp_path):
+        p = tmp_path / "a.jpg"
+        _synthetic_jpeg(p, exif_ifd={36867: "2024:06:27 21:34:03"})
+        result = _open_and_extract(p)
+        assert result["subsec_time_original"] is None
+        assert result["offset_time_original"] is None
+
+    def test_subsec_pil_does_not_change_exif_tag_count(self, tmp_path):
+        """Census parity with the exiftool path — see the exiftool-side
+        twin of this test. Two JPEGs identical but for the sub-second tags
+        must score identically."""
+        plain = tmp_path / "plain.jpg"
+        tagged = tmp_path / "tagged.jpg"
+        _synthetic_jpeg(plain, exif_ifd={36867: "2024:06:27 21:34:03"})
+        _synthetic_jpeg(tagged, exif_ifd={
+            36867: "2024:06:27 21:34:03",
+            0x9291: "087",
+            0x9011: "+09:00",
+        })
+        assert (
+            _open_and_extract(plain)["exif_tag_count"]
+            == _open_and_extract(tagged)["exif_tag_count"]
+        )
+
+
 class TestExtractPilScoringSignalsGps:
     def test_gps_present_true_from_latitude(self, tmp_path):
         p = tmp_path / "a.jpg"
@@ -2030,3 +2216,141 @@ class TestInMemoryJpegWiring:
         me = hr.to_media_extract()
         assert "pil_exif_inmemory" not in me.extracted_by
         assert me.exif_tag_count is None
+
+
+# ── #793 acceptance — a REAL malformed-EXIF JPEG ───────────────────────────
+#
+# PR #811 guarded ``img.getexif()`` inside ``extract_pil_scoring_signals``
+# (scanner/exif.py:645-655). The test that shipped with it drives a MagicMock
+# whose ``getexif`` raises (``TestExtractPilScoringSignalsRobustness`` above);
+# #793's acceptance asks for a REAL malformed-EXIF JPEG, proven to still be
+# hashed rather than silently dropped from the manifest. That is what the
+# fixture and tests below supply.
+
+
+def _malformed_exif_jpeg(path) -> None:
+    """Write a REAL JPEG that decodes fine but whose EXIF cannot be parsed.
+
+    Both halves of the recipe are load-bearing (verified against Pillow
+    12.2 — see the assertions in ``test_fixture_getexif_really_raises``,
+    which fail loudly if a Pillow upgrade makes the file benign):
+
+    * Build a normal EXIF payload, then zero the two-byte TIFF byte-order
+      mark that follows the ``Exif\\0\\0`` prefix. The APP1 segment is still
+      recognised as EXIF (the prefix survives), but ``ImageFileDirectory_v2``
+      rejects the header — ``SyntaxError: not a TIFF file``. Nothing else is
+      touched, so the entropy-coded scan data still decodes: the "malformed
+      base IFD on an otherwise-decodable image" shape #793 describes.
+
+    * ``dpi=(72, 72)`` is REQUIRED, not cosmetic. Without a JFIF DPI,
+      ``JpegImageFile._open`` calls ``_read_dpi_from_exif`` → ``getexif()``
+      at OPEN time and swallows the ``SyntaxError`` itself
+      (``PIL/JpegImagePlugin.py`` 402 → 507); ``Exif.load`` assigns
+      ``_loaded_exif`` *before* parsing, so the failed parse is cached and
+      every later ``getexif()`` quietly returns ``{}``. With a JFIF DPI
+      present that pre-warm returns early, and the first ``getexif()`` a
+      caller makes is the one that raises.
+    """
+    from PIL import Image
+    import numpy as np
+
+    arr = np.zeros((32, 32, 3), dtype=np.uint8)
+    arr[:16] = 200          # two bands so the image has real pHash entropy
+    arr[:, :8] = 90
+    img = Image.fromarray(arr)
+    exif = img.getexif()
+    exif.get_ifd(0x8769)[36867] = "2024:08:01 12:00:00"
+    payload = bytearray(exif.tobytes())
+    assert payload[:6] == b"Exif\x00\x00", (
+        f"unexpected EXIF payload prefix {payload[:6]!r} — corruption offset "
+        "below assumes the Exif\\0\\0 header"
+    )
+    payload[6:8] = b"\x00\x00"          # destroy the TIFF byte-order mark
+    img.save(str(path), "JPEG", quality=90, exif=bytes(payload), dpi=(72, 72))
+
+
+class TestMalformedExifJpegIsNotDropped:
+    """#793 — a JPEG with a malformed base EXIF IFD must survive the scan.
+
+    User-visible failure being pinned: a perfectly viewable photo whose EXIF
+    block happens to be damaged (a truncated card write, a buggy editor)
+    vanishes from the manifest entirely — the user sees a folder of 500
+    photos scan to 499 rows with no way to tell which one went missing.
+    """
+
+    def test_fixture_getexif_really_raises(self, tmp_path):
+        """Precondition for the two tests below: the fixture is genuinely
+        malformed on THIS Pillow. Asserted here rather than assumed, so a
+        Pillow upgrade that starts swallowing the error turns this into a
+        red test instead of silently making the guard tests vacuous."""
+        from PIL import Image
+
+        p = tmp_path / "malformed.jpg"
+        _malformed_exif_jpeg(p)
+
+        with Image.open(p) as img:
+            img.load()
+            assert img.size == (32, 32), "the fixture's pixels must still decode"
+
+        with Image.open(p) as img:
+            with pytest.raises(SyntaxError, match="not a TIFF file"):
+                img.getexif()
+
+    def test_extract_pil_scoring_signals_degrades_on_real_malformed_exif(
+        self, tmp_path
+    ):
+        """``extract_pil_scoring_signals`` must return empty-EXIF signals
+        rather than propagating — the unguarded call (pre-#811) raises
+        ``SyntaxError`` here, which ``compute_from_bytes``' broad except
+        turns into a ``HashFailure`` and drops the file (#793)."""
+        from PIL import Image
+
+        p = tmp_path / "malformed.jpg"
+        _malformed_exif_jpeg(p)
+
+        with Image.open(p) as img:
+            signals = extract_pil_scoring_signals(img)   # must NOT raise
+
+        assert signals["exif_date"] is None
+        assert signals["exif_date_tag"] is None
+        assert signals["exif_tag_count"] == 0
+        assert signals["gps_present"] is False
+        assert signals["xmp_derived"] is False
+
+    def test_malformed_exif_jpeg_still_hashes_via_compute_from_bytes(
+        self, tmp_path
+    ):
+        """The real COMPUTE entry the scan pipeline uses must return a
+        ``HashResult`` with a pHash — not a ``HashFailure``, which is what
+        routes a file into the ``skipped`` log and out of the manifest.
+
+        Scope, stated honestly: this pins the user-visible OUTCOME, and it
+        passes even with the #811 guard removed — because ``hasher.
+        _raw_exif_date`` runs first on the same ``Image`` object and its own
+        ``except Exception`` leaves PIL's failed parse cached (``Exif.load``
+        assigns ``_loaded_exif`` before parsing). That is precisely the
+        "crash-safe today only because" mechanism #793 describes, and it is
+        one reorder away from being untrue. The guard's own non-vacuous test
+        is ``test_extract_pil_scoring_signals_degrades_on_real_malformed_exif``
+        above, which fails with ``SyntaxError`` when the guard is removed.
+        """
+        from scanner.dedup import HashResult
+        from scanner.hasher import compute_from_bytes
+        from scanner.walker import FileRecord
+
+        p = tmp_path / "malformed.jpg"
+        _malformed_exif_jpeg(p)
+        rec = FileRecord(path=p, source_label="src", file_type="jpeg")
+
+        _idx, outcome = compute_from_bytes(0, rec, p.read_bytes())
+
+        assert isinstance(outcome, HashResult), (
+            f"malformed EXIF must not turn a decodable JPEG into a "
+            f"HashFailure; got {outcome!r}"
+        )
+        assert outcome.phash, "a decodable JPEG must still yield a pHash"
+        assert outcome.inmemory_signals is not None, (
+            "JPEG is in _INMEMORY_EXIF_TYPES — the in-memory signal pass must "
+            "still have run (degraded), not been skipped"
+        )
+        assert outcome.inmemory_signals["exif_date"] is None

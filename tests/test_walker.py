@@ -783,8 +783,8 @@ class TestWalkerSkipDirectories:
         """Edge: if the user explicitly points the scan at a path NAMED
         ``$RECYCLE.BIN`` (unlikely but possible), the root itself is
         the scan scope — only its DESCENDANTS get the skip-directory
-        filter. Documents the intent of the ``_is_in_skip_directory``
-        walk-up-to-root pattern."""
+        filter. Documents the intent of the
+        ``has_skip_directory_ancestor`` walk-up-to-root pattern."""
         from scanner.walker import scan_sources
 
         # Treat the user's chosen root as scope, even if it happens
@@ -796,6 +796,68 @@ class TestWalkerSkipDirectories:
         records = scan_sources({"src": root})
         names = sorted(r.path.name for r in records)
         assert names == ["real_photo.jpg"]
+
+    def test_skips_synology_share_recycle_bin(self, tmp_path):
+        """Synology DSM puts a share's Recycle Bin at ``<share>/#recycle``
+        (#821). A source pointed at a NAS share root would otherwise walk
+        straight into the user's already-deleted files — the same class of
+        bug #482 fixed for Windows' ``$RECYCLE.BIN``."""
+        from scanner.walker import scan_sources
+
+        recycle = tmp_path / "#recycle"
+        recycle.mkdir()
+        _write_jpeg(recycle / "deleted_photo.jpg")
+        _write_jpeg(tmp_path / "real_photo.jpg")
+
+        records = scan_sources({"src": tmp_path})
+        names = sorted(r.path.name for r in records)
+        assert names == ["real_photo.jpg"], (
+            f"walker pulled in a Synology recycle-bin file: {names}"
+        )
+
+
+class TestHasSkipDirectoryAncestor:
+    """``has_skip_directory_ancestor`` is the single definition of the
+    skip-prefix rule, shared by the walker and the #821 manifest reconcile.
+
+    The reconcile feeds it raw ``source_path`` STRINGS out of a SQLite
+    manifest — Windows paths with backslashes, on whatever platform the
+    process runs — and has no scan root to bound the walk with. These pin
+    the two properties that split can silently get wrong.
+    """
+
+    def test_parses_backslash_paths_without_a_root(self):
+        """A manifest row is a string, not a Path. Splitting must find the
+        directory components of a Windows path (``PurePosixPath`` would
+        collapse the whole thing into one component and report False)."""
+        from scanner.walker import has_skip_directory_ancestor
+
+        assert has_skip_directory_ancestor(
+            r"J:\photos\$RECYCLE.BIN\$R0KXSFA.jpg"
+        )
+        assert has_skip_directory_ancestor(r"J:\photos\#recycle\a.jpg")
+        assert not has_skip_directory_ancestor(r"J:\photos\2019\a.jpg")
+
+    def test_final_component_is_never_treated_as_a_directory(self):
+        """It is an ANCESTOR predicate: a FILE named like a skip directory
+        is a real photo and must not match."""
+        from scanner.walker import has_skip_directory_ancestor
+
+        assert not has_skip_directory_ancestor(r"J:\photos\#recycle")
+        assert not has_skip_directory_ancestor(r"J:\photos\$RECYCLE.BIN.jpg")
+
+    def test_root_bounds_the_walk(self):
+        """The walker passes its scan root so a source deliberately pointed
+        AT a recycle bin still walks; the same path with no root (the
+        reconcile's call) matches."""
+        from scanner.walker import has_skip_directory_ancestor
+
+        path = r"J:\photos\$RECYCLE.BIN\a.jpg"
+        assert not has_skip_directory_ancestor(
+            path, root=r"J:\photos\$RECYCLE.BIN"
+        )
+        assert has_skip_directory_ancestor(path, root=r"J:\photos")
+        assert has_skip_directory_ancestor(path)
 
 
 # ---------------------------------------------------------------------------

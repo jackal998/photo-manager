@@ -53,6 +53,7 @@ from app.views.window_state import (
     save_widget_geometry,
 )
 from infrastructure.i18n import t
+from infrastructure.winerror_reasons import decode_winerror
 
 # Internal verdict codes used by _ask_lock_confirm to normalize the
 # LockedRowsConfirmDialog result for the dialog's callers. Kept
@@ -81,39 +82,18 @@ _LOCK_CONFIRM_DEFERRED = "deferred"
 _TYPE_FILTER_ALL: str | None = None  # sentinel — show every decision
 
 
-# Decode Windows Shell COPYENGINE_E_* HRESULTs raised by send2trash into
-# plain-language reasons. send2trash wraps the COM error as
-# ``OSError(None, "OLE error 0x80270027", path, winerror=-2144927705)`` —
-# the raw HRESULT string is opaque to users (the documented bug was a
-# misread of 0x80270027 as "permission denied or path too long" when the
-# actual cause is a file-handle sharing violation). Constants from
-# ``win32comext.shell.shellcon``; this maps the codes a user is most
-# likely to hit on a Move-to-Recycle-Bin failure.
-_WINERROR_REASON_TABLE: dict[int, str] = {
-    # Signed-int form of each HRESULT (Python's ``OSError.winerror``).
-    -2144927705: "file is in use by another process",   # 0x80270027 SHARING_VIOLATION_SRC
-    -2144927704: "destination is in use by another process",  # 0x80270028 SHARING_VIOLATION_DEST
-    -2144927711: "access denied (source)",              # 0x80270021 ACCESS_DENIED_SRC
-    -2144927710: "access denied (destination)",         # 0x80270022 ACCESS_DENIED_DEST
-    -2144927688: "path too long for Recycle Bin",       # 0x80270038 RECYCLE_PATH_TOO_LONG
-    -2144927683: "file not found",                      # 0x8027003D (best-known approximation)
-    -2144927684: "destination disk is full",            # 0x8027003C
-}
-
-
 def _decode_winerror(exc: BaseException) -> str:
     """Return a plain-language reason for a delete-failure ``exc``.
 
-    Looks up ``OSError.winerror`` (the signed HRESULT) in
-    ``_WINERROR_REASON_TABLE``; if unmapped, falls back to ``str(exc)``
-    so the user still sees the raw error rather than nothing.
+    The HRESULT → reason table lives in
+    ``infrastructure.winerror_reasons`` (#757 — it used to be duplicated
+    here byte-for-byte, and two copies of a decode table drift). What
+    stays Qt-side is only the *fallback*: the shared decoder returns
+    ``None`` for an unmapped or absent ``winerror`` so each caller picks
+    its own wording, and this dialog falls back to ``str(exc)`` so the
+    user still sees the raw error rather than nothing.
     """
-    winerror = getattr(exc, "winerror", None)
-    if isinstance(winerror, int):
-        decoded = _WINERROR_REASON_TABLE.get(winerror)
-        if decoded:
-            return decoded
-    return str(exc)
+    return decode_winerror(exc) or str(exc)
 
 
 class ExecuteActionDialog(QDialog):

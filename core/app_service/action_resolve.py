@@ -1,6 +1,7 @@
 """Qt-free pattern-matcher extracted from the Qt dialog layer.
 
-All functions here are pure stdlib — no Qt, no PySide6.  They operate on
+All functions here are Qt-free — no PySide6, stdlib plus the shared
+ranking helper in ``core.services.auto_select`` (#778).  They operate on
 duck-typed PhotoGroup / PhotoRecord objects (attribute access) and are
 byte-identical in behaviour to their origins in:
 
@@ -16,9 +17,10 @@ from __future__ import annotations
 
 import re as _re
 from datetime import datetime
-from itertools import groupby
 from pathlib import Path
 from typing import Any
+
+from core.services.auto_select import top_n_paths
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +222,19 @@ def select_paths_top_n(
 
     When a group has fewer than N rankable records, all of its rankable
     records are selected.
+
+    #778 — the ranking itself lives in
+    :func:`core.services.auto_select.top_n_paths`, the single home of the
+    top-N-by-score rule. This function owns only the part that is specific
+    to this surface: turning a group's records into ``(value, path)`` pairs
+    via :func:`_numeric_value_for`. ``top_score_path_per_group`` (the
+    apply-best-copy / post-scan auto-select surface) calls the same helper,
+    so the two can no longer drift apart on tie-breaks or score tiers —
+    pinned by ``tests/test_topn_keeper_parity.py``.
     """
     if n <= 0 or order not in ("asc", "desc"):
         return []
     matched: list[str] = []
-    reverse = (order == "desc")
     for group in groups:
         ranked: list[tuple[float, str]] = []
         for rec in getattr(group, "items", []):
@@ -232,18 +242,7 @@ def select_paths_top_n(
             if val is None:
                 continue
             ranked.append((val, rec.file_path))
-        # Stable sort by (value, file_path).
-        ranked.sort(key=lambda t: (t[0], t[1]), reverse=False)
-        if reverse:
-            ranked.reverse()
-            # After reverse the tiebreaker reads desc(path); flip
-            # tiebreaker back to asc(path) within each value bucket.
-            fixed: list[tuple[float, str]] = []
-            for _val, grp in groupby(ranked, key=lambda t: t[0]):
-                fixed.extend(sorted(grp, key=lambda t: t[1]))
-            ranked = fixed
-        for _val, path in ranked[:n]:
-            matched.append(path)
+        matched.extend(top_n_paths(ranked, n, order))
     return matched
 
 

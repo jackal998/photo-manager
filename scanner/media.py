@@ -43,11 +43,23 @@ SKIP_FILENAMES = {"thumbs.db", "desktop.ini", "failed_inserting_exif.txt", ".ds_
 #   - ``.Trashes`` / ``.Trash-*`` — macOS / *nix trash dirs that show
 #     up on networked drives mounted from non-Windows hosts. Same
 #     "already deleted" semantics as ``$RECYCLE.BIN``.
+#   - ``#recycle`` — Synology DSM's per-share Recycle Bin (#821). Lives
+#     at the root of every share with the recycle bin enabled, so a
+#     source pointed at a NAS share root walks straight into the user's
+#     already-deleted files. Same "already deleted" semantics as
+#     ``$RECYCLE.BIN``; named in #821 as the folder the walker was
+#     believed to already skip.
+#
+# This set is the single definition of the skip-prefix rule. Both the
+# walker (new rows) and the manifest reconcile (#821, existing rows)
+# read it through ``scanner.walker.has_skip_directory_ancestor`` — do
+# not re-spell any of these names anywhere else.
 SKIP_DIRECTORIES = {
     "$recycle.bin",
     "system volume information",
     ".trashes",
     ".trash",
+    "#recycle",
 }
 
 # Google Takeout: "IMG_9556(1).HEIC" → base="IMG_9556", number=1

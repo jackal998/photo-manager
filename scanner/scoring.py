@@ -483,7 +483,8 @@ def apply_scoring_to_rows(
     Two-phase mutation of ``rows`` in place:
 
     Phase A — Backfill raw signals from the exiftool extract dict:
-        ``exif_tag_count``, ``gps_present``, ``xmp_derived`` move from
+        ``exif_tag_count``, ``gps_present``, ``xmp_derived`` and (#820)
+        ``subsec_time_original`` / ``offset_time_original`` move from
         the MediaExtract (PR 2 output) onto ManifestRow (PR 1 column).
         The MediaExtract sentinel ``None`` (not checked) is preserved as
         the column default — only definite True/False / int values
@@ -518,6 +519,14 @@ def apply_scoring_to_rows(
             row.gps_present = bool(extract.gps_present)
         if extract.xmp_derived is not None:
             row.xmp_derived = bool(extract.xmp_derived)
+        # #820 — sub-second / offset carry across on the same "only a definite
+        # value overwrites" rule. They feed no weight in DEFAULT_WEIGHTS: the
+        # composite score is unchanged by this backfill, the columns exist so
+        # that ordering inside a burst is available without a re-scan.
+        if extract.subsec_time_original is not None:
+            row.subsec_time_original = extract.subsec_time_original
+        if extract.offset_time_original is not None:
+            row.offset_time_original = extract.offset_time_original
 
     # Phase B: compute scores within each duplicate group. Isolated rows
     # (group_id is None) intentionally stay unscored — they have no peers

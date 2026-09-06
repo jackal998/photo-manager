@@ -169,11 +169,11 @@ sequence before sending its `SendMessage` reply.
 5. **Spawn teammates** — three `Agent` calls in a single message
    so they start in parallel:
    ```python
-   Agent(team_name="pr-review-<branch-short>",
+   Agent(team_name="pr-review-<branch-short>", model="opus",
          name="docs-reviewer",        subagent_type="docs-reviewer")
-   Agent(team_name="pr-review-<branch-short>",
+   Agent(team_name="pr-review-<branch-short>", model="opus",
          name="app-security-reviewer", subagent_type="app-security-reviewer")
-   Agent(team_name="pr-review-<branch-short>",
+   Agent(team_name="pr-review-<branch-short>", model="opus",
          name="quality-reviewer",     subagent_type="quality-reviewer")
    ```
 6. **Create tasks** — one `TaskCreate` per teammate. Subjects must

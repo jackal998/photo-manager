@@ -21,6 +21,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { selectPreviewMode } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { thumbnailUrl, mediaUrl } from "@/api/client";
+import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
 import { formatBytes, formatScore, formatDims, formatDate } from "@/lib/format";
 import { PREVIEW_PANE, PREVIEW_SINGLE_IMAGE, PREVIEW_INFO } from "@/testids";
 import type { FileRow } from "@/api/types";
@@ -69,25 +70,67 @@ export function PreviewPane() {
   const row = selectedFilePath !== null ? findRow(groups, selectedFilePath) : null;
 
   // Transcode fallback state — reset when the selected file changes.
-  const [useTranscode, setUseTranscode] = useState(false);
+  //
+  // The initial value is a HINT from the #787 capability probe: when the engine
+  // has told us it cannot decode HEVC and this is an HEVC-in-practice
+  // container, start on the transcode instead of paying a guaranteed-to-fail
+  // original-bytes attempt first. The probe answers "unknown" until it
+  // resolves (and always, in jsdom), so this is `false` — today's behaviour —
+  // unless we positively know better. The error handler below turns this into
+  // a two-attempt contract: whichever source we start on, the first error
+  // swaps to the OTHER one.
+  const [useTranscode, setUseTranscode] = useState(
+    () => selectedFilePath !== null && prefersTranscodedVideo(selectedFilePath)
+  );
+  // Whether the one allowed swap has been spent. Tracked separately from
+  // useTranscode because that flag alone is ambiguous once the #787 hint can
+  // choose the STARTING source: `useTranscode === true` no longer implies "we
+  // already fell back", and reading it that way made a hint-started transcode
+  // terminal on its first error (an ffmpeg-less server 501s, so a perfectly
+  // playable H.264 .mov died without ever trying the original bytes).
+  const [swapAttempted, setSwapAttempted] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [canPlay, setCanPlay] = useState(false);
+
+  // The transcode choice is re-made during RENDER on every path change, not in
+  // the effect below. Measured in headless Chromium: resetting it from an
+  // effect commits one render carrying the original-bytes src, so the browser
+  // starts the exact fetch this pre-check exists to skip, and only then swaps.
+  // This is React's documented "adjust state when a prop changes" pattern —
+  // React re-runs the render before anything reaches the DOM.
+  const [hintedPath, setHintedPath] = useState<string | null>(selectedFilePath);
+  if (hintedPath !== selectedFilePath) {
+    setHintedPath(selectedFilePath);
+    setUseTranscode(
+      selectedFilePath !== null && prefersTranscodedVideo(selectedFilePath)
+    );
+    setSwapAttempted(false);
+  }
+
   useEffect(() => {
-    setUseTranscode(false);
+    // Fire-and-forget: memoized, so this costs one decodingInfo call per page
+    // life. PreviewPane mounts with the app, so the answer is normally ready
+    // long before the first video row is selected.
+    void canPlayHevc();
     setVideoFailed(false);
     setCanPlay(false);
   }, [selectedFilePath]);
 
   const handleVideoError = useCallback(() => {
-    if (!useTranscode) {
-      // First error: swap to the H.264 transcode fallback.
-      setUseTranscode(true);
+    if (!swapAttempted) {
+      // First error: swap to the OTHER source. Started on the original bytes
+      // → try the H.264 transcode (the long-standing fallback). Started on the
+      // transcode because the #787 hint chose it → try the original bytes,
+      // which is the recovery path when the transcode is unavailable (ffmpeg
+      // missing → HTTP 501) or when the hint was simply wrong about the file.
+      setSwapAttempted(true);
+      setUseTranscode((prev) => !prev);
       setCanPlay(false);
     } else {
-      // Second error (transcode also failed): show terminal state.
+      // Second error (both sources failed): show terminal state.
       setVideoFailed(true);
     }
-  }, [useTranscode]);
+  }, [swapAttempted]);
 
   const handleDoubleClick = useCallback(() => {
     if (selectedFilePath !== null) {

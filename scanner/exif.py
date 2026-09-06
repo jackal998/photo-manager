@@ -489,6 +489,34 @@ _XMP_DERIVED_TAGS: tuple[str, ...] = (
     "XMP-xmpMM:DerivedFrom",   # in case caller uses -G1 / -G:1 in the future
 )
 
+# #820 — sub-second and UTC-offset companions of DateTimeOriginal, under the
+# ``-G`` group-0 form. Deliberately NOT in ``_CENSUS_TAGS``: adding them there
+# would raise ``exif_tag_count`` for every re-scanned file and therefore move
+# every composite score, which is a scoring change this issue is not.
+_SUBSEC_TAG = "EXIF:SubSecTimeOriginal"
+_OFFSET_TAG = "EXIF:OffsetTimeOriginal"
+
+
+def _subsec_text(raw) -> Optional[str]:
+    """Normalise a sub-second / offset tag value to its stored TEXT form.
+
+    ``str`` rather than ``isinstance(raw, str)``, because exiftool's ``-j``
+    JSON types these two tags INCONSISTENTLY: measured over 824 real dated
+    files on the user's NAS, ``SubSecTimeOriginal`` came back as a JSON
+    **int** 728 times (e.g. ``414``) and as a **str** only for the 96 values
+    carrying a leading zero (e.g. ``'087'``), which JSON cannot express as a
+    number. A ``isinstance(..., str)`` guard would silently drop 88 % of
+    them. ``str()`` is lossless in both directions — exiftool quotes exactly
+    the values whose leading zeros would otherwise be lost.
+
+    Leading zeros are load-bearing: ``"05"`` is 50 ms, ``"5"`` is 500 ms, so
+    the digits are stored verbatim as text and never coerced to a number.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
 
 # ── In-memory JPEG extraction (#786) ───────────────────────────────────────
 #
@@ -539,6 +567,15 @@ _PIL_CENSUS_TAG_IDS: dict[str, int] = {
 # truth for that tag id rather than repeating the literal.
 _EXIF_DATE_TIME_ORIGINAL_TAG = _PIL_CENSUS_TAG_IDS["EXIF:DateTimeOriginal"]
 _EXIF_CREATE_DATE_TAG = 36868
+
+# #820 — the PIL-side twins of _SUBSEC_TAG / _OFFSET_TAG, by numeric id:
+# SubSecTimeOriginal 0x9291 (37521) and OffsetTimeOriginal 0x9011 (36881).
+# Both are ExifIFD (0x8769) tags on real cameras, so they are read through
+# _pil_tag_value's ExifIFD-then-IFD0 fallback for the same reason the census
+# tags are. Kept OUT of _PIL_CENSUS_TAG_IDS to match the exiftool side:
+# counting them would move exif_tag_count and every score with it.
+_EXIF_SUBSEC_TIME_ORIGINAL_TAG = 0x9291
+_EXIF_OFFSET_TIME_ORIGINAL_TAG = 0x9011
 
 
 def _pil_tag_present(exif, exif_ifd, tag_id: int) -> bool:
@@ -638,7 +675,8 @@ def extract_pil_scoring_signals(img: "Image.Image") -> dict:
 
     Mirrors ``_record_to_extract``'s exiftool-based signals for JPEG:
     ``exif_date``/``exif_date_tag`` (fallback chain), ``exif_tag_count``
-    (census tags present), ``gps_present``, ``xmp_derived``. Returns a
+    (census tags present), ``gps_present``, ``xmp_derived``, plus #820's
+    ``subsec_time_original`` / ``offset_time_original``. Returns a
     dict (not a MediaExtract) — the caller (``scan_runner._route_outcome``)
     layers these onto a ``HashResult.to_media_extract()`` base.
     """
@@ -715,6 +753,15 @@ def extract_pil_scoring_signals(img: "Image.Image") -> dict:
         "exif_tag_count": exif_tag_count,
         "gps_present": gps_present,
         "xmp_derived": xmp_derived,
+        # #820 — same two fields the exiftool path emits, so a JPEG (56 % of
+        # the library, which never reaches exiftool since #786) is not the one
+        # format missing sub-second ordering.
+        "subsec_time_original": _subsec_text(
+            _pil_tag_value(exif, exif_ifd, _EXIF_SUBSEC_TIME_ORIGINAL_TAG)
+        ),
+        "offset_time_original": _subsec_text(
+            _pil_tag_value(exif, exif_ifd, _EXIF_OFFSET_TIME_ORIGINAL_TAG)
+        ),
     }
 
 
@@ -733,6 +780,10 @@ def batch_read_extracts(
       (*never None* after this function runs; that is the silent-dropout
       regression contract).
     * ``xmp_derived`` — True if ``xmpMM:DerivedFrom`` is present, else False.
+    * ``subsec_time_original`` / ``offset_time_original`` — #820, the
+      sub-second digits and UTC offset of ``DateTimeOriginal`` as text
+      (``None`` when the tag is absent). ``exif_date`` itself stays
+      second-resolution; these are the companion columns, not a new format.
     * ``extracted_by = {"exiftool"}``.
 
     ``XMP:Rating`` is still queried (it's one of the ``_CENSUS_TAGS``
@@ -785,6 +836,9 @@ def _read_extract_chunk(
         "-EXIF:ExposureTime", "-EXIF:FNumber", "-EXIF:Flash",
         "-EXIF:Orientation", "-EXIF:Software", "-EXIF:LensModel",
         "-EXIF:ColorSpace", "-EXIF:WhiteBalance",
+        # Sub-second + timezone for DateTimeOriginal (#820). NOT census
+        # tags — see _SUBSEC_TAG / _OFFSET_TAG below.
+        "-EXIF:SubSecTimeOriginal", "-EXIF:OffsetTimeOriginal",
         # Video census (QuickTime:CreateDate already in date chain above).
         "-QuickTime:Duration", "-QuickTime:VideoFrameRate",
         "-QuickTime:ImageWidth", "-QuickTime:ImageHeight",
@@ -860,6 +914,12 @@ def _record_to_extract(path: Path, rec: dict) -> "MediaExtract":
         exif_tag_count=exif_tag_count,
         gps_present=gps_present,
         xmp_derived=xmp_derived,
+        # #820 — kept beside exif_date rather than folded into it: shot_date
+        # stays second-resolution (parse_exif_date's 19-char slice is
+        # deliberate and unchanged), and consumers that need ordering inside
+        # a burst combine the two columns.
+        subsec_time_original=_subsec_text(rec.get(_SUBSEC_TAG)),
+        offset_time_original=_subsec_text(rec.get(_OFFSET_TAG)),
         extracted_by={"exiftool"},
     )
 

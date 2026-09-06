@@ -2,7 +2,7 @@
 name: qa-agent
 description: Validation agent spawned by /work after developer-agent completes. Reads the research brief's acceptance criteria, runs tests against the implementation, checks for coverage gaps and behaviour regressions, and returns PASS or FAIL with actionable details for the next dev iteration. Read-only except for Bash (test runner).
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 ---
 
 # qa-agent — post-implementation validator

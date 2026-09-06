@@ -72,6 +72,12 @@ class MediaExtract:
     exif_date: Optional[datetime] = None
     exif_date_tag: Optional[str] = None  # which exiftool tag produced exif_date;
                                           # None when PIL was the source (tag not surfaced)
+    # #820 — the sub-second digits and UTC offset that ``exif_date`` cannot
+    # carry: ``parse_exif_date`` truncates to whole seconds on purpose, so a
+    # burst at 10 fps ties in ``exif_date`` and is separated only by these.
+    # Stored as TEXT verbatim; leading zeros are significant ("05" = 50 ms).
+    subsec_time_original: Optional[str] = None   # EXIF:SubSecTimeOriginal / 0x9291
+    offset_time_original: Optional[str] = None   # EXIF:OffsetTimeOriginal / 0x9011
     mtime: Optional[datetime] = None
     ctime: Optional[datetime] = None
 
