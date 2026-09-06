@@ -12,6 +12,14 @@ that table is still procedure, and every threshold in it is copied from issue
 measurement, not a refusal: `status: measured`, `n_paths: 89`,
 `dropped_timeouts.total: 0`.
 
+**Re-measured 2026-09-06 at SHA `75a976d` after #865** (draft-mode decode of
+the embedded JPEG). Box 2 **still fails, at `ratio_median` 3.85×**; boxes 1, 3
+and 4 still pass. See
+[Results — 2026-09-06 re-measurement after #865](#results--2026-09-06-re-measurement-after-865)
+below. The embedded arm itself got faster (paired p95 1003.1 → 546.9 ms over
+the same 89 files) — box 2 is a two-arm ratio, so read that section before
+reading the drop from 4.242 to 3.85 as a regression.
+
 ## What this verifies
 
 Issue #622 shipped in two phases: Phase 1 (viewport cap, byte-budget LRU, DNG
@@ -396,6 +404,38 @@ The session write-up alongside `nas-probe-results-2026-07.md` — the #784 →
 next — is
 [`preview-phase3-results-2026-09.md`](preview-phase3-results-2026-09.md).
 #622 closes from there, on the owner's call about box 2.
+
+## Results — 2026-09-06 re-measurement after #865
+
+Second session, same root, same arguments, at SHA
+`75a976d97a05fa33bd3807b009c6f9e66c44fbb3` (`git_dirty: false` on both
+artifacts), after #865 added draft-mode decode to the embedded-JPEG branch.
+`ART` is now `~/.claude/handovers/worker-reports/865-artifacts`; the run 1 /
+run 2 argument blocks above are otherwise unchanged, so `_run 1 args_` and
+`_run 2 args_` below mean the same flags against that directory.
+
+| Box | Reading (field → value) | Probe | SHA | Args | JSON |
+|---|---|---|---|---|---|
+| 1 | `summary.box1.steady_state_rss_mb.p50` = **156.834 MB** (threshold 600.0, `pass` = **true**, `pass_on_max` = **true**) | `scripts/preview_phase3_probe.py` | `75a976d` | _run 1 args_ | `phase3_embedded.json` |
+| 1 | `summary.box1.steady_state_rss_mb.max` = **169.955 MB** (`steady_window_used` = 50 of 50, `placeholder_paints_in_window` = 0, `cold_decode_count` = 100) | `scripts/preview_phase3_probe.py` | `75a976d` | _run 1 args_ | `phase3_embedded.json` |
+| 2 | `summary.box2.ratio_median` = **3.85×** over `n_paths` = **89**, `dropped_timeouts.total` = **0** (threshold 5.0, `pass` = **false**) | `scripts/preview_phase3_probe.py` | `75a976d` | _run 2 args_ | `phase3_fulldecode.json` |
+| 2 | `summary.box2.embedded_ttfp_ms` p50 / **p95** / **max** = **380.887** / **521.997** / **623.486 ms** (pre-#865: 381.124 / 1000.828 / 1118.308) | `scripts/preview_phase3_probe.py` | `75a976d` | _run 2 args_ | `phase3_fulldecode.json` |
+| 2 | `summary.box2.full_decode_ttfp_ms.p50` = **1291.335 ms** — the control arm, which #865 does not touch, moved 51.5 ms on its own (pre-#865: 1342.884) | `scripts/preview_phase3_probe.py` | `75a976d` | _run 2 args_ | `phase3_fulldecode.json` |
+| 2 | distribution: `ratio_min` = **2.835**, `ratio_max` = **12.436**, `ratio_of_medians` = **3.390** | `scripts/preview_phase3_probe.py` | `75a976d` | _run 2 args_ | `phase3_fulldecode.json` |
+| 3 | `summary.box3.pass` = **true** (zoom 1.0 → 1.25, `pan_scroll_range` = 2896) | `scripts/preview_phase3_probe.py` | `75a976d` | _run 1 args_ | `phase3_embedded.json` |
+| 4 | `summary.box4.pass` = **true** (`label_valid_before_close` true → `label_valid_after_close` false) | `scripts/preview_phase3_probe.py` | `75a976d` | _run 1 args_ | `phase3_embedded.json` |
+| — | `summary.verdict.verdict` = **`FAIL`**, `verdict.failed` = `['box2']`, `verdict.unmeasured` = `[]` | `scripts/preview_phase3_probe.py` | `75a976d` | _run 2 args_ | `phase3_fulldecode.json` |
+
+**Read the two-arm caveat before quoting the drop from 4.242 to 3.85.** Box 2
+divides one arm by the other and #865 changed only the embedded arm. Paired by
+path across the two sessions, that arm improved on every summary statistic
+except the median (mean 547.5 → 402.3 ms, p95 1003.1 → 546.9, max 1118.3 →
+623.5, faster on 46 of 89 files), while the untouched control arm ran 51.5 ms
+faster at the median. The full analysis, including the measured reason the
+median did not move — this library's embedded JPEGs are bimodal, 4032 × 3024
+for most files and 8064 × 6048 for 23 of them, and `draft` correctly declines
+to reduce the first group below the 2048 cap — is in
+[`preview-phase3-results-2026-09.md`](preview-phase3-results-2026-09.md).
 
 ## Citation template
 

@@ -206,3 +206,231 @@ a mixed library.
   the preview tier peaking at 37.7 MiB of its 192 MB. A smaller-RAM machine
   gets a smaller budget and a different curve, so this box is a pass *for
   this host*, not a universal one.
+
+---
+
+# 2026-09 re-measurement after #865
+
+Second owner-authorised session, **2026-09-06**, same runbook, same root, same
+arguments, at commit `75a976d` (`git_dirty: false` in both artifacts) — the
+commit that adds draft-mode decode to the embedded-JPEG branch
+(`infrastructure/image_service.py`, issue #865). Artifacts archived at
+`~/.claude/handovers/worker-reports/865-artifacts/`, **not committed** (real
+library paths), same as the first session. Rehearsal on `qa/sandbox` preceded
+both runs and matched the runbook's healthy shape (`clicks=20 ok=20
+timeouts=0`, `decode_path_counts={'non_raw_source': 20}`, boxes 1/3/4
+`pass=True`, box 2 `not_measured`, `VERDICT: NOT_MEASURED`).
+
+## Verdict — still **`FAIL`** on box 2 alone, now at **3.85×**
+
+`summary.verdict.verdict` = `FAIL`, `verdict.failed` = `['box2']`,
+`verdict.unmeasured` = `[]` (`phase3_fulldecode.json`).
+
+| Box | Bar | Pre-#865 (`a202282`) | Post-#865 (`75a976d`) | Verdict |
+|---|---|---|---|---|
+| 1 — steady-state RSS, 100 clicks | < 600 MB | 157.946 p50 / 171.418 max | **156.834** p50 / **169.955** max | **pass** (`pass_on_max` true) |
+| 2 — embedded vs full-decode TTFP | ≥ 5× | 4.242× over 89 paths | **3.85×** over 89 paths | **fail** |
+| 3 — full-res viewer opens with pan/zoom | qualitative | pass | pass (zoom 1.0 → 1.25, `pan_scroll_range` 2896) | **pass** |
+| 4 — the viewer's QImage is freed on close | qualitative | pass | pass (label valid → invalid) | **pass** |
+
+`placeholder_count` = 0 and `cold_decode_count` = 100 on both runs, so every
+box was answered from real decodes. `dropped_timeouts.total` = 0 on both arms.
+
+**Box 2 misses the bar, so the acceptance for #622 is not met and this
+document does not declare it met.** The rest of this section is the honest
+account of what the change did, because "the ratio went down" and "the code
+got slower" are different claims and only the first one is true.
+
+## The two runs
+
+`ART` = `~/.claude/handovers/worker-reports/865-artifacts`. Back to back on a
+quiet machine (every concurrent agent held for the pair, released by a flag
+file the moment run 2 finished).
+
+```
+# run 1 — baseline, embedded-JPEG path   17:48:38 → 17:49:22 UTC (wall_s 43.811)
+python.exe scripts/preview_phase3_probe.py \
+    --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 \
+    --ext .dng --output "$ART/phase3_embedded.json"
+
+# run 2 — forced full raw decode          17:49:41 → 17:53:23 UTC (wall_s 222.182)
+python.exe scripts/preview_phase3_probe.py \
+    --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 \
+    --ext .dng --force-full-decode \
+    --compare-json "$ART/phase3_embedded.json" \
+    --output "$ART/phase3_fulldecode.json"
+```
+
+| | run 1 (embedded) | run 2 (forced full) |
+|---|---|---|
+| clicks / ok / timeouts | 100 / 100 / 0 | 100 / 100 / 0 |
+| placeholders / cold decodes | 0 / 100 | 0 / 100 |
+| `decode_path_counts` | `embedded_jpeg` 89, `non_raw_source` 11 | `forced_full_decode` 89, `non_raw_source` 11 |
+| `ttfp_ms` p50 / p95 / max | 379.005 / **564.750** / **803.414** | 1261.491 / 4754.820 / 5020.624 |
+| steady-state RSS p50 / max | 156.834 / 169.955 MB | 142.217 / 151.089 MB |
+
+The run-level `p95` and `max` are the first sign of what changed: 1000.828 →
+564.750 and 1118.308 → 803.414 ms, while `p50` sat still (374.707 → 379.005).
+Run 1's wall clock fell 56.715 → 43.811 s for the same 100 clicks.
+
+## Box 1 — steady-state memory. **Still passes.**
+
+`summary.box1.steady_state_rss_mb` over the last 50 of 100 clicks: p50
+**156.834 MB**, mean 155.093, p95 165.999, max **169.955**, against
+`threshold_mb` 600.0. `pass: true`, `pass_on_max: true`, `reason: null`,
+`steady_window_used` 50 of 50, `placeholder_paints_in_window` 0,
+`cold_decode_count` 100 against `min_cold_decodes` 3.
+
+Essentially unchanged from the pre-#865 session (157.946 / 171.418), which is
+the expected result: draft mode reduces the size of a transient decode buffer,
+not what the LRU retains. Peak `lru_occupancy_bytes.preview_max` = 56,586,706 B
+(~54.0 MiB) against the 192 MB preview tier, up from 39,565,490 B — the cache
+holds output JPEGs at the cap, whose size is unchanged, so this is ordinary
+between-run variation in which files were clicked, not a #865 effect.
+
+```
+Probe: scripts/preview_phase3_probe.py
+SHA:   75a976d97a05fa33bd3807b009c6f9e66c44fbb3
+Args:  --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 --ext .dng
+JSON:  phase3_embedded.json
+```
+
+## Box 2 — **3.85×, down from 4.242×, and not because the code got slower**
+
+`summary.box2`: `status: measured`, `ratio_median` **3.85**, `threshold` 5.0,
+`pass: false`, `n_paths` **89**, `dropped_timeouts.total` **0**.
+
+| Field | Pre-#865 (`a202282`) | Post-#865 (`75a976d`) |
+|---|---|---|
+| `embedded_ttfp_ms` min / p50 / mean / p95 / max | 256.823 / 381.124 / 547.530 / 1000.828 / 1118.308 | 282.570 / **380.887** / **402.331** / **521.997** / **623.486** |
+| `full_decode_ttfp_ms` min / p50 / mean / p95 / max | 1128.113 / 1342.884 / 2455.722 / 4876.087 / 4943.267 | 1078.904 / **1291.335** / 2394.564 / 4754.820 / 5020.624 |
+| `ratio_min` / `ratio_median` / `ratio_max` | 3.094 / **4.242** / 5.922 | 2.835 / **3.85** / **12.436** |
+| `ratio_of_medians` | 3.523 | 3.390 |
+
+Box 2 is a **two-arm** quantity and #865 touched only one arm. Reading the
+headline ratio alone would attribute a control-arm movement to the code
+change, so the arms were paired **by path across the two sessions** — the same
+89 files, the same route, `a202282` against `75a976d`:
+
+| Embedded arm, same 89 paths | p50 | mean | p90 | p95 | max |
+|---|---|---|---|---|---|
+| pre-#865 `a202282` | 381.1 | 547.5 | 981.4 | 1003.1 | 1118.3 |
+| post-#865 `75a976d` | 380.9 | **402.3** | **516.9** | **546.9** | **623.5** |
+
+Split at the pre-#865 p75 (895.8 ms), the change is not spread evenly — it is
+entirely in the tail:
+
+| Group | n | p50 pre → post | mean pre → post |
+|---|---|---|---|
+| slow tail (≥ p75) | 23 | 964.9 → **505.1 ms** (−459.8) | 972.9 → 497.1 |
+| body (< p75) | 66 | 341.2 → 367.1 ms (+25.9) | 399.3 → 369.3 |
+
+And the control arm, which #865 cannot touch (`--force-full-decode`
+short-circuits `_try_rawpy_embedded_thumb` before `extract_thumb`,
+`scripts/preview_phase3_probe.py:198-201`), moved on its own between the two
+sessions: paired p50 **1342.9 → 1291.3 ms**, 51.5 ms faster with no code
+change on that path.
+
+So the ratio fell because its **denominator files** — the body, where draft
+does nothing — sat against a control arm that happened to run ~4 % faster this
+session, while the files draft does help moved out to `ratio_max` 12.436 (from
+5.922). The embedded arm strictly improved on the arm's own terms: mean
+−145.2 ms, p95 −456.2 ms, max −494.8 ms, faster on 46 of 89 files.
+
+### Why 66 of 89 files were unaffected — measured, not inferred
+
+`draft` reduces only when the source is at least 2× the requested size in
+**both** axes, and it never undershoots. A bounded read-only probe over 8 of
+the 89 files (the 4 fastest and the 4 slowest of the pre-#865 embedded arm)
+opened each DNG's embedded JPEG and read its header:
+
+| Group | files sampled | embedded JPEG | MP | `draft("RGB", (2048, 2048))` → |
+|---|---|---|---|---|
+| body | IMG_1432, 1445, 1449, 1450 | **4032 × 3024** | 12.2 | 4032 × 3024 — **no reduction** |
+| tail | IMG_1230, 1235, 1277, 1278 | **8064 × 6048** | 48.8 | 4032 × 3024 — **halved** |
+
+The library is bimodal, and the median file is already at the floor: a
+4032 × 3024 thumb against a 2048 cap is 1.97× the cap, so the next libjpeg
+step (1/2 → 2016 × 1512) would land **below** the cap and lose output
+resolution. `draft` declines, correctly. The 48.8 MP frames are the
+full-sensor ProRAW preview #826 identified, and those are exactly the ~460 ms
+each that #865 removed.
+
+The saving matches an independent bench off the NAS: the same pipeline on a
+synthetic 8064 × 6048 JPEG runs 661 ms → 180 ms median (5 iterations) with
+byte-identical output geometry (2048 × 1536). Two instruments, one number.
+
+### What this means for #622's box 2
+
+The embedded path is now doing the least decode work the 2048 cap permits, on
+every file in this library. **Box 2 cannot be lifted to 5× by decoding less**
+— there is nothing left to remove for the 66 body files, and the 23 tail files
+already improved by ~48 %. The remaining TTFP on a body click is the SMB read
+of a 16–75 MB DNG plus a 12.2 MP decode that the cap requires.
+
+Levers that would move it, none of them built here and none of them inside
+#865's scope:
+
+* **Lower the viewport cap.** At 1024, a 4032 × 3024 thumb drafts to
+  2016 × 1512 and the body files halve too. This changes preview fidelity —
+  a product decision, and #622 explicitly put the cap out of scope.
+* **Let `draft` undershoot by a small tolerance.** Accepting 2016 × 1512
+  instead of 2048 × 1536 (1.6 % on the long edge) would halve the body decode.
+  It changes output geometry, which #865 was required not to do.
+* **Read less over SMB.** `rawpy.imread` pulls the whole DNG before
+  `extract_thumb` can run. Untested, larger, and a different issue.
+* **Re-state the bar** against the measured distribution.
+
+Per the runbook's decision row for a measured fail, the report is the
+distribution and not the one number: per-path ratios span **2.835×–12.436×**,
+with the 23 full-sensor files now at 6.2×–12.4× and the body files at
+2.8×–4.2×. **The 5× bar is met by the part of the library that carries a
+48 MP embedded frame and missed by the part that carries a 12 MP one.**
+Whether to re-state the bar, lower the cap, or leave box 2 open is the
+owner's call; this document does not make it, and the 3.85 is not softened to
+reach it.
+
+```
+Probe: scripts/preview_phase3_probe.py
+SHA:   75a976d97a05fa33bd3807b009c6f9e66c44fbb3
+Args:  --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 --ext .dng
+       --force-full-decode --compare-json "$ART/phase3_embedded.json"
+JSON:  phase3_fulldecode.json (summary.box2.compared_with names run 1)
+```
+
+## Boxes 3 and 4 — unchanged, both still pass
+
+Opened on `IMG_0867.DNG` (`qimage_is_placeholder` false). Box 3:
+`request_full_res_emitted` true, `zoom_scale_before` 1.0 → `zoom_scale_after`
+1.25 with `zoom_pixmap_grew` true, `pan_wired` true, `pan_scroll_range` 2896.
+Box 4: `label_valid_before_close` **true** → `label_valid_after_close`
+**false**, `full_qimage_none_after_close` true, `dialog_valid_after_close`
+false.
+
+The two limits recorded in the first session still hold and are not re-argued
+here: `pan_wired` asserts wiring rather than a driven drag, and
+`modal.dialog_is_modal` is still false against #622's "modal viewer" wording.
+
+```
+Probe: scripts/preview_phase3_probe.py
+SHA:   75a976d97a05fa33bd3807b009c6f9e66c44fbb3
+Args:  --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 --ext .dng
+JSON:  phase3_embedded.json (modal block + summary.box3 / summary.box4)
+```
+
+## Session notes
+
+Same host and same deviations as the first session — `--ext .dng` passed to
+both runs for the reason recorded above, `env.viewport_cap` 2048 with
+`viewport_cap_pinned` true, `env.file_count` 445, `env.ext_histogram`
+`{".dng": 445}`, `host.total_ram_bytes` 34,189,557,760, Python 3.12.9,
+PySide6 6.11.0, Qt platform `offscreen`, budget `min(256 MB, RAM/32)` = 256 MB
+split `{thumb: 67,108,864, preview: 201,326,592}`.
+
+The same 11 `.DNG` files took `non_raw_source` in both runs again, the same
+paths as the first session — deterministic, already explained there, and still
+excluded from the box-2 pairing by construction (hence `n_paths` 89).
+
+One thing this session did **not** do: re-run to fish for a better number.
+Both runs completed on the first attempt with zero timeouts; the 3.85 is the
+first and only reading taken at `75a976d`.
