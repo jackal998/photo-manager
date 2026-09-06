@@ -12,10 +12,11 @@ name: web-eval-gates
 #   job-always-runs + step-level-`if` diff-filter pattern tests.yml uses in
 #   its "Determine changed-file scope" step. This is what lets a later
 #   REQUIRED flip avoid a skipped-but-required check stuck pending forever on
-#   non-web PRs. #773 step 3 executed at cutover (2026-07-24): continue-on-error
-#   removed from all four jobs, WEB_PORT_PHASE=4 set in repo vars. Flake sizing
-#   basis: the last 20 advisory web-scenario-batch outcomes were 19 green /
-#   1 failure — the one failure being the known s72 race tracked in #815.
+#   non-web PRs. #773 step 3 executed 2026-09-06: continue-on-error removed
+#   from all four jobs. WEB_PORT_PHASE=4 and the required-check swap stay with
+#   the Phase-4 cutover (#646). Flake sizing basis: after PR #855 (write helpers
+#   wait for their API response) the web-scenario-batch went 8/8 green, versus
+#   7 red in the 16 runs before it — all of them the #850 race family.
 on:
   pull_request:
   workflow_dispatch:
