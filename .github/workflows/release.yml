@@ -166,9 +166,10 @@ jobs:
       # Runs the BUNDLED binaries out of dist\ — never PATH, which on a
       # GitHub Windows runner happens to carry its own ffmpeg and would
       # make this step pass for a bundle that ships none (exactly the #854
-      # bug). The encoder assertion is the second half of the gate: an
-      # ffmpeg that starts but has no H.264 encoder turns the 501 into a
-      # 500 and fixes nothing.
+      # bug). The encoder assertions are the second half of the gate: an
+      # ffmpeg that starts but cannot produce H.264 turns the 501 into a
+      # 500 and fixes nothing — so the step checks both that an encoder is
+      # LISTED and that it actually ENCODES.
       - name: Bundled ffmpeg smoke test
         shell: pwsh
         run: |
@@ -190,13 +191,33 @@ jobs:
               exit 1
             }
           }
-          $encoders = & (Join-Path $internal 'ffmpeg.exe') -hide_banner -encoders
+          $ffmpegExe = Join-Path $internal 'ffmpeg.exe'
+          $encoders = & $ffmpegExe -hide_banner -encoders
           $h264 = $encoders | Select-String -Pattern '\s(libx264|libopenh264)\s'
           if (-not $h264) {
             Write-Error "bundled ffmpeg has no software H.264 encoder — transcodes would fail with 'Encoder not found'"
             exit 1
           }
           Write-Host "H.264 encoder present: $($h264[0].Line.Trim())"
+
+          # LISTING an encoder is not being able to USE it. A broken static
+          # link or a rejected input fails only at encode time, and that
+          # failure is #854's own symptom — HTTP 500 on every HEVC video —
+          # with this gate green. So encode half a second of generated video
+          # with the encoder transcode_service.py's _select_h264_encoder
+          # would pick from the same listing (libx264 first, else
+          # libopenh264), through the BUNDLED exe, and fail on a non-zero
+          # exit. -f null - writes no file; -pix_fmt yuv420p matches both
+          # production recipes.
+          $encoder = if ($encoders | Select-String -Pattern '\slibx264\s') { 'libx264' } else { 'libopenh264' }
+          Write-Host "Exercising a real encode with: $encoder"
+          & $ffmpegExe -hide_banner -loglevel error -f lavfi -i testsrc=size=320x240:rate=10:duration=0.5 -c:v $encoder -pix_fmt yuv420p -b:v 1M -f null -
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "bundled ffmpeg lists $encoder but cannot encode with it (exit $LASTEXITCODE) — the packaged app would answer HTTP 500 on every HEVC video (#854)"
+            exit 1
+          }
+          Write-Host "Bundled ffmpeg encoded a test clip with $encoder (exit 0)"
+
           if (-not (Test-Path (Join-Path $internal 'FFMPEG-LICENSE.txt'))) {
             Write-Error "bundle is missing FFMPEG-LICENSE.txt — LGPL requires the licence to ship with the binary"
             exit 1
