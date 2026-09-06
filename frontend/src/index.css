@@ -1,4 +1,11 @@
 @import "tailwindcss";
+/* Emits the enter/exit utilities the dialog surfaces already ask for —
+   `animate-in` / `animate-out`, `fade-in-0` / `fade-out-0`,
+   `zoom-in-95` / `zoom-out-95` — in ui/dialog.tsx and FullResViewer.tsx.
+   Without it those class names compile to nothing and every dialog opens
+   and closes with no transition (#852). Tailwind v4 successor of the
+   `tailwindcss-animate` plugin; pure CSS, no plugin system. */
+@import "tw-animate-css";
 
 @layer base {
   :root {

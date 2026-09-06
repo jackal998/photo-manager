@@ -135,8 +135,9 @@ def _drag(page, testid: str, dx: float, dy: float) -> None:
     # A short settle so the next gesture measures a stable box. The round-1
     # workaround here was 400ms, justified by a 120ms read of x=-112 for a box
     # that settled at -156 — that reading was the uncancelled Tailwind-v4
-    # `translate` centering, fixed in the mechanism, not an entry animation:
-    # probed live, the dialog reports 0 running animations 50ms after open.
+    # `translate` centering, fixed in the mechanism, not an entry animation
+    # (there was none to run: the classes emitted no CSS until #852, which
+    # made the open animation real at 200ms — the settle below covers it).
     page.wait_for_timeout(200)
 
 
@@ -161,8 +162,40 @@ def _open_action(page) -> None:
     page.wait_for_timeout(200)  # brief settle before measuring
 
 
+def _probe_open_animation(page, dialog_testid: str, label: str) -> None:
+    """Soft probe (#852): does the dialog's open animation emit real CSS?
+
+    The `animate-in` / `zoom-in-95` / `fade-in-0` classes on the shared
+    wrapper compiled to NOTHING until `tw-animate-css` was imported in
+    index.css — dead markup that two reviewers reasoned about before anyone
+    checked the built stylesheet. jsdom has no CSSOM for it, so a live browser
+    is the only layer that can see it, and a print is the only thing that
+    would show a dropped import ever bringing the dead markup back.
+    Never fatal — a missing reading is reported, not raised.
+    """
+    try:
+        anim = page.evaluate(
+            """(testid) => {
+                const el = document.querySelector(
+                    '[data-testid="' + testid + '"]'
+                );
+                if (!el) return null;
+                const cs = getComputedStyle(el);
+                return cs.animationName + " " + cs.animationDuration;
+            }""",
+            dialog_testid,
+        )
+    except Exception:  # noqa: BLE001 — soft probe, never fatal
+        anim = None
+    print(f"probe_status: s48 {label} open_animation={anim}")
+
+
 def _close(page, dialog_testid: str) -> None:
     page.keyboard.press("Escape")
+    # `hidden` covers both halves of a Radix close: the exit animation runs
+    # while the element is still mounted (#852 made it a real 200ms), and the
+    # unmount lands after it. Waiting on the state — never a fixed sleep — is
+    # what keeps this correct whatever the animation does.
     page.get_by_test_id(dialog_testid).wait_for(state="hidden", timeout=5_000)
 
 
@@ -182,6 +215,7 @@ def _exercise(
     Returns the rect the dialog was left at, for the later reload assertions.
     """
     reopen(page)
+    _probe_open_animation(page, dialog_testid, label)
     before = _box(page, dialog_testid)
     print(
         f"probe_status: s48 {label} default="

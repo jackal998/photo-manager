@@ -19,6 +19,7 @@ import {
   loadOverlayGeometry,
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
+  overlayStorageKey,
 } from "@/lib/overlayGeometry";
 
 const VIEWPORT = { width: 1280, height: 800 };
@@ -79,21 +80,42 @@ function boxStyle(): CSSStyleDeclaration {
   return screen.getByTestId("box").style;
 }
 
+/** Stub what the hook measures. jsdom reports a zero rect AND zero offset* for
+ *  every element, so both halves need a stand-in: the rendered rect supplies
+ *  the POSITION, offsetWidth/offsetHeight the LAYOUT SIZE. This is the
+ *  surfaces' real default-layout source — the hook carries no per-surface
+ *  default of its own. Passing a `layout` size that differs from the rect is
+ *  how a transform-scaled box is simulated (see the #852 test below). */
+function stubBox(
+  rect: { left: number; top: number; width: number; height: number },
+  layout: { width: number; height: number } = {
+    width: rect.width,
+    height: rect.height,
+  }
+): void {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+    ...rect,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+    x: rect.left,
+    y: rect.top,
+    toJSON: () => ({}),
+  } as DOMRect);
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+    configurable: true,
+    get: () => layout.width,
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get: () => layout.height,
+  });
+}
+
 beforeEach(() => {
   localStorage.clear();
   window.innerWidth = VIEWPORT.width;
   window.innerHeight = VIEWPORT.height;
-  // jsdom reports a zero rect for every element, so the seed-from-rendered-rect
-  // path needs a stub. This is the surfaces' real default-layout source: the
-  // hook carries no per-surface default of its own.
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
-    ...RECT,
-    right: RECT.left + RECT.width,
-    bottom: RECT.top + RECT.height,
-    x: RECT.left,
-    y: RECT.top,
-    toJSON: () => ({}),
-  } as DOMRect);
+  stubBox(RECT);
 });
 
 describe("moving", () => {
@@ -173,18 +195,12 @@ describe("moving", () => {
     // a full-size window it could only ever sit at 0,0 — the title-bar drag
     // would appear dead, which is what #739 was filed for. Dragging must
     // shrink it and follow the cursor (the OS window-manager convention).
-    (Element.prototype.getBoundingClientRect as unknown as ReturnType<typeof vi.fn>)
-      .mockReturnValue({
-        left: 0,
-        top: 0,
-        width: VIEWPORT.width,
-        height: VIEWPORT.height,
-        right: VIEWPORT.width,
-        bottom: VIEWPORT.height,
-        x: 0,
-        y: 0,
-        toJSON: () => ({}),
-      } as DOMRect);
+    stubBox({
+      left: 0,
+      top: 0,
+      width: VIEWPORT.width,
+      height: VIEWPORT.height,
+    });
     render(<Harness />);
     mouseDown("titlebar", 600, 20);
     mouseMove(700, 60);
@@ -299,6 +315,34 @@ describe("persistence", () => {
     const top = Number.parseInt(boxStyle().top, 10);
     expect(left + RECT.width).toBeLessThanOrEqual(800);
     expect(top + RECT.height).toBeLessThanOrEqual(600);
+  });
+
+  it("clamps against the LAYOUT box while the open animation still scales it (#852)", () => {
+    // #852 gave the dialogs a real `zoom-in-95` entry animation, so for its
+    // first 200ms getBoundingClientRect reports 95% of the box — and the clamp
+    // runs inside that window. Measured against the scaled box, a restored
+    // dialog near the bottom edge opened with its footer below the viewport
+    // (live: stored y=690 in a 720px viewport settled at 310, bottom 742).
+    const scale = 0.95;
+    stubBox(
+      {
+        left: RECT.left,
+        top: RECT.top,
+        width: RECT.width * scale,
+        height: RECT.height * scale,
+      },
+      { width: RECT.width, height: RECT.height }
+    );
+    localStorage.setItem(
+      overlayStorageKey("execute"),
+      JSON.stringify({ x: 300, y: VIEWPORT.height - 30, w: null, h: null })
+    );
+    render(<Harness />);
+    const top = Number.parseInt(boxStyle().top, 10);
+    // 800 - 480 = 320 (the layout box); the scaled box would allow 344 and put
+    // 24px of the dialog — its Apply / Cancel row — off the bottom edge.
+    expect(top).toBe(VIEWPORT.height - RECT.height);
+    expect(top + RECT.height).toBeLessThanOrEqual(VIEWPORT.height);
   });
 });
 

@@ -205,7 +205,39 @@ def wait_manifest_loaded(page: "Page", timeout: float = 60_000) -> str:
     str
         The status bar text at the moment the wait resolved.
     """
-    return wait_status(page, _STATUS_MANIFEST_LOADED, timeout=timeout)
+    text = wait_status(page, _STATUS_MANIFEST_LOADED, timeout=timeout)
+    # ScanDialog auto-closes on the SSE `finished` event, before the manifest
+    # lands — but a closing Radix dialog stays MOUNTED until its exit animation
+    # ends, and #852 made that animation real. Settle here so the very next
+    # gesture cannot land on the fading backdrop (measured: s39 / s47).
+    wait_no_modal_overlay(page)
+    return text
+
+
+def wait_no_modal_overlay(page: "Page", timeout: float = 3_000) -> bool:
+    """Wait until no Radix modal backdrop is left in the DOM. Best-effort.
+
+    A ``data-state="closed"`` backdrop mid-fade still covers the viewport and
+    swallows pointer events — the same interception ``dismiss_modal_overlays``
+    presses Escape for, reached from the other side (nothing is stuck here;
+    the element is simply still animating out). Playwright's own
+    ``locator.click()`` waits for actionability and rides it out, but a RAW
+    ``page.mouse.down()`` — every drag gesture in s39 / s47 / s48 — does not:
+    it lands on the backdrop and the gesture silently does nothing, which
+    surfaces as "the drag wiring is broken" rather than as a timing race.
+
+    Never raises: returns False if an overlay outlives the budget, so a caller
+    that deliberately has a dialog open is slowed, never failed.
+    """
+    try:
+        page.wait_for_function(
+            "() => document.querySelectorAll('div.fixed.inset-0.z-50')"
+            ".length === 0",
+            timeout=timeout,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — best-effort settle, never fatal
+        return False
 
 
 # ---------------------------------------------------------------------------

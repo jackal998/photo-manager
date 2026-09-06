@@ -113,9 +113,10 @@ export function useOverlayGeometry(
 
   // Hydrate on every open, BEFORE the browser paints. A passive useEffect runs
   // after paint, so reopening a previously moved overlay showed one frame at
-  // the CSS default and then jumped to the stored position — nothing masks it,
-  // since the `animate-in` / `zoom-in-95` classes on dialog.tsx emit no CSS
-  // (no Tailwind animate plugin is installed).
+  // the CSS default and then jumped to the stored position. The `animate-in` /
+  // `zoom-in-95` classes on dialog.tsx do emit CSS since #852, but they animate
+  // opacity and scale only — a jump between two positions still shows through
+  // them, so hydrating before paint stays load-bearing.
   //
   // Ordering matters and is by construction: React runs layout effects in
   // declaration order within a commit, and this one is declared above the
@@ -129,13 +130,26 @@ export function useOverlayGeometry(
 
   // The element's live rect — the stand-in size for an overlay the user has
   // moved but never resized, and the seed for each surface's own default.
+  //
+  // POSITION comes from the rendered rect, which must keep the surfaces'
+  // `-translate-*` centering. SIZE comes from offsetWidth/offsetHeight — the
+  // LAYOUT box, which no transform can shrink. Since #852 the dialogs have a
+  // real `zoom-in-95` entry animation, so for its first 200ms
+  // getBoundingClientRect reports 95% of the box; the clamp below runs inside
+  // that window, and against the scaled box a restored dialog near the bottom
+  // edge opened with its footer off-screen (live-measured: stored y=690 in a
+  // 720px viewport settled at top 310, i.e. bottom 742 — the layout size puts
+  // it back at 288, flush).
   const readRect = useCallback((): {
     position: { x: number; y: number };
     size: OverlaySize;
   } | null => {
     if (node === null) return null;
     const r = node.getBoundingClientRect();
-    return { position: { x: r.left, y: r.top }, size: { w: r.width, h: r.height } };
+    return {
+      position: { x: r.left, y: r.top },
+      size: { w: node.offsetWidth, h: node.offsetHeight },
+    };
   }, [node]);
 
   const clampToViewport = useCallback(() => {
