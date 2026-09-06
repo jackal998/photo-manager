@@ -1,0 +1,1 @@
+Require a real reason in the `[skip-news: ...]` changelog bypass token — a blank one, an unclosed bracket, and the `<reason>` placeholder quoted in prose no longer disable the news gate, and the `[docs-not-needed: ...]` / `[qa-not-needed: ...]` twins reject the placeholder too (#858).
