@@ -117,7 +117,7 @@ _BYPASS_PATTERN = re.compile(
     r"\[docs-not-needed:(?!\s*<reason>\s*\])\s*[^\]\s][^\]]*\]"
 )
 
-# The placeholder form (#857): a token whose reason is blank. The old
+# The empty form (#857): a token whose reason is blank. The old
 # ``[^\]]*`` matched zero characters, so a pasted template — the literal
 # ``[docs-not-needed:]`` — was a valid bypass and disabled this gate
 # silently, in CI as well as in the local hook. It now blocks, and this
