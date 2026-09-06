@@ -1,27 +1,47 @@
 name: qa-batch
 
-# Run the layer-3 qa-explore batch on every PR. Goal: catch driver-vs-app
-# label drift and state-transition regressions before merge, instead of
-# relying on a manual `python -m qa.scenarios._batch` discipline (#74).
+# Layer-3 qa-explore batch (#74) — LEGACY coverage of the PySide6 Qt
+# desktop client, and of nothing else.
 #
-# paths-ignore (#622 follow-up) skips all 5 shards atomically for PRs that
-# only touch frontend/docs/news/*.md — pure-Qt scenarios have nothing to
-# exercise there, and the ~15-20 min windows-latest runner cost isn't worth
-# paying on every such PR. This is safe SPECIFICALLY because qa-batch is
-# NON-REQUIRED (see Status below): a `paths-ignore` match makes GitHub
-# Actions skip the check entirely rather than report a status, so this
-# workflow must never become a required check while this filter is in
-# place — a skipped-but-required check gets stuck pending forever (see
-# tests.yml, which needed the job-always-runs + step-`if:` pattern instead
-# for exactly that reason). Any other class of PR (including tooling/hook
-# changes) still runs the full uniform posture. If runner cost ever bites
-# further, the right fix is to make the batch faster (parallelise
-# scenarios, prune slow ones), not to widen this skip list carelessly.
+# What gates a PR is web QA. `.github/workflows/web-eval-gates.yml`
+# (web-scenario-batch's Playwright scenarios, web-dom-probe,
+# qa-parity-counter, bench-sanity) runs on EVERY pull request and has been
+# BLOCKING since PR #817 (#773); `scripts/check_qa_parity.py --phase 4`
+# reports 71/71 scenarios ported. So the shared backend — core/, scanner/,
+# infrastructure/ — is already exercised end-to-end through the web client
+# on every PR, whatever this workflow does.
 #
-# Status: NON-REQUIRED, informational. Per #74's acceptance criteria, this
-# workflow needs ≥10 consecutive flake-free runs on real PRs before being
-# promoted to a required status check via branch protection. Until then,
-# treat a red qa-batch as a signal to investigate, not a merge blocker.
+# Therefore these shards run ONLY when a Qt surface changes (#863). The
+# `paths:` allowlist below replaced the old `paths-ignore` skip list: that
+# list only excused frontend/docs/news/*.md, so the five shards (~30
+# windows-latest runner-minutes) fired on every other PR — including ones
+# that cannot touch the Qt client at all: qa/web/** (#855),
+# scripts/hooks/** (#859), infrastructure/** + its tests (#860), tests/**,
+# app/web/**, .claude/**. Every allowlist entry is the Qt client itself,
+# the UIA driver code, a fixture the drivers assert against, or a
+# dependency pin only this suite exercises; each is annotated inline.
+#
+# Deliberately NOT on the allowlist: core/**, scanner/**, infrastructure/**
+# and the rest of the shared backend, plus tests/**, scripts/hooks/** and
+# dev-requirements.txt (lint/test tooling the drivers never import). The
+# accepted trade-off: a shared-backend change that breaks ONLY the Qt
+# client is not caught until the next Qt-surface PR or a manual
+# workflow_dispatch. That is deliberate — the packaged release no longer
+# ships the Qt UI (#774) and this whole suite is deleted with the Phase-4
+# cutover (#646). Adding a shared directory back would restore exactly the
+# duplicated coverage #863 removed.
+#
+# Status: NON-REQUIRED, informational — and the allowlist is safe
+# SPECIFICALLY because of that. A `paths:` miss makes GitHub Actions skip
+# the check entirely rather than report a status, so this workflow must
+# never become a required check while this filter is in place: a
+# skipped-but-required check gets stuck pending forever (see tests.yml and
+# web-eval-gates.yml, which both use the job-always-runs + step-level
+# `if:` pattern for exactly that reason). #74's original acceptance
+# criterion — "≥10 consecutive flake-free runs, then promote to a required
+# status check" — is SUPERSEDED by the owner's 2026-09-06 decision (#863):
+# web QA is the gate, and these shards stay informational until they are
+# deleted. Treat a red qa-batch as a signal to investigate, not a blocker.
 #
 # Sharding (#188). The batch is split across 5 parallel jobs via
 # strategy.matrix to bring wall-clock from ~15–20 min down toward ~5 min.
@@ -38,17 +58,57 @@ name: qa-batch
 # (https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs).
 
 on:
-  # Run on every PR regardless of target branch — stacked PRs (whose
-  # base is another feature branch, not master) need per-stage CI too.
-  # Without this, intermediate PRs in a multi-PR feature chain bypass
-  # qa-batch entirely. See tests.yml for the matching change.
+  # Every target branch, not just master — stacked PRs (whose base is
+  # another feature branch) need per-stage CI too. See tests.yml.
+  #
+  # Qt-surface allowlist (#863). GitHub runs the workflow when ANY changed
+  # file matches ANY pattern here; `**` crosses directory boundaries. The
+  # per-entry justification is the grep of everything the UIA drivers
+  # import or launch — see the header for what is deliberately absent.
   pull_request:
-    paths-ignore:
-      - 'frontend/**'
-      - 'docs/**'
-      - 'news/**'
-      - '**.md'
-  workflow_dispatch: {}   # allow manual trigger from the Actions UI for debugging
+    paths:
+      # The Qt client. `main.py` is the process the drivers launch;
+      # `launcher.py` still boots it (`main.main()`) on the desktop path;
+      # `app/viewmodels/` is the view-model `main.py` hands to MainWindow —
+      # the web client only reaches the slice re-exported through
+      # core/app_service/review_service.py, so Qt-visible grouping/sort
+      # behaviour there is not covered by the web suite.
+      - 'app/views/**'
+      - 'app/viewmodels/**'
+      - 'main.py'
+      - 'launcher.py'
+      # The UIA drivers themselves, the standalone probes
+      # (qa/probes/*.py, which import app.views.dialogs directly), and the
+      # scenario registry qa/scenarios/_batch.py imports for shard
+      # selection (it lives outside qa/scenarios/ so the web runner can
+      # read it without pulling in the Qt batch machinery).
+      - 'qa/scenarios/**'
+      - 'qa/probes/**'
+      - 'qa/scenario_ids.py'
+      # Fixtures the drivers assert against, plus the two generators that
+      # build them: make_qa_sandbox.py is this workflow's own "Build qa
+      # sandbox fixtures" step, and make_qa_large_source.py is imported at
+      # runtime by s03_cancel_scan / s63_late_cancel.
+      - 'qa/sandbox/**'
+      - 'scripts/make_qa_sandbox.py'
+      - 'scripts/make_qa_large_source.py'
+      # The strings the drivers locate widgets by (UIA names are the
+      # localised labels; qa/scenarios/_batch.py loads this catalog to
+      # resolve the exit-prompt button names).
+      - 'translations/**'
+      # Dependency pins only this suite exercises: requirements.txt pins
+      # PySide6, whose widget / UIA behaviour no browser-based suite can
+      # observe, and qa/requirements.txt pins pywinauto, the driver
+      # library itself. (dev-requirements.txt is lint/test tooling the
+      # drivers never import — deliberately absent.)
+      - 'requirements.txt'
+      - 'qa/requirements.txt'
+      # This file, so any change to the allowlist is exercised by the
+      # shards it governs.
+      - '.github/workflows/qa-batch.yml'
+  workflow_dispatch: {}   # manual trigger from the Actions UI — the escape
+                          # hatch for running the Qt suite against a change
+                          # the allowlist above deliberately skips
 
 # Public-repo hardening: workflow is read-only, no write back to the repo,
 # no token-scoped operations. Locking permissions explicitly here keeps it
