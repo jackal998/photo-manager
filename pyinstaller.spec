@@ -34,6 +34,34 @@ if not (_frontend_dist / "index.html").exists():
         "ships the built SPA; PyInstaller must not run without it."
     )
 
+# Bundled ffmpeg/ffprobe (#854).  release.yml stages a checksum-verified
+# LGPL build into build-assets/ffmpeg/ BEFORE this spec runs; a dev build
+# usually has no such directory and simply ships without them (the app then
+# falls back to PATH, which is the pre-#854 behaviour).  Missing binaries
+# are therefore a warning here, never a build failure — unlike
+# frontend/dist above, whose absence produces a visibly dead app.
+#
+# datas, not binaries: these are fully static, self-contained exes with no
+# DLL imports to discover, so PyInstaller's binary dependency analysis has
+# nothing to add and would only chew through 114 MB per file. datas copies
+# them verbatim. Dest "." puts them in _internal/ under PyInstaller 6's
+# onedir layout, which is one of the two places transcode_service.py's
+# _resolve_media_tool() looks (the other is next to the exe).
+# The staging step names the licence FFMPEG-LICENSE.txt so it cannot be
+# mistaken for the app's own once it sits in the bundle; a datas entry
+# copies files verbatim and cannot rename them.
+_ffmpeg_stage = Path(SPECPATH) / "build-assets" / "ffmpeg"
+ffmpeg_datas = []
+for _name in ("ffmpeg.exe", "ffprobe.exe", "FFMPEG-LICENSE.txt"):
+    _staged = _ffmpeg_stage / _name
+    if _staged.exists():
+        ffmpeg_datas.append((str(_staged), "."))
+    else:
+        print(
+            f"pyinstaller.spec: {_staged} not found — bundle will ship "
+            "without it; video transcoding will need ffmpeg on PATH (#854)"
+        )
+
 # pillow-heif ships a compiled extension plus libheif/libde265/etc
 # native DLLs. collect_all picks up the Python package, data files,
 # and binaries in one call — the documented "just works" path for
@@ -57,7 +85,7 @@ a = Analysis(
     ["launcher.py"],
     pathex=[],
     binaries=heif_binaries + rawpy_binaries,
-    datas=heif_datas + [
+    datas=heif_datas + ffmpeg_datas + [
         # Bundled read-only assets resolved via sys._MEIPASS / BASE_DIR
         # in main.py. translations/ holds the YAML catalogs the i18n
         # layer reads at startup. No icons/PNGs are loaded by the app

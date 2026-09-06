@@ -9,6 +9,11 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# Downloaded third-party binaries staged for the PyInstaller bundle
+# (release.yml fetches a checksum-pinned ffmpeg into build-assets/ffmpeg/).
+# A separate directory from build/ because `pyinstaller --clean` wipes that
+# one; ~230 MB of exe must never reach a commit either way.
+build-assets/
 develop-eggs/
 dist/
 downloads/

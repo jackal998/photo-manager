@@ -15,6 +15,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -27,8 +28,11 @@ from infrastructure.transcode_service import (
     TranscodeError,
     TranscodeUnavailable,
     _compute_cache_key,
+    _EXE_SUFFIX,
     _KEY_LOCKS,
     _KEY_LOCKS_LOCK,
+    _resolve_media_tool,
+    _select_h264_encoder,
     TRANSCODE_RECIPE_VERSION,
 )
 
@@ -736,3 +740,185 @@ class TestProbeInvocation:
         assert len(seen) == 1
         assert seen[0]["shell"] is False
         assert 0 < seen[0]["timeout"] <= 60
+
+
+# ---------------------------------------------------------------------------
+# Where ffmpeg comes from (#854)
+# ---------------------------------------------------------------------------
+
+def _make_tool(directory: Path, name: str) -> Path:
+    """Create a file where a bundled ffmpeg/ffprobe would sit."""
+    directory.mkdir(parents=True, exist_ok=True)
+    tool = directory / f"{name}{_EXE_SUFFIX}"
+    tool.write_bytes(b"MZ")  # not executed, only located
+    return tool
+
+
+def _freeze(monkeypatch, exe_dir: Path, meipass: Path | None = None) -> None:
+    """Make the process look like a PyInstaller onedir bundle."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "photo-manager.exe"))
+    if meipass is None:
+        monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    else:
+        monkeypatch.setattr(sys, "_MEIPASS", str(meipass), raising=False)
+
+
+class TestResolveMediaTool:
+    """The packaged app must use its own ffmpeg, not hope for one on PATH.
+
+    Before #854 the release bundled no binary at all, so every HEVC video
+    in the shipped app answered HTTP 501 — the transcode fallback (#730)
+    only ever worked on a machine that had installed ffmpeg by hand.
+    """
+
+    def test_bundled_sibling_wins_over_path(self, tmp_path: Path, monkeypatch) -> None:
+        """A user's PATH ffmpeg is an unknown build; the bundled one is the
+        build this project pinned and smoke-tested, so it must win."""
+        bundle = tmp_path / "bundle"
+        bundled = _make_tool(bundle, "ffmpeg")
+        _freeze(monkeypatch, bundle)
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+
+        assert _resolve_media_tool("ffmpeg") == str(bundled)
+
+    def test_meipass_copy_is_found(self, tmp_path: Path, monkeypatch) -> None:
+        """pyinstaller.spec ships the binaries as datas, so under PyInstaller
+        6's onedir layout they land in _internal (sys._MEIPASS), NOT next to
+        the exe — this is the lookup the real release depends on."""
+        bundle = tmp_path / "bundle"
+        internal = bundle / "_internal"
+        bundled = _make_tool(internal, "ffprobe")
+        bundle.mkdir(exist_ok=True)
+        _freeze(monkeypatch, bundle, meipass=internal)
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+
+        assert _resolve_media_tool("ffprobe") == str(bundled)
+
+    def test_frozen_without_bundle_falls_back_to_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A bundle built before #854 (or one whose staging step was
+        skipped) must keep working wherever ffmpeg is installed."""
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        _freeze(monkeypatch, bundle, meipass=bundle / "_internal")
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+
+        assert _resolve_media_tool("ffmpeg") == "/usr/bin/ffmpeg"
+
+    def test_not_frozen_ignores_interpreter_siblings(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """On a dev checkout sys.executable is the venv's python.exe: a file
+        that happens to sit in Scripts/ is not this app's bundled binary and
+        must not silently shadow the developer's own ffmpeg."""
+        scripts = tmp_path / "Scripts"
+        _make_tool(scripts, "ffmpeg")
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+
+        assert _resolve_media_tool("ffmpeg") == "/usr/bin/ffmpeg"
+
+    def test_nothing_anywhere_is_none(self, tmp_path: Path, monkeypatch) -> None:
+        """None is what the route turns into its 501 — the honest answer
+        when there is genuinely no ffmpeg to run."""
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        _freeze(monkeypatch, bundle)
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+
+        assert _resolve_media_tool("ffmpeg") is None
+
+
+# ---------------------------------------------------------------------------
+# Which H.264 encoder the resolved ffmpeg actually has (#854)
+# ---------------------------------------------------------------------------
+
+def _encoders_listing(*names: str) -> bytes:
+    """ffmpeg's `-encoders` stdout carrying exactly ``names``."""
+    header = "Encoders:\n V..... = Video\n ------\n"
+    body = "".join(f" V....D {name}    Some codec (codec h264)\n" for name in names)
+    return (header + body).encode("utf-8")
+
+
+class _EncodersResult:
+    def __init__(self, returncode: int = 0, stdout: bytes = b"") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = b""
+
+
+class TestH264EncoderSelection:
+    """The bundled build is LGPL, which means it has no libx264 at all.
+
+    Measured on the pinned archive: the pre-#854 command against it exits 8
+    with "Unknown encoder 'libx264'".  Bundling ffmpeg without this would
+    have turned the ticket's HTTP 501 into an HTTP 500.
+    """
+
+    def test_libx264_preferred_when_present(self) -> None:
+        result = _EncodersResult(stdout=_encoders_listing("libx264", "libopenh264"))
+        with patch("subprocess.run", return_value=result):
+            assert _select_h264_encoder("/fake/ffmpeg") == "libx264"
+
+    def test_libopenh264_used_when_libx264_absent(self) -> None:
+        """This is the bundled LGPL build's real encoder listing."""
+        result = _EncodersResult(stdout=_encoders_listing("libopenh264", "h264_mf"))
+        with patch("subprocess.run", return_value=result):
+            assert _select_h264_encoder("/fake/ffmpeg") == "libopenh264"
+
+    def test_unreadable_ffmpeg_keeps_the_historical_recipe(self) -> None:
+        """A binary that will not run tells us nothing; falling back to the
+        pre-#854 command means a failed probe is never worse than no probe."""
+        with patch("subprocess.run", side_effect=OSError("not executable")):
+            assert _select_h264_encoder("/fake/ffmpeg") == "libx264"
+
+    def test_nonzero_exit_keeps_the_historical_recipe(self) -> None:
+        with patch("subprocess.run", return_value=_EncodersResult(returncode=1)):
+            assert _select_h264_encoder("/fake/ffmpeg") == "libx264"
+
+    def test_an_unexpected_error_cannot_escape_the_probe(self) -> None:
+        """The probe runs during web-app startup, so anything escaping it
+        takes the whole server down over an optional question.
+
+        Regression: the first version caught only OSError/SubprocessError,
+        and a test that had stubbed subprocess.Popen made subprocess.run
+        raise TypeError instead — which broke create_app() and failed an
+        unrelated route test.
+        """
+        with patch("subprocess.run", side_effect=TypeError("stubbed Popen")):
+            assert _select_h264_encoder("/fake/ffmpeg") == "libx264"
+
+    def test_service_asks_the_resolved_binary(self, tmp_path: Path) -> None:
+        """End of the chain: what the probe answers is what the encode uses."""
+        result = _EncodersResult(stdout=_encoders_listing("libopenh264"))
+        with patch("subprocess.run", return_value=result):
+            svc = _make_service(tmp_path)
+        assert svc._h264_encoder == "libopenh264"
+
+
+class TestEncodeCmdPerEncoder:
+    def test_libx264_recipe_unchanged(self) -> None:
+        cmd = TranscodeService._encode_cmd(
+            "/f/ffmpeg", "libx264", Path("in.mov"), Path("out.mp4")
+        )
+        assert cmd[cmd.index("-c:v") + 1] == "libx264"
+        assert cmd[cmd.index("-preset") + 1] == "ultrafast"
+        assert cmd[cmd.index("-crf") + 1] == "23"
+        assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+
+    def test_libopenh264_recipe_drops_libx264_only_options(self) -> None:
+        """-preset / -crf are libx264 options.  libopenh264 rejects them
+        outright, so leaving them in would fail every transcode in the
+        packaged app with a non-zero ffmpeg exit (HTTP 500)."""
+        cmd = TranscodeService._encode_cmd(
+            "/f/ffmpeg", "libopenh264", Path("in.mov"), Path("out.mp4")
+        )
+        assert cmd[cmd.index("-c:v") + 1] == "libopenh264"
+        assert "-preset" not in cmd
+        assert "-crf" not in cmd
+        assert cmd[cmd.index("-b:v") + 1] == "4M"
+        # Still normalised for the browser, exactly as the libx264 path is.
+        assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"

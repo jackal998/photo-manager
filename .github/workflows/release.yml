@@ -78,6 +78,74 @@ jobs:
           .venv-build\Scripts\python -m pip install --upgrade pip
           .venv-build\Scripts\python -m pip install -r requirements.txt -r build-requirements.txt
 
+      # The shipped app carries its own ffmpeg (#854): before this step the
+      # release resolved ffmpeg only through PATH, so the HEVC -> H.264
+      # transcode fallback (#730) answered HTTP 501 on every machine that
+      # had not installed ffmpeg by hand — i.e. almost every user.
+      #
+      # The build is BtbN's win64 **LGPL** variant, pinned to one immutable
+      # autobuild tag. LGPL (not GPL) so the bundle does not have to be
+      # relicensed; the consequence is no libx264 (x264 is GPL), which is
+      # why transcode_service.py picks its H.264 encoder from what the
+      # binary reports instead of hard-coding one. The checksum is verified
+      # BEFORE anything is read out of the archive; a mismatch fails the
+      # release rather than shipping an unknown binary.
+      - name: Fetch and verify pinned ffmpeg (LGPL)
+        shell: pwsh
+        env:
+          FFMPEG_TAG: autobuild-2026-09-05-13-10
+          FFMPEG_ASSET: ffmpeg-n9.0.1-26-g5c8e7e2433-win64-lgpl-9.0.zip
+          FFMPEG_SHA256: 62ea171be95967314104258b076392376fd97775b40c27f69223ffe3274b68fb
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_TAG/$env:FFMPEG_ASSET"
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg-pinned.zip'
+          Write-Host "Downloading $url"
+          # Invoke-WebRequest's progress bar costs more than the transfer on
+          # a ~140 MB asset; silencing it is the documented fix.
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          $expected = "$env:FFMPEG_SHA256".ToLower()
+          $actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
+          if ($actual -ne $expected) {
+            Write-Error "ffmpeg checksum mismatch: expected $expected got $actual"
+            exit 1
+          }
+          Write-Host "SHA-256 verified: $actual"
+
+          # Verified — only now is the archive opened, and only these three
+          # entries are taken (the zip also carries ffplay.exe and ~10 MB of
+          # HTML docs the app has no use for).
+          $stage = Join-Path $PWD 'build-assets\ffmpeg'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $wanted = @{
+              'bin/ffmpeg.exe'  = 'ffmpeg.exe'
+              'bin/ffprobe.exe' = 'ffprobe.exe'
+              'LICENSE.txt'     = 'FFMPEG-LICENSE.txt'
+            }
+            foreach ($suffix in $wanted.Keys) {
+              $entry = $archive.Entries | Where-Object { $_.FullName -like "*/$suffix" } | Select-Object -First 1
+              if ($null -eq $entry) {
+                Write-Error "archive has no entry matching */$suffix"
+                exit 1
+              }
+              $dest = Join-Path $stage $wanted[$suffix]
+              [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+            }
+          } finally {
+            $archive.Dispose()
+          }
+          Get-ChildItem $stage | Select-Object Name, Length
+          foreach ($f in @('ffmpeg.exe', 'ffprobe.exe', 'FFMPEG-LICENSE.txt')) {
+            $p = Join-Path $stage $f
+            if (-not (Test-Path $p) -or (Get-Item $p).Length -eq 0) {
+              Write-Error "staging is missing or empty: $p"
+              exit 1
+            }
+          }
+
       - name: Build with PyInstaller (--onedir)
         shell: pwsh
         run: |
@@ -94,6 +162,45 @@ jobs:
           }
           $size = (Get-ChildItem -Recurse "dist\photo-manager" | Measure-Object Length -Sum).Sum / 1MB
           Write-Host ("Bundle size: {0:N1} MB" -f $size)
+
+      # Runs the BUNDLED binaries out of dist\ — never PATH, which on a
+      # GitHub Windows runner happens to carry its own ffmpeg and would
+      # make this step pass for a bundle that ships none (exactly the #854
+      # bug). The encoder assertion is the second half of the gate: an
+      # ffmpeg that starts but has no H.264 encoder turns the 501 into a
+      # 500 and fixes nothing.
+      - name: Bundled ffmpeg smoke test
+        shell: pwsh
+        run: |
+          $internal = "dist\photo-manager\_internal"
+          foreach ($tool in @('ffmpeg', 'ffprobe')) {
+            $exe = Join-Path $internal "$tool.exe"
+            if (-not (Test-Path $exe)) {
+              Write-Error "bundle is missing $exe — the packaged app would answer HTTP 501 on every HEVC video (#854)"
+              exit 1
+            }
+            # No 2>&1 anywhere in this step: native stderr folded into the
+            # success stream becomes a terminating NativeCommandError under
+            # PowerShell's stop preference, which would fail the release on
+            # a warning line. -version and -encoders both print to stdout.
+            $version = & $exe -hide_banner -version | Select-Object -First 1
+            Write-Host "$tool : $version"
+            if ($version -notmatch "^$tool version ") {
+              Write-Error "$exe did not report a version line"
+              exit 1
+            }
+          }
+          $encoders = & (Join-Path $internal 'ffmpeg.exe') -hide_banner -encoders
+          $h264 = $encoders | Select-String -Pattern '\s(libx264|libopenh264)\s'
+          if (-not $h264) {
+            Write-Error "bundled ffmpeg has no software H.264 encoder — transcodes would fail with 'Encoder not found'"
+            exit 1
+          }
+          Write-Host "H.264 encoder present: $($h264[0].Line.Trim())"
+          if (-not (Test-Path (Join-Path $internal 'FFMPEG-LICENSE.txt'))) {
+            Write-Error "bundle is missing FFMPEG-LICENSE.txt — LGPL requires the licence to ship with the binary"
+            exit 1
+          }
 
       # Headless smoke: launch under the Qt offscreen platform plugin
       # so no display is required. Watchdog kills the process after a
@@ -163,6 +270,10 @@ jobs:
             'start "" "%~dp0photo-manager.exe"'
           )
           $bat | Set-Content -Path "dist\photo-manager\photo-manager-web.bat" -Encoding ascii
+          # Third-party notices ride at the top of the zip where a user can
+          # find them; the upstream FFmpeg licence text itself is already in
+          # _internal\ beside the binaries it covers (#854).
+          Copy-Item -Path "THIRD_PARTY_NOTICES.md" -Destination "dist\photo-manager\THIRD_PARTY_NOTICES.md"
           $asset = "${{ steps.version.outputs.asset_name }}"
           Compress-Archive -Path "dist\photo-manager\*" -DestinationPath $asset -Force
           Write-Host "Built $asset"
