@@ -4,7 +4,7 @@
 // survives ScanDialog open/close. ScanDialog does NOT subscribe — it only
 // reads scan state from the store. See ScanDialog.tsx header comment.
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 
 import { cn } from "./lib/utils";
@@ -168,36 +168,77 @@ export default function App() {
 
   // ---------------------------------------------------------------------------
   // Preview-panel resize (#739) — mirrors the #685 column-resize recipe
-  // (ColumnHeaderRow.handleResizeStart): mousedown tracks window mousemove /
-  // mouseup so the drag keeps working once the cursor leaves the thin handle;
-  // each move updates the width in-memory only (persist=false) for live
-  // feedback, and the final width is persisted once on mouseup (persist=true).
+  // (ColumnHeaderRow's drag useEffect): the drag tracks window mousemove so it
+  // keeps working once the cursor leaves the thin handle; each move updates the
+  // width in-memory only (persist=false) for live feedback, and the final width
+  // is persisted exactly once at the end of the gesture (persist=true).
   // ---------------------------------------------------------------------------
 
   const previewWidth = useAppStore((s) => s.resultView.panelWidths.preview);
   const setPreviewWidth = useAppStore((s) => s.setPreviewWidth);
 
+  // Active splitter drag, or null. Driving the window listeners from a useEffect
+  // (keyed on this state) instead of adding them imperatively inside the
+  // mousedown handler means React removes them on unmount too — not only on
+  // mouseup — so unmounting mid-drag no longer leaks a window mousemove/mouseup
+  // listener holding a stale setPreviewWidth closure (#851, the #813 class).
+  const [previewDrag, setPreviewDrag] = useState<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const latestPreviewWidthRef = useRef(0);
+
+  useEffect(() => {
+    if (previewDrag === null) return;
+    const { startX, startWidth } = previewDrag;
+    latestPreviewWidthRef.current = startWidth;
+    // Commit the final width to localStorage once (persist=true) — avoids a
+    // localStorage write per mousemove — then end the drag. Shared by every
+    // end-of-drag trigger below so all of them keep the #739 contract of
+    // exactly ONE persisted write per drag.
+    function endDrag() {
+      setPreviewWidth(latestPreviewWidthRef.current, true);
+      setPreviewDrag(null);
+    }
+    // The handle sits LEFT of the preview pane: dragging left (negative
+    // delta) widens the preview; dragging right narrows it.
+    function onMove(ev: globalThis.MouseEvent) {
+      // The button is already up: it was released somewhere we never heard
+      // about — outside the window, with no focus change, so neither `mouseup`
+      // nor `blur` reached us (#851). Without this the next move over the page
+      // would keep resizing the preview pane with no button held, and the
+      // layout would stick to the cursor until the user clicked again.
+      if (ev.buttons === 0) {
+        endDrag();
+        return;
+      }
+      latestPreviewWidthRef.current = startWidth - (ev.clientX - startX);
+      setPreviewWidth(latestPreviewWidthRef.current, false);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", endDrag);
+    // A release outside the window usually takes focus with it, and a
+    // system-level gesture (touch/pen cancel, native drag) cancels the pointer
+    // without a mouseup — end the drag on both rather than leaving the window
+    // listeners live (#851).
+    window.addEventListener("blur", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+    // Unconditional removal: the cleanup runs on every drag-state change AND on
+    // unmount, so no path can leave a window listener behind.
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", endDrag);
+      window.removeEventListener("blur", endDrag);
+      window.removeEventListener("pointercancel", endDrag);
+    };
+  }, [previewDrag, setPreviewWidth]);
+
   const handlePreviewResizeStart = useCallback(
     (e: ReactMouseEvent) => {
       e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = previewWidth;
-      let latest = startWidth;
-      // The handle sits LEFT of the preview pane: dragging left (negative
-      // delta) widens the preview; dragging right narrows it.
-      function onMove(ev: globalThis.MouseEvent) {
-        latest = startWidth - (ev.clientX - startX);
-        setPreviewWidth(latest, false);
-      }
-      function onUp() {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-        setPreviewWidth(latest, true); // commit the final width to localStorage
-      }
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
+      setPreviewDrag({ startX: e.clientX, startWidth: previewWidth });
     },
-    [previewWidth, setPreviewWidth]
+    [previewWidth]
   );
 
   // "Execute (only selected)": snapshot the current main-tree selection and
