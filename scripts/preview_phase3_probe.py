@@ -54,10 +54,25 @@ box 4  ``modal``         — whether the dialog's QImage is freed on close,
 
 Which decode path a click took is observed at the real seam rather than
 guessed: ``ImageService`` exposes no counter, so the probe wraps the bound
-methods ``_load_from_source`` and ``_try_rawpy_embedded_thumb`` on ITS OWN
-service instance and records what they returned. ``--force-full-decode`` makes
-the wrapper return ``None`` without calling ``extract_thumb``, which is exactly
-the pre-Phase-1 route into ``raw.postprocess``.
+methods ``get_preview``, ``get_thumbnail``, ``_load_from_source`` and
+``_try_rawpy_embedded_thumb`` on ITS OWN service instance and records what they
+returned. ``--force-full-decode`` makes the thumb wrapper return ``None``
+without calling ``extract_thumb``, which is exactly the pre-Phase-1 route into
+``raw.postprocess``.
+
+Every box refuses rather than guesses
+-------------------------------------
+``ImageService`` answers an undecodable file with a 64x64 grey placeholder
+instead of raising, so a run pointed at files it cannot decode completes with
+``ok=True`` on every click and a perfectly plausible RSS curve. Each box
+therefore checks that its own data could support an answer, and reports
+``pass: None`` with a ``reason`` when it could not: box 1 needs genuine
+non-placeholder paints in its window plus at least
+``MIN_COLD_DECODES_FOR_BOX1`` real cold decodes in the run; boxes 3 and 4 need
+the viewer to have held a real image, because ``closeEvent``
+(``full_res_viewer.py:181``) nulls ``_full_qimage`` unconditionally and would
+otherwise certify "freed" for an image that never existed. ``summary.verdict``
+folds the four into one word, and ``NOT_MEASURED`` outranks ``PASS``.
 
 Safety: the probe never writes to, deletes from, or renames anything under
 ``--root``. The only things it writes are the JSON artifact and the disk-cache
@@ -65,15 +80,9 @@ directory, which defaults to a fresh temp directory (never the app's real
 thumbs cache) so the two box-2 runs cannot serve each other's bytes from cache.
 Nothing is ever deleted, including that temp directory.
 
-CLI usage
----------
-
-    python scripts/preview_phase3_probe.py --root J:\\photos --clicks 100 \\
-        --viewport-cap 2048 --output phase3_embedded.json
-
-    python scripts/preview_phase3_probe.py --root J:\\photos --clicks 100 \\
-        --viewport-cap 2048 --force-full-decode \\
-        --compare-json phase3_embedded.json --output phase3_fulldecode.json
+CLI usage: ``--help`` lists every flag; the runbook holds the two invocations a
+session actually runs (baseline, then ``--force-full-decode --compare-json``)
+and a local ``qa/sandbox`` rehearsal to run before either.
 """
 from __future__ import annotations
 
@@ -111,6 +120,7 @@ from scripts.preview_phase3_analysis import (  # noqa: E402  (needs sys.path abo
     compute_box2_ratio,
     discover_images,
     git,
+    overall_verdict,
     summarise_clicks,
     validate_payload,
     write_json,
@@ -149,6 +159,16 @@ class _ServiceInstrumentation:
     calling the real method, which is precisely the pre-Phase-1 route: straight
     into ``postprocess``, no ``extract_thumb`` cost included.
 
+    It also wraps ``get_preview`` / ``get_thumbnail`` to keep ONE reference to
+    the bytes each request returned. That is how the harness finds out whether
+    a click was answered with the service's 64x64 grey placeholder
+    (``image_service.py::_make_placeholder_jpeg``), which it hands back instead
+    of raising when a file cannot be decoded — so an undecodable file otherwise
+    produces a perfectly ordinary-looking successful click. The reference is
+    taken by :meth:`take_jpeg` right after the click settles and dropped
+    immediately, so it neither runs inside the timed interval nor accumulates
+    across a run (the bytes are in the LRU anyway).
+
     Decodes run on QThreadPool threads while the harness waits on the GUI
     thread, so the record is written under a lock and read only after the click
     has settled.
@@ -162,9 +182,12 @@ class _ServiceInstrumentation:
         self._lock = threading.Lock()
         self._source_loaded = False
         self._route: str | None = None
+        self._jpeg: bytes | None = None
 
         real_load = service._load_from_source
         real_thumb = service._try_rawpy_embedded_thumb
+        real_preview = service.get_preview
+        real_thumbnail = service.get_thumbnail
 
         def load_from_source(path: str, requested_side: int) -> Any:
             with self._lock:
@@ -182,19 +205,56 @@ class _ServiceInstrumentation:
                 self._route = PATH_EMBEDDED if result is not None else PATH_RAW_FULL
             return result
 
+        def get_preview(path: str, max_side: int) -> Any:
+            jpeg = real_preview(path, max_side)
+            with self._lock:
+                self._jpeg = jpeg
+            return jpeg
+
+        def get_thumbnail(path: str, size: int) -> Any:
+            jpeg = real_thumbnail(path, size)
+            with self._lock:
+                self._jpeg = jpeg
+            return jpeg
+
         service._load_from_source = load_from_source
         service._try_rawpy_embedded_thumb = try_embedded
+        service.get_preview = get_preview
+        service.get_thumbnail = get_thumbnail
 
     def begin_click(self) -> None:
         with self._lock:
             self._source_loaded = False
             self._route = None
+            self._jpeg = None
 
     def read(self) -> tuple[bool, str]:
         with self._lock:
             if not self._source_loaded:
                 return False, PATH_CACHE_HIT
             return True, (self._route or PATH_UNKNOWN)
+
+    def take_jpeg(self) -> bytes | None:
+        """The bytes the last request returned, released as it is handed over."""
+        with self._lock:
+            jpeg, self._jpeg = self._jpeg, None
+        return jpeg
+
+    def was_placeholder(self) -> bool:
+        """True when the last request was answered with the grey placeholder.
+
+        Asks the service's OWN detector (``_looks_like_placeholder``) rather
+        than guessing from the image's dimensions, which would misfile a
+        genuine 64x64 source image. Called after the click has settled, so the
+        detector's cost is outside the measured interval.
+        """
+        jpeg = self.take_jpeg()
+        if not jpeg:
+            return False
+        try:
+            return bool(self._service._looks_like_placeholder(jpeg))
+        except Exception:
+            return False
 
 
 def _make_info(path: Path) -> dict:
@@ -227,7 +287,9 @@ def _drain(app: Any, seconds: float = 0.2) -> None:
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
-def run_modal_check(app: Any, pane: Any, service: Any, path: str) -> dict:
+def run_modal_check(
+    app: Any, pane: Any, service: Any, path: str, instrumentation: Any
+) -> dict:
     """Boxes 3 + 4: real double-click -> viewer -> pan/zoom -> freed on close.
 
     Box 4's "freed" is decided by ``shiboken6.isValid`` on the dialog and its
@@ -277,11 +339,17 @@ def run_modal_check(app: Any, pane: Any, service: Any, path: str) -> dict:
         return result
 
     rss_before, _ = _rss_private()
+    # Drop whatever show_single left behind so the next take_jpeg() is
+    # unambiguously the dialog's own full-res request, not the pane's.
+    instrumentation.take_jpeg()
     # Mirrors main_window.on_open_full_res_viewer: same class, same DI.
     dlg = FullResViewerDialog(emitted[0], parent=None, service=service)
     dlg.show()
     _drain(app, 0.5)
     rss_open, _ = _rss_private()
+    # The dialog loads synchronously in its constructor, so by here its
+    # get_preview(path, 0) has returned and its bytes are the ones held.
+    result["qimage_is_placeholder"] = instrumentation.was_placeholder()
 
     img = dlg._full_qimage
     result["dialog_opened"] = True
@@ -335,10 +403,27 @@ def run_modal_check(app: Any, pane: Any, service: Any, path: str) -> dict:
     result["rss_bytes_after_open"] = rss_open
     result["rss_bytes_after_close"] = rss_close
 
+    # A real image is a precondition for BOTH boxes, not a detail. The viewer
+    # renders the service's grey placeholder as happily as a photo, and
+    # FullResViewerDialog.closeEvent (full_res_viewer.py:181) nulls
+    # _full_qimage unconditionally — so on a placeholder both boxes would
+    # otherwise report a pass for a viewer that never held an image.
+    genuine = bool(
+        result["qimage_loaded"] and not result["qimage_is_placeholder"]
+    )
+    if not genuine:
+        result["reason"] = (
+            "the viewer was opened on a file that decoded to the service's "
+            "placeholder image (or to nothing), so neither the pan/zoom nor "
+            "the freed-on-close observation is about a real image"
+        )
+        result["box3_pass"] = None
+        result["box4_pass"] = None
+        return result
+
     result["box3_pass"] = bool(
         result["request_full_res_emitted"]
         and result["dialog_opened"]
-        and result["qimage_loaded"]
         and result["zoom_pixmap_grew"]
         and result["pan_wired"]
     )
@@ -348,6 +433,18 @@ def run_modal_check(app: Any, pane: Any, service: Any, path: str) -> dict:
         and not result["label_valid_after_close"]
     )
     return result
+
+
+def _pick_modal_path(per_click: list[dict]) -> str | None:
+    """The file to open the full-res viewer on: a DNG if one decoded, else any
+    genuinely decoded image. ``None`` when the run produced neither."""
+    genuine = [
+        r for r in per_click if r.get("ok") and not r.get("is_placeholder")
+    ]
+    for row in genuine:
+        if row.get("ext") == ".dng":
+            return str(row["path"])
+    return str(genuine[0]["path"]) if genuine else None
 
 
 def _click_once(app: Any, pane: Any, path: str, timeout_s: float, state: dict,
@@ -455,6 +552,9 @@ def run_session(args: argparse.Namespace, on_progress: Callable[[str], None]) ->
         ttfp_ms = _click_once(app, pane, p, args.timeout_s, state, loop_box)
         image = state["image"]
         source_loaded, route = instrumentation.read()
+        # After the click settled: the detector's cost stays out of the timed
+        # interval and the bytes reference is released as it is read.
+        is_placeholder = instrumentation.was_placeholder()
         rss, private = _rss_private()
         per_click.append({
             "i": i,
@@ -467,6 +567,7 @@ def run_session(args: argparse.Namespace, on_progress: Callable[[str], None]) ->
             "timed_out": ttfp_ms is None,
             "decode_path": route,
             "source_loaded": source_loaded,
+            "is_placeholder": is_placeholder,
             "image_w": (int(image.width()) if image is not None else None),
             "image_h": (int(image.height()) if image is not None else None),
             "rss_bytes": rss,
@@ -477,18 +578,28 @@ def run_session(args: argparse.Namespace, on_progress: Callable[[str], None]) ->
         if (i + 1) % max(1, args.progress_every) == 0:
             on_progress(
                 f"  click {i + 1}/{len(sequence)}  ttfp={ttfp_ms}ms  "
-                f"route={route}  rss={rss / 1e6:.1f}MB"
+                f"route={route}  placeholder={is_placeholder}  "
+                f"rss={rss / 1e6:.1f}MB"
             )
 
     modal: dict[str, Any]
     if args.no_modal_check:
         modal = {"attempted": False, "reason": "--no-modal-check"}
     else:
-        modal_path = args.modal_path or next(
-            (r["path"] for r in per_click if r["ok"] and r["ext"] == ".dng"),
-            next((r["path"] for r in per_click if r["ok"]), str(sequence[0])),
-        )
-        modal = run_modal_check(app, pane, service, modal_path)
+        # Never open the viewer on a file that decoded to the placeholder: the
+        # dialog would render it happily and boxes 3+4 would report a pass for
+        # an image that does not exist.
+        modal_path = args.modal_path or _pick_modal_path(per_click)
+        if modal_path is None:
+            modal = {
+                "attempted": False,
+                "reason": (
+                    "no click produced a genuine (non-placeholder) image, so "
+                    "there is nothing to open the full-res viewer on"
+                ),
+            }
+        else:
+            modal = run_modal_check(app, pane, service, modal_path, instrumentation)
 
     summary = summarise_clicks(
         per_click,
@@ -498,10 +609,12 @@ def run_session(args: argparse.Namespace, on_progress: Callable[[str], None]) ->
     summary["box3"] = {
         "criterion": "double-click opens the full-res viewer with pan/zoom",
         "pass": modal.get("box3_pass"),
+        "reason": modal.get("reason"),
     }
     summary["box4"] = {
         "criterion": "the viewer's QImage is freed when it closes",
         "pass": modal.get("box4_pass"),
+        "reason": modal.get("reason"),
         "detection": modal.get("detection"),
     }
 
@@ -520,6 +633,8 @@ def run_session(args: argparse.Namespace, on_progress: Callable[[str], None]) ->
             "probe": baseline.get("probe"),
         }
         summary["box2"] = box2
+
+    summary["verdict"] = overall_verdict(summary)
 
     env = {
         "root": str(root),
@@ -606,6 +721,14 @@ def main(argv: list[str]) -> int:
     if not root.is_dir():
         print(f"ERROR: --root {root} is not a directory", file=sys.stderr)
         return 2
+    if args.clicks <= 0:
+        print(f"ERROR: --clicks must be at least 1 (got {args.clicks})",
+              file=sys.stderr)
+        return 2
+    if args.steady_window < 0:
+        print(f"ERROR: --steady-window cannot be negative (got {args.steady_window})",
+              file=sys.stderr)
+        return 2
     if args.compare_json and not Path(args.compare_json).is_file():
         print(f"ERROR: --compare-json {args.compare_json} not found", file=sys.stderr)
         return 2
@@ -640,13 +763,22 @@ def main(argv: list[str]) -> int:
 
     s = payload["summary"]
     print("\n--- summary ---")
-    print(f"  clicks={s['clicks']} ok={s['ok_clicks']} timeouts={s['timeouts']}")
+    print(f"  clicks={s['clicks']} ok={s['ok_clicks']} timeouts={s['timeouts']} "
+          f"placeholders={s['placeholder_count']} "
+          f"cold_decodes={s['cold_decode_count']}")
     print(f"  ttfp_ms={s['ttfp_ms']}")
     print(f"  decode_path_counts={s['decode_path_counts']}")
     print(f"  box1={s['box1']['steady_state_rss_mb']} "
           f"threshold_mb={s['box1']['threshold_mb']} pass={s['box1']['pass']}")
-    print(f"  box2 status={s['box2'].get('status')} pass={s['box2'].get('pass')}")
+    print(f"  box2 status={s['box2'].get('status')} pass={s['box2'].get('pass')} "
+          f"dropped_timeouts={s['box2'].get('dropped_timeouts')}")
     print(f"  box3 pass={s['box3']['pass']}  box4 pass={s['box4']['pass']}")
+    verdict = s["verdict"]
+    print(f"  VERDICT: {verdict['verdict']}"
+          + (f"  unmeasured={verdict['unmeasured']}" if verdict["unmeasured"] else "")
+          + (f"  failed={verdict['failed']}" if verdict["failed"] else ""))
+    for box, why in verdict["reasons"].items():
+        print(f"    {box}: {why}")
     print(f"  disk_cache_dir={payload['env']['disk_cache_dir']}")
 
     if args.output:

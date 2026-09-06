@@ -37,6 +37,7 @@ def _click(
     source_loaded: bool = True,
     rss_bytes: int = 100_000_000,
     timed_out: bool = False,
+    is_placeholder: bool = False,
 ) -> dict:
     """One per-click row, shaped exactly as ``run_session`` records it."""
     return {
@@ -47,6 +48,7 @@ def _click(
         "source_loaded": source_loaded,
         "rss_bytes": rss_bytes,
         "timed_out": timed_out,
+        "is_placeholder": is_placeholder,
         "ext": ".dng",
         "lru_thumb_bytes": 1_000,
         "lru_preview_bytes": 2_000,
@@ -184,6 +186,41 @@ class TestComputeBox2Ratio:
         forced = [_click("a", ttfp_ms=900.0, decode_path=probe.PATH_FORCED_FULL)]
         assert probe.compute_box2_ratio(embedded, forced)["status"] == "not_measured"
 
+    def test_pairs_lost_to_a_timeout_are_counted_not_silently_dropped(self):
+        # On a NAS the file that times out is the slowest one, so dropping it
+        # quietly biases the ratio toward the fast files. n_paths shrinking
+        # must be explainable from the artifact alone.
+        embedded = [_click("a", ttfp_ms=100.0), _click("slow", ttfp_ms=100.0)]
+        forced = [
+            _click("a", ttfp_ms=800.0, decode_path=probe.PATH_FORCED_FULL),
+            _click("slow", ok=False, timed_out=True, ttfp_ms=None,
+                   decode_path=probe.PATH_FORCED_FULL),
+        ]
+        out = probe.compute_box2_ratio(embedded, forced)
+        assert out["n_paths"] == 1
+        assert out["dropped_timeouts"] == {
+            "total": 1, "embedded_arm": 0, "forced_arm": 1,
+        }
+
+    def test_a_timeout_in_the_baseline_arm_is_counted_too(self):
+        embedded = [_click("slow", ok=False, timed_out=True, ttfp_ms=None)]
+        forced = [_click("slow", ttfp_ms=800.0, decode_path=probe.PATH_FORCED_FULL)]
+        out = probe.compute_box2_ratio(embedded, forced)
+        assert out["status"] == "not_measured"
+        assert out["dropped_timeouts"]["embedded_arm"] == 1
+
+    def test_a_timeout_on_a_path_only_one_run_saw_is_not_a_dropped_pair(self):
+        # False-positive half: the counter must mean "a pair was lost", not
+        # "a timeout happened somewhere".
+        embedded = [_click("a", ttfp_ms=100.0)]
+        forced = [
+            _click("a", ttfp_ms=800.0, decode_path=probe.PATH_FORCED_FULL),
+            _click("only-here", ok=False, timed_out=True, ttfp_ms=None),
+        ]
+        out = probe.compute_box2_ratio(embedded, forced)
+        assert out["n_paths"] == 1
+        assert out["dropped_timeouts"]["total"] == 0
+
 
 class TestSummariseClicks:
     def test_box1_passes_under_the_threshold_and_names_the_window(self):
@@ -231,6 +268,103 @@ class TestSummariseClicks:
     def test_empty_run_reports_no_verdict_rather_than_a_pass(self):
         box1 = probe.summarise_clicks([], steady_window_n=50)["box1"]
         assert box1["pass"] is None
+        assert box1["reason"]
+
+
+class TestBox1RefusesUnsupportableRuns:
+    """The reviewer's repro: `--root qa/sandbox/corrupted` served the 64x64
+    grey placeholder on every click and box 1 reported PASS. RSS was real; the
+    run had decoded nothing."""
+
+    def test_all_placeholder_window_is_not_measured(self):
+        rows = [
+            _click(f"p{i}", is_placeholder=True,
+                   source_loaded=(i == 0),
+                   decode_path=probe.PATH_CACHE_HIT if i else probe.PATH_NON_RAW,
+                   rss_bytes=90_000_000)
+            for i in range(12)
+        ]
+        box1 = probe.summarise_clicks(rows, steady_window_n=6)["box1"]
+        assert box1["pass"] is None
+        assert box1["pass_on_max"] is None
+        assert "placeholder" in box1["reason"]
+        assert box1["genuine_paints_in_window"] == 0
+        assert box1["placeholder_paints_in_window"] == 6
+        assert box1["cold_decode_count"] == 0
+
+    def test_all_timed_out_window_is_not_measured(self):
+        rows = [
+            _click(f"p{i}", ok=False, timed_out=True, ttfp_ms=None,
+                   rss_bytes=90_000_000)
+            for i in range(10)
+        ]
+        box1 = probe.summarise_clicks(rows, steady_window_n=5)["box1"]
+        assert box1["pass"] is None
+        assert box1["genuine_paints_in_window"] == 0
+
+    def test_too_few_cold_decodes_in_the_run_is_not_measured(self):
+        # Genuine images, but only two were ever decoded from source.
+        rows = [_click(f"p{i}", source_loaded=(i < 2)) for i in range(10)]
+        box1 = probe.summarise_clicks(rows, steady_window_n=5,
+                                      min_cold_decodes=3)["box1"]
+        assert box1["pass"] is None
+        assert box1["cold_decode_count"] == 2
+        assert "cold source decode" in box1["reason"]
+
+    def test_a_legitimate_cache_heavy_run_still_gets_a_verdict(self):
+        # The false-positive half. A library smaller than --clicks cycles by
+        # design (click_order), so the steady window is mostly cache hits —
+        # that run must still produce a box-1 verdict, or the gate has broken
+        # the normal case to catch the pathological one.
+        rows = [_click(f"p{i % 4}", source_loaded=(i < 4),
+                       decode_path=probe.PATH_EMBEDDED if i < 4
+                       else probe.PATH_CACHE_HIT,
+                       rss_bytes=300_000_000)
+                for i in range(60)]
+        box1 = probe.summarise_clicks(rows, steady_window_n=50)["box1"]
+        assert box1["pass"] is True
+        assert box1["reason"] is None
+        assert box1["cold_decode_count"] == 4
+
+    def test_summary_counts_placeholders_and_cold_decodes(self):
+        rows = [_click("a"), _click("b", is_placeholder=True),
+                _click("c", source_loaded=False)]
+        summary = probe.summarise_clicks(rows, steady_window_n=3)
+        assert summary["placeholder_count"] == 1
+        assert summary["cold_decode_count"] == 1
+
+
+class TestOverallVerdict:
+    def _summary(self, b1, b2, b3, b4) -> dict:
+        return {
+            "box1": {"pass": b1, "reason": "b1 said why" if b1 is None else None},
+            "box2": {"pass": b2},
+            "box3": {"pass": b3},
+            "box4": {"pass": b4},
+        }
+
+    def test_all_true_is_pass(self):
+        out = probe.overall_verdict(self._summary(True, True, True, True))
+        assert out["verdict"] == "PASS"
+        assert out["unmeasured"] == [] and out["failed"] == []
+
+    def test_a_none_outranks_the_passes(self):
+        # The failure this exists to stop: three passes printed beside a box
+        # that could not be answered, read as "verified".
+        out = probe.overall_verdict(self._summary(None, True, True, True))
+        assert out["verdict"] == "NOT_MEASURED"
+        assert out["unmeasured"] == ["box1"]
+        assert out["reasons"]["box1"] == "b1 said why"
+
+    def test_a_failure_outranks_a_none(self):
+        out = probe.overall_verdict(self._summary(False, None, True, True))
+        assert out["verdict"] == "FAIL"
+        assert out["failed"] == ["box1"]
+
+    def test_missing_boxes_are_unmeasured_not_passed(self):
+        out = probe.overall_verdict({"box1": {"pass": True}})
+        assert out["verdict"] == "NOT_MEASURED"
+        assert out["unmeasured"] == ["box2", "box3", "box4"]
 
 
 def _payload() -> dict:

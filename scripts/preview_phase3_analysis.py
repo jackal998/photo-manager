@@ -48,6 +48,22 @@ DEFAULT_RSS_THRESHOLD_MB = 600.0
 DEFAULT_BOX2_RATIO = 5.0
 DEFAULT_STEADY_WINDOW = 50
 
+# How many genuine cold source decodes a run must contain before box 1's RSS
+# reading is allowed to mean anything.
+#
+# Three, not one: a single decode could be an outlier file, and the box is
+# about a *steady state* reached by repeatedly decoding. Not more than three,
+# because a legitimate run over a library smaller than --clicks spends most of
+# its tail on cache hits by design (see click_order) and must still produce a
+# verdict.
+#
+# Why the gate exists at all: ImageService answers an undecodable file with a
+# 64x64 grey placeholder (image_service.py::_make_placeholder_jpeg) rather than
+# an error, so a run pointed at files it cannot decode completes with ok=True
+# on every click and an RSS curve that is real but describes a process which
+# decoded nothing. Without this gate that run reports box 1 as PASSED.
+MIN_COLD_DECODES_FOR_BOX1 = 3
+
 _REQUIRED_TOP_LEVEL = (
     "probe", "probe_version", "git_sha", "args", "argv", "host",
     "timestamps", "env", "per_click", "modal", "summary",
@@ -127,6 +143,34 @@ def first_source_load_by_path(per_click: list[dict]) -> dict[str, dict]:
     return out
 
 
+def _timeout_paths(rows: list[dict]) -> set[str]:
+    """Paths whose click timed out in ``rows``."""
+    return {str(r.get("path", "")) for r in rows if r.get("timed_out")}
+
+
+def _dropped_to_timeouts(
+    embedded_clicks: list[dict], forced_clicks: list[dict]
+) -> dict:
+    """Paths present in BOTH runs that a timeout kept out of the pairing.
+
+    :func:`first_source_load_by_path` requires ``ok``, so a path whose decode
+    timed out in either arm silently vanishes from the box-2 comparison and
+    ``n_paths`` shrinks with nothing to say why. On a NAS a timeout is exactly
+    the file whose decode was slowest — dropping it quietly biases the ratio
+    toward the fast files. This counts the losses so the owner can see them.
+    """
+    emb_paths = {str(r.get("path", "")) for r in embedded_clicks if r.get("path")}
+    frc_paths = {str(r.get("path", "")) for r in forced_clicks if r.get("path")}
+    common = emb_paths & frc_paths
+    emb_to = _timeout_paths(embedded_clicks) & common
+    frc_to = _timeout_paths(forced_clicks) & common
+    return {
+        "total": len(emb_to | frc_to),
+        "embedded_arm": len(emb_to),
+        "forced_arm": len(frc_to),
+    }
+
+
 def compute_box2_ratio(
     embedded_clicks: list[dict],
     forced_clicks: list[dict],
@@ -149,6 +193,7 @@ def compute_box2_ratio(
     """
     base = first_source_load_by_path(embedded_clicks)
     forced = first_source_load_by_path(forced_clicks)
+    dropped = _dropped_to_timeouts(embedded_clicks, forced_clicks)
     pairs: list[dict] = []
     for path, base_row in base.items():
         forced_row = forced.get(path)
@@ -185,6 +230,7 @@ def compute_box2_ratio(
             ),
             "threshold": threshold,
             "n_paths": 0,
+            "dropped_timeouts": dropped,
             "pairs": [],
             "pass": None,
         }
@@ -198,6 +244,7 @@ def compute_box2_ratio(
         "status": "measured",
         "threshold": threshold,
         "n_paths": len(pairs),
+        "dropped_timeouts": dropped,
         "ratio_median": round(statistics.median(ratios), 3),
         "ratio_min": round(min(ratios), 3),
         "ratio_max": round(max(ratios), 3),
@@ -217,8 +264,13 @@ def summarise_clicks(
     *,
     steady_window_n: int = DEFAULT_STEADY_WINDOW,
     rss_threshold_mb: float = DEFAULT_RSS_THRESHOLD_MB,
+    min_cold_decodes: int = MIN_COLD_DECODES_FOR_BOX1,
 ) -> dict:
-    """Roll ``per_click`` up into the ``summary`` block, box 1 included."""
+    """Roll ``per_click`` up into the ``summary`` block, box 1 included.
+
+    Box 1 answers ``pass: None`` with a ``reason`` rather than a verdict when
+    the run cannot support one — see :data:`MIN_COLD_DECODES_FOR_BOX1`.
+    """
     ok_rows = [r for r in per_click if r.get("ok")]
     ttfp = [float(r["ttfp_ms"]) for r in ok_rows if r.get("ttfp_ms") is not None]
     rss_all = [float(r["rss_bytes"]) / 1e6 for r in per_click if r.get("rss_bytes")]
@@ -229,6 +281,36 @@ def summarise_clicks(
     steady_p50 = window_stats["p50"]
     steady_max = window_stats["max"]
 
+    # An RSS curve is only evidence about the preview path if the run actually
+    # went down that path. Two ways it may not have: every click timed out, or
+    # every click was answered with the service's grey placeholder because the
+    # files could not be decoded. Both leave ok=True-looking rows and a
+    # perfectly plausible RSS reading.
+    genuine_in_window = [
+        r for r in window if r.get("ok") and not r.get("is_placeholder")
+    ]
+    placeholders_in_window = [r for r in window if r.get("is_placeholder")]
+    cold_decodes = [
+        r for r in per_click
+        if r.get("ok") and r.get("source_loaded") and not r.get("is_placeholder")
+    ]
+
+    reason: str | None = None
+    if steady_p50 is None:
+        reason = "no RSS sample in the steady window (nothing was clicked)"
+    elif not genuine_in_window:
+        reason = (
+            "every click in the steady window either timed out or was served "
+            "the placeholder image, so this RSS curve describes a run that "
+            "decoded nothing — it is not a reading about the preview path"
+        )
+    elif len(cold_decodes) < min_cold_decodes:
+        reason = (
+            f"only {len(cold_decodes)} genuine cold source decode(s) in the "
+            f"run, below the minimum of {min_cold_decodes}; the steady state "
+            "was reached without decoding enough real images to mean anything"
+        )
+
     box1 = {
         "criterion": (
             f"steady-state RSS over the last {steady_window_n} clicks "
@@ -238,8 +320,17 @@ def summarise_clicks(
         "steady_window_used": len(window),
         "steady_state_rss_mb": window_stats,
         "threshold_mb": rss_threshold_mb,
-        "pass": (None if steady_p50 is None else bool(steady_p50 < rss_threshold_mb)),
-        "pass_on_max": (None if steady_max is None else bool(steady_max < rss_threshold_mb)),
+        "genuine_paints_in_window": len(genuine_in_window),
+        "placeholder_paints_in_window": len(placeholders_in_window),
+        "cold_decode_count": len(cold_decodes),
+        "min_cold_decodes": min_cold_decodes,
+        "reason": reason,
+        "pass": (
+            None if reason is not None else bool(steady_p50 < rss_threshold_mb)
+        ),
+        "pass_on_max": (
+            None if reason is not None else bool(steady_max < rss_threshold_mb)
+        ),
     }
 
     lru_thumb = [int(r["lru_thumb_bytes"]) for r in per_click
@@ -251,6 +342,8 @@ def summarise_clicks(
         "clicks": len(per_click),
         "ok_clicks": len(ok_rows),
         "timeouts": sum(1 for r in per_click if r.get("timed_out")),
+        "placeholder_count": sum(1 for r in per_click if r.get("is_placeholder")),
+        "cold_decode_count": len(cold_decodes),
         "ttfp_ms": _stats(ttfp),
         "decode_path_counts": dict(
             Counter(str(r.get("decode_path", PATH_UNKNOWN)) for r in per_click)
@@ -278,8 +371,45 @@ def summarise_clicks(
                 "<this file> to have the probe compute the ratio"
             ),
             "n_paths": 0,
+            # None rather than 0: with no comparison run there is no pairing
+            # for a timeout to have cost anything.
+            "dropped_timeouts": None,
             "pass": None,
         },
+    }
+
+
+def overall_verdict(summary: dict) -> dict:
+    """Fold the four boxes into one word, with the reasons attached.
+
+    ``NOT_MEASURED`` outranks ``PASS`` and is ranked below ``FAIL``: a box that
+    could not be answered must never be reported alongside three passes as
+    though the run had verified anything. The probe prints this line so a
+    session that produced no usable data says so in one glance rather than
+    only in a nested JSON field.
+    """
+    names = ("box1", "box2", "box3", "box4")
+    boxes: dict[str, object] = {}
+    reasons: dict[str, str] = {}
+    for name in names:
+        box = summary.get(name)
+        box = box if isinstance(box, dict) else {}
+        boxes[name] = box.get("pass")
+        reason = box.get("reason")
+        if boxes[name] is None and reason:
+            reasons[name] = str(reason)
+    if any(v is False for v in boxes.values()):
+        verdict = "FAIL"
+    elif any(v is None for v in boxes.values()):
+        verdict = "NOT_MEASURED"
+    else:
+        verdict = "PASS"
+    return {
+        "verdict": verdict,
+        "boxes": boxes,
+        "unmeasured": [n for n in names if boxes[n] is None],
+        "failed": [n for n in names if boxes[n] is False],
+        "reasons": reasons,
     }
 
 
