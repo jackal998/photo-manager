@@ -12,6 +12,7 @@ and by the transcode route tests in test_web_media_route.py (service mocked).
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import threading
@@ -36,10 +37,11 @@ from infrastructure.transcode_service import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_service(tmp_path: Path) -> TranscodeService:
+def _make_service(tmp_path: Path, *, ffprobe: str | None = "/fake/ffprobe") -> TranscodeService:
     """Return a TranscodeService whose cache lives under tmp_path.
 
-    ffmpeg is patched to a sentinel path so init doesn't require a real install.
+    ffmpeg (and, unless ``ffprobe=None``, ffprobe) is patched to a
+    sentinel path so init doesn't require a real install.
     """
     cache_dir = str(tmp_path / "transcodes")
 
@@ -49,9 +51,54 @@ def _make_service(tmp_path: Path) -> TranscodeService:
                 return cache_dir
             return default
 
-    with patch("shutil.which", return_value="/fake/ffmpeg"):
+    def _which(name: str) -> str | None:
+        return ffprobe if name == "ffprobe" else "/fake/ffmpeg"
+
+    with patch("shutil.which", side_effect=_which):
         svc = TranscodeService(settings=_FakeSettings())
     return svc
+
+
+def _is_probe(cmd: list) -> bool:
+    """True when ``cmd`` is the ffprobe codec probe rather than an ffmpeg run."""
+    return "-print_format" in cmd
+
+
+class _ProbeResult:
+    """Minimal stand-in for a completed ffprobe subprocess."""
+
+    def __init__(self, returncode: int = 0, stdout: bytes = b"", stderr: bytes = b""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _probe_unknown() -> _ProbeResult:
+    """An ffprobe result that yields no verdict → caller re-encodes.
+
+    Used by the tests below that are about the CACHE/lock/atomic-rename
+    contract, not about the codec probe: they must keep exercising the
+    libx264 encode path they were written for.
+    """
+    return _ProbeResult(returncode=1, stderr=b"probe unavailable")
+
+
+def _probe_streams(*streams: dict) -> _ProbeResult:
+    """An ffprobe result carrying ``streams`` in ffprobe's JSON shape."""
+    payload = json.dumps({"streams": list(streams)}).encode("utf-8")
+    return _ProbeResult(returncode=0, stdout=payload)
+
+
+def _h264_video(pix_fmt: str | None = "yuv420p") -> dict:
+    """An h264 video stream entry, 8-bit 4:2:0 unless told otherwise.
+
+    ``pix_fmt=None`` models an ffprobe build that reported no pixel
+    format for the stream.
+    """
+    stream: dict = {"codec_type": "video", "codec_name": "h264"}
+    if pix_fmt is not None:
+        stream["pix_fmt"] = pix_fmt
+    return stream
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +247,8 @@ class TestAtomicNaming:
         recorded_cmds: list = []
 
         def _fake_run(cmd, **kwargs):
+            if _is_probe(cmd):
+                return _probe_unknown()
             recorded_cmds.append(cmd)
             # Simulate a successful ffmpeg: write the staging output file.
             out_index = cmd.index("-y") + 1
@@ -237,6 +286,8 @@ class TestPerKeyLock:
         first_entered = threading.Event()
 
         def _fake_run(cmd, **kwargs):
+            if _is_probe(cmd):
+                return _probe_unknown()
             ffmpeg_call_count[0] += 1
             # Signal that thread 1 is inside ffmpeg, then block briefly.
             first_entered.set()
@@ -297,6 +348,8 @@ class TestTranscodeFailures:
         staging = self._staging_path(svc, source)
 
         def _fake_run(cmd, **kwargs):
+            if _is_probe(cmd):
+                return _probe_unknown()
             # Simulate ffmpeg having written a partial staging file, then hanging.
             out_index = cmd.index("-y") + 1
             Path(cmd[out_index]).write_bytes(b"partial")
@@ -315,6 +368,9 @@ class TestTranscodeFailures:
         source.write_bytes(b"\x00" * 10)
 
         def _fake_run(cmd, **kwargs):
+            if _is_probe(cmd):
+                return _probe_unknown()
+
             class _Result:
                 returncode = 0
                 stderr = b""
@@ -332,6 +388,8 @@ class TestTranscodeFailures:
         staging = self._staging_path(svc, source)
 
         def _fake_run(cmd, **kwargs):
+            if _is_probe(cmd):
+                return _probe_unknown()
             out_index = cmd.index("-y") + 1
             Path(cmd[out_index]).write_bytes(b"partial")
 
@@ -345,3 +403,336 @@ class TestTranscodeFailures:
                 svc.get_transcoded_path(source)
 
         assert not staging.exists(), "partial staging file left behind after non-zero exit"
+
+
+# ---------------------------------------------------------------------------
+# #853 codec passthrough: which ffmpeg recipe runs, and when
+#
+# The bug these guard: an H.264 .mov reaching this service (the #787
+# pre-check has to guess from the EXTENSION, so plain H.264 iPhone clips
+# do reach it) was re-encoded with libx264 — a multi-second stall and a
+# quality loss on a file whose video stream could simply be copied.  The
+# mirror-image bug is worse: copying a stream the browser cannot decode
+# (HEVC) would hand back an unplayable MP4 where the encode worked.  So
+# every test here asserts WHICH recipe ran, not that "a branch was hit".
+# ---------------------------------------------------------------------------
+
+class _FfmpegRecorder:
+    """subprocess.run stand-in: answers the probe, records ffmpeg runs."""
+
+    def __init__(self, probe: _ProbeResult, *, fail_copy: bool = False):
+        self._probe = probe
+        self._fail_copy = fail_copy
+        self.ffmpeg_cmds: list[list] = []
+        self.probe_cmds: list[list] = []
+
+    def __call__(self, cmd, **kwargs):
+        if _is_probe(cmd):
+            self.probe_cmds.append(cmd)
+            if isinstance(self._probe, BaseException):
+                raise self._probe
+            return self._probe
+
+        self.ffmpeg_cmds.append(cmd)
+        if self._fail_copy and "copy" in cmd:
+            class _Failed:
+                returncode = 1
+                stderr = b"muxer refused the stream"
+            return _Failed()
+
+        out_index = cmd.index("-y") + 1
+        Path(cmd[out_index]).write_bytes(b"fake-mp4")
+
+        class _Ok:
+            returncode = 0
+            stderr = b""
+        return _Ok()
+
+
+def _recipe_of(cmd: list) -> str:
+    """Name the recipe an ffmpeg argv encodes: 'copy' or 'encode'."""
+    if "libx264" in cmd:
+        return "encode"
+    if "copy" in cmd:
+        return "copy"
+    return f"unknown: {cmd!r}"
+
+
+def _run_with(tmp_path: Path, probe, *, name: str = "clip.mov", **kwargs):
+    """Transcode a source once with a given probe answer; return the recorder."""
+    svc = _make_service(tmp_path)
+    source = tmp_path / name
+    source.write_bytes(b"\x00" * 10)
+    recorder = _FfmpegRecorder(probe, **kwargs)
+    with patch("subprocess.run", side_effect=recorder):
+        svc.get_transcoded_path(source)
+    return recorder
+
+
+class TestStreamCopySelection:
+    def test_h264_aac_is_copied_not_reencoded(self, tmp_path: Path) -> None:
+        """The ticket's case: an H.264 .mov must not be re-encoded."""
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(),
+                {"codec_type": "audio", "codec_name": "aac"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy"]
+        assert "libx264" not in recorder.ffmpeg_cmds[0]
+        # The copy must still produce a streamable MP4, not a bare copy.
+        assert "+faststart" in recorder.ffmpeg_cmds[0]
+        cmd = recorder.ffmpeg_cmds[0]
+        assert cmd[cmd.index("-f") + 1] == "mp4"
+
+    def test_h264_without_audio_is_copied(self, tmp_path: Path) -> None:
+        """A silent clip has no audio stream to disqualify it."""
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(_h264_video()),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy"]
+
+    def test_hevc_is_still_reencoded(self, tmp_path: Path) -> None:
+        """The files the fallback exists for must keep their encode."""
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                {"codec_type": "video", "codec_name": "hevc"},
+                {"codec_type": "audio", "codec_name": "aac"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_h264_with_undecodable_audio_is_reencoded(self, tmp_path: Path) -> None:
+        """H.264 video + AC-3 audio: copying it would give the browser an
+        audio track it cannot decode, so the encode (which re-codes audio
+        to AAC) must still run."""
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(),
+                {"codec_type": "audio", "codec_name": "ac3"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_second_audio_stream_can_veto_the_copy(self, tmp_path: Path) -> None:
+        """A dual-audio file is only copyable if EVERY audio stream is."""
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(),
+                {"codec_type": "audio", "codec_name": "aac"},
+                {"codec_type": "audio", "codec_name": "pcm_s16le"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_data_stream_does_not_disqualify(self, tmp_path: Path) -> None:
+        """iPhone .mov files carry a timecode/metadata track; it is neither
+        video nor audio and must not push the file back onto the encode."""
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(),
+                {"codec_type": "audio", "codec_name": "aac"},
+                {"codec_type": "data", "codec_name": "bin_data"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy"]
+        # …and the copy must not try to mux that track into MP4.
+        assert "0:v:0" in recorder.ffmpeg_cmds[0]
+        assert "0:a:0?" in recorder.ffmpeg_cmds[0]
+
+    def test_ten_bit_h264_is_reencoded_not_copied(self, tmp_path: Path) -> None:
+        """`codec_name == "h264"` does not mean the browser can decode it.
+
+        H.264 High 10 (10-bit, e.g. Sony/Panasonic bodies and some screen
+        recorders) probes as plain `h264`. Copying one through would hand
+        the <video> element a file no mainstream browser decodes — worse
+        than the pre-#853 encode, which at least produced something.
+        """
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(pix_fmt="yuv420p10le"),
+                {"codec_type": "audio", "codec_name": "aac"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_422_h264_is_reencoded_not_copied(self, tmp_path: Path) -> None:
+        """Same for 4:2:2 H.264 — High 4:2:2 is not a browser profile."""
+        recorder = _run_with(
+            tmp_path, _probe_streams(_h264_video(pix_fmt="yuv422p"))
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_full_range_420_is_still_copied(self, tmp_path: Path) -> None:
+        """`yuvj420p` is the same 8-bit 4:2:0 data with full-range flags.
+
+        Browsers decode it, so the pixel-format gate must not reject it —
+        rejecting it would put ordinary JPEG-range captures back on the
+        pointless encode this PR exists to remove.
+        """
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(pix_fmt="yuvj420p"),
+                {"codec_type": "audio", "codec_name": "aac"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy"]
+
+    def test_missing_pix_fmt_is_reencoded(self, tmp_path: Path) -> None:
+        """No pix_fmt reported → no verdict → the safe path, not the copy."""
+        recorder = _run_with(
+            tmp_path, _probe_streams(_h264_video(pix_fmt=None))
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_encode_normalises_to_8bit_420(self, tmp_path: Path) -> None:
+        """The encode must force yuv420p, not inherit the source's format.
+
+        Without it libx264 keeps a 10-bit / 4:2:2 input's pixel format, so
+        routing such a source to the encode would produce another file the
+        browser refuses — making the pix_fmt gate above pointless.
+        """
+        recorder = _run_with(
+            tmp_path, _probe_streams(_h264_video(pix_fmt="yuv420p10le"))
+        )
+        cmd = recorder.ffmpeg_cmds[0]
+        assert _recipe_of(cmd) == "encode"
+        assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+
+    def test_cache_hit_runs_no_probe(self, tmp_path: Path) -> None:
+        """One ffprobe per file, not per request: a warm cache probes zero
+        times (this is what keeps the passthrough off the request path)."""
+        svc = _make_service(tmp_path)
+        source = tmp_path / "clip.mov"
+        source.write_bytes(b"\x00" * 10)
+        cache_key = _compute_cache_key(source)
+        cached = svc._base_dir / f"{cache_key}.mp4"
+        cached.write_bytes(b"already-transcoded")
+
+        recorder = _FfmpegRecorder(
+            _probe_streams(_h264_video())
+        )
+        with patch("subprocess.run", side_effect=recorder):
+            result = svc.get_transcoded_path(source)
+
+        assert result == cached
+        assert recorder.probe_cmds == [], "ffprobe ran on a cache hit"
+        assert recorder.ffmpeg_cmds == []
+
+
+class TestProbeFailureModes:
+    """Every way the probe can fail must degrade to the pre-#853 encode —
+    never a raised exception (the route would turn that into a 500 and the
+    user would see "Video cannot be played" for a file that used to play).
+    """
+
+    def test_ffprobe_not_installed_falls_back_to_encode(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path, ffprobe=None)
+        source = tmp_path / "clip.mov"
+        source.write_bytes(b"\x00" * 10)
+        recorder = _FfmpegRecorder(_probe_unknown())
+        with patch("subprocess.run", side_effect=recorder):
+            svc.get_transcoded_path(source)
+        assert recorder.probe_cmds == [], "probed despite ffprobe being absent"
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_nonzero_exit_falls_back_to_encode(self, tmp_path: Path) -> None:
+        recorder = _run_with(
+            tmp_path, _ProbeResult(returncode=1, stderr=b"Invalid data found")
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_timeout_falls_back_to_encode(self, tmp_path: Path) -> None:
+        """A wedged probe (a NAS file that stops responding) must not hold
+        the request open or kill it — the encode still runs."""
+        recorder = _run_with(
+            tmp_path, subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=30)
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_unparseable_output_falls_back_to_encode(self, tmp_path: Path) -> None:
+        recorder = _run_with(
+            tmp_path, _ProbeResult(returncode=0, stdout=b"not json at all")
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_missing_streams_key_falls_back_to_encode(self, tmp_path: Path) -> None:
+        recorder = _run_with(tmp_path, _ProbeResult(returncode=0, stdout=b"{}"))
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_audio_only_file_falls_back_to_encode(self, tmp_path: Path) -> None:
+        """No video stream → no verdict → the pre-#853 path."""
+        recorder = _run_with(
+            tmp_path, _probe_streams({"codec_type": "audio", "codec_name": "aac"})
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_failed_copy_falls_back_to_encode_and_succeeds(
+        self, tmp_path: Path
+    ) -> None:
+        """A stream copy ffmpeg refuses (an exotic track the MP4 muxer
+        rejects) must end in the encode, not a 500 — the passthrough can
+        never leave a file less playable than it was before #853.
+        """
+        svc = _make_service(tmp_path)
+        source = tmp_path / "clip.mov"
+        source.write_bytes(b"\x00" * 10)
+        recorder = _FfmpegRecorder(
+            _probe_streams(_h264_video()),
+            fail_copy=True,
+        )
+        with patch("subprocess.run", side_effect=recorder):
+            result = svc.get_transcoded_path(source)
+
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy", "encode"]
+        assert result.exists(), "no cached output after the copy→encode fallback"
+        assert not (svc._base_dir / f"{_compute_cache_key(source)}_tmp.mp4").exists()
+
+
+class TestProbeInvocation:
+    def test_probe_is_argv_never_a_shell_string(self, tmp_path: Path) -> None:
+        """A filename holding shell metacharacters must reach ffprobe as one
+        argument, not as something a shell could split or expand.
+        """
+        name = "clip & rm -rf $HOME `id`.mov"
+        recorder = _run_with(tmp_path, _probe_unknown(), name=name)
+
+        assert len(recorder.probe_cmds) == 1
+        cmd = recorder.probe_cmds[0]
+        assert isinstance(cmd, list)
+        assert cmd[-1] == str(tmp_path / name)
+
+    def test_probe_is_bounded_and_not_shelled(self, tmp_path: Path) -> None:
+        """shell=False and a finite timeout are what keep a hostile filename
+        harmless and a wedged NAS read from pinning the per-key lock."""
+        svc = _make_service(tmp_path)
+        source = tmp_path / "clip.mov"
+        source.write_bytes(b"\x00" * 10)
+        seen: list[dict] = []
+
+        def _capture(cmd, **kwargs):
+            if _is_probe(cmd):
+                seen.append(kwargs)
+                return _probe_unknown()
+            out_index = cmd.index("-y") + 1
+            Path(cmd[out_index]).write_bytes(b"fake-mp4")
+
+            class _Ok:
+                returncode = 0
+                stderr = b""
+            return _Ok()
+
+        with patch("subprocess.run", side_effect=_capture):
+            svc.get_transcoded_path(source)
+
+        assert len(seen) == 1
+        assert seen[0]["shell"] is False
+        assert 0 < seen[0]["timeout"] <= 60

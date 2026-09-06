@@ -5,6 +5,28 @@ FastAPI media route (app/web/routes/media.py) which calls
 ``get_transcoded_path`` via ``run_in_executor`` so the blocking ffmpeg
 sub-process never touches the event loop.
 
+Codec passthrough (#853): nothing else in the pipeline knows a video's
+codec, so before #853 every source reaching this service was re-encoded
+with libx264 — including the H.264 ``.mov`` files an iPhone library is
+full of, which only got here because the #787 pre-check has to guess from
+the file EXTENSION.  On a cache miss the service now asks ffprobe once
+what the source actually holds; when it is already 8-bit 4:2:0 H.264
+with browser-playable audio the cached MP4 is produced by a stream COPY
+(remux) instead of an encode: same bytes for the video track, no quality
+loss, no encode stall.  The pixel format is part of the verdict because
+``codec_name == "h264"`` also covers High 10 / 4:2:2 / 4:4:4, which no
+mainstream browser decodes — and for the same reason the encode now
+forces ``-pix_fmt yuv420p`` rather than inheriting the source's.
+
+Why a remux and not "serve the original bytes": the cache artifact stays
+a plain MP4 that every engine can demux.  Handing back the source
+container instead would break the files it aims to help — ``.avi`` is a
+walked video extension (scanner/media.py) and no browser demuxes AVI,
+and Firefox does not demux QuickTime, so an H.264 ``.mov`` served raw
+fails there while today's encode works.  The frontend's two-attempt swap
+cannot recover from that: the source it swaps to is byte-identical to the
+one that just failed.
+
 Cache design mirrors image_service.py:
 - Versioned sub-directory under the configured base dir.
 - Cache key = sha1(source_path | mtime_ns).hexdigest() + ".mp4".
@@ -23,6 +45,7 @@ Cache design mirrors image_service.py:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -47,6 +70,31 @@ _KEY_LOCKS: dict[str, threading.Lock] = {}
 
 # Mirror exif.py's _CREATE_NO_WINDOW constant.
 _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+# Codec passthrough (#853).  A source matching ALL THREE of these can be
+# remuxed into MP4 with -c copy instead of re-encoded: every target
+# browser decodes 8-bit 4:2:0 H.264 video, and AAC/MP3 are the audio
+# codecs that are both browser-playable and legal in an MP4 container.
+# Anything else (HEVC, VP9, AV1, PCM/AC-3/Opus audio, …) keeps the
+# libx264 encode.
+_COPYABLE_VIDEO_CODEC = "h264"
+_COPYABLE_AUDIO_CODECS = frozenset({"aac", "mp3"})
+
+# `codec_name == "h264"` is NOT enough to promise a browser can decode it.
+# H.264 High 10 / High 4:2:2 / High 4:4:4 (10-bit and 4:2:2 output from
+# Sony and Panasonic bodies, and from some screen recorders) is still
+# "h264" to ffprobe, and no mainstream browser decodes those profiles —
+# copying one through would hand the <video> element a file it refuses,
+# where the pre-#853 encode at least produced something.  The pixel
+# format is the cheapest reliable proxy for the profile, and it comes
+# from the same single probe.  `yuvj420p` is the same 8-bit 4:2:0 data
+# with full-range flags, which browsers handle.
+_COPYABLE_PIX_FMTS = frozenset({"yuv420p", "yuvj420p"})
+
+# ffprobe only reads container headers, so this is generous even for a
+# cold file on a NAS.  Bounded so a wedged probe can never hold the
+# per-key lock (and therefore the request) open indefinitely.
+_PROBE_TIMEOUT_S = 30
 
 
 class TranscodeUnavailable(Exception):
@@ -76,6 +124,30 @@ def _compute_cache_key(source: Path) -> str:
     mtime_ns = source.stat().st_mtime_ns
     sig = f"{source}|{mtime_ns}".encode("utf-8", errors="ignore")
     return hashlib.sha1(sig).hexdigest()
+
+
+def _parse_probe_streams(stdout: bytes) -> Optional[list[dict]]:
+    """Parse ffprobe's ``-print_format json`` stdout into a stream list.
+
+    Returns ``None`` — never raises — when the output is not the shape
+    this module expects (empty, not JSON, no ``streams`` array, or an
+    array holding something other than objects).  ``None`` means "no
+    verdict", which the caller turns into a re-encode.
+    """
+    try:
+        # errors="replace" cannot raise, so ValueError here means
+        # "ffprobe did not emit JSON" (empty output included).
+        payload = json.loads(stdout.decode("utf-8", errors="replace"))
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    streams = payload.get("streams")
+    if not isinstance(streams, list):
+        return None
+    if not all(isinstance(s, dict) for s in streams):
+        return None
+    return streams
 
 
 class TranscodeService:
@@ -113,6 +185,16 @@ class TranscodeService:
         if self._ffmpeg is None:
             logger.warning("ffmpeg not found on PATH — transcode fallback unavailable")
 
+        # ffprobe ships beside ffmpeg and is resolved the same way (#853).
+        # Absent is not an error: without it every source is re-encoded,
+        # which is exactly the pre-#853 behaviour.
+        self._ffprobe: Optional[str] = shutil.which("ffprobe")
+        if self._ffprobe is None:
+            logger.warning(
+                "ffprobe not found on PATH — codec passthrough disabled, "
+                "every transcode will re-encode"
+            )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -120,7 +202,11 @@ class TranscodeService:
     def get_transcoded_path(self, source: Path) -> Path:
         """Return the path to the cached H.264 MP4 for ``source``.
 
-        Transcodes on cache-miss.  Raises:
+        Transcodes on cache-miss — or, when ffprobe says the source is
+        already H.264 with browser-playable audio, remuxes it with a
+        stream copy instead of re-encoding (#853).  Either way the
+        returned path is a cached MP4, so callers see no difference.
+        Raises:
         - ``TranscodeUnavailable`` if ffmpeg is not installed.
         - ``TranscodeError`` if ffmpeg exits non-zero or output is
           missing after a successful transcode.
@@ -154,18 +240,80 @@ class TranscodeService:
     # ------------------------------------------------------------------
 
     def _transcode(self, source: Path, out_path: Path) -> None:
-        """Run ffmpeg to produce ``out_path`` from ``source``.
+        """Produce ``out_path`` from ``source`` with ffmpeg.
 
-        Acquires ``_TRANSCODE_SEM`` only around the subprocess call so
-        the concurrency cap covers only the CPU/IO-bound ffmpeg work,
-        not the lock-wait or cache-check.
+        Two recipes, chosen by one ffprobe call (#853): a source that is
+        already H.264 with browser-playable audio is REMUXED (stream
+        copy) into MP4; everything else is re-encoded with libx264 as
+        before.  A remux that fails for any reason falls through to the
+        encode, so the passthrough can never make a file less playable
+        than it was before #853.
+
+        This method only ever runs on a cache miss, inside the per-key
+        lock, so the probe costs one ffprobe per file per cache
+        generation — never one per request.
         """
         # Use a sibling .tmp file with the same stem so ffmpeg knows the
         # container format.  Explicitly pass -f mp4 as a belt-and-suspenders
         # guard against Windows builds that can't infer format from .tmp.
         tmp_path = out_path.parent / (out_path.stem + "_tmp.mp4")
-        cmd = [
-            self._ffmpeg,
+
+        ffmpeg = self._ffmpeg
+        if ffmpeg is None:  # pragma: no cover - get_transcoded_path guards this
+            raise TranscodeUnavailable(
+                "ffmpeg not found on PATH; cannot transcode video"
+            )
+
+        if self._can_stream_copy(source):
+            try:
+                self._run_ffmpeg(
+                    self._copy_cmd(ffmpeg, source, tmp_path), source, tmp_path
+                )
+            except TranscodeError as exc:
+                # e.g. an exotic stream ffmpeg refuses to put in MP4.  The
+                # encode below is the pre-#853 path and still works.
+                logger.warning(
+                    "Stream copy failed for {} ({}) — re-encoding", source.name, exc
+                )
+            else:
+                os.replace(tmp_path, out_path)
+                logger.info(
+                    "Remuxed (no re-encode) {} → {}", source.name, out_path.name
+                )
+                return
+
+        self._run_ffmpeg(
+            self._encode_cmd(ffmpeg, source, tmp_path), source, tmp_path
+        )
+        os.replace(tmp_path, out_path)
+        logger.info("Transcoded {} → {}", source.name, out_path.name)
+
+    @staticmethod
+    def _copy_cmd(ffmpeg: str, source: Path, tmp_path: Path) -> list[str]:
+        """ffmpeg argv that remuxes ``source`` into MP4 without re-encoding.
+
+        ``-map`` is explicit so the output carries exactly the streams
+        the probe vetted: the first video stream and, if present, the
+        first audio stream.  Default stream selection could otherwise
+        pull in a timecode/data track that MP4 refuses.
+        """
+        return [
+            ffmpeg,
+            "-i", str(source),
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
+            "-c", "copy",
+            "-movflags", "+faststart",
+            "-f", "mp4",
+            "-y",
+            str(tmp_path),
+        ]
+
+    @staticmethod
+    def _encode_cmd(ffmpeg: str, source: Path, tmp_path: Path) -> list[str]:
+        """ffmpeg argv for the full H.264 re-encode (the pre-#853 recipe)."""
+        return [
+            ffmpeg,
             "-i", str(source),
             "-c:v", "libx264",
             # ultrafast (was "fast", #737): this is a throwaway H.264 stream the
@@ -177,12 +325,28 @@ class TranscodeService:
             # streaming + a real progress % is the proper follow-up fix.
             "-preset", "ultrafast",
             "-crf", "23",
+            # #853: without this libx264 inherits the SOURCE pixel format,
+            # so a 10-bit or 4:2:2 input re-encoded to 10-bit/4:2:2 H.264 —
+            # which browsers refuse exactly as they refuse the original.
+            # Routing such a source here (instead of copying it) is only
+            # worth anything if the encode normalises, so it does.
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-movflags", "+faststart",
             "-f", "mp4",
             "-y",
             str(tmp_path),
         ]
+
+    def _run_ffmpeg(self, cmd: list[str], source: Path, tmp_path: Path) -> None:
+        """Run one ffmpeg ``cmd`` that writes ``tmp_path``.
+
+        Acquires ``_TRANSCODE_SEM`` only around the subprocess call so
+        the concurrency cap covers only the CPU/IO-bound ffmpeg work,
+        not the lock-wait or cache-check.  Raises ``TranscodeError`` on
+        timeout, non-zero exit, or a missing output file, always after
+        removing the partial staging file.
+        """
         _TRANSCODE_SEM.acquire()
         try:
             result = subprocess.run(
@@ -215,9 +379,82 @@ class TranscodeService:
             # "output is missing" contract in get_transcoded_path's docstring.
             raise TranscodeError(f"ffmpeg produced no output for {source!r}")
 
-        # Atomic rename so a reader never observes a partial file.
-        os.replace(tmp_path, out_path)
-        logger.info("Transcoded {} → {}", source.name, out_path.name)
+    def _can_stream_copy(self, source: Path) -> bool:
+        """Whether ``source`` can be remuxed into MP4 without re-encoding.
+
+        True only when ffprobe reports that the first video stream is
+        H.264 **in a browser-decodable pixel format**
+        (:data:`_COPYABLE_PIX_FMTS` — 8-bit 4:2:0) and every audio stream
+        is one of :data:`_COPYABLE_AUDIO_CODECS`.
+
+        Never raises and never blocks a request: ffprobe missing, a
+        non-zero exit, a timeout, unparseable output, or a file with no
+        video stream all answer ``False``, which is exactly the pre-#853
+        behaviour (full libx264 encode).  The failure is logged once —
+        the caller only reaches here on a cache miss, and a successful
+        encode then makes the next request a cache hit.
+        """
+        if self._ffprobe is None:
+            return False
+
+        cmd = [
+            self._ffprobe,
+            "-v", "error",
+            "-print_format", "json",
+            # Only the three fields the verdict needs; keeps the output
+            # small and the parse trivial.
+            "-show_entries", "stream=codec_type,codec_name,pix_fmt",
+            str(source),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=False,
+                timeout=_PROBE_TIMEOUT_S,
+                check=False,
+                capture_output=True,
+                creationflags=_CREATE_NO_WINDOW,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning(
+                "ffprobe failed for {} ({}) — re-encoding", source.name, exc
+            )
+            return False
+
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace")
+            logger.warning(
+                "ffprobe exited {} for {} ({}) — re-encoding",
+                result.returncode, source.name, stderr[:200],
+            )
+            return False
+
+        streams = _parse_probe_streams(result.stdout)
+        if streams is None:
+            logger.warning(
+                "ffprobe output for {} was not parseable — re-encoding", source.name
+            )
+            return False
+
+        video = [s for s in streams if s.get("codec_type") == "video"]
+        if not video:
+            # Audio-only or a container ffprobe could not make sense of:
+            # unknown territory, so keep the encode.
+            return False
+        if video[0].get("codec_name") != _COPYABLE_VIDEO_CODEC:
+            return False
+        if video[0].get("pix_fmt") not in _COPYABLE_PIX_FMTS:
+            # High 10 / 4:2:2 / 4:4:4 H.264, or an ffprobe build that did
+            # not report pix_fmt at all.  Either way we cannot promise the
+            # browser can decode the bitstream, so re-encode it (which
+            # normalises to yuv420p — see _encode_cmd).
+            return False
+
+        return all(
+            s.get("codec_name") in _COPYABLE_AUDIO_CODECS
+            for s in streams
+            if s.get("codec_type") == "audio"
+        )
 
     @staticmethod
     def _remove_tmp(tmp_path: Path) -> None:
