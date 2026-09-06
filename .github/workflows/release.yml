@@ -83,19 +83,21 @@ jobs:
       # transcode fallback (#730) answered HTTP 501 on every machine that
       # had not installed ffmpeg by hand — i.e. almost every user.
       #
-      # The build is BtbN's win64 **LGPL** variant, pinned to one immutable
-      # autobuild tag. LGPL (not GPL) so the bundle does not have to be
-      # relicensed; the consequence is no libx264 (x264 is GPL), which is
-      # why transcode_service.py picks its H.264 encoder from what the
-      # binary reports instead of hard-coding one. The checksum is verified
-      # BEFORE anything is read out of the archive; a mismatch fails the
-      # release rather than shipping an unknown binary.
-      - name: Fetch and verify pinned ffmpeg (LGPL)
+      # The build is BtbN's win64 **LGPL SHARED** variant, pinned to one
+      # immutable autobuild tag. LGPL (not GPL) so the bundle does not have
+      # to be relicensed; the consequence is no libx264 (x264 is GPL), which
+      # is why transcode_service.py picks its H.264 encoder from what the
+      # binary reports instead of hard-coding one. SHARED (not static)
+      # because the two static exes cost 218 MB for no gain — the same
+      # binaries share one set of av*/sw* DLLs for ~128 MB. The checksum is
+      # verified BEFORE anything is read out of the archive; a mismatch
+      # fails the release rather than shipping an unknown binary.
+      - name: Fetch and verify pinned ffmpeg (LGPL, shared)
         shell: pwsh
         env:
           FFMPEG_TAG: autobuild-2026-09-05-13-10
-          FFMPEG_ASSET: ffmpeg-n9.0.1-26-g5c8e7e2433-win64-lgpl-9.0.zip
-          FFMPEG_SHA256: 62ea171be95967314104258b076392376fd97775b40c27f69223ffe3274b68fb
+          FFMPEG_ASSET: ffmpeg-n9.0.1-26-g5c8e7e2433-win64-lgpl-shared-9.0.zip
+          FFMPEG_SHA256: f0f6eba08f6d03ddf86a259133710d129b1b373bdbff7b4ed2c6c78bc8dca634
         run: |
           $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_TAG/$env:FFMPEG_ASSET"
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg-pinned.zip'
@@ -112,14 +114,16 @@ jobs:
           }
           Write-Host "SHA-256 verified: $actual"
 
-          # Verified — only now is the archive opened, and only these three
-          # entries are taken (the zip also carries ffplay.exe and ~10 MB of
-          # HTML docs the app has no use for).
+          # Verified — only now is the archive opened. Taken: the two exes,
+          # EVERY bin/*.dll (the shared build's av*/sw* libraries, which
+          # ffmpeg.exe and ffprobe.exe cannot run without), and the licence.
+          # Left behind: ffplay.exe (18 MB, unused) and ~10 MB of HTML docs.
           $stage = Join-Path $PWD 'build-assets\ffmpeg'
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
           try {
+            # Exact entries, renamed on the way in.
             $wanted = @{
               'bin/ffmpeg.exe'  = 'ffmpeg.exe'
               'bin/ffprobe.exe' = 'ffprobe.exe'
@@ -134,10 +138,25 @@ jobs:
               $dest = Join-Path $stage $wanted[$suffix]
               [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
             }
+            # Every DLL from bin/, under its own name. Globbed rather than
+            # listed so a soname bump in a future pinned build cannot
+            # silently drop a library the exes need.
+            $dlls = $archive.Entries | Where-Object { $_.FullName -like '*/bin/*.dll' }
+            if ($dlls.Count -lt 5) {
+              Write-Error "shared build should carry the av*/sw* DLLs; found $($dlls.Count) in bin/"
+              exit 1
+            }
+            foreach ($dll in $dlls) {
+              [System.IO.Compression.ZipFileExtensions]::ExtractToFile(
+                $dll, (Join-Path $stage $dll.Name), $true)
+            }
+            Write-Host "Extracted $($dlls.Count) DLLs: $(($dlls | ForEach-Object { $_.Name }) -join ', ')"
           } finally {
             $archive.Dispose()
           }
           Get-ChildItem $stage | Select-Object Name, Length
+          $staged = (Get-ChildItem $stage | Measure-Object Length -Sum).Sum
+          Write-Host ("Staged ffmpeg set: {0:N1} MB" -f ($staged / 1MB))
           foreach ($f in @('ffmpeg.exe', 'ffprobe.exe', 'FFMPEG-LICENSE.txt')) {
             $p = Join-Path $stage $f
             if (-not (Test-Path $p) -or (Get-Item $p).Length -eq 0) {
@@ -173,7 +192,20 @@ jobs:
       - name: Bundled ffmpeg smoke test
         shell: pwsh
         run: |
-          $internal = "dist\photo-manager\_internal"
+          # _internal\ffmpeg\ — its own directory, so the shared build's
+          # av*/sw* DLLs sit beside the exes that import them and never mix
+          # with the FFmpeg DLLs PySide6 ships for QtMultimedia.
+          $internal = "dist\photo-manager\_internal\ffmpeg"
+          if (-not (Test-Path $internal)) {
+            Write-Error "bundle has no $internal — the packaged app would answer HTTP 501 on every HEVC video (#854)"
+            exit 1
+          }
+          Get-ChildItem $internal | Select-Object Name, Length
+          $dllCount = (Get-ChildItem $internal -Filter *.dll).Count
+          if ($dllCount -lt 5) {
+            Write-Error "bundled ffmpeg is the shared build but only $dllCount DLLs shipped — the exes cannot start"
+            exit 1
+          }
           foreach ($tool in @('ffmpeg', 'ffprobe')) {
             $exe = Join-Path $internal "$tool.exe"
             if (-not (Test-Path $exe)) {

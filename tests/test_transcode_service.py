@@ -27,6 +27,7 @@ from infrastructure.transcode_service import (
     TranscodeService,
     TranscodeError,
     TranscodeUnavailable,
+    _BUNDLE_SUBDIR,
     _compute_cache_key,
     _EXE_SUFFIX,
     _KEY_LOCKS,
@@ -774,13 +775,50 @@ class TestResolveMediaTool:
 
     def test_bundled_sibling_wins_over_path(self, tmp_path: Path, monkeypatch) -> None:
         """A user's PATH ffmpeg is an unknown build; the bundled one is the
-        build this project pinned and smoke-tested, so it must win."""
+        build this project pinned and smoke-tested, so it must win.
+
+        This is the LOOSE layout (no sub-directory) — the shape a
+        hand-placed single binary takes, still supported.
+        """
         bundle = tmp_path / "bundle"
         bundled = _make_tool(bundle, "ffmpeg")
         _freeze(monkeypatch, bundle)
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
 
         assert _resolve_media_tool("ffmpeg") == str(bundled)
+
+    def test_meipass_subdir_is_the_shipped_layout(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """`_internal/ffmpeg/` is where pyinstaller.spec puts the shipped
+        shared build — exe and its DLLs in one directory so Windows resolves
+        the imports from there, and away from PySide6's own av*.dll set.
+        """
+        bundle = tmp_path / "bundle"
+        internal = bundle / "_internal"
+        bundled = _make_tool(internal / _BUNDLE_SUBDIR, "ffmpeg")
+        bundle.mkdir(exist_ok=True)
+        _freeze(monkeypatch, bundle, meipass=internal)
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+
+        assert _resolve_media_tool("ffmpeg") == str(bundled)
+
+    def test_user_subdir_beside_the_exe_wins_over_the_shipped_one(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A replacement set dropped in `<exe dir>/ffmpeg/` must beat the
+        shipped `_internal/ffmpeg/` one — that is how a user swaps in a
+        different build (e.g. a GPL one with libx264) without unpacking the
+        bundle, which README documents.
+        """
+        bundle = tmp_path / "bundle"
+        internal = bundle / "_internal"
+        _make_tool(internal / _BUNDLE_SUBDIR, "ffmpeg")  # shipped
+        user_copy = _make_tool(bundle / _BUNDLE_SUBDIR, "ffmpeg")  # user's
+        _freeze(monkeypatch, bundle, meipass=internal)
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+
+        assert _resolve_media_tool("ffmpeg") == str(user_copy)
 
     def test_meipass_copy_is_found(self, tmp_path: Path, monkeypatch) -> None:
         """pyinstaller.spec ships the binaries as datas, so under PyInstaller

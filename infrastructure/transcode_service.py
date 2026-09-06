@@ -108,12 +108,25 @@ _PROBE_TIMEOUT_S = 30
 
 # Bundled binaries (#854).  A packaged release carries its own ffmpeg and
 # ffprobe (release.yml downloads a checksum-pinned LGPL build,
-# pyinstaller.spec bundles the two exes); a dev checkout carries neither
-# and still relies on PATH.
+# pyinstaller.spec bundles the two exes plus their shared libraries); a dev
+# checkout carries neither and still relies on PATH.
 _EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
 
-# `ffmpeg -encoders` on the bundled static build takes ~40 ms; the bound
-# exists only so a wedged binary can never hang the first transcode.
+# The bundle keeps ffmpeg in its OWN sub-directory rather than loose beside
+# the app's other binaries.  The pinned build is the SHARED LGPL variant:
+# two small exes plus avcodec-63 / avformat-63 / avutil-61 / swresample-7 /
+# swscale-10 / avfilter-12 / avdevice-63, and Windows resolves an exe's
+# imports from the exe's own directory first — so the set has to travel
+# together.  It also keeps our libraries away from the SECOND FFmpeg DLL
+# set this bundle already contains: PySide6 ships avcodec-61 / avformat-61
+# / avutil-59 / swresample-5 / swscale-8 for QtMultimedia (measured in a
+# local build: PyInstaller puts those in _internal/PySide6/, so nothing
+# collides today — this layout is what keeps that true after a soname bump
+# on either side).
+_BUNDLE_SUBDIR = "ffmpeg"
+
+# `ffmpeg -encoders` on the bundled build takes tens of milliseconds; the
+# bound exists only so a wedged binary can never hang the first transcode.
 _ENCODERS_TIMEOUT_S = 15
 
 # H.264 encoder preference (#854).  libx264 is the historical recipe and
@@ -150,18 +163,24 @@ def _bundled_tool_dirs() -> list[Path]:
     and probing the interpreter's own directory there would find a
     ``python.exe`` sibling that has nothing to do with this app.
 
-    Both frozen locations are real.  ``sys.executable``'s directory is the
-    top of the extracted onedir bundle (where a user can also drop their
-    own build by hand); ``sys._MEIPASS`` is ``_internal/``, which is where
-    pyinstaller.spec's ``datas`` entry actually puts them.
+    Four frozen locations, in priority order:
+
+    1. ``<exe dir>/ffmpeg/`` — where a user drops a replacement set
+       (binary + its DLLs) without touching the bundle's insides.
+    2. ``<_MEIPASS>/ffmpeg/`` — ``_internal/ffmpeg/``, where
+       pyinstaller.spec actually puts the shipped build.
+    3. ``<exe dir>/`` and 4. ``<_MEIPASS>/`` — the pre-subdirectory
+       layout, kept so a hand-placed loose ``ffmpeg.exe`` (the shape the
+       README documented first, and the shape a statically linked build
+       needs no directory for) still works.
     """
     if not getattr(sys, "frozen", False):
         return []
-    dirs = [Path(sys.executable).parent]
+    roots = [Path(sys.executable).parent]
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        dirs.append(Path(meipass))
-    return dirs
+        roots.append(Path(meipass))
+    return [root / _BUNDLE_SUBDIR for root in roots] + roots
 
 
 def _resolve_media_tool(name: str) -> Optional[str]:

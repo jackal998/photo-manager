@@ -5,35 +5,55 @@ Components redistributed inside the packaged Windows release
 from PyPI at build time are listed in `requirements.txt` and keep their own
 licences; this file covers the binaries the release **ships**.
 
-## FFmpeg (ffmpeg.exe, ffprobe.exe)
+## FFmpeg (ffmpeg.exe, ffprobe.exe and their shared libraries)
 
 - **Upstream:** <https://ffmpeg.org/>
-- **Build:** BtbN/FFmpeg-Builds, win64 **LGPL** variant
+- **Build:** BtbN/FFmpeg-Builds, win64 **LGPL shared** variant
 - **Release tag:** `autobuild-2026-09-05-13-10`
   (<https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-05-13-10>)
-- **Asset:** `ffmpeg-n9.0.1-26-g5c8e7e2433-win64-lgpl-9.0.zip`
-- **SHA-256:** `62ea171be95967314104258b076392376fd97775b40c27f69223ffe3274b68fb`
+- **Asset:** `ffmpeg-n9.0.1-26-g5c8e7e2433-win64-lgpl-shared-9.0.zip`
+- **SHA-256:** `f0f6eba08f6d03ddf86a259133710d129b1b373bdbff7b4ed2c6c78bc8dca634`
   (verified by `.github/workflows/release.yml` before the archive is opened;
   matches the publisher's `checksums.sha256` for the same tag)
-- **Version reported by the binary:** `n9.0.1-26-g5c8e7e2433-20260905`
+- **Version reported by the binaries:** `n9.0.1-26-g5c8e7e2433-20260905`
 - **Licence:** GNU Lesser General Public License v3 (the build is configured
   `--enable-version3`). The verbatim text is reproduced below and also ships
-  in the bundle as `_internal\FFMPEG-LICENSE.txt`.
+  in the bundle as `_internal\ffmpeg\FFMPEG-LICENSE.txt`.
 
-Only `ffmpeg.exe` and `ffprobe.exe` are redistributed, unmodified, exactly as
-published in that release asset. They are invoked as separate processes by
+Redistributed, unmodified, exactly as published in that release asset —
+nine files, all in `_internal\ffmpeg\`:
+
+| File | Bytes |
+|---|---|
+| `ffmpeg.exe` | 538,112 |
+| `ffprobe.exe` | 227,328 |
+| `avcodec-63.dll` | 71,069,184 |
+| `avfilter-12.dll` | 30,015,488 |
+| `avformat-63.dll` | 22,153,728 |
+| `avdevice-63.dll` | 3,923,968 |
+| `avutil-61.dll` | 2,939,392 |
+| `swscale-10.dll` | 2,479,616 |
+| `swresample-7.dll` | 722,944 |
+
+(The archive's `ffplay.exe` and its HTML documentation are not
+redistributed.) The two executables are invoked as separate processes by
 `infrastructure/transcode_service.py`; nothing in this application links
-against FFmpeg's libraries. Both binaries are statically linked builds of
-FFmpeg itself — the LGPL variant is used deliberately so that no GPL-only
-component (notably `libx264`, `libx265`, `libxvid`, all disabled in this
-build) is redistributed. Re-linking rights under LGPL §4 are satisfied by
-the upstream source: the exact commit is `5c8e7e2433` on the `release/9.0`
-branch of <https://github.com/FFmpeg/FFmpeg>, and the full build recipe is
-published at <https://github.com/BtbN/FFmpeg-Builds>.
+against FFmpeg's libraries — the DLLs are here because the shared build's
+own executables need them, and they are kept in their own directory so they
+never mix with the FFmpeg libraries PySide6 ships for QtMultimedia.
 
-Replacing the shipped binaries is supported and needs no rebuild: the app
-prefers an `ffmpeg.exe` / `ffprobe.exe` sitting next to `photo-manager.exe`
-over the bundled copies and over PATH.
+The LGPL variant is used deliberately so that no GPL-only component
+(notably `libx264`, `libx265`, `libxvid`, all disabled in this build) is
+redistributed. Re-linking rights under LGPL §4 are satisfied by the
+upstream source: the exact commit is `5c8e7e2433` on the `release/9.0`
+branch of <https://github.com/FFmpeg/FFmpeg>, and the full build recipe is
+published at <https://github.com/BtbN/FFmpeg-Builds>. Because this is the
+shared build, the libraries can also simply be replaced in place.
+
+Replacing the shipped set is supported and needs no rebuild: the app looks
+for `ffmpeg\ffmpeg.exe` next to `photo-manager.exe` before the bundled copy
+and before PATH, so a complete replacement set dropped in that directory
+wins.
 
 ---
 
