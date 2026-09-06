@@ -10,15 +10,23 @@ importable in CI unit-test runs where playwright is not installed.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Iterator, Union
 
-from qa.web.testid_constants import scan_source_recursive_testid
+from qa.web.testid_constants import (
+    CTX_APPLY_BEST_COPY,
+    CTX_LOCK,
+    CTX_SET_ACTION_DELETE,
+    CTX_SET_ACTION_KEEP,
+    CTX_UNLOCK,
+    scan_source_recursive_testid,
+)
 
 if TYPE_CHECKING:
     # Only evaluated by type-checkers, never at runtime.
-    from playwright.sync_api import Page
+    from playwright.sync_api import Page, Response
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +446,93 @@ def set_prune_pref(base_url: str, pref: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Write-settling contract (#850)
+# ---------------------------------------------------------------------------
+#
+# Every UI affordance that stages state does so through an ASYNCHRONOUS request
+# (a DecisionControl click issues PATCH /api/decision; a context-menu verb
+# issues PATCH /api/decision, PATCH /api/lock or POST /api/action/...).  A
+# scenario that re-reads GET /api/manifest straight after the click races that
+# request and sees the pre-click row — the moving "expected decision 'delete',
+# got ''" flake family in the advisory ``web-scenario-batch`` job (#850, #815).
+#
+# The contract, owned here rather than at each read site: **a write helper does
+# not return until the request its own click caused has responded.**  Every
+# caller inherits it; no scenario needs its own poll.  The wait is on the REAL
+# response (Playwright ``expect_response``), never a sleep, so it costs the
+# round-trip and nothing more.
+
+# The response wait is a local SQLite write plus loopback latency; 15 s is a
+# CI-safe ceiling that is never reached on a healthy run.  It is deliberately
+# NOT the caller's ``timeout`` — that one budgets DOM visibility, not network.
+_WRITE_RESPONSE_TIMEOUT_MS = 15_000
+
+# Context-menu items that fire exactly ONE API write per click, and the
+# ``(method, url fragment)`` of that write.  Items absent from this map either
+# open a submenu / dialog (``CTX_SET_ACTION_BY_FIELD``, ``CTX_EXECUTE_SELECTED``,
+# ``CTX_OPEN_FOLDER``) or write only CONDITIONALLY — ``CTX_SET_ACTION_REMOVE``
+# posts straight from the result tree but is gated behind a confirm sheet inside
+# the execute dialog (s54) — so waiting on them would time out on a legitimate
+# flow.  Add an entry only for an item that ALWAYS issues its request on click.
+_CTX_ITEM_WRITES: "dict[str, tuple[str, str]]" = {
+    CTX_SET_ACTION_DELETE: ("PATCH", "/api/decision"),
+    CTX_SET_ACTION_KEEP: ("PATCH", "/api/decision"),
+    CTX_LOCK: ("PATCH", "/api/lock"),
+    CTX_UNLOCK: ("PATCH", "/api/lock"),
+    CTX_APPLY_BEST_COPY: ("POST", "/api/action/apply-best-copy"),
+}
+
+
+@contextlib.contextmanager
+def _await_write(
+    page: "Page", method: str, url_fragment: str, what: str
+) -> "Iterator[None]":
+    """Run the wrapped click and block until ITS API write has responded.
+
+    Parameters
+    ----------
+    page:
+        The Playwright Page the click happens on.
+    method / url_fragment:
+        The request to wait for, e.g. ``"PATCH"`` and ``"/api/decision"``.
+    what:
+        Human-readable description of the click, used in failure messages.
+
+    Notes
+    -----
+    A 4xx is NOT a failure here: ``PATCH /api/decision`` answers 409
+    ``locked_paths`` by design when the row is locked (#733), and s53 drives
+    exactly that.  The scenario's own assertions judge the outcome; this helper
+    only guarantees the outcome is OBSERVABLE.  A 5xx is a failure, because it
+    would otherwise surface downstream as an unexplained "got ''".
+    """
+    # Imported lazily: this module must stay importable without playwright
+    # (``TestImportIsolation``).
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    def _matches(response: "Response") -> bool:
+        return url_fragment in response.url and response.request.method == method
+
+    with page.expect_response(
+        _matches, timeout=_WRITE_RESPONSE_TIMEOUT_MS
+    ) as response_info:
+        yield
+    try:
+        response = response_info.value
+    except PlaywrightTimeoutError as exc:
+        raise AssertionError(
+            f"{what}: no {method} {url_fragment} response within "
+            f"{_WRITE_RESPONSE_TIMEOUT_MS} ms — the click never reached the API "
+            f"(handler not wired, or the endpoint moved)"
+        ) from exc
+    if response.status >= 500:
+        raise AssertionError(
+            f"{what}: {method} {url_fragment} returned {response.status} — the "
+            f"staged state was never written"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Context-menu helpers
 # ---------------------------------------------------------------------------
 
@@ -480,10 +575,24 @@ def click_context_item(page: "Page", item_testid: str, *, timeout: float = 5_000
         ``CTX_SET_ACTION_DELETE`` from ``testid_constants``.
     timeout:
         Maximum milliseconds to wait for the item to be clickable.
+
+    Notes
+    -----
+    For an item listed in ``_CTX_ITEM_WRITES`` this helper does not return
+    until the API write the click causes has responded (#850) — a caller may
+    read ``GET /api/manifest`` immediately afterwards without racing it.
+    Items not in that map (submenu openers, confirm-sheet gated verbs) behave
+    exactly as before.
     """
     item = page.get_by_test_id(item_testid)
     item.wait_for(state="visible", timeout=timeout)
-    item.click()
+    write = _CTX_ITEM_WRITES.get(item_testid)
+    if write is None:
+        item.click()
+    else:
+        method, url_fragment = write
+        with _await_write(page, method, url_fragment, f"click_context_item({item_testid!r})"):
+            item.click()
     # Context menu unmounts on click; wait for it to disappear.
     page.get_by_test_id("context-menu").wait_for(state="hidden", timeout=timeout)
 
@@ -501,7 +610,7 @@ def set_row_decision(
     ``Delete`` / ``Ignore``); one click stages the decision with no menu to open
     (#744).  Each button's testid is the group decision testid with the option
     slug appended (``row_decision_option_testid``).  This is the affordance for
-    STAGING a reversible ``user_decision`` (PATCH /api/decisions) — distinct from
+    STAGING a reversible ``user_decision`` (PATCH /api/decision) — distinct from
     the context-menu "Remove from list", which FINALIZES ``outcome='ignored'``
     since #694.
 
@@ -521,12 +630,21 @@ def set_row_decision(
         The button label: ``"None"``, ``"Delete"`` or ``"Ignore"``.
     timeout:
         Maximum milliseconds to wait for the button.
+
+    Notes
+    -----
+    The helper does not return until the ``PATCH /api/decision`` its click
+    causes has responded (#850) — a caller may read ``GET /api/manifest``
+    immediately afterwards without racing the write.
     """
     slug = _DECISION_LABEL_TO_SLUG[label]  # KeyError = fail loud on a bad label
     button = page.get_by_test_id(f"{decision_testid}-{slug}")
     button.wait_for(state="visible", timeout=timeout)
     button.scroll_into_view_if_needed(timeout=timeout)
-    button.click()
+    with _await_write(
+        page, "PATCH", "/api/decision", f"set_row_decision({decision_testid!r}, {label!r})"
+    ):
+        button.click()
 
 
 # ---------------------------------------------------------------------------
