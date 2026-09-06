@@ -1,11 +1,16 @@
 # Preview redesign (#622) Phase 3 — verification runbook
 
-**Status:** instrument ready for an owner-present session on the real NAS
-library. **No real-NAS reading is recorded in this document.** Every number
-that appears below is either a threshold copied from issue #622's acceptance
-list or a placeholder shape in the results template — never a measurement.
-Fill the template in during the session and cite each reading per
-[Citation template](#citation-template).
+**Status:** run on the owner's J: NAS on **2026-09-06** at SHA
+`a202282190f5757e6cb373d37f2f4db51e85f9d1`. The
+[Results](#results--2026-09-06-session) table below now carries real
+readings, each with its probe + SHA + args + JSON citation. Everything above
+that table is still procedure, and every threshold in it is copied from issue
+#622's acceptance list, never measured.
+
+**Session verdict: `FAIL`** — boxes 1, 3 and 4 pass; **box 2 fails**
+(`ratio_median` 4.242× against the issue's 5× bar). The box-2 reading is a
+measurement, not a refusal: `status: measured`, `n_paths: 89`,
+`dropped_timeouts.total: 0`.
 
 ## What this verifies
 
@@ -269,31 +274,128 @@ docstring reads "Non-modal full-resolution viewer with pan/zoom", while issue
 #622 calls it a "modal viewer". The probe reports the fact; whether the issue
 text or the code should move is the owner's call.
 
-## Results template
+## Results — 2026-09-06 session
 
-Fill one row per reading. A row missing any of the four citation columns gets
+One row per reading. A row missing any of the four citation columns gets
 deleted, not softened — that is the project's perf-claim rule.
+
+The two commands the rows below cite, verbatim as run from the worktree root
+(`ART` = `~/.claude/handovers/worker-reports/622-phase3-artifacts`, where the
+artifacts are archived per [Where the artifacts land](#where-the-artifacts-land)):
+
+```
+# run 1 args
+python.exe scripts/preview_phase3_probe.py \
+    --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 \
+    --ext .dng --output "$ART/phase3_embedded.json"
+
+# run 2 args
+python.exe scripts/preview_phase3_probe.py \
+    --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 \
+    --ext .dng --force-full-decode \
+    --compare-json "$ART/phase3_embedded.json" \
+    --output "$ART/phase3_fulldecode.json"
+```
+
+`SHA` in every row below is `a202282190f5757e6cb373d37f2f4db51e85f9d1`, the
+artifacts' own `git_sha`, with `git_dirty: false` on both.
 
 | Box | Reading (field → value) | Probe | SHA | Args | JSON |
 |---|---|---|---|---|---|
-| 1 | `summary.box1.steady_state_rss_mb.p50` = _fill in_ (threshold `…threshold_mb`, `pass` = _fill in_) | `scripts/preview_phase3_probe.py` | _fill in_ | `--root … --clicks 100 --viewport-cap …` | `phase3_embedded.json` |
-| 1 | `summary.box1.steady_state_rss_mb.max` = _fill in_ | `scripts/preview_phase3_probe.py` | _fill in_ | _same as above_ | `phase3_embedded.json` |
-| 2 | `summary.box2.ratio_median` = _fill in_ over `n_paths` = _fill in_, `dropped_timeouts.total` = _fill in_ (threshold `…threshold`, `pass` = _fill in_) | `scripts/preview_phase3_probe.py` | _fill in_ | `--root … --clicks 100 --force-full-decode --compare-json phase3_embedded.json` | `phase3_fulldecode.json` |
-| 2 | `summary.box2.embedded_ttfp_ms.p50` / `full_decode_ttfp_ms.p50` = _fill in_ / _fill in_ | `scripts/preview_phase3_probe.py` | _fill in_ | _same as above_ | `phase3_fulldecode.json` |
-| 3 | `summary.box3.pass` = _fill in_ (`modal.zoom_pixmap_grew`, `modal.pan_wired`) | `scripts/preview_phase3_probe.py` | _fill in_ | _run 1 args_ | `phase3_embedded.json` |
-| 4 | `summary.box4.pass` = _fill in_ (`modal.label_valid_before_close` → `label_valid_after_close`) | `scripts/preview_phase3_probe.py` | _fill in_ | _run 1 args_ | `phase3_embedded.json` |
-| — | `summary.verdict.verdict` = _fill in_ (`PASS` / `FAIL` / `NOT_MEASURED`, with `verdict.unmeasured`) | `scripts/preview_phase3_probe.py` | _fill in_ | _run 1 and run 2 args_ | both artifacts |
+| 1 | `summary.box1.steady_state_rss_mb.p50` = **157.946 MB** (threshold `threshold_mb` = 600.0, `pass` = **true**) | `scripts/preview_phase3_probe.py` | `a202282` | _run 1 args_ | `phase3_embedded.json` |
+| 1 | `summary.box1.steady_state_rss_mb.max` = **171.418 MB** (`pass_on_max` = **true**; `steady_window_used` = 50 of 50 requested, `placeholder_paints_in_window` = 0, `cold_decode_count` = 100) | `scripts/preview_phase3_probe.py` | `a202282` | _run 1 args_ | `phase3_embedded.json` |
+| 2 | `summary.box2.ratio_median` = **4.242×** over `n_paths` = **89**, `dropped_timeouts.total` = **0** (threshold `threshold` = 5.0, `pass` = **false**) | `scripts/preview_phase3_probe.py` | `a202282` | _run 2 args_ | `phase3_fulldecode.json` |
+| 2 | `summary.box2.embedded_ttfp_ms.p50` / `full_decode_ttfp_ms.p50` = **381.124 ms** / **1342.884 ms** | `scripts/preview_phase3_probe.py` | `a202282` | _run 2 args_ | `phase3_fulldecode.json` |
+| 2 | distribution, per the box-2 decision row for a measured fail: `ratio_min` = **3.094**, `ratio_max` = **5.922**, `ratio_of_medians` = **3.523** | `scripts/preview_phase3_probe.py` | `a202282` | _run 2 args_ | `phase3_fulldecode.json` |
+| 3 | `summary.box3.pass` = **true** (`modal.zoom_pixmap_grew` = true, scale 1.0 → 1.25; `modal.pan_wired` = true, `pan_scroll_range` = 2896; `request_full_res_emitted` = true) | `scripts/preview_phase3_probe.py` | `a202282` | _run 1 args_ | `phase3_embedded.json` |
+| 4 | `summary.box4.pass` = **true** (`modal.label_valid_before_close` = true → `label_valid_after_close` = false; `full_qimage_none_after_close` = true, `dialog_valid_after_close` = false) | `scripts/preview_phase3_probe.py` | `a202282` | _run 1 args_ | `phase3_embedded.json` |
+| — | `summary.verdict.verdict` = **`FAIL`**, `verdict.failed` = `['box2']`, `verdict.unmeasured` = `[]` | `scripts/preview_phase3_probe.py` | `a202282` | _run 2 args_ | `phase3_fulldecode.json` |
 
-Session notes to record beside the table, because they change what the numbers
-mean: the `--root` tree (file count and `env.ext_histogram`), whether anything
-else was touching the NAS, `env.viewport_cap` and whether it was pinned, and
+Run 1 read alone reports `verdict: NOT_MEASURED` with `unmeasured: ['box2']`
+— that is the single-run state the probe describes ("re-run with
+`--force-full-decode --compare-json`"), not a second opinion about box 2. The
+session verdict is run 2's, which is where the pairing lives.
+
+### Session notes
+
+These change what the numbers mean, so they are recorded beside the table:
+the `--root` tree (file count and `env.ext_histogram`), whether anything else
+was touching the NAS, `env.viewport_cap` and whether it was pinned, and
 `host.total_ram_bytes` (the LRU budget is `min(256 MB, RAM/32)`, so a different
 machine gets a different budget).
 
-When the table is filled, write the session up as its own document alongside
-`nas-probe-results-2026-07.md` — that is the #784 → #785 shape: runbook and
-instrument in one PR, the session's readings in the next — and close #622 from
-there.
+* **`--root` tree:** `J:/圖片/20240601-0712大阪`, the owner's Osaka-trip
+  iPhone ProRAW library. `env.file_count` = 445, `env.ext_histogram` =
+  `{".dng": 445}` (under the `--ext` restriction below).
+* **`--ext .dng` was passed, and it is load-bearing on this root.** The
+  directory holds 1353 files matching the probe's default extension set (821
+  `.heic`, 445 `.dng`, 62 `.png`, 25 `.jpg`; plus 190 video files the probe
+  excludes by design). `discover_images` sorts case-insensitively by full
+  path, so the *default* extension set would have spent the first 100 clicks
+  on 97 `.heic` + 1 `.jpg` + 2 `.png` and **zero DNG** — box 2 would have
+  reported `not_measured` and box 1 would have described a HEIC run, while
+  issue #622's boxes 1 and 2 both say "on the J: NAS DNG mix". The
+  restriction was decided from a directory listing *before* the first run,
+  and both NAS runs used identical `--root`, `--clicks`, `--viewport-cap` and
+  `--ext`. **If your `--root` is a mixed library rather than a DNG-only tree,
+  pass `--ext` —** the prerequisite above ("pointing at a directory
+  containing the DNG mix") is not satisfied by a directory that merely
+  *contains* DNGs.
+* **Nothing else was touching the NAS** during either run: no scan, no second
+  copy of the app, no other agent — every concurrent worker was paused for the
+  pair, and the two runs went back to back (run 1 18:09:45–18:10:42, run 2
+  18:10:54–18:14:42 local; `timestamps.wall_s` 56.7 and 227.9).
+* **`env.viewport_cap` = 2048, `env.viewport_cap_pinned` = true** on both
+  runs. The rehearsal, which pins nothing, recorded `viewport_cap: 800` from
+  offscreen Qt's virtual screen — the concrete reason the pin exists.
+* **`host.total_ram_bytes` = 34,189,557,760** (31.8 GiB), so the budget
+  resolved to `min(256 MB, RAM/32)` = 256 MB, split
+  `cache_budget_bytes: {thumb: 67,108,864, preview: 201,326,592}`. Observed
+  peak `lru_occupancy_bytes.preview_max` = 39,565,490 B (~37.7 MiB), well
+  inside the 192 MB preview tier. A machine with less RAM gets a smaller
+  budget and a different box-1 curve.
+* **11 of the 100 clicked `.DNG` files took `non_raw_source` in *both* runs**
+  — the same 11 paths, so this is deterministic, not a flake. rawpy refuses
+  them (`Unsupported file format or not RAW file` in the run-2 log) and the
+  service falls through to the Pillow / Shell-WIC route, which still paints
+  them at the 2048 cap. They are 0.8–12.8 MB against 16–75 MB for the ProRAW
+  files around them, so they are very likely not ProRAW at all. The probe
+  excludes them from the box-2 pairing by construction (run 1 must genuinely
+  have taken the embedded route), which is why `n_paths` is 89 and not 100.
+  Recorded as an observation; nothing was changed for it.
+* **`modal.dialog_is_modal` = false**, exactly as the section above predicts.
+  Box 3 is scored on the behaviour (opens, zooms, pan wired), not on the word
+  "modal"; whether the issue text or the code should move is still the
+  owner's call.
+
+### What box 2's fail does and does not say
+
+`status: measured` with `dropped_timeouts.total: 0` over `n_paths: 89` means
+the pairing lost nothing: every file that took the embedded route in run 1
+took the forced full decode in run 2, and both arms completed. So the 4.242×
+median is a real reading of this library, not an artefact of a thin pairing.
+
+Per the box-2 decision row for a measured fail, the follow-up is the
+distribution rather than the one number: the per-path ratio spans
+3.094×–5.922×, and `ratio_of_medians` (3.523×) sits below `ratio_median`
+(4.242×) because the slowest full decodes are not the same files as the
+slowest embedded reads. That spread is what a heterogeneous DNG mix looks
+like — embedded thumb sizes differ per file — and it means the issue's "5×"
+is met for part of this library and not for the rest.
+
+What it does **not** say: nothing here indicts the Phase 1 fast path's
+existence. 89 of 100 DNG clicks took `embedded_jpeg`, the median click paints
+in 381 ms instead of 1343 ms, and box 1 lands at 158 MB against a 600 MB bar.
+The gap is between "markedly faster" as built and the specific 5× number the
+issue wrote down before anything had been measured. Closing #622 on this
+session means either re-stating that bar against the measured 4.242× or
+leaving box 2 open — an owner decision, not one this document makes.
+
+The session write-up alongside `nas-probe-results-2026-07.md` — the #784 →
+#785 shape, runbook and instrument in one PR, the session's readings in the
+next — is
+[`preview-phase3-results-2026-09.md`](preview-phase3-results-2026-09.md).
+#622 closes from there, on the owner's call about box 2.
 
 ## Citation template
 
