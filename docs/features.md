@@ -1062,7 +1062,11 @@ at `gh pr create` time for changes in `app/views/dialogs/` or
 
 If a change genuinely doesn't shift user-visible behaviour, the bypass
 token `[docs-not-needed: <reason>]` in the `gh pr create` body still
-works — but the reason should be specific and reviewer-visible.
+works — but the reason must be specific and reviewer-visible. Since
+#857 that is enforced, not advised: a token whose reason is blank
+bypasses nothing and blocks with "bypass token seen but its reason is
+empty — write why", both in the local hook and in the `pr-gates` CI
+job. The same rule applies to `[qa-not-needed: <reason>]`.
 
 ### Section schema
 
