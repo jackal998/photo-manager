@@ -609,6 +609,84 @@ class TestDngEmbeddedJpegFastPath:
                 f"{decoded.size}"
             )
 
+    def test_draft_undershoot_takes_a_near_miss_to_the_next_step(self):
+        """4032×3072-class frames must draft, not miss the step by 1.6 %.
+
+        Real failure mode (#865 round 2, measured on the J: NAS library): the
+        embedded frame of most files here is 4032×3024 against a 2048 cap.
+        Half-scale is 2016 — 1.6 % under the cap — so an exact-cap draft
+        request declines and the file decodes all 12.2 MP to paint 2048 px.
+        66 of the 89 measured DNGs were in exactly that position, which is why
+        the box-2 median did not move in the first re-measurement.
+
+        ``_DRAFT_UNDERSHOOT`` buys that step. The cost is the output long edge
+        landing at 2016 instead of 2048 — asserted here, because it is a real
+        (if sub-pixel-at-175 %) change and must not drift silently.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        raw = self._make_raw_mock_jpeg(4032, 3024)
+        with self._spy_decode_calls() as calls:
+            result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
+
+        assert calls.draft, "a 4032×3024 frame at cap 2048 must draft"
+        assert max(calls.draft[0]["after"]) <= 2016, (
+            f"the near-miss must be taken to half scale; libjpeg reported "
+            f"{calls.draft[0]['after']}"
+        )
+        assert calls.transpose and max(calls.transpose[0]["entry_size"]) <= 2016, (
+            "exif_transpose must run on the reduced image, not the 4032 one; "
+            f"entered at {calls.transpose[0]['entry_size'] if calls.transpose else None}"
+        )
+        assert calls.thumbnail and max(calls.thumbnail[0]["entry_size"]) <= 2016
+        assert result is not None
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.size == (2016, 1512), (
+                f"expected the half-scale output, got {decoded.size}"
+            )
+            assert max(decoded.size) <= 2048, "must never exceed the cap"
+            assert max(decoded.size) >= 2048 * (1 - svc_mod._DRAFT_UNDERSHOOT), (
+                "must never fall further under the cap than the declared "
+                f"tolerance; got {decoded.size}"
+            )
+
+    def test_draft_declines_when_the_step_would_undershoot_too_far(self):
+        """The other side of the tolerance: a 4.8 % undershoot is refused.
+
+        3900×2925 at cap 2048 — half scale is 1950, which is 4.8 % under the
+        cap, well past ``_DRAFT_UNDERSHOOT``. draft must decline, the image
+        must decode at full size, and the output must land exactly on the cap.
+
+        Real failure mode: a tolerance implemented as "always take the next
+        step down" would silently ship previews at 1950 px, and every image
+        whose half-scale is far below the cap would lose resolution for a
+        speed-up nobody asked for. This is the false-positive half of the
+        gate — without it the constant could be anything and no test would
+        notice.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        raw = self._make_raw_mock_jpeg(3900, 2925)
+        with self._spy_decode_calls() as calls:
+            result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
+
+        assert calls.draft, "draft is still called — it is what declines"
+        assert calls.draft[0]["after"] == (3900, 2925), (
+            f"a 4.8 % undershoot must be refused; draft reduced to "
+            f"{calls.draft[0]['after']}"
+        )
+        assert calls.thumbnail and calls.thumbnail[0]["entry_size"] == (3900, 2925)
+        assert result is not None
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.size == (2048, 1536), (
+                f"a declined draft must still land exactly on the cap; got "
+                f"{decoded.size}"
+            )
+
     def test_draft_preserves_exif_orientation(self):
         """Orientation=6 must still be applied after the draft.
 

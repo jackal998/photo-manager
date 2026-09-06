@@ -376,7 +376,11 @@ Levers that would move it, none of them built here and none of them inside
   a product decision, and #622 explicitly put the cap out of scope.
 * **Let `draft` undershoot by a small tolerance.** Accepting 2016 × 1512
   instead of 2048 × 1536 (1.6 % on the long edge) would halve the body decode.
-  It changes output geometry, which #865 was required not to do.
+  **Built after this session**, on the owner's call, as
+  `_DRAFT_UNDERSHOOT = 0.02` — see the third re-measurement below for whether
+  it moved box 2. It does change output geometry, by up to 2 % of the long
+  edge, which is why it was raised here as an owner decision rather than
+  folded into the first change.
 * **Read less over SMB.** `rawpy.imread` pulls the whole DNG before
   `extract_thumb` can run. Untested, larger, and a different issue.
 * **Re-state the bar** against the measured distribution.
