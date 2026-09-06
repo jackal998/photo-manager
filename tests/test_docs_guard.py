@@ -500,6 +500,98 @@ class TestManifestRepositorySchemaGate:
         assert rc == 2
 
 
+# ── bypass token: the reason must be non-blank (#857) ─────────────────────
+
+
+class TestBypassEmptyReason:
+    """PR #856 pasted a brief's template text verbatim — ``[docs-not-needed:]``
+    with no reason — and the gate reported a bypass and passed. A copy-pasted
+    placeholder must not disable the guard, and the developer must be told
+    what to fix rather than reading the generic "no docs touched" text.
+
+    Both halves are tested by name: the empty / whitespace-only forms BLOCK,
+    and every ordinary real token still BYPASSES (a guard that refuses
+    everything is as broken as one that refuses nothing).
+    """
+
+    # ── the empty form must no longer bypass ──────────────────────────────
+
+    def test_empty_reason_blocks_and_names_the_problem(self, monkeypatch, capsys):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: thing' --body 'body [docs-not-needed:]'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "bypass token seen but its reason is empty" in err
+        assert "docs-not-needed: <reason>" in err
+
+    def test_whitespace_only_reason_blocks(self, monkeypatch, capsys):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: thing [docs-not-needed:   ]'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 2
+        assert "its reason is empty" in capsys.readouterr().err
+
+    def test_empty_reason_blocks_on_behavioural_path_too(self, monkeypatch, capsys):
+        """The #262 behavioural-modify path has its own block message; the
+        empty-token explanation must reach it too, not just the generic one."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'fix: dialog copy [docs-not-needed:]'",
+            changed=["app/views/dialogs/execute_action_dialog.py"],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 2
+        assert "its reason is empty" in capsys.readouterr().err
+
+    # ── every ordinary real token must still bypass ───────────────────────
+
+    def test_ordinary_reason_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'refactor [docs-not-needed: internal refactor]'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 0
+
+    def test_punctuation_heavy_reason_still_bypasses(self, monkeypatch):
+        """A real reason carries commas, colons, dashes, slashes, #refs and
+        parentheses — only ``]`` ends the token."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body "
+            "'[docs-not-needed: guard-only change (see #857): scripts/hooks/*.py "
+            "+ tests — no user-visible behaviour, 100% internal]'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 0
+
+    def test_reason_after_leading_whitespace_still_bypasses(self, monkeypatch):
+        """Whitespace BEFORE a real reason is normal formatting, not a blank
+        reason — the two must not be confused."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x [docs-not-needed:    real reason here]'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 0
+
+    def test_single_character_reason_still_bypasses(self, monkeypatch):
+        """The pre-existing ``[docs-not-needed: x]`` shape stays valid — the
+        fix must not raise the bar beyond "non-blank"."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body 'whatever [docs-not-needed: x] more'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 0
+
+
 # ── CI mode (#273) ────────────────────────────────────────────────────────
 
 
@@ -554,6 +646,24 @@ class TestCiMode:
             "PR_BODY", "details here\n[docs-not-needed: internal scaffold]\n"
         )
         assert mod.main() == 0
+
+    def test_ci_mode_blocks_on_empty_reason_token(self, monkeypatch, capsys):
+        """#857: the hole existed server-side too — pr-gates.yml feeds
+        PR_TITLE + PR_BODY into the same check, so a pasted placeholder in
+        the PR body passed the CI gate. It must block there as well."""
+        mod = _load_hook()
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "app/views/dialogs/new_dialog.py",
+        ])
+        monkeypatch.setattr(mod, "_new_files", lambda: {
+            "app/views/dialogs/new_dialog.py",
+        })
+        monkeypatch.setattr(sys, "argv", ["docs_guard.py", "--ci"])
+        monkeypatch.setenv("PR_TITLE", "feat: new dialog")
+        monkeypatch.setenv("PR_BODY", "## What\ndetails\n[docs-not-needed:]\n")
+        rc = mod.main()
+        assert rc == 2
+        assert "bypass token seen but its reason is empty" in capsys.readouterr().err
 
     def test_diff_base_env_var_overrides_default(self, monkeypatch):
         """DIFF_BASE plumbing: the git diff command must include the

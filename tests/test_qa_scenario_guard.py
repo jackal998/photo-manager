@@ -240,6 +240,75 @@ class TestBypassTokenShape:
         assert rc == 2
 
 
+# ── bypass token: the reason must be non-blank (#857) ─────────────────────
+
+
+class TestBypassEmptyReason:
+    """Twin of ``tests/test_docs_guard.py::TestBypassEmptyReason``. PR #856
+    pasted ``[qa-not-needed:]`` from a brief's template and the gate reported
+    a bypass and passed. A placeholder with no reason must block — and every
+    ordinary real token must still bypass.
+    """
+
+    # ── the empty form must no longer bypass ──────────────────────────────
+
+    def test_empty_reason_blocks_and_names_the_problem(self, monkeypatch, capsys):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: lock' --body 'body [qa-not-needed:]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "bypass token seen but its reason is empty" in err
+        assert "qa-not-needed: <reason>" in err
+
+    def test_whitespace_only_reason_blocks(self, monkeypatch, capsys):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: lock [qa-not-needed:   ]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 2
+        assert "its reason is empty" in capsys.readouterr().err
+
+    # ── every ordinary real token must still bypass ───────────────────────
+
+    def test_ordinary_reason_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'refactor [qa-not-needed: pure rename]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+    def test_punctuation_heavy_reason_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body "
+            "'[qa-not-needed: covered by s14/s32 (see #857): no new flow — "
+            "handler signature only, 1:1 rename]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+    def test_reason_after_leading_whitespace_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x [qa-not-needed:    real reason here]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+    def test_single_character_reason_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body 'whatever [qa-not-needed: x] more'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+
 # ── CI mode (#273) ────────────────────────────────────────────────────────
 
 
@@ -275,6 +344,20 @@ class TestCiMode:
             "PR_BODY", "details\n[qa-not-needed: pure rename, no UX change]\n"
         )
         assert mod.main() == 0
+
+    def test_ci_mode_blocks_on_empty_reason_token(self, monkeypatch, capsys):
+        """#857: pr-gates.yml feeds PR_TITLE + PR_BODY into the same check,
+        so a pasted placeholder in the PR body passed the CI gate too."""
+        mod = _load_hook(monkeypatch)
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "app/views/handlers/file_operations.py",
+        ])
+        monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
+        monkeypatch.setenv("PR_TITLE", "feat: lock state")
+        monkeypatch.setenv("PR_BODY", "## What\ndetails\n[qa-not-needed:]\n")
+        rc = mod.main()
+        assert rc == 2
+        assert "bypass token seen but its reason is empty" in capsys.readouterr().err
 
     def test_diff_base_env_var_overrides_default(self, monkeypatch):
         mod = _load_hook(monkeypatch)

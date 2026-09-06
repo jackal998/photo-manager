@@ -20,6 +20,11 @@ refactor with zero user-visible effect, a translation-string update, a
 docstring fix. The reason becomes part of the PR title/body so the
 choice is visible in code review.
 
+The reason must be **non-blank** (#857). ``[qa-not-needed:]`` and
+``[qa-not-needed:   ]`` do not bypass anything: they block with a
+message naming the empty reason. A pasted template placeholder used to
+satisfy the old ``[^\\]]*`` pattern and disabled this gate silently.
+
 Hook protocol
 -------------
 * stdin  — JSON with shape ``{"tool_name": ..., "tool_input": {"command": ...}}``
@@ -53,7 +58,31 @@ USER_FACING_PATTERNS = (
     re.compile(r"^app/views/workers/.*\.py$"),
 )
 QA_SCENARIO_PATTERN = re.compile(r"^qa/scenarios/s\d+.*\.py$")
-BYPASS_PATTERN = re.compile(r"\[qa-not-needed:[^\]]*\]")
+# The reason must be non-blank: at least one non-space character after the
+# colon (leading whitespace is fine), then anything up to the closing ``]``.
+# Punctuation, unicode and ``#refs`` all still match — only ``]`` ends it.
+BYPASS_PATTERN = re.compile(r"\[qa-not-needed:\s*[^\]\s][^\]]*\]")
+
+# The placeholder form (#857): a token whose reason is blank. The old
+# ``[^\]]*`` matched zero characters, so a pasted template — the literal
+# ``[qa-not-needed:]`` — was a valid bypass and disabled this gate
+# silently, in CI as well as in the local hook. It now blocks, and this
+# pattern exists so the block message can name the real problem instead of
+# falling through to the generic "no qa scenario" text.
+EMPTY_BYPASS_PATTERN = re.compile(r"\[qa-not-needed:\s*\]")
+
+_EMPTY_BYPASS_MSG_LINES = (
+    "  bypass token seen but its reason is empty — write why.",
+    "",
+    "    A `[qa-not-needed:]` with no reason does not bypass this gate.",
+    "    The reason IS the mechanism: it is what a reviewer reads to judge",
+    "    the call, so a pasted placeholder must not silently disable the",
+    "    check.",
+    "",
+    "    Write `[qa-not-needed: <reason>]` with a specific reason, or add",
+    "    the driver described below.",
+    "",
+)
 
 
 def _diff_base() -> str:
@@ -89,6 +118,12 @@ def check(pr_text: str) -> tuple[int, str]:
     if BYPASS_PATTERN.search(pr_text):
         return 0, ""
 
+    # A token with a blank reason (#857) no longer bypasses. It doesn't
+    # block on its own either — if the gate has nothing to say, a vestigial
+    # token is harmless — but when the gate DOES fire, the message leads
+    # with the empty reason so the developer fixes the right thing.
+    empty_bypass = bool(EMPTY_BYPASS_PATTERN.search(pr_text))
+
     changed = _changed_files()
     if not changed:
         # No diff against the base — nothing to check (or no remote).
@@ -101,11 +136,10 @@ def check(pr_text: str) -> tuple[int, str]:
     qa_changes = [f for f in changed if QA_SCENARIO_PATTERN.match(f)]
 
     if user_facing and not qa_changes:
-        msg_lines = [
-            "QA-scenario guard fired — blocking `gh pr create`.",
-            "",
-            "  user-facing files changed:",
-        ]
+        msg_lines = ["QA-scenario guard fired — blocking `gh pr create`.", ""]
+        if empty_bypass:
+            msg_lines += list(_EMPTY_BYPASS_MSG_LINES)
+        msg_lines.append("  user-facing files changed:")
         for f in user_facing:
             msg_lines.append(f"    {f}")
         msg_lines += [
@@ -119,7 +153,8 @@ def check(pr_text: str) -> tuple[int, str]:
             "    a) Add or extend a qa/scenarios/sNN_*.py driver, OR",
             "    b) Include `[qa-not-needed: <reason>]` in the gh pr create",
             "       command (title or body) — the reason will be visible in",
-            "       review so the choice is auditable.",
+            "       review so the choice is auditable. It must be non-blank:",
+            "       an empty `[qa-not-needed:]` is rejected.",
         ]
         return 2, "\n".join(msg_lines) + "\n"
 

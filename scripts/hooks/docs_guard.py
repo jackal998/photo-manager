@@ -24,6 +24,11 @@ fix, an internal refactor with zero structural impact. The reason
 becomes part of the PR title/body so the choice is visible in code
 review.
 
+The reason must be **non-blank** (#857). ``[docs-not-needed:]`` and
+``[docs-not-needed:   ]`` do not bypass anything: they block with a
+message naming the empty reason. A pasted template placeholder used to
+satisfy the old ``[^\\]]*`` pattern and disabled this gate silently.
+
 Hook protocol
 -------------
 * stdin  — JSON ``{"tool_name": "Bash", "tool_input": {"command": "gh pr create …"}}``
@@ -98,7 +103,31 @@ _DOC_BEHAVIOURAL_MODIFY_PATTERN = re.compile(
 _BEHAVIOURAL_FEATURES_DOC = "docs/features.md"
 _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD = 10
 
-_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:[^\]]*\]")
+# The reason must be non-blank: at least one non-space character after the
+# colon (leading whitespace is fine), then anything up to the closing ``]``.
+# Punctuation, unicode and ``#refs`` all still match — only ``]`` ends it.
+_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:\s*[^\]\s][^\]]*\]")
+
+# The placeholder form (#857): a token whose reason is blank. The old
+# ``[^\]]*`` matched zero characters, so a pasted template — the literal
+# ``[docs-not-needed:]`` — was a valid bypass and disabled this gate
+# silently, in CI as well as in the local hook. It now blocks, and this
+# pattern exists so the block message can name the real problem instead of
+# falling through to the generic "no docs touched" text.
+_EMPTY_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:\s*\]")
+
+_EMPTY_BYPASS_MSG_LINES = (
+    "  bypass token seen but its reason is empty — write why.",
+    "",
+    "    A `[docs-not-needed:]` with no reason does not bypass this gate.",
+    "    The reason IS the mechanism: it is what a reviewer reads to judge",
+    "    the call, so a pasted placeholder must not silently disable the",
+    "    check.",
+    "",
+    "    Write `[docs-not-needed: <reason>]` with a specific reason, or drop",
+    "    the token and update the docs below.",
+    "",
+)
 
 # Schema-defining markers for the manifest_repository.py semantics-aware
 # gate (below). A modify to that file only needs a README schema-table
@@ -292,6 +321,12 @@ def check(pr_text: str) -> tuple[int, str]:
     if _BYPASS_PATTERN.search(pr_text):
         return 0, ""
 
+    # A token with a blank reason (#857) no longer bypasses. It doesn't
+    # block on its own either — if the gate has nothing to say, a vestigial
+    # token is harmless — but when the gate DOES fire, the message leads
+    # with the empty reason so the developer fixes the right thing.
+    empty_bypass = bool(_EMPTY_BYPASS_PATTERN.search(pr_text))
+
     changed = _changed_files()
     if not changed:
         return 0, ""
@@ -312,11 +347,12 @@ def check(pr_text: str) -> tuple[int, str]:
         if _DOC_BEHAVIOURAL_MODIFY_PATTERN.match(f) and f not in added
     ]
     if behavioural and _BEHAVIOURAL_FEATURES_DOC not in docs:
-        msg_lines = [
-            "docs guard fired — blocking `gh pr create`.",
-            "",
-            f"  user-visible behaviour change without a {_BEHAVIOURAL_FEATURES_DOC} update:",
-        ]
+        msg_lines = ["docs guard fired — blocking `gh pr create`.", ""]
+        if empty_bypass:
+            msg_lines += list(_EMPTY_BYPASS_MSG_LINES)
+        msg_lines.append(
+            f"  user-visible behaviour change without a {_BEHAVIOURAL_FEATURES_DOC} update:"
+        )
         for f in behavioural:
             msg_lines.append(f"    {f}")
         msg_lines += [
@@ -333,7 +369,8 @@ def check(pr_text: str) -> tuple[int, str]:
             "    c) Include `[docs-not-needed: <reason>]` in the gh pr create",
             "       command (title or body) when the change is genuinely not",
             "       user-visible (e.g. an internal refactor that preserves",
-            "       behaviour byte-for-byte).",
+            "       behaviour byte-for-byte). The reason must be non-blank —",
+            "       an empty `[docs-not-needed:]` is rejected.",
         ]
         return 2, "\n".join(msg_lines) + "\n"
 
@@ -345,11 +382,10 @@ def check(pr_text: str) -> tuple[int, str]:
         # take the strict path above.)
         return 0, ""
 
-    msg_lines = [
-        "docs guard fired — blocking `gh pr create`.",
-        "",
-        "  doc-relevant changes on this branch:",
-    ]
+    msg_lines = ["docs guard fired — blocking `gh pr create`.", ""]
+    if empty_bypass:
+        msg_lines += list(_EMPTY_BYPASS_MSG_LINES)
+    msg_lines.append("  doc-relevant changes on this branch:")
     seen: set[str] = set()
     for f, suggested in relevant:
         if f in seen:
@@ -371,7 +407,8 @@ def check(pr_text: str) -> tuple[int, str]:
         "       that this file-touch gate cannot see.",
         "    c) Include `[docs-not-needed: <reason>]` in the gh pr create",
         "       command (title or body) — the reason will be visible in",
-        "       review so the choice is auditable.",
+        "       review so the choice is auditable. It must be non-blank:",
+        "       an empty `[docs-not-needed:]` is rejected.",
     ]
     return 2, "\n".join(msg_lines) + "\n"
 
