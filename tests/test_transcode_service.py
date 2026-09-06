@@ -89,6 +89,18 @@ def _probe_streams(*streams: dict) -> _ProbeResult:
     return _ProbeResult(returncode=0, stdout=payload)
 
 
+def _h264_video(pix_fmt: str | None = "yuv420p") -> dict:
+    """An h264 video stream entry, 8-bit 4:2:0 unless told otherwise.
+
+    ``pix_fmt=None`` models an ffprobe build that reported no pixel
+    format for the stream.
+    """
+    stream: dict = {"codec_type": "video", "codec_name": "h264"}
+    if pix_fmt is not None:
+        stream["pix_fmt"] = pix_fmt
+    return stream
+
+
 # ---------------------------------------------------------------------------
 # Cache-key determinism
 # ---------------------------------------------------------------------------
@@ -463,7 +475,7 @@ class TestStreamCopySelection:
         recorder = _run_with(
             tmp_path,
             _probe_streams(
-                {"codec_type": "video", "codec_name": "h264"},
+                _h264_video(),
                 {"codec_type": "audio", "codec_name": "aac"},
             ),
         )
@@ -478,7 +490,7 @@ class TestStreamCopySelection:
         """A silent clip has no audio stream to disqualify it."""
         recorder = _run_with(
             tmp_path,
-            _probe_streams({"codec_type": "video", "codec_name": "h264"}),
+            _probe_streams(_h264_video()),
         )
         assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy"]
 
@@ -500,7 +512,7 @@ class TestStreamCopySelection:
         recorder = _run_with(
             tmp_path,
             _probe_streams(
-                {"codec_type": "video", "codec_name": "h264"},
+                _h264_video(),
                 {"codec_type": "audio", "codec_name": "ac3"},
             ),
         )
@@ -511,7 +523,7 @@ class TestStreamCopySelection:
         recorder = _run_with(
             tmp_path,
             _probe_streams(
-                {"codec_type": "video", "codec_name": "h264"},
+                _h264_video(),
                 {"codec_type": "audio", "codec_name": "aac"},
                 {"codec_type": "audio", "codec_name": "pcm_s16le"},
             ),
@@ -524,7 +536,7 @@ class TestStreamCopySelection:
         recorder = _run_with(
             tmp_path,
             _probe_streams(
-                {"codec_type": "video", "codec_name": "h264"},
+                _h264_video(),
                 {"codec_type": "audio", "codec_name": "aac"},
                 {"codec_type": "data", "codec_name": "bin_data"},
             ),
@@ -533,6 +545,67 @@ class TestStreamCopySelection:
         # …and the copy must not try to mux that track into MP4.
         assert "0:v:0" in recorder.ffmpeg_cmds[0]
         assert "0:a:0?" in recorder.ffmpeg_cmds[0]
+
+    def test_ten_bit_h264_is_reencoded_not_copied(self, tmp_path: Path) -> None:
+        """`codec_name == "h264"` does not mean the browser can decode it.
+
+        H.264 High 10 (10-bit, e.g. Sony/Panasonic bodies and some screen
+        recorders) probes as plain `h264`. Copying one through would hand
+        the <video> element a file no mainstream browser decodes — worse
+        than the pre-#853 encode, which at least produced something.
+        """
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(pix_fmt="yuv420p10le"),
+                {"codec_type": "audio", "codec_name": "aac"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_422_h264_is_reencoded_not_copied(self, tmp_path: Path) -> None:
+        """Same for 4:2:2 H.264 — High 4:2:2 is not a browser profile."""
+        recorder = _run_with(
+            tmp_path, _probe_streams(_h264_video(pix_fmt="yuv422p"))
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_full_range_420_is_still_copied(self, tmp_path: Path) -> None:
+        """`yuvj420p` is the same 8-bit 4:2:0 data with full-range flags.
+
+        Browsers decode it, so the pixel-format gate must not reject it —
+        rejecting it would put ordinary JPEG-range captures back on the
+        pointless encode this PR exists to remove.
+        """
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(pix_fmt="yuvj420p"),
+                {"codec_type": "audio", "codec_name": "aac"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy"]
+
+    def test_missing_pix_fmt_is_reencoded(self, tmp_path: Path) -> None:
+        """No pix_fmt reported → no verdict → the safe path, not the copy."""
+        recorder = _run_with(
+            tmp_path, _probe_streams(_h264_video(pix_fmt=None))
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
+
+    def test_encode_normalises_to_8bit_420(self, tmp_path: Path) -> None:
+        """The encode must force yuv420p, not inherit the source's format.
+
+        Without it libx264 keeps a 10-bit / 4:2:2 input's pixel format, so
+        routing such a source to the encode would produce another file the
+        browser refuses — making the pix_fmt gate above pointless.
+        """
+        recorder = _run_with(
+            tmp_path, _probe_streams(_h264_video(pix_fmt="yuv420p10le"))
+        )
+        cmd = recorder.ffmpeg_cmds[0]
+        assert _recipe_of(cmd) == "encode"
+        assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
 
     def test_cache_hit_runs_no_probe(self, tmp_path: Path) -> None:
         """One ffprobe per file, not per request: a warm cache probes zero
@@ -545,7 +618,7 @@ class TestStreamCopySelection:
         cached.write_bytes(b"already-transcoded")
 
         recorder = _FfmpegRecorder(
-            _probe_streams({"codec_type": "video", "codec_name": "h264"})
+            _probe_streams(_h264_video())
         )
         with patch("subprocess.run", side_effect=recorder):
             result = svc.get_transcoded_path(source)
@@ -613,7 +686,7 @@ class TestProbeFailureModes:
         source = tmp_path / "clip.mov"
         source.write_bytes(b"\x00" * 10)
         recorder = _FfmpegRecorder(
-            _probe_streams({"codec_type": "video", "codec_name": "h264"}),
+            _probe_streams(_h264_video()),
             fail_copy=True,
         )
         with patch("subprocess.run", side_effect=recorder):

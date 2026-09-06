@@ -10,10 +10,13 @@ codec, so before #853 every source reaching this service was re-encoded
 with libx264 — including the H.264 ``.mov`` files an iPhone library is
 full of, which only got here because the #787 pre-check has to guess from
 the file EXTENSION.  On a cache miss the service now asks ffprobe once
-what the source actually holds; when it is already H.264 with
-browser-playable audio the cached MP4 is produced by a stream COPY
+what the source actually holds; when it is already 8-bit 4:2:0 H.264
+with browser-playable audio the cached MP4 is produced by a stream COPY
 (remux) instead of an encode: same bytes for the video track, no quality
-loss, no encode stall.
+loss, no encode stall.  The pixel format is part of the verdict because
+``codec_name == "h264"`` also covers High 10 / 4:2:2 / 4:4:4, which no
+mainstream browser decodes — and for the same reason the encode now
+forces ``-pix_fmt yuv420p`` rather than inheriting the source's.
 
 Why a remux and not "serve the original bytes": the cache artifact stays
 a plain MP4 that every engine can demux.  Handing back the source
@@ -68,13 +71,25 @@ _KEY_LOCKS: dict[str, threading.Lock] = {}
 # Mirror exif.py's _CREATE_NO_WINDOW constant.
 _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
-# Codec passthrough (#853).  A source matching BOTH of these can be
+# Codec passthrough (#853).  A source matching ALL THREE of these can be
 # remuxed into MP4 with -c copy instead of re-encoded: every target
-# browser decodes H.264 video, and AAC/MP3 are the audio codecs that are
-# both browser-playable and legal in an MP4 container.  Anything else
-# (HEVC, VP9, AV1, PCM/AC-3/Opus audio, …) keeps the libx264 encode.
+# browser decodes 8-bit 4:2:0 H.264 video, and AAC/MP3 are the audio
+# codecs that are both browser-playable and legal in an MP4 container.
+# Anything else (HEVC, VP9, AV1, PCM/AC-3/Opus audio, …) keeps the
+# libx264 encode.
 _COPYABLE_VIDEO_CODEC = "h264"
 _COPYABLE_AUDIO_CODECS = frozenset({"aac", "mp3"})
+
+# `codec_name == "h264"` is NOT enough to promise a browser can decode it.
+# H.264 High 10 / High 4:2:2 / High 4:4:4 (10-bit and 4:2:2 output from
+# Sony and Panasonic bodies, and from some screen recorders) is still
+# "h264" to ffprobe, and no mainstream browser decodes those profiles —
+# copying one through would hand the <video> element a file it refuses,
+# where the pre-#853 encode at least produced something.  The pixel
+# format is the cheapest reliable proxy for the profile, and it comes
+# from the same single probe.  `yuvj420p` is the same 8-bit 4:2:0 data
+# with full-range flags, which browsers handle.
+_COPYABLE_PIX_FMTS = frozenset({"yuv420p", "yuvj420p"})
 
 # ffprobe only reads container headers, so this is generous even for a
 # cold file on a NAS.  Bounded so a wedged probe can never hold the
@@ -310,6 +325,12 @@ class TranscodeService:
             # streaming + a real progress % is the proper follow-up fix.
             "-preset", "ultrafast",
             "-crf", "23",
+            # #853: without this libx264 inherits the SOURCE pixel format,
+            # so a 10-bit or 4:2:2 input re-encoded to 10-bit/4:2:2 H.264 —
+            # which browsers refuse exactly as they refuse the original.
+            # Routing such a source here (instead of copying it) is only
+            # worth anything if the encode normalises, so it does.
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-movflags", "+faststart",
             "-f", "mp4",
@@ -362,8 +383,9 @@ class TranscodeService:
         """Whether ``source`` can be remuxed into MP4 without re-encoding.
 
         True only when ffprobe reports that the first video stream is
-        H.264 and every audio stream is one of
-        :data:`_COPYABLE_AUDIO_CODECS`.
+        H.264 **in a browser-decodable pixel format**
+        (:data:`_COPYABLE_PIX_FMTS` — 8-bit 4:2:0) and every audio stream
+        is one of :data:`_COPYABLE_AUDIO_CODECS`.
 
         Never raises and never blocks a request: ffprobe missing, a
         non-zero exit, a timeout, unparseable output, or a file with no
@@ -379,9 +401,9 @@ class TranscodeService:
             self._ffprobe,
             "-v", "error",
             "-print_format", "json",
-            # Only the two fields the verdict needs; keeps the output
+            # Only the three fields the verdict needs; keeps the output
             # small and the parse trivial.
-            "-show_entries", "stream=codec_type,codec_name",
+            "-show_entries", "stream=codec_type,codec_name,pix_fmt",
             str(source),
         ]
         try:
@@ -420,6 +442,12 @@ class TranscodeService:
             # unknown territory, so keep the encode.
             return False
         if video[0].get("codec_name") != _COPYABLE_VIDEO_CODEC:
+            return False
+        if video[0].get("pix_fmt") not in _COPYABLE_PIX_FMTS:
+            # High 10 / 4:2:2 / 4:4:4 H.264, or an ffprobe build that did
+            # not report pix_fmt at all.  Either way we cannot promise the
+            # browser can decode the bitstream, so re-encode it (which
+            # normalises to yuv420p — see _encode_cmd).
             return False
 
         return all(
