@@ -1,0 +1,1 @@
+Require a non-blank reason in the `[docs-not-needed: ...]` and `[qa-not-needed: ...]` PR-gate bypass tokens, so a pasted placeholder can no longer disable either gate silently (#857).
