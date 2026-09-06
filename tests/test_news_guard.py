@@ -211,6 +211,29 @@ class TestFragment:
         )
         assert rc == 0
 
+    def test_pass_log_names_the_fragment_it_found(self, monkeypatch, capsys):
+        """A green run must say WHICH fragment satisfied it — otherwise a
+        triager cannot tell a real fragment from a bypass, and the old
+        inline gate's "Found news fragment(s)" line is lost."""
+        rc = _run(
+            monkeypatch,
+            added=("news/860.bugfix", "docs/whatever.md"),
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "news/860.bugfix" in out
+        assert "docs/whatever.md" not in out
+
+    def test_pass_log_distinguishes_a_bypass_from_a_fragment(
+        self, monkeypatch, capsys
+    ):
+        """The two green grounds must not look alike in the CI log — the
+        #858 bug was invisible precisely because a bypass printed a success
+        line nobody read closely."""
+        rc = _run(monkeypatch, body="[skip-news: comment typo]")
+        assert rc == 0
+        assert "bypass token" in capsys.readouterr().out
+
     def test_unknown_suffix_does_not_count(self, monkeypatch, capsys):
         """``news/860.txt`` is not a type towncrier builds — it must not be
         mistaken for a fragment."""

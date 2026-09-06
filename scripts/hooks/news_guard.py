@@ -143,16 +143,19 @@ def _rejected_bypass_lines(pr_text: str) -> tuple[str, ...]:
 
 
 def check(pr_text: str, added_files: Iterable[str]) -> tuple[int, str]:
-    """Decide the gate. Returns ``(exit_code, message)``."""
+    """Decide the gate. Returns ``(exit_code, message)`` — the message goes
+    to stdout when the gate passes and to stderr when it blocks, so a green
+    run still says on which of the two grounds it passed."""
     if _BYPASS_PATTERN.search(pr_text):
-        return 0, ""
+        return 0, "news-gate: bypass token with a reason present — gate passes.\n"
 
     fragments = [f for f in added_files if _NEWS_FRAGMENT_PATTERN.match(f)]
     if fragments:
         # A fragment satisfies the gate outright. A malformed leftover token
         # alongside it is vestigial, not a reason to block: what the gate
         # wants has already been delivered.
-        return 0, ""
+        found = "".join(f"  {f}\n" for f in fragments)
+        return 0, f"news-gate: found news fragment(s):\n{found}"
 
     msg_lines = [
         "",
@@ -178,10 +181,7 @@ def _added_files() -> Sequence[str]:
 
 def main() -> int:
     rc, msg = check(_pr_text(), _added_files())
-    if msg:
-        sys.stderr.write(msg)
-    else:
-        print("news-gate: satisfied (fragment found, or a bypass with a reason).")
+    (sys.stderr if rc else sys.stdout).write(msg)
     return rc
 
 
