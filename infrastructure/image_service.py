@@ -818,6 +818,11 @@ class ImageService:
         - LibRawNoThumbnailError is raised (no embedded thumb),
         - the thumb is too small,
         - or any other extraction error occurs.
+
+        The size check and the JPEG branch's ``draft()`` both run before any
+        pixel is decoded (#865), so a capped request decodes at the smallest
+        libjpeg reduction that still covers the cap and a rejected thumb costs
+        no decode at all. Output geometry is unaffected.
         """
         try:
             thumb = raw.extract_thumb()  # type: ignore[attr-defined]
@@ -829,6 +834,44 @@ class ImageService:
                 # gives correct orientation for portrait-grip ProRAW DNGs.
                 assert Image is not None and ImageOps is not None
                 with Image.open(io.BytesIO(bytes(thumb.data))) as pil_im:
+                    # True embedded size, read BEFORE draft() mutates the
+                    # reported size. Image.open is lazy, so this is the JPEG
+                    # header, not a decode (#865; same rule as
+                    # scanner/hasher.py:203).
+                    longest = max(pil_im.size)
+
+                    # Check size before committing. max() is invariant under
+                    # EXIF transposition (Orientation 5-8 swap the axes), so
+                    # this is the same verdict the post-transpose check used
+                    # to give — but a thumb that is about to be discarded no
+                    # longer pays for a full decode and a transposed copy
+                    # first.
+                    if viewport_cap > 0 and longest < viewport_cap:
+                        return None  # too small — fall through to postprocess
+
+                    if viewport_cap > 0:
+                        # #865 — libjpeg DCT shrink-on-load. Decode at the
+                        # largest 1/8, 1/4 or 1/2 reduction that still covers
+                        # the cap instead of at full size: on iPhone ProRAW
+                        # the embedded frame is the whole 8064x6048 sensor
+                        # (#826) against a 2048 cap, so this decodes 12 MP
+                        # rather than 48 MP, and the transpose and the LANCZOS
+                        # shrink below then run on that.
+                        #
+                        # Must precede exif_transpose, which calls load() —
+                        # after it, draft() is a silent no-op. Output geometry
+                        # is unchanged: draft never undershoots the requested
+                        # size in either axis, so thumbnail() still lands
+                        # exactly at the cap. Returns None when no reduction
+                        # applies, and is a no-op on non-JPEG data.
+                        #
+                        # Gated on > 0 because draft divides by the requested
+                        # size: draft("RGB", (0, 0)) would raise
+                        # ZeroDivisionError into the blanket except below and
+                        # silently strip the fast path from the full-res
+                        # viewer.
+                        pil_im.draft("RGB", (viewport_cap, viewport_cap))
+
                     try:
                         pil_im = ImageOps.exif_transpose(pil_im)
                     except (OSError, ValueError, AttributeError):
@@ -836,11 +879,6 @@ class ImageService:
                         # fall through to the un-rotated image rather than
                         # failing the whole load.
                         pass
-                    # Check size before committing
-                    if viewport_cap > 0:
-                        longest = max(pil_im.width, pil_im.height)
-                        if longest < viewport_cap:
-                            return None  # too small — fall through to postprocess
 
                     if viewport_cap > 0:
                         resampling = getattr(Image, "Resampling", Image)
