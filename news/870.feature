@@ -1,0 +1,1 @@
+Decode the DNG embedded-JPEG preview in draft mode: a click on an iPhone ProRAW file now decodes 12 MP instead of the full 48 MP sensor frame, cutting time-to-first-paint on those files from ~965 ms to ~505 ms on the J: NAS with identical output geometry and orientation (#865).
