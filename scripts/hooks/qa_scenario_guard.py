@@ -20,10 +20,12 @@ refactor with zero user-visible effect, a translation-string update, a
 docstring fix. The reason becomes part of the PR title/body so the
 choice is visible in code review.
 
-The reason must be **non-blank** (#857). ``[qa-not-needed:]`` and
-``[qa-not-needed:   ]`` do not bypass anything: they block with a
-message naming the empty reason. A pasted template placeholder used to
-satisfy the old ``[^\\]]*`` pattern and disabled this gate silently.
+The reason must be **non-blank** (#857) and must not be the documented
+placeholder ``<reason>`` itself (#858). ``[qa-not-needed:]``,
+``[qa-not-needed:   ]`` and ``[qa-not-needed: <reason>]`` do not bypass
+anything: they block with a message naming the problem. A pasted
+template placeholder used to satisfy the old ``[^\\]]*`` pattern and
+disabled this gate silently.
 
 Hook protocol
 -------------
@@ -61,7 +63,14 @@ QA_SCENARIO_PATTERN = re.compile(r"^qa/scenarios/s\d+.*\.py$")
 # The reason must be non-blank: at least one non-space character after the
 # colon (leading whitespace is fine), then anything up to the closing ``]``.
 # Punctuation, unicode and ``#refs`` all still match — only ``]`` ends it.
-BYPASS_PATTERN = re.compile(r"\[qa-not-needed:\s*[^\]\s][^\]]*\]")
+# The lookahead rejects one specific reason, the documented placeholder
+# itself (#858): ``[qa-not-needed: <reason>]`` is how the token is
+# *written down* — in README.md and in every brief that quotes the
+# convention — so accepting it means a PR body that merely explains the
+# token disables the gate.
+BYPASS_PATTERN = re.compile(
+    r"\[qa-not-needed:(?!\s*<reason>\s*\])\s*[^\]\s][^\]]*\]"
+)
 
 # The placeholder form (#857): a token whose reason is blank. The old
 # ``[^\]]*`` matched zero characters, so a pasted template — the literal
@@ -83,6 +92,40 @@ _EMPTY_BYPASS_MSG_LINES = (
     "    the driver described below.",
     "",
 )
+
+# The placeholder form (#858): a reason that is exactly the documented
+# ``<reason>``. Same failure as the empty token one step later — a brief's
+# template pasted verbatim, or the convention quoted in prose, silently
+# disabling the gate.
+PLACEHOLDER_BYPASS_PATTERN = re.compile(r"\[qa-not-needed:\s*<reason>\s*\]")
+
+_PLACEHOLDER_BYPASS_MSG_LINES = (
+    "  bypass token seen but its reason is the literal `<reason>`",
+    "  placeholder — write a real one.",
+    "",
+    "    `[qa-not-needed: <reason>]` is how this token is *documented*.",
+    "    Pasting it verbatim, or quoting it in prose, does not bypass the",
+    "    gate — otherwise any PR that explains the convention would turn",
+    "    it off.",
+    "",
+    "    Write a specific reason, or add the driver described below.",
+    "",
+)
+
+
+def _rejected_bypass_lines(pr_text: str) -> tuple[str, ...]:
+    """Explain a ``[qa-not-needed:`` token that did not bypass.
+
+    Empty (#857) and placeholder (#858) reasons do not block on their own —
+    if the gate has nothing to say, a vestigial token is harmless — but when
+    the gate DOES fire, the message must lead with the real problem so the
+    developer fixes the right thing instead of reading the generic text.
+    """
+    if PLACEHOLDER_BYPASS_PATTERN.search(pr_text):
+        return _PLACEHOLDER_BYPASS_MSG_LINES
+    if EMPTY_BYPASS_PATTERN.search(pr_text):
+        return _EMPTY_BYPASS_MSG_LINES
+    return ()
 
 
 def _diff_base() -> str:
@@ -118,11 +161,7 @@ def check(pr_text: str) -> tuple[int, str]:
     if BYPASS_PATTERN.search(pr_text):
         return 0, ""
 
-    # A token with a blank reason (#857) no longer bypasses. It doesn't
-    # block on its own either — if the gate has nothing to say, a vestigial
-    # token is harmless — but when the gate DOES fire, the message leads
-    # with the empty reason so the developer fixes the right thing.
-    empty_bypass = bool(EMPTY_BYPASS_PATTERN.search(pr_text))
+    rejected_bypass = _rejected_bypass_lines(pr_text)
 
     changed = _changed_files()
     if not changed:
@@ -137,8 +176,7 @@ def check(pr_text: str) -> tuple[int, str]:
 
     if user_facing and not qa_changes:
         msg_lines = ["QA-scenario guard fired — blocking `gh pr create`.", ""]
-        if empty_bypass:
-            msg_lines += list(_EMPTY_BYPASS_MSG_LINES)
+        msg_lines += list(rejected_bypass)
         msg_lines.append("  user-facing files changed:")
         for f in user_facing:
             msg_lines.append(f"    {f}")

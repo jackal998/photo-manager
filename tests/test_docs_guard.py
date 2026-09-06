@@ -591,6 +591,35 @@ class TestBypassEmptyReason:
         )
         assert rc == 0
 
+    # ── the documented placeholder is not a reason (#858) ─────────────────
+
+    def test_literal_placeholder_reason_blocks(self, monkeypatch, capsys):
+        """#858: ``<reason>`` is a non-blank string, so #857's pattern
+        accepted it — and that is exactly the text README.md, docs/features.md
+        and every brief template carry. A PR body that pastes or quotes the
+        convention must not thereby disable the gate."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: thing' --body "
+            "'Bypass with `[docs-not-needed: <reason>]` in the body.'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "literal `<reason>`" in err
+
+    def test_real_reason_containing_the_word_still_bypasses(self, monkeypatch):
+        """Only a reason that IS exactly ``<reason>`` is rejected — a real
+        reason that happens to mention it must still bypass, or the guard
+        blocks the very PR that documents the token."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body "
+            "'[docs-not-needed: doc-only: renames the <reason> placeholder]'",
+            changed=["app/views/dialogs/new_dialog.py"],
+        )
+        assert rc == 0
+
 
 # ── CI mode (#273) ────────────────────────────────────────────────────────
 
