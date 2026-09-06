@@ -14,6 +14,13 @@
 #
 # Invariant: the number of rows in this file must equal len(ALL_SCENARIOS).
 # Enforced by scripts/check_qa_parity.py.
+#
+# Write-settling contract (#850): the write helpers in qa/web/_invariants.py
+# (set_row_decision, click_context_item for the items in _CTX_ITEM_WRITES) do
+# not return until the API write their click caused has responded.  A driver
+# may therefore read GET /api/manifest straight after a write helper without
+# racing it; per-scenario polls that predate this contract are belt-and-braces,
+# not the mechanism.
 
 scenarios:
   - scenario: s01_happy_path
@@ -194,7 +201,7 @@ scenarios:
   - scenario: s35_lock_via_context_menu
     playwright_module: qa.web.scenarios.s35_lock_via_context_menu
     status: done
-    notes: "Lock/Unlock a row via the right-click context menu. (a) lock q95 → only q95 is_locked; (b) re-right-click q95 (menu now offers Unlock per the live is_locked) → unlock → all clear; (c) lock q88 then q80 (two sequential single-row ops = web multi-select divergence, s15 precedent) → both locked, q95/q72/q65 stay unlocked; (d) unlock both → all clear. Asserts is_locked via GET /api/manifest with a short poll absorbing the async PATCH /api/lock; is_locked stays orthogonal to user_decision. Uses CTX_LOCK/CTX_UNLOCK (the mutually-exclusive ContextMenu item, also used by s36)."
+    notes: "Lock/Unlock a row via the right-click context menu. (a) lock q95 → only q95 is_locked; (b) re-right-click q95 (menu now offers Unlock per the live is_locked) → unlock → all clear; (c) lock q88 then q80 (two sequential single-row ops = web multi-select divergence, s15 precedent) → both locked, q95/q72/q65 stay unlocked; (d) unlock both → all clear. Asserts is_locked via GET /api/manifest with a short poll that used to absorb the async PATCH /api/lock (since #850 click_context_item itself waits for that response, so the poll is now redundant cover, not the mechanism); is_locked stays orthogonal to user_decision. Uses CTX_LOCK/CTX_UNLOCK (the mutually-exclusive ContextMenu item, also used by s36)."
 
   - scenario: s36_lock_confirm_destructive_execute
     playwright_module: qa.web.scenarios.s36_lock_confirm_destructive_execute
