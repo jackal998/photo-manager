@@ -1,11 +1,17 @@
 """Tests for ``scripts/hooks/qa_scenario_guard.py`` — the PreToolUse hook
 that blocks ``gh pr create`` when user-facing files changed without a
-qa/scenarios/sNN_*.py driver.
+qa/web/scenarios/sNN_*.py driver.
 
 Failure mode the hook is preventing: shipping a feature PR (e.g.
-photo-manager#175 in its first iteration) that touches dialogs /
-handlers / components but lacks layer-3 coverage. CLAUDE.md is the
-spec; this hook + these tests are the enforcement.
+photo-manager#175 in its first iteration) that touches the React client
+or a FastAPI route but lacks layer-3 coverage. CLAUDE.md is the spec;
+this hook + these tests are the enforcement.
+
+Second failure mode, added by #646: the triggers used to name
+``app/views/`` — the Qt client deleted in the Phase-4 cutover — so the
+gate would have matched nothing and passed every PR in silence.
+``TestBlock`` pins the new roots; ``TestAllow`` pins the half that must
+NOT fire (vitest specs, the vitest bootstrap, tests/).
 """
 from __future__ import annotations
 
@@ -62,7 +68,7 @@ class TestAllow:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'qa: extend s14'",
-            changed=["qa/scenarios/s14_action_by_regex.py"],
+            changed=["qa/web/scenarios/s14_action_by_regex.py"],
         )
         assert rc == 0
 
@@ -79,16 +85,39 @@ class TestAllow:
         )
         assert rc == 0
 
+    def test_colocated_vitest_spec_alone_passes(self, monkeypatch):
+        """A ``*.test.tsx`` next to its component is a test, not a user
+        surface — demanding a layer-3 driver for it would make every
+        frontend test-only PR need a scenario touch."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'test: cover the decision hook'",
+            changed=[
+                "frontend/src/components/ResultTree.keyboard.test.tsx",
+                "frontend/src/hooks/useDecisionShortcuts.test.ts",
+            ],
+        )
+        assert rc == 0
+
+    def test_vitest_bootstrap_alone_passes(self, monkeypatch):
+        """``frontend/src/test/`` holds the vitest setup, not UI."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'test: widen the jsdom shim'",
+            changed=["frontend/src/test/setup.ts"],
+        )
+        assert rc == 0
+
     def test_pr_create_with_user_facing_AND_qa_passes(self, monkeypatch):
         """Happy path for a feature PR — user-facing change accompanied
-        by a qa/scenarios/sNN_*.py driver."""
+        by a qa/web/scenarios/sNN_*.py driver."""
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: lock state'",
             changed=[
-                "app/views/handlers/file_operations.py",
-                "app/views/dialogs/execute_action_dialog.py",
-                "qa/scenarios/s32_lock_confirm_bulk_regex.py",
+                "frontend/src/components/execute/ExecuteDialog.tsx",
+                "frontend/src/components/execute/ExecuteTree.tsx",
+                "qa/web/scenarios/s32_lock_confirm_bulk_regex.py",
             ],
         )
         assert rc == 0
@@ -97,7 +126,7 @@ class TestAllow:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'refactor: rename internal fn [qa-not-needed: pure rename, no behaviour change]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -105,7 +134,7 @@ class TestAllow:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'fix' --body 'whatever [qa-not-needed: sweep] more'",
-            changed=["app/views/dialogs/select_dialog.py"],
+            changed=["frontend/src/components/action/ActionDialog.tsx"],
         )
         assert rc == 0
 
@@ -131,14 +160,14 @@ class TestAllow:
 
 class TestBlock:
     @pytest.mark.parametrize("user_facing_file", [
-        "app/views/handlers/file_operations.py",
-        "app/views/handlers/context_menu.py",
-        "app/views/dialogs/execute_action_dialog.py",
-        "app/views/dialogs/select_dialog.py",
-        "app/views/dialogs/scan_dialog.py",
-        "app/views/components/menu_controller.py",
-        "app/views/components/status_messages.py",
-        "app/views/workers/scan_worker.py",
+        "frontend/src/components/execute/ExecuteDialog.tsx",
+        "frontend/src/components/ContextMenu.tsx",
+        "frontend/src/components/execute/ExecuteTree.tsx",
+        "frontend/src/components/action/ActionDialog.tsx",
+        "frontend/src/components/ScanDialog.tsx",
+        "frontend/src/components/MenuBar.tsx",
+        "frontend/src/store/useAppStore.ts",
+        "app/web/routes/scan.py",
     ])
     def test_user_facing_change_without_qa_blocks(
         self, monkeypatch, user_facing_file, capsys
@@ -160,41 +189,41 @@ class TestBlock:
             monkeypatch,
             "gh pr create --title 'feat: lock state'",
             changed=[
-                "app/views/handlers/file_operations.py",
-                "app/views/dialogs/execute_action_dialog.py",
-                "app/views/handlers/context_menu.py",
+                "frontend/src/components/execute/ExecuteDialog.tsx",
+                "frontend/src/components/execute/ExecuteTree.tsx",
+                "frontend/src/components/ContextMenu.tsx",
                 "tests/test_file_operations.py",  # not user-facing but unrelated
             ],
         )
         assert rc == 2
         err = capsys.readouterr().err
-        assert "app/views/handlers/file_operations.py" in err
-        assert "app/views/dialogs/execute_action_dialog.py" in err
-        assert "app/views/handlers/context_menu.py" in err
+        assert "frontend/src/components/execute/ExecuteDialog.tsx" in err
+        assert "frontend/src/components/execute/ExecuteTree.tsx" in err
+        assert "frontend/src/components/ContextMenu.tsx" in err
 
     def test_test_only_qa_change_does_not_satisfy(self, monkeypatch):
         """A test file that happens to live under tests/ named test_qa_*.py
         is NOT a layer-3 driver — only files matching
-        ``qa/scenarios/sNN_*.py`` count."""
+        ``qa/web/scenarios/sNN_*.py`` count."""
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: thing'",
             changed=[
-                "app/views/dialogs/select_dialog.py",
-                "tests/test_qa_helpers.py",  # NOT a qa/scenarios/ file
+                "frontend/src/components/action/ActionDialog.tsx",
+                "tests/test_qa_helpers.py",  # NOT a qa/web/scenarios/ file
             ],
         )
         assert rc == 2
 
-    def test_qa_uia_helper_does_not_satisfy(self, monkeypatch):
-        """``qa/scenarios/_uia.py`` and other ``_*.py`` helpers don't
+    def test_qa_helper_module_does_not_satisfy(self, monkeypatch):
+        """``qa/web/_pw.py`` and other ``_*.py`` helpers don't
         satisfy the rule — must be a numbered ``sNN_*.py`` driver."""
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: thing'",
             changed=[
-                "app/views/handlers/context_menu.py",
-                "qa/scenarios/_uia.py",
+                "frontend/src/components/ContextMenu.tsx",
+                "qa/web/_pw.py",
             ],
         )
         assert rc == 2
@@ -208,7 +237,7 @@ class TestBypassTokenShape:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x [qa-not-needed: covered by existing s14, no new flow]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -216,7 +245,7 @@ class TestBypassTokenShape:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x [qa-not-needed: 翻譯字串更新]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -227,7 +256,7 @@ class TestBypassTokenShape:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x [qa-not-needed: forgot to close'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 2
 
@@ -235,7 +264,7 @@ class TestBypassTokenShape:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x [qa: not needed]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 2
 
@@ -256,7 +285,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: lock' --body 'body [qa-not-needed:]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 2
         err = capsys.readouterr().err
@@ -267,7 +296,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: lock [qa-not-needed:   ]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 2
         assert "its reason is empty" in capsys.readouterr().err
@@ -278,7 +307,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'refactor [qa-not-needed: pure rename]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -288,7 +317,7 @@ class TestBypassEmptyReason:
             "gh pr create --title 'x' --body "
             "'[qa-not-needed: covered by s14/s32 (see #857): no new flow — "
             "handler signature only, 1:1 rename]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -296,7 +325,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x [qa-not-needed:    real reason here]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -304,7 +333,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x' --body 'whatever [qa-not-needed: x] more'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -319,7 +348,7 @@ class TestBypassEmptyReason:
             monkeypatch,
             "gh pr create --title 'feat: lock' --body "
             "'Bypass with `[qa-not-needed: <reason>]` in the body.'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 2
         err = capsys.readouterr().err
@@ -333,7 +362,7 @@ class TestBypassEmptyReason:
             monkeypatch,
             "gh pr create --title 'x' --body "
             "'[qa-not-needed: doc-only: renames the <reason> placeholder]'",
-            changed=["app/views/handlers/file_operations.py"],
+            changed=["frontend/src/components/execute/ExecuteDialog.tsx"],
         )
         assert rc == 0
 
@@ -353,19 +382,19 @@ class TestCiMode:
     ):
         mod = _load_hook(monkeypatch)
         monkeypatch.setattr(mod, "_changed_files", lambda: [
-            "app/views/handlers/file_operations.py",
+            "frontend/src/components/execute/ExecuteDialog.tsx",
         ])
         monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
         monkeypatch.setenv("PR_TITLE", "feat: lock state")
         monkeypatch.delenv("PR_BODY", raising=False)
         rc = mod.main()
         assert rc == 2
-        assert "file_operations.py" in capsys.readouterr().err
+        assert "ExecuteDialog.tsx" in capsys.readouterr().err
 
     def test_ci_mode_honours_bypass_token_in_pr_body(self, monkeypatch):
         mod = _load_hook(monkeypatch)
         monkeypatch.setattr(mod, "_changed_files", lambda: [
-            "app/views/handlers/file_operations.py",
+            "frontend/src/components/execute/ExecuteDialog.tsx",
         ])
         monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
         monkeypatch.setenv("PR_TITLE", "refactor: rename internal fn")
@@ -379,7 +408,7 @@ class TestCiMode:
         so a pasted placeholder in the PR body passed the CI gate too."""
         mod = _load_hook(monkeypatch)
         monkeypatch.setattr(mod, "_changed_files", lambda: [
-            "app/views/handlers/file_operations.py",
+            "frontend/src/components/execute/ExecuteDialog.tsx",
         ])
         monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
         monkeypatch.setenv("PR_TITLE", "feat: lock state")

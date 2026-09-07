@@ -1,15 +1,19 @@
 """PreToolUse hook: enforce QA-scenario coverage for user-facing PRs.
 
 When ``gh pr create`` is about to run, scan the branch's diff vs.
-``origin/master`` for user-facing file changes (handlers / dialogs /
-components / workers under ``app/views/``). If any are present and no
-``qa/scenarios/sNN_*.py`` change accompanies them, block the PR creation
-with a clear stderr message naming the offenders.
+``origin/master`` for user-facing file changes (the React client under
+``frontend/src/`` and the FastAPI surface under ``app/web/``). If any are
+present and no ``qa/web/scenarios/sNN_*.py`` change accompanies them,
+block the PR creation with a clear stderr message naming the offenders.
 
-Per CLAUDE.md, layer-3 ``qa/scenarios/sNN_*.py`` drivers are a hard
+Per CLAUDE.md, layer-3 ``qa/web/scenarios/sNN_*.py`` drivers are a hard
 requirement for user-facing flows. Words alone in the docs were not
 enough — see photo-manager#175 (Locked-state PR initially shipped
 without a QA scenario; required a follow-up commit to comply).
+
+Retargeted by #646 (Phase-4 cutover): the old triggers pointed at
+``app/views/`` — the deleted Qt client — which would have left this gate
+matching nothing and silently passing every PR.
 
 Bypass
 ------
@@ -54,12 +58,24 @@ import subprocess
 import sys
 
 USER_FACING_PATTERNS = (
-    re.compile(r"^app/views/handlers/.*\.py$"),
-    re.compile(r"^app/views/dialogs/.*\.py$"),
-    re.compile(r"^app/views/components/.*\.py$"),
-    re.compile(r"^app/views/workers/.*\.py$"),
+    # The React client — components, hooks, store, api layer, styles.
+    re.compile(r"^frontend/src/.*\.(ts|tsx|css)$"),
+    # The FastAPI surface the client talks to (routes + their models).
+    re.compile(r"^app/web/.*\.py$"),
 )
-QA_SCENARIO_PATTERN = re.compile(r"^qa/scenarios/s\d+.*\.py$")
+
+# Files that live under the roots above but are not themselves a user
+# surface: co-located vitest specs, the vitest bootstrap, and any Python
+# test that ever lands inside app/web/. Excluded so a test-only PR does
+# not demand a layer-3 driver (the false-positive half of this gate).
+NOT_USER_FACING_PATTERNS = (
+    re.compile(r"^frontend/src/test/"),
+    re.compile(r"^frontend/src/.*\.test\.(ts|tsx)$"),
+    re.compile(r"^app/web/(.*/)?test_[^/]+\.py$"),
+    re.compile(r"^app/web/(.*/)?tests?/"),
+)
+
+QA_SCENARIO_PATTERN = re.compile(r"^qa/web/scenarios/s\d+.*\.py$")
 # The reason must be non-blank: at least one non-space character after the
 # colon (leading whitespace is fine), then anything up to the closing ``]``.
 # Punctuation, unicode and ``#refs`` all still match — only ``]`` ends it.
@@ -170,7 +186,9 @@ def check(pr_text: str) -> tuple[int, str]:
         return 0, ""
 
     user_facing = [
-        f for f in changed if any(p.match(f) for p in USER_FACING_PATTERNS)
+        f for f in changed
+        if any(p.match(f) for p in USER_FACING_PATTERNS)
+        and not any(p.match(f) for p in NOT_USER_FACING_PATTERNS)
     ]
     qa_changes = [f for f in changed if QA_SCENARIO_PATTERN.match(f)]
 
@@ -182,13 +200,13 @@ def check(pr_text: str) -> tuple[int, str]:
             msg_lines.append(f"    {f}")
         msg_lines += [
             "",
-            "  no qa/scenarios/sNN_*.py changes in this PR.",
+            "  no qa/web/scenarios/sNN_*.py changes in this PR.",
             "",
             "  Per CLAUDE.md, user-facing flows (button / dialog / menu /",
-            "  status bar) require a layer-3 qa/scenarios/sNN_*.py driver.",
+            "  status bar) require a layer-3 qa/web/scenarios/sNN_*.py driver.",
             "",
             "  To unblock:",
-            "    a) Add or extend a qa/scenarios/sNN_*.py driver, OR",
+            "    a) Add or extend a qa/web/scenarios/sNN_*.py driver, OR",
             "    b) Include `[qa-not-needed: <reason>]` in the gh pr create",
             "       command (title or body) — the reason will be visible in",
             "       review so the choice is auditable. It must be non-blank:",
