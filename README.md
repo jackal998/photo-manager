@@ -671,5 +671,15 @@ configured. The bypass tokens work identically server-side (CI parses
 PR title + body). `zombie_check` stays local-only — it inspects host
 processes and has no CI analogue.
 
+A third gate script, `scripts/hooks/news_guard.py`, has no client half
+at all: [`.github/workflows/news-gate.yml`](.github/workflows/news-gate.yml)
+calls it to require a `news/<PR>.<type>` changelog fragment, and the
+fragment's filename needs the PR number, which doesn't exist until
+after `gh pr create`. Its bypass is `[skip-news: <reason>]`. All three
+tokens share one enforced rule — a blank reason, the literal
+`<reason>` placeholder, and an unclosed bracket are rejected; see
+[`news/README.md`](news/README.md) § Bypass for the canonical
+statement.
+
 ---
 

@@ -24,10 +24,12 @@ fix, an internal refactor with zero structural impact. The reason
 becomes part of the PR title/body so the choice is visible in code
 review.
 
-The reason must be **non-blank** (#857). ``[docs-not-needed:]`` and
-``[docs-not-needed:   ]`` do not bypass anything: they block with a
-message naming the empty reason. A pasted template placeholder used to
-satisfy the old ``[^\\]]*`` pattern and disabled this gate silently.
+The reason must be **non-blank** (#857) and must not be the documented
+placeholder ``<reason>`` itself (#858). ``[docs-not-needed:]``,
+``[docs-not-needed:   ]`` and ``[docs-not-needed: <reason>]`` do not
+bypass anything: they block with a message naming the problem. A pasted
+template placeholder used to satisfy the old ``[^\\]]*`` pattern and
+disabled this gate silently.
 
 Hook protocol
 -------------
@@ -106,9 +108,16 @@ _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD = 10
 # The reason must be non-blank: at least one non-space character after the
 # colon (leading whitespace is fine), then anything up to the closing ``]``.
 # Punctuation, unicode and ``#refs`` all still match — only ``]`` ends it.
-_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:\s*[^\]\s][^\]]*\]")
+# The lookahead rejects one specific reason, the documented placeholder
+# itself (#858): ``[docs-not-needed: <reason>]`` is how the token is
+# *written down* — in README.md, in docs/features.md, in every brief that
+# quotes the convention — so accepting it means a PR body that merely
+# explains the token disables the gate.
+_BYPASS_PATTERN = re.compile(
+    r"\[docs-not-needed:(?!\s*<reason>\s*\])\s*[^\]\s][^\]]*\]"
+)
 
-# The placeholder form (#857): a token whose reason is blank. The old
+# The empty form (#857): a token whose reason is blank. The old
 # ``[^\]]*`` matched zero characters, so a pasted template — the literal
 # ``[docs-not-needed:]`` — was a valid bypass and disabled this gate
 # silently, in CI as well as in the local hook. It now blocks, and this
@@ -128,6 +137,41 @@ _EMPTY_BYPASS_MSG_LINES = (
     "    the token and update the docs below.",
     "",
 )
+
+# The placeholder form (#858): a reason that is exactly the documented
+# ``<reason>``. Same failure as the empty token one step later — a brief's
+# template pasted verbatim, or the convention quoted in prose, silently
+# disabling the gate.
+_PLACEHOLDER_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:\s*<reason>\s*\]")
+
+_PLACEHOLDER_BYPASS_MSG_LINES = (
+    "  bypass token seen but its reason is the literal `<reason>`",
+    "  placeholder — write a real one.",
+    "",
+    "    `[docs-not-needed: <reason>]` is how this token is *documented*.",
+    "    Pasting it verbatim, or quoting it in prose, does not bypass the",
+    "    gate — otherwise any PR that explains the convention would turn",
+    "    it off.",
+    "",
+    "    Write a specific reason, or drop the token and update the docs",
+    "    below.",
+    "",
+)
+
+
+def _rejected_bypass_lines(pr_text: str) -> tuple[str, ...]:
+    """Explain a ``[docs-not-needed:`` token that did not bypass.
+
+    Empty (#857) and placeholder (#858) reasons do not block on their own —
+    if the gate has nothing to say, a vestigial token is harmless — but when
+    the gate DOES fire, the message must lead with the real problem so the
+    developer fixes the right thing instead of reading the generic text.
+    """
+    if _PLACEHOLDER_BYPASS_PATTERN.search(pr_text):
+        return _PLACEHOLDER_BYPASS_MSG_LINES
+    if _EMPTY_BYPASS_PATTERN.search(pr_text):
+        return _EMPTY_BYPASS_MSG_LINES
+    return ()
 
 # Schema-defining markers for the manifest_repository.py semantics-aware
 # gate (below). A modify to that file only needs a README schema-table
@@ -321,11 +365,7 @@ def check(pr_text: str) -> tuple[int, str]:
     if _BYPASS_PATTERN.search(pr_text):
         return 0, ""
 
-    # A token with a blank reason (#857) no longer bypasses. It doesn't
-    # block on its own either — if the gate has nothing to say, a vestigial
-    # token is harmless — but when the gate DOES fire, the message leads
-    # with the empty reason so the developer fixes the right thing.
-    empty_bypass = bool(_EMPTY_BYPASS_PATTERN.search(pr_text))
+    rejected_bypass = _rejected_bypass_lines(pr_text)
 
     changed = _changed_files()
     if not changed:
@@ -348,8 +388,7 @@ def check(pr_text: str) -> tuple[int, str]:
     ]
     if behavioural and _BEHAVIOURAL_FEATURES_DOC not in docs:
         msg_lines = ["docs guard fired — blocking `gh pr create`.", ""]
-        if empty_bypass:
-            msg_lines += list(_EMPTY_BYPASS_MSG_LINES)
+        msg_lines += list(rejected_bypass)
         msg_lines.append(
             f"  user-visible behaviour change without a {_BEHAVIOURAL_FEATURES_DOC} update:"
         )
@@ -383,8 +422,7 @@ def check(pr_text: str) -> tuple[int, str]:
         return 0, ""
 
     msg_lines = ["docs guard fired — blocking `gh pr create`.", ""]
-    if empty_bypass:
-        msg_lines += list(_EMPTY_BYPASS_MSG_LINES)
+    msg_lines += list(rejected_bypass)
     msg_lines.append("  doc-relevant changes on this branch:")
     seen: set[str] = set()
     for f, suggested in relevant:
