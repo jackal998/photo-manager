@@ -10,6 +10,22 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Near-duplicate Hamming-distance range accepted for the pHash and dHash
+# thresholds (#823, #876). The floor is 2, not 1: ``classify`` groups on
+# ``0 < distance <= threshold``, so 1 admits only distance-1 pairs — which
+# photographic content essentially never produces (every pHash has exactly
+# 32 of 64 bits set, so distances come out even; 0 of 86_400 measured
+# distances were odd). At 1 the near-duplicate tier is off, not strict.
+# 2 is the strictest setting that still detects anything.
+#
+# These live here — beside the ``ScanConfig`` fields they bound and away from
+# any Qt import — so the Qt dialog (``app/views/dialogs/scan_dialog.py``) and
+# the HTTP boundary model (``app/web/models.py`` ``WebScanRequest``) enforce
+# one number instead of two copies that can drift. The mean-colour gate is a
+# different predicate and keeps its own 0–100 range.
+NEAR_DUP_THRESHOLD_MIN = 2
+NEAR_DUP_THRESHOLD_MAX = 20
+
 
 @dataclass
 class ScanConfig:
