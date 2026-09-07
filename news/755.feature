@@ -1,0 +1,1 @@
+Improve the web "Set Action by Field" dialog: Apply is no longer blocked on an empty pattern, a Recent-patterns dropdown remembers what you used, and the delete confirmation now names the field/pattern and file count. (#755)

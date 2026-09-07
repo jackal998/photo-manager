@@ -68,6 +68,16 @@ class Translator:
     def locale(self) -> str:
         return self._locale
 
+    @property
+    def strings(self) -> dict[str, str]:
+        """Return a shallow copy of the flattened dotted-key string dict.
+
+        Callers (e.g. the /api/i18n route) get a snapshot they can freely
+        serialise without reaching into the private ``_strings`` attribute.
+        Shallow copy is safe because values are immutable strings.
+        """
+        return dict(self._strings)
+
     def t(self, key: str, **fmt: object) -> str:
         """Resolve ``key`` in the active locale; format-substitute if asked.
 

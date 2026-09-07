@@ -20,6 +20,16 @@ refactor with zero user-visible effect, a translation-string update, a
 docstring fix. The reason becomes part of the PR title/body so the
 choice is visible in code review.
 
+The reason must be **non-blank** (#857), must not be the documented
+placeholder ``<reason>`` itself (#858), and must sit **on one line**
+together with its closing ``]`` (#872). ``[qa-not-needed:]``,
+``[qa-not-needed:   ]``, ``[qa-not-needed: <reason>]`` and an opener whose
+bracket never closes on its line do not bypass anything: they block with a
+message naming the problem. A pasted template placeholder used to satisfy
+the old ``[^\\]]*`` pattern and disabled this gate silently; that class
+also matched newlines, so any later ``]`` in the body closed the token and
+the paragraphs in between became "the reason".
+
 Hook protocol
 -------------
 * stdin  — JSON with shape ``{"tool_name": ..., "tool_input": {"command": ...}}``
@@ -53,7 +63,102 @@ USER_FACING_PATTERNS = (
     re.compile(r"^app/views/workers/.*\.py$"),
 )
 QA_SCENARIO_PATTERN = re.compile(r"^qa/scenarios/s\d+.*\.py$")
-BYPASS_PATTERN = re.compile(r"\[qa-not-needed:[^\]]*\]")
+# The reason must be non-blank AND must stay on one line: at least one
+# non-space character after the colon (leading blanks are fine), then
+# anything up to the closing ``]`` — but never a line break (#872).
+# Punctuation, unicode and ``#refs`` all still match; only ``]`` or the end
+# of that line ends the token. ``[^\S\r\n]`` is "whitespace that is not a
+# line break", used everywhere ``\s`` used to be so a token left unclosed
+# on its own line cannot be closed by an unrelated ``]`` further down the
+# body — a markdown link, a ``- [ ]`` checklist box, a bracketed reference
+# — which would silently turn several paragraphs into "the reason".
+# The lookahead rejects one specific reason, the documented placeholder
+# itself (#858): ``[qa-not-needed: <reason>]`` is how the token is
+# *written down* — in README.md and in every brief that quotes the
+# convention — so accepting it means a PR body that merely explains the
+# token disables the gate.
+BYPASS_PATTERN = re.compile(
+    r"\[qa-not-needed:(?![^\S\r\n]*<reason>[^\S\r\n]*\])"
+    r"[^\S\r\n]*[^\]\s][^\]\r\n]*\]"
+)
+
+# The empty form (#857): a token whose reason is blank. The old
+# ``[^\]]*`` matched zero characters, so a pasted template — the literal
+# ``[qa-not-needed:]`` — was a valid bypass and disabled this gate
+# silently, in CI as well as in the local hook. It now blocks, and this
+# pattern exists so the block message can name the real problem instead of
+# falling through to the generic "no qa scenario" text.
+EMPTY_BYPASS_PATTERN = re.compile(r"\[qa-not-needed:[^\S\r\n]*\]")
+
+_EMPTY_BYPASS_MSG_LINES = (
+    "  bypass token seen but its reason is empty — write why.",
+    "",
+    "    A `[qa-not-needed:]` with no reason does not bypass this gate.",
+    "    The reason IS the mechanism: it is what a reviewer reads to judge",
+    "    the call, so a pasted placeholder must not silently disable the",
+    "    check.",
+    "",
+    "    Write `[qa-not-needed: <reason>]` with a specific reason, or add",
+    "    the driver described below.",
+    "",
+)
+
+# The placeholder form (#858): a reason that is exactly the documented
+# ``<reason>``. Same failure as the empty token one step later — a brief's
+# template pasted verbatim, or the convention quoted in prose, silently
+# disabling the gate.
+PLACEHOLDER_BYPASS_PATTERN = re.compile(
+    r"\[qa-not-needed:[^\S\r\n]*<reason>[^\S\r\n]*\]"
+)
+
+_PLACEHOLDER_BYPASS_MSG_LINES = (
+    "  bypass token seen but its reason is the literal `<reason>`",
+    "  placeholder — write a real one.",
+    "",
+    "    `[qa-not-needed: <reason>]` is how this token is *documented*.",
+    "    Pasting it verbatim, or quoting it in prose, does not bypass the",
+    "    gate — otherwise any PR that explains the convention would turn",
+    "    it off.",
+    "",
+    "    Write a specific reason, or add the driver described below.",
+    "",
+)
+
+# The unclosed form (#872): an opener with no ``]`` before the line ends.
+# Until #872 the reason class matched newlines, so any later ``]`` in the
+# body closed the token and the swallowed span became "the reason". Now the
+# token stops at the line end, and this pattern exists so the block message
+# says which of the two mistakes was made.
+TOKEN_PREFIX_PATTERN = re.compile(r"\[qa-not-needed:")
+
+_UNCLOSED_BYPASS_MSG_LINES = (
+    "  bypass token seen but its closing `]` does not arrive on the same",
+    "  line — the token is the whole bracketed phrase, on one line.",
+    "",
+    "    Write `[qa-not-needed: <a real reason>]` on one line, brackets and",
+    "    all. A later `]` further down the body — a markdown link, a",
+    "    `- [ ]` checklist box — does not close it, and the text in",
+    "    between is not a reason anyone chose to write.",
+    "",
+)
+
+
+def _rejected_bypass_lines(pr_text: str) -> tuple[str, ...]:
+    """Explain a ``[qa-not-needed:`` token that did not bypass.
+
+    Empty (#857), placeholder (#858) and unclosed (#872) reasons do not
+    block on their own — if the gate has nothing to say, a vestigial token
+    is harmless — but when the gate DOES fire, the message must lead with
+    the real problem so the developer fixes the right thing instead of
+    reading the generic text.
+    """
+    if PLACEHOLDER_BYPASS_PATTERN.search(pr_text):
+        return _PLACEHOLDER_BYPASS_MSG_LINES
+    if EMPTY_BYPASS_PATTERN.search(pr_text):
+        return _EMPTY_BYPASS_MSG_LINES
+    if TOKEN_PREFIX_PATTERN.search(pr_text):
+        return _UNCLOSED_BYPASS_MSG_LINES
+    return ()
 
 
 def _diff_base() -> str:
@@ -89,6 +194,8 @@ def check(pr_text: str) -> tuple[int, str]:
     if BYPASS_PATTERN.search(pr_text):
         return 0, ""
 
+    rejected_bypass = _rejected_bypass_lines(pr_text)
+
     changed = _changed_files()
     if not changed:
         # No diff against the base — nothing to check (or no remote).
@@ -101,11 +208,9 @@ def check(pr_text: str) -> tuple[int, str]:
     qa_changes = [f for f in changed if QA_SCENARIO_PATTERN.match(f)]
 
     if user_facing and not qa_changes:
-        msg_lines = [
-            "QA-scenario guard fired — blocking `gh pr create`.",
-            "",
-            "  user-facing files changed:",
-        ]
+        msg_lines = ["QA-scenario guard fired — blocking `gh pr create`.", ""]
+        msg_lines += list(rejected_bypass)
+        msg_lines.append("  user-facing files changed:")
         for f in user_facing:
             msg_lines.append(f"    {f}")
         msg_lines += [
@@ -119,7 +224,8 @@ def check(pr_text: str) -> tuple[int, str]:
             "    a) Add or extend a qa/scenarios/sNN_*.py driver, OR",
             "    b) Include `[qa-not-needed: <reason>]` in the gh pr create",
             "       command (title or body) — the reason will be visible in",
-            "       review so the choice is auditable.",
+            "       review so the choice is auditable. It must be non-blank:",
+            "       an empty `[qa-not-needed:]` is rejected.",
         ]
         return 2, "\n".join(msg_lines) + "\n"
 

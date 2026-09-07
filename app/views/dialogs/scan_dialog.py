@@ -40,6 +40,11 @@ from app.views.window_state import (
     save_widget_geometry,
 )
 from app.views.workers.scan_worker import ScanWorker
+from core.app_service.dtos import (
+    NEAR_DUP_THRESHOLD_MAX,
+    NEAR_DUP_THRESHOLD_MIN,
+)
+from core.app_service.settings_migration import resolve_source_entries
 from infrastructure.i18n import t
 from scanner.workers import default_hash_workers
 
@@ -50,6 +55,11 @@ class _SourceEntry:
 
     path: str
     recursive: bool = True
+
+
+# NEAR_DUP_THRESHOLD_MIN / _MAX are imported above from
+# ``core.app_service.dtos`` — the non-Qt home they moved to in #876 so the
+# web API's ``WebScanRequest`` bounds and these widget ranges cannot drift.
 
 
 # #424 — scan progress UI: stage label, files-per-sec, ETA helpers.
@@ -545,16 +555,28 @@ class ScanDialog(QDialog):
         params_layout.setContentsMargins(0, 0, 0, 0)
 
         # pHash threshold
+        #
+        # Floor is 2, not 1 (#823). The near-duplicate predicate is
+        # ``0 < distance <= threshold`` (scanner/dedup.py ``classify``), so a
+        # threshold of 1 admits only distance-1 pairs — and on photographic
+        # content every pHash carries exactly 32 of 64 set bits, which makes
+        # every pairwise distance even (measured: 0 of 86_400 distances odd
+        # over the 1_500-hash study corpus, docs/audits/
+        # visual-autoselect-feasibility.md §3c/§9). Position 1 therefore did
+        # not "tighten" the tier, it switched it off, and each odd position
+        # above it admitted exactly what the even one below it admitted. The
+        # predicate is right; the control was lying about it — so the fix is
+        # the floor plus honest copy, not a change to dedup.
         phash_label = QLabel(t("scan_dialog.phash_label"))
         phash_desc = QLabel(t("scan_dialog.phash_desc"))
         phash_desc.setStyleSheet("color: #555;")
         phash_desc.setToolTip(_tip(t("scan_dialog.phash_tooltip")))
         phash_row = QHBoxLayout()
         self._phash_slider = QSlider(Qt.Orientation.Horizontal)
-        self._phash_slider.setRange(1, 20)
+        self._phash_slider.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._phash_slider.setValue(10)
         self._phash_spin = QSpinBox()
-        self._phash_spin.setRange(1, 20)
+        self._phash_spin.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._phash_spin.setValue(10)
         self._phash_spin.setFixedWidth(60)
         self._phash_slider.valueChanged.connect(self._phash_spin.setValue)
@@ -569,17 +591,18 @@ class ScanDialog(QDialog):
 
         # dHash confidence threshold (#517) — the second, independent
         # perceptual hash that confirms a pHash near-dup match (high vs low
-        # confidence). Sits directly below pHash; mirrors its 1–20 range.
+        # confidence). Sits directly below pHash; mirrors its 2–20 range
+        # (floor raised from 1 in #823 for the same parity reason).
         dhash_label = QLabel(t("scan_dialog.dhash_label"))
         dhash_desc = QLabel(t("scan_dialog.dhash_desc"))
         dhash_desc.setStyleSheet("color: #555;")
         dhash_desc.setToolTip(_tip(t("scan_dialog.dhash_tooltip")))
         dhash_row = QHBoxLayout()
         self._dhash_slider = QSlider(Qt.Orientation.Horizontal)
-        self._dhash_slider.setRange(1, 20)
+        self._dhash_slider.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._dhash_slider.setValue(10)
         self._dhash_spin = QSpinBox()
-        self._dhash_spin.setRange(1, 20)
+        self._dhash_spin.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._dhash_spin.setValue(10)
         self._dhash_spin.setFixedWidth(60)
         self._dhash_slider.valueChanged.connect(self._dhash_spin.setValue)
@@ -779,29 +802,15 @@ class ScanDialog(QDialog):
 
     def _load_from_settings(self) -> None:
         """Populate the dialog from saved settings (new list format or legacy keys)."""
-        sources_list = self.settings.get("sources.list")
-        if sources_list:
-            entries = [
-                _SourceEntry(path=item["path"], recursive=item.get("recursive", True))
-                for item in sources_list
-                if isinstance(item, dict) and item.get("path")
-            ]
-            self._source_list.set_entries(entries)
-        else:
-            # Migration shim (since the 2025 "sources.list" rollout):
-            # users upgrading from pre-sources.list builds still carry
-            # only the legacy sources.{iphone,takeout,jdrive} keys.
-            # Removing this branch silently empties their source list
-            # on first launch -- no error, no warning, just zero sources.
-            # tests/test_settings_migration.py pins the contract; a PR
-            # that intentionally drops this shim must drop that test
-            # too and ship a migration story. See #258.
-            entries = []
-            for key in ("iphone", "takeout", "jdrive"):
-                path = self.settings.get(f"sources.{key}", "")
-                if path:
-                    entries.append(_SourceEntry(path=path, recursive=True))
-            self._source_list.set_entries(entries)
+        # New-format ``sources.list`` and the #258 legacy-keys migration shim
+        # both live in the Qt-free ``resolve_source_entries`` helper, shared
+        # with the web settings loader so upgraders never silently lose their
+        # source list. See core/app_service/settings_migration.py.
+        entries = [
+            _SourceEntry(path=item["path"], recursive=item["recursive"])
+            for item in resolve_source_entries(self.settings)
+        ]
+        self._source_list.set_entries(entries)
 
         saved_out = self.settings.get("sources.output", "migration_manifest.sqlite")
         self._output_field.setText(saved_out or "migration_manifest.sqlite")

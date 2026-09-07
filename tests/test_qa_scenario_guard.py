@@ -240,6 +240,104 @@ class TestBypassTokenShape:
         assert rc == 2
 
 
+# ── bypass token: the reason must be non-blank (#857) ─────────────────────
+
+
+class TestBypassEmptyReason:
+    """Twin of ``tests/test_docs_guard.py::TestBypassEmptyReason``. PR #856
+    pasted ``[qa-not-needed:]`` from a brief's template and the gate reported
+    a bypass and passed. A placeholder with no reason must block — and every
+    ordinary real token must still bypass.
+    """
+
+    # ── the empty form must no longer bypass ──────────────────────────────
+
+    def test_empty_reason_blocks_and_names_the_problem(self, monkeypatch, capsys):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: lock' --body 'body [qa-not-needed:]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "bypass token seen but its reason is empty" in err
+        assert "qa-not-needed: <reason>" in err
+
+    def test_whitespace_only_reason_blocks(self, monkeypatch, capsys):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: lock [qa-not-needed:   ]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 2
+        assert "its reason is empty" in capsys.readouterr().err
+
+    # ── every ordinary real token must still bypass ───────────────────────
+
+    def test_ordinary_reason_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'refactor [qa-not-needed: pure rename]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+    def test_punctuation_heavy_reason_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body "
+            "'[qa-not-needed: covered by s14/s32 (see #857): no new flow — "
+            "handler signature only, 1:1 rename]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+    def test_reason_after_leading_whitespace_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x [qa-not-needed:    real reason here]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+    def test_single_character_reason_still_bypasses(self, monkeypatch):
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body 'whatever [qa-not-needed: x] more'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+    # ── the documented placeholder is not a reason (#858) ─────────────────
+
+    def test_literal_placeholder_reason_blocks(self, monkeypatch, capsys):
+        """#858: ``<reason>`` is a non-blank string, so #857's pattern
+        accepted it — and that is exactly the text README.md and every brief
+        template carry. A PR body that pastes or quotes the convention must
+        not thereby disable the gate."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: lock' --body "
+            "'Bypass with `[qa-not-needed: <reason>]` in the body.'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "literal `<reason>`" in err
+
+    def test_real_reason_containing_the_word_still_bypasses(self, monkeypatch):
+        """Only a reason that IS exactly ``<reason>`` is rejected — a real
+        reason that happens to mention it must still bypass, or the guard
+        blocks the very PR that documents the token."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'x' --body "
+            "'[qa-not-needed: doc-only: renames the <reason> placeholder]'",
+            changed=["app/views/handlers/file_operations.py"],
+        )
+        assert rc == 0
+
+
 # ── CI mode (#273) ────────────────────────────────────────────────────────
 
 
@@ -276,6 +374,20 @@ class TestCiMode:
         )
         assert mod.main() == 0
 
+    def test_ci_mode_blocks_on_empty_reason_token(self, monkeypatch, capsys):
+        """#857: pr-gates.yml feeds PR_TITLE + PR_BODY into the same check,
+        so a pasted placeholder in the PR body passed the CI gate too."""
+        mod = _load_hook(monkeypatch)
+        monkeypatch.setattr(mod, "_changed_files", lambda: [
+            "app/views/handlers/file_operations.py",
+        ])
+        monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
+        monkeypatch.setenv("PR_TITLE", "feat: lock state")
+        monkeypatch.setenv("PR_BODY", "## What\ndetails\n[qa-not-needed:]\n")
+        rc = mod.main()
+        assert rc == 2
+        assert "bypass token seen but its reason is empty" in capsys.readouterr().err
+
     def test_diff_base_env_var_overrides_default(self, monkeypatch):
         mod = _load_hook(monkeypatch)
         captured: list[list[str]] = []
@@ -291,3 +403,110 @@ class TestCiMode:
         assert any(
             "origin/feat/parent-branch...HEAD" in arg for arg in captured[0]
         )
+
+
+# ── bypass token: the reason may not span lines (#872) ────────────────────
+
+
+def _run_ci(
+    monkeypatch,
+    *,
+    title: str = "fix: something",
+    body: str = "",
+    changed: list[str] | None = None,
+) -> int:
+    """Invoke ``main()`` the way ``.github/workflows/pr-gates.yml`` does:
+    ``--ci`` plus PR_TITLE / PR_BODY from the environment. The PR body is
+    where a multi-line trap actually arrives — GitHub hands it over
+    verbatim, CRLF and all — so the newline tests use this entry point
+    rather than the ``gh pr create`` command line."""
+    mod = _load_hook(monkeypatch)
+    files = (
+        ["app/views/handlers/file_operations.py"] if changed is None else changed
+    )
+    monkeypatch.setattr(mod, "_changed_files", lambda: list(files))
+    monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
+    monkeypatch.setenv("PR_TITLE", title)
+    monkeypatch.setenv("PR_BODY", body)
+    return mod.main()
+
+
+# The two shapes a real PR body carries a stray `]` in, below an opener its
+# author never closed: a markdown link and a task-list checkbox. Both used
+# to close the token.
+_LATER_BRACKET_BODIES = {
+    "markdown-link": (
+        "## What\n"
+        "[qa-not-needed: internal rename\n"
+        "\n"
+        "See [the issue](https://example.invalid/872) for the trap.\n"
+    ),
+    "checklist-box": (
+        "[qa-not-needed: no user-visible flow\n"
+        "\n"
+        "## Checklist\n"
+        "- [ ] tests\n"
+    ),
+}
+
+
+class TestBypassMustStayOnOneLine:
+    """#872: the reason class was ``[^\\]]*``, which matches newlines. An
+    opener left unclosed on its line was therefore closed by the next ``]``
+    anywhere below, and every paragraph in between became "the reason" — a
+    bypass nobody wrote, whose reviewer-visible reason is garbage.
+
+    Both halves, as in :class:`TestBypassEmptyReason`: the swallowing
+    shapes must block, and an honest one-line token in a CRLF body — the
+    normal case, since that is how GitHub delivers ``PR_BODY`` — must still
+    bypass.
+    """
+
+    @pytest.mark.parametrize("shape", sorted(_LATER_BRACKET_BODIES))
+    def test_a_later_bracket_does_not_close_the_token(
+        self, monkeypatch, capsys, shape
+    ):
+        rc = _run_ci(monkeypatch, body=_LATER_BRACKET_BODIES[shape])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "closing `]` does not arrive on the same" in err
+
+    def test_reason_split_across_a_crlf_does_not_bypass(
+        self, monkeypatch, capsys
+    ):
+        """GitHub delivers PR bodies CRLF-terminated, so the class has to
+        exclude ``\\r`` as well as ``\\n`` — excluding only ``\\n`` would
+        leave the hole open on every real PR."""
+        rc = _run_ci(
+            monkeypatch,
+            body="[qa-not-needed: pure rename\r\nof a private helper]\r\n",
+        )
+        assert rc == 2
+        assert (
+            "closing `]` does not arrive on the same"
+            in capsys.readouterr().err
+        )
+
+    def test_one_line_token_in_a_crlf_body_still_bypasses(self, monkeypatch):
+        """The false-positive half: a CRLF body is the ordinary case, not
+        the attack. An honest token inside one must keep working."""
+        rc = _run_ci(
+            monkeypatch,
+            body=(
+                "## What\r\nPrivate helper rename.\r\n"
+                "[qa-not-needed: pure rename, no user-visible flow]\r\n"
+            ),
+        )
+        assert rc == 0
+
+    def test_empty_token_with_its_bracket_on_the_next_line_reports_unclosed(
+        self, monkeypatch, capsys
+    ):
+        """The #857 empty-reason twin carried the same ``\\s*`` hole: it
+        read ``[qa-not-needed:\\n]`` as an empty reason on one line. The
+        token is unclosed, and the message has to say that instead."""
+        rc = _run_ci(monkeypatch, body="[qa-not-needed:\n]\n")
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "closing `]` does not arrive on the same" in err
+        assert "its reason is empty" not in err

@@ -1,0 +1,1 @@
+Web scan now reads back hash-pool / read-knee calibration caches and `scan.exif_workers` from settings before scanning, matching the Qt dialog — the second web scan of a library reuses the first one's calibration instead of re-measuring (#652)

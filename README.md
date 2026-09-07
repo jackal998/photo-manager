@@ -49,6 +49,8 @@ A pre-built standalone bundle is published on every release tag — no Python in
 
 You still need [exiftool](https://exiftool.org/) on `PATH` for EXIF date extraction (same prerequisite as the source install).
 
+ffmpeg is **not** a prerequisite: the bundle ships its own `ffmpeg.exe` / `ffprobe.exe` plus their libraries in `_internal\ffmpeg\` (a pinned LGPL *shared* build, ~128 MB unpacked / ~54 MB of the download — see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)), which is what lets the web UI play HEVC video on browsers that cannot decode it natively. To use a different build, put a complete set (`ffmpeg.exe`, `ffprobe.exe` and any DLLs they need) in a folder named `ffmpeg` next to `photo-manager.exe` — the app prefers that over the bundled one and over `PATH`.
+
 > **SmartScreen note:** the binary is unsigned, so on first launch Windows shows *"Windows protected your PC"*. Click **More info → Run anyway**. The warning is expected and will disappear once we publish a signed release.
 
 Settings (`settings.json`, `window_state.ini`) are written next to `photo-manager.exe`, so the extracted folder is portable — copy it to a USB stick and your config travels with it.
@@ -252,6 +254,52 @@ canonical catalogue.
 
 ---
 
+## Web UI
+
+The app also runs as a **localhost web app** — a FastAPI + SSE backend
+serving a React + TanStack frontend, packaged behind a native
+[pywebview](https://pywebview.flowrl.com/) shell so it still opens as
+its own desktop window rather than a browser tab. Both UIs drive the
+same headless `core/` + `scanner/` + `infrastructure/` engine; the
+PySide6 desktop app above remains the default and primary interface.
+
+**Status:** in development on the `docs/web-port-feasibility`
+integration branch — not yet merged to `master`, and the Qt app stays
+the default launch path (`run.bat` / `main.py`) until the port is
+complete. See [`docs/design/web-port-tech-design.md`](docs/design/web-port-tech-design.md)
+for the architecture and [`docs/audits/web-parity-matrix-2026-07.md`](docs/audits/web-parity-matrix-2026-07.md)
+for the current Qt-vs-web parity snapshot.
+
+```powershell
+cd frontend
+npm install
+npm run build           # builds frontend/dist — the web shell serves this bundle
+cd ..
+$env:PHOTO_MANAGER_WEB = "1"
+.venv\Scripts\python launcher.py
+```
+
+`launcher.py` (repo root) dispatches on the `PHOTO_MANAGER_WEB` env
+var: unset/falsey boots the classic Qt app unchanged; a truthy value
+starts the FastAPI app under uvicorn on loopback (`127.0.0.1:8765` by
+default — override with `PHOTO_MANAGER_WEB_PORT`), waits for it to
+report healthy, then opens a native window pointed at it via
+pywebview.
+
+**Windows dependency:** the pywebview window renders through the
+**Microsoft Edge WebView2 Runtime**. `launcher.py` checks for it up
+front and raises a clear error naming the install URL rather than
+opening a blank window if it's missing — most Windows 10/11 machines
+already have it (it ships with Windows Update / Edge); if not, install
+the Evergreen runtime from
+[Microsoft's WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
+
+For the full web feature surface — every dialog, endpoint, and
+Qt/web behavioural divergence — see the `### Web —` entries throughout
+[`docs/features.md`](docs/features.md).
+
+---
+
 ## Classification rules
 
 | Condition | Action |
@@ -385,6 +433,14 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
 - **Batch EXIF** — exiftool `-stay_open` chunked at 500 files/call for speed
 - **Cached metadata** — `file_size_bytes`, `shot_date`, `creation_date`, `mtime` written
   to the manifest at scan time; load reads from SQLite with zero filesystem round-trips
+- **Sub-second shot time** — `subsec_time_original` and `offset_time_original`
+  columns (#820) hold EXIF `SubSecTimeOriginal` / `OffsetTimeOriginal` as text
+  (e.g. `"087"`, `"+09:00"`), read on both extraction paths: the exiftool tag
+  list for HEIC/RAW/video and the in-memory PIL pass for JPEG. `shot_date`
+  keeps its whole-second format on purpose, so these are what separate frames
+  of a burst shot inside the same second. Both are `NULL` on manifests written
+  before #820 and on files whose camera wrote neither tag — a re-scan fills
+  them. No scoring weight reads them yet
 - **Keep-worthiness scoring** — composite score in `[0.0, 1.0]` per file (#187);
   highest-scoring copy lands at the top of each group; batch-apply via the
   Set Action dialog's "Top N per group" Score condition or scan-time auto-select
@@ -494,6 +550,7 @@ photo-manager/
     ├── test_hasher.py
     ├── test_walker.py
     ├── test_manifest_repository.py
+    ├── test_manifest_skip_reconcile.py  # #821 recycle-bin rows dismissed on open
     ├── test_settings.py
     ├── test_utils.py
     ├── test_delete_service.py
@@ -616,6 +673,16 @@ UI, a fork, mobile, or a machine without `.claude/settings.json`
 configured. The bypass tokens work identically server-side (CI parses
 PR title + body). `zombie_check` stays local-only — it inspects host
 processes and has no CI analogue.
+
+A third gate script, `scripts/hooks/news_guard.py`, has no client half
+at all: [`.github/workflows/news-gate.yml`](.github/workflows/news-gate.yml)
+calls it to require a `news/<PR>.<type>` changelog fragment, and the
+fragment's filename needs the PR number, which doesn't exist until
+after `gh pr create`. Its bypass is `[skip-news: <reason>]`. All three
+tokens share one enforced rule — a blank reason, the literal
+`<reason>` placeholder, and an unclosed bracket are rejected; see
+[`news/README.md`](news/README.md) § Bypass for the canonical
+statement.
 
 ---
 

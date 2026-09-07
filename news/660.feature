@@ -1,0 +1,1 @@
+Add the localhost web review UI: a scan dialog with live SSE progress, a virtualized grouped result tree with thumbnails and per-file decision/lock controls, and manifest loading over the Phase 2B1 API. (#660)

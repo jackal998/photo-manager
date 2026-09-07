@@ -44,6 +44,22 @@ class PhotoRecord:
     # their HEIC's decision). Computed at scan time by scanner.scoring;
     # re-computable without re-scan via ManifestRepository.rescore().
     score: float | None = None
+    # Per-dimension scoring signals (#187 raw inputs, surfaced by #680).
+    # Types and defaults mirror scanner.dedup.ManifestRow and the manifest
+    # columns exactly, so the same value means the same thing at every hop:
+    #   exif_tag_count — INTEGER (nullable). None = the extended exiftool
+    #     census pass did not run for this file; 0 = it ran and found none.
+    #   gps_present / xmp_derived — INTEGER NOT NULL DEFAULT 0, so the DB
+    #     cannot express "unknown"; they are plain bools here for the same
+    #     reason. False therefore reads as "no GPS / not a derivative" and,
+    #     on a manifest written before #187 added the columns, also as "never
+    #     measured" — a pre-existing conflation of the storage layer, not one
+    #     introduced here.
+    # Unlike ``score`` these are independent of grouping: they are populated
+    # by extraction, so an unscored row (score=None) still carries them.
+    exif_tag_count: int | None = None
+    gps_present: bool = False
+    xmp_derived: bool = False
 
 
 @dataclass(slots=True)

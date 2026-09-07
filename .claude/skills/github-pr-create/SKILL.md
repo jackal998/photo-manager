@@ -30,7 +30,7 @@ source of truth for *doing the steps that make them pass*.
 | On a feature branch, not `master` | `branch-guard` hook (commit-time) | Pre-flight check before any commit/create |
 | `docs/features.md` updated when user-visible behaviour changed | `docs_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: update features.md (via `/update-docs`) **or** put `[docs-not-needed: <reason>]` in the PR body |
 | `qa/scenarios/sNN_*.py` added/extended for user-facing flows | `qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: add a driver **or** put `[qa-not-needed: <reason>]` in the PR body |
-| `news/<PR>.<type>` changelog fragment | `news-gate.yml` `require-news-fragment` (server-only — no client hook, because the filename needs the PR number) | Write it **after** create, or put `[skip-news: <reason>]` in the body |
+| `news/<PR>.<type>` changelog fragment | `news-gate.yml` `require-news-fragment` → `scripts/hooks/news_guard.py --ci` (server-only — no client hook, because the filename needs the PR number) | Write it **after** create, or put `[skip-news: <reason>]` in the body |
 | Unit + coverage (70% file / 80% global) | `tests.yml` `pytest` | Run locally before push (`/work` Phase 4 already does) |
 | qa scenario batch | `qa-batch.yml` `qa (1..5)` | Server-side; watch in the tail |
 | Semantic drift (code ↔ features.md ↔ qa) | `/pr-review` (advisory, in-session) | Run before create when the diff qualifies |
@@ -73,6 +73,14 @@ Use `[qa-not-needed]` when a layer-3 driver would be padding (e.g.
 asserting a value only a flaky UIA read can observe), not to dodge real
 coverage — the project's no-test-padding rule (CLAUDE.md "Testing
 ground rules") applies to the token decision too.
+
+All three tokens share one enforced rule — **write a real reason**: a
+blank one, the literal `<reason>` placeholder pasted from this page,
+and (for `skip-news`) a token whose `]` never arrives are all rejected,
+each with a message naming the problem. The canonical statement of the
+three shapes and that rule lives in
+[`news/README.md`](../../../news/README.md) § Bypass — read it there
+rather than restating it anywhere else.
 
 **Also decide the issue link.** Which issue(s) does this PR *fully
 resolve*? Each one needs a `Closes #N` (or `Fixes #N` / `Resolves #N`)
@@ -132,7 +140,8 @@ EOF
 
 ### Step 4 — News fragment (the easy-to-forget step)
 
-If Step 1 chose `[skip-news:]`, this step is a no-op — skip to Step 5.
+If Step 1 chose the `skip-news` token, this step is a no-op — skip to
+Step 5.
 
 Otherwise write `news/<PR>.<type>`, one line, present-tense imperative,
 ending `(#<PR-or-issue>)`. Map the head commit's Conventional-Commits

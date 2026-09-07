@@ -1,0 +1,1 @@
+Point run.bat at launcher.py so the dev launcher honours PHOTO_MANAGER_WEB like the packaged build (#810).

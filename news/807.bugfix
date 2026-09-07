@@ -1,0 +1,1 @@
+Sort string fields in the correct order when descending is selected — previously descending on a string silently produced ascending order (#807).

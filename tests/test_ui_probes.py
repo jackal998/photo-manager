@@ -45,6 +45,7 @@ MAIN_WINDOW_PATH = REPO / "app" / "views" / "main_window.py"
 SCANNER_DEDUP_PATH = REPO / "scanner" / "dedup.py"
 EN_YAML = REPO / "translations" / "en.yml"
 ZH_TW_YAML = REPO / "translations" / "zh_TW.yml"
+VIDEO_TILE_TSX_PATH = REPO / "frontend" / "src" / "components" / "VideoTile.tsx"
 
 
 # Tree columns that the user expects to filter against in the Select
@@ -384,6 +385,16 @@ _TRANSLATION_EXEMPT_KEYS: frozenset[str] = frozenset({
     # natural-language structure that differs by locale); this one is
     # the format-template degenerate case.
     "action_dialog.pattern_summary_numeric_threshold",
+    # Web analog of the above (#741): the same `{field} {op} {value}`
+    # placeholder + math-operator template — nothing language-specific to
+    # translate. The other three web.action_dialog.pattern_summary_* keys ARE
+    # translated (Simple/Regex/TopN have locale-specific natural-language form).
+    "web.action_dialog.pattern_summary_numeric_threshold",
+    # Language autonyms in the web View → Language switcher: each language
+    # is shown in its own name in every locale (standard i18n practice), so
+    # "English" stays "English" in zh_TW. (The zh entry "中文 (繁體)" passes
+    # on its own via the CJK check.)
+    "web.menu.lang_en",
 })
 
 _CJK_RE = re.compile(r"[一-鿿]")
@@ -1044,6 +1055,45 @@ def _count_os_path_get_calls(fn: ast.FunctionDef) -> list[tuple[int, str]]:
     return found
 
 
+def test_probe_image_service_has_zero_pyside6_references():
+    """``infrastructure/image_service.py`` must import ZERO PySide6 symbols.
+
+    Forward-defensive against the Qt-free refactor of PR-C' (web-port Phase 0)
+    being quietly re-coupled to Qt. The service returns JPEG bytes; the only
+    QImage construction site is ``app/views/image_tasks._bytes_to_qimage``.
+
+    Catches: any import of PySide6 (direct or submodule), or any bare use of
+    QImage / QImageReader / QColor / QSize / Qt.* that slipped in through a
+    copy-paste or refactor without an import guard.
+    """
+    image_service_path = REPO / "infrastructure" / "image_service.py"
+    src = image_service_path.read_text(encoding="utf-8")
+
+    # Text-level scan — covers both import lines and attribute accesses.
+    banned_patterns = [
+        "PySide6",
+        "QImage",
+        "QImageReader",
+        "QColor",
+        "QSize",
+        # Qt. is only meaningful in a Qt context; the service must not use it.
+        "Qt.",
+    ]
+    hits: list[tuple[str, int]] = []
+    for lineno, line in enumerate(src.splitlines(), start=1):
+        for pat in banned_patterns:
+            if pat in line:
+                hits.append((pat, lineno))
+
+    assert not hits, (
+        "infrastructure/image_service.py contains Qt references — "
+        "the service must be Qt-free (returns JPEG bytes; QImage lives "
+        "only in app/views/image_tasks._bytes_to_qimage). "
+        "References found:\n  "
+        + "\n  ".join(f"line {ln}: matched {pat!r}" for pat, ln in hits)
+    )
+
+
 def test_probe_make_row_per_row_stat_budget():
     """#474 forward-defensive: ``scanner/dedup.py::_make_row`` MUST NOT
     issue more than 3 ``os.path.get*`` calls.
@@ -1077,4 +1127,162 @@ def test_probe_make_row_per_row_stat_budget():
         "trade-off and #474 for the guardrail rationale. If the new "
         "stat is truly necessary, raise the threshold here in the same "
         "PR with a one-line reason."
+    )
+
+
+def test_probe_scan_runner_has_no_qthread_method_calls():
+    """T6 — core/app_service/scan_runner.py must contain zero Qt references.
+
+    The pipeline's Qt-free contract enables the Phase 1 web API (FastAPI +
+    SSE) to call run_pipeline() without importing PySide6.  This probe
+    enforces the contract statically so a stray ``.emit(`` or
+    ``QThread`` import can't slip in unnoticed.
+
+    Checked patterns (AST-level):
+    - ``import PySide6``           — top-level or function-body
+    - ``from PySide6 import …``    — ditto
+    - ``QThread``                  — as a name reference anywhere
+    - ``.emit(``                   — attribute-call pattern (Qt signal emission)
+
+    If this probe fires, the change that introduced the Qt coupling should
+    instead add the new signal dispatch to ``_QtBus`` in scan_worker.py and
+    call it via ``bus.<method>()`` in scan_runner.py.
+    """
+    SCAN_RUNNER_PATH = REPO / "core" / "app_service" / "scan_runner.py"
+    source = SCAN_RUNNER_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(SCAN_RUNNER_PATH))
+
+    violations: list[str] = []
+
+    for node in ast.walk(tree):
+        # ``import PySide6`` or ``import PySide6.QtCore``
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if "PySide6" in alias.name:
+                    violations.append(
+                        f"line {node.lineno}: import {alias.name}"
+                    )
+        # ``from PySide6 import …`` or ``from PySide6.QtCore import …``
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and "PySide6" in node.module:
+                violations.append(
+                    f"line {node.lineno}: from {node.module} import …"
+                )
+        # ``QThread`` as a bare name reference
+        elif isinstance(node, ast.Name) and node.id == "QThread":
+            violations.append(
+                f"line {node.lineno}: bare name 'QThread'"
+            )
+        # ``.emit(…)`` — attribute call (Qt signal emission)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "emit"
+        ):
+            violations.append(
+                f"line {node.lineno}: .emit() call"
+            )
+
+    assert violations == [], (
+        f"core/app_service/scan_runner.py must have zero Qt references.\n"
+        f"Violations found ({len(violations)}):\n"
+        + "\n".join(f"  {v}" for v in violations)
+        + "\nFix: dispatch via bus.<method>() and implement the method "
+        "in _QtBus (scan_worker.py) instead."
+    )
+
+
+def test_probe_qtbus_implements_every_scanprogressbus_method():
+    """T7 — _QtBus must implement every method declared on ScanProgressBus.
+
+    ScanProgressBus is a runtime_checkable Protocol; the pipeline dispatches
+    all events through it. _QtBus is the Qt-signal implementation. If a new
+    event method is added to the Protocol but not to _QtBus, the pipeline
+    runs fine in tests (which use _SpyBus) but crashes at runtime when the
+    Qt worker dispatches an unknown attribute.
+
+    This probe asserts SET EQUALITY so both gaps fire:
+      - Protocol method missing from _QtBus → AttributeError at runtime.
+      - Extra method on _QtBus not in Protocol → not wrong but worth
+        knowing (informative, not a hard failure, so we check only Protocol ⊆ _QtBus).
+
+    Current passing set (both sides equal today):
+        {completed_empty, failed, finished, hash_pool_measured, log,
+         read_knee_measured, stage}
+    """
+    import inspect
+    import typing
+
+    from core.app_service.events import ScanProgressBus
+    from app.views.workers.scan_worker import _QtBus
+
+    # Protocol member names (non-dunder methods declared by the Protocol).
+    # typing.get_protocol_members arrived in Python 3.13; on 3.11/3.12 use
+    # the __protocol_attrs__ semi-public attribute instead.
+    if hasattr(typing, "get_protocol_members"):
+        protocol_methods = set(typing.get_protocol_members(ScanProgressBus))
+    else:
+        protocol_methods = set(getattr(ScanProgressBus, "__protocol_attrs__", set()))
+
+    # _QtBus concrete methods (non-dunder, defined directly on the class —
+    # excludes inherited object methods).
+    qtbus_methods = {
+        name for name, _ in inspect.getmembers(_QtBus, predicate=inspect.isfunction)
+        if not name.startswith("_")
+    }
+
+    missing_from_qtbus = protocol_methods - qtbus_methods
+    assert not missing_from_qtbus, (
+        f"_QtBus is missing methods declared on ScanProgressBus: "
+        f"{sorted(missing_from_qtbus)}. "
+        f"Adding a new bus event to the Protocol without implementing it in "
+        f"_QtBus means the Qt scan worker will raise AttributeError at runtime "
+        f"when the pipeline calls bus.<method>(). Implement the method in "
+        f"_QtBus (scan_worker.py) and connect it to the matching Qt signal."
+    )
+
+
+def test_probe_video_tile_video_element_carries_video_testid():
+    """The <video> inside VideoTile.tsx must carry a "{testId}-video" data-testid.
+
+    s71 (qa/web/scenarios/s71_grid_video_tiles.py) targets each tile's media
+    element via ``page.get_by_test_id(f"{tile_testid}-video")`` — the outer
+    tile div keeps the plain ``{testId}`` and the inner <video> appends
+    ``-video``. If a refactor drops the inner testid (or renames the suffix),
+    the Playwright scenario times out with a stale "element not found" error
+    that reads like a mount bug rather than a testid drift. This probe pins
+    the contract as a source-text shape so the drift fails fast in CI.
+
+    The invariant is inherently a JSX-text shape (a data-testid attribute
+    derived from a prop on a specific element), so we inspect the source text
+    rather than importing the TSX (no TS toolchain in the pytest run).
+    """
+    src = VIDEO_TILE_TSX_PATH.read_text(encoding="utf-8")
+
+    # The JSX <video> element opens with `<video` on its own line followed by
+    # attributes on subsequent lines and closes with a self-closing `/>`.
+    # Anchoring on `<video` + newline distinguishes the real element from the
+    # literal "<video>" that appears in the file's header prose comment.
+    # Capture the attribute block up to the first `/>`.
+    video_tag_match = re.search(r"<video\s*\n(.*?)/>", src, re.DOTALL)
+    assert video_tag_match is not None, (
+        "No self-closing <video ... /> JSX element found in VideoTile.tsx. The "
+        "grid video tile must render a native <video> on click — check the "
+        "component was not refactored away from an inline self-closing element."
+    )
+    video_tag = video_tag_match.group(1)
+
+    # The data-testid must derive from the testId prop with a "-video" suffix.
+    # The value is a JSX expression with a template literal (`${testId}-video`)
+    # so it contains `}` internally — match the attribute up to end-of-line
+    # rather than up to the first `}`.
+    testid_line = next(
+        (ln for ln in video_tag.splitlines() if "data-testid=" in ln), ""
+    )
+    assert "testId" in testid_line and "-video" in testid_line, (
+        "VideoTile.tsx's <video> element does not carry a "
+        '`data-testid={testId ? `${testId}-video` : undefined}` attribute. '
+        "s71 addresses the tile media element as '{tile-testid}-video'; without "
+        "this attribute the scenario cannot find the <video> and will time out. "
+        f"Current <video> tag attributes: {video_tag.strip()!r}"
     )

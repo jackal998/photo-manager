@@ -1,0 +1,1 @@
+Add the headless review backend for the localhost web port: load a manifest into duplicate groups, set per-file decisions and lock state, and browse folders via /api/manifest, /api/decision, /api/lock, /api/settings, and /api/fs/browse. (#659)

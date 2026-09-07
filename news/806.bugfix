@@ -1,0 +1,1 @@
+Surface real manifest-migration failures instead of silently swallowing every ALTER TABLE error as a duplicate column (#806).

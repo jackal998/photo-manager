@@ -1,0 +1,1 @@
+Add `scripts/bench_thumbnail_latency.py`, the T4 web-port cutover gate: asserts the 40 MiB full-res cap returns 413, a real ProRAW full-res serve stays under a peak-RSS budget, and warm `size=thumb` p95 ≤ 200 ms — with a `make_qa_large_source.py --include-large-raw` fixture helper (#726)

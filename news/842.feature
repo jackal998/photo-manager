@@ -1,0 +1,1 @@
+Serialise preview decodes per physical device with cancellation tokens, so rapid clicks through a group decode only the first and last image instead of every one, and queue the next group's first image as a 1-ahead prefetch (#622).

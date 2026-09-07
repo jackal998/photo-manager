@@ -193,7 +193,24 @@ class PreviewPane(QWidget):
             pass
 
     # Public API
+    def current_thumb_side(self) -> int:
+        """The pixel side the grid is currently requesting thumbnails at.
+
+        The 1-ahead prefetch (#622 Phase 2) must warm the SAME side the grid
+        will ask for — the cache key is (path, side, mtime), so a prefetch at
+        any other side stores bytes nothing will ever look up. Falls back to
+        the configured thumb size if the geometry probe fails.
+        """
+        try:
+            return int(self._compute_grid_geometry()[1])
+        except Exception:
+            return int(self._thumb_size)
+
     def show_single(self, path: str, info: dict | None = None) -> None:
+        # #622 Phase 2 — a new selection: drop every decode still queued for
+        # the file the user just left, so a fast click-through spends the
+        # per-device read budget on where they landed, not where they passed.
+        self._runner.begin_selection(self)
         self.clear()
         self._single_label_path = path
         self.preview_area.setWidgetResizable(False)
@@ -270,11 +287,16 @@ class PreviewPane(QWidget):
                 self._single_info_payload = (path, info)
                 self._runner.request_resolution(path)
             self._single_label.setText(t("preview.loading"))
-            self._current_single_token = self._runner.request_single_preview(path)
+            self._current_single_token = self._runner.request_single_preview(
+                path, owner=self
+            )
 
     def show_grid(
         self, items: list[tuple[str, str, str, str] | tuple[str, str, str, str, str, str]]
     ) -> None:
+        # #622 Phase 2 — see show_single: the previous group's undecoded
+        # thumbnails must not read ahead of this group's.
+        self._runner.begin_selection(self)
         self.clear()
         self.preview_area.setWidgetResizable(True)
         self.preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -384,7 +406,7 @@ class PreviewPane(QWidget):
                 info.setObjectName("info_label")
 
                 self._grid_layout.addWidget(tile, r, c)
-                token = self._runner.request_grid_thumbnail(p, thumb_side)
+                token = self._runner.request_grid_thumbnail(p, thumb_side, owner=self)
                 self._grid_labels[token] = img_lbl
             else:
                 # Image tile
@@ -412,7 +434,7 @@ class PreviewPane(QWidget):
                 info.setObjectName("info_label")
                 v.addWidget(info)
                 self._grid_layout.addWidget(tile, r, c)
-                token = self._runner.request_grid_thumbnail(p, thumb_side)
+                token = self._runner.request_grid_thumbnail(p, thumb_side, owner=self)
                 self._grid_labels[token] = img_lbl
 
         self._preview_layout.addWidget(self._grid_container)
@@ -791,7 +813,7 @@ class PreviewPane(QWidget):
                     v.addWidget(info)
 
                     self._grid_layout.addWidget(tile, r, c)
-                    token = self._runner.request_grid_thumbnail(p, thumb_side)
+                    token = self._runner.request_grid_thumbnail(p, thumb_side, owner=self)
                     self._grid_labels[token] = img_lbl
                 else:
                     # Image tile — resolution comes from cached _grid_items, no extra I/O
@@ -812,7 +834,7 @@ class PreviewPane(QWidget):
                     info.setObjectName("info_label")
                     v.addWidget(info)
                     self._grid_layout.addWidget(tile, r, c)
-                    token = self._runner.request_grid_thumbnail(p, thumb_side)
+                    token = self._runner.request_grid_thumbnail(p, thumb_side, owner=self)
                     self._grid_labels[token] = img_lbl
 
             self._preview_layout.addWidget(self._grid_container)

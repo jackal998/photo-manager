@@ -1,0 +1,1 @@
+Cut the first-view stall when playing HEVC videos in the web app (ffmpeg ultrafast transcode) and show a "Preparing video…" indicator while it prepares. (#751)

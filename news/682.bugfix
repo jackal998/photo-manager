@@ -1,0 +1,1 @@
+Fix the web Execute dialog committing every decided row regardless of the active type filter; Execute now scopes to the visible rows ("visible = committed") and a banner warns when a filter hides pending deletes. (#676)

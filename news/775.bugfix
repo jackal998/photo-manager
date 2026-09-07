@@ -1,0 +1,1 @@
+settings.json writes are now crash-safe (temp file + atomic replace, #653) and a settings update that would silently destroy an existing value now fails loudly with a clear error instead — surfaced as 422 by PATCH /api/settings (#658).

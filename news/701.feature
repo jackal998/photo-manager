@@ -1,0 +1,1 @@
+Port the singleton-prune flow to the web app — after a destructive op leaves single-item groups, the 3-value `ui.prune_singletons` preference (ask / always / never) drives a mixed plain/actioned bucket dialog with an opt-in checkbox and the D6 locked-singleton lock gate, matching the desktop behaviour (#701)

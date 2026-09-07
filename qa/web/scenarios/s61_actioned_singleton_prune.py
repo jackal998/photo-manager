@@ -1,0 +1,367 @@
+"""Web scenario s61 — mixed-bucket singleton prune on the "ask" path
+(#686, web port of qa/scenarios/s61_actioned_singleton_prune.py).
+
+Qt intent
+---------
+After a destructive op leaves singleton groups, ``ui.prune_singletons="ask"``
+fires the SingletonPruneConfirmDialog. It classifies singletons into a PLAIN
+bucket (no pending decision) and an ACTIONED bucket (an un-executed
+delete/ignore decision). When BOTH exist (mixed layout) the actioned bucket is
+opt-in via a checkbox (default unchecked); the Remove button label is dynamic.
+Variant D adds the D6 locked-singleton gate: a locked singleton routes through
+the LockConfirmDialog before the prune dialog.
+
+Web adaptation — accumulation (the single-select reality)
+---------------------------------------------------------
+The desktop collapses two groups with ONE multi-row "Remove from List". This
+scenario instead drives the EXECUTE-dialog menu's FINALIZING remove (s54), which
+is SINGLE-row, so a single gesture collapses ONE group. (Since #694 the
+result-tree "Remove from list" also finalizes and is multi-row, but the
+single-row execute path is what lets us ACCUMULATE a mixed offer one group at a
+time.) To assemble a MIXED offer we ACCUMULATE:
+
+  1. Under ``prune="never"`` finalize-remove A_drop → A collapses to the plain
+     (or locked) A_keep singleton, silently (no dialog on the "never" path).
+  2. Flip ``prune="ask"`` and finalize-remove B_drop → B collapses to the
+     actioned B_keep singleton. maybeOfferPrune now classifies ALL current
+     singletons (A_keep + B_keep) → the MIXED dialog (or, for the locked
+     variant, the lock gate then the actioned-only prune dialog).
+
+This exercises the SAME behaviour the desktop pins — the dialog offers every
+current singleton, not just the one the last op collapsed.
+
+Seven variants:
+  * remove_plain — mixed, checkbox UNCHECKED, Remove → only A_keep (plain)
+    pruned; B_keep (actioned) held with its 'delete' decision intact.
+  * remove_both  — mixed, checkbox CHECKED, Remove → both pruned.
+  * keep         — mixed, Keep all → neither pruned.
+  * lock_cancel  — A_keep LOCKED; lock gate Cancel → A_keep held; the prune
+    dialog (actioned-only B_keep) is dismissed with Keep → B_keep held. Also
+    confirms A_keep stays a LOCKED prune candidate via POST /api/prune/candidates.
+  * lock_unlocked_only — A_keep LOCKED; lock gate "Unlocked only" → A_keep held
+    (the held outcome is identical to Cancel, since resolvePruneLock treats the
+    two verdicts the same); the candidates read is the discriminator that the
+    distinct button still HELD the lock rather than unlocking it.
+  * lock_apply   — lock gate Unlock&Apply → A_keep pruned; prune dialog Keep →
+    B_keep held (the Qt to_prune.extend(prunable_locked) tail: A_keep prunes
+    regardless of the prune-dialog verdict).
+  * lock_apply_remove — lock gate Unlock&Apply, then the prune dialog is dismissed
+    with REMOVE (not Keep) → BOTH singletons prune: A_keep via the lockedToPrune
+    fold and B_keep via the actioned bucket. The lock-resolved dialog is
+    ACTIONED-ONLY (A_keep has left the unlocked buckets), so `isMixed` is false,
+    no opt-in checkbox is rendered, and Remove itself opts the actioned bucket in
+    — the label counts the ACTIONED bucket, not the plain one. This is the only
+    live drive of the Remove-with-non-empty-`lockedToPrune` path and the
+    `onOpenChange` double-`applyPrune` guard (#713 / #702 item 4).
+
+Assertions read sqlite directly — a held singleton (outcome='') is a
+single-member group the web review view filters out (orphan-skip), so GET
+/api/manifest cannot observe it. See s67 for the same rationale.
+
+Desktop source: qa/scenarios/s61_actioned_singleton_prune.py
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sqlite3
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from qa.web._pw import PWContext
+from qa.web._prune_fixtures import write_cluster
+from qa.web._invariants import (
+    click_context_item,
+    open_execute_dialog,
+    right_click_row,
+    run_scan,
+    set_prune_pref,
+)
+from qa.web.testid_constants import (
+    CTX_LOCK,
+    CTX_SET_ACTION_DELETE,
+    CTX_SET_ACTION_REMOVE,
+    EXECUTE_REMOVE_CONFIRM,
+    EXECUTE_REMOVE_CONFIRM_YES,
+    LOCK_CONFIRM_BTN_CANCEL,
+    LOCK_CONFIRM_BTN_UNLOCK_APPLY,
+    LOCK_CONFIRM_BTN_UNLOCKED_ONLY,
+    LOCK_CONFIRM_DIALOG,
+    PRUNE_BTN_KEEP,
+    PRUNE_BTN_REMOVE,
+    PRUNE_CONFIRM_DIALOG,
+    PRUNE_INCLUDE_ACTIONED,
+    execute_row_testid,
+    row_file_testid,
+)
+
+A_KEEP = "s61_a_keep_q95.jpg"   # plain (or locked) singleton after A_drop goes
+A_DROP = "s61_a_drop_q65.jpg"
+B_KEEP = "s61_b_keep_q95.jpg"   # actioned singleton (staged 'delete', un-executed)
+B_DROP = "s61_b_drop_q65.jpg"
+
+
+def _manifest(base_url: str, db_path: str) -> dict:
+    encoded = urllib.parse.quote(db_path, safe="")
+    with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/manifest?path={encoded}", timeout=15) as resp:  # noqa: S310
+        return json.loads(resp.read())
+
+
+def _locked_candidates(base_url: str, db_path: str) -> set[str]:
+    """Basenames in the ``locked`` bucket of POST /api/prune/candidates — the
+    authoritative classification the prune flow / lock gate branch on (#686).
+
+    This is the SAME endpoint maybeOfferPrune reads, so it independently confirms
+    how the backend would re-classify the held singleton: a regression that
+    accidentally UNLOCKED the row (e.g. a mis-wired Cancel/Unlocked-only verdict)
+    would move it out of ``locked`` and be caught here even though the raw sqlite
+    is_locked/outcome read still looked plausible. Read-only."""
+    payload = json.dumps({"manifest_path": db_path}).encode()
+    req = urllib.request.Request(  # noqa: S310
+        f"{base_url.rstrip('/')}/api/prune/candidates",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+        data = json.loads(resp.read())
+    return {Path(p).name for p in data.get("locked", [])}
+
+
+def _gid_of(base_url: str, db_path: str, basename: str) -> str:
+    """group_number of the group currently containing ``basename``."""
+    for g in _manifest(base_url, db_path).get("groups", []):
+        if any(Path(it["file_path"]).name == basename for it in g["items"]):
+            return str(g["group_number"])
+    raise AssertionError(f"{basename} not found in any group")
+
+
+def _sqlite(db_path: str, basename: str) -> tuple[str, str, int]:
+    """(outcome, user_decision, is_locked) for ``basename`` — read-only."""
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(outcome,''), COALESCE(user_decision,''), COALESCE(is_locked,0) "
+            "FROM migration_manifest WHERE source_path LIKE ?",
+            (f"%{basename}",),
+        ).fetchone()
+    finally:
+        conn.close()
+    return (row[0], row[1], row[2]) if row else ("", "", 0)
+
+
+def _await(predicate, *, timeout: float = 4.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return predicate()
+
+
+def _stage(page, base_url, db_path, basename, item_testid):
+    gid = _gid_of(base_url, db_path, basename)
+    right_click_row(page, row_file_testid(gid, basename))
+    click_context_item(page, item_testid)
+
+
+def _dismiss_modal_overlays(page, *, max_presses: int = 6) -> None:
+    """Dismiss any lingering Radix modal overlays so the toolbar is clickable.
+
+    The execute dialog's close after a remove is timing-dependent — it
+    auto-closes cleanly on a local Windows run but can stay OPEN (sometimes
+    STACKED under its nested confirm sheet — the CI log showed an
+    `aria-hidden` overlay, i.e. a dialog behind another) on the faster CI
+    runner. Any such modal overlay (`fixed inset-0 z-50` backdrop) intercepts the
+    click on `main-execute-button`, hanging the next `open_execute_dialog` for
+    30s. The execute / confirm dialogs close on Escape (they only
+    `preventDefault` the Escape while a job is running, which it is not at an
+    open point), so press Escape until NO overlay element remains in the DOM —
+    waiting for the close animation to fully DETACH it (not merely flip
+    `data-state`, since a `data-state="closed"` overlay mid-fade still
+    intercepts). Returns immediately when nothing is open (the common path)."""
+    overlay = page.locator("div.fixed.inset-0.z-50")
+    open_overlay = page.locator('div.fixed.inset-0.z-50[data-state="open"]')
+    for _ in range(max_presses):
+        if overlay.count() == 0:
+            return
+        if open_overlay.count() > 0:
+            page.keyboard.press("Escape")
+        page.wait_for_timeout(450)  # let the close animation detach the overlay
+
+
+def _execute_remove(page, base_url, db_path, basename):
+    """Finalize-remove one row via the EXECUTE-dialog menu (the removeFromList
+    path). Dismisses any lingering modal overlay then opens a fresh execute
+    dialog (the close after a remove is timing-dependent — see
+    _dismiss_modal_overlays); the fresh open re-reads the renumbered groups
+    (after one group collapses to a hidden singleton, the survivor is
+    renumbered)."""
+    _dismiss_modal_overlays(page)
+    open_execute_dialog(page)
+    gid = _gid_of(base_url, db_path, basename)
+    right_click_row(page, execute_row_testid(gid, basename))
+    click_context_item(page, CTX_SET_ACTION_REMOVE)
+    page.get_by_test_id(EXECUTE_REMOVE_CONFIRM).wait_for(state="visible", timeout=10_000)
+    page.get_by_test_id(EXECUTE_REMOVE_CONFIRM_YES).click()
+
+
+def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) -> None:
+    """prune_action ∈ {"remove_plain", "remove_both", "keep", "remove_actioned"}.
+
+    For lock=True, the lock gate is driven first (Cancel for keep-ish holds,
+    Unlock&Apply otherwise — encoded by the caller via label). The prune dialog
+    is then dismissed with Keep for prune_action="keep", which isolates the lock
+    effect on A_keep while B_keep (actioned) stays intact; "remove_actioned"
+    instead clicks Remove on that lock-resolved (actioned-only) dialog, which is
+    the one prune-flow combination the Keep-only lock variants cannot reach.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="qa_s61_")
+    try:
+        write_cluster(Path(tmpdir), (A_KEEP, A_DROP), exif_month=1)
+        write_cluster(Path(tmpdir), (B_KEEP, B_DROP), exif_month=2)
+        db = os.path.join(tmpdir, "s61_manifest.db")
+
+        with PWContext(base_url=base_url) as ctx:
+            page = ctx.new_page()
+            page.goto("/")
+            run_scan(page, sources=[tmpdir], output_path=db, scan_timeout=120_000)
+            m = _manifest(base_url, db)
+            assert m["total_groups"] == 2, f"expected 2 clusters, got {m['total_groups']}"
+
+            # Stage decisions on the main tree (so the drops appear in the
+            # execute tree; B_keep's un-executed 'delete' makes it actioned).
+            _stage(page, base_url, db, A_DROP, CTX_SET_ACTION_DELETE)
+            _stage(page, base_url, db, B_DROP, CTX_SET_ACTION_DELETE)
+            _stage(page, base_url, db, B_KEEP, CTX_SET_ACTION_DELETE)
+            assert _await(lambda: _sqlite(db, B_KEEP)[1] == "delete"), "B_keep not staged delete"
+            if lock:
+                _stage(page, base_url, db, A_KEEP, CTX_LOCK)
+                assert _await(lambda: _sqlite(db, A_KEEP)[2] == 1), "A_keep not locked"
+
+            # Phase 1 — collapse A under "never": A_keep becomes a plain/locked
+            # singleton with NO prune dialog. (Each variant re-asserts "never"
+            # because the previous variant's Phase 2 left the pref at "ask".)
+            set_prune_pref(base_url, "never")
+            _execute_remove(page, base_url, db, A_DROP)
+            assert _await(lambda: _sqlite(db, A_DROP)[0] == "ignored"), "A_drop not removed"
+            assert not page.get_by_test_id(PRUNE_CONFIRM_DIALOG).is_visible(), \
+                'prune dialog must NOT fire under "never"'
+
+            # Phase 2 — flip to "ask" and collapse B → maybeOfferPrune sees BOTH
+            # singletons (A_keep + B_keep).
+            set_prune_pref(base_url, "ask")
+            _execute_remove(page, base_url, db, B_DROP)
+            assert _await(lambda: _sqlite(db, B_DROP)[0] == "ignored"), "B_drop not removed"
+
+            if lock:
+                # D6 gate fires first for the locked A_keep.
+                page.get_by_test_id(LOCK_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
+                if label == "lock_cancel":
+                    lock_btn = LOCK_CONFIRM_BTN_CANCEL
+                elif label == "lock_unlocked_only":
+                    lock_btn = LOCK_CONFIRM_BTN_UNLOCKED_ONLY
+                else:  # lock_apply
+                    lock_btn = LOCK_CONFIRM_BTN_UNLOCK_APPLY
+                page.get_by_test_id(lock_btn).click()
+                # Then the prune dialog. The lock-resolved offer is ACTIONED-ONLY
+                # (B_keep): A_keep has left the unlocked buckets either way —
+                # Unlock&Apply folded it into lockedToPrune, Cancel/Unlocked-only
+                # held it out entirely — so `plain` is empty, PruneConfirmDialog's
+                # `isMixed` is false, and it renders NO opt-in checkbox; Remove
+                # itself opts the actioned bucket in.
+                page.get_by_test_id(PRUNE_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
+                if prune_action == "remove_actioned":
+                    # Pin the layout, not just the verdict: were the lock fold to
+                    # regress and leave A_keep in the PLAIN bucket, the dialog
+                    # would render the mixed opt-in checkbox and Remove would
+                    # prune only the plain bucket — caught here.
+                    assert page.get_by_test_id(PRUNE_INCLUDE_ACTIONED).count() == 0, \
+                        "lock-resolved offer must be actioned-only (no mixed opt-in checkbox)"
+                    assert "Remove 1" in page.get_by_test_id(PRUNE_BTN_REMOVE).inner_text(), \
+                        "dynamic Remove label should show the ACTIONED count (1) here"
+                    page.get_by_test_id(PRUNE_BTN_REMOVE).click()
+                else:
+                    page.get_by_test_id(PRUNE_BTN_KEEP).click()
+            else:
+                # Mixed dialog: assert the opt-in checkbox is present + the label.
+                page.get_by_test_id(PRUNE_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
+                assert page.get_by_test_id(PRUNE_INCLUDE_ACTIONED).is_visible(), \
+                    "mixed layout must render the actioned opt-in checkbox"
+                assert "Remove 1" in page.get_by_test_id(PRUNE_BTN_REMOVE).inner_text(), \
+                    "dynamic Remove label should show the plain count (1)"
+                if prune_action == "keep":
+                    page.get_by_test_id(PRUNE_BTN_KEEP).click()
+                else:
+                    if prune_action == "remove_both":
+                        page.get_by_test_id(PRUNE_INCLUDE_ACTIONED).click()
+                    page.get_by_test_id(PRUNE_BTN_REMOVE).click()
+
+            # ---- Assert the outcomes (sqlite — review view hides singletons) ----
+            if label == "remove_plain":
+                _await(lambda: _sqlite(db, A_KEEP)[0] == "ignored")
+                assert _sqlite(db, A_KEEP)[0] == "ignored", f"plain A_keep should be pruned, got {_sqlite(db, A_KEEP)}"
+                assert _sqlite(db, B_KEEP)[0] == "", "actioned B_keep should be HELD (box unchecked)"
+                assert _sqlite(db, B_KEEP)[1] == "delete", "actioned B_keep must keep its 'delete' decision"
+            elif label == "remove_both":
+                _await(lambda: _sqlite(db, A_KEEP)[0] == "ignored" and _sqlite(db, B_KEEP)[0] == "ignored")
+                assert _sqlite(db, A_KEEP)[0] == "ignored", "A_keep should be pruned"
+                assert _sqlite(db, B_KEEP)[0] == "ignored", "B_keep should be pruned (box checked)"
+            elif label == "keep":
+                assert _sqlite(db, A_KEEP)[0] == "", "Keep all must prune nothing (A_keep)"
+                assert _sqlite(db, B_KEEP)[0] == "", "Keep all must prune nothing (B_keep)"
+                assert _sqlite(db, B_KEEP)[1] == "delete", "B_keep must keep its decision on Keep all"
+            elif label in ("lock_cancel", "lock_unlocked_only"):
+                # Both verdicts HOLD the locked A_keep — resolvePruneLock treats
+                # "unlocked-only" identically to "cancel" (lockedToPrune=[]), so
+                # their raw sqlite state is the same. The DISCRIMINATING check is
+                # the candidates read: it proves the held row is STILL a LOCKED
+                # prune candidate (the button did NOT unlock it). A mis-wire of
+                # either button to the unlock-apply verdict would unlock A_keep
+                # and drop it out of the `locked` bucket — caught here, not by
+                # the sqlite read above.
+                verb = "Cancel" if label == "lock_cancel" else "Unlocked-only"
+                assert _sqlite(db, A_KEEP)[0] == "", f"{verb} must HOLD the locked A_keep"
+                assert _sqlite(db, A_KEEP)[2] == 1, "A_keep should still be locked"
+                assert _sqlite(db, B_KEEP)[0] == "", "B_keep held under Keep"
+                assert _await(lambda: A_KEEP in _locked_candidates(base_url, db)), (
+                    f"{A_KEEP} must remain a LOCKED prune candidate after {verb} — "
+                    f"buckets: locked={sorted(_locked_candidates(base_url, db))}"
+                )
+            elif label == "lock_apply_remove":
+                # The only variant that drives Remove on the lock-confirmed path
+                # (#713 / #702 item 4): computePruneSet folds A_keep in via the
+                # non-empty lockedToPrune AND the actioned bucket via Remove, so
+                # BOTH singletons finalize. The existing lock_apply variant proves
+                # the lockedToPrune tail survives a KEEP verdict; this one proves
+                # the two prune sources compose on a REMOVE verdict.
+                _await(lambda: _sqlite(db, A_KEEP)[0] == "ignored" and _sqlite(db, B_KEEP)[0] == "ignored")
+                assert _sqlite(db, A_KEEP)[0] == "ignored", \
+                    f"Unlock&Apply must prune the locked A_keep, got {_sqlite(db, A_KEEP)}"
+                assert _sqlite(db, A_KEEP)[2] == 0, "Unlock&Apply must have UNLOCKED A_keep"
+                assert _sqlite(db, B_KEEP)[0] == "ignored", \
+                    f"Remove must prune the actioned B_keep, got {_sqlite(db, B_KEEP)}"
+                assert _sqlite(db, B_KEEP)[1] == "delete", \
+                    "pruning B_keep must not clear its staged 'delete' decision"
+            else:  # lock_apply
+                _await(lambda: _sqlite(db, A_KEEP)[0] == "ignored")
+                assert _sqlite(db, A_KEEP)[0] == "ignored", "Unlock&Apply must prune the locked A_keep"
+                assert _sqlite(db, B_KEEP)[0] == "", "B_keep held under Keep (actioned bucket intact)"
+            print(f"probe_status: s61 {label} A_keep={_sqlite(db, A_KEEP)[0]!r} "
+                  f"B_keep_outcome={_sqlite(db, B_KEEP)[0]!r} B_keep_decision={_sqlite(db, B_KEEP)[1]!r}")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def run(*, base_url: str) -> None:
+    _run_variant(base_url, label="remove_plain", lock=False, prune_action="remove_plain")
+    _run_variant(base_url, label="remove_both", lock=False, prune_action="remove_both")
+    _run_variant(base_url, label="keep", lock=False, prune_action="keep")
+    _run_variant(base_url, label="lock_cancel", lock=True, prune_action="keep")
+    _run_variant(base_url, label="lock_unlocked_only", lock=True, prune_action="keep")
+    _run_variant(base_url, label="lock_apply", lock=True, prune_action="keep")
+    _run_variant(base_url, label="lock_apply_remove", lock=True, prune_action="remove_actioned")

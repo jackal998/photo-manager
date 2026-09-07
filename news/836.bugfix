@@ -1,0 +1,1 @@
+Group a RAW original with its renamed lossy export when their pHashes match exactly, so the pair is reviewable instead of two invisible singletons; both stay undecided (#824).

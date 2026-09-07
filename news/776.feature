@@ -1,0 +1,1 @@
+The web menu bar gains the List menu with "Remove from List" (#678-D): removes the selected rows from the review list exactly like the right-click path (files stay on disk); disabled until rows are selected.

@@ -176,6 +176,29 @@ class TestDeleteToRecycle:
         assert result.failed[0][0] == str(f)
         assert "Multiple delete failures" in result.failed[0][1]
 
+    def test_winerror_decoded_reason_surfaces_in_failure(self, tmp_path):
+        """A send2trash OSError carrying a known winerror decodes to a
+        plain-language reason instead of the generic 'Multiple delete
+        failures: ...' string (#742)."""
+        f = tmp_path / "photo.jpg"
+        f.write_bytes(b"fake")
+
+        def trash_sharing_violation(p):
+            exc = OSError(None, "OLE error 0x80270027", p)
+            exc.winerror = -2144927705
+            raise exc
+
+        svc = DeleteService()
+        with patch(
+            "infrastructure.delete_service.send2trash",
+            side_effect=trash_sharing_violation,
+        ):
+            result = svc.delete_to_recycle([str(f)])
+        assert result.success_paths == []
+        assert len(result.failed) == 1
+        assert result.failed[0][0] == str(f)
+        assert result.failed[0][1] == "file is in use by another process"
+
     def test_runtime_error_on_normalized_path_recorded_as_failure(self, tmp_path):
         """RuntimeError on Method 1 short-circuits to failure (no fallback)."""
         f = tmp_path / "photo.jpg"

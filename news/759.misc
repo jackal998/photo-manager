@@ -1,0 +1,1 @@
+Scan now writes the manifest and its auto-select keeper locks/decisions as a single atomic step, so an interrupted or failed scan can no longer leave a manifest with rows but missing keeper locks — and a failed re-scan leaves the prior manifest untouched. (#759)

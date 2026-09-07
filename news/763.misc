@@ -1,0 +1,1 @@
+CI now path-scopes the Qt qa-batch and pytest jobs so a pure-frontend PR skips them instead of paying the full ~7-minute backend + 5-shard UIA cost; the filter fails open so a real backend change is never silently skipped. (#763)

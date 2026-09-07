@@ -40,6 +40,27 @@ class TestSortService:
         SortService().sort([g], [("file_size_bytes", False)])
         assert [r.file_size_bytes for r in g.items] == [200, 100]
 
+    def test_single_key_descending_string(self):
+        # Descending on a STRING field must reverse it. The pre-#791 code
+        # embedded a constant leading flag and left the string comparison
+        # ascending, so descending-on-a-string silently produced ascending.
+        g = _group(_rec("/a.jpg"), _rec("/c.jpg"), _rec("/b.jpg"))
+        SortService().sort([g], [("file_path", False)])
+        assert [r.file_path for r in g.items] == ["/c.jpg", "/b.jpg", "/a.jpg"]
+
+    def test_multi_key_descending_string_primary(self):
+        # primary: folder desc (string); tiebreak: size asc — proves the
+        # direction is honoured for a string key even under a second key.
+        g = _group(
+            _rec("/1.jpg", size=200, folder="a"),
+            _rec("/2.jpg", size=100, folder="b"),
+            _rec("/3.jpg", size=100, folder="a"),
+        )
+        SortService().sort([g], [("folder_path", False), ("file_size_bytes", True)])
+        assert [(r.folder_path, r.file_size_bytes) for r in g.items] == [
+            ("b", 100), ("a", 100), ("a", 200),
+        ]
+
     def test_multi_key_stable(self):
         # primary: size desc; tiebreak: path asc
         g = _group(

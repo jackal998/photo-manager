@@ -341,6 +341,220 @@ class TestManifestRepositoryLoad:
         assert all(r.user_decision == "" for r in records)
 
 
+class TestMigrateSchemaErrorHandling:
+    """migrate_manifest_schema swallows ONLY the duplicate-column idempotency
+    case; any other OperationalError (missing table, locked DB, IO failure)
+    propagates so a real migration failure is not silently masked (#797)."""
+
+    def test_idempotent_when_columns_already_exist(self, tmp_path):
+        """Re-running migration on an already-migrated DB is a no-op — every
+        ADD COLUMN raises 'duplicate column name', which must be swallowed."""
+        from infrastructure.manifest_repository import migrate_manifest_schema
+
+        db = _make_manifest(tmp_path, [])  # fully-migrated schema
+        conn = sqlite3.connect(str(db))
+        try:
+            # Runs against a table that already has every column — exercises
+            # the duplicate-column skip path for all of _MIGRATIONS.
+            migrate_manifest_schema(conn)  # must NOT raise
+            migrate_manifest_schema(conn)  # still a no-op on a second pass
+        finally:
+            conn.close()
+
+    def test_non_duplicate_error_propagates(self, tmp_path):
+        """An ALTER failure that is NOT 'column already exists' (here: the
+        migration_manifest table does not exist) must propagate, not be
+        swallowed as if the column merely pre-existed."""
+        from infrastructure.manifest_repository import migrate_manifest_schema
+
+        conn = sqlite3.connect(str(tmp_path / "no_table.db"))  # empty DB
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="no such table"):
+                migrate_manifest_schema(conn)
+        finally:
+            conn.close()
+
+
+# The complete canonical schema as it stood immediately BEFORE #820 — the
+# post-#584 `scanner.manifest._DDL` plus the `is_locked` / `outcome` columns
+# the additive migrations had already added. This is what is on every user's
+# disk today, so it is what the new migration has to open.
+_DDL_PRE_820 = """
+CREATE TABLE migration_manifest (
+    id               INTEGER PRIMARY KEY,
+    source_path      TEXT    NOT NULL,
+    source_label     TEXT    NOT NULL,
+    action           TEXT    NOT NULL,
+    source_hash      TEXT,
+    phash            TEXT,
+    hamming_distance INTEGER,
+    group_id         TEXT,
+    reason           TEXT,
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    file_size_bytes  INTEGER,
+    shot_date        TEXT,
+    creation_date    TEXT,
+    mtime            TEXT,
+    pixel_width      INTEGER,
+    pixel_height     INTEGER,
+    exif_tag_count   INTEGER,
+    gps_present      INTEGER NOT NULL DEFAULT 0,
+    xmp_derived      INTEGER NOT NULL DEFAULT 0,
+    score            REAL,
+    is_locked        INTEGER NOT NULL DEFAULT 0,
+    outcome          TEXT    NOT NULL DEFAULT ''
+);
+"""
+
+
+class TestSubsecTimeOriginalMigration:
+    """#820 — the two new columns land on a manifest that predates them.
+
+    A user's existing `migration_manifest.sqlite` must keep opening, keep
+    every stored value, and report NULL for the new columns until a re-scan
+    fills them. A failure here is not a test failure, it is "the app can no
+    longer open the library you already scanned".
+    """
+
+    def _pre_820_db(self, tmp_path: Path) -> Path:
+        return _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/a.jpg",
+                    "source_label": "jdrive",
+                    "action": "REVIEW_DUPLICATE",
+                    "hamming_distance": 3,
+                    "group_id": "/group/a",
+                    "reason": "near-dup",
+                    "executed": 0,
+                    "user_decision": "delete",
+                    "shot_date": "2024-06-27T21:34:03",
+                    "score": 0.42,
+                }
+            ],
+            ddl=_DDL_PRE_820,
+        )
+
+    def test_subsec_columns_added_to_pre_820_manifest(self, tmp_path):
+        db = self._pre_820_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+        assert "subsec_time_original" in cols
+        assert "offset_time_original" in cols
+
+    def test_subsec_pre_820_rows_read_back_null(self, tmp_path):
+        """No DEFAULT on the ADD COLUMN, so the stored rows genuinely say
+        "unknown" rather than pretending to a sub-second of ''/0 that would
+        sort ahead of every real value."""
+        db = self._pre_820_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute(
+                "SELECT subsec_time_original, offset_time_original, "
+                "       shot_date, user_decision, score "
+                "FROM migration_manifest WHERE source_path = '/legacy/a.jpg'"
+            ).fetchone()
+        assert row[0] is None
+        assert row[1] is None
+        # And the migration disturbed nothing that was already there.
+        assert row[2] == "2024-06-27T21:34:03"
+        assert row[3] == "delete"
+        assert row[4] == pytest.approx(0.42)
+
+    def test_subsec_value_round_trips_after_migration(self, tmp_path):
+        """Leading zero survives storage: "087" must not come back as 87."""
+        db = self._pre_820_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                "INSERT INTO migration_manifest "
+                "(source_path, source_label, action, subsec_time_original,"
+                " offset_time_original) VALUES (?, ?, ?, ?, ?)",
+                ("/new/b.jpg", "jdrive", "", "087", "+09:00"),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT subsec_time_original, offset_time_original "
+                "FROM migration_manifest WHERE source_path = '/new/b.jpg'"
+            ).fetchone()
+        assert row == ("087", "+09:00")
+
+    def test_subsec_columns_survive_the_drop_move_rebuild(self, tmp_path):
+        """The #433 copy-table dance rebuilds the whole table from a
+        hardcoded DDL and copies only the columns named in
+        ``_POST_DROP_COLUMNS``. A column added to ``_MIGRATIONS`` but
+        forgotten there is created by the ALTER and then dropped again on
+        the very next open — silently, on exactly the oldest manifests.
+
+        The fixture row carries REAL sub-second values, not NULLs, because
+        the two halves of the bug are separable and only one of them is a
+        missing column: forgetting the name in the rebuild's ``CREATE TABLE``
+        drops the column, while forgetting it in ``_POST_DROP_COLUMNS``
+        keeps the column and silently drops every VALUE in it. A NULL
+        fixture passes that second case, so it would certify half a guard.
+        """
+        ddl_with_dest_path = _DDL_PRE_820.replace(
+            "outcome          TEXT    NOT NULL DEFAULT ''",
+            "outcome          TEXT    NOT NULL DEFAULT '',\n    dest_path        TEXT",
+        )
+        db = _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/c.jpg",
+                    "source_label": "jdrive",
+                    "action": "MOVE",
+                    "hamming_distance": None,
+                    "group_id": "/group/c",
+                    "reason": "legacy",
+                    "executed": 0,
+                    "user_decision": "",
+                }
+            ],
+            ddl=ddl_with_dest_path,
+        )
+        # Populate the new columns BEFORE the rebuild: they don't exist on
+        # the dest_path-era schema, so the ALTER has to run first. This is
+        # the state a user reaches by opening an ancient manifest once
+        # (columns added, values written by a re-scan) and then opening it
+        # again — the second open is what runs the dance.
+        conn = sqlite3.connect(str(db))
+        try:
+            for col in ("subsec_time_original", "offset_time_original"):
+                conn.execute(
+                    f"ALTER TABLE migration_manifest ADD COLUMN {col} TEXT"
+                )
+            conn.execute(
+                "UPDATE migration_manifest "
+                "SET subsec_time_original = ?, offset_time_original = ? "
+                "WHERE source_path = ?",
+                ("087", "+09:00", "/legacy/c.jpg"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ManifestRepository().ensure_schema(str(db))
+
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+            row = conn.execute(
+                "SELECT action, subsec_time_original, offset_time_original "
+                "FROM migration_manifest WHERE source_path = '/legacy/c.jpg'"
+            ).fetchone()
+        assert "dest_path" not in cols          # the dance really ran
+        assert row[0] == ""                     # …and did its MOVE→'' work
+        assert "subsec_time_original" in cols   # …without eating the columns
+        assert "offset_time_original" in cols
+        # …and without eating their CONTENTS — this is the half a NULL
+        # fixture cannot see, and the half _POST_DROP_COLUMNS protects.
+        assert row[1] == "087"
+        assert row[2] == "+09:00"
+
+
 class TestManifestRepositorySave:
     def _make_record(
         self, path: str, action: str, user_decision: str = "", locked: bool = False
@@ -1539,6 +1753,85 @@ class TestScoringSchemaMigration:
         records = {r.file_path: r for r in ManifestRepository().load(str(db))}
         assert records[str(ref)].score is None
         assert records[str(cand)].score == pytest.approx(0.75)
+
+    def test_scoring_signals_load_from_db_into_photo_record(self, tmp_path):
+        """#680 — the three per-dimension signals must be SELECTed and threaded
+        onto PhotoRecord, not left at their dataclass defaults.
+
+        This is the load-bearing test for the whole ticket: PhotoRecord defaults
+        ``gps_present``/``xmp_derived`` to False and ``exif_tag_count`` to None,
+        which are also legitimate real values. So if the columns fall out of
+        ``_LOAD_ALL_SQL`` (or the yield stops passing them), every row in the
+        web UI reports "no GPS, no XMP, no census" and nothing raises — the
+        serialisation test in tests/test_review_view.py would still pass.
+        """
+        gps_file = tmp_path / "with_gps.jpg"
+        plain = tmp_path / "no_gps.jpg"
+        gps_file.write_bytes(b""); plain.write_bytes(b"")
+        gid = "/group/a"
+        from scanner.dedup import ManifestRow
+        from scanner.manifest import write_manifest
+
+        rows = [
+            ManifestRow(
+                source_path=str(gps_file), source_label="src", action="",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="", group_id=gid, score=0.9,
+                exif_tag_count=12, gps_present=True, xmp_derived=True,
+            ),
+            ManifestRow(
+                source_path=str(plain), source_label="src",
+                action="REVIEW_DUPLICATE",
+                source_hash="bbb", phash=None, hamming_distance=4,
+                duplicate_of=None, reason="", group_id=gid, score=0.5,
+                exif_tag_count=0, gps_present=False, xmp_derived=False,
+            ),
+        ]
+        db = tmp_path / "m.sqlite"
+        write_manifest(rows, db)
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(gps_file)].exif_tag_count == 12
+        assert records[str(gps_file)].gps_present is True
+        assert records[str(gps_file)].xmp_derived is True
+        # The other row must NOT inherit the first row's values, and its 0 /
+        # False must survive as real readings rather than as "unset".
+        assert records[str(plain)].exif_tag_count == 0
+        assert records[str(plain)].gps_present is False
+        assert records[str(plain)].xmp_derived is False
+
+    def test_exif_tag_count_null_survives_load(self, tmp_path):
+        """A NULL exif_tag_count means the extended exiftool census pass did
+        not run for that file (#556's starvation symptom). It must stay None
+        through the load, not become 0 — 0 is "ran, counted nothing"."""
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/a"
+        from scanner.dedup import ManifestRow
+        from scanner.manifest import write_manifest
+
+        rows = [
+            ManifestRow(
+                source_path=str(cand), source_label="src", action="",
+                source_hash="aaa", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="", group_id=gid,
+                exif_tag_count=None,
+            ),
+            ManifestRow(
+                source_path=str(ref), source_label="src",
+                action="REVIEW_DUPLICATE",
+                source_hash="bbb", phash=None, hamming_distance=2,
+                duplicate_of=None, reason="", group_id=gid,
+                exif_tag_count=None,
+            ),
+        ]
+        db = tmp_path / "m.sqlite"
+        write_manifest(rows, db)
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(cand)].exif_tag_count is None
+        assert records[str(ref)].exif_tag_count is None
 
 
 # ---------------------------------------------------------------------------

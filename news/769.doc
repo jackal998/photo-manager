@@ -1,0 +1,1 @@
+Correct two stale prose descriptions in the GroupMediaController feature doc (master-position truncation and mute-restore-to-default), and flag the web-port tech-design §5 testid contract as superseded by the generated testids and features.md. (#744)

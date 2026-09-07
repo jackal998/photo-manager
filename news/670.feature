@@ -1,0 +1,1 @@
+Add POST /api/action/bulk-decide — server-side resolution of the Set-Action-by-regex pseudo-patterns (plain regex, numeric threshold, top-N) into decisions and lock/unlock, with a preview dry-run and an allowed-roots guard. (#670)
