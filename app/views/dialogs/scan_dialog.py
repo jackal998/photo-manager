@@ -40,6 +40,10 @@ from app.views.window_state import (
     save_widget_geometry,
 )
 from app.views.workers.scan_worker import ScanWorker
+from core.app_service.dtos import (
+    NEAR_DUP_THRESHOLD_MAX,
+    NEAR_DUP_THRESHOLD_MIN,
+)
 from core.app_service.settings_migration import resolve_source_entries
 from infrastructure.i18n import t
 from scanner.workers import default_hash_workers
@@ -53,15 +57,9 @@ class _SourceEntry:
     recursive: bool = True
 
 
-# Near-duplicate Hamming-distance range offered by the pHash and dHash
-# controls (#823). The floor is 2, not 1: ``classify`` groups on
-# ``0 < distance <= threshold``, so 1 admits only distance-1 pairs — which
-# photographic content essentially never produces (every pHash has exactly
-# 32 of 64 bits set, so distances come out even; 0 of 86_400 measured
-# distances were odd). At 1 the near-duplicate tier is off, not strict.
-# 2 is the strictest setting that still detects anything.
-NEAR_DUP_THRESHOLD_MIN = 2
-NEAR_DUP_THRESHOLD_MAX = 20
+# NEAR_DUP_THRESHOLD_MIN / _MAX are imported above from
+# ``core.app_service.dtos`` — the non-Qt home they moved to in #876 so the
+# web API's ``WebScanRequest`` bounds and these widget ranges cannot drift.
 
 
 # #424 — scan progress UI: stage label, files-per-sec, ETA helpers.
