@@ -2,7 +2,8 @@
 
 > Instruments removed with #646 (Qt-client cutover): `scripts/bench_autotune_604.py`
 > and `scripts/probe_byte_budget_598.py` drove the Qt `ScanWorker` and no longer
-> exist in the tree; they live at the SHAs cited below and in git history.
+> exist in the tree; they live in git history, last carried at `3f0a7d1` and
+> `d94a7f0` respectively. The readings below are unaffected.
 
 **Status:** Decisions made on direct measurement; load-bearing quantities
 asserted at scan-start; the prior #604 conclusion was confounded by

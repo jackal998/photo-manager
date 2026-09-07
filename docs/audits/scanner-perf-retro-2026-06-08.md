@@ -2,7 +2,8 @@
 
 > Instruments removed with #646 (Qt-client cutover): `scripts/probe_process_monitor.py`
 > and `scripts/probe_pipeline_timeline.py` drove the Qt `ScanWorker` and no longer
-> exist in the tree; they live at the SHAs cited below and in git history.
+> exist in the tree; they live in git history, last carried at `e87fa7b` and
+> `3f0a7d1` respectively. The lessons below are unaffected.
 
 ## What we shipped (1-paragraph honest summary)
 

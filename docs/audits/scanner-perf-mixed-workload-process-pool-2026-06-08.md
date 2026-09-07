@@ -1,8 +1,8 @@
 # Mixed-workload (D+J) hash-pool inversion — decision record (2026-06-08)
 
 > Instrument removed with #646 (Qt-client cutover): `scripts/probe_pipeline_timeline.py`
-> drove the Qt `ScanWorker` and no longer exists in the tree; it lives at the
-> SHA cited below and in git history.
+> drove the Qt `ScanWorker` and no longer exists in the tree; it lives in git
+> history, last carried at `3f0a7d1`. The readings below are unaffected.
 
 **Status:** Direction-of-fix backed by direct per-second instrumentation
 on the user's real rig. Single rig (N=1, dev/validation checkpoint), no
