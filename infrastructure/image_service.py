@@ -61,6 +61,11 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 # Recipe version — bump to invalidate the disk cache namespace.
+# Deliberately NOT bumped for #865's _DRAFT_UNDERSHOOT, though it can leave a
+# cached 2048 px preview beside a freshly-decoded 2016 px one: a full rebuild
+# of every preview for a ≤ 2 % long-edge difference inside the declared
+# tolerance costs far more than it buys, and the cache key already carries
+# path/size/mtime, so nothing served is stale — only marginally larger.
 PREVIEW_RECIPE_VERSION = "1"
 
 # Size boundary (longest side) separating "thumb" vs "preview" tier at put time.

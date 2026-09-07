@@ -441,8 +441,10 @@ except the median (mean 547.5 → 402.3 ms, p95 1003.1 → 546.9, max 1118.3 →
 623.5, faster on 46 of 89 files), while the untouched control arm ran 51.5 ms
 faster at the median. The full analysis, including the measured reason the
 median did not move — this library's embedded JPEGs are bimodal, 4032 × 3024
-for most files and 8064 × 6048 for 23 of them, and `draft` correctly declines
-to reduce the first group below the 2048 cap — is in
+for **57** of the 89 paired files and 8064 × 6048 for the other **32** (counted
+by source DNG size, which splits with a 15.3 MB gap and is corroborated exactly
+by `full_decode_ttfp_ms` > 2500 ms), and `draft` correctly declines to reduce
+the first group below the 2048 cap — is in
 [`preview-phase3-results-2026-09.md`](preview-phase3-results-2026-09.md).
 
 ## Results — 2026-09-07 re-measurement after the draft undershoot

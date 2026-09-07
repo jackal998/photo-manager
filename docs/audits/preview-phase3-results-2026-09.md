@@ -337,7 +337,7 @@ session, while the files draft does help moved out to `ratio_max` 12.436 (from
 5.922). The embedded arm strictly improved on the arm's own terms: mean
 −145.2 ms, p95 −456.2 ms, max −494.8 ms, faster on 46 of 89 files.
 
-### Why 66 of 89 files were unaffected — measured, not inferred
+### Why most of the 89 files were unaffected — measured, not inferred
 
 `draft` reduces only when the source is at least 2× the requested size in
 **both** axes, and it never undershoots. A bounded read-only probe over 8 of
@@ -346,15 +346,34 @@ opened each DNG's embedded JPEG and read its header:
 
 | Group | files sampled | embedded JPEG | MP | `draft("RGB", (2048, 2048))` → |
 |---|---|---|---|---|
-| body | IMG_1432, 1445, 1449, 1450 | **4032 × 3024** | 12.2 | 4032 × 3024 — **no reduction** |
-| tail | IMG_1230, 1235, 1277, 1278 | **8064 × 6048** | 48.8 | 4032 × 3024 — **halved** |
+| small | IMG_1432, 1445, 1449, 1450 | **4032 × 3024** | 12.2 | 4032 × 3024 — **no reduction** |
+| large | IMG_1230, 1235, 1277, 1278 | **8064 × 6048** | 48.8 | 4032 × 3024 — **halved** |
 
-The library is bimodal, and the median file is already at the floor: a
-4032 × 3024 thumb against a 2048 cap is 1.97× the cap, so the next libjpeg
-step (1/2 → 2016 × 1512) would land **below** the cap and lose output
-resolution. `draft` declines, correctly. The 48.8 MP frames are the
-full-sensor ProRAW preview #826 identified, and those are exactly the ~460 ms
-each that #865 removed.
+**How many of each — counted, not extrapolated.** The 8-file probe establishes
+the two shapes; the split across all 89 comes from the artifacts, by **source
+DNG size**, which is the cleanest available proxy (a 48 MP full-sensor ProRAW
+file cannot be small) and needs no further NAS reads. `per_click[].size_bytes`
+over the 89 paired paths splits with a 15.3 MB gap and nothing inside it:
+**32 large** (47.5–124.8 MB) and **57 small** (10.7–32.2 MB).
+
+Two independent signals in the same artifacts agree: `full_decode_ttfp_ms`
+above 2500 ms selects **exactly the same 32 files, 0 disagreements**, and on
+the `75a976d` artifact a per-path `ratio ≥ 5` selects 33 (one more), the
+distribution there having a clean gap between 4.198 and 6.231. (That third
+signal stops discriminating at `5fdee78`, where the undershoot lifts 79 of 89
+past 5×, so it is quoted from the round-1 data only.)
+
+**Do not read the 23 / 66 in the table above as this count.** Those are the
+p75 *latency* quartile — by construction ~25 % of 89 — and a quartile cannot
+count a group that is 36 % of the library. All 23 of those latency-tail files
+are inside the 32, which is why the split looked plausible.
+
+The library is bimodal, and the median file — the 45th of 89, comfortably
+inside the 57 — is already at the floor: a 4032 × 3024 thumb against a 2048
+cap is 1.97× the cap, so the next libjpeg step (1/2 → 2016 × 1512) would land
+**below** the cap and lose output resolution. `draft` declines, correctly. The
+48.8 MP frames are the full-sensor ProRAW preview #826 identified, and those
+are exactly the ~460 ms each that #865 removed.
 
 The saving matches an independent bench off the NAS: the same pipeline on a
 synthetic 8064 × 6048 JPEG runs 661 ms → 180 ms median (5 iterations) with
@@ -364,9 +383,10 @@ byte-identical output geometry (2048 × 1536). Two instruments, one number.
 
 The embedded path is now doing the least decode work the 2048 cap permits, on
 every file in this library. **Box 2 cannot be lifted to 5× by decoding less**
-— there is nothing left to remove for the 66 body files, and the 23 tail files
-already improved by ~48 %. The remaining TTFP on a body click is the SMB read
-of a 16–75 MB DNG plus a 12.2 MP decode that the cap requires.
+— there is nothing left to remove for the 57 small-frame files, and the 32
+large-frame ones already improved by ~48 %. The remaining TTFP on a small-frame
+click is the SMB read of a 10.7–32.2 MB DNG plus a 12.2 MP decode that the cap
+requires.
 
 Levers that would move it, none of them built here and none of them inside
 #865's scope:
@@ -387,9 +407,10 @@ Levers that would move it, none of them built here and none of them inside
 
 Per the runbook's decision row for a measured fail, the report is the
 distribution and not the one number: per-path ratios span **2.835×–12.436×**,
-with the 23 full-sensor files now at 6.2×–12.4× and the body files at
-2.8×–4.2×. **The 5× bar is met by the part of the library that carries a
-48 MP embedded frame and missed by the part that carries a 12 MP one.**
+splitting cleanly along the same size boundary — the **32** large-frame files
+at **6.414×–12.436×** and the **57** small-frame ones at **2.835×–6.231×**.
+**The 5× bar is met by the part of the library that carries a 48 MP embedded
+frame and missed by the part that carries a 12 MP one.**
 Whether to re-state the bar, lower the cap, or leave box 2 open is the
 owner's call; this document does not make it, and the 3.85 is not softened to
 reach it.
@@ -549,6 +570,15 @@ logical pixel on this owner's 4K display at 175 %, and #622's own premise is
 that this pane exists for near-duplicate discrimination rather than
 pixel-peeping. The full-res viewer (`viewport_cap == 0`) never drafts and is
 unaffected.
+
+**`PREVIEW_RECIPE_VERSION` was deliberately left at `"1"`** rather than bumped
+for this change, which means a preview cached before it (2048 px) can sit
+beside a freshly decoded one (2016 px) for different files. That is a stated
+decision, not an oversight: a bump wipes and rebuilds every cached preview, and
+paying that for a ≤ 2 % long-edge difference that is inside the declared
+tolerance is exactly the waste the bump exists to justify. Nothing served is
+stale either way — the cache key still carries path, size and mtime, so an
+entry is only ever the same file at a marginally larger edge.
 
 ```
 Probe: scripts/preview_phase3_probe.py
