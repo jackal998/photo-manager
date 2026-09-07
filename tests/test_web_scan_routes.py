@@ -614,13 +614,13 @@ class TestExifWorkersResolution:
 
 
 # ---------------------------------------------------------------------------
-# 7. Cross-import guard: no existing Qt file imports app.web
+# 7. Cross-import guard: the shared layers do not import app.web
 # ---------------------------------------------------------------------------
 
 class TestCrossImportGuard:
-    def test_qt_files_do_not_import_app_web(self, tmp_path):
+    def test_shared_layers_do_not_import_app_web(self, tmp_path):
         """Verify the one-directional import constraint: app/web must not be
-        imported by app/views/**, core/**, or infrastructure/**.
+        imported by app/viewmodels/**, core/**, or infrastructure/**.
 
         Grep all .py files in those trees for 'from app.web' or 'import app.web'.
         """
@@ -630,7 +630,6 @@ class TestCrossImportGuard:
         repo_root = Path(__file__).parent.parent
 
         search_roots = [
-            repo_root / "app" / "views",
             repo_root / "app" / "viewmodels",
             repo_root / "core",
             repo_root / "infrastructure",

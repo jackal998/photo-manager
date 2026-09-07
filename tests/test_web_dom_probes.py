@@ -271,7 +271,7 @@ class TestScenarioMapParity:
 
     def _load_all_scenarios(self) -> list[str]:
         sys.path.insert(0, str(_REPO))
-        from qa.scenarios._batch import ALL_SCENARIOS  # type: ignore[import]
+        from qa.scenario_ids import ALL_SCENARIOS  # type: ignore[import]
         return list(ALL_SCENARIOS)
 
     def _load_map_names(self) -> list[str]:

@@ -721,7 +721,7 @@ class TestBatchUpdateDecisions:
         # so the batch test still verifies two distinct non-default
         # writes (canonical keep "" would be indistinguishable from
         # the untouched /c.jpg row).
-        from app.views.constants import IGNORE_DECISION
+        from core.constants import IGNORE_DECISION
         ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": IGNORE_DECISION})
 
         conn = sqlite3.connect(db)
@@ -1410,7 +1410,7 @@ class TestRemoveFromReviewNoVacuum:
 class TestInGroupRowOrdering:
     """#55 + #76 — the file rendered as "Ref" sits at the top of its group.
 
-    `_file_similarity` (in `app/views/tree_model_builder.py`) renders any
+    `compute_similarity` (in `core/app_service/review_view.py`) renders any
     action other than EXACT and REVIEW_DUPLICATE as "Ref". So the SQL
     ordering puts every "Ref tier" action (KEEP / UNDATED / unset "")
     at position 1, then EXACT (2 — strongest match), then REVIEW_DUPLICATE
