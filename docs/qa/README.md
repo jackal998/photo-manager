@@ -84,7 +84,7 @@ The skill prompts for permission before installing either.
 The server the drivers talk to is started with the QA config root:
 
 ```
-PHOTO_MANAGER_HOME=qa .venv/Scripts/python.exe launcher.py
+PHOTO_MANAGER_HOME=qa .venv/Scripts/python.exe -m app.web.main
 ```
 
 `PHOTO_MANAGER_HOME=qa` makes the app read `qa/settings.json` (which

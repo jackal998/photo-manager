@@ -90,9 +90,10 @@ For each scenario:
    with the QA config root:
 
    ```
-   PHOTO_MANAGER_HOME=qa .venv/Scripts/python.exe -m uvicorn \
-       app.web.main:create_app --factory --host 127.0.0.1 --port 8765
+   PHOTO_MANAGER_HOME=qa .venv/Scripts/python.exe -m app.web.main
    ```
+
+   (Same entry `web-eval-gates.yml` uses — it binds `127.0.0.1:8765`.)
 
    `PHOTO_MANAGER_HOME=qa` — the app reads `qa/settings.json` (which
    only references `qa/sandbox/`) and ignores the user's root
