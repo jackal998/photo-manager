@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from app.web.models import SettingsUpdate
+from infrastructure.settings import load_settings
 
 router = APIRouter()
 
@@ -44,29 +45,12 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
 )
 
 
-def _load_settings():
-    """Return a JsonSettings pointed at settings.json — same resolution as scan.py."""
-    import os
-    from pathlib import Path
-
-    from infrastructure.settings import JsonSettings
-
-    home_env = os.environ.get("PHOTO_MANAGER_HOME")
-    # app/web/routes/settings.py → app/web/ → app/ → repo root
-    repo_root = Path(__file__).parent.parent.parent.parent
-    if home_env:
-        config_home = (repo_root / home_env).resolve()
-    else:
-        config_home = repo_root
-    return JsonSettings(config_home / "settings.json")
-
-
 @router.get("/api/settings")
 def get_settings() -> dict:
     """Return the allowlisted web-facing settings as a dict.
 
     Declared a plain ``def`` so FastAPI runs it in its worker threadpool:
-    ``_load_settings()`` does a real ``Path.exists()`` + ``open()`` +
+    ``load_settings()`` does a real ``Path.exists()`` + ``open()`` +
     ``json.load()``, and on ``async def`` that ran on the event loop and
     stalled every other request (incl. the SSE scan stream) for the read's
     duration. See #790.
@@ -84,7 +68,7 @@ def get_settings() -> dict:
     """
     from core.app_service.settings_migration import resolve_source_entries
 
-    settings = _load_settings()
+    settings = load_settings()
     result = {key: settings.get(key) for key in _WEB_SETTINGS_KEYS}
     if not result.get("sources.list"):
         resolved = resolve_source_entries(settings)
@@ -117,7 +101,7 @@ def patch_settings(body: SettingsUpdate) -> dict:
                 status_code=400,
                 detail=f"settings key not writable: {key!r}",
             )
-    settings = _load_settings()
+    settings = load_settings()
     try:
         for key, value in body.updates.items():
             settings.set(key, value)

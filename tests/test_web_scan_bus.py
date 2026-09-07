@@ -294,7 +294,7 @@ class TestBusHashPoolMeasured:
         mock_settings.get.return_value = {}
 
         with (
-            patch("app.web.routes.scan._load_settings", return_value=mock_settings),
+            patch("app.web.routes.scan.load_settings", return_value=mock_settings),
         ):
             bus.hash_pool_measured(rates)
 

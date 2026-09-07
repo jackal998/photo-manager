@@ -36,14 +36,14 @@ _ROUTES_DIR = Path(__file__).resolve().parent.parent / "app" / "web" / "routes"
 
 # Callee names that mean "this touches the disk or the DB, synchronously".
 # Matched on the *called* name only (``x.stat()`` → ``stat``), so a bare
-# reference handed to an executor (``run_in_executor(None, _load_settings)``)
+# reference handed to an executor (``run_in_executor(None, load_settings)``)
 # is correctly NOT a call and never matches.
 #
 # KNOWN LIMITS — this is a name-matching probe, not a call-graph analysis:
 #
 # * It is a DENYLIST. Blocking work reached through a helper whose name is not
 #   listed here is invisible. When you add a route helper that touches disk,
-#   add its name. (`_load_settings` is listed for exactly this reason.)
+#   add its name. (`load_settings` is listed for exactly this reason.)
 # * It matches names, not bindings: a local variable that happens to be called
 #   ``save`` produces a false positive, and ``getattr(p, "stat")()`` a false
 #   negative. Both are rare enough in this codebase to be worth the simplicity.
@@ -82,7 +82,7 @@ _BLOCKING_CALLEES = frozenset(
         "connect",
         "executemany",
         # project-level helpers that wrap the above
-        "_load_settings",
+        "load_settings",
         "save",
         "browse",
         "load_review",
@@ -252,7 +252,7 @@ class TestNoBlockingCallsInAsyncHandlers:
             "    loop = asyncio.get_running_loop()\n"
             "    if not await loop.run_in_executor(None, Path(body.p).is_file):\n"
             "        raise HTTPException(404)\n"
-            "    settings = await loop.run_in_executor(None, _load_settings)\n"
+            "    settings = await loop.run_in_executor(None, load_settings)\n"
             "    return {}\n",
             encoding="utf-8",
         )
@@ -298,7 +298,7 @@ class TestHealthStaysResponsiveUnderBlockingRoute:
         """GET /api/health must not queue behind a blocking GET /api/settings.
 
         Before #790's fix ``get_settings`` was ``async def`` and called
-        ``_load_settings()`` (``Path.exists()`` + ``open()`` + ``json.load()``)
+        ``load_settings()`` (``Path.exists()`` + ``open()`` + ``json.load()``)
         directly on the event loop, so the whole server — every other request
         and the live SSE scan stream — froze for the read's duration. With the
         handler dispatched to FastAPI's threadpool, health is unaffected.
@@ -321,7 +321,7 @@ class TestHealthStaysResponsiveUnderBlockingRoute:
             # unmodified and still returns 200.
             return JsonSettings(Path(__file__).parent / "_no_such_settings_790.json")
 
-        monkeypatch.setattr(settings_routes, "_load_settings", _blocking_load_settings)
+        monkeypatch.setattr(settings_routes, "load_settings", _blocking_load_settings)
         app = create_app()
 
         async def _scenario():

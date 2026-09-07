@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import threading
-from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request
@@ -17,6 +15,7 @@ from app.web.models import ScanTask, WebScanRequest
 from app.web.registry import registry
 from core.app_service.cancel_token import _CancelToken
 from core.app_service.scan_runner import run_pipeline
+from infrastructure.settings import load_settings
 
 router = APIRouter()
 
@@ -24,29 +23,6 @@ router = APIRouter()
 # (#661). Named so tests can patch it small; the client's connection-drop
 # watchdog (useScanSSE.ts) is sized as a multiple of this.
 _KEEPALIVE_TIMEOUT_S = 30.0
-
-# ---------------------------------------------------------------------------
-# Settings helpers — mirrors how scan_dialog.py locates settings.json
-# ---------------------------------------------------------------------------
-
-def _load_settings():
-    """Return a JsonSettings pointed at the same settings.json the Qt app uses.
-
-    Resolution order matches main.py:
-    1. PHOTO_MANAGER_HOME env var (relative to repo root)
-    2. Repository root (BASE_DIR = directory of main.py, two levels above app/web/)
-    """
-    from infrastructure.settings import JsonSettings
-
-    home_env = os.environ.get("PHOTO_MANAGER_HOME")
-    # app/web/routes/scan.py → app/web/ → app/ → repo root
-    repo_root = Path(__file__).parent.parent.parent.parent
-    if home_env:
-        config_home = (repo_root / home_env).resolve()
-    else:
-        config_home = repo_root
-    return JsonSettings(config_home / "settings.json")
-
 
 # ---------------------------------------------------------------------------
 # SseScanBus — implements ScanProgressBus over SSE
@@ -176,7 +152,7 @@ class SseScanBus:
                 store_hash_pool_rates,
             )
             import os as _os
-            settings = _load_settings()
+            settings = load_settings()
             config = self._task._config if hasattr(self._task, "_config") else None
             if config is not None:
                 fp = hash_pool_fingerprint(
@@ -196,7 +172,7 @@ class SseScanBus:
         if device is not None and isinstance(knee, int):
             try:
                 from scanner.autotune import store_read_knee
-                settings = _load_settings()
+                settings = load_settings()
                 store_read_knee(settings, device, knee)
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
@@ -237,7 +213,7 @@ async def start_scan(req: WebScanRequest) -> JSONResponse:
     # blocking, so it goes to the executor. This handler must stay ``async``:
     # it captured the running loop above for SseScanBus. Same idiom as
     # execute.py's offloaded validation.
-    req = req.resolved_with(await loop.run_in_executor(None, _load_settings))
+    req = req.resolved_with(await loop.run_in_executor(None, load_settings))
 
     # Store config on task so hash_pool_measured can compute the fingerprint.
     config = req.to_config()

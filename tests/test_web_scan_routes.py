@@ -35,7 +35,7 @@ from app.web.main import create_app
 def client(monkeypatch, tmp_path):
     """Fresh FastAPI TestClient per test (new registry, no state leak).
 
-    #652 — POST /api/scan now reads settings.json via ``_load_settings()``
+    #652 — POST /api/scan now reads settings.json via ``load_settings()``
     on every request (not just inside the calibration-persist callbacks), so
     the fixture must point PHOTO_MANAGER_HOME at an isolated ``tmp_path``.
     Without this, tests would read the developer's real local settings.json
@@ -232,25 +232,25 @@ class TestHealth:
 
 
 # ---------------------------------------------------------------------------
-# 8. _load_settings path resolution
+# 8. load_settings path resolution
 # ---------------------------------------------------------------------------
 
 class TestLoadSettings:
     def test_load_settings_returns_json_settings_instance(self):
-        """_load_settings must return a JsonSettings pointed at settings.json."""
-        from app.web.routes.scan import _load_settings
+        """load_settings must return a JsonSettings pointed at settings.json."""
+        from app.web.routes.scan import load_settings
         from infrastructure.settings import JsonSettings
 
-        settings = _load_settings()
+        settings = load_settings()
         assert isinstance(settings, JsonSettings)
 
     def test_load_settings_respects_photo_manager_home(self, tmp_path, monkeypatch):
         """PHOTO_MANAGER_HOME env var shifts the config root."""
-        from app.web.routes.scan import _load_settings
+        from app.web.routes.scan import load_settings
 
         monkeypatch.setenv("PHOTO_MANAGER_HOME", str(tmp_path))
         # Should not raise even if settings.json doesn't exist at that path.
-        settings = _load_settings()
+        settings = load_settings()
         # get() on a missing-file settings returns the default.
         assert settings.get("nonexistent.key", "default_val") == "default_val"
 
@@ -417,7 +417,7 @@ class TestBusReadKneeMeasured:
         mock_settings.get.return_value = {}
 
         summary = {"device": r"\\NAS", "knee": 2, "sole_ramping": True}
-        with patch("app.web.routes.scan._load_settings", return_value=mock_settings):
+        with patch("app.web.routes.scan.load_settings", return_value=mock_settings):
             bus.read_knee_measured(summary)
 
         with task.buffer_lock:

@@ -28,7 +28,7 @@ from core.services.auto_select import (
     top_score_path_per_group,
 )
 from infrastructure.manifest_repository import ManifestRepository
-from infrastructure.settings import JsonSettings
+from infrastructure.settings import load_settings
 
 
 # ---------------------------------------------------------------------------
@@ -49,19 +49,6 @@ def _require_manifest(manifest_path: str) -> None:
         raise FileNotFoundError(f"Manifest not found: {manifest_path!r}")
 
 
-def _resolve_settings_path() -> Path:
-    """Return the settings.json path using the same logic as review_service."""
-    import os
-
-    home_env = os.environ.get("PHOTO_MANAGER_HOME")
-    # core/app_service/action_service.py → core/app_service/ → core/ → repo root
-    repo_root = Path(__file__).parent.parent.parent
-    if home_env:
-        config_home = (repo_root / home_env).resolve()
-    else:
-        config_home = repo_root
-    return config_home / "settings.json"
-
 
 def _load_vm(manifest_path: str):
     """Load a MainVM from the manifest and return it.
@@ -72,7 +59,7 @@ def _load_vm(manifest_path: str):
     """
     from app.viewmodels.main_vm import MainVM
 
-    settings = JsonSettings(_resolve_settings_path())
+    settings = load_settings()
     default_sort = settings.get("sorting.defaults", [])
     vm = MainVM(default_sort=default_sort)
     vm.load_from_repo(ManifestRepository(), manifest_path)
