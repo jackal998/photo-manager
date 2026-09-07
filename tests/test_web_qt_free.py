@@ -33,6 +33,10 @@ _PHASE2B_FILES = [
     # these would break the web process (no display in the FastAPI worker).
     REPO / "app" / "viewmodels" / "main_vm.py",
     REPO / "core" / "services" / "sort_service.py",
+    # Named explicitly rather than left to CI's PySide6-free install: this is
+    # the imaging path every thumbnail and preview request goes through, and
+    # it is where a QImage/QPixmap shortcut would be most tempting.
+    REPO / "infrastructure" / "image_service.py",
 ]
 
 
