@@ -38,6 +38,18 @@ Qt divergences:
     fails fast (mirrors s38's bad-path pattern) — the POST body is already
     captured by the time the failure surfaces, and a fast failure keeps this
     scenario's runtime small and leaves no orphaned running scan.
+
+#823 addition (near-duplicate threshold floor):
+  - The two HASH thresholds render ``min="2"``, not 1. ``classify`` groups on
+    ``0 < distance <= threshold`` and photographic pHashes always carry
+    exactly 32 of their 64 bits, so pairwise distances are even: position 1
+    admitted nothing at all and every odd position duplicated the even one
+    below it. The mean-colour gate is a different predicate and keeps 0-100.
+  - Typing 1 past the ``min`` hint still puts 2 on the wire (asserted on the
+    POST body, same ``expect_request`` discipline as the #736 phase) — the
+    attribute is advisory, ``clampThresholdInput`` is the real guard.
+  - The parity note renders under both inputs, localized via
+    ``web.scan.threshold_parity_note``.
 """
 from __future__ import annotations
 
@@ -54,10 +66,12 @@ from qa.web.testid_constants import (
     FS_BROWSER_FILENAME,
     SCAN_ADVANCED,
     SCAN_COLOR_THRESHOLD,
+    SCAN_DHASH_PARITY_NOTE,
     SCAN_DHASH_THRESHOLD,
     SCAN_DIALOG,
     SCAN_OUTPUT_BROWSE,
     SCAN_OUTPUT_PATH,
+    SCAN_PHASH_PARITY_NOTE,
     SCAN_PHASH_THRESHOLD,
     SCAN_START_BUTTON,
     scan_source_browse_testid,
@@ -111,6 +125,89 @@ def _phase_threshold_wiring(page) -> None:
         assert body["dhash_threshold"] == 7, f"dHash threshold not wired into POST body: {body!r}"
         assert body["mean_color_threshold"] == 42, (
             f"mean-color threshold not wired into POST body: {body!r}"
+        )
+
+        _close_failed_scan_dialog(page)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _phase_near_dup_threshold_floor(page) -> None:
+    """#823 — the two hash thresholds floor at 2, and say why.
+
+    Three things are asserted against the RENDERED dialog, because all three
+    were wrong at once before #823 and none of them is visible from the unit
+    tests alone:
+
+    1. Both hash inputs advertise ``min="2"`` (the browser's own hint).
+    2. Typing 1 anyway still puts **2** on the wire — the ``min`` attribute is
+       only a hint, so ``clampThresholdInput`` is the authoritative guard and
+       it is the one that has to hold.
+    3. The parity note is rendered under each input. The floor without the
+       explanation just makes the missing position mysterious; the note is the
+       user-visible half of the fix.
+
+    Mean-colour is deliberately not touched here: it is a different predicate
+    (L2 colour distance) and keeps its own 0-100 range.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="s17_floor_")
+    try:
+        bad_path = str(Path(tmpdir) / "does_not_exist_s17_floor")
+        output_path = str(Path(tmpdir) / "out.sqlite")
+
+        open_scan_dialog(page)
+        add_scan_source(page, bad_path, idx=0, label="bad")
+        set_output_path(page, output_path)
+
+        page.get_by_test_id(SCAN_ADVANCED).click()
+        phash = page.get_by_test_id(SCAN_PHASH_THRESHOLD)
+        phash.wait_for(state="visible", timeout=5_000)
+        dhash = page.get_by_test_id(SCAN_DHASH_THRESHOLD)
+
+        for name, box in (("pHash", phash), ("dHash", dhash)):
+            rendered_min = box.get_attribute("min")
+            assert rendered_min == "2", (
+                f"{name} threshold input renders min={rendered_min!r}, expected "
+                f"'2' — position 1 admits only distance 1, which photographic "
+                f"pHashes never produce, so it switches near-duplicate "
+                f"detection off instead of tightening it (#823)"
+            )
+
+        mean_color_min = page.get_by_test_id(SCAN_COLOR_THRESHOLD).get_attribute("min")
+        assert mean_color_min == "0", (
+            f"mean-colour gate min changed to {mean_color_min!r}; #823 raises "
+            f"the floor on the two HASH thresholds only"
+        )
+
+        for name, testid in (
+            ("pHash", SCAN_PHASH_PARITY_NOTE),
+            ("dHash", SCAN_DHASH_PARITY_NOTE),
+        ):
+            note = page.get_by_test_id(testid)
+            note.wait_for(state="visible", timeout=5_000)
+            text = note.inner_text()
+            assert "2" in text, f"{name} parity note is empty: {text!r}"
+            # Locale-independent-ish: the en catalog is what the batch runs
+            # under, so pin the en marker; s22 covers the locale switch.
+            assert "odd value" in text, (
+                f"{name} parity note does not explain the odd-value "
+                f"equivalence: {text!r}"
+            )
+
+        # The wire is the assertion that actually protects the scan: `min` is
+        # a hint the user can type straight past.
+        phash.fill("1")
+        dhash.fill("1")
+        with page.expect_request("**/api/scan") as req_info:
+            page.get_by_test_id(SCAN_START_BUTTON).click()
+        body = req_info.value.post_data_json
+        assert body["threshold"] == 2, (
+            f"a typed pHash threshold of 1 reached the wire as "
+            f"{body.get('threshold')!r}; it must clamp to 2 (#823): {body!r}"
+        )
+        assert body["dhash_threshold"] == 2, (
+            f"a typed dHash threshold of 1 reached the wire as "
+            f"{body.get('dhash_threshold')!r}; it must clamp to 2 (#823): {body!r}"
         )
 
         _close_failed_scan_dialog(page)
@@ -223,6 +320,9 @@ def run(*, base_url: str) -> None:
 
         # --- #736: grouping-sensitivity threshold wiring -----------------------
         _phase_threshold_wiring(page)
+
+        # --- #823: near-duplicate threshold floor + parity note ----------------
+        _phase_near_dup_threshold_floor(page)
 
         # --- #736: display-only alphabetized source list -----------------------
         _phase_alphabetized_display_order(page)

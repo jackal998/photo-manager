@@ -142,12 +142,12 @@ scan_dialog:
   browse_button: "Browse…"
   save_dialog_title: "Save Manifest As"
   advanced_settings_label: "Advanced settings"
-  phash_label: "<b>pHash Similarity Threshold</b> (default: 10, range: 1–20)"
-  phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter."
-  phash_tooltip: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs)."
-  dhash_label: "<b>dHash Confidence Threshold</b> (default: 10, range: 1–20)"
-  dhash_desc: "Second hash that confirms a pHash match. Lower = stricter confirmation."
-  dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
+  phash_label: "<b>pHash Similarity Threshold</b> (default: 10, range: 2–20)"
+  phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter; 2 is the strictest useful setting."
+  phash_tooltip: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs). The scale starts at 2, not 1, because photographic pHashes always carry exactly 32 of their 64 bits, so the distance between any two of them is even: an odd value usually matches exactly the same files as the even value below it, and 1 would match nothing at all — it would switch near-duplicate detection off rather than tighten it. 2 is the strictest useful setting."
+  dhash_label: "<b>dHash Confidence Threshold</b> (default: 10, range: 2–20)"
+  dhash_desc: "Second hash that confirms a pHash match. Lower = stricter confirmation; 2 is the strictest useful setting."
+  dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation. Like the pHash scale this one starts at 2, not 1: an odd value usually confirms exactly the same pairs as the even value below it, and 1 would confirm nothing. 2 is the strictest useful setting."
   color_label: "<b>Mean Color Gate</b> (default: 30, range: 0–100)"
   color_desc: "Reject a pHash match when average colours differ by more than this (L2). 0 = off."
   color_tooltip: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
@@ -617,6 +617,11 @@ web:
     stage_classify: "Classifying duplicates"
     stage_score: "Scoring keepers"
     stage_write: "Writing manifest"
+    # #823 — helper under the pHash / dHash threshold inputs. The web
+    # analogue of the desktop scan_dialog.{phash,dhash}_tooltip parity
+    # paragraph: the scale starts at 2 and odd values are usually
+    # indistinguishable from the even value below them.
+    threshold_parity_note: "Starts at 2: photo pHashes always differ by an even number of bits, so an odd value usually matches the same files as the even one below it, and 1 would match nothing at all. 2 is the strictest useful setting."
   rescan_confirm:
     title: "Discard pending decisions?"
     body: "You have {pending} on the loaded manifest. Starting a new scan will discard them."

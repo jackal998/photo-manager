@@ -11,6 +11,9 @@ Drives every widget operation on _SourceListWidget end-to-end:
   - remove via the × button
   - tail: clear + re-add one folder, run scan, close & load — proves
     widget mutations actually feed _build_sources() and the scan worker
+  - #823: expands Advanced settings once and asserts the rendered
+    pHash / dHash sliders floor at 2 (the mean-colour gate keeps 0),
+    then collapses it again to restore the baseline
 
 Catches drift in: row-button click coordinates (column-2 DataItem
 rectangle after the #213 layout flattening), the entries-index lambda
@@ -33,12 +36,18 @@ review, not this driver.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from qa.scenarios import _invariants, _uia
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "qa" / "run-manifest.sqlite"
+
+# Title of the collapsible Advanced-settings groupbox (Qt renders a checkable
+# QGroupBox title as a CheckBox in the UIA tree). Same constant s49 / s57 /
+# s66 use to expand the panel.
+ADVANCED_GROUP_TITLE = "Advanced settings"
 
 SOURCE_UNIQUE = REPO / "qa" / "sandbox" / "unique"
 SOURCE_NEAR = REPO / "qa" / "sandbox" / "near-duplicates"
@@ -79,6 +88,55 @@ def main() -> int:
             f"checkable + unchecked by default — see photo-manager#163."
         )
         return 1
+
+    # ── 0b. Near-duplicate threshold floor (#823) ─────────────────────────
+    # The pHash and dHash sliders must start at 2, not 1. ``classify``
+    # groups on ``0 < distance <= threshold``, and photographic pHashes
+    # always carry exactly 32 of their 64 bits, so every pairwise distance
+    # is even — position 1 admitted only distance 1, i.e. nothing, and each
+    # odd position admitted exactly what the even one below it admitted.
+    # The strictest end of the control was switching the tier OFF.
+    #
+    # Read over UIA (the rendered widget), which is the point of doing it
+    # here rather than only in tests/test_scan_dialog.py: this proves the
+    # floor survives into the real dialog a user drags. The mean-colour
+    # slider is a different predicate and keeps its 0-100 range, so exactly
+    # one of the three visible sliders is expected to report minimum 0.
+    print("step: assert_near_dup_threshold_floor")
+    _advanced = dlg.child_window(
+        title=ADVANCED_GROUP_TITLE, control_type="CheckBox"
+    )
+    _advanced.toggle()
+    time.sleep(0.3)
+    _sliders = [s for s in dlg.descendants(control_type="Slider") if s.is_visible()]
+    _mins: list[int] = []
+    for _s in _sliders:
+        try:
+            _mins.append(int(_s.min_value()))
+        except Exception:  # pragma: no cover - pywinauto build variance
+            _mins.append(int(_s.iface_range_value.CurrentMinimum))
+    print(f"  visible_slider_minimums={_mins}")
+    print(f"probe_status: neardup_floor minimums={_mins}")
+    if len(_sliders) != 3:
+        print(
+            f"FAIL: expected 3 visible sliders once Advanced is expanded "
+            f"(pHash, dHash, mean-colour); got {len(_sliders)}"
+        )
+        return 1
+    if sorted(_mins) != [0, 2, 2]:
+        print(
+            f"FAIL: advanced slider minimums are {sorted(_mins)}, expected "
+            f"[0, 2, 2] — the two near-duplicate hash sliders must floor at 2 "
+            f"(#823; 1 admits only distance 1, which photographic pHashes "
+            f"never produce, so it turns the tier off), while the mean-colour "
+            f"gate keeps its 0 floor."
+        )
+        return 1
+    # Restore the collapsed baseline the rest of this scenario (and s23b's
+    # settings round-trip) expects — the toggle is persisted immediately by
+    # _on_advanced_toggled.
+    _advanced.toggle()
+    time.sleep(0.3)
 
     # ── 1. Empty-state baseline ───────────────────────────────────────────
     print("step: assert_empty_baseline")

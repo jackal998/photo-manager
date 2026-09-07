@@ -236,17 +236,28 @@ SCAN_AUTOTUNE = "scan-autotune"
 
 SCAN_PHASH_THRESHOLD = "scan-phash-threshold"
 """pHash Similarity Threshold number input (Advanced settings, #736) —
-Hamming-distance ceiling (default 10, range 1-20) between two 64-bit pHashes
-before two images are grouped as near-duplicates. Sent per-scan as
-``WebScanRequest.threshold``; never persisted (mirrors Qt's slider+spinbox,
-read at scan-start only)."""
+Hamming-distance ceiling (default 10, range 2-20 since #823) between two
+64-bit pHashes before two images are grouped as near-duplicates. Sent
+per-scan as ``WebScanRequest.threshold``; never persisted (mirrors Qt's
+slider+spinbox, read at scan-start only)."""
+
+SCAN_PHASH_PARITY_NOTE = "scan-phash-parity-note"
+"""Helper line under the pHash threshold input (#823) — explains that the
+scale starts at 2 because photographic pHash distances are always even, so
+an odd value usually matches exactly what the even value below it matches
+and 1 would match nothing. Localized via ``web.scan.threshold_parity_note``."""
 
 SCAN_DHASH_THRESHOLD = "scan-dhash-threshold"
 """dHash Confidence Threshold number input (Advanced settings, #736) —
-Hamming-distance ceiling (default 10, range 1-20) for the second,
+Hamming-distance ceiling (default 10, range 2-20 since #823) for the second,
 independent perceptual hash that confirms a pHash near-duplicate as
 high-confidence. Sent per-scan as ``WebScanRequest.dhash_threshold``; never
 persisted."""
+
+SCAN_DHASH_PARITY_NOTE = "scan-dhash-parity-note"
+"""Helper line under the dHash threshold input (#823) — same
+``web.scan.threshold_parity_note`` copy as the pHash note; the dHash scale
+starts at 2 for the same parity reason."""
 
 SCAN_COLOR_THRESHOLD = "scan-color-threshold"
 """Mean Color Gate number input (Advanced settings, #736) — L2 distance

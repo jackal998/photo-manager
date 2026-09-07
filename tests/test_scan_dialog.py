@@ -1554,3 +1554,201 @@ class TestReadKneeCachePersistence:
         the feature would reach nobody, exactly the failure Phase 4 closes."""
         dlg, _ = self._dialog(tmp_path, {"sources": {}})
         assert dlg._autotune_read_knee_check.isChecked() is True
+
+
+# ---------------------------------------------------------------------------
+# Near-duplicate threshold floor (photo-manager#823)
+# ---------------------------------------------------------------------------
+
+class TestNearDupSliderFloor:
+    """The pHash / dHash controls start at 2, not 1.
+
+    ``classify`` groups near-duplicates on ``0 < distance <= threshold``
+    (``scanner/dedup.py``). Photographic pHashes always carry exactly 32 of
+    their 64 bits, so the Hamming distance between any two of them is even
+    (0 of 86_400 measured distances were odd — ``docs/audits/
+    visual-autoselect-feasibility.md`` section 3c / section 9 item 6).
+    Position 1 therefore admitted only distance-1 pairs, i.e. nothing: the
+    slider's *strictest* end silently switched the whole near-duplicate tier
+    off, and every odd position above it admitted exactly what the even one
+    below it admitted. This class pins the floor and the copy that explains
+    it; the scanner predicate is unchanged.
+    """
+
+    def _dialog(self, tmp_path: Path):
+        from app.views.dialogs.scan_dialog import ScanDialog
+        from infrastructure.settings import JsonSettings
+
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps({"sources": {}}), encoding="utf-8")
+        return ScanDialog(JsonSettings(p))
+
+    def _catalog(self, locale: str):
+        from infrastructure.i18n import Translator
+
+        repo_root = Path(__file__).resolve().parents[1]
+        return Translator(locale, repo_root / "translations")
+
+    def test_minimum_is_two_on_all_four_widgets(self, qapp, tmp_path):
+        """Both hashes, both widgets of each slider+spinbox pair.
+
+        The spinbox is the half a keyboard user drives, so a floor applied to
+        only the slider would still let 1 be typed in and reach ``classify``.
+        """
+        dlg = self._dialog(tmp_path)
+        widgets = {
+            "phash_slider": dlg._phash_slider,
+            "phash_spin": dlg._phash_spin,
+            "dhash_slider": dlg._dhash_slider,
+            "dhash_spin": dlg._dhash_spin,
+        }
+        for name, widget in widgets.items():
+            assert widget.minimum() == 2, (
+                f"{name} minimum is {widget.minimum()}, expected 2 - position 1 "
+                f"admits only distance 1, which photographic pHashes never "
+                f"produce, so it turns near-duplicate detection off (#823)"
+            )
+            assert widget.maximum() == 20, (
+                f"{name} maximum changed from 20 to {widget.maximum()}; #823 "
+                f"keeps the range's shape and only raises the floor"
+            )
+
+    def test_stored_value_below_floor_clamps_to_two(self, qapp, tmp_path):
+        """A value of 1 arriving from anywhere lands on 2, never below.
+
+        This surface has never persisted the thresholds
+        (``_load_from_settings`` does not read them and ``_save_to_settings``
+        does not write them), so the pre-#823 way to end up at 1 was a caller
+        pushing it in - restored session state, a future settings key, a test
+        harness. Qt's own range clamp is what makes that safe now, and it
+        clamps inside the widget without rewriting anything on disk.
+        """
+        dlg = self._dialog(tmp_path)
+        for slider, spin in (
+            (dlg._phash_slider, dlg._phash_spin),
+            (dlg._dhash_slider, dlg._dhash_spin),
+        ):
+            slider.setValue(1)
+            assert slider.value() == 2
+            # The spinbox mirrors the slider through valueChanged, so the
+            # value the user SEES must have clamped too.
+            assert spin.value() == 2
+            spin.setValue(1)
+            assert spin.value() == 2
+            assert slider.value() == 2
+
+    def test_start_scan_can_never_send_a_threshold_below_two(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """The floor has to hold at the wire, not just in the widget.
+
+        ``_start_scan`` reads ``.value()`` off both sliders; this drives that
+        real path (push 1 into both, start a scan against a fake worker) and
+        reads what the worker was actually constructed with.
+        """
+        import app.views.dialogs.scan_dialog as sd
+
+        dlg = self._dialog(tmp_path)
+        dlg._source_list.set_entries(
+            [_SourceEntry(path=str(tmp_path), recursive=False)]
+        )
+        dlg._output_field.setText(str(tmp_path / "m.sqlite"))
+        dlg._phash_slider.setValue(1)
+        dlg._dhash_slider.setValue(1)
+
+        captured: dict = {}
+
+        class FakeWorker:
+            def __init__(self, **kw):
+                captured.update(kw)
+                self.progress = MagicMock()
+                self.stage_progress = MagicMock()
+                self.failed = MagicMock()
+                self.finished = MagicMock()
+                self.completed_empty = MagicMock()
+                self.hash_pool_measured = MagicMock()
+                self.read_knee_measured = MagicMock()
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(sd, "ScanWorker", FakeWorker)
+        dlg._start_scan()
+
+        assert captured.get("threshold") == 2, (
+            f"pHash threshold reached the worker as "
+            f"{captured.get('threshold')!r}; 1 must be impossible to send (#823)"
+        )
+        assert captured.get("dhash_threshold") == 2, (
+            f"dHash threshold reached the worker as "
+            f"{captured.get('dhash_threshold')!r}; 1 must be impossible to send"
+        )
+
+    def test_tooltip_explains_the_odd_positions_in_both_locales(self, qapp):
+        """The floor alone is a silent change; the copy is the deliverable.
+
+        Read straight from the shipped catalogs rather than the process-global
+        translator (other test modules install a tmp catalog into it), so this
+        pins the real en + zh_TW strings a user hovers.
+        """
+        # en - binding written explicitly per the mapping-verification rule.
+        en = self._catalog("en")
+        for key in ("scan_dialog.phash_tooltip", "scan_dialog.dhash_tooltip"):
+            text = en.t(key)
+            assert text and text != key, f"{key} empty in en.yml"
+            assert "starts at 2" in text, (
+                f"en {key} must say the scale starts at 2; got {text!r}"
+            )
+            assert "odd value" in text, (
+                f"en {key} must explain that an odd value duplicates the even "
+                f"value below it; got {text!r}"
+            )
+        for key in ("scan_dialog.phash_desc", "scan_dialog.dhash_desc"):
+            assert "2 is the strictest useful setting" in en.t(key), (
+                f"en {key} must name 2 as the strictest useful setting"
+            )
+
+        # zh_TW - the same three claims, in the zh_TW wording.
+        zh = self._catalog("zh_TW")
+        for key in ("scan_dialog.phash_tooltip", "scan_dialog.dhash_tooltip"):
+            text = zh.t(key)
+            assert text and text != key, f"{key} empty in zh_TW.yml"
+            assert text != en.t(key), (
+                f"{key} fell back to the en string - zh_TW.yml is missing it"
+            )
+            assert "從 2" in text, (
+                f"zh_TW {key} must say the scale starts at 2"
+            )
+            assert "奇數值" in text, (
+                f"zh_TW {key} must explain the odd-value equivalence"
+            )
+        for key in ("scan_dialog.phash_desc", "scan_dialog.dhash_desc"):
+            assert "2 是最嚴格" in zh.t(key), (
+                f"zh_TW {key} must name 2 as the strictest useful setting"
+            )
+
+    def test_web_parity_note_present_in_both_locales(self):
+        """The web helper is served from these same catalogs under ``web.*``.
+
+        ``app/web/routes/i18n.py`` ships only keys with the ``web.`` prefix, so
+        a note added under ``scan_dialog.*`` would never reach the browser.
+        """
+        key = "web.scan.threshold_parity_note"
+        en_text = self._catalog("en").t(key)
+        zh_text = self._catalog("zh_TW").t(key)
+        assert en_text and en_text != key, f"{key} missing from en.yml"
+        assert zh_text and zh_text != key, f"{key} missing from zh_TW.yml"
+        assert zh_text != en_text, f"{key} not translated in zh_TW.yml"
+        assert "Starts at 2" in en_text
+        assert "從 2 開始" in zh_text
+
+    def test_label_ranges_advertise_the_new_floor(self):
+        """The bold slider titles carry the range; leaving them at 1-20 would
+        keep telling the lie the floor was raised to stop."""
+        for locale in ("en", "zh_TW"):
+            catalog = self._catalog(locale)
+            for key in ("scan_dialog.phash_label", "scan_dialog.dhash_label"):
+                text = catalog.t(key)
+                assert "2–20" in text, (
+                    f"{locale} {key} still advertises the old range: {text!r}"
+                )
