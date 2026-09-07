@@ -218,13 +218,14 @@ not a synthetic test.
 | 2 — Integration with real binaries (on-demand — see `docs/testing.md`) | `tests/integration/test_*.py` (`@pytest.mark.integration`, skip-if-missing) | Local only — CI doesn't have `exiftool` / RAW codecs / etc. | Boundary error modes hard to reproduce through the UI. **No maintained suite** — add a spot-test only when a specific bug surfaces. Layer 3 covers the boundary happy paths. |
 | 3 — End-to-end via `/qa-explore` | `qa/web/scenarios/sNN_*.py` | Local via `python -m qa.web._batch`, and in CI (`web-eval-gates` → `web-scenario-batch`) | Label drift, state-transition bugs, UX regressions |
 
-**Probe layer** ([`tests/test_web_dom_probes.py`](tests/test_web_dom_probes.py) +
+**Probe layer** ([`tests/test_source_probes.py`](tests/test_source_probes.py)
++ [`tests/test_web_dom_probes.py`](tests/test_web_dom_probes.py) +
 soft-probe blocks in qa scenarios) complements the three layers above
 by catching cross-cutting structural invariants that scripted tests
-can't: testid drift between `frontend/src/testids.ts` and the drivers,
-dropdown option drift, label uniqueness, translation passthroughs,
-menu-gating holes. Two forms: static probes (AST/TS/YAML inspection in
-[`tests/test_web_dom_probes.py`](tests/test_web_dom_probes.py), run in CI) and
+can't: sweep-shaped source rules with no single call site, testid drift
+between `frontend/src/testids.ts` and the drivers, translation
+passthroughs, menu-gating holes. Two forms: static probes (AST/TS/YAML
+inspection in the two files above, run in CI) and
 live soft-probes (`print("probe_status: …")` blocks injected into
 `qa/web/scenarios/sNN_*.py` setups). See
 [`docs/testing.md`](docs/testing.md) (Probes section) for the full

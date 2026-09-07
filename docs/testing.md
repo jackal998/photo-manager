@@ -51,7 +51,8 @@ each with a comment naming the layer that DOES cover them.
   Ref row is at the bottom of its group.
 - *Misses:* Anything not exercised by the scripted scenario path.
 
-**Probes** (`tests/test_web_dom_probes.py` + sNN soft-probe blocks)
+**Probes** (`tests/test_source_probes.py` + `tests/test_web_dom_probes.py`
++ sNN soft-probe blocks)
 - Cross-cutting structural invariants that *every* layer above misses
   by design — added in [#243](https://github.com/jackal998/photo-manager/issues/243).
 - *Catches:* "Did the dialog dropdown drift from the tree columns?",
@@ -306,7 +307,6 @@ even when `status: done`).
 | `scripts/memory_probe.py` | **omit** (scripts/*) | `tests/test_memory_probe.py` covers disabled no-op, enabled JSONL schema, the tracked-allocation counter lifecycle, and the ImportError guard pattern; the ctypes Windows memory query and the referrer-dump path need a live app and are exercised by manual probe runs against the fixture. **Residual: the tracked-allocation half (`track_qt_alloc`) has had no caller since #646 removed the desktop client — dead instrument, pending removal** |
 | `scripts/generate_probe_fixture.py` | **omit** (scripts/*) | dev tool; deterministic output verified by running it and loading the result into `memory_probe` harness |
 | `scripts/bench_web_port.py` | **omit** (scripts/*) | web-port cutover gate (T6): asserts the scan emits `files_per_s > 0` (liveness). Run in CI by the **`bench-sanity` job** (blocking since PR #817) in `web-eval-gates.yml` (`--backend web`, now the only arm). |
-| `scripts/preview_phase3_analysis.py` | **omit** (scripts/*) | #622 Phase 3 instrument, pure half — the ratio maths and verdict logic behind the numbers cited in `docs/audits/preview-phase3-results-2026-09.md`. Its layer-1 suite went with the harness half in the Phase-4 cutover ([#646](https://github.com/jackal998/photo-manager/issues/646)), so it is now **uncovered**: the module is a historical instrument kept for re-running the audit, not a live code path. |
 | `scripts/bench_thumbnail_latency.py` | **omit** (scripts/*) | web-port cutover gate (T4): (A) route 40 MiB full-res cap → 413; (B) full-res serve of a real ProRAW stays under a peak-RSS budget; (C) warm-cache `size=thumb` p95 ≤ 200 ms. Run in CI by the `bench-sanity` job (blocking since PR #817) in `web-eval-gates.yml` (`--mode all`); (A)+(C) run there, (B) is a **local dev-rig checkpoint** — it needs real ProRAW DNGs in the gitignored `qa/fixtures/raw_local/` (populate via `make_qa_large_source.py --include-large-raw`) and skips when absent (CI has no RAW codecs). **Residual risk:** the `_FULLRES_DECODE_SEM` concurrent-`postprocess` path is *not* exercised — it is unreachable for real ProRAW (40 MiB cap + embedded-thumb fast path serve the file without `postprocess`), so forcing it would test a synthetic regime. The semaphore stands as defense-in-depth for the rare no-embedded-thumb <40 MiB RAW. See the T4 implementation note in `docs/design/web-port-tech-design.md`. |
 
 ---
@@ -460,9 +460,26 @@ ways those two can drift apart from each other or from the files on disk.
 
 ## Probe inventory
 
-Two homes. **Static probes** live in
-[`tests/test_web_dom_probes.py`](../tests/test_web_dom_probes.py) and run
-in the main CI job as pure Python — no Playwright, no server:
+**Static probes** live in two files, both run in the main CI job as pure
+Python — no Playwright, no server.
+
+[`tests/test_source_probes.py`](../tests/test_source_probes.py) holds the
+sweep-shaped invariants: "no file anywhere under these roots may do X",
+which has no single call site to test. It is what survives of the old
+`tests/test_ui_probes.py` — the probes whose targets outlived the #646
+cutover, with their scan roots narrowed to the remaining trees:
+
+| Probe | Invariant |
+|---|---|
+| `test_probe_scanner_and_infrastructure_popen_declare_creationflags` | No `subprocess.Popen` under `scanner/` or `infrastructure/` omits `creationflags` (#427 — a visible console window on the `--noconsole` build) |
+| `test_probe_production_code_does_not_write_literal_keep_to_user_decision` | Nothing writes the literal `"keep"` to `user_decision` (#425) |
+| `test_probe_make_row_per_row_stat_budget` | `scanner/dedup.py::_make_row` stays within its per-row `stat` budget (#474) |
+| `test_probe_sse_bus_implements_every_scanprogressbus_method` | `SseScanBus` implements every `ScanProgressBus` method — the Protocol's stub bodies can't be unit-tested (T7) |
+| `test_probe_video_tile_video_element_carries_video_testid` | `VideoTile.tsx` still emits the `-video` testid s71 locates |
+| `test_probe_zh_tw_translations_are_not_english_passthroughs` + `test_probe_no_legacy_move_wording_in_user_facing_translations` | Translation VALUE sweeps — English passthroughs, and legacy `MOVE` wording in user-facing copy |
+
+[`tests/test_web_dom_probes.py`](../tests/test_web_dom_probes.py) holds
+the qa/web scaffold's own invariants:
 
 | Probe class | Invariant |
 |---|---|
@@ -515,7 +532,7 @@ If the bug fits this pattern: file the issue, then add a probe before or in the 
 
 Two flavours exist. Pick the first one that reaches the invariant.
 
-**1 — Static probe** (`tests/test_web_dom_probes.py`)
+**1 — Static probe** (`tests/test_source_probes.py` for source-shape sweeps, `tests/test_web_dom_probes.py` for qa/web scaffold shape)
 
 For source-level invariants you can verify by reading the AST, the TS
 source or the YAML. Runs as `pytest` in CI on every commit. Fastest,
@@ -665,7 +682,7 @@ If your AST walker only handles `ast.Assign`, it silently sees an empty set and 
 
 The translation probe (`test_probe_zh_tw_translations_are_not_english_passthroughs`) uses the heuristic: `zh_value == en_value` AND contains Latin letters AND no CJK characters → flag as untranslated. Some strings are legitimately identical in both locales — product names, version format strings.
 
-Pattern: keep a `_TRANSLATION_EXEMPT_KEYS: frozenset[str]` set in `tests/test_web_dom_probes.py`. Any new entry must carry a one-line reason in the PR description (e.g. "brand name", "technical term"). Don't add entries to silence a false positive without verifying the string genuinely doesn't need translation.
+Pattern: keep a `_TRANSLATION_EXEMPT_KEYS: frozenset[str]` set in `tests/test_source_probes.py`. Any new entry must carry a one-line reason in the PR description (e.g. "brand name", "technical term"). Don't add entries to silence a false positive without verifying the string genuinely doesn't need translation.
 
 ---
 

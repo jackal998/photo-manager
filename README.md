@@ -160,7 +160,7 @@ Read that before adding tests for a new feature. Short version:
 | 1 — Unit + mocks (CI) | Refactoring bugs, parser logic | Real third-party behavior |
 | 2 — Integration (local, on-demand) | Spot-tests for specific boundary bugs already hit (exiftool / send2trash / rawpy edge cases) | UI behaviour; anything you haven't written a spot-test for |
 | 3 — `/qa-explore` (local + CI) | Label drift, dialog regressions, state-transition bugs, boundary happy paths | Anything off the scripted path |
-| Probes — `tests/test_web_dom_probes.py` + sNN soft-probe blocks | Cross-cutting invariants: testid drift, label uniqueness, translation passthroughs, menu-gating drift ([#243](https://github.com/jackal998/photo-manager/issues/243)) | Anything not framed as a structural invariant |
+| Probes — `tests/test_source_probes.py` + `tests/test_web_dom_probes.py` + sNN soft-probe blocks | Cross-cutting invariants: sweep-shaped source rules, testid drift, translation passthroughs, menu-gating drift ([#243](https://github.com/jackal998/photo-manager/issues/243)) | Anything not framed as a structural invariant |
 
 **No test padding.** A test that exists only to clear a coverage gate
 is metric gaming, not engineering — see the testing rules in
@@ -568,7 +568,8 @@ photo-manager/
     ├── test_launcher.py         # Boot path, health poll, WebView2 preflight
     ├── test_web_*.py            # One per router, plus CORS / security / SPA mount
     ├── test_web_qt_free.py      # Pins the headless seam: the web stack imports no UI toolkit
-    ├── test_web_dom_probes.py   # Static probes over the React tree + testid parity
+    ├── test_source_probes.py    # Sweep-shaped source invariants (#243)
+    ├── test_web_dom_probes.py   # Static probes over the qa/web scaffold + testid parity
     ├── test_i18n.py             # Catalog parity (en ↔ zh_TW), fallback, format-placeholder safety
     ├── test_docs_guard.py       # The three PR gates under scripts/hooks/
     ├── test_qa_scenario_guard.py
