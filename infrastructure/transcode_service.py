@@ -1,5 +1,15 @@
 """HEVC-to-H.264 transcode service for web video fallback.
 
+Where ffmpeg comes from (#854): a packaged release BUNDLES a pinned LGPL
+ffmpeg + ffprobe (``.github/workflows/release.yml`` downloads and
+checksum-verifies them, ``pyinstaller.spec`` puts them in the bundle), and
+the service prefers that copy over anything on PATH — before #854 the
+shipped app resolved neither and every HEVC video answered HTTP 501.  A dev
+checkout has no bundled copy and still uses PATH.  One consequence drives
+the encoder choice below: an LGPL build is built ``--disable-libx264``
+(x264 is GPL), so the encoder is picked from what the resolved binary
+actually offers instead of being hard-coded.
+
 Qt-free: shells out to ffmpeg via subprocess.  The only consumer is the
 FastAPI media route (app/web/routes/media.py) which calls
 ``get_transcoded_path`` via ``run_in_executor`` so the blocking ffmpeg
@@ -96,9 +106,47 @@ _COPYABLE_PIX_FMTS = frozenset({"yuv420p", "yuvj420p"})
 # per-key lock (and therefore the request) open indefinitely.
 _PROBE_TIMEOUT_S = 30
 
+# Bundled binaries (#854).  A packaged release carries its own ffmpeg and
+# ffprobe (release.yml downloads a checksum-pinned LGPL build,
+# pyinstaller.spec bundles the two exes plus their shared libraries); a dev
+# checkout carries neither and still relies on PATH.
+_EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
+
+# The bundle keeps ffmpeg in its OWN sub-directory rather than loose beside
+# the app's other binaries.  The pinned build is the SHARED LGPL variant:
+# two small exes plus avcodec-63 / avformat-63 / avutil-61 / swresample-7 /
+# swscale-10 / avfilter-12 / avdevice-63, and Windows resolves an exe's
+# imports from the exe's own directory first — so the set has to travel
+# together.  It also keeps our libraries away from the SECOND FFmpeg DLL
+# set this bundle already contains: PySide6 ships avcodec-61 / avformat-61
+# / avutil-59 / swresample-5 / swscale-8 for QtMultimedia (measured in a
+# local build: PyInstaller puts those in _internal/PySide6/, so nothing
+# collides today — this layout is what keeps that true after a soname bump
+# on either side).
+_BUNDLE_SUBDIR = "ffmpeg"
+
+# `ffmpeg -encoders` on the bundled build takes tens of milliseconds; the
+# bound exists only so a wedged binary can never hang the first transcode.
+_ENCODERS_TIMEOUT_S = 15
+
+# H.264 encoder preference (#854).  libx264 is the historical recipe and
+# is what every distro / chocolatey / apt ffmpeg carries — it stays first
+# so dev machines and CI behave exactly as before.  The bundled build is
+# LGPL, which means `--disable-libx264` (x264 is GPL); its software H.264
+# encoder is Cisco's libopenh264, whose output is plain 8-bit 4:2:0 H.264
+# that browsers decode.  Order matters: a build carrying both keeps the
+# tuned libx264 recipe.
+_H264_ENCODER_PREFERENCE = ("libx264", "libopenh264")
+
+# Used when the encoder probe cannot run (ffmpeg missing at probe time, a
+# binary that will not execute, a timeout).  Falling back to libx264
+# reproduces the pre-#854 command exactly, so a failed probe can never be
+# worse than not probing at all.
+_DEFAULT_H264_ENCODER = "libx264"
+
 
 class TranscodeUnavailable(Exception):
-    """Raised when ffmpeg is not installed / not found on PATH.
+    """Raised when ffmpeg is neither bundled with the app nor on PATH.
 
     The media route maps this to HTTP 501.
     """
@@ -106,6 +154,108 @@ class TranscodeUnavailable(Exception):
 
 class TranscodeError(Exception):
     """Raised when ffmpeg exits non-zero or the output is missing."""
+
+
+def _bundled_tool_dirs() -> list[Path]:
+    """Directories a PACKAGED build may carry ffmpeg/ffprobe in.
+
+    Empty outside a frozen build: a dev checkout has no bundled binary,
+    and probing the interpreter's own directory there would find a
+    ``python.exe`` sibling that has nothing to do with this app.
+
+    Four frozen locations, in priority order:
+
+    1. ``<exe dir>/ffmpeg/`` — where a user drops a replacement set
+       (binary + its DLLs) without touching the bundle's insides.
+    2. ``<_MEIPASS>/ffmpeg/`` — ``_internal/ffmpeg/``, where
+       pyinstaller.spec actually puts the shipped build.
+    3. ``<exe dir>/`` and 4. ``<_MEIPASS>/`` — the pre-subdirectory
+       layout, kept so a hand-placed loose ``ffmpeg.exe`` (the shape the
+       README documented first, and the shape a statically linked build
+       needs no directory for) still works.
+    """
+    if not getattr(sys, "frozen", False):
+        return []
+    roots = [Path(sys.executable).parent]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+    return [root / _BUNDLE_SUBDIR for root in roots] + roots
+
+
+def _resolve_media_tool(name: str) -> Optional[str]:
+    """Locate ``name`` ("ffmpeg" / "ffprobe"): bundled first, then PATH.
+
+    The bundled copy wins over PATH deliberately: it is the build this
+    project pinned and smoke-tested, whereas a PATH ffmpeg on a user's
+    machine is an unknown version with unknown codecs.  Returns ``None``
+    when neither exists, which the caller turns into HTTP 501.
+    """
+    filename = f"{name}{_EXE_SUFFIX}"
+    for directory in _bundled_tool_dirs():
+        candidate = directory / filename
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which(name)
+
+
+def _select_h264_encoder(ffmpeg: str) -> str:
+    """Return the H.264 encoder ``ffmpeg`` should be asked for.
+
+    Asks the resolved binary what it actually has rather than assuming:
+    the bundled LGPL build has no libx264 at all, so the pre-#854 command
+    fails there with "Unknown encoder 'libx264'" — a 500 in place of the
+    501 it was meant to fix.  Never raises: any failure answers
+    :data:`_DEFAULT_H264_ENCODER`, i.e. the historical command.
+    """
+    # Deliberately broad.  This probe runs while the web app is starting up,
+    # so ANY exception escaping it would take the whole server down over a
+    # question whose answer is optional — and the fallback is the exact
+    # command this module used before #854, so swallowing costs nothing.
+    # Not hypothetical: it first ran during the FastAPI lifespan in a test
+    # that had replaced subprocess.Popen with a stub, and the resulting
+    # TypeError (neither OSError nor SubprocessError) broke create_app().
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-encoders"],
+            shell=False,
+            timeout=_ENCODERS_TIMEOUT_S,
+            check=False,
+            capture_output=True,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "ffmpeg -encoders exited {} — assuming {}",
+                result.returncode, _DEFAULT_H264_ENCODER,
+            )
+            return _DEFAULT_H264_ENCODER
+
+        listing = result.stdout.decode("utf-8", errors="replace")
+        # The listing is one encoder per line as " V....D libx264   H.264 …";
+        # match on the whitespace-delimited name so "libx264rgb" (a different
+        # encoder, RGB-only) can never be mistaken for "libx264".
+        available = set()
+        for line in listing.splitlines():
+            fields = line.split()
+            if len(fields) >= 2:
+                available.add(fields[1])
+    except Exception as exc:  # noqa: BLE001 - see comment above
+        logger.warning(
+            "Could not list ffmpeg encoders ({}) — assuming {}",
+            exc, _DEFAULT_H264_ENCODER,
+        )
+        return _DEFAULT_H264_ENCODER
+
+    for candidate in _H264_ENCODER_PREFERENCE:
+        if candidate in available:
+            return candidate
+
+    logger.warning(
+        "ffmpeg has none of {} — transcodes will fail until one is present",
+        ", ".join(_H264_ENCODER_PREFERENCE),
+    )
+    return _DEFAULT_H264_ENCODER
 
 
 def _key_lock(cache_key: str) -> threading.Lock:
@@ -180,20 +330,37 @@ class TranscodeService:
         self._base_dir = Path(default_dir) / f"v{TRANSCODE_RECIPE_VERSION}"
         self._base_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve ffmpeg once at init.  None means "not installed".
-        self._ffmpeg: Optional[str] = shutil.which("ffmpeg")
+        # Resolve ffmpeg once at init: the binary bundled with a packaged
+        # release first, then PATH (#854).  None means "nowhere to be found".
+        self._ffmpeg: Optional[str] = _resolve_media_tool("ffmpeg")
         if self._ffmpeg is None:
-            logger.warning("ffmpeg not found on PATH — transcode fallback unavailable")
+            logger.warning(
+                "ffmpeg not found next to the app or on PATH — "
+                "transcode fallback unavailable"
+            )
+        else:
+            logger.info("ffmpeg resolved to {}", self._ffmpeg)
 
         # ffprobe ships beside ffmpeg and is resolved the same way (#853).
         # Absent is not an error: without it every source is re-encoded,
         # which is exactly the pre-#853 behaviour.
-        self._ffprobe: Optional[str] = shutil.which("ffprobe")
+        self._ffprobe: Optional[str] = _resolve_media_tool("ffprobe")
         if self._ffprobe is None:
             logger.warning(
-                "ffprobe not found on PATH — codec passthrough disabled, "
-                "every transcode will re-encode"
+                "ffprobe not found next to the app or on PATH — codec "
+                "passthrough disabled, every transcode will re-encode"
             )
+
+        # Which H.264 encoder THIS ffmpeg has (#854).  Decided here, with
+        # the binary itself: everything about the ffmpeg this service will
+        # use is pinned at init, and the ~40 ms probe is paid once per
+        # process rather than on the first (already slow) transcode.
+        self._h264_encoder: str = (
+            _select_h264_encoder(self._ffmpeg)
+            if self._ffmpeg is not None
+            else _DEFAULT_H264_ENCODER
+        )
+        logger.info("H.264 encoder for transcodes: {}", self._h264_encoder)
 
     # ------------------------------------------------------------------
     # Public API
@@ -207,7 +374,7 @@ class TranscodeService:
         stream copy instead of re-encoding (#853).  Either way the
         returned path is a cached MP4, so callers see no difference.
         Raises:
-        - ``TranscodeUnavailable`` if ffmpeg is not installed.
+        - ``TranscodeUnavailable`` if ffmpeg is neither bundled nor on PATH.
         - ``TranscodeError`` if ffmpeg exits non-zero or output is
           missing after a successful transcode.
         - ``OSError`` if the source file cannot be stat'd.
@@ -219,7 +386,8 @@ class TranscodeService:
         """
         if self._ffmpeg is None:
             raise TranscodeUnavailable(
-                "ffmpeg not found on PATH; cannot transcode video"
+                "ffmpeg not found next to the app or on PATH; "
+                "cannot transcode video"
             )
 
         cache_key = _compute_cache_key(source)
@@ -261,7 +429,8 @@ class TranscodeService:
         ffmpeg = self._ffmpeg
         if ffmpeg is None:  # pragma: no cover - get_transcoded_path guards this
             raise TranscodeUnavailable(
-                "ffmpeg not found on PATH; cannot transcode video"
+                "ffmpeg not found next to the app or on PATH; "
+                "cannot transcode video"
             )
 
         if self._can_stream_copy(source):
@@ -283,7 +452,9 @@ class TranscodeService:
                 return
 
         self._run_ffmpeg(
-            self._encode_cmd(ffmpeg, source, tmp_path), source, tmp_path
+            self._encode_cmd(ffmpeg, self._h264_encoder, source, tmp_path),
+            source,
+            tmp_path,
         )
         os.replace(tmp_path, out_path)
         logger.info("Transcoded {} → {}", source.name, out_path.name)
@@ -310,12 +481,24 @@ class TranscodeService:
         ]
 
     @staticmethod
-    def _encode_cmd(ffmpeg: str, source: Path, tmp_path: Path) -> list[str]:
-        """ffmpeg argv for the full H.264 re-encode (the pre-#853 recipe)."""
-        return [
-            ffmpeg,
-            "-i", str(source),
-            "-c:v", "libx264",
+    def _encode_cmd(
+        ffmpeg: str, encoder: str, source: Path, tmp_path: Path
+    ) -> list[str]:
+        """ffmpeg argv for the full H.264 re-encode.
+
+        ``encoder`` comes from :func:`_select_h264_encoder` (#854).  The
+        quality/speed options are encoder-specific — ``-preset``/``-crf``
+        are libx264 options that libopenh264 rejects outright — so each
+        encoder brings its own, and everything else stays the shared
+        pre-#854 recipe.
+        """
+        if encoder == "libopenh264":
+            # Cisco's encoder (the only software H.264 encoder in an LGPL
+            # build) has no CRF mode: rate control is a target bitrate.
+            # 4 Mbps is generous for the 1080p-and-below sources this
+            # fallback serves and keeps the artifact a throwaway.
+            quality_opts = ["-b:v", "4M"]
+        else:
             # ultrafast (was "fast", #737): this is a throwaway H.264 stream the
             # browser plays once and the result is cached to disk, so encode
             # SPEED matters far more than output size — ultrafast is the fastest
@@ -323,13 +506,18 @@ class TranscodeService:
             # that every first view of the owner's ~99%-HEVC library pays. The
             # larger output is irrelevant (cached, then discarded). Progressive
             # streaming + a real progress % is the proper follow-up fix.
-            "-preset", "ultrafast",
-            "-crf", "23",
-            # #853: without this libx264 inherits the SOURCE pixel format,
-            # so a 10-bit or 4:2:2 input re-encoded to 10-bit/4:2:2 H.264 —
-            # which browsers refuse exactly as they refuse the original.
-            # Routing such a source here (instead of copying it) is only
-            # worth anything if the encode normalises, so it does.
+            quality_opts = ["-preset", "ultrafast", "-crf", "23"]
+
+        return [
+            ffmpeg,
+            "-i", str(source),
+            "-c:v", encoder,
+            *quality_opts,
+            # #853: without this the encoder inherits the SOURCE pixel
+            # format, so a 10-bit or 4:2:2 input re-encoded to 10-bit/4:2:2
+            # H.264 — which browsers refuse exactly as they refuse the
+            # original.  Routing such a source here (instead of copying it)
+            # is only worth anything if the encode normalises, so it does.
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-movflags", "+faststart",

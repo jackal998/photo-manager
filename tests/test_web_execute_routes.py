@@ -1150,8 +1150,13 @@ class TestPostReveal:
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "ok"
 
-        assert len(popen_calls) == 1
-        assert popen_calls[0][0] == "explorer"
-        assert popen_calls[0][1] == "/select,"
+        # Filtered to explorer: the fake Popen is installed on the shared
+        # subprocess module, so it also sees the app's own start-up
+        # sub-processes — since #854 the lifespan asks the resolved ffmpeg
+        # once which H.264 encoders it has. The contract under test is
+        # "reveal launches explorer exactly once", which this still asserts.
+        explorer_calls = [c for c in popen_calls if c and c[0] == "explorer"]
+        assert len(explorer_calls) == 1
+        assert explorer_calls[0][1] == "/select,"
         # Third argument is the normalized path.
-        assert os.path.normpath(str(f)) == popen_calls[0][2]
+        assert os.path.normpath(str(f)) == explorer_calls[0][2]

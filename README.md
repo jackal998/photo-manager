@@ -49,6 +49,8 @@ A pre-built standalone bundle is published on every release tag — no Python in
 
 You still need [exiftool](https://exiftool.org/) on `PATH` for EXIF date extraction (same prerequisite as the source install).
 
+ffmpeg is **not** a prerequisite: the bundle ships its own `ffmpeg.exe` / `ffprobe.exe` plus their libraries in `_internal\ffmpeg\` (a pinned LGPL *shared* build, ~128 MB unpacked / ~54 MB of the download — see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)), which is what lets the web UI play HEVC video on browsers that cannot decode it natively. To use a different build, put a complete set (`ffmpeg.exe`, `ffprobe.exe` and any DLLs they need) in a folder named `ffmpeg` next to `photo-manager.exe` — the app prefers that over the bundled one and over `PATH`.
+
 > **SmartScreen note:** the binary is unsigned, so on first launch Windows shows *"Windows protected your PC"*. Click **More info → Run anyway**. The warning is expected and will disappear once we publish a signed release.
 
 Settings (`settings.json`, `window_state.ini`) are written next to `photo-manager.exe`, so the extracted folder is portable — copy it to a USB stick and your config travels with it.

@@ -34,6 +34,67 @@ if not (_frontend_dist / "index.html").exists():
         "ships the built SPA; PyInstaller must not run without it."
     )
 
+# Bundled ffmpeg/ffprobe (#854).  release.yml stages a checksum-verified
+# LGPL build into build-assets/ffmpeg/ BEFORE this spec runs; a dev build
+# usually has no such directory and simply ships without them (the app then
+# falls back to PATH, which is the pre-#854 behaviour).  Missing binaries
+# are therefore a warning here, never a build failure — unlike
+# frontend/dist above, whose absence produces a visibly dead app.
+#
+# The build is the SHARED LGPL variant: two small exes plus their av*/sw*
+# DLLs (~128 MB) instead of two ~114 MB statically linked exes (~218 MB).
+# Everything staged is shipped, whatever the staging step put there.
+#
+# Dest "ffmpeg" — a sub-directory, NOT loose in _internal/. Two reasons,
+# both measured on a local build of this spec:
+#   1. The shared build's exes import their av*/sw* DLLs by name, and
+#      Windows searches the exe's OWN directory first. Keeping the set in
+#      one directory is what makes ffmpeg.exe load the libraries it was
+#      built against, wherever the bundle is unpacked.
+#   2. This bundle ALREADY contains a second, different FFmpeg DLL set:
+#      PySide6 ships avcodec-61 / avformat-61 / avutil-59 / swresample-5 /
+#      swscale-8 for QtMultimedia, and PyInstaller collects them (measured:
+#      they land in _internal/PySide6/, so there is no name collision with
+#      our avcodec-63 / avformat-63 / avutil-61 / swresample-7 / swscale-10
+#      / avfilter-12 / avdevice-63 today). Our set staying in its own
+#      directory keeps it that way when either side bumps a soname.
+# transcode_service.py's _resolve_media_tool() looks in <_MEIPASS>/ffmpeg
+# and <exe dir>/ffmpeg before the loose locations.
+#
+# datas, not binaries: these files are a self-consistent set that must be
+# copied verbatim into one directory. PyInstaller's binary analysis would
+# hoist the DLLs it recognises into _internal/ (splitting the set and
+# putting our av*.dll next to Qt's), which is exactly what this layout
+# exists to prevent.
+#
+# The staging step names the licence FFMPEG-LICENSE.txt so it cannot be
+# mistaken for the app's own once it sits in the bundle; a datas entry
+# copies files verbatim and cannot rename them.
+_ffmpeg_stage = Path(SPECPATH) / "build-assets" / "ffmpeg"
+_ffmpeg_required = ("ffmpeg.exe", "ffprobe.exe", "FFMPEG-LICENSE.txt")
+ffmpeg_datas = []
+if (_ffmpeg_stage / "ffmpeg.exe").exists():
+    for _staged in sorted(_ffmpeg_stage.iterdir()):
+        if _staged.is_file():
+            ffmpeg_datas.append((str(_staged), "ffmpeg"))
+    _staged_names = {Path(src).name for src, _ in ffmpeg_datas}
+    _missing = [n for n in _ffmpeg_required if n not in _staged_names]
+    if _missing:
+        raise SystemExit(
+            f"build-assets/ffmpeg/ is incomplete — missing {_missing}. "
+            "A half-staged directory would ship an ffmpeg that cannot run; "
+            "re-run the fetch/verify/extract step (#854)."
+        )
+    print(
+        f"pyinstaller.spec: bundling {len(ffmpeg_datas)} ffmpeg files into "
+        f"_internal/ffmpeg ({sum(Path(s).stat().st_size for s, _ in ffmpeg_datas)} bytes)"
+    )
+else:
+    print(
+        f"pyinstaller.spec: {_ffmpeg_stage} has no ffmpeg.exe — bundle will "
+        "ship without ffmpeg; video transcoding will need it on PATH (#854)"
+    )
+
 # pillow-heif ships a compiled extension plus libheif/libde265/etc
 # native DLLs. collect_all picks up the Python package, data files,
 # and binaries in one call — the documented "just works" path for
@@ -57,7 +118,7 @@ a = Analysis(
     ["launcher.py"],
     pathex=[],
     binaries=heif_binaries + rawpy_binaries,
-    datas=heif_datas + [
+    datas=heif_datas + ffmpeg_datas + [
         # Bundled read-only assets resolved via sys._MEIPASS / BASE_DIR
         # in main.py. translations/ holds the YAML catalogs the i18n
         # layer reads at startup. No icons/PNGs are loaded by the app
@@ -69,6 +130,17 @@ a = Analysis(
         ("frontend/dist", "frontend/dist"),
     ],
     hiddenimports=heif_hiddenimports + [
+        # launcher.py hands uvicorn the app as the STRING
+        # "app.web.main:create_app" (uvicorn.Config(..., factory=True)), so
+        # static analysis never sees the web app and PyInstaller collected
+        # no `app/` package at all. Measured on a local build of this spec
+        # BEFORE this entry: the frozen exe's own web smoke
+        # (PHOTO_MANAGER_WEB_SMOKE=1) exits 1 with
+        # "ModuleNotFoundError: No module named 'app.web'" — i.e. the
+        # packaged web shell could not start, which also makes the bundled
+        # ffmpeg (#854) unreachable. Pulling in the factory module drags its
+        # static imports (routes, services) with it.
+        "app.web.main",
         # pywebview's Windows backends are selected at runtime by string,
         # invisible to static analysis. winforms is the .NET host window,
         # edgechromium the WebView2 embedding; clr_loader/pythonnet are
@@ -159,6 +231,33 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+# PyInstaller reclassifies our staged PE files as binaries (they leave
+# `datas` and arrive in `a.binaries` keeping the "ffmpeg\..." destination)
+# and its dependency analysis ALSO adds each discovered DLL a SECOND time
+# at the top level of _internal/. Measured on local builds: without this
+# filter every av*/sw* DLL shipped twice — _internal/ and _internal/ffmpeg/
+# — costing 128 MB of duplication and putting the loose copies exactly
+# where this layout exists to keep them out of.
+#
+# So the filter keys on the DESTINATION, not the source: drop an entry only
+# when it is one of our staged files AND it is headed for the top level.
+# (Filtering by source alone deletes the correctly-placed copies too — that
+# build shipped an _internal/ffmpeg holding nothing but the licence.)
+if ffmpeg_datas:
+    _staged_sources = {str(Path(src).resolve()).lower() for src, _ in ffmpeg_datas}
+    _binaries_before = len(a.binaries)
+    a.binaries = [
+        _entry for _entry in a.binaries
+        if not (
+            str(Path(_entry[1]).resolve()).lower() in _staged_sources
+            and Path(_entry[0]).parent == Path(".")
+        )
+    ]
+    print(
+        f"pyinstaller.spec: dropped {_binaries_before - len(a.binaries)} "
+        "top-level duplicates so the ffmpeg set ships once, in _internal/ffmpeg"
+    )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
