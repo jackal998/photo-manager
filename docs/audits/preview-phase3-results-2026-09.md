@@ -438,3 +438,175 @@ excluded from the box-2 pairing by construction (hence `n_paths` 89).
 One thing this session did **not** do: re-run to fish for a better number.
 Both runs completed on the first attempt with zero timeouts; the 3.85 is the
 first and only reading taken at `75a976d`.
+
+---
+
+# 2026-09 second re-measurement, after the draft undershoot
+
+Third owner-authorised session, **2026-09-07**, same runbook, same root, same
+arguments, at commit `5fdee78` (`git_dirty: false` on both artifacts) — the
+commit that adds `_DRAFT_UNDERSHOOT = 0.02`, the lever the previous section
+raised and the owner chose. Artifacts at
+`~/.claude/handovers/worker-reports/865-artifacts/r2_phase3_*.json`, **not
+committed**. Rehearsal on `qa/sandbox` first, matching the runbook's healthy
+shape (`clicks=20 ok=20 timeouts=0`, `{'non_raw_source': 20}`, boxes 1/3/4
+`pass=True`, box 2 `not_measured`, `VERDICT: NOT_MEASURED`).
+
+## Verdict — **`PASS`**. All four boxes.
+
+`summary.verdict.verdict` = **`PASS`**, `verdict.failed` = `[]`,
+`verdict.unmeasured` = `[]` (`r2_phase3_fulldecode.json`).
+
+| Box | Bar | `a202282` pre-#865 | `75a976d` draft | `5fdee78` + undershoot | Verdict |
+|---|---|---|---|---|---|
+| 1 RSS p50 / max | < 600 MB | 157.946 / 171.418 | 156.834 / 169.955 | **157.340 / 167.309** | **pass** |
+| 2 `ratio_median` | ≥ 5.0 | 4.242 | 3.850 | **6.958** | **pass** |
+| 2 `ratio_of_medians` | — | 3.523 | 3.390 | **5.184** | — |
+| 3 viewer pan/zoom | — | pass | pass | pass | **pass** |
+| 4 QImage freed | — | pass | pass | pass | **pass** |
+
+`placeholder_count` 0, `cold_decode_count` 100, `n_paths` **89**,
+`dropped_timeouts.total` **0** (`embedded_arm` 0, `forced_arm` 0) — the pairing
+lost nothing, so the ratio is a real reading of this library.
+
+**#622's box-2 acceptance is met on this library and this host.** Both the
+per-path median (6.958×) and the ratio of the two medians (5.184×) clear 5.0.
+
+## The two runs
+
+```
+# run 1 — baseline, embedded-JPEG path   01:05:30 → 01:06:02 UTC (wall_s 31.763)
+python.exe scripts/preview_phase3_probe.py \
+    --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 \
+    --ext .dng --output "$ART/r2_phase3_embedded.json"
+
+# run 2 — forced full raw decode          01:06:11 → 01:09:46 UTC (wall_s 215.533)
+python.exe scripts/preview_phase3_probe.py \
+    --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 \
+    --ext .dng --force-full-decode \
+    --compare-json "$ART/r2_phase3_embedded.json" \
+    --output "$ART/r2_phase3_fulldecode.json"
+```
+
+Run 1's wall clock across the three sessions: 56.715 → 43.811 → **31.763 s**
+for the same 100 clicks.
+
+## Box 2 — **6.958×, and the median moved this time**
+
+| Field | `a202282` | `75a976d` | `5fdee78` |
+|---|---|---|---|
+| `embedded_ttfp_ms` min / p50 / mean / p95 / max | 256.823 / 381.124 / 547.530 / 1000.828 / 1118.308 | 282.570 / 380.887 / 402.331 / 521.997 / 623.486 | **117.309 / 241.228 / 261.920 / 449.702 / 544.030** |
+| `full_decode_ttfp_ms` p50 / mean / max | 1342.884 / 2455.722 / 4943.267 | 1291.335 / 2394.564 / 5020.624 | 1250.554 / 2321.339 / 4762.057 |
+| `ratio_min` / `ratio_median` / `ratio_max` | 3.094 / 4.242 / 5.922 | 2.835 / 3.850 / 12.436 | **2.582 / 6.958 / 20.020** |
+
+Paired **by path** across all three sessions (89 files common to all three,
+embedded arm):
+
+| Session | p50 | mean | p90 | p95 | max |
+|---|---|---|---|---|---|
+| `a202282` pre-#865 | 381.1 | 547.5 | 981.4 | 1003.1 | 1118.3 |
+| `75a976d` draft | 380.9 | 402.3 | 516.9 | 546.9 | 623.5 |
+| `5fdee78` + undershoot | **241.2** | **261.9** | **422.5** | **464.5** | **544.0** |
+
+The first change took the tail (48 MP frames, half scale); this one takes the
+**body** as well, which is why the median finally moves — 381.1 → 241.2 ms,
+−36.7 % against pre-#865, with the mean down 52 % and p95 down 54 %.
+
+### The control arm drifted, and it drifted *against* this result
+
+The forced-full-decode arm is untouched by every commit in this arc
+(`--force-full-decode` short-circuits `_try_rawpy_embedded_thumb` before
+`extract_thumb`), yet its paired median has fallen each session: **1342.9 →
+1291.3 → 1250.6 ms**, −6.9 % overall. That is NAS/host variation, not code.
+
+It matters for reading the pass, and it cuts the safe way: a faster control arm
+makes the ratio **smaller**, because it is the numerator. Recomputing
+`ratio_of_medians` against the pre-#865 control median instead of this
+session's gives 1342.9 / 241.2 = **5.57×** — higher, not lower. So the pass is
+not an artefact of a lucky control run; the drift was working against it.
+
+### What the undershoot cost, measured
+
+The declared trade-off is an output long edge up to 2 % under the cap. From
+`per_click[].image_w/h`, the long edge of the 89 embedded-arm paints:
+
+| Session | Output long edge |
+|---|---|
+| `a202282` pre-#865 | 2048 px × 89 |
+| `75a976d` draft | 2048 px × 89 |
+| `5fdee78` + undershoot | **2016 px × 83**, 2048 px × 6 |
+
+83 of 89 previews now render at 2016 px instead of 2048 — **32 px, 1.56 %**,
+exactly the half-scale step the tolerance was sized to buy and comfortably
+inside the declared 2 %. The remaining 6 are the files whose half-scale would
+have fallen further under the cap than the tolerance allows, and they still
+land exactly on 2048. No file fell below 2016, so the tolerance never
+compounded.
+
+Whether 32 px on the long edge is acceptable for dedup previews is a product
+judgement, not a measurement — it is ~1.6 % of linear resolution, below one
+logical pixel on this owner's 4K display at 175 %, and #622's own premise is
+that this pane exists for near-duplicate discrimination rather than
+pixel-peeping. The full-res viewer (`viewport_cap == 0`) never drafts and is
+unaffected.
+
+```
+Probe: scripts/preview_phase3_probe.py
+SHA:   5fdee788af2a0386c63bcb5b7f46a8413f5ab391
+Args:  --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 --ext .dng
+       --force-full-decode --compare-json "$ART/r2_phase3_embedded.json"
+JSON:  r2_phase3_fulldecode.json (summary.box2.compared_with names run 1)
+```
+
+## Box 1 — **still passes**, unchanged
+
+`steady_state_rss_mb` over the last 50 of 100 clicks: p50 **157.340 MB**, mean
+154.842, p95 164.221, max **167.309**, against `threshold_mb` 600.0.
+`pass: true`, `pass_on_max: true`, `reason: null`, `steady_window_used` 50 of
+50, `placeholder_paints_in_window` 0, `cold_decode_count` 100.
+
+Flat across all three sessions (157.9 → 156.8 → 157.3 p50), which is the
+expected result: draft mode shrinks a transient decode buffer, not what the LRU
+retains. Peak `lru_occupancy_bytes.preview_max` 54,317,897 B (~51.8 MiB) of the
+192 MB preview tier. Host unchanged: 34,189,557,760 B RAM, budget 256 MB split
+`{thumb: 67,108,864, preview: 201,326,592}`.
+
+```
+Probe: scripts/preview_phase3_probe.py
+SHA:   5fdee788af2a0386c63bcb5b7f46a8413f5ab391
+Args:  --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 --ext .dng
+JSON:  r2_phase3_embedded.json
+```
+
+## Boxes 3 and 4 — unchanged, both pass
+
+Opened on `IMG_0867.DNG`, `qimage_is_placeholder` false.
+`request_full_res_emitted` true, zoom 1.0 → 1.25 with `zoom_pixmap_grew` true,
+`pan_wired` true, `pan_scroll_range` 2896; `label_valid_before_close` **true** →
+`label_valid_after_close` **false**, `full_qimage_none_after_close` true,
+`dialog_valid_after_close` false. The two standing limits (pan is asserted as
+wired, not driven; the viewer is non-modal against #622's wording) are recorded
+in the first session and unchanged.
+
+```
+Probe: scripts/preview_phase3_probe.py
+SHA:   5fdee788af2a0386c63bcb5b7f46a8413f5ab391
+Args:  --root "J:/圖片/20240601-0712大阪" --clicks 100 --viewport-cap 2048 --ext .dng
+JSON:  r2_phase3_embedded.json (modal block + summary.box3 / summary.box4)
+```
+
+## Session notes
+
+Same host, same root, same `--ext .dng` deviation and the same reason, same
+`env.viewport_cap` 2048 with `viewport_cap_pinned` true, `env.file_count` 445,
+`env.ext_histogram` `{".dng": 445}`. The same 11 `.DNG` files took
+`non_raw_source` in both runs, as in both earlier sessions.
+
+Neither run was repeated. 6.958 is the first and only reading taken at
+`5fdee78`.
+
+**What this does and does not settle.** Box 2 passes on *this library, this
+host, this cap*. The ratio is sensitive to the mix — a library of 12 MP-embedded
+files with no 48 MP frames would land lower, and a smaller-RAM machine gets a
+different box-1 budget. The reading is what the runbook asks for and #622's
+acceptance names; it is not a claim about every library.

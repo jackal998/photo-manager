@@ -20,6 +20,14 @@ below. The embedded arm itself got faster (paired p95 1003.1 → 546.9 ms over
 the same 89 files) — box 2 is a two-arm ratio, so read that section before
 reading the drop from 4.242 to 3.85 as a regression.
 
+**Re-measured again 2026-09-07 at SHA `5fdee78`** (that draft may now land up
+to 2 % under the cap, so a near-miss takes the next DCT step). **Session
+verdict: `PASS` — all four boxes.** Box 2 `ratio_median` **6.958×**,
+`ratio_of_medians` **5.184×**, `n_paths` 89, `dropped_timeouts.total` 0; box 1
+157.340 p50 / 167.309 max against 600 MB. See
+[Results — 2026-09-07 re-measurement after the draft undershoot](#results--2026-09-07-re-measurement-after-the-draft-undershoot).
+This is the reading #622's box-2 acceptance names.
+
 ## What this verifies
 
 Issue #622 shipped in two phases: Phase 1 (viewport cap, byte-budget LRU, DNG
@@ -435,6 +443,36 @@ faster at the median. The full analysis, including the measured reason the
 median did not move — this library's embedded JPEGs are bimodal, 4032 × 3024
 for most files and 8064 × 6048 for 23 of them, and `draft` correctly declines
 to reduce the first group below the 2048 cap — is in
+[`preview-phase3-results-2026-09.md`](preview-phase3-results-2026-09.md).
+
+## Results — 2026-09-07 re-measurement after the draft undershoot
+
+Third session, same root and arguments, at SHA
+`5fdee788af2a0386c63bcb5b7f46a8413f5ab391` (`git_dirty: false` on both
+artifacts), after `_DRAFT_UNDERSHOOT = 0.02` let a near-miss take the next DCT
+step. `ART` is `~/.claude/handovers/worker-reports/865-artifacts`, artifacts
+`r2_`-prefixed; the run 1 / run 2 argument blocks are otherwise unchanged.
+
+| Box | Reading (field → value) | Probe | SHA | Args | JSON |
+|---|---|---|---|---|---|
+| 1 | `summary.box1.steady_state_rss_mb.p50` = **157.340 MB** (threshold 600.0, `pass` = **true**, `pass_on_max` = **true**) | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 1 args_ | `r2_phase3_embedded.json` |
+| 1 | `summary.box1.steady_state_rss_mb.max` = **167.309 MB** (`steady_window_used` 50 of 50, `placeholder_paints_in_window` 0, `cold_decode_count` 100) | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 1 args_ | `r2_phase3_embedded.json` |
+| 2 | `summary.box2.ratio_median` = **6.958×** over `n_paths` = **89**, `dropped_timeouts.total` = **0** (threshold 5.0, `pass` = **true**) | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 2 args_ | `r2_phase3_fulldecode.json` |
+| 2 | `summary.box2.ratio_of_medians` = **5.184×** — also clears the bar, so the pass does not rest on the per-path median alone | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 2 args_ | `r2_phase3_fulldecode.json` |
+| 2 | `summary.box2.embedded_ttfp_ms` p50 / p95 / max = **241.228 / 449.702 / 544.030 ms** (pre-#865: 381.124 / 1000.828 / 1118.308) | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 2 args_ | `r2_phase3_fulldecode.json` |
+| 2 | `summary.box2.full_decode_ttfp_ms.p50` = **1250.554 ms** — control arm, untouched by every commit, drifted 1342.9 → 1291.3 → 1250.6 across the three sessions | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 2 args_ | `r2_phase3_fulldecode.json` |
+| 2 | distribution: `ratio_min` = **2.582**, `ratio_max` = **20.020** | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 2 args_ | `r2_phase3_fulldecode.json` |
+| — | output long edge, `per_click[].image_w/h` over the 89 embedded paints = **2016 px × 83, 2048 px × 6** — the measured cost of the tolerance | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 1 args_ | `r2_phase3_embedded.json` |
+| 3 | `summary.box3.pass` = **true** (zoom 1.0 → 1.25, `pan_scroll_range` 2896) | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 1 args_ | `r2_phase3_embedded.json` |
+| 4 | `summary.box4.pass` = **true** (`label_valid_before_close` true → `label_valid_after_close` false) | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 1 args_ | `r2_phase3_embedded.json` |
+| — | `summary.verdict.verdict` = **`PASS`**, `verdict.failed` = `[]`, `verdict.unmeasured` = `[]` | `scripts/preview_phase3_probe.py` | `5fdee78` | _run 2 args_ | `r2_phase3_fulldecode.json` |
+
+**Two things to read beside the pass.** The control arm got 6.9 % faster across
+the three sessions with no code change, and since it is the ratio's numerator
+that works *against* the pass — recomputed against the pre-#865 control median
+the ratio of medians would be 5.57×, higher. And the tolerance has a measured
+cost: 83 of 89 previews now paint at 2016 px rather than 2048 (1.56 %, one DCT
+step), with the other 6 still exactly at the cap. Detail in
 [`preview-phase3-results-2026-09.md`](preview-phase3-results-2026-09.md).
 
 ## Citation template
