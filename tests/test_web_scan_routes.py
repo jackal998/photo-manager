@@ -650,3 +650,118 @@ class TestCrossImportGuard:
             "These files import app.web — violates the one-directional constraint:\n"
             + "\n".join(f"  {v}" for v in violations)
         )
+
+
+# ---------------------------------------------------------------------------
+# 8. Near-duplicate threshold bounds at the HTTP trust boundary (#876)
+# ---------------------------------------------------------------------------
+
+class TestNearDupThresholdBounds:
+    """``POST /api/scan`` refuses a near-duplicate threshold below 2.
+
+    ``classify`` groups near-duplicates on ``0 < distance <= threshold``
+    (``scanner/dedup.py``), and a photographic pHash always carries exactly
+    32 of its 64 bits, so every pairwise Hamming distance is even (0 of
+    86_400 measured distances were odd —
+    ``docs/audits/visual-autoselect-feasibility.md`` section 3c). A
+    ``threshold`` of 1 therefore admits nothing: the scan runs to completion
+    and reports "no near-duplicates found", which is a lie rather than an
+    error. #823 removed that from both dialogs; #876 moves the guard to the
+    API, which is the actual trust boundary — a scripted or hand-rolled
+    client never goes through a dialog.
+
+    These assert the model, not the route handler: FastAPI validates the
+    body against ``WebScanRequest`` *before* invoking ``start_scan``, so the
+    bound is what the model declares. The one route-level test below stays
+    on the rejection path for the same reason — a 422 is produced before the
+    handler's ``run_in_executor`` settings read, so no executor is involved
+    (project rule: never combine ``TestClient`` with a ``run_in_executor``
+    path).
+    """
+
+    def _request(self, **overrides):
+        from app.web.models import WebScanRequest
+
+        return WebScanRequest(**_valid_scan_body(**overrides))
+
+    @pytest.mark.parametrize("field", ["threshold", "dhash_threshold"])
+    def test_one_is_rejected_naming_the_floor(self, field):
+        """1 must not reach ``classify`` — and the error must say why not."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as excinfo:
+            self._request(**{field: 1})
+
+        errors = excinfo.value.errors()
+        assert [e["loc"] for e in errors] == [(field,)], (
+            f"expected exactly one error on {field!r}, got {errors!r}"
+        )
+        assert errors[0]["ctx"]["ge"] == 2
+        assert "greater than or equal to 2" in errors[0]["msg"], (
+            f"the 422 must name the floor so a scripted client can fix its "
+            f"request; got {errors[0]['msg']!r}"
+        )
+
+    @pytest.mark.parametrize("field", ["threshold", "dhash_threshold"])
+    @pytest.mark.parametrize("value", [2, 20])
+    def test_floor_and_ceiling_are_accepted(self, field, value):
+        """The whole advertised 2-20 range still reaches ``ScanConfig``."""
+        config = self._request(**{field: value}).to_config()
+        assert getattr(config, field) == value
+
+    @pytest.mark.parametrize("field", ["threshold", "dhash_threshold"])
+    def test_above_ceiling_is_rejected(self, field):
+        """21 is outside what either dialog offers; the API agrees."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as excinfo:
+            self._request(**{field: 21})
+        assert excinfo.value.errors()[0]["ctx"]["le"] == 20
+
+    @pytest.mark.parametrize("value", [0, 100])
+    def test_mean_colour_gate_keeps_its_own_range(self, value):
+        """The mean-colour gate is a different predicate — do not fence it.
+
+        It is an L2 distance over mean colours where 0 legitimately means
+        "off" and 100 is the documented top of its range; applying the
+        near-duplicate bound to it would reject two settings both clients
+        still offer.
+        """
+        config = self._request(mean_color_threshold=value).to_config()
+        assert config.mean_color_threshold == value
+
+    def test_post_scan_with_threshold_one_returns_422(self, client):
+        """The wire contract, not just the model: a real POST is refused.
+
+        Rejected during body validation, so ``start_scan`` — and its
+        ``run_in_executor`` settings read — never runs.
+        """
+        resp = client.post("/api/scan", json=_valid_scan_body(threshold=1))
+
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert any(
+            d["loc"][-1] == "threshold"
+            and "greater than or equal to 2" in d["msg"]
+            for d in detail
+        ), f"422 body does not name the floor for 'threshold': {detail!r}"
+
+    def test_openapi_schema_advertises_the_shared_bounds(self, client):
+        """Generated clients read the bound off /openapi.json, so pin it.
+
+        The values must come from the one shared definition in
+        ``core.app_service.dtos`` — the whole point of #876's move out of
+        ``app/views/`` is that the API and the Qt dialog cannot drift.
+        """
+        from core.app_service.dtos import (
+            NEAR_DUP_THRESHOLD_MAX,
+            NEAR_DUP_THRESHOLD_MIN,
+        )
+
+        props = client.get("/openapi.json").json()["components"]["schemas"][
+            "WebScanRequest"
+        ]["properties"]
+        for field in ("threshold", "dhash_threshold"):
+            assert props[field]["minimum"] == NEAR_DUP_THRESHOLD_MIN
+            assert props[field]["maximum"] == NEAR_DUP_THRESHOLD_MAX
+        assert "minimum" not in props["mean_color_threshold"]

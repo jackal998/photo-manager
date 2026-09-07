@@ -14,7 +14,10 @@ in a code comment, a transitive dep bump with no behaviour change. The
 reason is for the reviewer, so it must be real:
 
 * ``[skip-news:]`` / ``[skip-news:   ]`` — blank reason, rejected.
-* ``[skip-news: no closing bracket`` — never closes, rejected.
+* ``[skip-news: no closing bracket`` — never closes on its line, rejected.
+  A later ``]`` anywhere below (a markdown link, a ``- [ ]`` checklist box)
+  does not close it either: the reason must sit on one line with its
+  bracket (#872), or the swallowed paragraphs become "the reason".
 * ``[skip-news: <reason>]`` — the documented placeholder pasted verbatim,
   or the token quoted in prose (a docs PR citing ``news/README.md``),
   rejected.
@@ -58,23 +61,32 @@ _NEWS_FRAGMENT_PATTERN = re.compile(
     r"^news/[0-9]+\.(feature|bugfix|doc|removal|misc)$"
 )
 
-# A bypass needs a closing `]` and a non-blank reason: leading whitespace is
-# fine, then at least one non-space character, then anything up to the `]`.
-# Punctuation, unicode and `#refs` all still match — only `]` ends it. The
-# lookahead rejects one specific reason, the documented placeholder itself
-# (#858): `[skip-news: <reason>]` is how the token is *written down*, in
-# news/README.md and in every brief that quotes it, so accepting it means
-# any PR body that explains the convention disables the gate.
+# A bypass needs a non-blank reason and a closing `]` ON THE SAME LINE:
+# leading blanks are fine, then at least one non-space character, then
+# anything up to the `]` — but never a line break (#872). Punctuation,
+# unicode and `#refs` all still match; only `]` or the end of that line ends
+# the token. `[^\S\r\n]` is "whitespace that is not a line break", used
+# everywhere `\s` used to be so a token left unclosed on its own line cannot
+# be closed by an unrelated `]` further down the body — a markdown link, a
+# `- [ ]` checklist box, a bracketed reference — which would silently turn
+# several paragraphs into "the reason". The lookahead rejects one specific
+# reason, the documented placeholder itself (#858): `[skip-news: <reason>]`
+# is how the token is *written down*, in news/README.md and in every brief
+# that quotes it, so accepting it means any PR body that explains the
+# convention disables the gate.
 _BYPASS_PATTERN = re.compile(
-    r"\[skip-news:(?!\s*<reason>\s*\])\s*[^\]\s][^\]]*\]"
+    r"\[skip-news:(?![^\S\r\n]*<reason>[^\S\r\n]*\])"
+    r"[^\S\r\n]*[^\]\s][^\]\r\n]*\]"
 )
 
 # The three rejected shapes, kept as separate patterns so the block message
 # can name the actual problem instead of falling through to the generic
 # "no fragment found" text — a developer who pasted a template needs to be
 # told that, not told to write a fragment they may not need.
-_PLACEHOLDER_BYPASS_PATTERN = re.compile(r"\[skip-news:\s*<reason>\s*\]")
-_EMPTY_BYPASS_PATTERN = re.compile(r"\[skip-news:\s*\]")
+_PLACEHOLDER_BYPASS_PATTERN = re.compile(
+    r"\[skip-news:[^\S\r\n]*<reason>[^\S\r\n]*\]"
+)
+_EMPTY_BYPASS_PATTERN = re.compile(r"\[skip-news:[^\S\r\n]*\]")
 _TOKEN_PREFIX_PATTERN = re.compile(r"\[skip-news:")
 
 _EMPTY_REASON_LINES = (
@@ -98,11 +110,13 @@ _PLACEHOLDER_REASON_LINES = (
 )
 
 _UNCLOSED_LINES = (
-    "  bypass token seen but it has no closing `]` — the token is the",
-    "  whole bracketed phrase.",
+    "  bypass token seen but its closing `]` does not arrive on the same",
+    "  line — the token is the whole bracketed phrase, on one line.",
     "",
     "    Write `[skip-news: <a real reason>]` on one line, brackets and",
-    "    all. A dangling `[skip-news:` is not a bypass.",
+    "    all. A dangling `[skip-news:` is not a bypass, and a later `]`",
+    "    further down the body — a markdown link, a `- [ ]` checklist box",
+    "    — does not close it (#872).",
     "",
 )
 
