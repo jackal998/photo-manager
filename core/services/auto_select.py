@@ -1,22 +1,22 @@
-"""Auto-select helper used by the scan worker (photo-manager#212).
+"""Auto-select helper used by the scan pipeline (photo-manager#212).
 
-When ``ScanDialog``'s "Auto select after scan" option is on, the worker
-calls :func:`top_score_path_per_group` immediately after scoring and
-before writing the manifest. The set it returns is the keepers — one
-row per duplicate group, picked by highest :attr:`score`.
+When the scan's "Auto select after scan" option is on, the pipeline calls
+:func:`top_score_path_per_group` immediately after scoring and before
+writing the manifest. The set it returns is the keepers — one row per
+duplicate group, picked by highest :attr:`score`.
 
 The helper is shape-agnostic: it duck-types on ``group_id`` /
 ``source_path`` / ``score``, so the same function would work on
 ``PhotoRecord`` (where the corresponding attributes are
 ``group_id`` / ``file_path`` / ``score``) if a future caller adapts the
 attribute names. The current production caller is
-``app.views.workers.scan_worker.ScanWorker`` operating on
+``core.app_service.scan_runner.run_pipeline`` operating on
 ``scanner.dedup.ManifestRow``.
 
 Tie-break and None-handling match ``select_paths_top_n`` in
-``app/views/dialogs/select_dialog.py`` so behaviour is consistent
-between the manual "Top 1 by score" rule the user triggers from the
-Selection dialog and the automatic version triggered here:
+``core.app_service.action_resolve`` so behaviour is consistent between
+the manual "Top 1 by score" rule the user triggers from the selection
+UI and the automatic version triggered here:
 
 * ``score is None`` rows are excluded from ranking entirely.
   Isolated rows (``group_id is None``) AND Live Photo MOV passengers
@@ -203,10 +203,9 @@ def top_n_paths(
         return []
     # Sort ascending by (value, path), then for desc reverse and restore the
     # ascending path tiebreak within each equal-value bucket. Equivalent to a
-    # (-value, path) key for every real score, but kept in this exact form so
-    # the rule stays bit-for-bit identical to the Qt original it was extracted
-    # from (app/views/dialogs/select_dialog.py::select_paths_top_n), which
-    # tests/test_action_resolve_parity.py pins.
+    # (-value, path) key for every real score, but kept in this exact form
+    # because it is the ordering users' saved "Top N" rules were built
+    # against — see select_paths_top_n in core.app_service.action_resolve.
     ordered = sorted(ranked, key=lambda t: (t[0], t[1]))
     if order == "desc":
         ordered.reverse()

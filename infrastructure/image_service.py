@@ -3,8 +3,8 @@
 Includes Pillow-based decoding, optional rawpy support for DNG, and Windows
 Shell/WIC fallback via ctypes for robust HEIC handling on Windows.
 
-Qt-free: returns JPEG bytes. The only GUI-side conversion is in
-``app/views/image_tasks._bytes_to_qimage`` which wraps bytes for signal delivery.
+Returns JPEG bytes, never a decoded UI object — ``GET /api/image``
+(app/web/routes/image.py) streams them straight to the browser.
 """
 
 from __future__ import annotations
@@ -433,10 +433,9 @@ class _ByteBudgetLRUCache:
 
     Evicts the LRU entry whenever the total byte sum would exceed the budget.
 
-    Thread-safe. ``_ImageTask`` (``app/views/image_tasks.py``) calls
-    ``get``/``put`` from QThreadPool workers; ``clear()`` runs on the
-    main thread on manifest unload. Without the lock the OrderedDict
-    mutation in any of the three would race the others (#616).
+    Thread-safe. ``get``/``put`` run on whichever worker thread served the
+    request while ``clear()`` runs on manifest unload; without the lock the
+    OrderedDict mutation in any of the three would race the others (#616).
     """
 
     def __init__(self, budget_bytes: int) -> None:

@@ -69,7 +69,7 @@ WHERE  outcome = ''
 ORDER  BY
     group_id NULLS LAST,
     -- "Ref tier" first (KEEP / UNDATED / unset all render as "Ref"
-    -- in the tree per app/views/tree_model_builder._file_similarity), then
+    -- per core/app_service/review_view.compute_similarity), then
     -- duplicates in descending similarity: EXACT (100%) before
     -- REVIEW_DUPLICATE (near-match). Top-down a group reads as "winner"
     -- → strongest match → weaker matches (#55, #76). The legacy MOVE

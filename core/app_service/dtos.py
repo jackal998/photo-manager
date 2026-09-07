@@ -1,8 +1,8 @@
 """ScanConfig — picklable plain-data bag for the scan pipeline.
 
-Keeping the config as a plain dataclass (no Qt, no PySide6) means it
-can cross a ProcessPoolExecutor boundary in Phase 1 without patching.
-ScanWorker.__init__ builds one and passes it straight to run_pipeline().
+Keeping the config as a plain dataclass means it can cross a
+ProcessPoolExecutor boundary without patching. A client resolves every
+field, then passes the config straight to run_pipeline().
 """
 from __future__ import annotations
 

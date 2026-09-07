@@ -1,10 +1,8 @@
-"""Qt-free domain constants shared across the GUI, web, and service layers.
+"""Domain constants shared across the web, service and scanner layers.
 
-These are pure values with no Qt dependency, so they live here (outside
-``app/views/``) where Qt-free code — the web API, ``core.app_service``
-services, and the headless invariant tests — can import them without
-pulling in PySide6. The Qt ``app.views.constants`` module re-exports them
-for the desktop app's continued use.
+Pure wire values with no client dependency, so the web API,
+``core.app_service`` services and the headless invariant tests can all
+import them without reaching into a UI package.
 """
 from __future__ import annotations
 

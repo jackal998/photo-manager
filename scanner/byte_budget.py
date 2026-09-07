@@ -1,7 +1,7 @@
 """Byte-budget semaphore for the HASH-stage compute dispatch (#587 OOM fix).
 
-Pure logic — no Qt, no I/O. The pipeline wiring lives in
-``app/views/workers/scan_worker.py``; this module only holds the byte-budget
+Pure logic — no I/O. The pipeline wiring lives in
+``core/app_service/scan_runner.py``; this module only holds the byte-budget
 math so it is fully unit-testable at layer 1.
 
 The problem it solves (#587):

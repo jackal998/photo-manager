@@ -6,19 +6,17 @@ worker-count module. ``scanner.workers`` re-exports every public name
 here, so all pre-existing callers and their imports are unchanged —
 there is exactly ONE implementation of ``device_key`` in the tree.
 
-Two consumers, one definition:
+The consumer today is the HASH stage (#548 / #565): one ThreadPoolExecutor
+per physical device, so NAS-latency-bound reads overlap HDD-seek-bound
+reads instead of queueing behind each other in one flat pool.
 
-* HASH stage (#548 / #565) — one ThreadPoolExecutor per physical device
-  so NAS-latency-bound reads overlap HDD-seek-bound reads instead of
-  queueing behind each other in one flat pool.
-* Preview coordinator (:mod:`app.views.preview_coordinator`, #622
-  Phase 2) — serialises at most one in-flight decode per device so a
-  burst of rapid clicks cannot put N concurrent SMB reads on one NAS.
-
-Both must agree on what "one device" means. If they ever disagreed, the
-preview pane would consider two drive letters independent while the
-scanner treated them as one box (or vice versa) and the per-device
-concurrency ceiling would silently double.
+A second consumer used to share this definition — the desktop preview
+coordinator (#622 Phase 2), which serialised at most one in-flight decode
+per device so a burst of rapid clicks could not put N concurrent SMB reads
+on one NAS. The web preview path has no equivalent, so any new consumer
+must come back through this module rather than growing its own notion of
+"one device": two definitions would silently double the per-device
+concurrency ceiling.
 """
 
 from __future__ import annotations
