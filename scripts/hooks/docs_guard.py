@@ -24,12 +24,15 @@ fix, an internal refactor with zero structural impact. The reason
 becomes part of the PR title/body so the choice is visible in code
 review.
 
-The reason must be **non-blank** (#857) and must not be the documented
-placeholder ``<reason>`` itself (#858). ``[docs-not-needed:]``,
-``[docs-not-needed:   ]`` and ``[docs-not-needed: <reason>]`` do not
-bypass anything: they block with a message naming the problem. A pasted
-template placeholder used to satisfy the old ``[^\\]]*`` pattern and
-disabled this gate silently.
+The reason must be **non-blank** (#857), must not be the documented
+placeholder ``<reason>`` itself (#858), and must sit **on one line**
+together with its closing ``]`` (#872). ``[docs-not-needed:]``,
+``[docs-not-needed:   ]``, ``[docs-not-needed: <reason>]`` and an opener
+whose bracket never closes on its line do not bypass anything: they block
+with a message naming the problem. A pasted template placeholder used to
+satisfy the old ``[^\\]]*`` pattern and disabled this gate silently; that
+class also matched newlines, so any later ``]`` in the body closed the
+token and the paragraphs in between became "the reason".
 
 Hook protocol
 -------------
@@ -105,16 +108,23 @@ _DOC_BEHAVIOURAL_MODIFY_PATTERN = re.compile(
 _BEHAVIOURAL_FEATURES_DOC = "docs/features.md"
 _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD = 10
 
-# The reason must be non-blank: at least one non-space character after the
-# colon (leading whitespace is fine), then anything up to the closing ``]``.
-# Punctuation, unicode and ``#refs`` all still match — only ``]`` ends it.
+# The reason must be non-blank AND must stay on one line: at least one
+# non-space character after the colon (leading blanks are fine), then
+# anything up to the closing ``]`` — but never a line break (#872).
+# Punctuation, unicode and ``#refs`` all still match; only ``]`` or the end
+# of that line ends the token. ``[^\S\r\n]`` is "whitespace that is not a
+# line break", used everywhere ``\s`` used to be so a token left unclosed
+# on its own line cannot be closed by an unrelated ``]`` further down the
+# body — a markdown link, a ``- [ ]`` checklist box, a bracketed reference
+# — which would silently turn several paragraphs into "the reason".
 # The lookahead rejects one specific reason, the documented placeholder
 # itself (#858): ``[docs-not-needed: <reason>]`` is how the token is
 # *written down* — in README.md, in docs/features.md, in every brief that
 # quotes the convention — so accepting it means a PR body that merely
 # explains the token disables the gate.
 _BYPASS_PATTERN = re.compile(
-    r"\[docs-not-needed:(?!\s*<reason>\s*\])\s*[^\]\s][^\]]*\]"
+    r"\[docs-not-needed:(?![^\S\r\n]*<reason>[^\S\r\n]*\])"
+    r"[^\S\r\n]*[^\]\s][^\]\r\n]*\]"
 )
 
 # The empty form (#857): a token whose reason is blank. The old
@@ -123,7 +133,7 @@ _BYPASS_PATTERN = re.compile(
 # silently, in CI as well as in the local hook. It now blocks, and this
 # pattern exists so the block message can name the real problem instead of
 # falling through to the generic "no docs touched" text.
-_EMPTY_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:\s*\]")
+_EMPTY_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:[^\S\r\n]*\]")
 
 _EMPTY_BYPASS_MSG_LINES = (
     "  bypass token seen but its reason is empty — write why.",
@@ -142,7 +152,9 @@ _EMPTY_BYPASS_MSG_LINES = (
 # ``<reason>``. Same failure as the empty token one step later — a brief's
 # template pasted verbatim, or the convention quoted in prose, silently
 # disabling the gate.
-_PLACEHOLDER_BYPASS_PATTERN = re.compile(r"\[docs-not-needed:\s*<reason>\s*\]")
+_PLACEHOLDER_BYPASS_PATTERN = re.compile(
+    r"\[docs-not-needed:[^\S\r\n]*<reason>[^\S\r\n]*\]"
+)
 
 _PLACEHOLDER_BYPASS_MSG_LINES = (
     "  bypass token seen but its reason is the literal `<reason>`",
@@ -158,19 +170,40 @@ _PLACEHOLDER_BYPASS_MSG_LINES = (
     "",
 )
 
+# The unclosed form (#872): an opener with no ``]`` before the line ends.
+# Until #872 the reason class matched newlines, so any later ``]`` in the
+# body closed the token and the swallowed span became "the reason". Now the
+# token stops at the line end, and this pattern exists so the block message
+# says which of the two mistakes was made.
+_TOKEN_PREFIX_PATTERN = re.compile(r"\[docs-not-needed:")
+
+_UNCLOSED_BYPASS_MSG_LINES = (
+    "  bypass token seen but its closing `]` does not arrive on the same",
+    "  line — the token is the whole bracketed phrase, on one line.",
+    "",
+    "    Write `[docs-not-needed: <a real reason>]` on one line, brackets",
+    "    and all. A later `]` further down the body — a markdown link, a",
+    "    `- [ ]` checklist box — does not close it, and the text in",
+    "    between is not a reason anyone chose to write.",
+    "",
+)
+
 
 def _rejected_bypass_lines(pr_text: str) -> tuple[str, ...]:
     """Explain a ``[docs-not-needed:`` token that did not bypass.
 
-    Empty (#857) and placeholder (#858) reasons do not block on their own —
-    if the gate has nothing to say, a vestigial token is harmless — but when
-    the gate DOES fire, the message must lead with the real problem so the
-    developer fixes the right thing instead of reading the generic text.
+    Empty (#857), placeholder (#858) and unclosed (#872) reasons do not
+    block on their own — if the gate has nothing to say, a vestigial token
+    is harmless — but when the gate DOES fire, the message must lead with
+    the real problem so the developer fixes the right thing instead of
+    reading the generic text.
     """
     if _PLACEHOLDER_BYPASS_PATTERN.search(pr_text):
         return _PLACEHOLDER_BYPASS_MSG_LINES
     if _EMPTY_BYPASS_PATTERN.search(pr_text):
         return _EMPTY_BYPASS_MSG_LINES
+    if _TOKEN_PREFIX_PATTERN.search(pr_text):
+        return _UNCLOSED_BYPASS_MSG_LINES
     return ()
 
 # Schema-defining markers for the manifest_repository.py semantics-aware

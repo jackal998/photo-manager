@@ -403,3 +403,110 @@ class TestCiMode:
         assert any(
             "origin/feat/parent-branch...HEAD" in arg for arg in captured[0]
         )
+
+
+# ── bypass token: the reason may not span lines (#872) ────────────────────
+
+
+def _run_ci(
+    monkeypatch,
+    *,
+    title: str = "fix: something",
+    body: str = "",
+    changed: list[str] | None = None,
+) -> int:
+    """Invoke ``main()`` the way ``.github/workflows/pr-gates.yml`` does:
+    ``--ci`` plus PR_TITLE / PR_BODY from the environment. The PR body is
+    where a multi-line trap actually arrives — GitHub hands it over
+    verbatim, CRLF and all — so the newline tests use this entry point
+    rather than the ``gh pr create`` command line."""
+    mod = _load_hook(monkeypatch)
+    files = (
+        ["app/views/handlers/file_operations.py"] if changed is None else changed
+    )
+    monkeypatch.setattr(mod, "_changed_files", lambda: list(files))
+    monkeypatch.setattr(sys, "argv", ["qa_scenario_guard.py", "--ci"])
+    monkeypatch.setenv("PR_TITLE", title)
+    monkeypatch.setenv("PR_BODY", body)
+    return mod.main()
+
+
+# The two shapes a real PR body carries a stray `]` in, below an opener its
+# author never closed: a markdown link and a task-list checkbox. Both used
+# to close the token.
+_LATER_BRACKET_BODIES = {
+    "markdown-link": (
+        "## What\n"
+        "[qa-not-needed: internal rename\n"
+        "\n"
+        "See [the issue](https://example.invalid/872) for the trap.\n"
+    ),
+    "checklist-box": (
+        "[qa-not-needed: no user-visible flow\n"
+        "\n"
+        "## Checklist\n"
+        "- [ ] tests\n"
+    ),
+}
+
+
+class TestBypassMustStayOnOneLine:
+    """#872: the reason class was ``[^\\]]*``, which matches newlines. An
+    opener left unclosed on its line was therefore closed by the next ``]``
+    anywhere below, and every paragraph in between became "the reason" — a
+    bypass nobody wrote, whose reviewer-visible reason is garbage.
+
+    Both halves, as in :class:`TestBypassEmptyReason`: the swallowing
+    shapes must block, and an honest one-line token in a CRLF body — the
+    normal case, since that is how GitHub delivers ``PR_BODY`` — must still
+    bypass.
+    """
+
+    @pytest.mark.parametrize("shape", sorted(_LATER_BRACKET_BODIES))
+    def test_a_later_bracket_does_not_close_the_token(
+        self, monkeypatch, capsys, shape
+    ):
+        rc = _run_ci(monkeypatch, body=_LATER_BRACKET_BODIES[shape])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "closing `]` does not arrive on the same" in err
+
+    def test_reason_split_across_a_crlf_does_not_bypass(
+        self, monkeypatch, capsys
+    ):
+        """GitHub delivers PR bodies CRLF-terminated, so the class has to
+        exclude ``\\r`` as well as ``\\n`` — excluding only ``\\n`` would
+        leave the hole open on every real PR."""
+        rc = _run_ci(
+            monkeypatch,
+            body="[qa-not-needed: pure rename\r\nof a private helper]\r\n",
+        )
+        assert rc == 2
+        assert (
+            "closing `]` does not arrive on the same"
+            in capsys.readouterr().err
+        )
+
+    def test_one_line_token_in_a_crlf_body_still_bypasses(self, monkeypatch):
+        """The false-positive half: a CRLF body is the ordinary case, not
+        the attack. An honest token inside one must keep working."""
+        rc = _run_ci(
+            monkeypatch,
+            body=(
+                "## What\r\nPrivate helper rename.\r\n"
+                "[qa-not-needed: pure rename, no user-visible flow]\r\n"
+            ),
+        )
+        assert rc == 0
+
+    def test_empty_token_with_its_bracket_on_the_next_line_reports_unclosed(
+        self, monkeypatch, capsys
+    ):
+        """The #857 empty-reason twin carried the same ``\\s*`` hole: it
+        read ``[qa-not-needed:\\n]`` as an empty reason on one line. The
+        token is unclosed, and the message has to say that instead."""
+        rc = _run_ci(monkeypatch, body="[qa-not-needed:\n]\n")
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "closing `]` does not arrive on the same" in err
+        assert "its reason is empty" not in err

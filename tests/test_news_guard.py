@@ -19,6 +19,9 @@ as broken as one that refuses nothing:
   bypass, punctuation and all.
 * :class:`TestFragment` — the no-token path: a real fragment allows, no
   fragment blocks, and near-miss filenames don't count.
+* :class:`TestBypassMustStayOnOneLine` — #872, the same hole from the other
+  side: the reason class matched newlines, so an unclosed opener was closed
+  by any later ``]`` and swallowed the paragraphs in between.
 """
 from __future__ import annotations
 
@@ -268,3 +271,86 @@ class TestFragment:
         err = capsys.readouterr().err
         for suffix in ("feature", "bugfix", "doc", "removal", "misc"):
             assert f".{suffix}" in err
+
+
+# ── the reason may not span lines (#872) ──────────────────────────────────
+
+
+# The two shapes a real PR body carries a stray `]` in, below an opener its
+# author never closed: a markdown link and a task-list checkbox. Both used
+# to close the token.
+_LATER_BRACKET_BODIES = {
+    "markdown-link": (
+        "## What\n"
+        "[skip-news: CI-only change\n"
+        "\n"
+        "See [the issue](https://example.invalid/872) for the trap.\n"
+    ),
+    "checklist-box": (
+        "[skip-news: tooling only\n"
+        "\n"
+        "## Checklist\n"
+        "- [ ] tests\n"
+    ),
+}
+
+
+class TestBypassMustStayOnOneLine:
+    """#872: the reason class was ``[^\\]]*``, which matches newlines. An
+    opener left unclosed on its line was therefore closed by the next ``]``
+    anywhere below, and every paragraph in between became "the reason" — a
+    bypass nobody wrote, whose reviewer-visible reason is garbage.
+
+    Both halves again: the swallowing shapes must block, and an honest
+    one-line token in a CRLF body — the normal case, since that is how
+    GitHub delivers ``PR_BODY`` — must still bypass.
+    """
+
+    @pytest.mark.parametrize("shape", sorted(_LATER_BRACKET_BODIES))
+    def test_a_later_bracket_does_not_close_the_token(
+        self, monkeypatch, capsys, shape
+    ):
+        rc = _run(monkeypatch, body=_LATER_BRACKET_BODIES[shape])
+        assert rc != 0
+        err = capsys.readouterr().err
+        assert "closing `]` does not arrive on the same" in err
+
+    def test_reason_split_across_a_crlf_does_not_bypass(
+        self, monkeypatch, capsys
+    ):
+        """GitHub delivers PR bodies CRLF-terminated, so the class has to
+        exclude ``\\r`` as well as ``\\n`` — excluding only ``\\n`` would
+        leave the hole open on every real PR."""
+        rc = _run(
+            monkeypatch,
+            body="[skip-news: CI-only\r\nchange, no user diff]\r\n",
+        )
+        assert rc != 0
+        assert (
+            "closing `]` does not arrive on the same"
+            in capsys.readouterr().err
+        )
+
+    def test_one_line_token_in_a_crlf_body_still_bypasses(self, monkeypatch):
+        """The false-positive half: a CRLF body is the ordinary case, not
+        the attack. An honest token inside one must keep working."""
+        rc = _run(
+            monkeypatch,
+            body=(
+                "## What\r\nWorkflow-only change.\r\n"
+                "[skip-news: CI wiring only, no user-visible diff]\r\n"
+            ),
+        )
+        assert rc == 0
+
+    def test_empty_token_with_its_bracket_on_the_next_line_reports_unclosed(
+        self, monkeypatch, capsys
+    ):
+        """The #858 empty-reason twin carried the same ``\\s*`` hole: it
+        read ``[skip-news:\\n]`` as an empty reason on one line. The token
+        is unclosed, and the message has to say that instead."""
+        rc = _run(monkeypatch, body="[skip-news:\n]\n")
+        assert rc != 0
+        err = capsys.readouterr().err
+        assert "closing `]` does not arrive on the same" in err
+        assert "its reason is empty" not in err
