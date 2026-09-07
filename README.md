@@ -11,17 +11,17 @@ Produces `migration_manifest.sqlite` recording each file's dedup classification 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. SCAN (photo-manager)                                                    │
-│     GUI: File > Scan Sources…                                               │
+│     File > Scan Sources…                                                    │
 │     Walks any number of source folders, hashes every file,                  │
 │     writes  migration_manifest.sqlite                                       │
 │                                                                             │
 │  2. REVIEW (photo-manager)                                                  │
-│     GUI: File > Open Manifest…                                              │
+│     File > Open Manifest…                                                   │
 │     Inspect every group — col 0 (Similarity) shows match strength           │
 │     Set decisions per file or in bulk:                                      │
 │       Right-click a file → Set Action → delete / keep                       │
-│       Action > Set Action by Field/Regex… → regex batch across any column   │
-│     File > Save Manifest Decisions… persists decisions to the manifest      │
+│       Action > Set Action by Field… → pattern batch across any column       │
+│     Every decision is persisted to the manifest as you make it              │
 │                                                                             │
 │  3. EXECUTE (photo-manager)                                                 │
 │     Action > Execute Action…  opens a full tree review (same columns as     │
@@ -53,7 +53,7 @@ ffmpeg is **not** a prerequisite: the bundle ships its own `ffmpeg.exe` / `ffpro
 
 > **SmartScreen note:** the binary is unsigned, so on first launch Windows shows *"Windows protected your PC"*. Click **More info → Run anyway**. The warning is expected and will disappear once we publish a signed release.
 
-Settings (`settings.json`, `window_state.ini`) are written next to `photo-manager.exe`, so the extracted folder is portable — copy it to a USB stick and your config travels with it.
+`settings.json` is written next to `photo-manager.exe`, so the extracted folder is portable — copy it to a USB stick and your config travels with it.
 
 ---
 
@@ -61,8 +61,14 @@ Settings (`settings.json`, `window_state.ini`) are written next to `photo-manage
 
 ### Prerequisites
 
-- Windows 10/11, Python 3.11+
+- Windows 10/11, Python 3.11+, Node 20+ (to build the frontend bundle)
 - [exiftool](https://exiftool.org/) on `PATH` (required for EXIF date extraction)
+- The **Microsoft Edge WebView2 Runtime** — the app window renders through
+  it. Most Windows 10/11 machines already have it (it ships with Windows
+  Update / Edge); `launcher.py` checks for it up front and raises a clear
+  error naming the install URL rather than opening a blank window. If it's
+  missing, install the Evergreen runtime from
+  [Microsoft's WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
 - Dependencies installed in a venv (see Install below)
 
 ### Install
@@ -75,17 +81,32 @@ python -m venv .venv
 pip install -r requirements.txt
 pip install -r dev-requirements.txt        # pytest, black, ruff, pylint
 copy settings.json.example settings.json   # local config — never committed
+
+cd frontend
+npm ci
+npm run build          # writes frontend/dist — the app serves this bundle
+cd ..
 ```
 
 `settings.json` is gitignored. It may contain personal folder paths; edit it to add your sources after copying.
 
-### Launch (GUI)
+`frontend/dist` is gitignored too, so `npm run build` is a required step on
+a fresh checkout and after any change under `frontend/src/`.
+
+### Launch
 
 ```powershell
-run.bat          # activates .venv and starts main.py
+run.bat          # activates .venv and starts launcher.py
 # or
-.venv\Scripts\python main.py
+.venv\Scripts\python launcher.py
 ```
+
+`launcher.py` starts the FastAPI app under uvicorn on loopback
+(`127.0.0.1:8765` by default — override with `PHOTO_MANAGER_WEB_PORT`),
+waits for it to report healthy, then opens a native
+[pywebview](https://pywebview.flowrl.com/) window pointed at it. The result
+is a desktop window, not a browser tab, but the UI inside it is the React
+app served by the same process.
 
 ### Run tests
 
@@ -115,11 +136,19 @@ Two more test layers exist locally:
 # fixtures. Run when present:
 .venv\Scripts\python -m pytest -m integration
 
-# Layer 3 — full GUI exercise via /qa-explore. Drives main.py through
-# scripted scenarios to catch UI / state-transition / copy regressions
-# AND validates real third-party boundaries (exiftool, send2trash) on
-# happy paths.
-.venv\Scripts\python -m qa.scenarios._batch
+# Layer 3 — full app exercise via /qa-explore. Drives the running web
+# shell with Playwright through scripted scenarios to catch UI /
+# state-transition / copy regressions AND validates real third-party
+# boundaries (exiftool, send2trash) on happy paths. Needs the app
+# running; see qa/web/INSTALL.md for the one-time browser install.
+.venv\Scripts\python -m qa.web._batch --base-url http://127.0.0.1:8765
+```
+
+The frontend has its own unit suite (vitest / jsdom), run from
+`frontend/`:
+
+```powershell
+npm test
 ```
 
 **The full strategy — what each layer catches, what it misses, and the
@@ -129,9 +158,9 @@ Read that before adding tests for a new feature. Short version:
 | Layer | Catches | Misses |
 |---|---|---|
 | 1 — Unit + mocks (CI) | Refactoring bugs, parser logic | Real third-party behavior |
-| 2 — Integration (local, on-demand) | Spot-tests for specific boundary bugs already hit (exiftool / send2trash / rawpy edge cases) | GUI behavior; anything you haven't written a spot-test for |
-| 3 — `/qa-explore` (local) | Label drift, dialog regressions, state-transition bugs, boundary happy paths | Anything off the scripted path |
-| Probes — `tests/test_ui_probes.py` + sNN soft-probe blocks (CI) + `qa/probes/` (local) | Cross-cutting invariants: dropdown drift, missing kwargs, label uniqueness, translation passthroughs, menu-gating drift, bridge-pattern holes ([#243](https://github.com/jackal998/photo-manager/issues/243)) | Anything not framed as a structural invariant |
+| 2 — Integration (local, on-demand) | Spot-tests for specific boundary bugs already hit (exiftool / send2trash / rawpy edge cases) | UI behaviour; anything you haven't written a spot-test for |
+| 3 — `/qa-explore` (local + CI) | Label drift, dialog regressions, state-transition bugs, boundary happy paths | Anything off the scripted path |
+| Probes — `tests/test_web_dom_probes.py` + sNN soft-probe blocks | Cross-cutting invariants: testid drift, label uniqueness, translation passthroughs, menu-gating drift ([#243](https://github.com/jackal998/photo-manager/issues/243)) | Anything not framed as a structural invariant |
 
 **No test padding.** A test that exists only to clear a coverage gate
 is metric gaming, not engineering — see the testing rules in
@@ -139,9 +168,10 @@ is metric gaming, not engineering — see the testing rules in
 
 ---
 
-## Usage — GUI
+## Usage
 
-The PySide6 desktop app is the primary interface. Launch it with `run.bat`.
+Launch with `run.bat`; the window that opens is the app. Everything below
+happens inside it.
 
 ### Step 1 — Scan sources
 
@@ -212,18 +242,23 @@ The tree shows all files loaded from the manifest.
   Right-clicking a row in the main tree (single or multi-select) and
   in the Execute Action dialog also opens the same dialog.
 
-**Navigating:** double-click a file row to open it in the OS default
-viewer (#143); double-click a group header to toggle expand / collapse.
+**Navigating:** click a group header to toggle expand / collapse;
+double-click the preview tile to open the full-resolution viewer
+(Escape closes it). Arrow keys move a roving cursor through the rows,
+and `d` / `k` set delete / keep on the selection (#709).
 
-If you close the app with unsaved decisions a prompt appears with
-**Save & leave** / **Leave** / **Back**, so you don't lose work
-accidentally.
+If you close the window while a scan is running you get a Leave / Stay
+prompt; leaving cancels the scan rather than orphaning the worker (#703).
+Decisions themselves are written to SQLite as you make them, so there is
+no separate unsaved-work prompt.
 
-### Step 3 — Save decisions
+### Step 3 — Decisions persist as you make them
 
-**File › Save Manifest Decisions…** opens a file picker. Choose the same
-path to save in-place or a new path to export a copy. Decisions are written
-to the chosen file, and subsequent saves default to that location.
+Every decision is written straight to the manifest via
+`PATCH /api/decision`, so there is no separate save step and nothing to
+lose by closing the window. (`POST /api/save` — exporting a snapshot to a
+second file — is plumbed on the backend but not surfaced in the menu; see
+[`docs/features.md`](docs/features.md).)
 
 ### Step 4 — Execute actions
 
@@ -254,49 +289,20 @@ canonical catalogue.
 
 ---
 
-## Web UI
+## Architecture
 
-The app also runs as a **localhost web app** — a FastAPI + SSE backend
-serving a React + TanStack frontend, packaged behind a native
-[pywebview](https://pywebview.flowrl.com/) shell so it still opens as
-its own desktop window rather than a browser tab. Both UIs drive the
-same headless `core/` + `scanner/` + `infrastructure/` engine; the
-PySide6 desktop app above remains the default and primary interface.
+The app is a **localhost web app** wearing a desktop window: a FastAPI +
+SSE backend serving a React + TanStack frontend, opened through a native
+[pywebview](https://pywebview.flowrl.com/) shell rather than a browser
+tab. The UI drives the same headless `core/` + `scanner/` +
+`infrastructure/` engine the CLI scanner uses — none of those packages
+imports anything UI-specific, which is what `tests/test_web_qt_free.py`
+pins.
 
-**Status:** in development on the `docs/web-port-feasibility`
-integration branch — not yet merged to `master`, and the Qt app stays
-the default launch path (`run.bat` / `main.py`) until the port is
-complete. See [`docs/design/web-port-tech-design.md`](docs/design/web-port-tech-design.md)
-for the architecture and [`docs/audits/web-parity-matrix-2026-07.md`](docs/audits/web-parity-matrix-2026-07.md)
-for the current Qt-vs-web parity snapshot.
-
-```powershell
-cd frontend
-npm install
-npm run build           # builds frontend/dist — the web shell serves this bundle
-cd ..
-$env:PHOTO_MANAGER_WEB = "1"
-.venv\Scripts\python launcher.py
-```
-
-`launcher.py` (repo root) dispatches on the `PHOTO_MANAGER_WEB` env
-var: unset/falsey boots the classic Qt app unchanged; a truthy value
-starts the FastAPI app under uvicorn on loopback (`127.0.0.1:8765` by
-default — override with `PHOTO_MANAGER_WEB_PORT`), waits for it to
-report healthy, then opens a native window pointed at it via
-pywebview.
-
-**Windows dependency:** the pywebview window renders through the
-**Microsoft Edge WebView2 Runtime**. `launcher.py` checks for it up
-front and raises a clear error naming the install URL rather than
-opening a blank window if it's missing — most Windows 10/11 machines
-already have it (it ships with Windows Update / Edge); if not, install
-the Evergreen runtime from
-[Microsoft's WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
-
-For the full web feature surface — every dialog, endpoint, and
-Qt/web behavioural divergence — see the `### Web —` entries throughout
-[`docs/features.md`](docs/features.md).
+See [`docs/design/web-port-tech-design.md`](docs/design/web-port-tech-design.md)
+for the architecture, and the `### Web —` entries throughout
+[`docs/features.md`](docs/features.md) for the full feature surface —
+every dialog, endpoint, and the divergences recorded during the port.
 
 ---
 
@@ -459,8 +465,8 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
 calls per row. Old manifests without these columns auto-migrate and fall back to the
 original filesystem reads transparently (re-scan once to get the speed benefit).
 
-Manifest loading runs in a **background `QThread`** (`ManifestLoadWorker`) so the UI
-stays responsive while the manifest opens.
+Manifest loading runs on the FastAPI threadpool (a plain `def` route), so the
+event loop — and therefore the UI — stays responsive while the manifest opens.
 
 ---
 
@@ -468,11 +474,11 @@ stays responsive while the manifest opens.
 
 ```
 photo-manager/
-├── run.bat                  # Launch GUI (activates .venv automatically)
-├── main.py                  # PySide6 GUI entry point
+├── run.bat                  # Launch the app (activates .venv automatically)
+├── launcher.py              # Entry point — uvicorn + the pywebview window
 ├── run_all_linters.py       # Runs Black, isort, Ruff, Pylint in sequence
 │
-├── scanner/                 # Scanner engine (no Qt dependency)
+├── scanner/                 # Scanner engine (headless — no UI dependency)
 │   ├── media.py             # Extensions, magic-byte detection, filename parsing
 │   ├── walker.py            # Directory walk + Live Photo pairing
 │   ├── hasher.py            # SHA-256 + pHash + mean-color; single file read
@@ -482,59 +488,55 @@ photo-manager/
 │   ├── scoring.py           # Keep-worthiness scorer — two-tier composite (#187)
 │   └── manifest.py          # SQLite writer + summary printer
 │
-├── app/                     # PySide6 GUI
-│   ├── views/
-│   │   ├── main_window.py             # Main window — wires all components
-│   │   ├── main_window_helpers.py     # Pure-logic helpers extracted from main_window (layer-1 testable)
-│   │   ├── tree_model_builder.py      # Builds QStandardItemModel from groups
-│   │   ├── constants.py               # Column indices and header labels
-│   │   ├── preview_pane.py            # Image/video preview; grid + single-file modes
-│   │   ├── preview_pane_helpers.py    # Pure-logic helpers extracted from preview_pane (layer-1 testable)
-│   │   ├── image_tasks.py             # Background image loading tasks
-│   │   ├── image_tasks_helpers.py     # Pure-logic token-format helpers extracted from image_tasks (layer-1 testable)
-│   │   ├── media_utils.py             # Media type helpers for the views layer
-│   │   ├── window_state.py            # Shared geometry persistence (MainWindow + dialogs)
-│   │   ├── components/
-│   │   │   ├── menu_controller.py      # Menu creation + "Set Action" submenu
-│   │   │   ├── status_messages.py      # Centralized status-bar copy formatter
-│   │   │   └── tree_controller.py      # Tree view interactions
-│   │   ├── handlers/
-│   │   │   ├── file_operations.py      # set_decision, execute_action
-│   │   │   ├── context_menu.py         # Right-click Set Action routing
-│   │   │   └── dialog_handler.py       # Dialog lifecycle coordination
-│   │   ├── layout/
-│   │   │   └── layout_manager.py       # Window layout initialisation
-│   │   ├── widgets/
-│   │   │   ├── group_media_controller.py  # Grid thumbnail controller per group
-│   │   │   └── video_player.py            # Embedded video player widget
-│   │   ├── dialogs/
-│   │   │   ├── scan_dialog.py              # Scan Sources dialog
-│   │   │   ├── execute_action_dialog.py    # Tree review + execute delete/keep
-│   │   │   ├── locked_rows_confirm_dialog.py  # Unified "Unlock to proceed?" confirm
-│   │   │   └── select_dialog.py            # Set Action by Field/Regex dialog
-│   │   └── workers/
-│   │       ├── scan_worker.py              # Background QThread for scan pipeline
-│   │       └── manifest_load_worker.py     # Background QThread for manifest load
-│   └── viewmodels/
-│       └── main_vm.py       # Groups/marks logic; loads manifest
+├── app/web/                 # FastAPI backend — the only UI server
+│   ├── main.py              # App factory; mounts the SPA + every router
+│   ├── models.py            # Pydantic request / response bodies
+│   ├── registry.py          # In-process scan registry (one live scan at a time)
+│   ├── security.py          # Loopback-only + allowed-roots enforcement
+│   └── routes/
+│       ├── scan.py          # POST /api/scan + the SSE progress stream
+│       ├── review.py        # GET /api/manifest, PATCH /api/decision, /api/lock
+│       ├── action.py        # Field/regex bulk-decide
+│       ├── execute.py       # Execute plan + run, POST /api/save
+│       ├── image.py         # Thumbnails and full-res reads
+│       ├── media.py         # Range-streamed video + on-the-fly transcode
+│       ├── fs.py            # Folder browser for the scan dialog
+│       ├── settings.py      # GET / PATCH the settings.json keys the UI owns
+│       ├── i18n.py          # Serves the shared YAML catalog to the client
+│       └── health.py        # /api/health — what launcher.py polls on boot
 │
-├── core/                    # Models + service interfaces
+├── frontend/                # React + TanStack client (built to frontend/dist)
+│   ├── src/components/      # ResultTree, PreviewPane, MenuBar, dialogs, execute/
+│   ├── src/hooks/           # useScanSSE, useDecisionShortcuts, useOverlayGeometry
+│   ├── src/store/           # useAppStore — selection, decisions, manifest state
+│   ├── src/lib/             # Pure helpers (column widths, regex escape, prune)
+│   ├── src/api/             # Typed client for the routes above
+│   └── src/i18n/            # useT + the locale store
+│
+├── core/                    # Models + UI-agnostic application services
 │   ├── models.py            # PhotoRecord (action, user_decision, group_id), PhotoGroup
+│   ├── app_service/         # scan_runner, review_service, execute_service, dtos…
 │   └── services/
 │       ├── interfaces.py         # DeleteResult, DeletePlan, DeletePlanGroupSummary
+│       ├── auto_select.py        # Auto-select keepers after a scan (#212)
 │       └── sort_service.py       # SortService
 │
 ├── infrastructure/          # I/O: manifest repo, delete service, image cache
 │   ├── manifest_repository.py   # load/save/batch_update_decisions; finalize_outcome()
 │   ├── delete_service.py         # Recycle-bin deletion + audit CSV logging
 │   ├── image_service.py          # Thumbnail loading; disk + memory LRU cache
+│   ├── transcode_service.py      # HEVC → H.264 via the bundled ffmpeg
+│   ├── device_key.py             # Per-device read budgeting for the scan pipeline
 │   ├── i18n.py                   # YAML translator catalog + t() lookup helper
 │   ├── logging.py                # loguru configuration and file rotation
 │   ├── settings.py               # settings.json loader
 │   └── utils.py                  # Shared utilities
 │
 ├── scripts/
-│   └── make_qa_images.py    # Generates controlled near-dup test images for QA
+│   ├── make_qa_images.py    # Generates controlled near-dup test images for QA
+│   └── hooks/               # PreToolUse / CI gate scripts (see Contributing)
+│
+├── qa/web/                  # Layer-3 Playwright drivers + the scenario map
 │
 ├── translations/            # Locale catalogs — single source of truth for UI strings
 │   ├── en.yml
@@ -543,8 +545,8 @@ photo-manager/
 │
 ├── settings.json            # User configuration (source paths, thumbnail cache, …)
 │
-└── tests/                   # Scanner, infra, viewmodel, GUI handlers
-    ├── conftest.py              # Shared fixtures (qapp)
+└── tests/                   # Layer 1 — scanner, infra, core services, web routes
+    ├── conftest.py              # Shared fixtures
     ├── test_dedup.py
     ├── test_hasher.py
     ├── test_walker.py
@@ -556,23 +558,21 @@ photo-manager/
     ├── test_scanner_exif.py
     ├── test_scanner_manifest.py
     ├── test_scanner_media.py    # magic-byte detection, Takeout filename parsing
-    ├── test_main_vm.py
-    ├── test_file_operations.py  # set_decision, execute_action, regex remove-from-list
+    ├── test_scan_pipeline.py    # Reader / compute split + the bounded queue
+    ├── test_scan_runner.py      # core.app_service.scan_runner + its no-UI-import guard
+    ├── test_review_service.py   # set_decisions, lock gating, outcome column
+    ├── test_auto_select.py
     ├── test_sort_service.py
-    ├── test_execute_action_dialog.py
-    ├── test_locked_rows_confirm_dialog.py  # LockedRowsConfirmDialog body / verdicts / button states (#182)
-    ├── test_context_menu.py
-    ├── test_manifest_load_worker.py
-    ├── test_scan_dialog.py      # _auto_label, _SourceListWidget, ScanDialog settings
-    ├── test_scan_worker.py
-    ├── test_select_dialog.py    # initial_field, Set Action signal, settable decision options
-    ├── test_status_messages.py  # Pins status-bar copy so qa-explore regexes stay coherent
-    ├── test_status_bar_baseline.py  # Persistent baseline widget (#138, #140) — survives temp messages + menu hover
-    ├── test_media_utils.py
-    ├── test_tree_model_builder.py
-    ├── test_menu_controller_manifest_actions.py  # Language picker exclusivity, action toggle lifecycle
+    ├── test_scoring.py          # Keep-worthiness scorer (#187)
+    ├── test_transcode_service.py
+    ├── test_launcher.py         # Boot path, health poll, WebView2 preflight
+    ├── test_web_*.py            # One per router, plus CORS / security / SPA mount
+    ├── test_web_qt_free.py      # Pins the headless seam: the web stack imports no UI toolkit
+    ├── test_web_dom_probes.py   # Static probes over the React tree + testid parity
     ├── test_i18n.py             # Catalog parity (en ↔ zh_TW), fallback, format-placeholder safety
-    └── test_uia_label_coupling.py  # Lint: every _uia.py constant exists in app/*.py or translations/*.yml
+    ├── test_docs_guard.py       # The three PR gates under scripts/hooks/
+    ├── test_qa_scenario_guard.py
+    └── test_zombie_check.py
 ```
 
 ---
@@ -598,9 +598,9 @@ photo-manager/
   },
   "ui": {
     "locale": "en",
+    "prune_singletons": "ask",
     "action_dialog": {
-      "recent_patterns": [],
-      "window_modality": "application"
+      "recent_patterns": []
     }
   }
 }
@@ -608,32 +608,26 @@ photo-manager/
 
 Source paths and recursive flags set via **File › Scan Sources…** are saved here
 automatically. List order determines dedup priority (index 0 = highest priority).
-The regex dialog persists a capped list of recently-used regex patterns under
-`ui.action_dialog.recent_patterns`. The optional
-`ui.action_dialog.window_modality` key (default `"application"`) accepts
-`"window"` to switch the Set Action dialog to `Qt.WindowModal` so the user can
-interact with other top-level windows while it's open — note that on Windows
-this does NOT set `WS_DISABLED` on the parent the way `ApplicationModal` does
-(PR #151), so the main window's menu bar stays clickable when this opt-in is
-on. Any unrecognised value falls back to the `ApplicationModal` default.
+The Set Action dialog persists a capped list of recently-used patterns under
+`ui.action_dialog.recent_patterns`. `settings.json` is read and written through
+`GET` / `PATCH /api/settings`, which only exposes the keys the UI owns — the
+scanner-tuning keys stay file-only.
 
-The main window's position, size, and splitter ratio are persisted across
-launches (#141) in a separate `window_state.ini` (Qt `QSettings` INI format)
-alongside `settings.json`, under the keys `geometry/main_window` and
-`geometry/main_splitter`. Stored under `PHOTO_MANAGER_HOME` when set, so QA
-scenarios and dev runs stay isolated from any installed-app state. The
-splitter also enforces a 200 px floor on each pane and disables collapse
-(#136), preventing the preview pane from being squeezed to invisibility at
-the minimum window width.
+Window geometry, column widths and panel splits are per-viewer state and live
+in the client's `localStorage`, not in `settings.json` (overlay rects under
+`pm.overlay-geometry.*`). `PHOTO_MANAGER_HOME`, when set, relocates
+`settings.json` and the manifest so QA scenarios and dev runs stay isolated
+from any installed-app state.
 
 ---
 
 ## Languages
 
 The UI ships in **English** (`en`) and **Traditional Chinese** (`zh_TW`).
-Switch via **View › Language**; after a Yes/No confirmation the main
-window rebuilds in place — no app restart needed. The chosen locale is
-persisted in `settings.json` under `ui.locale`.
+Switch via **View › Language**; the UI re-renders in place — no app
+restart needed. The chosen locale is persisted in `settings.json` under
+`ui.locale`, and the client fetches the catalog from
+`GET /api/i18n/{locale}`.
 
 To add another language, copy `translations/en.yml` to
 `translations/<code>.yml`, translate the values, and restart once —
@@ -657,8 +651,8 @@ Three `PreToolUse` hooks fire on `Bash` calls to keep PRs honest:
 
 | Hook | Fires on | Behaviour | Bypass |
 |---|---|---|---|
-| `scripts/hooks/qa_scenario_guard.py` | `gh pr create` | **Blocks** (exit 2) if user-facing files under `app/views/{handlers,dialogs,components,workers}/` changed without a `qa/scenarios/sNN_*.py` driver. | `[qa-not-needed: <reason>]` in title/body |
-| `scripts/hooks/docs_guard.py` | `gh pr create` | **Blocks** if doc-relevant code (new modules under `app/`, `infrastructure/`, `scanner/`, `core/services/`; new tests; qa-scenario changes) lands without a corresponding `README.md` / `docs/*.md` / `CLAUDE.md` / `pyproject.toml` edit. | `[docs-not-needed: <reason>]` in title/body |
+| `scripts/hooks/qa_scenario_guard.py` | `gh pr create` | **Blocks** (exit 2) if user-facing files under `frontend/src/` or `app/web/` changed without a `qa/web/scenarios/sNN_*.py` driver. Vitest specs and `frontend/src/test/` are excluded. | `[qa-not-needed: <reason>]` in title/body |
+| `scripts/hooks/docs_guard.py` | `gh pr create` | **Blocks** if doc-relevant code (new modules under `app/web/`, `frontend/src/`, `infrastructure/`, `scanner/`, `core/services/`; new tests; qa-scenario changes) lands without a corresponding `README.md` / `docs/*.md` / `CLAUDE.md` / `pyproject.toml` edit. A behaviour-bearing modify under `app/web/routes/` or `frontend/src/components/` needs `docs/features.md` specifically. | `[docs-not-needed: <reason>]` in title/body |
 | `scripts/hooks/zombie_check.py` | `git commit` | **Warns** (non-blocking) when a QA-relevant commit is about to land and stale Photo Manager / pytest python processes are still running. Lists PIDs + a `taskkill` command. Windows-only. | n/a (warn only) |
 
 Setup: `.claude/settings.json` is gitignored. Copy

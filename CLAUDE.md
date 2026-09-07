@@ -196,7 +196,7 @@ A test catches bugs a real user would hit. If a test exercises code only
 to make the coverage number larger, it is **not a test** — it is metric
 gaming. Examples of metric gaming you must NOT do:
 
-- Monkeypatching `QStandardItem.setData` to raise so the wrapped
+- Monkeypatching a store setter to raise so the wrapped
   `except: pass` branches run.
 - Forcing `_HASH_AVAILABLE = False` to cover the ImportError fallback
   when PIL is in fact a hard dependency.
@@ -215,23 +215,24 @@ not a synthetic test.
 | Layer | What | Where it runs | Catches |
 |---|---|---|---|
 | 1 — Unit + mocks | `tests/test_*.py` | CI (`pytest`) + local | Refactoring bugs, parser logic, dispatch errors |
-| 2 — Integration with real binaries (on-demand — see `docs/testing.md`) | `tests/integration/test_*.py` (`@pytest.mark.integration`, skip-if-missing) | Local only — CI doesn't have `exiftool` / RAW codecs / etc. | Boundary error modes hard to reproduce via the GUI. **No maintained suite** — add a spot-test only when a specific bug surfaces. Layer 3 covers the boundary happy paths. |
-| 3 — End-to-end via `/qa-explore` | `qa/scenarios/sNN_*.py` | Local via `python -m qa.scenarios._batch` | Label drift, state-transition bugs, UX regressions |
+| 2 — Integration with real binaries (on-demand — see `docs/testing.md`) | `tests/integration/test_*.py` (`@pytest.mark.integration`, skip-if-missing) | Local only — CI doesn't have `exiftool` / RAW codecs / etc. | Boundary error modes hard to reproduce through the UI. **No maintained suite** — add a spot-test only when a specific bug surfaces. Layer 3 covers the boundary happy paths. |
+| 3 — End-to-end via `/qa-explore` | `qa/web/scenarios/sNN_*.py` | Local via `python -m qa.web._batch`, and in CI (`web-eval-gates` → `web-scenario-batch`) | Label drift, state-transition bugs, UX regressions |
 
-**Probe layer** ([`tests/test_ui_probes.py`](tests/test_ui_probes.py) +
+**Probe layer** ([`tests/test_web_dom_probes.py`](tests/test_web_dom_probes.py) +
 soft-probe blocks in qa scenarios) complements the three layers above
 by catching cross-cutting structural invariants that scripted tests
-can't: dropdown drift, missing method proxies, label uniqueness,
-translation passthroughs, menu-gating holes, bridge-pattern gaps. Two
-forms: static probes (AST/YAML inspection in
-[`tests/test_ui_probes.py`](tests/test_ui_probes.py), run in CI) and
+can't: testid drift between `frontend/src/testids.ts` and the drivers,
+dropdown option drift, label uniqueness, translation passthroughs,
+menu-gating holes. Two forms: static probes (AST/TS/YAML inspection in
+[`tests/test_web_dom_probes.py`](tests/test_web_dom_probes.py), run in CI) and
 live soft-probes (`print("probe_status: …")` blocks injected into
-`qa/scenarios/sNN_*.py` setups). See
+`qa/web/scenarios/sNN_*.py` setups). See
 [`docs/testing.md`](docs/testing.md) (Probes section) for the full
 inventory and authoring recipe.
 
-CI covers layer 1 only. Knowing which layer you're skimping on matters
-more than the headline coverage number.
+CI covers layers 1 and 3 (the latter on web-touching diffs only); layer 2
+is local, on-demand. Knowing which layer you're skimping on matters more
+than the headline coverage number.
 
 ### When you write code
 
@@ -244,10 +245,10 @@ Three triggers, three test homes:
    `rawpy`, `pillow-heif`, `send2trash`) → unit test for our side; let
    qa-explore (layer 3) cover the boundary happy path. **Add a layer-2
    spot-test only if you can name a specific failure mode that's hard
-   to trigger through the GUI** (e.g. exiftool returning malformed
+   to trigger through the UI** (e.g. exiftool returning malformed
    output on a real corner-case file). Default: no extra test.
 3. **User-facing flow** (button, dialog, menu, status bar) → extend or
-   add a `qa/scenarios/sNN_*.py` driver.
+   add a `qa/web/scenarios/sNN_*.py` driver.
 
 ### Coverage policy
 
@@ -316,7 +317,7 @@ Skills live in two homes, split by trust level:
   `/pr-review` runs the semantic-content review the file-touch
   gates (`docs_guard.py`, `qa_scenario_guard.py`) cannot do — it
   reads the branch diff and compares it against `docs/features.md`
-  entries and `qa/scenarios/sNN_*.py` drivers, reporting drift in
+  entries and `qa/web/scenarios/sNN_*.py` drivers, reporting drift in
   chat. **Acts as a manager** that dispatches to per-gate
   sub-skills (`docs-features-drift`, `qa-scenario-drift`,
   `app-security-patterns`, `sqlite-migration-safety`,
