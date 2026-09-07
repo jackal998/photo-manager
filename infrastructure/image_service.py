@@ -16,6 +16,7 @@ import sys
 from dataclasses import dataclass
 import hashlib
 import io
+import math
 import os
 import threading
 import time
@@ -60,6 +61,11 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 # Recipe version — bump to invalidate the disk cache namespace.
+# Deliberately NOT bumped for #865's _DRAFT_UNDERSHOOT, though it can leave a
+# cached 2048 px preview beside a freshly-decoded 2016 px one: a full rebuild
+# of every preview for a ≤ 2 % long-edge difference inside the declared
+# tolerance costs far more than it buys, and the cache key already carries
+# path/size/mtime, so nothing served is stale — only marginally larger.
 PREVIEW_RECIPE_VERSION = "1"
 
 # Size boundary (longest side) separating "thumb" vs "preview" tier at put time.
@@ -68,6 +74,40 @@ _THUMB_SIDE_THRESHOLD = 256
 # Default sizes for the two cache tiers (overridden at init from RAM probe).
 _THUMB_CACHE_DEFAULT_BYTES = 64 * 1024 * 1024   # 64 MB
 _PREVIEW_CACHE_DEFAULT_BYTES = 192 * 1024 * 1024  # 192 MB
+
+# How far below the viewport cap a draft-mode decode is allowed to land (#865).
+# libjpeg's DCT scaler offers only 1/2, 1/4 and 1/8, so a JPEG whose half-scale
+# falls just under the cap decodes at FULL size for want of a few pixels: this
+# library's 4032×3024 embedded frames sit 1.6 % above the half-scale step for a
+# 2048 cap, so they missed the reduction by 32 px and decoded 12.2 MP to paint
+# a 2048 px preview. Accepting a long edge up to this fraction under the cap
+# takes them at half scale (and the 8064×6048 ProRAW frames at quarter).
+# thumbnail() never upscales, so the output long edge may end up this much
+# under the cap — at the 2048 viewport cap that is ≤ 41 px, below one logical
+# pixel on a 4K display at 175 %.
+_DRAFT_UNDERSHOOT = 0.02
+
+
+def _draft_target(size: tuple[int, int], viewport_cap: int) -> tuple[int, int]:
+    """The box to hand ``Image.draft`` for an image of ``size`` at ``viewport_cap``.
+
+    Deliberately NOT a square ``(cap, cap)``. ``draft`` picks its reduction from
+    ``min(w // req_w, h // req_h)`` — it constrains BOTH axes — while
+    ``thumbnail`` fits only the long edge. A square request therefore makes the
+    SHORT edge binding and declines reductions that are perfectly fine.
+    Measured: a 4032×3024 frame against a square 2008 request stays 4032×3024
+    (3024 // 2008 == 1), while the aspect-matched request takes it to 2016×1512.
+
+    So the box is the cap scaled to this image's own aspect ratio, then shrunk
+    by :data:`_DRAFT_UNDERSHOOT` so a near-miss lands on the next DCT step.
+    """
+    width, height = size
+    longest = max(width, height)
+    if longest <= 0:
+        return (1, 1)
+    factor = viewport_cap * (1.0 - _DRAFT_UNDERSHOOT) / longest
+    return (max(1, math.ceil(width * factor)), max(1, math.ceil(height * factor)))
+
 
 # Full-res OOM semaphore: caps concurrent rawpy.postprocess() calls (each may
 # transiently allocate 300–800 MB for 60 MP ProRAW). Static value 2 gives an
@@ -818,6 +858,12 @@ class ImageService:
         - LibRawNoThumbnailError is raised (no embedded thumb),
         - the thumb is too small,
         - or any other extraction error occurs.
+
+        The size check and the JPEG branch's ``draft()`` both run before any
+        pixel is decoded (#865), so a capped request decodes at the smallest
+        libjpeg reduction that meets the cap and a rejected thumb costs no
+        decode at all. The output long edge is at the cap, or up to
+        :data:`_DRAFT_UNDERSHOOT` under it when that buys a whole DCT step.
         """
         try:
             thumb = raw.extract_thumb()  # type: ignore[attr-defined]
@@ -829,6 +875,43 @@ class ImageService:
                 # gives correct orientation for portrait-grip ProRAW DNGs.
                 assert Image is not None and ImageOps is not None
                 with Image.open(io.BytesIO(bytes(thumb.data))) as pil_im:
+                    # True embedded size, read BEFORE draft() mutates the
+                    # reported size. Image.open is lazy, so this is the JPEG
+                    # header, not a decode (#865; same rule as
+                    # scanner/hasher.py:203).
+                    longest = max(pil_im.size)
+
+                    # Check size before committing. max() is invariant under
+                    # EXIF transposition (Orientation 5-8 swap the axes), so
+                    # this is the same verdict the post-transpose check used
+                    # to give — but a thumb that is about to be discarded no
+                    # longer pays for a full decode and a transposed copy
+                    # first.
+                    if viewport_cap > 0 and longest < viewport_cap:
+                        return None  # too small — fall through to postprocess
+
+                    if viewport_cap > 0:
+                        # #865 — libjpeg DCT shrink-on-load. Decode at the
+                        # largest 1/8, 1/4 or 1/2 reduction that meets the cap
+                        # (within _DRAFT_UNDERSHOOT) instead of at full size:
+                        # on iPhone ProRAW the embedded frame is the whole
+                        # 8064x6048 sensor (#826) against a 2048 cap, so this
+                        # decodes 3 MP rather than 48 MP, and the transpose and
+                        # the LANCZOS shrink below then run on that.
+                        #
+                        # Must precede exif_transpose, which calls load() —
+                        # after it, draft() is a silent no-op. Returns None
+                        # when no reduction applies, and is a no-op on non-JPEG
+                        # data. See _draft_target for why the requested box is
+                        # aspect-matched rather than a square (cap, cap).
+                        #
+                        # Gated on > 0 because draft divides by the requested
+                        # size: draft("RGB", (0, 0)) would raise
+                        # ZeroDivisionError into the blanket except below and
+                        # silently strip the fast path from the full-res
+                        # viewer.
+                        pil_im.draft("RGB", _draft_target(pil_im.size, viewport_cap))
+
                     try:
                         pil_im = ImageOps.exif_transpose(pil_im)
                     except (OSError, ValueError, AttributeError):
@@ -836,11 +919,6 @@ class ImageService:
                         # fall through to the un-rotated image rather than
                         # failing the whole load.
                         pass
-                    # Check size before committing
-                    if viewport_cap > 0:
-                        longest = max(pil_im.width, pil_im.height)
-                        if longest < viewport_cap:
-                            return None  # too small — fall through to postprocess
 
                     if viewport_cap > 0:
                         resampling = getattr(Image, "Resampling", Image)

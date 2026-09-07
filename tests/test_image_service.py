@@ -17,6 +17,7 @@ import hashlib
 import io
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -521,6 +522,285 @@ class TestDngEmbeddedJpegFastPath:
             assert decoded.width > decoded.height, (
                 f"DNG embedded JPEG with Orientation=6 must come out landscape "
                 f"after exif_transpose; got {decoded.width}×{decoded.height}"
+            )
+
+    # ── #865 — draft-mode decode of the embedded JPEG ────────────────────
+
+    @staticmethod
+    @contextmanager
+    def _spy_decode_calls():
+        """Record ``draft`` / ``thumbnail`` / ``exif_transpose`` calls.
+
+        Every wrapper DELEGATES to the real Pillow implementation — none of
+        them is a stub. That matters: what these tests assert is the size
+        libjpeg really decoded at, which a stub would fabricate.
+        """
+        from PIL import ImageOps as _ImageOps
+        from PIL.JpegImagePlugin import JpegImageFile
+
+        real_draft = JpegImageFile.draft
+        real_thumbnail = PILImage.Image.thumbnail
+        real_transpose = _ImageOps.exif_transpose
+        calls = SimpleNamespace(draft=[], thumbnail=[], transpose=[])
+
+        def draft(im, mode, size):
+            before = im.size
+            result = real_draft(im, mode, size)
+            calls.draft.append(
+                {"mode": mode, "size": size, "before": before, "after": im.size}
+            )
+            return result
+
+        def thumbnail(im, size, *args, **kwargs):
+            calls.thumbnail.append({"entry_size": im.size, "size": size})
+            return real_thumbnail(im, size, *args, **kwargs)
+
+        def exif_transpose(im, **kwargs):
+            calls.transpose.append({"entry_size": im.size})
+            return real_transpose(im, **kwargs)
+
+        with (
+            patch.object(JpegImageFile, "draft", draft),
+            patch.object(PILImage.Image, "thumbnail", thumbnail),
+            patch.object(svc_mod.ImageOps, "exif_transpose", exif_transpose),
+        ):
+            yield calls
+
+    def test_draft_reduces_decoded_size_before_thumbnail(self):
+        """A 4096×3072 embedded JPEG at cap 1024 must be DECODED reduced.
+
+        Real failure mode (#865): iPhone ProRAW embeds the full 48 MP sensor
+        frame (8064×6048 — established in #826), while the viewport cap is
+        2048. Without ``draft`` every preview click decodes all 48 MP,
+        ``exif_transpose`` allocates a second 48 MP buffer, and LANCZOS
+        shrinks 48 MP down to ~2 MP. That is the work the #622 box-2
+        measurement is about (4.242× against a 5× bar at `a202282`).
+
+        The assertion is on the size Pillow actually decoded at — not on
+        whether a call happened — because a ``draft`` placed after
+        ``exif_transpose`` would be called and do nothing (``load()`` has
+        already run by then), which is exactly the bug this test must catch.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        raw = self._make_raw_mock_jpeg(4096, 3072)
+        with self._spy_decode_calls() as calls:
+            result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=1024)
+
+        assert calls.draft, "draft() must be called on the embedded JPEG path"
+        assert calls.draft[0]["before"] == (4096, 3072), (
+            "draft must see the full embedded size before reducing it"
+        )
+        assert max(calls.draft[0]["after"]) <= 2048, (
+            f"draft must reduce the decode for cap 1024; libjpeg reported "
+            f"{calls.draft[0]['after']} after the call"
+        )
+        assert calls.thumbnail, "thumbnail() must still run"
+        assert max(calls.thumbnail[0]["entry_size"]) <= 2048, (
+            "the image handed to thumbnail must be the drafted one, not the "
+            f"full 4096×3072; got {calls.thumbnail[0]['entry_size']}"
+        )
+        assert result is not None
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.size == (1024, 768), (
+                f"output geometry must be unchanged by the draft; got "
+                f"{decoded.size}"
+            )
+
+    def test_draft_undershoot_takes_a_near_miss_to_the_next_step(self):
+        """4032×3072-class frames must draft, not miss the step by 1.6 %.
+
+        Real failure mode (#865 round 2, measured on the J: NAS library): the
+        embedded frame of most files here is 4032×3024 against a 2048 cap.
+        Half-scale is 2016 — 1.6 % under the cap — so an exact-cap draft
+        request declines and the file decodes all 12.2 MP to paint 2048 px.
+        66 of the 89 measured DNGs were in exactly that position, which is why
+        the box-2 median did not move in the first re-measurement.
+
+        ``_DRAFT_UNDERSHOOT`` buys that step. The cost is the output long edge
+        landing at 2016 instead of 2048 — asserted here, because it is a real
+        (if sub-pixel-at-175 %) change and must not drift silently.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        raw = self._make_raw_mock_jpeg(4032, 3024)
+        with self._spy_decode_calls() as calls:
+            result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
+
+        assert calls.draft, "a 4032×3024 frame at cap 2048 must draft"
+        assert max(calls.draft[0]["after"]) <= 2016, (
+            f"the near-miss must be taken to half scale; libjpeg reported "
+            f"{calls.draft[0]['after']}"
+        )
+        assert calls.transpose and max(calls.transpose[0]["entry_size"]) <= 2016, (
+            "exif_transpose must run on the reduced image, not the 4032 one; "
+            f"entered at {calls.transpose[0]['entry_size'] if calls.transpose else None}"
+        )
+        assert calls.thumbnail and max(calls.thumbnail[0]["entry_size"]) <= 2016
+        assert result is not None
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.size == (2016, 1512), (
+                f"expected the half-scale output, got {decoded.size}"
+            )
+            assert max(decoded.size) <= 2048, "must never exceed the cap"
+            assert max(decoded.size) >= 2048 * (1 - svc_mod._DRAFT_UNDERSHOOT), (
+                "must never fall further under the cap than the declared "
+                f"tolerance; got {decoded.size}"
+            )
+
+    def test_draft_declines_when_the_step_would_undershoot_too_far(self):
+        """The other side of the tolerance: a 4.8 % undershoot is refused.
+
+        3900×2925 at cap 2048 — half scale is 1950, which is 4.8 % under the
+        cap, well past ``_DRAFT_UNDERSHOOT``. draft must decline, the image
+        must decode at full size, and the output must land exactly on the cap.
+
+        Real failure mode: a tolerance implemented as "always take the next
+        step down" would silently ship previews at 1950 px, and every image
+        whose half-scale is far below the cap would lose resolution for a
+        speed-up nobody asked for. This is the false-positive half of the
+        gate — without it the constant could be anything and no test would
+        notice.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        raw = self._make_raw_mock_jpeg(3900, 2925)
+        with self._spy_decode_calls() as calls:
+            result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=2048)
+
+        assert calls.draft, "draft is still called — it is what declines"
+        assert calls.draft[0]["after"] == (3900, 2925), (
+            f"a 4.8 % undershoot must be refused; draft reduced to "
+            f"{calls.draft[0]['after']}"
+        )
+        assert calls.thumbnail and calls.thumbnail[0]["entry_size"] == (3900, 2925)
+        assert result is not None
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.size == (2048, 1536), (
+                f"a declined draft must still land exactly on the cap; got "
+                f"{decoded.size}"
+            )
+
+    def test_draft_preserves_exif_orientation(self):
+        """Orientation=6 must still be applied after the draft.
+
+        Real failure mode: ``draft`` has to run BEFORE ``exif_transpose``
+        (``exif_transpose`` calls ``load()``, after which draft is a no-op),
+        so the reordering this change makes puts the rotation downstream of a
+        reduced decode. If the drafted image lost its EXIF block, portrait-grip
+        ProRAW DNGs would render 90° rotated again — the PR #624 bug that
+        ``exif_transpose`` was added to fix, reintroduced on exactly the files
+        #865 speeds up.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        # 3072×4096 pixels + Orientation=6 → must come out landscape.
+        raw = self._make_raw_mock_jpeg_with_orientation(
+            pixel_width=3072, pixel_height=4096, orientation=6
+        )
+        with self._spy_decode_calls() as calls:
+            result = svc._try_rawpy_embedded_thumb(raw, viewport_cap=1024)
+
+        assert calls.draft, "the rotated sample must go through draft too"
+        assert max(calls.draft[0]["after"]) <= 2048
+        assert result is not None
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.width > decoded.height, (
+                f"Orientation=6 must still be applied after the draft; got "
+                f"{decoded.width}×{decoded.height}"
+            )
+            assert max(decoded.size) <= 1024
+
+    def test_too_small_thumb_falls_through_before_decoding(self):
+        """The too-small fall-through is judged from the PRE-draft size, and
+        now costs no decode at all.
+
+        Two real failure modes in one gate, one per side of its value domain:
+
+        * too small (1000 px at cap 2048) — must still return ``None`` so the
+          caller falls through to ``postprocess``. Judging this AFTER the
+          draft would be judging a reduced number.
+        * large enough (3000 px at cap 2048) — must still be accepted. This is
+          the half the issue calls out: a 3000 px thumb that draft would decode
+          at 1500 px must not be mistaken for a sub-cap thumb, which would push
+          every such DNG onto the slow full raw decode — the exact opposite of
+          what #865 is for.
+
+        The ``transpose == []`` assertion is the second improvement: today the
+        size check sits after ``exif_transpose``, so a thumb that is about to
+        be discarded is fully decoded and copied first. Moving the check above
+        the decode makes the fall-through free.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        with self._spy_decode_calls() as small:
+            too_small = svc._try_rawpy_embedded_thumb(
+                self._make_raw_mock_jpeg(1000, 750), viewport_cap=2048
+            )
+        assert too_small is None, (
+            "a 1000 px thumb at cap 2048 must still fall through to postprocess"
+        )
+        assert small.transpose == [], (
+            "the discarded thumb must not be decoded/transposed first; "
+            f"exif_transpose was entered with {small.transpose}"
+        )
+
+        with self._spy_decode_calls() as big:
+            large_enough = svc._try_rawpy_embedded_thumb(
+                self._make_raw_mock_jpeg(3000, 2250), viewport_cap=2048
+            )
+        assert large_enough is not None, (
+            "a 3000 px thumb at cap 2048 is large enough and must be used"
+        )
+        assert big.transpose, "the accepted thumb still goes through exif_transpose"
+
+    def test_draft_is_gated_on_the_viewport_cap(self):
+        """draft runs for a capped request and never for a full-res one.
+
+        Real failure mode: ``draft`` divides by the requested size
+        (``scale = min(w // size[0], h // size[1])``), so an ungated
+        ``draft("RGB", (0, 0))`` raises ``ZeroDivisionError`` into this
+        method's blanket ``except``, which returns ``None``. The full-res
+        viewer would silently lose the embedded fast path and pay a full
+        ``raw.postprocess`` on every open — a regression with no error
+        message anywhere.
+
+        Both halves of the gate are asserted: the cap-0 side must not draft
+        AND must keep every pixel, the capped side must draft.
+        """
+        svc = ImageService.__new__(ImageService)
+        svc._rawpy_available = True
+        svc._pillow_available = True
+
+        with self._spy_decode_calls() as capped:
+            svc._try_rawpy_embedded_thumb(
+                self._make_raw_mock_jpeg(4096, 3072), viewport_cap=1024
+            )
+        assert capped.draft, "a capped request must draft"
+
+        with self._spy_decode_calls() as full_res:
+            result = svc._try_rawpy_embedded_thumb(
+                self._make_raw_mock_jpeg(4096, 3072), viewport_cap=0
+            )
+        assert full_res.draft == [], (
+            f"viewport_cap=0 (full-res) must never draft; got {full_res.draft}"
+        )
+        assert result is not None, (
+            "the full-res request must still return the embedded JPEG"
+        )
+        with PILImage.open(io.BytesIO(result)) as decoded:
+            assert decoded.size == (4096, 3072), (
+                f"a full-res request must keep every pixel; got {decoded.size}"
             )
 
 
