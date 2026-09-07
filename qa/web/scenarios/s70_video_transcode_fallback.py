@@ -17,7 +17,7 @@ the encode quality.  The real H.264 proof lives in the integration test.
 
 Fixture: qa/sandbox/video-playback/clip.mp4 (same as s69).
 Divergence from Qt: web uses page.evaluate to dispatch synthetic events; Qt
-scenario uses UIA to observe the player state.
+scenario used the desktop tree to observe the player state.
 """
 from __future__ import annotations
 

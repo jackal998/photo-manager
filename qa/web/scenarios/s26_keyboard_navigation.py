@@ -1,6 +1,6 @@
 """Web scenario s26 — keyboard navigation over the main result tree.
 
-Ported from qa/scenarios/s26_keyboard_navigation.py (Qt UIA), HONEST PARTIAL.
+Ported from the desktop s26_keyboard_navigation driver — HONEST PARTIAL.
 
 Qt s26 drives the WHOLE main flow by keyboard to catch focus-management bugs:
   0. 'd' / 'k' decision shortcuts (#615) — single + multi selection.
@@ -14,7 +14,7 @@ Web slice — the DECISION shortcuts (step 0) and the ROVING CURSOR (steps 1/3):
   Pressing bare 'd' on the current main-tree selection sets user_decision=
   'delete'; bare 'k' clears it back to '' (canonical no-decision / keep, #584).
   This is the cross-OS user-facing flow; it ports the Qt DecisionTreeView.
-  keyPressEvent (app/views/components/decision_tree_view.py) onto a document-
+  keyPressEvent (the desktop result tree's key-press handler) onto a document-
   level shortcut hook (frontend/src/hooks/useDecisionShortcuts.ts) that drives
   the SAME store.setDecisions the multi-select context menu uses — true parity.
 
@@ -46,9 +46,9 @@ Web slice — the DECISION shortcuts (step 0) and the ROVING CURSOR (steps 1/3):
 
 Honest omits (no web equivalent / separate item — see the hook header):
   - Shift+arrow range extension, Home/End/PageUp/PageDown, and Left/Right
-    expand-collapse on a group header: Qt inherits those from QTreeView; the
+    expand-collapse on a group header: Qt inherits those from desktop result tree; the
     web port ships the bare Up/Down cursor (#709) only, as the issue scoped it.
-  - Alt+F menu mnemonic, Tab-cycle, Esc-dismiss — Qt-native UIA menu/dialog
+  - Alt+F menu mnemonic, Tab-cycle, Esc-dismiss — desktop-native menu/dialog
     keyboard traversal with no web analog (Radix owns dialog focus + Esc; the
     browser owns Tab order). The decision shortcuts are the portable surface.
   - 'p' play/pause — a PreviewPane (video) concern, out of the decision scope.
@@ -63,7 +63,7 @@ Qt divergences (assertion mechanics):
   - /api/decision skips the allowed-roots guard (unlike /api/remove), so the
     repo fixture dir is scanned directly with a temp db (s30/s53 precedent).
 
-Desktop source: qa/scenarios/s26_keyboard_navigation.py
+Desktop source: the s26_keyboard_navigation driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs, one group)
 """
 from __future__ import annotations

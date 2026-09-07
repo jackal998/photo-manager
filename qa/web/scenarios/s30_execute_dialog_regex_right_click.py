@@ -1,6 +1,6 @@
 """Web scenario s30 — Set Action by Field via the EXECUTE dialog row menu (#316).
 
-Ported from qa/scenarios/s30_execute_dialog_regex_right_click.py (Qt UIA).
+Ported from the desktop s30_execute_dialog_regex_right_click driver.
 
 Qt intent:
   Right-click a file row inside the Execute Action dialog → 'Set Action by
@@ -29,7 +29,7 @@ Qt divergences:
   D4. The seed decision (q95=delete, to expose a row) is a matching row, so the
       final split is exactly the 3 regex matches — no extra delete leaks in.
 
-Desktop source: qa/scenarios/s30_execute_dialog_regex_right_click.py
+Desktop source: the s30_execute_dialog_regex_right_click driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs)
 """
 from __future__ import annotations

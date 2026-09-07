@@ -1,6 +1,6 @@
 """Web scenario s50 — open the Action dialog (numeric panel) from the menu bar.
 
-Ported from qa/scenarios/s50_select_numeric_panel_from_main_window.py (Qt UIA).
+Ported from the desktop s50_select_numeric_panel_from_main_window driver.
 
 Qt intent:
   - Open the Action ("Set Action by Regex") dialog from the main window's menu

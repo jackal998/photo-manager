@@ -1,6 +1,6 @@
 """Web scenario s58 — Language switch preserves loaded manifest (#428).
 
-Ported from qa/scenarios/s58_language_switch_preserves_manifest.py (Qt UIA).
+Ported from the desktop s58_language_switch_preserves_manifest driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files, 1 group).
@@ -32,8 +32,8 @@ Qt divergences:
   - Qt's confirm prompt ("Switch language?") does not exist in the web UI —
     clicking the toggle IS the confirmation.  See s22 for the full divergence
     note.
-  - Qt reads the tree row order via UIA ``read_tree_row_order`` (which walks
-    the UIA element tree and extracts basenames).  The web equivalent is
+  - Qt reads the tree row order via the desktop tree ``read_tree_row_order`` (which walks
+    the desktop element tree and extracts basenames).  The web equivalent is
     locating all ``[data-testid^="row-file-"]`` elements and reading their
     testid suffixes; the baseline ``count_file_rows`` helper from _invariants
     is used for the count assertion, and a direct locator query captures order.

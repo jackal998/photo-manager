@@ -26,7 +26,7 @@ your three gates, send `SUMMARY: 0 findings — CLEAN` and idle.
 | Gate | Trigger | Rubric |
 |---|---|---|
 | **8 — SQLite migration safety** | diff touches `_MIGRATIONS` list in `infrastructure/manifest_repository.py` OR `CREATE TABLE migration_manifest` in `scanner/manifest.py` | `/sqlite-migration-safety` |
-| **9 — scanner / threading perf** | diff touches `scanner/**.py`, `app/views/workers/**.py`, OR adds a `QThread` / `QRunnable` / `ThreadPoolExecutor` | `/scanner-perf-patterns` composes `/photo-scanner-patterns` (global lens) |
+| **9 — scanner / threading perf** | diff touches `scanner/**.py`, OR adds a `threading.Thread` / `ThreadPoolExecutor` / `run_in_executor` call | `/scanner-perf-patterns` composes `/photo-scanner-patterns` (global lens) |
 | **10 — test padding** | diff adds/modifies `tests/test_*.py` or `tests/integration/test_*.py` | `/test-padding-patterns` composes `/python-testing` (global lens) |
 
 For each gate whose trigger fires on this diff, load its rubric and
@@ -95,7 +95,7 @@ are empty, send `SUMMARY: 0 findings — CLEAN`.
 - ✗ Don't expand into Gates 2, 3, 6, 7, or 11.
 - ✗ Don't flag a `_MIGRATIONS` insertion that lands at the end of the
   list as "mid-list" — append-only is the correct shape.
-- ✗ Don't flag a `QThread` that already has progress signals AND
+- ✗ Don't flag a background thread that already emits progress AND
   cancellation as "missing thread plumbing".
 - ✗ Don't flag a test as "padding" if it asserts a real failure mode
   (a truncated file, a missing optional dep, a malformed timestamp).

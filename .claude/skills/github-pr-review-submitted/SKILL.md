@@ -101,7 +101,7 @@ Write the body to a JSON file:
   "body": "Review summary: 3 ⚠, 0 ✗. Verdict: ship-able after Gate 9 fix.",
   "comments": [
     {
-      "path": "app/views/dialogs/save_changes_dialog.py",
+      "path": "frontend/src/components/dialogs/DeleteConfirmDialog.tsx",
       "line": 142,
       "side": "RIGHT",
       "body": "**suggestion (non-blocking):** Extract `_should_show_save_dialog(...)` ..."

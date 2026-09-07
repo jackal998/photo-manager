@@ -1,13 +1,17 @@
 """PreToolUse hook: enforce documentation coverage for doc-relevant PRs.
 
 When ``gh pr create`` is about to run, scan the branch's diff vs.
-``origin/master`` for "doc-relevant" code changes: new ``.py`` files
-under structured directories (``app/views/``, ``infrastructure/``,
-``scanner/``, ``core/services/``, ``tests/``), new or renamed QA
-scenarios, schema migration list changes, etc. If any are present and
-NO doc file (``README.md`` / ``docs/testing.md`` / ``CLAUDE.md`` /
-``pyproject.toml``'s omit list) was touched, block the PR creation
-with a clear stderr message naming the offenders.
+``origin/master`` for "doc-relevant" code changes: new modules under
+structured directories (``app/web/``, ``frontend/src/``,
+``infrastructure/``, ``scanner/``, ``core/services/``, ``tests/``), new
+or renamed QA scenarios, schema migration list changes, etc. If any are
+present and NO doc file (``README.md`` / ``docs/testing.md`` /
+``CLAUDE.md`` / ``pyproject.toml``'s omit list) was touched, block the PR
+creation with a clear stderr message naming the offenders.
+
+Retargeted by #646 (Phase-4 cutover): the ``app/views/`` patterns named
+the deleted Qt client, so both the project-tree trigger and the
+behavioural trigger below would have matched nothing.
 
 Mirror of ``qa_scenario_guard.py`` (#176), which enforces QA-scenario
 coverage. This guard catches the symmetric class of drift: code lands
@@ -62,8 +66,32 @@ import sys
 # surfaced in the failure message so the developer knows where to look.
 _DOC_RELEVANT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
-        re.compile(r"^app/views/(dialogs|handlers|workers|components|widgets|layout|viewmodels)/[^/]+\.py$"),
-        "README.md project tree (under app/views/...)",
+        re.compile(r"^app/web/(routes/)?[^/]+\.py$"),
+        "README.md project tree (under app/web/...)",
+    ),
+    # The two frontend patterns below deliberately do NOT suggest the
+    # README project tree. That tree lists ``app/web/`` file-by-file (17
+    # files) but ``frontend/src/`` at DIRECTORY granularity (6 lines for
+    # ~90 files), so "update the README tree" would send an author to an
+    # edit with nowhere to land — and a gate whose instruction cannot be
+    # followed is a gate everyone bypasses. Each pattern names the doc
+    # that genuinely carries an entry at that path's granularity.
+    #
+    # Co-located vitest specs (``*.test.ts`` / ``*.test.tsx``) are not new
+    # entries anywhere — they follow their module — so both patterns
+    # exclude them. Nested paths stay in scope (``components/execute/…``,
+    # ``lib/…``) because both target docs do carry nested entries.
+    (
+        re.compile(
+            r"^frontend/src/(components|hooks)/(?!.*\.test\.).*\.(ts|tsx)$"
+        ),
+        "docs/features.md (the `### Web —` entry for this surface)",
+    ),
+    (
+        re.compile(
+            r"^frontend/src/(store|lib|api|i18n)/(?!.*\.test\.).*\.(ts|tsx)$"
+        ),
+        "docs/testing.md per-module table (what covers this module)",
     ),
     (
         re.compile(r"^infrastructure/[^/]+\.py$"),
@@ -82,7 +110,7 @@ _DOC_RELEVANT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "README.md tests list (and docs/testing.md if it shifts a layer)",
     ),
     (
-        re.compile(r"^qa/scenarios/s\d+.*\.py$"),
+        re.compile(r"^qa/web/scenarios/s\d+.*\.py$"),
         "docs/testing.md per-module table (which scenario covers what)",
     ),
 )
@@ -96,17 +124,32 @@ _DOC_FILE_PATTERNS = (
 )
 
 # Behavioural-modify trigger (#262): MODIFIED files under
-# app/views/{dialogs,handlers}/ shift user-visible behaviour by
-# definition — these are the dialog bodies and action handlers a
-# user reaches. When the diff is non-trivial, require
+# app/web/routes/ and frontend/src/components/ shift user-visible
+# behaviour by definition — these are the endpoints the client calls and
+# the components a user reaches. When the diff is non-trivial, require
 # docs/features.md specifically rather than letting any doc touch
 # satisfy the gate. Trivial edits (typo, single-line comment) stay
 # under the diff-size / signature-change threshold and don't fire.
+# (#646 retarget: was app/views/{dialogs,handlers}/, now deleted.)
 _DOC_BEHAVIOURAL_MODIFY_PATTERN = re.compile(
-    r"^app/views/(dialogs|handlers)/[^/]+\.py$"
+    r"^(app/web/routes/[^/]+\.py"
+    r"|frontend/src/components/(?!.*\.test\.).*\.tsx?)$"
 )
 _BEHAVIOURAL_FEATURES_DOC = "docs/features.md"
 _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD = 10
+
+# A declaration line on either side of a ``git diff -U0``. Python ``def``
+# covers app/web/routes/; the TS/TSX forms cover frontend/src/components/,
+# where a behaviour change is a new export / component / handler rather
+# than a ``def`` (#646 retarget — without these the sub-threshold half of
+# the trigger would only ever fire on the Python side).
+_SIGNATURE_LINE_PATTERN = re.compile(
+    r"^[+-]\s*(?:(?:async\s+)?def\s"
+    r"|export\s"
+    r"|(?:async\s+)?function\s"
+    r"|const\s+\w+\s*=)",
+    re.MULTILINE,
+)
 
 # The reason must be non-blank AND must stay on one line: at least one
 # non-space character after the colon (leading blanks are fine), then
@@ -272,8 +315,8 @@ def _behavioural_modify_qualifies(path: str) -> bool:
 
     Qualifies when EITHER the diff is at least
     :data:`_BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD` added + deleted lines
-    OR a function signature line appears in the diff (heuristic: a
-    ``def`` or ``async def`` line on the + / - side of ``git diff
+    OR a declaration line appears in the diff (heuristic:
+    :data:`_SIGNATURE_LINE_PATTERN` on the + / - side of ``git diff
     -U0``). Trivial edits (a single-line copy tweak, a comment fix)
     fall under both bars and don't fire the gate.
 
@@ -303,7 +346,7 @@ def _behavioural_modify_qualifies(path: str) -> bool:
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
-    return bool(re.search(r"^[+-]\s*(async\s+)?def\s", diff_out, re.MULTILINE))
+    return bool(_SIGNATURE_LINE_PATTERN.search(diff_out))
 
 
 def _manifest_repository_touches_schema(path: str) -> bool:
@@ -346,7 +389,8 @@ def _doc_relevant(changed: list[str], added: set[str]) -> list[tuple[str, str]]:
         actually touches schema-defining content (see
         :func:`_manifest_repository_touches_schema`); a pure refactor
         of that file does NOT trigger;
-      * files under ``app/views/{dialogs,handlers}/`` that pass
+      * files under ``app/web/routes/`` and
+        ``frontend/src/components/`` that pass
         :func:`_behavioural_modify_qualifies` — these shift
         user-visible behaviour and require
         :data:`_BEHAVIOURAL_FEATURES_DOC` specifically (enforced in
@@ -362,7 +406,7 @@ def _doc_relevant(changed: list[str], added: set[str]) -> list[tuple[str, str]]:
                 out.append((f, suggested))
                 break
             # MODIFIED — narrow trigger set.
-            if f.startswith("qa/scenarios/s"):
+            if f.startswith("qa/web/scenarios/s"):
                 out.append((f, suggested))
                 break
             if f == "infrastructure/manifest_repository.py":
@@ -429,9 +473,9 @@ def check(pr_text: str) -> tuple[int, str]:
             msg_lines.append(f"    {f}")
         msg_lines += [
             "",
-            "  Behavioural changes under app/views/{dialogs,handlers}/",
-            f"  must update {_BEHAVIOURAL_FEATURES_DOC} so the canonical",
-            "  feature inventory stays in sync.",
+            "  Behavioural changes under app/web/routes/ or",
+            f"  frontend/src/components/ must update {_BEHAVIOURAL_FEATURES_DOC}",
+            "  so the canonical feature inventory stays in sync.",
             "",
             "  To unblock:",
             f"    a) Add or update the corresponding section in {_BEHAVIOURAL_FEATURES_DOC}.",

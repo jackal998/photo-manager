@@ -1,16 +1,16 @@
-"""Canonical, Qt-free registry of qa scenario ids.
+"""Canonical, client-agnostic registry of qa scenario ids.
 
 ``ALL_SCENARIOS`` is the single source of truth for the ordered set of
-scenario ids. It lives here (not in ``qa.scenarios._batch``) because two
-web-side consumers need it WITHOUT pulling in the Qt batch runner's
-``ctypes`` / subprocess machinery:
+scenario ids. It lives in its own module — separate from any batch runner —
+so both consumers can read it without pulling in a runner's ``ctypes`` /
+subprocess machinery:
 
   - ``qa.web._batch`` — the web QA batch runner
   - ``scripts/check_qa_parity.py`` — the parity CI check
 
-``qa.scenarios._batch`` re-imports the list from here so the Qt batch
-runner keeps working unchanged. This module imports nothing beyond the
-standard library, so importing it never transitively loads PySide6.
+The comments on individual ids below record what each scenario covered on the
+desktop client removed in #646; they are the parity record the port was
+written against. This module imports nothing beyond the standard library.
 """
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ ALL_SCENARIOS = [
     # s33 (#166) — Execute Action dialog's all-delete banner renders
     # the flagged group number as a clickable anchor (the click → jump
     # itself is covered by unit tests since QLabel HTML anchors aren't
-    # first-class UIA elements).
+    # first-class desktop-tree elements).
     "s33_execute_dialog_jump_to_all_delete",
     # s34 (#182) — Execute-time lock confirm drives the
     # LockedRowsConfirmDialog when locked rows have decision='delete'
@@ -163,7 +163,7 @@ ALL_SCENARIOS = [
     # s49 (#212) — "Auto select after scan" checkbox end-to-end.
     # Two phases inside one app session against the near-duplicates
     # fixture: phase 1 toggles the new Advanced-Settings checkbox ON
-    # via UIA and asserts the top-scored row carries action="KEEP" in
+    # via the desktop tree and asserts the top-scored row carries action="KEEP" in
     # the manifest; phase 2 toggles it OFF and asserts zero KEEP rows.
     "s49_scan_auto_select",
     # s50 (#237) — Select dialog's numeric-condition panel must surface
@@ -176,7 +176,7 @@ ALL_SCENARIOS = [
     # s51 (#165) — Execute Action dialog now embeds a PreviewPane via a
     # horizontal splitter. Non-destructive: opens the dialog with one
     # row marked 'delete', clicks the row, asserts that the dialog
-    # contains both a tree and a preview pane visible to UIA, then
+    # contains both a tree and a preview pane visible to the desktop tree, then
     # cancels without executing.
     "s51_execute_dialog_preview",
     # s52 (#253) — REVIEW_DUPLICATE rows' Similarity % is recomputed at
@@ -204,7 +204,7 @@ ALL_SCENARIOS = [
     # via the menu after scanning a no-dedup fixture (unique/) produces
     # match_fn=None, which must disable the Simple radio and force-check
     # Regex. Layer-1 pins the constructor branch; this driver pins the
-    # UIA-observable disabled state. Non-destructive.
+    # desktop-tree-observable disabled state. Non-destructive.
     "s55_action_dialog_no_match_fn",
     # s56 (#392) — ActionDialog Apply with field=Score writes decisions
     # via __cmp__: dispatch in file_operations.set_decision_by_regex.
@@ -284,7 +284,7 @@ ALL_SCENARIOS = [
     # click the group row → assert GroupGrid renders N tiles + GroupMediaController
     # present; click a tile → <video> mounts + decodes (readyState>=2, currentTime>0);
     # group-play → >=2 videos advance; master scrub → all tiles seek to ~same time.
-    # Qt counterpart (qa/scenarios/s71_*.py) is a LIGHTWEIGHT group-loads guard only
+    # Qt counterpart (the desktop s71 driver) is a LIGHTWEIGHT group-loads guard only
     # (scan → group in manifest) — QMediaPlayer playback is NOT required in qa-batch.
     "s71_grid_video_tiles",
     # s72 (#744) — "Apply best-copy decisions to this group" context-menu item.
@@ -292,20 +292,20 @@ ALL_SCENARIOS = [
     # was REMOVED in PR #224 (closed #210), superseded on desktop by the Set
     # Action dialog's "top 1 by score within group" numeric condition — see
     # docs/features.md's Score-column entry. There is deliberately NO
-    # qa/scenarios/s72_apply_best_copy.py Qt-side driver (the feature does not
-    # exist in the Qt UI to drive); only the web scenario below is real.
+    # desktop counterpart driver for s72 (the feature does not
+    # exist in the desktop UI to drive); only the web scenario below is real.
     "s72_apply_best_copy",
 ]
 
-# Scenario ids that exist ONLY as qa/web/ Playwright drivers — the Qt UI has
-# no equivalent surface to drive (the entry's comment in ALL_SCENARIOS says
-# why, per id). Kept INSIDE ALL_SCENARIOS so the web batch and the
-# scenario_map.yml parity check keep seeing them; consumers that need the
-# Qt-runnable subset filter with this set:
-#   - qa/scenarios/_batch.py excludes these from default runs and shards
-#     (and refuses an explicit request with a pointer to qa.web._batch);
-#   - tests/test_all_scenarios_registered.py checks these against
-#     qa/web/scenarios/ instead of qa/scenarios/ + SCENARIO_SOURCES.
+# Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
+# desktop client had no equivalent surface to drive (the entry's comment in
+# ALL_SCENARIOS says why, per id). Kept INSIDE ALL_SCENARIOS so the web batch
+# and the scenario_map.yml parity check keep seeing them.
+#
+# Since #646 the web batch is the only consumer, so this set no longer gates
+# any run; it survives as the record of which ids were never desktop-runnable,
+# which is what `tests/test_all_scenarios_registered.py` reads when it checks
+# every id against `qa/web/scenarios/`.
 WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s72_apply_best_copy",
 })

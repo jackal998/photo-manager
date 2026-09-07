@@ -1,6 +1,6 @@
 """Web scenario s21 — List menu → Remove from List (menu-bar path, #678-D).
 
-Ported from qa/scenarios/s21_list_menu_remove.py (Qt UIA).
+Ported from the desktop s21_list_menu_remove driver.
 
 Qt intent:
   Drive the MENU-BAR entry (MainWindow._remove_from_list_toolbar) — distinct
@@ -22,7 +22,7 @@ Web slice (#678-D — the List menu was the last unshipped MenuBar entry):
     absence and a direct sqlite read of the outcome column), files stay on
     disk, unselected rows keep their staged decisions.
 
-Desktop source: qa/scenarios/s21_list_menu_remove.py
+Desktop source: the s21_list_menu_remove driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates (5 files, one near-dup group)
 """
 from __future__ import annotations

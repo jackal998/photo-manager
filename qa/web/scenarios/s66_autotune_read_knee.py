@@ -1,6 +1,6 @@
 """Web scenario s66 — read-knee autotune default-ON / opt-out (#551 Phase 3+4).
 
-Ported from qa/scenarios/s66_autotune_read_knee.py (Qt UIA).
+Ported from the desktop s66_autotune_read_knee driver.
 
 Qt intent:
   - The "Auto-tune reader concurrency" checkbox in ScanDialog's Advanced settings
@@ -23,7 +23,7 @@ Qt divergence:
   D2. No scan-log 'Done.' probe (ScanProgress unmounts on SSE finished); the
       manifest-loaded status bar is the completion signal (run helper).
 
-Desktop source: qa/scenarios/s66_autotune_read_knee.py
+Desktop source: the s66_autotune_read_knee driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs → one near-dup group)
 """
 from __future__ import annotations

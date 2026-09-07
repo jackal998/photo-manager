@@ -1,6 +1,6 @@
 """Web scenario s08 — EXIF edge-case date handling.
 
-Ported from qa/scenarios/s08_exif_edge.py (Qt UIA, print-only probe).
+Ported from the desktop s08_exif_edge driver (print-only probe).
 
 Qt intent:
   - Scan qa/sandbox/exif-edge (6 JPEGs with EXIF date edge cases):
@@ -10,7 +10,7 @@ Qt intent:
       datetime_tag_only.jpg  — DateTime tag only (legacy fallback)
       zero_date_sentinel.jpg — Date field value 0000:00:00 00:00:00
       dash_sentinel.jpg      — Date field value "---" / dash sentinel
-  - After scan, read the Date column for each file row via Qt UIA and PRINT
+  - After scan, read the Date column for each file row via the desktop tree and PRINT
     the per-file date mapping.  No assertions — a pure observation probe.
 
 Web slice (UPGRADED to hard per-file assertions — see "Divergences"):
@@ -46,7 +46,7 @@ Assertions:
      shot_date — the correct EXIF parse of a 0000-date / dash value.
 
 Qt divergences:
-  D1. SOURCE READ: Qt reads the per-file Date column from the UIA result tree.
+  D1. SOURCE READ: Qt reads the per-file Date column from the desktop result tree.
       The web port reads the canonical shot_date field (ISO 8601 / null) from
       GET /api/manifest — full precision, immune to UI truncation.
   D2. PRINT -> ASSERT: Qt only prints the per-file dates.  The web port hard-
@@ -62,7 +62,7 @@ Qt divergences:
       probed (a guaranteed flake on fast CI).  The "undated" behaviour is
       asserted instead via the sentinel files' null shot_date in the manifest.
 
-Desktop source: qa/scenarios/s08_exif_edge.py
+Desktop source: the s08_exif_edge driver (removed with #646)
 Fixture:        qa/sandbox/exif-edge/ (6 JPEGs)
 """
 from __future__ import annotations

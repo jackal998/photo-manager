@@ -1,6 +1,6 @@
 """Web scenario s38 — Invalid scan source path surfaces a named, recoverable error.
 
-Ported from ``qa/scenarios/s38_scan_dialog_invalid_path.py`` (Qt UIA).
+Ported from the desktop s38_scan_dialog_invalid_path driver (desktop).
 
 Qt intent (#144, #216):
   #144 — typing a non-existent source path must NOT silently no-op: the

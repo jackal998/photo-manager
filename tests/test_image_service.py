@@ -1154,8 +1154,8 @@ class TestSourceMtimeCacheFreshness:
 
 
 class TestStatusReporterWiring:
-    """The migration-notice plumbing — ``main.py`` builds ImageService
-    BEFORE MainWindow's status reporter exists, so the legacy-cache wipe
+    """The migration-notice plumbing — the app builds ImageService
+    BEFORE any status reporter exists, so the legacy-cache wipe
     message has to be queueable for later delivery. These tests pin both
     paths (synchronous reporter present + deferred reporter-attached-later).
     """
@@ -1197,7 +1197,7 @@ class TestStatusReporterWiring:
         is queued onto ``_pending_status_msg`` so ``set_status_reporter`` can
         flush it later.
 
-        Failure mode: without the queue, main.py's pre-MainWindow ImageService
+        Failure mode: without the queue, the pre-reporter ImageService
         construction silently drops the notice — the user sees no status
         indication of the one-time rebuild.
         """
@@ -1261,7 +1261,7 @@ class TestStatusReporterWiring:
 
         Failure mode: a fragile status-bar implementation that raises on a
         message containing certain characters could bring down the whole
-        MainWindow construction path. The setter's try/except keeps the
+        app construction path. The setter's try/except keeps the
         startup robust.
         """
         svc = ImageService.__new__(ImageService)

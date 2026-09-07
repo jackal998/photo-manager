@@ -1,6 +1,6 @@
 """Web scenario s35 — Lock / Unlock a row via the right-click context menu.
 
-Ported from qa/scenarios/s35_lock_via_context_menu.py (Qt UIA).
+Ported from the desktop s35_lock_via_context_menu driver.
 
 Qt intent (5-file near-duplicates fixture):
   (a) right-click row 0 (q95) → Lock; only that row is_locked=1.

@@ -1,6 +1,6 @@
 """Web scenario s14 — field+regex bulk-decide via Action menu (primary entry point).
 
-Ported from qa/scenarios/s14_action_by_regex.py (Qt UIA).
+Ported from the desktop s14_action_by_regex driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files in one group).
@@ -29,12 +29,12 @@ Qt divergences:
   - Qt asserts Apply stays enabled on empty/invalid regex (#397 contract);
     the web port skips this — the web backend surfaces bad patterns as a 400
     from POST /api/action/bulk-decide, not a disabled button.
-  - Qt has a Wave-4 Folder-regex preview probe (A2) that reads UIA list items;
+  - Qt has a Wave-4 Folder-regex preview probe (A2) that reads desktop list items;
     no web-UI equivalent — omitted.
   - Qt's probe_apply_always_enabled and probe_folder_regex_preview_shows_paths
-    use UIA affordances (iface_value.SetValue, read_preview_items) that are
+    use desktop-tree affordances (iface_value.SetValue, read_preview_items) that are
     Qt-internal and have no Playwright counterpart — omitted.
-  - Qt's status-bar "Decision set" flash is matched via UIA text probe; the
+  - Qt's status-bar "Decision set" flash is matched via the desktop tree text probe; the
     web port asserts server-side state via GET /api/manifest only.
   - The web port writes the manifest to a temp directory cleaned up in finally;
     no restore step is needed.

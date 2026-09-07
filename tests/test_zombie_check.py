@@ -8,6 +8,9 @@ The hook is intentionally non-blocking (always exits 0). Tests pin:
   - it lists the zombies it found (so the developer sees them)
   - it doesn't emit anything when no zombies are around or the
     staged diff is unrelated
+  - which command lines count as this repo's (``TestCmdlineMatch``),
+    retargeted in #646 from ``main.py`` / ``qa.scenarios`` to
+    ``launcher.py`` / ``qa.web``
 """
 from __future__ import annotations
 
@@ -66,7 +69,7 @@ class TestNonBlocking:
         rc = _run(
             monkeypatch,
             "git commit -m 'qa: extend s32'",
-            staged=["qa/scenarios/s32_lock_confirm_bulk_regex.py"],
+            staged=["qa/web/scenarios/s32_lock_confirm_bulk_regex.py"],
             zombies=[],
         )
         assert rc == 0
@@ -76,10 +79,10 @@ class TestNonBlocking:
         rc = _run(
             monkeypatch,
             "git commit -m 'qa: extend s32'",
-            staged=["qa/scenarios/s32_lock_confirm_bulk_regex.py"],
+            staged=["qa/web/scenarios/s32_lock_confirm_bulk_regex.py"],
             zombies=[
-                (1234, "python.exe -m qa.scenarios.s32_lock_confirm_bulk_regex"),
-                (5678, "python.exe main.py"),
+                (1234, "python.exe -m qa.web.scenarios.s32_lock_confirm_bulk_regex"),
+                (5678, "python.exe launcher.py"),
             ],
         )
         assert rc == 0  # NON-BLOCKING
@@ -97,8 +100,8 @@ class TestTriggerFilter:
         rc = _run(
             monkeypatch,
             "git log --oneline",
-            staged=["qa/scenarios/s32_lock_confirm_bulk_regex.py"],
-            zombies=[(1234, "python.exe -m qa.scenarios.s32")],
+            staged=["qa/web/scenarios/s32_lock_confirm_bulk_regex.py"],
+            zombies=[(1234, "python.exe -m qa.web.scenarios.s32")],
         )
         assert rc == 0
         assert capsys.readouterr().err == ""
@@ -108,8 +111,8 @@ class TestTriggerFilter:
         rc = _run(
             monkeypatch,
             "git commit-tree HEAD^{tree}",
-            staged=["qa/scenarios/s32_lock_confirm_bulk_regex.py"],
-            zombies=[(1234, "python.exe -m qa.scenarios.s32")],
+            staged=["qa/web/scenarios/s32_lock_confirm_bulk_regex.py"],
+            zombies=[(1234, "python.exe -m qa.web.scenarios.s32")],
         )
         assert rc == 0
         assert capsys.readouterr().err == ""
@@ -118,8 +121,8 @@ class TestTriggerFilter:
         rc = _run(
             monkeypatch,
             "git commit -m 'thing' --no-verify",
-            staged=["qa/scenarios/s32_lock_confirm_bulk_regex.py"],
-            zombies=[(1234, "python.exe main.py")],
+            staged=["qa/web/scenarios/s32_lock_confirm_bulk_regex.py"],
+            zombies=[(1234, "python.exe launcher.py")],
         )
         assert rc == 0
         assert "1234" in capsys.readouterr().err
@@ -131,7 +134,7 @@ class TestTriggerFilter:
             monkeypatch,
             "git commit -m 'fix dedup edge case'",
             staged=["scanner/dedup.py", "tests/test_dedup.py"],
-            zombies=[(1234, "python.exe -m qa.scenarios.s32")],
+            zombies=[(1234, "python.exe -m qa.web.scenarios.s32")],
         )
         assert rc == 0
         # Zombies present, but staged files aren't QA-relevant → silent.
@@ -142,20 +145,70 @@ class TestTriggerFilter:
             monkeypatch,
             "git commit -m 'tests: dialog'",
             staged=["tests/test_execute_action_dialog.py"],
-            zombies=[(1234, "python.exe main.py")],
+            zombies=[(1234, "python.exe launcher.py")],
         )
         assert rc == 0
         assert "1234" in capsys.readouterr().err
 
-    def test_fires_on_main_py_change(self, monkeypatch, capsys):
+    def test_fires_on_launcher_py_change(self, monkeypatch, capsys):
         rc = _run(
             monkeypatch,
-            "git commit -m 'main: fix'",
-            staged=["main.py"],
-            zombies=[(1234, "python.exe main.py")],
+            "git commit -m 'launcher: fix'",
+            staged=["launcher.py"],
+            zombies=[(1234, "python.exe launcher.py")],
         )
         assert rc == 0
         assert "1234" in capsys.readouterr().err
+
+    def test_does_not_fire_on_frontend_only_change(self, monkeypatch, capsys):
+        """The false-positive half: a pure frontend edit spawns no python
+        process, so a stale PID list is not this commit's business."""
+        rc = _run(
+            monkeypatch,
+            "git commit -m 'feat: menu copy'",
+            staged=["frontend/src/components/MenuBar.tsx"],
+            zombies=[(1234, "python.exe launcher.py")],
+        )
+        assert rc == 0
+        assert capsys.readouterr().err == ""
+
+
+# ── which command lines count as ours (#646 retarget) ─────────────────────
+
+
+class TestCmdlineMatch:
+    """``_is_photo_manager_cmdline`` decides which stray python process
+    gets reported. Before #646 it matched ``main.py`` / ``qa.scenarios``
+    — both deleted with the Qt client, so every real zombie would have
+    been invisible while the hook still looked alive.
+    """
+
+    def test_matches_launcher_in_this_repo(self):
+        mod = _load_hook()
+        assert mod._is_photo_manager_cmdline(
+            r"python.exe C:\repo\photo-manager\launcher.py"
+        )
+
+    def test_matches_web_qa_batch_module(self):
+        mod = _load_hook()
+        assert mod._is_photo_manager_cmdline(
+            r"python.exe -m qa.web._batch --base-url http://127.0.0.1:8765"
+            r"  (cwd C:\repo\photo-manager)"
+        )
+
+    def test_ignores_the_same_entry_point_in_another_checkout(self):
+        """Both halves must hold — otherwise every unrelated python
+        process on the machine lands in the warning."""
+        mod = _load_hook()
+        assert not mod._is_photo_manager_cmdline(
+            r"python.exe C:\repo\other-project\launcher.py"
+        )
+
+    def test_ignores_an_unrelated_process_in_this_repo(self):
+        mod = _load_hook()
+        assert not mod._is_photo_manager_cmdline(
+            r"python.exe C:\repo\photo-manager\scripts\bench_web_port.py"
+        )
 
 
 # ── stdin / malformed-payload robustness ──────────────────────────────────

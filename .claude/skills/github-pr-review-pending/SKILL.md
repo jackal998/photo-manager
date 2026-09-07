@@ -122,7 +122,7 @@ Write the body to a JSON file — do **not** try to pass it inline as
   "body": "Optional draft summary — visible to humans before submit.",
   "comments": [
     {
-      "path": "app/views/dialogs/save_changes_dialog.py",
+      "path": "frontend/src/components/dialogs/DeleteConfirmDialog.tsx",
       "line": 142,
       "side": "RIGHT",
       "body": "**suggestion (non-blocking):** Extract `_should_show_save_dialog(...)` ..."

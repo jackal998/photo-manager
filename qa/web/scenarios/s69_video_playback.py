@@ -19,7 +19,7 @@ second copy of the fixture.  The manifest db is placed beside the source subdir
 in tmpdir.
 
 Divergences from a Qt equivalent:
-  (i)  Qt drives the single-view player via pywinauto UIA; the web port
+  (i)  Qt drives the single-view player via the desktop tree; the web port
        asserts the DOM <video> element and JS readyState/currentTime directly
        via page.evaluate — the same observables, different access path.
   (ii) Fixture is VP9-in-MP4 (open codec, CI-safe), not MOV/H.264.  Real

@@ -1,6 +1,6 @@
 """Web scenario s04 — Corrupted file: scan tolerates a truncated JPEG.
 
-Ported from qa/scenarios/s04_corrupted.py (Qt UIA).
+Ported from the desktop s04_corrupted driver.
 
 Qt intent:
   - Scan qa/sandbox/corrupted (one truncated JPEG, phash=None).

@@ -27,7 +27,7 @@ threshold key — the path by which a threshold could leak back into the dialog.
 Coverage for the inputs themselves (render/wiring into the POST /api/scan body)
 lives in s17_scan_dialog_widgets.py.
 
-Desktop source: qa/scenarios/s23b_verify_settings.py
+Desktop source: the s23b_verify_settings driver (removed with #646)
 Fixtures:       qa/sandbox/unique, qa/sandbox/near-duplicates (distinct basenames)
 """
 from __future__ import annotations

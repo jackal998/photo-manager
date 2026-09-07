@@ -1,6 +1,6 @@
 """Web scenario s06 — Multi-format scan: HEIC, PNG, GIF, WebP, TIFF.
 
-Ported from qa/scenarios/s06_formats.py (Qt UIA, print-only smoke probe).
+Ported from the desktop s06_formats driver (print-only smoke probe).
 
 Qt intent:
   - Scan qa/sandbox/formats (5 files: fmt_gif.gif, fmt_heic.heic,
@@ -38,7 +38,7 @@ Assertions:
      manifest items' file paths.
 
 Qt divergences:
-  D1. SOURCE READ: Qt walks pywinauto TreeItem rows and parses cell text for
+  D1. SOURCE READ: Qt walked the desktop tree's TreeItem rows and parses cell text for
       extensions.  The web port reads GET /api/manifest JSON file paths — the
       authoritative server serialisation, immune to UI virtualisation.
   D2. PRINT -> ASSERT: Qt prints extensions_in_results with no assertion.  The
@@ -55,7 +55,7 @@ Qt divergences:
       never via perceptual similarity.  That gif/tiff get no pHash is a scanner
       property surfaced by this scenario, not asserted as pass/fail here.
 
-Desktop source: qa/scenarios/s06_formats.py
+Desktop source: the s06_formats driver (removed with #646)
 Fixture:        qa/sandbox/formats/{fmt_gif.gif, fmt_heic.heic, fmt_png.png,
                 fmt_tiff.tif, fmt_webp.webp}
 """

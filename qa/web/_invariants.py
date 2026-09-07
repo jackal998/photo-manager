@@ -2,8 +2,8 @@
 
 All functions in this module accept a Playwright ``Page`` object and
 perform assertions or waits that are reused across multiple scenario
-drivers.  They are analogous to the ``assert_*`` / ``wait_*`` helpers
-in ``qa/scenarios/_uia.py`` for the Qt harness.
+drivers.  They are the web counterpart of the ``assert_*`` / ``wait_*``
+helpers the removed desktop harness carried.
 
 Playwright is imported inside each function (lazy) so this module is
 importable in CI unit-test runs where playwright is not installed.

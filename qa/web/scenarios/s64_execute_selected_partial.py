@@ -1,6 +1,6 @@
 """Web scenario s64 — Execute selected (partial-execute) leaves other rows intact.
 
-Ported from qa/scenarios/s64_execute_selected_partial.py (Qt UIA).
+Ported from the desktop s64_execute_selected_partial driver.
 
 Qt intent:
   - Build TWO independent near-duplicate clusters (6 generated JPEGs, 3 per

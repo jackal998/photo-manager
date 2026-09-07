@@ -1,6 +1,6 @@
 """Web scenario s41 — empty-state action buttons.
 
-Ported from qa/scenarios/s41_empty_state_action_buttons.py (Qt UIA).
+Ported from the desktop s41_empty_state_action_buttons driver.
 
 Qt intent:
   - When no manifest is loaded, the main content area is not a bare

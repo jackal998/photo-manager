@@ -1,6 +1,6 @@
 ---
 name: qa-scenario-drift
-description: Detect whether qa/scenarios/sNN_*.py drivers exercise the new branch added by a PR. Use when /pr-review's Gate 2 (docs-features-drift) has matched features.md entries — this skill reads the scenarios named in each entry's Related field and checks whether the new behaviour is actually covered by the driver.
+description: Detect whether qa/web/scenarios/sNN_*.py drivers exercise the new branch added by a PR. Use when /pr-review's Gate 2 (docs-features-drift) has matched features.md entries — this skill reads the scenarios named in each entry's Related field and checks whether the new behaviour is actually covered by the driver.
 origin: local
 ---
 
@@ -9,7 +9,7 @@ origin: local
 Invoked by `/pr-review` Gate 3 immediately after `docs-features-drift`
 (Gate 2). For each behaviour-bearing source file with a matched
 `docs/features.md` entry, this skill checks whether the
-`qa/scenarios/sNN_*.py` driver named in the entry's `Related:`
+`qa/web/scenarios/sNN_*.py` driver named in the entry's `Related:`
 field actually exercises the new branch the diff added.
 
 The file-touch gate (`scripts/hooks/qa_scenario_guard.py`) catches
@@ -23,7 +23,7 @@ assertions cover branch A while the PR adds branch B.
 
 - Gate 2 (`docs-features-drift`) has matched a features.md entry for
   a behaviour-bearing source file, AND
-- That entry's `Related:` field names a `qa/scenarios/sNN_*.py`
+- That entry's `Related:` field names a `qa/web/scenarios/sNN_*.py`
   driver.
 
 If a behaviour-bearing file has no matching entry, Gate 2 emits ✗
@@ -36,7 +36,7 @@ driver file.
 
 For each matched entry from Gate 2 that names a scenario:
 
-1. Read the named `qa/scenarios/sNN_*.py` driver file.
+1. Read the named `qa/web/scenarios/sNN_*.py` driver file.
 2. Read the diff's hunks for the behaviour-bearing file in full.
 3. Check whether the scenario exercises the NEW branch the diff
    added. Concrete signals:
@@ -53,7 +53,7 @@ Outcomes:
   with the scenario name and a one-line "extend scenario to
   cover X" suggestion.
 - ⚠ no scenario named in the entry AND the behaviour is
-  user-visible — flag suggesting "add or extend qa/scenarios/
+  user-visible — flag suggesting "add or extend qa/web/scenarios/
   driver to cover X". Lower severity than missing features.md
   entry (which is Gate 2's ✗).
 - ✗ the diff changes dialog/overlay open-close-dismiss-focus
@@ -77,7 +77,7 @@ Outcomes:
 
 ## Output format
 
-Emit findings under the `## qa/scenarios/ coverage` section in
+Emit findings under the `## qa/web/scenarios/ coverage` section in
 `/pr-review`'s chat report, one line per matched-but-drifted entry:
 
 ```
@@ -91,6 +91,6 @@ Emit findings under the `## qa/scenarios/ coverage` section in
 - `pr-review/SKILL.md` — the manager that invokes this skill.
 - `docs-features-drift/SKILL.md` — Gate 2; provides the matched
   entries this skill iterates.
-- `qa/scenarios/sNN_*.py` — the driver files this skill reads.
+- `qa/web/scenarios/sNN_*.py` — the driver files this skill reads.
 - `docs/testing.md` — three-layer model; layer 3 is what these
   scenarios cover.

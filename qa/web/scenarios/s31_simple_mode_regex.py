@@ -1,6 +1,6 @@
 """Web scenario s31 — Simple mode write-through + bulk-decide action dialog.
 
-Ported from qa/scenarios/s31_simple_mode_regex.py (Qt UIA).
+Ported from the desktop s31_simple_mode_regex driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files in one group).
@@ -38,7 +38,7 @@ Qt divergences:
     the web UI — the web dialog shows both Simple and Regex rows side-by-side
     without a mode toggle, so the toggle-and-back-round-trip probes are omitted.
   - Qt reads decisions from SQLite directly; the web port uses GET /api/manifest.
-  - Qt's status-bar "Decision set" flash after Apply is matched with a UIA text
+  - Qt's status-bar "Decision set" flash after Apply is matched with a desktop text
     probe; the web port asserts via the HTTP API only (no status-bar text check
     after Apply — the action dialog closes on success and the status bar update
     timing is not critical for the server-side assertion).
@@ -48,7 +48,7 @@ Qt divergences:
     contract is identical but the error surface is the server response, not a
     QMessageBox.
   - Qt has a Recent-pick probe (#396) and Wave-11 keyboard/mnemonic probes; these
-    depend on Qt UIA affordances (type_keys, find_popup) with no web equivalent —
+    depend on desktop-tree affordances (type_keys, find_popup) with no web equivalent —
     omitted.
   - The web scenario does NOT restore decisions after the test run.  The manifest
     is in a temp file that is cleaned up in the finally block, so no restore is

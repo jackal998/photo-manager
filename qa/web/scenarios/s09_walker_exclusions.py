@@ -1,6 +1,6 @@
 """Web scenario s09 — walker exclusion rules.
 
-Ported from qa/scenarios/s09_walker_exclusions.py (Qt UIA, print-only probe).
+Ported from the desktop s09_walker_exclusions driver (print-only probe).
 
 Qt intent:
   - Scan qa/sandbox/walker-exclusions (2 real JPEGs + Thumbs.db + desktop.ini
@@ -33,7 +33,7 @@ Assertions:
      symlink privilege (the layer-1 mock test covers that branch).
 
 Qt divergences:
-  D1. SOURCE READ: Qt scrapes the per-file Date/Name cells from the UIA result
+  D1. SOURCE READ: Qt scrapes the per-file Date/Name cells from the desktop result
       tree. The web port reads basenames from GET /api/manifest JSON — the
       authoritative server serialisation, immune to UI virtualisation / label
       drift.
@@ -49,7 +49,7 @@ Qt divergences:
       a wait could observe it (a guaranteed flake on fast CI, per the s08 D4
       note). Exclusion is asserted from the manifest instead.
 
-Desktop source: qa/scenarios/s09_walker_exclusions.py
+Desktop source: the s09_walker_exclusions driver (removed with #646)
 Fixture:        qa/sandbox/walker-exclusions/
 """
 from __future__ import annotations

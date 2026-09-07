@@ -1,6 +1,6 @@
 """Web scenario s07 — Format-duplicate pair (HEIC vs JPG of same scene).
 
-Ported from qa/scenarios/s07_format_dup.py (Qt UIA).
+Ported from the desktop s07_format_dup driver.
 
 Qt intent:
   - Scan qa/sandbox/format-dup (scene_a.heic + scene_a.jpg).
@@ -48,7 +48,7 @@ Strengthening (Qt -> web, intentional upgrade):
   dup"; we verify this at the data layer via the manifest JSON.
 
 Qt divergences:
-  D1. NO UIA ROW SCRAPING: Qt reads result-tree rows via pywinauto
+  D1. NO desktop-tree ROW SCRAPING: Qt reads result-tree rows via the desktop UI-automation harness
       automation and checks the "Ref" cell text.  The web port reads
       GET /api/manifest JSON directly — the authoritative server
       serialisation — which is strictly stronger (data-layer assertion,
@@ -72,7 +72,7 @@ Qt divergences:
       asserts the JPG similarity kind == "percent" with percent in (0,100]
       (the near-dup % to the HEIC Ref) and HEIC similarity["kind"] == "ref".
 
-Desktop source: qa/scenarios/s07_format_dup.py
+Desktop source: the s07_format_dup driver (removed with #646)
 Fixture:        qa/sandbox/format-dup/scene_a.heic, scene_a.jpg
 """
 from __future__ import annotations

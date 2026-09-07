@@ -1,6 +1,6 @@
 """Web scenario s68 — double-click preview tile opens the full-res viewer.
 
-Ported from qa/scenarios/s68_full_res_viewer_double_click.py (Qt UIA).
+Ported from the desktop s68_full_res_viewer_double_click driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files in one group).
@@ -38,7 +38,7 @@ Qt → web divergences:
     Do NOT "simplify" this to a row dblclick — that would exercise a different
     code path than the desktop scenario verifies.
   - D3 (window vs overlay): the desktop asserts a NEW top-level OS window via
-    UIA.  The web full-res viewer is a same-document Radix Dialog overlay
+    desktop-tree.  The web full-res viewer is a same-document Radix Dialog overlay
     (position:fixed inset-0); we assert ``fullres-dialog`` visibility instead.
   - D4 (title shape): the desktop title is ``"<filename>  [W×H]"`` (one
     string).  The web title renders the basename and a SEPARATE

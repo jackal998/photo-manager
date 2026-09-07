@@ -79,7 +79,7 @@ class TestAllow:
             monkeypatch,
             "gh pr create --title 'feat: new dialog'",
             changed=[
-                "app/views/dialogs/new_dialog.py",
+                "app/web/routes/new_route.py",
                 "README.md",
             ],
         )
@@ -109,7 +109,7 @@ class TestAllow:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'fix: dialog button label'",
-            changed=["app/views/dialogs/execute_action_dialog.py"],
+            changed=["app/web/routes/execute.py"],
             added=[],  # the file already exists; this is a modification
         )
         assert rc == 0
@@ -118,7 +118,7 @@ class TestAllow:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: thing [docs-not-needed: trivial]'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 0
 
@@ -126,7 +126,7 @@ class TestAllow:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat' --body 'whatever [docs-not-needed: x] more'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 0
 
@@ -139,12 +139,12 @@ class TestAllow:
         assert rc == 0
 
     def test_scenario_change_with_testing_doc_passes(self, monkeypatch):
-        """qa/scenarios/sNN change is doc-relevant on both add and modify."""
+        """qa/web/scenarios/sNN change is doc-relevant on both add and modify."""
         rc = _run(
             monkeypatch,
             "gh pr create --title 'qa: extend s32'",
             changed=[
-                "qa/scenarios/s32_lock_confirm_bulk_regex.py",
+                "qa/web/scenarios/s32_lock_confirm_bulk_regex.py",
                 "docs/testing.md",
             ],
             added=[],  # modified, not new
@@ -156,22 +156,22 @@ class TestAllow:
 
 
 class TestBlock:
-    def test_new_dialog_without_docs_blocks(self, monkeypatch, capsys):
+    def test_new_route_without_docs_blocks(self, monkeypatch, capsys):
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: new dialog'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 2
         err = capsys.readouterr().err
         assert "docs guard" in err.lower()
-        assert "new_dialog.py" in err
+        assert "new_route.py" in err
 
-    def test_new_handler_without_docs_blocks(self, monkeypatch):
+    def test_new_component_without_docs_blocks(self, monkeypatch):
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat'",
-            changed=["app/views/handlers/new_handler.py"],
+            changed=["frontend/src/components/NewPanel.tsx"],
         )
         assert rc == 2
 
@@ -209,20 +209,51 @@ class TestBlock:
 
     def test_scenario_rename_without_testing_doc_blocks(self, monkeypatch):
         """Scenario renames are doc-relevant even though both names
-        appear under qa/scenarios/sNN_*.py."""
+        appear under qa/web/scenarios/sNN_*.py."""
         rc = _run(
             monkeypatch,
             "gh pr create --title 'qa: rename s32'",
-            changed=["qa/scenarios/s32_renamed.py"],
+            changed=["qa/web/scenarios/s32_renamed.py"],
             added=[],  # treat as modification of existing scenario
         )
         assert rc == 2
+
+    def test_frontend_suggestion_names_a_doc_that_holds_that_entry(
+        self, monkeypatch, capsys
+    ):
+        """The suggested doc must be one the author can actually edit.
+
+        README's project tree lists `app/web/` file-by-file but
+        `frontend/src/` at directory granularity, so suggesting the README
+        tree for a new component would send the author to an edit with
+        nowhere to land — and an unfollowable instruction is a gate
+        everyone bypasses. Components/hooks point at features.md (which
+        carries a `### Web —` entry per surface); store/lib/api/i18n point
+        at testing.md's per-module table (which carries a row per module).
+        """
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: prune banner'",
+            changed=["frontend/src/components/execute/PruneBanner.tsx"],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "docs/features.md" in err
+        assert "README.md project tree (under frontend/src" not in err
+
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: prune helper'",
+            changed=["frontend/src/lib/pruneBanner.ts"],
+        )
+        assert rc == 2
+        assert "docs/testing.md per-module table" in capsys.readouterr().err
 
     def test_block_message_mentions_suggested_doc(self, monkeypatch, capsys):
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 2
         err = capsys.readouterr().err
@@ -254,11 +285,15 @@ class TestStdinRobustness:
 
 
 class TestBehaviouralModifyTrigger:
-    """The #262 hardening: MODIFIED files under
-    app/views/{dialogs,handlers}/ trigger the docs gate when the diff
+    """The #262 hardening: MODIFIED files under app/web/routes/ and
+    frontend/src/components/ trigger the docs gate when the diff
     is non-trivial, AND they require docs/features.md specifically
     rather than just any doc touch. New files keep the legacy
-    any-doc-touch semantic. Bypass token still works."""
+    any-doc-touch semantic. Bypass token still works.
+
+    Retargeted by #646 — the old roots (``app/views/{dialogs,handlers}/``)
+    went with the Qt client, which would have left this trigger matching
+    nothing at all."""
 
     def test_below_threshold_modify_does_not_trigger(self, monkeypatch):
         """A trivial edit (< 10 lines, no signature change) doesn't
@@ -267,7 +302,7 @@ class TestBehaviouralModifyTrigger:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'fix: copy tweak'",
-            changed=["app/views/dialogs/execute_action_dialog.py"],
+            changed=["app/web/routes/execute.py"],
             added=[],
             behavioural_qualifies=False,
         )
@@ -279,21 +314,21 @@ class TestBehaviouralModifyTrigger:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: scope execute to highlighted'",
-            changed=["app/views/dialogs/execute_action_dialog.py"],
+            changed=["app/web/routes/execute.py"],
             added=[],
             behavioural_qualifies=True,
         )
         assert rc == 2
         err = capsys.readouterr().err
         assert "docs/features.md" in err
-        assert "execute_action_dialog.py" in err
+        assert "execute.py" in err
 
     def test_above_threshold_modify_with_features_passes(self, monkeypatch):
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: scope execute to highlighted'",
             changed=[
-                "app/views/dialogs/execute_action_dialog.py",
+                "app/web/routes/execute.py",
                 "docs/features.md",
             ],
             added=[],
@@ -301,13 +336,13 @@ class TestBehaviouralModifyTrigger:
         )
         assert rc == 0
 
-    def test_handler_above_threshold_blocks_same_as_dialog(self, monkeypatch):
-        """Handlers (file_operations.py, context_menu.py, etc.) ride
-        the same gate as dialogs — both are user-visible behaviour."""
+    def test_component_above_threshold_blocks_same_as_route(self, monkeypatch):
+        """A React component rides the same gate as a FastAPI route —
+        both are user-visible behaviour."""
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: new context menu entry'",
-            changed=["app/views/handlers/context_menu.py"],
+            changed=["frontend/src/components/ContextMenu.tsx"],
             added=[],
             behavioural_qualifies=True,
         )
@@ -320,7 +355,7 @@ class TestBehaviouralModifyTrigger:
             monkeypatch,
             "gh pr create --title 'feat'",
             changed=[
-                "app/views/dialogs/execute_action_dialog.py",
+                "app/web/routes/execute.py",
                 "docs/testing.md",
             ],
             added=[],
@@ -334,7 +369,7 @@ class TestBehaviouralModifyTrigger:
             monkeypatch,
             "gh pr create --title 'feat'",
             changed=[
-                "app/views/dialogs/execute_action_dialog.py",
+                "app/web/routes/execute.py",
                 "README.md",
             ],
             added=[],
@@ -342,7 +377,7 @@ class TestBehaviouralModifyTrigger:
         )
         assert rc == 2
 
-    def test_new_dialog_with_testing_doc_passes(self, monkeypatch):
+    def test_new_route_with_testing_doc_passes(self, monkeypatch):
         """NEW files keep the legacy 'any doc touch is enough'
         semantic — they're typically introducing new structure that
         the docs map rows already cover."""
@@ -350,10 +385,10 @@ class TestBehaviouralModifyTrigger:
             monkeypatch,
             "gh pr create --title 'feat: new dialog'",
             changed=[
-                "app/views/dialogs/new_dialog.py",
+                "app/web/routes/new_route.py",
                 "docs/testing.md",
             ],
-            added=["app/views/dialogs/new_dialog.py"],
+            added=["app/web/routes/new_route.py"],
             behavioural_qualifies=False,
         )
         assert rc == 0
@@ -365,29 +400,109 @@ class TestBehaviouralModifyTrigger:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'refactor [docs-not-needed: pure refactor, no UX change]'",
-            changed=["app/views/dialogs/execute_action_dialog.py"],
+            changed=["app/web/routes/execute.py"],
             added=[],
             behavioural_qualifies=True,
         )
         assert rc == 0
 
-    def test_above_threshold_workers_dir_not_in_behavioural_scope(self, monkeypatch):
-        """Only dialogs/ and handlers/ are in the behavioural scope —
-        workers/, components/, widgets/, layout/, viewmodels/ stay
-        on the legacy any-doc-touch rule because they're internal
-        plumbing (background QThreads, layout helpers, viewmodels)
-        that don't independently shift user-facing UX."""
-        # A modified worker file with no docs at all — should NOT
-        # trigger because workers are not in the behavioural pattern
-        # and not in the existing MODIFIED-trigger set.
+    def test_above_threshold_hooks_dir_not_in_behavioural_scope(self, monkeypatch):
+        """Only app/web/routes/ and frontend/src/components/ are in the
+        behavioural scope — hooks/, store/, lib/, api/ stay on the legacy
+        any-doc-touch rule because they're internal plumbing (SSE
+        subscriptions, selectors, formatters) that don't independently
+        shift user-facing UX."""
+        # A modified hook with no docs at all — should NOT trigger
+        # because hooks/ is not in the behavioural pattern and not in
+        # the existing MODIFIED-trigger set.
         rc = _run(
             monkeypatch,
-            "gh pr create --title 'fix: worker thread cleanup'",
-            changed=["app/views/workers/scan_worker.py"],
+            "gh pr create --title 'fix: SSE reconnect cleanup'",
+            changed=["frontend/src/hooks/useScanSSE.ts"],
             added=[],
-            behavioural_qualifies=True,  # would have qualified if scope included workers
+            behavioural_qualifies=True,  # would have qualified if scope included hooks
         )
         assert rc == 0
+
+    def test_colocated_component_spec_not_in_behavioural_scope(self, monkeypatch):
+        """A vitest spec sitting next to a component is a test, not the
+        behaviour — the behavioural pattern excludes ``*.test.tsx`` so a
+        test-only PR never demands a features.md edit."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'test: cover the context menu'",
+            changed=["frontend/src/components/ContextMenu.test.tsx"],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 0
+
+
+# ── the real behavioural qualifier (#646) ─────────────────────────────────
+
+
+class TestBehaviouralQualifierSignatureHeuristic:
+    """Exercises the real ``_behavioural_modify_qualifies`` — every test
+    above mocks it, so nothing covered the sub-threshold half.
+
+    That half is a declaration-line heuristic, and until #646 it only
+    knew Python's ``def``. With the behavioural roots retargeted at
+    ``frontend/src/components/``, a two-line TSX edit that adds a new
+    exported handler would have slipped under both bars and shipped
+    without a features.md entry.
+    """
+
+    def _qualifies(self, monkeypatch, numstat: str, diff: str) -> bool:
+        mod = _load_hook()
+
+        def fake_check_output(cmd, **kwargs):
+            return numstat if "--numstat" in cmd else diff
+
+        monkeypatch.setattr(mod.subprocess, "check_output", fake_check_output)
+        return mod._behavioural_modify_qualifies(
+            "frontend/src/components/ContextMenu.tsx"
+        )
+
+    def test_large_diff_qualifies_without_any_declaration(self, monkeypatch):
+        """The line-count bar is language-agnostic and unchanged."""
+        assert self._qualifies(
+            monkeypatch,
+            numstat="8\t7\tfrontend/src/components/ContextMenu.tsx\n",
+            diff="+  <span>copy</span>\n",
+        )
+
+    def test_small_tsx_diff_adding_an_export_qualifies(self, monkeypatch):
+        """Two lines, but a new exported symbol — user-visible surface."""
+        assert self._qualifies(
+            monkeypatch,
+            numstat="1\t1\tfrontend/src/components/ContextMenu.tsx\n",
+            diff="+export function PruneEntry({ id }: Props) {\n",
+        )
+
+    def test_small_tsx_diff_adding_a_const_handler_qualifies(self, monkeypatch):
+        assert self._qualifies(
+            monkeypatch,
+            numstat="1\t0\tfrontend/src/components/ContextMenu.tsx\n",
+            diff="+  const onPrune = () => store.prune(id)\n",
+        )
+
+    def test_small_python_diff_adding_a_def_still_qualifies(self, monkeypatch):
+        """The original Python half must keep working."""
+        assert self._qualifies(
+            monkeypatch,
+            numstat="1\t0\tapp/web/routes/execute.py\n",
+            diff="+async def prune(req: PruneRequest) -> PruneResult:\n",
+        )
+
+    def test_small_copy_only_diff_does_not_qualify(self, monkeypatch):
+        """The false-positive half: a one-word copy tweak with no
+        declaration must stay under both bars, or the gate blocks typo
+        fixes."""
+        assert not self._qualifies(
+            monkeypatch,
+            numstat="1\t1\tfrontend/src/components/ContextMenu.tsx\n",
+            diff="-  <span>Remove</span>\n+  <span>Remove from list</span>\n",
+        )
 
 
 # ── manifest_repository.py semantics-aware schema gate ────────────────────
@@ -497,7 +612,7 @@ class TestManifestRepositorySchemaGate:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: new dialog'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 2
 
@@ -522,7 +637,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: thing' --body 'body [docs-not-needed:]'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 2
         err = capsys.readouterr().err
@@ -533,7 +648,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'feat: thing [docs-not-needed:   ]'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 2
         assert "its reason is empty" in capsys.readouterr().err
@@ -544,7 +659,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'fix: dialog copy [docs-not-needed:]'",
-            changed=["app/views/dialogs/execute_action_dialog.py"],
+            changed=["app/web/routes/execute.py"],
             added=[],
             behavioural_qualifies=True,
         )
@@ -557,7 +672,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'refactor [docs-not-needed: internal refactor]'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 0
 
@@ -569,7 +684,7 @@ class TestBypassEmptyReason:
             "gh pr create --title 'x' --body "
             "'[docs-not-needed: guard-only change (see #857): scripts/hooks/*.py "
             "+ tests — no user-visible behaviour, 100% internal]'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 0
 
@@ -579,7 +694,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x [docs-not-needed:    real reason here]'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 0
 
@@ -589,7 +704,7 @@ class TestBypassEmptyReason:
         rc = _run(
             monkeypatch,
             "gh pr create --title 'x' --body 'whatever [docs-not-needed: x] more'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 0
 
@@ -604,7 +719,7 @@ class TestBypassEmptyReason:
             monkeypatch,
             "gh pr create --title 'feat: thing' --body "
             "'Bypass with `[docs-not-needed: <reason>]` in the body.'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 2
         err = capsys.readouterr().err
@@ -618,7 +733,7 @@ class TestBypassEmptyReason:
             monkeypatch,
             "gh pr create --title 'x' --body "
             "'[docs-not-needed: doc-only: renames the <reason> placeholder]'",
-            changed=["app/views/dialogs/new_dialog.py"],
+            changed=["app/web/routes/new_route.py"],
         )
         assert rc == 0
 
@@ -648,17 +763,17 @@ class TestCiMode:
         an empty body)."""
         mod = _load_hook()
         monkeypatch.setattr(mod, "_changed_files", lambda: [
-            "app/views/dialogs/new_dialog.py",
+            "app/web/routes/new_route.py",
         ])
         monkeypatch.setattr(mod, "_new_files", lambda: {
-            "app/views/dialogs/new_dialog.py",
+            "app/web/routes/new_route.py",
         })
         monkeypatch.setattr(sys, "argv", ["docs_guard.py", "--ci"])
         monkeypatch.setenv("PR_TITLE", "feat: new dialog")
         monkeypatch.delenv("PR_BODY", raising=False)
         rc = mod.main()
         assert rc == 2
-        assert "new_dialog.py" in capsys.readouterr().err
+        assert "new_route.py" in capsys.readouterr().err
 
     def test_ci_mode_honours_bypass_token_in_pr_body(self, monkeypatch):
         """CI mode must read PR_BODY for the bypass token — otherwise
@@ -666,10 +781,10 @@ class TestCiMode:
         valve."""
         mod = _load_hook()
         monkeypatch.setattr(mod, "_changed_files", lambda: [
-            "app/views/dialogs/new_dialog.py",
+            "app/web/routes/new_route.py",
         ])
         monkeypatch.setattr(mod, "_new_files", lambda: {
-            "app/views/dialogs/new_dialog.py",
+            "app/web/routes/new_route.py",
         })
         monkeypatch.setattr(sys, "argv", ["docs_guard.py", "--ci"])
         monkeypatch.setenv("PR_TITLE", "feat: new dialog")
@@ -684,10 +799,10 @@ class TestCiMode:
         the PR body passed the CI gate. It must block there as well."""
         mod = _load_hook()
         monkeypatch.setattr(mod, "_changed_files", lambda: [
-            "app/views/dialogs/new_dialog.py",
+            "app/web/routes/new_route.py",
         ])
         monkeypatch.setattr(mod, "_new_files", lambda: {
-            "app/views/dialogs/new_dialog.py",
+            "app/web/routes/new_route.py",
         })
         monkeypatch.setattr(sys, "argv", ["docs_guard.py", "--ci"])
         monkeypatch.setenv("PR_TITLE", "feat: new dialog")
@@ -731,7 +846,7 @@ def _run_ci(
     verbatim, CRLF and all — so the newline tests use this entry point
     rather than the ``gh pr create`` command line."""
     mod = _load_hook()
-    files = ["app/views/dialogs/new_dialog.py"] if changed is None else changed
+    files = ["app/web/routes/new_route.py"] if changed is None else changed
     monkeypatch.setattr(mod, "_changed_files", lambda: list(files))
     monkeypatch.setattr(mod, "_new_files", lambda: set(files))
     monkeypatch.setattr(mod, "_behavioural_modify_qualifies", lambda path: False)

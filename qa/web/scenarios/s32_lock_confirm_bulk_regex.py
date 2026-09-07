@@ -1,7 +1,7 @@
 """Web scenario s32 — bulk-regex lock-confirm: Cancel-keeps-open (#764) +
 "Apply to Unlocked Only" (#674).
 
-Ported from qa/scenarios/s32_lock_confirm_bulk_regex.py (Qt UIA).
+Ported from the desktop s32_lock_confirm_bulk_regex driver.
 
 Qt intent (the most interesting verdict, exercised end-to-end):
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg in one group).

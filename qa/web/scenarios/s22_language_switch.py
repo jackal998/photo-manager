@@ -1,6 +1,6 @@
 """Web scenario s22 — Language toggle: EN ↔ 繁體中文, live switch, persistence.
 
-Ported from qa/scenarios/s22_language_switch.py (Qt UIA).
+Ported from the desktop s22_language_switch driver.
 
 Qt intent:
   - Open View → Language → 繁體中文.

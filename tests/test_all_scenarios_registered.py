@@ -6,9 +6,9 @@ agent) can add a new driver, forget to register it, and CI silently skips the
 new scenario — the only thing that ever runs is the layer-1 unit tests.
 
 #646 retargeted this file. Before the cutover the registry
-(``qa.scenario_ids.ALL_SCENARIOS``) was checked against ``qa/scenarios/``
-drivers plus ``qa.scenarios._config.SCENARIO_SOURCES``. Those are gone; the
-web harness resolves a scenario id through ``qa/web/scenario_map.yml`` to a
+(``qa.scenario_ids.ALL_SCENARIOS``) was checked against the desktop client's
+drivers and its source-folder config; both went with that client. The web
+harness resolves a scenario id through ``qa/web/scenario_map.yml`` to a
 ``qa.web.scenarios`` module, so that is the pair of registries pinned here.
 
 The four assertions form a bidirectional check so any one of these accidents

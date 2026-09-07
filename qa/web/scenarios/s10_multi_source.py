@@ -1,6 +1,6 @@
 """Web scenario s10 — multi-source priority + cross-source dedup.
 
-Ported from qa/scenarios/s10_multi_source.py (Qt UIA, print-only probe).
+Ported from the desktop s10_multi_source driver (print-only probe).
 
 Qt intent:
   - Scan TWO source folders in configured order (multi-source-a FIRST, then
@@ -25,7 +25,7 @@ Web slice (UPGRADED to hard assertions — see "Divergences"):
         dedup actually happened, so assertion C is not vacuously true.
 
 Qt divergences:
-  D1. NO UIA ROW SCRAPING: Qt reads result-tree cells and finds the "Ref" cell;
+  D1. NO desktop-tree ROW SCRAPING: Qt reads result-tree cells and finds the "Ref" cell;
       the web port reads is_ref_winner + file_path from GET /api/manifest JSON
       (the authoritative serialisation, immune to UI virtualisation / ordering).
   D2. PRINT -> ASSERT: Qt only prints ref_folder; the web port hard-asserts the
@@ -39,7 +39,7 @@ Qt divergences:
       the manifest (ScanProgress unmounts on SSE 'finished' — log-probe is a
       fast-CI flake, per the s07/s08 notes).
 
-Desktop source: qa/scenarios/s10_multi_source.py
+Desktop source: the s10_multi_source driver (removed with #646)
 Fixtures:       qa/sandbox/multi-source-a/, qa/sandbox/multi-source-b/
 """
 from __future__ import annotations

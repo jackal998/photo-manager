@@ -1,6 +1,6 @@
 """Web scenario s57 — auto-select aggressive mode (#393).
 
-Ported from qa/scenarios/s57_scan_auto_select_aggressive.py (Qt UIA).
+Ported from the desktop s57_scan_auto_select_aggressive driver.
 
 Qt intent:
   - Expand ScanDialog's "Advanced settings"; assert the "Also mark all other
@@ -33,7 +33,7 @@ Qt divergence:
       observe-the-platform-dependent-bit pattern. Aggressive must still fire on
       ≥1 duplicate (guards the silent no-op).
 
-Desktop source: qa/scenarios/s57_scan_auto_select_aggressive.py
+Desktop source: the s57_scan_auto_select_aggressive driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs; q95 = keeper)
 """
 from __future__ import annotations

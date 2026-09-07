@@ -21,7 +21,7 @@ JPEG quality (q95→q65), so name-ASC order (00→04) differs from size-ASC orde
 all 5 land in ONE similarity group so the rendered order equals the global
 size order (no cross-group interleaving to confuse the oracle).
 
-Desktop source: qa/scenarios/s45_sort_persistence.py
+Desktop source: the s45_sort_persistence driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates
 """
 from __future__ import annotations

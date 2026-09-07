@@ -1,6 +1,6 @@
 """Web scenario s54 — Remove from list (finalize) via the EXECUTE dialog menu.
 
-Ported from qa/scenarios/s54_execute_dialog_remove_from_list.py (Qt UIA).
+Ported from the desktop s54_execute_dialog_remove_from_list driver.
 
 Qt intent:
   Right-click a file row in the Execute Action dialog, navigate Set Action >
@@ -38,7 +38,7 @@ Qt divergences:
   D3. outcome='ignored' is asserted behaviourally (row gone from manifest +
       copied file present on disk) rather than by reading the SQLite column.
 
-Desktop source: qa/scenarios/s54_execute_dialog_remove_from_list.py
+Desktop source: the s54_execute_dialog_remove_from_list driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs, copied per the s13 pattern)
 """
 from __future__ import annotations

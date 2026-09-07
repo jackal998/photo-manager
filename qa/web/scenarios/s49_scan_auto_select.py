@@ -1,6 +1,6 @@
 """Web scenario s49 — auto-select after scan (#212 / #393).
 
-Ported from qa/scenarios/s49_scan_auto_select.py (Qt UIA).
+Ported from the desktop s49_scan_auto_select driver.
 
 Qt intent:
   - Expand ScanDialog's "Advanced settings", assert the "Auto select after scan"
@@ -26,7 +26,7 @@ Qt divergence:
       is the UX parity layer on top.
   D2. Manifest read via GET /api/manifest JSON vs Qt SQLite.
 
-Desktop source: qa/scenarios/s49_scan_auto_select.py
+Desktop source: the s49_scan_auto_select driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs; q95 = top score)
 """
 from __future__ import annotations

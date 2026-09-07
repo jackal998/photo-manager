@@ -24,7 +24,8 @@ on:
   # Run on every PR regardless of target branch — stacked PRs (whose base is
   # another feature branch, not master) need per-stage gate enforcement too.
   # Without this, intermediate PRs in a multi-PR feature chain bypass the
-  # gates entirely. See tests.yml / qa-batch.yml for the matching pattern.
+  # gates entirely. See tests.yml / web-eval-gates.yml for the matching
+  # pattern.
   pull_request:
 
 concurrency:

@@ -1,6 +1,6 @@
 """Web scenario s40 — result-tree group header expand/collapse toggle.
 
-Ported from qa/scenarios/s40_results_tree_double_click.py (Qt UIA).
+Ported from the desktop s40_results_tree_double_click driver.
 
 Qt intent:
   - Double-click the "Group 1" GROUP HEADER row → it collapses (is_expanded →

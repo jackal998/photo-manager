@@ -22,11 +22,11 @@ state at startup. So a few things still need a single orchestrator:
    reads issue bodies, Greps the codebase for the cited files, and
    builds a concrete task spec for each.
 2. **File-scope collision check** — if Bundle A and Bundle B both
-   plan to edit `main_window.py`, name the overlap up-front so the
+   plan to edit `App.tsx`, name the overlap up-front so the
    second-merged branch's rebase cost is visible at fan-out time,
    not discovered at PR-merge time.
 3. **Scenario slot pre-assignment** — if two cold sessions both grab
-   `qa/scenarios/s37_*.py`, you get a name collision at PR time.
+   `qa/web/scenarios/s37_*.py`, you get a name collision at PR time.
    Hand out s37, s38, s39 in advance from the first free slot.
 4. **Base SHA pinning** — all sessions branch off the same commit,
    so their work is comparable and merge-order-flexible.
@@ -162,7 +162,7 @@ You also need (these are usually trivial to infer):
 ```
 git fetch origin && git status -sb       # confirm clean tree
 git rev-parse origin/master               # note base SHA for all briefs
-ls qa/scenarios/sNN_*.py | tail -5        # find highest taken slot
+ls qa/web/scenarios/sNN_*.py | tail -5        # find highest taken slot
 ```
 
 Then build the **file-scope matrix**: for each bundle, list the
@@ -171,7 +171,7 @@ SURFACE this to the user before continuing — name the overlap and
 the likely rebase cost. Don't silently fan out overlapping work.
 
 Pre-assign slot numbers: if bundles A, B, C each need a new
-`qa/scenarios/sNN_*.py`, hand out `sNN`, `sNN+1`, `sNN+2` from the
+`qa/web/scenarios/sNN_*.py`, hand out `sNN`, `sNN+1`, `sNN+2` from the
 first free slot.
 
 **Validate every `#N` reference before emitting briefs.** For each
@@ -222,7 +222,7 @@ For each task:
 - Apply the pm-reminders relevant to the task's scope:
   - **Universal**: name the three gates the cold session may hit
     (already in the template's step 8).
-  - **If MODIFIED `app/views/{dialogs,handlers}/*.py` is
+  - **If MODIFIED `app/web/routes/*.py` and `frontend/src/components/**.tsx` is
     in-scope**: apply the behavioural-modify pre-staging rule —
     name the trigger explicitly in the Acceptance section AND
     pre-write either the features.md action or
@@ -327,7 +327,7 @@ from here; they own their work end-to-end.
   template — the canonical template in brief-template.md has it.
 - **Treating `docs_guard` as a single trigger.** The hook has
   two: a coarse new-file trigger (any doc touch satisfies) and a
-  strict behavioural-modify trigger on `app/views/{dialogs,handlers}/`
+  strict behavioural-modify trigger on `app/web/routes/` and `frontend/src/components/`
   MODIFIED files (only `docs/features.md` satisfies). A brief that
   says "docs_guard fires on the new tests — docs/testing.md update
   satisfies it" for a task editing handler files is wrong on both

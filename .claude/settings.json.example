@@ -44,7 +44,7 @@
   },
   "permissions": {
     "allow": [
-      "Bash(.venv/Scripts/python.exe -m qa.scenarios.*:*)"
+      "Bash(.venv/Scripts/python.exe -m qa.web.*:*)"
     ],
     "ask": [
       "Bash(pip install*)",

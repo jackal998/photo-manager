@@ -1,6 +1,6 @@
 """Web scenario s33 — Execute dialog: all-delete warning banner + jump link (#166).
 
-Ported from qa/scenarios/s33_execute_dialog_jump_to_all_delete.py (Qt UIA).
+Ported from the desktop s33_execute_dialog_jump_to_all_delete driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files, one group).
@@ -10,7 +10,7 @@ Qt intent:
     at least one digit (the group number rendered as an anchor).
   - Close (no execute).
   - NOTE: Qt could not click the anchor inside the QLabel reliably on hosted CI
-    runners because pywinauto UIA doesn't expose first-class elements for
+    runners because the desktop tree did not expose first-class elements for
     QLabel <a> children (see gotcha #1 in the Qt scenario comments).
 
 Web slice:
@@ -34,10 +34,10 @@ Qt divergences:
     qa/sandbox/near-duplicates/ directly (read-only).  Only the manifest .db is
     written into a tempdir.
   - Qt derives decisions from SQLite directly.  The web port uses GET /api/manifest.
-  - Qt's all-delete bulk step uses mark_all_via_regex_standalone (ActionDialog UIA
+  - Qt's all-delete bulk step uses mark_all_via_regex_standalone (ActionDialog desktop-tree
     helper).  The web port drives it file-by-file via right-click context menu — the
     same DB write path, no regex dialog needed here.
-  - Qt can only assert the banner TEXT contains a digit (pywinauto can't click
+  - Qt can only assert the banner TEXT contains a digit (the desktop driver could not click
     QLabel <a> anchors on CI).  The web IMPROVES on Qt: the jump button is a real
     <button> with a data-testid, so we assert it is visible AND click it — verifying
     the interactive element is mounted, not just rendered text.
@@ -211,7 +211,7 @@ def run(*, base_url: str) -> None:
             # "execute-all-delete-jump-{group_number}" for the <button> that
             # scrolls the execute tree to the named group.
             # The web IMPROVES on Qt: this is a real <button> we can click,
-            # not a QLabel <a> that UIA can't reach on CI.
+            # not a QLabel <a> that the desktop tree could not reach on CI.
             jump_tid = execute_all_delete_jump_testid(group_number)
             jump_btn = page.get_by_test_id(jump_tid)
             jump_btn.wait_for(state="visible", timeout=10_000)

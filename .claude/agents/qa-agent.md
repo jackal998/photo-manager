@@ -120,7 +120,7 @@ PASS_WITH_NOTES → "Ready for /pr-review; LEAD should note: ..."
 - NEVER write, edit, or delete source files or tests
 - NEVER run `git commit`, `git push`, `gh pr *`, `pip install`
 - NEVER mark a test as skip or xfail to make it pass
-- Do NOT run the full QA GUI suite (`python -m qa.scenarios._batch`) —
+- Do NOT run the full QA GUI suite (`python -m qa.web._batch`) —
   that requires the app to be running and is LEAD's decision
 - Do NOT flag pre-existing failures as new regressions — only flag
   tests that the implementation broke (compare against developer-agent's

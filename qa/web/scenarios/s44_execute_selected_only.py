@@ -1,7 +1,7 @@
 """Web scenario s44 — Execute (only selected): main-tree selection scopes the
 execute dialog to the selected rows' groups (#430 group-pull, #410 static label).
 
-Ported from qa/scenarios/s44_execute_highlighted_rows.py (Qt UIA).
+Ported from the desktop s44_execute_highlighted_rows driver.
 
 Qt intent:
   Mark every row delete, highlight some file rows in the MAIN result tree, then
@@ -52,7 +52,7 @@ Qt divergences (assertion mechanics):
 lives in a tmpdir that is rmtree'd on exit, so nothing accumulates in-repo; the
 recycle-bin path is inside the tmpdir so os.path.exists still reports False.
 
-Desktop source: qa/scenarios/s44_execute_highlighted_rows.py
+Desktop source: the s44_execute_highlighted_rows driver (removed with #646)
 Fixture:        qa/sandbox/exif-edge/{tz_offset,subsecond}.jpg (copied twice each)
 """
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Web scenario s27 — re-scan while the manifest has pending decisions (#142).
 
-Ported from qa/scenarios/s27_rescan_confirm.py (Qt UIA).
+Ported from the desktop s27_rescan_confirm driver.
 
 Qt intent:
   - Scan the 5-JPEG near-duplicates fixture; close & load; set a decision on

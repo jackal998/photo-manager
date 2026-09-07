@@ -1,6 +1,6 @@
 """Web scenario s20 — Right-click multi-selection → context-menu action.
 
-Ported from qa/scenarios/s20_multi_remove_from_list.py (Qt UIA).
+Ported from the desktop s20_multi_remove_from_list driver.
 
 Qt intent:
   Ctrl+click several file rows in the main result tree, right-click one of the
@@ -45,7 +45,7 @@ Qt divergences (assertion mechanics):
   - /api/remove enforces the allowed-roots guard, so (like s54) the fixtures are
     copied into a tmpdir and scanned THERE, with the db written under that root.
 
-Desktop source: qa/scenarios/s20_multi_remove_from_list.py
+Desktop source: the s20_multi_remove_from_list driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs, one group), copied to a tmpdir
 """
 from __future__ import annotations

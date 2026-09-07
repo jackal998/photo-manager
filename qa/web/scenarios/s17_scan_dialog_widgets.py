@@ -1,7 +1,7 @@
 """Web scenario s17 — scan dialog browse widgets + grouping-sensitivity
 thresholds + display-only alphabetized source list (#736).
 
-Ported from qa/scenarios/s17_scan_dialog_widgets.py (Qt UIA).
+Ported from the desktop s17_scan_dialog_widgets driver.
 
 Qt intent:
   - The scan dialog's Browse buttons open a file picker for the source folder
