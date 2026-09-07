@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 import uuid
@@ -32,10 +33,10 @@ from loguru import logger
 # calls `_read_disk()`.
 _SAVE_LOCK = threading.RLock()
 
-# Belt-and-braces for handles this process cannot lock away — the Qt desktop
-# app pointed at the same settings.json, an AV scanner, a backup agent. The
-# lock above cannot span processes, so a contended `os.replace` gets a few
-# short retries before it is allowed to fail.
+# Belt-and-braces for handles this process cannot lock away — a second copy
+# of the app pointed at the same settings.json, an AV scanner, a backup
+# agent. The lock above cannot span processes, so a contended `os.replace`
+# gets a few short retries before it is allowed to fail.
 _REPLACE_ATTEMPTS = 10
 _REPLACE_RETRY_S = 0.02
 
@@ -254,3 +255,57 @@ class JsonSettings:
             _REPLACE_ATTEMPTS,
         )
         raise last
+
+
+def _app_root() -> Path:
+    """Return the directory this installation keeps its writable state in.
+
+    Frozen (PyInstaller ``--onedir``): the directory holding the executable.
+    NOT ``sys._MEIPASS`` — that is ``<exe>/_internal``, which an upgrade
+    replaces wholesale, so a settings.json written there is lost on every
+    new release (#882). ``_MEIPASS`` stays the home of the bundle's
+    READ-ONLY assets (translations/, frontend/dist).
+
+    Source checkout: the repository root (this file lives in
+    ``<repo>/infrastructure/``).
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parents[1]
+
+
+def resolve_settings_path() -> Path:
+    """Return the settings.json path for this process.
+
+    The single resolver (#882). Before it there were four private copies —
+    two in ``app/web/routes/``, two in ``core/app_service/`` — none of which
+    knew about frozen builds, so the packaged app read and wrote
+    ``<exe>/_internal/settings.json``.
+
+    Resolution order:
+
+    1. ``PHOTO_MANAGER_HOME``, if set. A relative value is resolved against
+       the app root (so the variable is robust to cwd); an absolute value is
+       used as-is. This is how the QA harness and the tests point a run at a
+       throwaway config root.
+    2. The app root itself — next to the executable when frozen, the repo
+       root when running from source.
+    """
+    root = _app_root()
+    home_env = os.environ.get("PHOTO_MANAGER_HOME")
+    if home_env:
+        root = (root / home_env).resolve()
+    return root / "settings.json"
+
+
+def load_settings() -> JsonSettings:
+    """Return a :class:`JsonSettings` bound to :func:`resolve_settings_path`.
+
+    The one construction site outside tests: every caller that wants "the
+    app's settings" goes through here, so the resolution order above cannot
+    drift back apart.
+
+    Blocking (``Path.exists()`` + ``open()`` + ``json.load()``) — async
+    handlers must hand it to a threadpool, never call it on the event loop.
+    """
+    return JsonSettings(resolve_settings_path())

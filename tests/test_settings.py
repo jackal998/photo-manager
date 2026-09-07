@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
-from infrastructure.settings import JsonSettings
+from infrastructure.settings import JsonSettings, resolve_settings_path
 
 
 @pytest.fixture
@@ -387,3 +388,95 @@ def test_save_crash_mid_write_keeps_original_intact(settings_file, monkeypatch):
 
     reread = JsonSettings(settings_file)  # would raise if truncated
     assert reread.get("thumbnail_size") == 512  # pre-crash content intact
+
+
+# ---------------------------------------------------------------------------
+# resolve_settings_path — the single resolver (#882)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def frozen_bundle(tmp_path, monkeypatch):
+    """Lay out a PyInstaller --onedir bundle and make sys look frozen.
+
+    Returns the directory holding the executable. ``_internal/`` (where the
+    packaged Python code actually lives, and what ``sys._MEIPASS`` points at)
+    is created too, because it is the wrong answer this guard exists to
+    reject.
+    """
+    exe_dir = tmp_path / "photo-manager"
+    internal = exe_dir / "_internal"
+    internal.mkdir(parents=True)
+    exe = exe_dir / "photo-manager.exe"
+    exe.write_bytes(b"")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(internal), raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    return exe_dir
+
+
+def test_frozen_build_writes_settings_beside_the_exe_not_in_internal(
+    frozen_bundle, monkeypatch
+):
+    """The packaged app must keep settings.json OUT of _internal/ (#882).
+
+    An upgrade replaces _internal/ wholesale, so a settings.json resolved
+    there loses the user's sources, output path, cache dirs and language on
+    every new release. Before this resolver existed the web routes computed
+    the repo root as ``Path(__file__).parent × 4``, which inside the bundle
+    is ``<exe>/_internal`` — exactly the directory that gets replaced.
+    """
+    monkeypatch.delenv("PHOTO_MANAGER_HOME", raising=False)
+
+    resolved = resolve_settings_path()
+
+    assert resolved == frozen_bundle / "settings.json"
+    assert (frozen_bundle / "_internal") not in resolved.parents
+
+
+def test_frozen_build_still_honours_photo_manager_home(
+    frozen_bundle, tmp_path, monkeypatch
+):
+    """An explicit config root wins over the exe directory.
+
+    This is how the QA harness and a portable/multi-profile install point one
+    run at its own settings.json; the frozen branch must not swallow it.
+    """
+    elsewhere = tmp_path / "profile-b"
+    elsewhere.mkdir()
+    monkeypatch.setenv("PHOTO_MANAGER_HOME", str(elsewhere))
+
+    assert resolve_settings_path() == elsewhere / "settings.json"
+
+
+def test_relative_photo_manager_home_resolves_against_the_repo_root(
+    tmp_path, monkeypatch
+):
+    """Source runs keep their behaviour: relative env value, repo-root anchor.
+
+    The value is resolved against the app root rather than the cwd, so a
+    server started from any directory reads the same file.
+    """
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setenv("PHOTO_MANAGER_HOME", "qa")
+    monkeypatch.chdir(tmp_path)
+
+    resolved = resolve_settings_path()
+
+    assert resolved.name == "settings.json"
+    assert resolved.parent.name == "qa"
+    assert (resolved.parent.parent / "infrastructure" / "settings.py").is_file()
+
+
+def test_source_run_without_the_env_var_uses_the_repo_root(monkeypatch):
+    """Unset env + not frozen = the repo's own settings.json (unchanged)."""
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.delenv("PHOTO_MANAGER_HOME", raising=False)
+
+    resolved = resolve_settings_path()
+
+    assert resolved.name == "settings.json"
+    # The parent IS the repo root — asserted by a property of the tree, not
+    # by restating the implementation's parents[] arithmetic.
+    assert (resolved.parent / "infrastructure" / "settings.py").is_file()

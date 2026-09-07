@@ -193,8 +193,8 @@ jobs:
         shell: pwsh
         run: |
           # _internal\ffmpeg\ — its own directory, so the shared build's
-          # av*/sw* DLLs sit beside the exes that import them and never mix
-          # with the FFmpeg DLLs PySide6 ships for QtMultimedia.
+          # av*/sw* DLLs sit beside the exes that import them (Windows
+          # searches an exe's own directory first).
           $internal = "dist\photo-manager\_internal\ffmpeg"
           if (-not (Test-Path $internal)) {
             Write-Error "bundle has no $internal — the packaged app would answer HTTP 501 on every HEVC video (#854)"
@@ -255,40 +255,6 @@ jobs:
             exit 1
           }
 
-      # Headless smoke: launch under the Qt offscreen platform plugin
-      # so no display is required. Watchdog kills the process after a
-      # short window — we're asserting "starts without crashing", not
-      # "completes some task". A non-zero exit before the watchdog
-      # fires = crash = workflow fails.
-      - name: Headless smoke test
-        shell: pwsh
-        env:
-          QT_QPA_PLATFORM: offscreen
-          QT_LOGGING_RULES: '*.debug=false'
-        run: |
-          $exe = "dist\photo-manager\photo-manager.exe"
-          $stderrFile = "$env:RUNNER_TEMP\smoke-stderr.log"
-          $stdoutFile = "$env:RUNNER_TEMP\smoke-stdout.log"
-          $p = Start-Process -FilePath $exe `
-                             -RedirectStandardError $stderrFile `
-                             -RedirectStandardOutput $stdoutFile `
-                             -PassThru -NoNewWindow
-          Start-Sleep -Seconds 5
-          if ($p.HasExited) {
-            Write-Host "--- exe exited prematurely (exit=$($p.ExitCode)) ---"
-            Write-Host "--- stdout ---"
-            if (Test-Path $stdoutFile) { Get-Content $stdoutFile }
-            Write-Host "--- stderr ---"
-            if (Test-Path $stderrFile) { Get-Content $stderrFile }
-            exit 1
-          }
-          Write-Host "Process still running after 5s — no immediate crash. Stopping."
-          Stop-Process -Id $p.Id -Force
-          # Print stderr regardless so missing-module warnings surface
-          # in the workflow log even when the smoke passes.
-          Write-Host "--- stderr (post-kill) ---"
-          if (Test-Path $stderrFile) { Get-Content $stderrFile }
-
       # Server-only smoke of the WEB path (#772): PHOTO_MANAGER_WEB_SMOKE
       # makes launcher.py boot uvicorn + the bundled SPA, poll /api/health,
       # and exit — its exit code is the verdict. No display, no WebView2
@@ -315,14 +281,10 @@ jobs:
       - name: Zip bundle
         shell: pwsh
         run: |
-          # Double-click helper for the web shell — users shouldn't have to
-          # set an env var by hand to try web mode.
-          $bat = @(
-            '@echo off',
-            'set PHOTO_MANAGER_WEB=1',
-            'start "" "%~dp0photo-manager.exe"'
-          )
-          $bat | Set-Content -Path "dist\photo-manager\photo-manager-web.bat" -Encoding ascii
+          # No launcher .bat: photo-manager.exe opens the web shell on its
+          # own since #646, so the helper that used to set
+          # PHOTO_MANAGER_WEB=1 would now be a second double-click target
+          # doing exactly what the exe does.
           # Third-party notices ride at the top of the zip where a user can
           # find them; the upstream FFmpeg licence text itself is already in
           # _internal\ beside the binaries it covers (#854).
@@ -364,8 +326,8 @@ jobs:
             "",
             "1. Download ``$asset`` from the Assets section below.",
             "2. Extract the zip anywhere - the bundle is self-contained, no installer.",
-            "3. Run ``photo-manager.exe`` (classic desktop app).",
-            "4. To try the new web UI shell, run ``photo-manager-web.bat`` instead (needs the Edge WebView2 runtime, preinstalled on most Windows 10/11 machines).",
+            "3. Run ``photo-manager.exe`` - it opens the web UI in an app window (needs the Edge WebView2 runtime, preinstalled on most Windows 10/11 machines).",
+            "4. Your ``settings.json`` is written next to ``photo-manager.exe``, so it survives upgrades - keep the folder, replace its contents.",
             "",
             "**SmartScreen note:** the binary is unsigned, so Windows SmartScreen will show ""Windows protected your PC"" on first launch. Click **More info** -> **Run anyway**. This will go away once we publish a signed release."
           )

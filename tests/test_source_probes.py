@@ -20,8 +20,13 @@ here with their scan roots narrowed to the surviving trees:
 * every `ScanProgressBus` method implemented by `SseScanBus` (T7)
 * translation VALUE sweeps — English passthroughs and legacy MOVE wording
 
-What did NOT come back, and why, is recorded in #646 PR A's body: every other
-probe in the old file read a module under `app/views/` that no longer exists.
+What did NOT come back, and why, is recorded in #646 PR A's body: nine of the
+dropped probes read a module under `app/views/` that no longer exists. The
+other two — `image_service_has_zero_pyside6_references` and
+`scan_runner_has_no_qthread_method_calls` — were dropped because live guards
+now cover them: `tests/test_scan_runner.py` (no-QThread, at runtime) and
+`tests/test_web_qt_free.py`'s `_PHASE2B_FILES`, which names
+`infrastructure/image_service.py`.
 
 Authoring guide: `docs/testing.md` — "Probe layer — authoring a new probe".
 """

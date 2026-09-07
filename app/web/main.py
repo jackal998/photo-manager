@@ -28,8 +28,9 @@ from app.web.routes.i18n import router as i18n_router
 from app.web.routes.image import router as image_router
 from app.web.routes.media import router as media_router
 from app.web.routes.review import router as review_router
-from app.web.routes.scan import _load_settings, router as scan_router
+from app.web.routes.scan import router as scan_router
 from app.web.routes.settings import router as settings_router
+from infrastructure.settings import load_settings
 
 
 @asynccontextmanager
@@ -61,11 +62,11 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Both services read their cache directory from settings.json
     # (thumbnail_disk_cache_dir / video_transcode_cache_dir); constructing
     # them with no settings silently pinned every web cache to the default
-    # %LOCALAPPDATA%/PhotoManager path (#874). _load_settings() is the scan
-    # route's PHOTO_MANAGER_HOME resolver — reused rather than copied a third
-    # time, since a drifting copy is what this bug was. A missing file yields
-    # an empty JsonSettings, so the defaults are unchanged on a fresh install.
-    settings = _load_settings()
+    # %LOCALAPPDATA%/PhotoManager path (#874). load_settings() is the single
+    # resolver (#882) — the same settings.json every route reads, next to the
+    # executable in a frozen build. A missing file yields an empty
+    # JsonSettings, so the defaults are unchanged on a fresh install.
+    settings = load_settings()
     image_service = _img_svc_mod.ImageService(settings)
     app.state.image_service = image_service
     transcode_service = _transcode_svc_mod.TranscodeService(settings)

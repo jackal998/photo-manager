@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from infrastructure.manifest_repository import ManifestRepository
-from infrastructure.settings import JsonSettings
+from infrastructure.settings import load_settings
 from app.viewmodels.main_vm import MainVM
 from core.app_service.review_view import serialize_groups
 
@@ -35,25 +35,6 @@ def _require_manifest(manifest_path: str) -> None:
         raise FileNotFoundError(f"Manifest not found: {manifest_path!r}")
 
 
-def _resolve_settings_path() -> Path:
-    """Resolve settings.json the same way scan.py does.
-
-    Resolution order (mirrors app/web/routes/scan.py _load_settings):
-    1. PHOTO_MANAGER_HOME env var (relative to repo root)
-    2. Repository root (two levels above core/app_service/)
-    """
-    import os
-
-    home_env = os.environ.get("PHOTO_MANAGER_HOME")
-    # core/app_service/review_service.py → core/app_service/ → core/ → repo root
-    repo_root = Path(__file__).parent.parent.parent
-    if home_env:
-        config_home = (repo_root / home_env).resolve()
-    else:
-        config_home = repo_root
-    return config_home / "settings.json"
-
-
 def load_review(
     manifest_path: str,
     settings: Any | None = None,
@@ -68,8 +49,9 @@ def load_review(
 
     Args:
         manifest_path: Absolute path to a .sqlite manifest file.
-        settings: Optional JsonSettings instance. If None, a JsonSettings
-            is constructed from the same path the scan route uses.
+        settings: Optional JsonSettings instance. If None, one is loaded
+            through ``infrastructure.settings.load_settings`` — the single
+            resolver every caller shares (#882).
 
     Returns:
         {
@@ -85,7 +67,7 @@ def load_review(
     """
     _require_manifest(manifest_path)
     if settings is None:
-        settings = JsonSettings(_resolve_settings_path())
+        settings = load_settings()
 
     default_sort = settings.get("sorting.defaults", [])
     vm = MainVM(default_sort=default_sort)

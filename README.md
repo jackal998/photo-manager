@@ -45,7 +45,12 @@ A pre-built standalone bundle is published on every release tag — no Python in
 
 1. Grab the latest zip from **[Releases → latest](https://github.com/jackal998/photo-manager/releases/latest)**: look for `photo-manager-<version>-windows-x64.zip`.
 2. Extract anywhere — the folder is self-contained.
-3. Run `photo-manager.exe`.
+3. Run `photo-manager.exe`. It opens the photo-manager UI in its own app
+   window; the page is rendered by the **Microsoft Edge WebView2 Runtime**,
+   preinstalled on most Windows 10/11 machines (if it is missing the app says
+   so and names the download, rather than opening a blank window). There is
+   no second executable and no environment variable to set — since #646 the
+   web client is the only client.
 
 You still need [exiftool](https://exiftool.org/) on `PATH` for EXIF date extraction (same prerequisite as the source install).
 
@@ -53,7 +58,14 @@ ffmpeg is **not** a prerequisite: the bundle ships its own `ffmpeg.exe` / `ffpro
 
 > **SmartScreen note:** the binary is unsigned, so on first launch Windows shows *"Windows protected your PC"*. Click **More info → Run anyway**. The warning is expected and will disappear once we publish a signed release.
 
-`settings.json` is written next to `photo-manager.exe`, so the extracted folder is portable — copy it to a USB stick and your config travels with it.
+`settings.json` is written next to `photo-manager.exe` — **beside** the
+`_internal\` folder, never inside it. That matters on upgrade: `_internal\` is
+the bundle's own code and is replaced wholesale by every new release, so a
+config living there would be lost each time (#882). Keeping it at the top of
+the folder also makes the install portable — copy the folder to a USB stick
+and your config travels with it. Point a run at a different config root with
+the `PHOTO_MANAGER_HOME` environment variable (relative values are resolved
+against the folder holding the exe).
 
 ---
 
