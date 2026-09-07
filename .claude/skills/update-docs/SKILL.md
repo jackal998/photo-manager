@@ -23,7 +23,7 @@ Activate this skill after implementing any non-trivial change to photo-manager s
   - Adding a `tests/integration/` test (layer 2 spot-add — record it
     in `docs/testing.md` per-module table; layer 2 is on-demand, not
     a maintained suite, so each addition is an event worth noting)
-  - Adding or modifying a `qa/scenarios/sNN_*.py` driver (layer 3)
+  - Adding or modifying a `qa/web/scenarios/sNN_*.py` driver (layer 3)
   - A module's layer-1 coverage changes by ≥5pp (e.g. lifted from 73 → 90)
 
 ---
@@ -80,7 +80,8 @@ Work through every item below. Check only the items relevant to your change.
 - [ ] `pyproject.toml` — update `target-version` (Black + Ruff) and `py-version` (Pylint)
 
 ### Background worker / major flow changed?
-- [ ] New `QThread` worker → add to `README.md` workers/ subtree
+- [ ] New background thread or SSE stage → add to the `README.md`
+      project tree and to the relevant `docs/features.md` entry
 
 ---
 
@@ -98,7 +99,7 @@ Work through every item below. Check only the items relevant to your change.
 
 ## Example edit patterns
 
-**New file added** (`app/views/dialogs/export_dialog.py`):
+**New file added** (`frontend/src/dialogs/export_dialog.py`):
 ```
 # In README.md project structure, find the dialogs/ block and add:
 │   │   │   ├── export_dialog.py            # Export decisions to CSV
@@ -109,7 +110,7 @@ Work through every item below. Check only the items relevant to your change.
 # In README.md Configuration section, add the key to the example JSON block.
 ```
 
-**Deprecated a file** (`app/views/dialogs/legacy_dialog.py`):
+**Deprecated a file** (`frontend/src/dialogs/legacy_dialog.py`):
 ```
 # In README.md project structure, change:
 │   │   │   └── legacy_dialog.py

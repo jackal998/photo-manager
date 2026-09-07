@@ -27,8 +27,8 @@ not the **type** of work (type is what labels are for).
 
 | Prefix | Scope | Typical paths |
 |---|---|---|
-| `[QA]` | qa scenarios, probes, qa-batch CI flakes | `qa/scenarios/`, `qa/probes/`, qa-batch workflows |
-| `[FE]` | Qt UI, dialogs, handlers, workers, translations | `app/views/`, `translations/` |
+| `[QA]` | qa scenarios, probes, web-scenario-batch CI flakes | `qa/web/scenarios/`, `qa/web/`, the web-eval-gates workflow |
+| `[FE]` | React client, dialogs, hooks, store, translations | `frontend/src/`, `translations/` |
 | `[BE]` | scanner, core models, infrastructure, manifest, scoring | `scanner/`, `core/`, `infrastructure/` |
 | `[CI]` | GitHub Actions workflows, pre-commit hooks, news-gate | `.github/workflows/`, `scripts/hooks/`, `news/` |
 | `[DX]` | Claude harness, agents, skills, MCPs, settings | `.claude/`, `CLAUDE.md`, MCP configs |
@@ -42,7 +42,7 @@ helps with skim-find in the issue list:
 - `[QA:s31] …`
 - `[FE:action-dialog] …`
 - `[BE:scanner] …`
-- `[CI:qa-batch] …`
+- `[CI:web-eval-gates] …`
 - `[DX:skill:work] …`
 - `[DOCS:features] …`
 
@@ -61,7 +61,7 @@ Recent issues re-titled to this convention:
 |---|---|
 | `[BUG] ActionDialog (Set Action by Regex): functional bugs — data loss, lying preview, broken example` | `[FE:action-dialog] functional bugs — data loss, lying preview, broken example` |
 | `[CHORE] Status emission on skip-locked branch in ExecuteActionDialog._handle_execute_request_with_lock_check` | `[FE:execute-dialog] status emission missing on skip-locked branch` |
-| `ci(qa-batch): qa (2) shard fails on docs-only PR #368 — likely runner flake` | `[CI:qa-batch] qa (2) shard fails on docs-only PR #368 — likely runner flake` |
+| `ci(web-scenario-batch): qa (2) shard fails on docs-only PR #368 — likely runner flake` | `[CI:web-eval-gates] qa (2) shard fails on docs-only PR #368 — likely runner flake` |
 | `qa: extend s31 with Wave 10 layer-3 coverage (D3 confirm modal + D4 test-against label)` | `[QA:s31] extend with Wave 10 layer-3 coverage (D3 confirm modal + D4 test-against)` |
 | `regex-dialog: verify Recent ▾ menu off-screen clamp on multi-monitor disconnect (audit D7)` | `[FE:action-dialog] verify Recent ▾ menu off-screen clamp on multi-monitor disconnect (audit D7)` |
 
@@ -108,7 +108,7 @@ in the order they typically appear:
 | `## Symptom` / `## Reproduction` | Bugs — concrete steps to reproduce, error messages, stack traces. Goes between What and Why for bugs. |
 | `## Acceptance criteria` | Features / enhancements — bulleted list of "done when …" so a future implementor knows when to stop. |
 | `## Out of scope` | Anything close to the issue that the reporter explicitly does NOT want this issue to grow into. Prevents scope creep at planning time. |
-| `## Related` | Cross-links to other issues (`#N`), PRs (`#N`), audits, source lines (`select_dialog.py:1218`). Use `Supersedes #N` / `Superseded by #N` / `Follow-up to #N` / `Blocks #N` / `Blocked by #N` shapes when the relationship is structural. |
+| `## Related` | Cross-links to other issues (`#N`), PRs (`#N`), audits, source lines (`ExecuteDialog.tsx:218`). Use `Supersedes #N` / `Superseded by #N` / `Follow-up to #N` / `Blocks #N` / `Blocked by #N` shapes when the relationship is structural. |
 | `## Context` | Background that made this filable — "found during /work on #X", "drive-by from /pr-review on PR #N", "audit item E10". Useful for "why was this filed *now*" questions later. |
 | `## Trace` | For audit-derived issues — the source line or commit that prompted the filing, so a future reader can re-derive the observation. |
 
@@ -116,43 +116,41 @@ in the order they typically appear:
 
 ```markdown
 ## What
-`connect_main` in `qa/scenarios/_uia.py:351` has a 5-second default
-timeout for the UIA-connect step. On GitHub Actions Windows runners
-this is often insufficient, leading to intermittent
-`ElementNotFoundError: '.*Photo Manager.*'` flakes that surface as
-random qa-shard failures.
+The write helpers in `qa/web/_invariants.py` click and return without
+waiting for the API response the click triggers. The store updates
+optimistically, so an assertion that reads the committed value races
+the `PATCH` — intermittent failures in the `web-scenario-batch` job
+that never reproduce locally.
 
 ## Symptom
 Run captured at https://github.com/jackal998/photo-manager/actions/runs/26301844529/attempts/1 —
-qa (2) shard fails 6m56s in, with two scenarios (`s02_empty_folder`,
-`s12_save_manifest`) both raising `pywinauto.findwindows.ElementNotFoundError`
-for `.*Photo Manager.*` after the 8s window-appear warner fired.
+`web-scenario-batch` fails 6m56s in, with two scenarios
+(`s20_multi_remove_from_list`, `s29_remove_from_list_by_regex`) both
+asserting an old `user_decision` from `GET /api/manifest`.
 
 ## Why
-The flake erodes CI signal — docs-only PRs cannot physically introduce
-qa regressions, so a failed qa shard on such a PR is noise that costs
-maintainer attention and slows merge cadence. Recurring noise also
-trains reviewers to ignore qa failures, which masks real regressions.
+The flake erodes CI signal — a red batch on a PR that cannot physically
+have caused it costs maintainer attention and slows merge cadence.
+Recurring noise also trains reviewers to ignore qa failures, which
+masks the real regressions this gate exists to catch.
 
 ## How
-Raise the `connect_main` default from `5` to `20` to match the
-precedent already established in `qa/probes/_runtime.py:150`. Total
-launch-to-UIA-ready budget becomes ~28s (8s waiter + 20s connect)
-— generous enough for slow runners; local runs unaffected (finish in
-<2s, ceiling never hit).
+Make each write helper await the response of the request its click
+issues (`page.expect_response`) before returning, so a driver's next
+assertion reads committed state by construction rather than by timing.
 
 ## Out of scope
-- Migrating scenarios off pywinauto (separate, larger discussion)
-- Raising the 8s `_wait_for_main_window` default (non-fatal warner only)
+- Widening the batch timeout (treats the symptom, keeps the race)
+- Retrying failed scenarios (hides a real ordering bug)
 
 ## Related
 - Follow-up to flake observation in #373
-- Precedent: `qa/probes/_runtime.py:150` `_uia.connect_main(timeout=20)`
+- Precedent: the #855 write-helper fix, after which the batch went 8/8
 
 ## Context
 Surfaced during `/work #373` when Path C (fix-now) was chosen over
 Path A (close-as-flake-confirmed). Filed for paper trail in case
-future runs reveal cases the 20s ceiling still doesn't absorb.
+future runs reveal a second race the response-wait doesn't absorb.
 ```
 
 ## Label allocation

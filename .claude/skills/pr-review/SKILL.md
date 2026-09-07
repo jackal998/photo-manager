@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Use after `git push` (or against an existing PR number) to catch semantic drift between code, docs/features.md, and qa/scenarios/sNN_*.py that the file-touch hooks (docs_guard, qa_scenario_guard) cannot see. Acts as a **manager** that dispatches to per-gate sub-skills based on what the diff touches. Reports findings in chat; defaults to posting them to the PR (pending draft for human-in-loop, submitted review for agent-driven flows) unless the user said "preview only" or there are no thread-worthy findings.
+description: Use after `git push` (or against an existing PR number) to catch semantic drift between code, docs/features.md, and qa/web/scenarios/sNN_*.py that the file-touch hooks (docs_guard, qa_scenario_guard) cannot see. Acts as a **manager** that dispatches to per-gate sub-skills based on what the diff touches. Reports findings in chat; defaults to posting them to the PR (pending draft for human-in-loop, submitted review for agent-driven flows) unless the user said "preview only" or there are no thread-worthy findings.
 origin: local
 ---
 
@@ -69,7 +69,7 @@ The skill reads:
      all return — don't serialise.
 2. **`docs/features.md`** at the working tree's HEAD — the canonical
    feature inventory used by `docs-features-drift/`.
-3. **`qa/scenarios/sNN_*.py`** files named in features.md entries —
+3. **`qa/web/scenarios/sNN_*.py`** files named in features.md entries —
    used by `qa-scenario-drift/`.
 4. **`README.md § Usage — GUI § Step 1-4`** ONLY if the diff touches
    the documented happy-path surfaces (scan dialog, save flow,
@@ -95,13 +95,13 @@ logic) that handles it:
 | **0** — task alignment | PR body has `Fixes #N` / `Closes #N` / `Resolves #N`, OR user supplied issue number | **inline** — direct `gh issue view <N> --json title,body,labels` |
 | **1** — behaviour-bearing classifier | always runs (dispatcher) | **inline** — file-glob classification; output gates which lenses fire downstream |
 | **2** — features.md drift | Gate 1 emitted any behaviour-bearing file | → `docs-features-drift/` (project skill) |
-| **3** — qa scenario coverage | Gate 2 matched any features.md entry naming a `qa/scenarios/sNN_*.py` driver | → `qa-scenario-drift/` (project skill, chains with Gate 2's match list) |
+| **3** — qa scenario coverage | Gate 2 matched any features.md entry naming a `qa/web/scenarios/sNN_*.py` driver | → `qa-scenario-drift/` (project skill, chains with Gate 2's match list) |
 | **4** — historical-drift caveat | invoked with a PR number AND that PR predates `docs/features.md` (introduced in PR #263) | **inline** — `git show <pr-head>:docs/features.md` probe + caveat handling |
 | **5** — drive-by observations | always runs after Gates 0-4 | **inline** — catch-all bucket (limit 3) |
 | **6** — harness security | diff touches `.claude/**`, `scripts/hooks/**`, `settings.json` / `settings.local.json` / `.mcp.json`, or `CLAUDE.md` permissions/install lines | → `/security-scan` (global skill, AgentShield) — auto-invoked, findings folded in |
 | **7** — app-level security | diff has behaviour-bearing Python source files | → `app-security-patterns/` (project skill) → composes `security-review` (global lens) |
 | **8** — SQLite migration safety | diff touches `_MIGRATIONS` list in `infrastructure/manifest_repository.py` OR `CREATE TABLE migration_manifest` in `scanner/manifest.py` | → `sqlite-migration-safety/` (project skill) |
-| **9** — scanner / threading perf | diff touches `scanner/**.py`, `app/views/workers/**.py`, or adds a `QThread` / `QRunnable` / `ThreadPoolExecutor` | → `scanner-perf-patterns/` (project skill) → composes `photo-scanner-patterns` (global lens) |
+| **9** — scanner / threading perf | diff touches `scanner/**.py`, `core/app_service/scan_runner.py`, or adds a `threading.Thread` / `ThreadPoolExecutor` / `run_in_executor` call | → `scanner-perf-patterns/` (project skill) → composes `photo-scanner-patterns` (global lens) |
 | **10** — test padding patterns | diff adds or modifies `tests/test_*.py` or `tests/integration/test_*.py` | → `test-padding-patterns/` (project skill) → composes `python-testing` (global lens) |
 | **11** — PII audit on project skills | diff adds or modifies files under `.claude/skills/<name>/` (NOT `.claude/skills/personal/`) | → `skill-pii-audit/` (project skill) |
 | **Post-back, Mode A** (human-in-loop) | default in human session AND user didn't say "preview only" | → `github-pr-review-pending/` (project skill) → composes `conventional-comments` |
@@ -285,20 +285,20 @@ When the user runs `/pr-review` (with or without a PR number):
    A PR is behaviour-bearing when it could change what a user
    sees, clicks, or what happens when they act. Concretely:
 
-   - Touches `app/views/dialogs/**.py`, `app/views/handlers/**.py`,
-     `app/views/workers/**.py`, `app/views/main_window.py`, or
-     `app/views/window_state.py` with non-trivial diff (>10
+   - Touches `app/web/routes/**.py`, `frontend/src/components/**.tsx`,
+     `frontend/src/App.tsx`, or
+     `frontend/src/lib/overlayGeometry.ts` with non-trivial diff (>10
      added+deleted lines OR a signature change OR a new
      conditional branch OR a new string literal that surfaces in
      the UI).
    - Touches `core/services/**.py` or `core/models.py` in a way
      that changes a return shape, raised exception, or
      side-effect signature that flows to a UI surface.
-   - Adds or renames a `qa/scenarios/sNN_*.py` driver (signals a
+   - Adds or renames a `qa/web/scenarios/sNN_*.py` driver (signals a
      new user-visible flow worth recording in features.md).
    - Adds or removes a `settings.json` key visible to the user.
    - Adds, renames, or removes a translation key referenced from
-     `app/views/`.
+     `frontend/src/`.
 
    A PR is **NOT behaviour-bearing** (→ CLEAN, stop) when it ONLY
    touches:
@@ -391,7 +391,7 @@ note: no linked issue / unclear issue body
 ✗ <touched-file>: no features.md entry — appears user-visible
     suggested entry name: "<area> — <behaviour>"
 
-## qa/scenarios/ coverage
+## qa/web/scenarios/ coverage
 ✓ sNN: <one-line summary>
 ⚠ sNN: exists but doesn't exercise <new-branch> at <file:line>
 ⚠ no scenario: <touched-file> — consider extending sNN or adding new

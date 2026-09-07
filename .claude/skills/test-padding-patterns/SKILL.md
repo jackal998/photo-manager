@@ -1,6 +1,6 @@
 ---
 name: test-padding-patterns
-description: Detect coverage-padding anti-patterns in photo-manager Python tests. Use when /pr-review's diff adds or modifies tests/test_*.py or tests/integration/test_*.py — this skill flags monkeypatching stdlib/Qt methods to cover except-pass branches, forcing feature-flag constants to False, undocumented @pytest.mark.skip, pytest.skip() in test bodies, stub-AttributeError tricks, branch-reached-only assertions, and generic regression-test names. Composes with global python-testing for positive fixture patterns.
+description: Detect coverage-padding anti-patterns in photo-manager Python tests. Use when /pr-review's diff adds or modifies tests/test_*.py or tests/integration/test_*.py — this skill flags monkeypatching stdlib methods to cover except-pass branches, forcing feature-flag constants to False, undocumented @pytest.mark.skip, pytest.skip() in test bodies, stub-AttributeError tricks, branch-reached-only assertions, and generic regression-test names. Composes with global python-testing for positive fixture patterns.
 origin: local
 ---
 
@@ -36,10 +36,11 @@ Skip otherwise.
 
 ## Anti-patterns to flag (each ⚠ unless noted)
 
-### Monkeypatching a stdlib / Qt method to raise just to cover an except-pass branch
+### Monkeypatching a stdlib method to raise just to cover an except-pass branch
 
-- `monkeypatch.setattr(QStandardItem, "setData", lambda *a: 1/0)`
-  — flag. CLAUDE.md's anti-pattern list names this exact one.
+- `monkeypatch.setattr(store, "set_decisions", lambda *a: 1/0)` to
+  reach a wrapped `except: pass` — flag. CLAUDE.md's anti-pattern
+  list names this shape.
 - `monkeypatch.setattr(Image, "getexif", lambda self: None)` —
   flag if used only to cover the `if not exif: return None`
   guard. The right test is a real fixture file with no EXIF.

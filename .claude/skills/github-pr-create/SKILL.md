@@ -7,7 +7,7 @@ description: Single source of truth for opening a GitHub PR that goes green — 
 
 Opening a PR in this repo has more moving parts than `gh pr create`
 suggests: three independent CI gates (`pr-gates`, `news-gate`, plus
-`tests` / `qa-batch`), two of which need an **input the human/agent
+`tests` / `web-scenario-batch`), two of which need an **input the human/agent
 must supply at create time** (a bypass token in the body, a
 `news/<PR>.<type>` file keyed by the not-yet-existing PR number). That
 responsibility used to live scattered across `/work` Phase 5, the
@@ -29,10 +29,10 @@ source of truth for *doing the steps that make them pass*.
 |---|---|---|
 | On a feature branch, not `master` | `branch-guard` hook (commit-time) | Pre-flight check before any commit/create |
 | `docs/features.md` updated when user-visible behaviour changed | `docs_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: update features.md (via `/update-docs`) **or** put `[docs-not-needed: <reason>]` in the PR body |
-| `qa/scenarios/sNN_*.py` added/extended for user-facing flows | `qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: add a driver **or** put `[qa-not-needed: <reason>]` in the PR body |
+| `qa/web/scenarios/sNN_*.py` added/extended for user-facing flows | `qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: add a driver **or** put `[qa-not-needed: <reason>]` in the PR body |
 | `news/<PR>.<type>` changelog fragment | `news-gate.yml` `require-news-fragment` → `scripts/hooks/news_guard.py --ci` (server-only — no client hook, because the filename needs the PR number) | Write it **after** create, or put `[skip-news: <reason>]` in the body |
 | Unit + coverage (70% file / 80% global) | `tests.yml` `pytest` | Run locally before push (`/work` Phase 4 already does) |
-| qa scenario batch | `qa-batch.yml` `qa (1..5)` | Server-side; watch in the tail |
+| qa scenario batch | `web-eval-gates.yml` `web-scenario-batch` | Server-side; watch in the tail |
 | Semantic drift (code ↔ features.md ↔ qa) | `/pr-review` (advisory, in-session) | Run before create when the diff qualifies |
 
 The asymmetry that bites: `docs_guard` / `qa_scenario_guard` run **both**
@@ -70,7 +70,7 @@ record the answer — these become inputs to Steps 2 and 4:
 
 Tokens must be **honest** — they're visible in review and in CI logs.
 Use `[qa-not-needed]` when a layer-3 driver would be padding (e.g.
-asserting a value only a flaky UIA read can observe), not to dodge real
+asserting a value only a flaky DOM read can observe), not to dodge real
 coverage — the project's no-test-padding rule (CLAUDE.md "Testing
 ground rules") applies to the token decision too.
 
@@ -213,7 +213,7 @@ most one long wakeup if a follow-up depends on the merge.
 - **`github-issue-create`** — when a drive-by finding surfaces while
   opening the PR, file it through that skill rather than bloating this
   PR — deferred work always gets filed, never silently dropped.
-- **CI workflows** (`pr-gates`, `news-gate`, `tests`, `qa-batch`) and
+- **CI workflows** (`pr-gates`, `news-gate`, `tests`, `web-scenario-batch`) and
   **PreToolUse hooks** (`docs_guard`, `qa_scenario_guard`) are the
   enforcers; this skill supplies their inputs and watches their result.
   Do not re-implement their checks here.
