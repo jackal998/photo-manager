@@ -611,6 +611,49 @@ describe("ScanDialog", () => {
     expect(req.dhash_threshold).toBe(2);
   });
 
+  it("snaps a below-floor hash threshold to 2 in the FIELD on blur (#823)", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    // `min` only makes the browser set rangeUnderflow — it never corrects the
+    // field. Without the blur snap the dialog shows "1" while the scan runs at
+    // 2, which is the same class of dishonesty #823 exists to remove. Qt's
+    // QSpinBox snaps the shown value, so this is also client parity.
+    for (const testid of [SCAN_PHASH_THRESHOLD, SCAN_DHASH_THRESHOLD]) {
+      const input = screen.getByTestId(testid);
+      await user.clear(input);
+      await user.type(input, "1");
+      expect(input).toHaveValue(1); // mid-edit: not clamped per keystroke
+      await user.tab();
+      expect(input).toHaveValue(2);
+    }
+  });
+
+  it("snaps the displayed hash thresholds to what Start Scan actually sends (#823)", async () => {
+    const user = userEvent.setup();
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+
+    renderDialog();
+    await fillStartFields(user);
+
+    await user.clear(screen.getByTestId(SCAN_PHASH_THRESHOLD));
+    await user.type(screen.getByTestId(SCAN_PHASH_THRESHOLD), "1");
+    await user.clear(screen.getByTestId(SCAN_DHASH_THRESHOLD));
+    await user.type(screen.getByTestId(SCAN_DHASH_THRESHOLD), "1");
+
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    // What the user sees after Start must equal what the wire carries.
+    const [req] = startScanMock.mock.calls[0] as [
+      { threshold: number; dhash_threshold: number },
+    ];
+    expect(req.threshold).toBe(2);
+    expect(req.dhash_threshold).toBe(2);
+    expect(screen.getByTestId(SCAN_PHASH_THRESHOLD)).toHaveValue(2);
+    expect(screen.getByTestId(SCAN_DHASH_THRESHOLD)).toHaveValue(2);
+  });
+
   it("renders the odd-value parity note under both hash threshold inputs (#823)", async () => {
     renderDialog();
 

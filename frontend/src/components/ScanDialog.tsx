@@ -118,6 +118,24 @@ function clampThresholdInput(
 }
 
 /**
+ * The same clamp, rendered back as the string the input should DISPLAY.
+ *
+ * Used on blur so the field shows the value that would actually run (#823).
+ * Deliberately not applied on every keystroke: clamping mid-type corrupts a
+ * clear-and-retype (clearing would snap the field straight back to the
+ * default, so the next digit appends onto it). Blur is the moment the user
+ * has finished with the field, which is exactly when Qt's QSpinBox snaps too.
+ */
+function snapThresholdInput(
+  raw: string,
+  min: number,
+  max: number,
+  fallback: number
+): string {
+  return String(clampThresholdInput(raw, min, max, fallback));
+}
+
+/**
  * Map persisted `sources.list` (from GET /api/settings) into SourceEntry rows.
  *
  * Mirrors the Qt ScanDialog._load_from_settings malformed-entry guard: only
@@ -428,6 +446,17 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       DEFAULT_MEAN_COLOR_THRESHOLD
     );
 
+    // Snap the DISPLAYED values to what is actually about to run (#823).
+    // The `min` attribute only makes the browser set `rangeUnderflow`; it
+    // never corrects the field, so typing 1 used to leave "1" on screen while
+    // the request carried 2 — the scan dialog quietly disagreeing with itself
+    // about the very setting this ticket exists to stop it lying about. Qt's
+    // QSpinBox snaps the shown value, so this is also what keeps the two
+    // clients honest in the same way. Purely presentational: `req` below is
+    // built from the clamped locals either way.
+    setPhashThresholdInput(String(phashThreshold));
+    setDhashThresholdInput(String(dhashThreshold));
+
     const req: WebScanRequest = {
       sources: sourcesMap,
       output_path: outputPath.trim(),
@@ -734,6 +763,16 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   value={phashThresholdInput}
                   disabled={isRunning}
                   onChange={(e) => setPhashThresholdInput(e.target.value)}
+                  onBlur={() =>
+                    setPhashThresholdInput((raw) =>
+                      snapThresholdInput(
+                        raw,
+                        NEAR_DUP_THRESHOLD_MIN,
+                        NEAR_DUP_THRESHOLD_MAX,
+                        DEFAULT_PHASH_THRESHOLD
+                      )
+                    )
+                  }
                   className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
                 />
                 <p
@@ -766,6 +805,16 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   value={dhashThresholdInput}
                   disabled={isRunning}
                   onChange={(e) => setDhashThresholdInput(e.target.value)}
+                  onBlur={() =>
+                    setDhashThresholdInput((raw) =>
+                      snapThresholdInput(
+                        raw,
+                        NEAR_DUP_THRESHOLD_MIN,
+                        NEAR_DUP_THRESHOLD_MAX,
+                        DEFAULT_DHASH_THRESHOLD
+                      )
+                    )
+                  }
                   className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
                 />
                 <p
