@@ -168,7 +168,6 @@ class TestPipelineSkipsBadFile:
 
         Regression for issue #46 (rawpy.LibRawFileUnsupportedError aborted the whole scan).
         """
-        # Need a fresh QApplication to deliver signals via DirectConnection in this thread.
 
         a = tmp_path / "a.jpg"
         b = tmp_path / "b.jpg"
@@ -208,7 +207,6 @@ class TestPipelineSkipsBadFile:
         worker.finished.connect(finished.append)
         worker.failed.connect(failed.append)
 
-        # Run synchronously in this thread — DirectConnection delivers signals immediately.
         worker.run()
 
         assert not failed, f"Scan must not have failed; got: {failed}"
@@ -1009,7 +1007,8 @@ class TestHashPoolCalibration:
         self, tmp_path, monkeypatch
     ):
         """Cache miss: a fresh measurement is dispatched via bus.hash_pool_measured
-        so the dialog can persist it (the inbound half of the cache)."""
+        so the client can persist it — app/web/routes/scan.py:175 calls
+        store_hash_pool_rates (the inbound half of the cache)."""
         import core.app_service.scan_runner as scan_runner_mod
 
         monkeypatch.setattr(
@@ -2035,7 +2034,7 @@ class TestPipelinePerDeviceHashPools:
     def test_close_unblocks_route_outcome_on_full_exif_queue(
         self, tmp_path, monkeypatch
     ):
-        """#594 — requestInterruption() (dialog close) must tear the worker down
+        """#594 — a user cancel (the client closing the scan) must tear the run down
         even when the parent drain thread is wedged in ``_route_outcome``'s
         cooperative ``exif_queue.put`` loop because the queue is full.
 
@@ -2111,11 +2110,6 @@ class TestPipelinePerDeviceHashPools:
             worker._cancel_token.request()
 
         failed: list[str] = []
-        # DirectConnection: run() executes in a sub-thread below so the test can
-        # time-bound a hang, but the worker's affinity is the main (test) thread.
-        # Under the default AutoConnection a cross-thread failed.emit() would queue
-        # to a main-thread event loop that isn't running here, and the capture would
-        # be lost — force Direct so the slot fires inline in the run() thread.
         worker.failed.connect(failed.append)
 
         done = threading.Event()
@@ -3218,7 +3212,7 @@ class TestByteBudgetPipelineBound:
 
 
 class TestPostHashCancelKillsExif:
-    """#607 / T7 — closing the scan dialog DURING the post-HASH EXIF drain
+    """#607 / T7 — a user cancel DURING the post-HASH EXIF drain
     must hard-kill exiftool so consumers wedged inside ``proc.execute()``
     can exit promptly.
 
@@ -3324,10 +3318,6 @@ class TestPostHashCancelKillsExif:
 
         _threading.Thread(target=watcher, daemon=True).start()
 
-        # DirectConnection so emit() from the background worker thread
-        # delivers to the test thread's list synchronously — without this
-        # the default AutoConnection queues the signal on the test thread's
-        # (non-running) event loop and `failed` stays empty.
         failed: list[str] = []
         finished: list[str] = []
         worker.failed.connect(failed.append)
