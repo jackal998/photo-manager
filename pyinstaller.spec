@@ -14,9 +14,8 @@ Reproducibility:
 
 Iteration policy: refine the `excludes` list from real PyInstaller
 WARNINGs + the smoke step's stderr, never from speculation. The
-starter list is a generous trim aimed at PySide6's optional Qt
-modules and dev-only stdlib; entries that turn out to be required
-will show up as missing-module errors at runtime.
+list trims dev-only stdlib and tooling; entries that turn out to be
+required will show up as missing-module errors at runtime.
 """
 
 from pathlib import Path
@@ -45,26 +44,18 @@ if not (_frontend_dist / "index.html").exists():
 # DLLs (~128 MB) instead of two ~114 MB statically linked exes (~218 MB).
 # Everything staged is shipped, whatever the staging step put there.
 #
-# Dest "ffmpeg" — a sub-directory, NOT loose in _internal/. Two reasons,
-# both measured on a local build of this spec:
-#   1. The shared build's exes import their av*/sw* DLLs by name, and
-#      Windows searches the exe's OWN directory first. Keeping the set in
-#      one directory is what makes ffmpeg.exe load the libraries it was
-#      built against, wherever the bundle is unpacked.
-#   2. This bundle ALREADY contains a second, different FFmpeg DLL set:
-#      PySide6 ships avcodec-61 / avformat-61 / avutil-59 / swresample-5 /
-#      swscale-8 for QtMultimedia, and PyInstaller collects them (measured:
-#      they land in _internal/PySide6/, so there is no name collision with
-#      our avcodec-63 / avformat-63 / avutil-61 / swresample-7 / swscale-10
-#      / avfilter-12 / avdevice-63 today). Our set staying in its own
-#      directory keeps it that way when either side bumps a soname.
+# Dest "ffmpeg" — a sub-directory, NOT loose in _internal/, and measured
+# on a local build of this spec: the shared build's exes import their
+# av*/sw* DLLs by name, and Windows searches the exe's OWN directory
+# first. Keeping the set in one directory is what makes ffmpeg.exe load
+# the libraries it was built against, wherever the bundle is unpacked.
 # transcode_service.py's _resolve_media_tool() looks in <_MEIPASS>/ffmpeg
 # and <exe dir>/ffmpeg before the loose locations.
 #
 # datas, not binaries: these files are a self-consistent set that must be
 # copied verbatim into one directory. PyInstaller's binary analysis would
-# hoist the DLLs it recognises into _internal/ (splitting the set and
-# putting our av*.dll next to Qt's), which is exactly what this layout
+# hoist the DLLs it recognises into _internal/, splitting the set across
+# _internal/ and _internal/ffmpeg/ — which is exactly what this layout
 # exists to prevent.
 #
 # The staging step names the licence FFMPEG-LICENSE.txt so it cannot be
@@ -110,21 +101,22 @@ block_cipher = None
 
 
 a = Analysis(
-    # launcher.py dispatches: Qt desktop by default, web shell when
-    # PHOTO_MANAGER_WEB is truthy, server-only smoke when
-    # PHOTO_MANAGER_WEB_SMOKE is truthy (#772). The old main.py Qt
-    # entry is what launcher's default path runs, so classic behaviour
-    # is unchanged.
+    # launcher.py is the only entry point since the desktop client was
+    # removed (#646): it opens the web shell unconditionally, or runs the
+    # server-only smoke when PHOTO_MANAGER_WEB_SMOKE is truthy (#772,
+    # release.yml's web-shell smoke step).
     ["launcher.py"],
     pathex=[],
     binaries=heif_binaries + rawpy_binaries,
     datas=heif_datas + ffmpeg_datas + [
-        # Bundled read-only assets resolved via sys._MEIPASS / BASE_DIR
-        # in main.py. translations/ holds the YAML catalogs the i18n
-        # layer reads at startup. No icons/PNGs are loaded by the app
-        # today (verified by grep) so only translations/ is bundled.
+        # Bundled read-only assets, resolved under sys._MEIPASS at
+        # runtime (writable state goes next to the exe instead — see
+        # infrastructure/settings.py, #882). translations/ holds the YAML
+        # catalogs the i18n layer reads at startup. No icons/PNGs are
+        # loaded by the app today (verified by grep) so only
+        # translations/ is bundled.
         ("translations", "translations"),
-        # Built SPA for the web shell. app/web/main.py resolves
+        # Built SPA for the web shell. `app.web.main` resolves
         # Path(__file__).parents[2]/frontend/dist, which under a frozen
         # onedir build is <_internal>/frontend/dist — exactly this dest.
         ("frontend/dist", "frontend/dist"),
@@ -166,36 +158,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # PySide6 — optional modules the app doesn't import. Trims
-        # tens of MB. Refine from PyInstaller WARNINGs if any of these
-        # turn out to be transitively required.
-        "PySide6.Qt3DCore",
-        "PySide6.Qt3DRender",
-        "PySide6.Qt3DInput",
-        "PySide6.Qt3DLogic",
-        "PySide6.Qt3DAnimation",
-        "PySide6.Qt3DExtras",
-        "PySide6.QtWebEngine",
-        "PySide6.QtWebEngineCore",
-        "PySide6.QtWebEngineWidgets",
-        "PySide6.QtWebView",
-        "PySide6.QtCharts",
-        "PySide6.QtDataVisualization",
-        "PySide6.QtNetworkAuth",
-        "PySide6.QtBluetooth",
-        "PySide6.QtNfc",
-        "PySide6.QtPositioning",
-        "PySide6.QtLocation",
-        "PySide6.QtSerialPort",
-        "PySide6.QtSerialBus",
-        "PySide6.QtSensors",
-        "PySide6.QtTextToSpeech",
-        "PySide6.QtRemoteObjects",
-        "PySide6.QtScxml",
-        "PySide6.QtSql",
-        "PySide6.QtTest",
-        "PySide6.QtHelp",
-        "PySide6.QtDesigner",
         # Stdlib modules pulled in by transitive deps but never used
         # by the app's runtime path.
         "tkinter",

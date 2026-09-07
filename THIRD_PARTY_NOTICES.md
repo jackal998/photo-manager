@@ -39,8 +39,9 @@ nine files, all in `_internal\ffmpeg\`:
 redistributed.) The two executables are invoked as separate processes by
 `infrastructure/transcode_service.py`; nothing in this application links
 against FFmpeg's libraries — the DLLs are here because the shared build's
-own executables need them, and they are kept in their own directory so they
-never mix with the FFmpeg libraries PySide6 ships for QtMultimedia.
+own executables need them, and they are kept in their own directory because
+Windows searches an executable's own directory first, so `ffmpeg.exe` loads
+the libraries it was built against.
 
 The LGPL variant is used deliberately so that no GPL-only component
 (notably `libx264`, `libx265`, `libxvid`, all disabled in this build) is
