@@ -19,14 +19,6 @@ if TYPE_CHECKING:
     from playwright.sync_api import Page
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    """Session-scoped QApplication for tests that need a Qt event loop."""
-    from PySide6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 @pytest.fixture(autouse=True)
 def _isolate_unc_resolution(monkeypatch):
     """Keep ``device_key``'s NAS-server grouping (#565) deterministic in tests.

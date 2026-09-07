@@ -119,12 +119,10 @@ _EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
 # two small exes plus avcodec-63 / avformat-63 / avutil-61 / swresample-7 /
 # swscale-10 / avfilter-12 / avdevice-63, and Windows resolves an exe's
 # imports from the exe's own directory first — so the set has to travel
-# together.  It also keeps our libraries away from the SECOND FFmpeg DLL
-# set this bundle already contains: PySide6 ships avcodec-61 / avformat-61
-# / avutil-59 / swresample-5 / swscale-8 for QtMultimedia (measured in a
-# local build: PyInstaller puts those in _internal/PySide6/, so nothing
-# collides today — this layout is what keeps that true after a soname bump
-# on either side).
+# together.  Keeping them in their own subdirectory also means a second
+# FFmpeg DLL set arriving in the bundle (a dependency shipping its own
+# avcodec/avformat, as the desktop toolkit did before #646) cannot collide
+# with ours after a soname bump on either side.
 _BUNDLE_SUBDIR = "ffmpeg"
 
 # `ffmpeg -encoders` on the bundled build takes tens of milliseconds; the

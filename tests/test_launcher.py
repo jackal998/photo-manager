@@ -1,7 +1,7 @@
-"""Unit tests for the dual-mode entry point (launcher.py).
+"""Unit tests for the entry point (launcher.py).
 
 These cover the real decision + contract logic without opening a window:
-- env → mode dispatch (Qt default vs web shell),
+- env → mode dispatch (web shell by default, smoke when CI asks),
 - the WebView2-runtime loud-fail (a blank-window failure mode),
 - the single-worker / daemon-thread / factory uvicorn contract,
 - health-gated startup and the correct loopback window URL.
@@ -42,10 +42,10 @@ def test_env_flag_truthy(raw, expected):
     assert launcher._env_flag_truthy(raw) is expected
 
 
-def test_web_enabled_reads_env():
-    assert launcher._web_enabled({"PHOTO_MANAGER_WEB": "1"}) is True
-    assert launcher._web_enabled({"PHOTO_MANAGER_WEB": "0"}) is False
-    assert launcher._web_enabled({}) is False
+def test_web_smoke_enabled_reads_env():
+    assert launcher._web_smoke_enabled({"PHOTO_MANAGER_WEB_SMOKE": "1"}) is True
+    assert launcher._web_smoke_enabled({"PHOTO_MANAGER_WEB_SMOKE": "0"}) is False
+    assert launcher._web_smoke_enabled({}) is False
 
 
 def test_web_port_default_and_override():
@@ -249,22 +249,25 @@ def test_run_web_raises_when_server_never_healthy(monkeypatch):
 # --- top-level dispatch ----------------------------------------------------
 
 
-def test_main_dispatches_to_qt_by_default(monkeypatch):
+def test_main_opens_the_web_shell_with_no_env_set(monkeypatch):
+    # #646: the web shell is the only client, so a bare launch must open it —
+    # no opt-in env var. This is the regression that would ship a build the
+    # user double-clicks and nothing happens.
     monkeypatch.delenv("PHOTO_MANAGER_WEB", raising=False)
-    monkeypatch.setattr(launcher, "_run_qt", lambda: 42)
-    monkeypatch.setattr(
-        launcher, "run_web", lambda *a, **k: pytest.fail("web path taken by default")
-    )
-    assert launcher.main() == 42
-
-
-def test_main_dispatches_to_web_when_enabled(monkeypatch):
-    monkeypatch.setenv("PHOTO_MANAGER_WEB", "1")
+    monkeypatch.delenv("PHOTO_MANAGER_WEB_SMOKE", raising=False)
     monkeypatch.setattr(launcher, "run_web", lambda: 7)
-    monkeypatch.setattr(
-        launcher, "_run_qt", lambda: pytest.fail("qt path taken when web enabled")
-    )
     assert launcher.main() == 7
+
+
+def test_main_ignores_a_leftover_photo_manager_web_value(monkeypatch):
+    # The var used to select the client; an installer or a user shell profile
+    # may still set it (including to a falsey value). It must not turn the
+    # only remaining client off, and it must not raise.
+    monkeypatch.delenv("PHOTO_MANAGER_WEB_SMOKE", raising=False)
+    monkeypatch.setattr(launcher, "run_web", lambda: 7)
+    for value in ("1", "0", "false", ""):
+        monkeypatch.setenv("PHOTO_MANAGER_WEB", value)
+        assert launcher.main() == 7
 
 
 # --- web smoke (packaging CI, #772) ----------------------------------------
@@ -304,17 +307,14 @@ def test_run_web_smoke_unhealthy_returns_one_but_still_shuts_down(monkeypatch):
     assert thread.joined is True
 
 
-def test_main_dispatches_to_smoke_before_web_or_qt(monkeypatch):
-    # Smoke wins even when PHOTO_MANAGER_WEB is also set: CI sets exactly
-    # one knob and must never open a window or the Qt app.
+def test_main_dispatches_to_smoke_before_the_window(monkeypatch):
+    # Smoke wins even when PHOTO_MANAGER_WEB is also set: release.yml runs the
+    # frozen exe on a runner with no display, so it must never open a window.
     monkeypatch.setenv("PHOTO_MANAGER_WEB_SMOKE", "1")
     monkeypatch.setenv("PHOTO_MANAGER_WEB", "1")
     monkeypatch.setattr(launcher, "run_web_smoke", lambda: 0)
     monkeypatch.setattr(
         launcher, "run_web", lambda *a, **k: pytest.fail("window path taken in smoke")
-    )
-    monkeypatch.setattr(
-        launcher, "_run_qt", lambda: pytest.fail("qt path taken in smoke")
     )
     assert launcher.main() == 0
 
@@ -324,7 +324,6 @@ def test_main_surfaces_fatal_and_reraises_on_web_runtime_error(monkeypatch):
     # invisible — main() must route it through _surface_fatal, then
     # still exit non-zero via the re-raise.
     monkeypatch.delenv("PHOTO_MANAGER_WEB_SMOKE", raising=False)
-    monkeypatch.setenv("PHOTO_MANAGER_WEB", "1")
     surfaced = []
 
     def _boom():

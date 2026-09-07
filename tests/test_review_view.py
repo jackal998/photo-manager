@@ -1,8 +1,15 @@
-"""Parity tests: core/app_service/review_view.py vs app/views/tree_model_builder.py.
+"""Behaviour tests for core/app_service/review_view.py.
 
-Each compute_similarity case is validated against tree_model_builder._file_similarity
-via the oracle mapping (kind → label), so the headless module stays
-behaviourally identical to the Qt tree.
+``pick_ref_winner`` decides which row a group displays as "Ref"; drift there
+reorders every group in the review tree and changes which file the user is
+steered to keep. ``compute_similarity`` produces the per-row similarity the
+UI renders, and ``serialize_groups`` is the exact shape ``GET /api/manifest``
+returns.
+
+Until #646 each case was ALSO asserted against the desktop tree-model builder
+as a parity oracle. That second implementation is gone; what remains is the
+explicit expected value every case already carried, so the pins are unchanged
+in substance.
 """
 
 from __future__ import annotations
@@ -10,42 +17,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-import app.views.tree_model_builder as tmb
 import core.app_service.review_view as rv
-from infrastructure.i18n import t
 
 
 # ---------------------------------------------------------------------------
-# Oracle: maps similarity kind → the Qt label the tree would show
-# ---------------------------------------------------------------------------
-
-def _kind_to_label(sim: dict) -> str:
-    """Convert a compute_similarity dict to the Qt display label.
-
-    This is the PARITY ORACLE — the same mapping tree_model_builder applies:
-      percent   → f"{percent}%"
-      passenger → f"{percent}*%"
-      ref       → t("tree.similarity_ref")
-      near_dup  → t("tree.similarity_near_dup")
-      none      → t("tree.similarity_passenger")
-    """
-    kind = sim["kind"]
-    pct = sim["percent"]
-    if kind == "percent":
-        return f"{pct}%"
-    if kind == "passenger":
-        return f"{pct}*%"
-    if kind == "ref":
-        return t("tree.similarity_ref")
-    if kind == "near_dup":
-        return t("tree.similarity_near_dup")
-    if kind == "none":
-        return t("tree.similarity_passenger")
-    raise ValueError(f"Unknown similarity kind: {kind!r}")
-
-
-# ---------------------------------------------------------------------------
-# Minimal PhotoRecord stand-in for tests (no Qt, no DB)
+# Minimal PhotoRecord stand-in for tests (no DB)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -77,21 +53,18 @@ _PHASH_NEAR = "0" * 15 + "f"  # 60 zeros + 4 ones → hamming = 4 → 94%
 
 
 # ---------------------------------------------------------------------------
-# pick_ref_winner parity
+# pick_ref_winner
 # ---------------------------------------------------------------------------
 
-class TestPickRefWinnerParity:
+class TestPickRefWinner:
     def test_exact_duplicate_group_no_ref(self):
         items = [
             _FakeRecord("/a.jpg", action="EXACT"),
             _FakeRecord("/b.jpg", action="EXACT"),
         ]
-        # Both headless and Qt implementations must explicitly return None.
-        rv_result = rv.pick_ref_winner(items)
-        qt_result = tmb._pick_ref_winner(items)
-        assert rv_result is qt_result          # parity: same object identity (both None)
-        assert rv_result is None               # explicit: headless returns None
-        assert qt_result is None               # explicit: Qt returns None
+        # An all-EXACT group has no Ref tier, so there is no winner to
+        # promote: the contract is an explicit None, not "the first row".
+        assert rv.pick_ref_winner(items) is None
 
         # serialize_groups for an all-EXACT group must mark every row
         # is_ref_winner=False (there is no Ref winner to label).
@@ -111,10 +84,7 @@ class TestPickRefWinnerParity:
             _FakeRecord("/ref.jpg", action="", score=0.9),
             _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE"),
         ]
-        rv_winner = rv.pick_ref_winner(items)
-        qt_winner = tmb._pick_ref_winner(items)
-        assert rv_winner is qt_winner
-        assert rv_winner is items[0]
+        assert rv.pick_ref_winner(items) is items[0]
 
     def test_score_based_tiebreak(self):
         """Higher score wins among Ref-tier items."""
@@ -123,10 +93,7 @@ class TestPickRefWinnerParity:
             _FakeRecord("/high.jpg", action="", score=0.9),
             _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE"),
         ]
-        rv_winner = rv.pick_ref_winner(items)
-        qt_winner = tmb._pick_ref_winner(items)
-        assert rv_winner is qt_winner
-        assert rv_winner is items[1]  # highest score
+        assert rv.pick_ref_winner(items) is items[1]  # highest score
 
     def test_path_lexicographic_tiebreak_when_score_equal(self):
         """When scores are equal, lex-min file_path wins."""
@@ -134,10 +101,7 @@ class TestPickRefWinnerParity:
             _FakeRecord("/z.jpg", action="", score=0.5),
             _FakeRecord("/a.jpg", action="", score=0.5),
         ]
-        rv_winner = rv.pick_ref_winner(items)
-        qt_winner = tmb._pick_ref_winner(items)
-        assert rv_winner is qt_winner
-        assert rv_winner is items[1]  # "/a.jpg" < "/z.jpg"
+        assert rv.pick_ref_winner(items) is items[1]  # "/a.jpg" < "/z.jpg"
 
     def test_unscored_loses_to_scored(self):
         """Unscored (score=None) ranks last among Ref-tier items."""
@@ -145,97 +109,83 @@ class TestPickRefWinnerParity:
             _FakeRecord("/scored.jpg", action="", score=0.1),
             _FakeRecord("/unscored.jpg", action=""),
         ]
-        rv_winner = rv.pick_ref_winner(items)
-        qt_winner = tmb._pick_ref_winner(items)
-        assert rv_winner is qt_winner
-        assert rv_winner is items[0]
+        assert rv.pick_ref_winner(items) is items[0]
 
     def test_keep_action_is_ref_tier(self):
         items = [
             _FakeRecord("/keep.jpg", action="KEEP", score=0.8),
             _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE"),
         ]
-        rv_winner = rv.pick_ref_winner(items)
-        qt_winner = tmb._pick_ref_winner(items)
-        assert rv_winner is qt_winner
-        assert rv_winner is items[0]
+        assert rv.pick_ref_winner(items) is items[0]
 
     def test_undated_action_is_ref_tier(self):
         items = [
             _FakeRecord("/undated.jpg", action="UNDATED", score=0.5),
         ]
-        rv_winner = rv.pick_ref_winner(items)
-        qt_winner = tmb._pick_ref_winner(items)
-        assert rv_winner is qt_winner
+        # UNDATED is a Ref-tier action, so a lone UNDATED row wins its
+        # own group rather than leaving the group without a Ref.
+        assert rv.pick_ref_winner(items) is items[0]
 
 
 # ---------------------------------------------------------------------------
-# compute_similarity parity
+# compute_similarity
 # ---------------------------------------------------------------------------
 
-class TestComputeSimilarityParity:
-    def _assert_parity(self, action, record, is_ref_winner, ref_phash):
-        sim = rv.compute_similarity(action, record, is_ref_winner, ref_phash)
-        qt_label = tmb._file_similarity(action, record, is_ref_winner, ref_phash)
-        headless_label = _kind_to_label(sim)
-        assert headless_label == qt_label, (
-            f"Similarity mismatch for action={action!r}, "
-            f"is_ref_winner={is_ref_winner}, ref_phash={ref_phash!r}: "
-            f"headless={headless_label!r} != qt={qt_label!r}"
-        )
-        return sim
+class TestComputeSimilarity:
+    def _sim(self, action, record, is_ref_winner, ref_phash):
+        return rv.compute_similarity(action, record, is_ref_winner, ref_phash)
 
     def test_exact_action_gives_100_percent(self):
         rec = _FakeRecord("/a.jpg", action="EXACT")
-        sim = self._assert_parity("EXACT", rec, False, None)
+        sim = self._sim("EXACT", rec, False, None)
         assert sim == {"kind": "percent", "percent": 100}
 
     def test_review_duplicate_with_phash_recomputed(self):
         # 4 bits different → (64-4)/64*100 = 93.75 → round = 94
         rec = _FakeRecord("/b.jpg", action="REVIEW_DUPLICATE", phash=_PHASH_NEAR)
-        sim = self._assert_parity("REVIEW_DUPLICATE", rec, False, _PHASH_A)
+        sim = self._sim("REVIEW_DUPLICATE", rec, False, _PHASH_A)
         assert sim["kind"] == "percent"
         assert sim["percent"] == round((64 - 4) / 64 * 100)
 
     def test_review_duplicate_falls_back_to_stored_hamming(self):
         """When ref_phash is None and record has stored hamming_distance."""
         rec = _FakeRecord("/b.jpg", action="REVIEW_DUPLICATE", hamming_distance=8)
-        sim = self._assert_parity("REVIEW_DUPLICATE", rec, False, None)
+        sim = self._sim("REVIEW_DUPLICATE", rec, False, None)
         assert sim["kind"] == "percent"
         assert sim["percent"] == round((64 - 8) / 64 * 100)
 
     def test_review_duplicate_near_dup_when_no_phash(self):
         """No phash on either side → near_dup kind."""
         rec = _FakeRecord("/b.jpg", action="REVIEW_DUPLICATE")
-        sim = self._assert_parity("REVIEW_DUPLICATE", rec, False, None)
+        sim = self._sim("REVIEW_DUPLICATE", rec, False, None)
         assert sim == {"kind": "near_dup", "percent": None}
 
     def test_ref_winner_returns_ref_kind(self):
         rec = _FakeRecord("/ref.jpg", action="")
-        sim = self._assert_parity("", rec, True, None)
+        sim = self._sim("", rec, True, None)
         assert sim == {"kind": "ref", "percent": None}
 
     def test_ref_tier_passenger_with_phash_gives_starred_percent(self):
         """Ref-tier non-winner + phash → passenger kind with percent."""
         rec = _FakeRecord("/passenger.jpg", action="KEEP", phash=_PHASH_NEAR)
-        sim = self._assert_parity("KEEP", rec, False, _PHASH_A)
+        sim = self._sim("KEEP", rec, False, _PHASH_A)
         assert sim["kind"] == "passenger"
         assert sim["percent"] == round((64 - 4) / 64 * 100)
 
     def test_ref_tier_passenger_no_phash_gives_none_kind(self):
         """Ref-tier non-winner + no phash → none kind ('—')."""
         rec = _FakeRecord("/mov.mov", action="")
-        sim = self._assert_parity("", rec, False, None)
+        sim = self._sim("", rec, False, None)
         assert sim == {"kind": "none", "percent": None}
 
     def test_keep_action_ref_winner(self):
         rec = _FakeRecord("/keep.jpg", action="KEEP")
-        sim = self._assert_parity("KEEP", rec, True, _PHASH_A)
+        sim = self._sim("KEEP", rec, True, _PHASH_A)
         assert sim["kind"] == "ref"
 
     def test_undated_action_ref_winner(self):
         rec = _FakeRecord("/undated.jpg", action="UNDATED")
-        sim = self._assert_parity("UNDATED", rec, True, None)
+        sim = self._sim("UNDATED", rec, True, None)
         assert sim["kind"] == "ref"
 
 

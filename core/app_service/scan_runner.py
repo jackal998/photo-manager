@@ -1,12 +1,12 @@
-"""Qt-free scan pipeline — run_pipeline().
+"""The scan pipeline — run_pipeline().
 
-Extracted from app.views.workers.ScanWorker._run_pipeline so the
-pipeline logic is reachable without importing PySide6.  The original
-file retains a thin Qt adapter (ScanWorker.run()) that builds a
-ScanConfig + _QtBus and delegates here.
+Walk → hash → EXIF → classify → score → manifest.  A client supplies a
+``ScanConfig``, a cancel token and a ``ScanProgressBus``; everything the
+user sees during a scan is an event on that bus.  ``app/web/routes/scan.py``
+is the one production caller today, fanning the events out over SSE.
 
-No Qt import lives in this module — enforced by the T6 AST probe in
-tests/test_ui_probes.py.
+This module must stay headless — it runs in the FastAPI process, which has
+no display.  ``tests/test_scan_pipeline.py`` pins its behaviour.
 """
 from __future__ import annotations
 

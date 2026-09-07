@@ -1,19 +1,16 @@
-"""Tests for app/views/workers/scan_worker.py — ScanWorker pipeline behaviour.
+"""Behaviour tests for core.app_service.scan_runner.run_pipeline.
 
-Coverage:
+``run_pipeline`` is the scan engine: walk → hash → EXIF → classify → manifest.
+``app/web/routes/scan.py`` drives it on a plain thread and fans its events out
+over SSE, so everything pinned here is behaviour a web user can hit — skipped
+unreadable files, cancellation at every stage, the bounded queues that must not
+deadlock, per-device hash pools, the read-knee ramp, and the byte budget.
 
-- issue #46 regression — one bad file must never abort the whole scan
-  (per-file ``compute_hashes`` exception is logged and skipped, manifest
-  still written).
-- issues #51 + #56 regression — an empty input folder is treated as a
-  benign success (``completed_empty`` signal, "Done." log line, no
-  ``failed`` emission, no modal).
-- issue #57 regression — silent image-decode failures (truncated /
-  corrupt JPEGs that compute_hashes returns from without raising) are
-  routed to the skip channel instead of being misclassified as UNDATED.
-- issue #49 regression — scan progress and errors are forwarded to
-  loguru so the rotating ``app_<date>.log`` captures forensic context
-  (the dialog log box is transient and disappears on close).
+#646 renamed this file. It used to be ``tests/test_scan_worker.py`` and drove
+the pipeline through the desktop ``ScanWorker`` QThread, which did nothing but
+build a ``ScanConfig`` from its keyword arguments and call ``run_pipeline``.
+``_PipelineRun`` below performs that same wiring, so the assertions are
+unchanged; only the plumbing that reaches them moved.
 """
 
 from __future__ import annotations
@@ -23,19 +20,154 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from core.app_service.cancel_token import _CancelToken
+from core.app_service.dtos import ScanConfig
+from core.app_service.scan_runner import run_pipeline
+
+
+# ---------------------------------------------------------------------------
+# Test harness: the wiring app/web/routes/scan.py performs around run_pipeline
+# ---------------------------------------------------------------------------
+
+
+class _Event:
+    """One pipeline event channel: ``connect(fn)`` now, ``fn(...)`` on emit."""
+
+    def __init__(self) -> None:
+        self._subscribers: list = []
+
+    def connect(self, fn) -> None:
+        self._subscribers.append(fn)
+
+    def emit(self, *args) -> None:
+        for fn in self._subscribers:
+            fn(*args)
+
+
+class _PipelineRun:
+    """Build a ScanConfig from these kwargs and run the pipeline on them.
+
+    The keyword arguments, the per-channel events and the clamping are the
+    contract every client shares: ``app/web/routes/scan.py`` resolves the same
+    ScanConfig fields and subscribes to the same seven events through its SSE
+    bus. Keeping the harness here (rather than importing a client) is what lets
+    these tests fail for a pipeline regression and nothing else.
+    """
+
+    def __init__(
+        self,
+        sources: dict[str, str],
+        output_path: str,
+        recursive_map: dict[str, bool] | None = None,
+        source_priority: dict[str, int] | None = None,
+        threshold: int = 10,
+        mean_color_threshold: int = 30,
+        dhash_threshold: int = 10,
+        limit: int | None = None,
+        workers: int = 4,
+        exif_workers: int = 2,
+        hash_pool: str = "thread",
+        hash_pool_rates: dict | None = None,
+        auto_select_enabled: bool = False,
+        auto_select_aggressive_delete: bool = False,
+        autotune_read_knee: bool = False,
+        autotune_knees: dict | None = None,
+    ) -> None:
+        self.progress = _Event()
+        self.stage_progress = _Event()
+        self.finished = _Event()
+        self.failed = _Event()
+        self.completed_empty = _Event()
+        self.hash_pool_measured = _Event()
+        self.read_knee_measured = _Event()
+        self._cancel_token = _CancelToken()
+        self._config = ScanConfig(
+            sources={k: Path(v) for k, v in sources.items() if str(v).strip()},
+            output_path=Path(output_path),
+            recursive_map=recursive_map or {},
+            source_priority=source_priority,
+            threshold=threshold,
+            mean_color_threshold=mean_color_threshold,
+            dhash_threshold=dhash_threshold,
+            limit=limit,
+            workers=workers,
+            exif_workers=exif_workers,
+            # Passed through unvalidated, exactly as app/web/models.py does —
+            # so a settings.json typo reaches run_pipeline in tests the same
+            # way it reaches it in production.
+            hash_pool=hash_pool,
+            hash_pool_rates=hash_pool_rates,
+            auto_select_enabled=auto_select_enabled,
+            auto_select_aggressive_delete=auto_select_aggressive_delete,
+            autotune_read_knee=autotune_read_knee,
+            autotune_knees=autotune_knees or {},
+        )
+
+    # -- the two clamped/normalised fields the tests assert on --------------
+    @property
+    def exif_workers(self) -> int:
+        return self._config.exif_workers
+
+    @property
+    def hash_pool(self) -> str:
+        return self._config.hash_pool
+
+    # -- cancellation, as every client exposes it ---------------------------
+    def requestInterruption(self) -> None:  # noqa: N802 - mirrors the client API
+        self._cancel_token.request()
+
+    def isInterruptionRequested(self) -> bool:  # noqa: N802
+        return self._cancel_token.is_set()
+
+    def run(self) -> None:
+        try:
+            run_pipeline(self._config, self._cancel_token, _Bus(self))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # Clients log the traceback and surface the message; the pipeline
+            # must never let an exception escape as a hang.
+            self.failed.emit(str(exc))
+
+
+class _Bus:
+    """ScanProgressBus implementation forwarding to a _PipelineRun's events."""
+
+    def __init__(self, run: "_PipelineRun") -> None:
+        self._run = run
+
+    def log(self, msg: str) -> None:
+        self._run.progress.emit(msg)
+
+    def stage(self, stage_name: str, completed: int, total: int,
+              files_per_sec: float) -> None:
+        self._run.stage_progress.emit(stage_name, completed, total, files_per_sec)
+
+    def failed(self, msg: str) -> None:
+        self._run.failed.emit(msg)
+
+    def finished(self, output_path: str) -> None:
+        self._run.finished.emit(output_path)
+
+    def completed_empty(self) -> None:
+        self._run.completed_empty.emit()
+
+    def hash_pool_measured(self, rates: dict) -> None:
+        self._run.hash_pool_measured.emit(rates)
+
+    def read_knee_measured(self, summary: dict) -> None:
+        self._run.read_knee_measured.emit(summary)
+
+
 
 def _write_jpeg(path: Path, color=(128, 64, 32)) -> None:
     Image.new("RGB", (32, 32), color).save(path, "JPEG")
 
 
-class TestScanWorkerSkipsBadFile:
-    def test_per_file_exception_does_not_abort_scan(self, qapp, tmp_path, monkeypatch):
+class TestPipelineSkipsBadFile:
+    def test_per_file_exception_does_not_abort_scan(self, tmp_path, monkeypatch):
         """A LibRaw error on one file → that file is skipped, others scanned, manifest written.
 
         Regression for issue #46 (rawpy.LibRawFileUnsupportedError aborted the whole scan).
         """
-        # Need a fresh QApplication to deliver signals via DirectConnection in this thread.
-        from app.views.workers.scan_worker import ScanWorker
 
         a = tmp_path / "a.jpg"
         b = tmp_path / "b.jpg"
@@ -44,7 +176,7 @@ class TestScanWorkerSkipsBadFile:
         _write_jpeg(b, color=(0, 255, 0))
         bad.write_bytes(b"II*\x00" + b"\x00" * 64)  # TIFF magic, unparseable
 
-        # Patch _hashes_from_data at the source so the late import in _run_pipeline
+        # Patch _hashes_from_data at the source so the late import in run_pipeline
         # picks it up.  Pre-#566 this patched compute_hashes (the fused single-read
         # path); after #566 the thread branch calls compute_from_bytes →
         # _hashes_from_data, so we patch the leaf that both paths share.
@@ -61,7 +193,7 @@ class TestScanWorkerSkipsBadFile:
         monkeypatch.setattr(_hasher, "_hashes_from_data", fake_hashes_from_data)
 
         out = tmp_path / "manifest.sqlite"
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -75,7 +207,6 @@ class TestScanWorkerSkipsBadFile:
         worker.finished.connect(finished.append)
         worker.failed.connect(failed.append)
 
-        # Run synchronously in this thread — DirectConnection delivers signals immediately.
         worker.run()
 
         assert not failed, f"Scan must not have failed; got: {failed}"
@@ -87,8 +218,8 @@ class TestScanWorkerSkipsBadFile:
             f"skipped file path should appear in progress: {progress!r}"
 
 
-class TestScanWorkerEmptyInput:
-    def test_empty_folder_signals_completed_empty_not_failed(self, qapp, tmp_path):
+class TestPipelineEmptyInput:
+    def test_empty_folder_signals_completed_empty_not_failed(self, tmp_path):
         """An empty source folder is a benign success, not a failure.
 
         Regression for issues #51 (red 'Scan Failed' modal misclassified the
@@ -103,12 +234,11 @@ class TestScanWorkerEmptyInput:
           - The progress log contains a 'Done.' terminator so the QA
             driver's case-sensitive match succeeds.
         """
-        from app.views.workers.scan_worker import ScanWorker
 
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(empty_dir)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -134,9 +264,9 @@ class TestScanWorkerEmptyInput:
             f"progress log must contain a 'Done.' terminator: {progress!r}"
 
 
-class TestScanWorkerCorruptImage:
+class TestPipelineCorruptImage:
     def test_truncated_jpeg_is_logged_and_excluded_from_manifest(
-        self, qapp, tmp_path
+        self, tmp_path
     ):
         """A truncated JPEG should be logged as ImageDecodeError, not silently UNDATED.
 
@@ -147,7 +277,6 @@ class TestScanWorkerCorruptImage:
         """
         import sqlite3
 
-        from app.views.workers.scan_worker import ScanWorker
 
         # Two files: one valid JPEG, one truncated JPEG (1 KB cut).
         good = tmp_path / "good.jpg"
@@ -161,7 +290,7 @@ class TestScanWorkerCorruptImage:
         full.unlink()
 
         out = tmp_path / "manifest.sqlite"
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -196,7 +325,7 @@ class TestScanWorkerCorruptImage:
         assert "bad_truncated.jpg" not in paths, \
             f"corrupt file should be excluded from manifest, but found in: {paths}"
 
-    def test_gif_not_flagged_as_corrupt(self, qapp, tmp_path):
+    def test_gif_not_flagged_as_corrupt(self, tmp_path):
         """GIFs must NOT be flagged as ImageDecodeError.
 
         Regression for #75: scanner/hasher.compute_hashes intentionally
@@ -207,14 +336,13 @@ class TestScanWorkerCorruptImage:
         """
         import sqlite3
 
-        from app.views.workers.scan_worker import ScanWorker
 
         gif = tmp_path / "good.gif"
         # Tiny valid GIF (1×1 transparent pixel).
         Image.new("RGB", (8, 8), (200, 0, 0)).save(gif, "GIF")
 
         out = tmp_path / "manifest.sqlite"
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -239,7 +367,7 @@ class TestScanWorkerCorruptImage:
         assert "good.gif" in paths, \
             f"GIF should be in manifest, not excluded as corrupt: {paths}"
 
-    def test_non_camera_tiff_not_flagged_as_corrupt(self, qapp, tmp_path):
+    def test_non_camera_tiff_not_flagged_as_corrupt(self, tmp_path):
         """Non-camera-RAW TIFFs (Photoshop / scanner output) must NOT be flagged.
 
         Regression for #75: TIFF maps to file_type='raw' (scanner/media.py),
@@ -249,14 +377,13 @@ class TestScanWorkerCorruptImage:
         """
         import sqlite3
 
-        from app.views.workers.scan_worker import ScanWorker
 
         tiff = tmp_path / "scan_output.tif"
         # Synthetic TIFF — PIL writes it cleanly but rawpy can't parse it.
         Image.new("RGB", (32, 32), (50, 100, 150)).save(tiff, "TIFF")
 
         out = tmp_path / "manifest.sqlite"
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -279,7 +406,7 @@ class TestScanWorkerCorruptImage:
             f"TIFF should be in manifest, not excluded as corrupt: {paths}"
 
 
-class TestScanWorkerParallelWalk:
+class TestPipelineParallelWalk:
     """#452 — multiple sources walk in parallel; single source stays serial.
 
     Order-stability matters: records must appear in source-iteration
@@ -289,7 +416,7 @@ class TestScanWorkerParallelWalk:
     """
 
     def test_two_sources_records_in_source_order_even_if_beta_returns_first(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Parallel walks must concatenate per-source results in
         source-iteration order, NOT thread-completion order.
@@ -303,11 +430,7 @@ class TestScanWorkerParallelWalk:
         """
         import time as _time
 
-        import app.views.workers.scan_worker as _module
-        from app.views.workers.scan_worker import ScanWorker
         from scanner.walker import FileRecord
-
-        original = _module.__dict__.get("scan_sources")
 
         # Each call hands the worker a single FileRecord whose label
         # encodes the call-site, then sleeps if alpha. We don't care
@@ -332,7 +455,7 @@ class TestScanWorkerParallelWalk:
                         progress_callback()
             return recs
 
-        # Inject the fake into the late-import inside _run_pipeline by
+        # Inject the fake into the late-import inside run_pipeline by
         # patching the module the worker imports from.
         import scanner.walker as _walker
         monkeypatch.setattr(_walker, "scan_sources", fake_scan_sources)
@@ -344,7 +467,7 @@ class TestScanWorkerParallelWalk:
         _write_jpeg(src_a / "a1.jpg")
         _write_jpeg(src_b / "b1.jpg")
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"alpha": str(src_a), "beta": str(src_b)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"alpha": True, "beta": True},
@@ -374,16 +497,15 @@ class TestScanWorkerParallelWalk:
             f"got {hashing_line!r}"
         )
 
-    def test_single_source_runs_serial_no_executor(self, qapp, tmp_path):
+    def test_single_source_runs_serial_no_executor(self, tmp_path):
         """A 1-source scan must NOT spin up the thread pool — verified
         indirectly: we patch ThreadPoolExecutor to raise, then run a
         single-source scan and assert it still succeeds.
         """
-        from app.views.workers.scan_worker import ScanWorker
 
         _write_jpeg(tmp_path / "only.jpg")
         out = tmp_path / "manifest.sqlite"
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"solo": str(tmp_path)},
             output_path=str(out),
             recursive_map={"solo": False},
@@ -393,8 +515,8 @@ class TestScanWorkerParallelWalk:
         assert out.exists(), "single-source scan should still write its manifest"
 
 
-class TestScanWorkerExifWorkers:
-    """#451 — exif_workers is clamped at ScanWorker construction.
+class TestPipelineExifWorkers:
+    """#451 — exif_workers is clamped at run_pipeline construction.
 
     Floor: 1 (never zero, would deadlock the queue with no consumers).
     Cap: min(4, cpu_count() // 2) — exiftool processes scale near-linearly
@@ -402,10 +524,9 @@ class TestScanWorkerExifWorkers:
     on Windows so the user pays without speedup gain.
     """
 
-    def test_exif_workers_floor_one(self, qapp, tmp_path):
-        from app.views.workers.scan_worker import ScanWorker
+    def test_exif_workers_floor_one(self, tmp_path):
 
-        w = ScanWorker(
+        w = _PipelineRun(
             sources={"s": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"s": False},
@@ -413,12 +534,11 @@ class TestScanWorkerExifWorkers:
         )
         assert w.exif_workers == 1
 
-    def test_exif_workers_capped_at_cpu_half(self, qapp, tmp_path):
+    def test_exif_workers_capped_at_cpu_half(self, tmp_path):
         import os
-        from app.views.workers.scan_worker import ScanWorker
 
         cap = max(1, min(4, (os.cpu_count() or 4) // 2))
-        w = ScanWorker(
+        w = _PipelineRun(
             sources={"s": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"s": False},
@@ -426,10 +546,9 @@ class TestScanWorkerExifWorkers:
         )
         assert w.exif_workers == cap
 
-    def test_exif_workers_within_range_kept(self, qapp, tmp_path):
-        from app.views.workers.scan_worker import ScanWorker
+    def test_exif_workers_within_range_kept(self, tmp_path):
 
-        w = ScanWorker(
+        w = _PipelineRun(
             sources={"s": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"s": False},
@@ -439,7 +558,7 @@ class TestScanWorkerExifWorkers:
         # and above the floor — should pass through unchanged.
         assert w.exif_workers == 2
 
-    def test_n_consumer_threads_spawned(self, qapp, tmp_path):
+    def test_n_consumer_threads_spawned(self, tmp_path):
         """A 2-exif-worker scan must spawn exactly 2 consumer threads
         named ``exif-consumer-N``. Verified by sampling
         ``threading.enumerate()`` after the scan completes — the
@@ -447,7 +566,6 @@ class TestScanWorkerExifWorkers:
         suite also enforces that count returns to zero.
         """
         import threading
-        from app.views.workers.scan_worker import ScanWorker
 
         _write_jpeg(tmp_path / "a.jpg")
         observed: list[str] = []
@@ -464,7 +582,7 @@ class TestScanWorkerExifWorkers:
 
         threading.Thread.start = spy_start
         try:
-            worker = ScanWorker(
+            worker = _PipelineRun(
                 sources={"src": str(tmp_path)},
                 output_path=str(tmp_path / "m.sqlite"),
                 recursive_map={"src": False},
@@ -494,20 +612,18 @@ class TestHashPoolSetting:
     real-world runs, not in CI.
     """
 
-    def test_default_is_thread(self, qapp, tmp_path):
-        from app.views.workers.scan_worker import ScanWorker
+    def test_default_is_thread(self, tmp_path):
 
-        w = ScanWorker(
+        w = _PipelineRun(
             sources={"s": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"s": False},
         )
         assert w.hash_pool == "thread"
 
-    def test_process_value_kept(self, qapp, tmp_path):
-        from app.views.workers.scan_worker import ScanWorker
+    def test_process_value_kept(self, tmp_path):
 
-        w = ScanWorker(
+        w = _PipelineRun(
             sources={"s": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"s": False},
@@ -515,27 +631,48 @@ class TestHashPoolSetting:
         )
         assert w.hash_pool == "process"
 
-    def test_unknown_value_falls_back_to_thread(self, qapp, tmp_path):
-        """Catches: a typo'd / stale settings.json value silently selecting
-        a non-existent executor mode instead of the safe default."""
-        from app.views.workers.scan_worker import ScanWorker
+    def test_unknown_value_falls_back_to_thread(self, tmp_path, monkeypatch):
+        """Catches: a typo'd / stale ``scan.hash_pool`` in settings.json
+        breaking the scan instead of falling back to the safe executor.
 
-        w = ScanWorker(
+        Nothing between settings.json and here validates the string
+        (app/web/models.py passes it straight into ScanConfig), so the
+        fallback has to be the pipeline's own routing: an unrecognised
+        selector must run on threads and still write a manifest, never
+        raise and never reach the process pool.
+        """
+        import concurrent.futures as _cf
+
+        def _boom(*args, **kwargs):
+            raise AssertionError(
+                "an unrecognised hash_pool must not select the process pool"
+            )
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", _boom)
+
+        _write_jpeg(tmp_path / "only.jpg")
+        out = tmp_path / "m.sqlite"
+        worker = _PipelineRun(
             sources={"s": str(tmp_path)},
-            output_path=str(tmp_path / "m.sqlite"),
+            output_path=str(out),
             recursive_map={"s": False},
+            workers=1,
             hash_pool="garbage",
         )
-        assert w.hash_pool == "thread"
+        failed: list[str] = []
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert not failed, f"an unrecognised hash_pool must not fail the scan: {failed}"
+        assert out.exists(), "the scan must still write its manifest"
 
     def test_process_mode_routes_to_process_pool_and_writes_manifest(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Catches: the process branch not being selected, OR the parent's
         _route_outcome path dropping HashResults so the manifest comes out
         empty. Asserts both the executor choice and end-to-end output."""
         import concurrent.futures as _cf
-        from app.views.workers.scan_worker import ScanWorker
 
         _write_jpeg(tmp_path / "only.jpg")
         out = tmp_path / "manifest.sqlite"
@@ -553,7 +690,7 @@ class TestHashPoolSetting:
 
         monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"solo": str(tmp_path)},
             output_path=str(out),
             recursive_map={"solo": False},
@@ -566,13 +703,12 @@ class TestHashPoolSetting:
         assert out.exists(), "parent-side outcome routing must still write the manifest"
 
     def test_thread_mode_never_touches_process_pool(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Catches: the default regressing so it accidentally instantiates
         a ProcessPoolExecutor. Patches it to explode — a default scan must
         complete without ever constructing it."""
         import concurrent.futures as _cf
-        from app.views.workers.scan_worker import ScanWorker
 
         _write_jpeg(tmp_path / "only.jpg")
         out = tmp_path / "manifest.sqlite"
@@ -582,7 +718,7 @@ class TestHashPoolSetting:
 
         monkeypatch.setattr(_cf, "ProcessPoolExecutor", _boom)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"solo": str(tmp_path)},
             output_path=str(out),
             recursive_map={"solo": False},
@@ -648,10 +784,9 @@ class TestHashPoolCalibration:
             hash_pool_rates=hash_pool_rates,
         )
 
-    def test_auto_value_kept_at_construction(self, qapp, tmp_path):
-        from app.views.workers.scan_worker import ScanWorker
+    def test_auto_value_kept_at_construction(self, tmp_path):
 
-        w = ScanWorker(
+        w = _PipelineRun(
             sources={"s": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"s": False},
@@ -676,7 +811,7 @@ class TestHashPoolCalibration:
         )
 
     def test_calibration_picks_process_when_projection_favors_it(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Catches: the projected-winner comparison inverted. Large N where
         process's lower per-file rate beats its one-time spawn."""
@@ -692,7 +827,7 @@ class TestHashPoolCalibration:
         assert pool_type == "process"
 
     def test_calibration_picks_thread_when_projection_favors_it(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Catches: process chosen on a scan too small to amortise its spawn
         cost (and ties defaulting to process)."""
@@ -707,7 +842,7 @@ class TestHashPoolCalibration:
         assert pool_type == "thread"
 
     def test_projection_flips_winner_with_file_count(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """The core of the fix: with *identical* measured rates, the winner
         must depend on the real file count — process's one-time spawn cost
@@ -728,7 +863,7 @@ class TestHashPoolCalibration:
         assert (small, large) == ("thread", "process")
 
     def test_calibration_skipped_below_floor_without_timing(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Catches: paying the (expensive) process-spawn calibration cost on
         a tiny scan where it can't yield a reliable signal."""
@@ -751,7 +886,7 @@ class TestHashPoolCalibration:
         assert pool_type == "thread"
         assert timed == [], "below the floor calibration must not time anything"
 
-    def test_time_hash_executor_returns_elapsed(self, qapp, tmp_path):
+    def test_time_hash_executor_returns_elapsed(self, tmp_path):
         """Real-hash timing path (no mock): hashes a few real jpegs through a
         ThreadPoolExecutor and returns a non-negative elapsed time."""
         from concurrent.futures import ThreadPoolExecutor
@@ -767,7 +902,7 @@ class TestHashPoolCalibration:
         elapsed = scan_runner_mod._time_hash_executor(ThreadPoolExecutor, recs, 2)
         assert elapsed >= 0.0
 
-    def test_profile_process_pool_returns_spawn_and_rate(self, qapp, tmp_path):
+    def test_profile_process_pool_returns_spawn_and_rate(self, tmp_path):
         """Real-hash measurement path (no mock): runs the cold/warm two-batch
         split through a real executor and returns a non-negative (spawn,
         per_file) pair. Uses ThreadPoolExecutor so CI never spawns a real
@@ -787,13 +922,12 @@ class TestHashPoolCalibration:
         assert per_file >= 0.0
 
     def test_auto_scan_below_floor_runs_thread_and_writes_manifest(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """End-to-end: a small 'auto' scan calibrates (skips, too few),
         resolves to thread, and still writes a manifest. Patches the process
         pool to explode to prove the resolved thread path never touches it."""
         import concurrent.futures as _cf
-        from app.views.workers.scan_worker import ScanWorker
 
         _write_jpeg(tmp_path / "only.jpg")
         out = tmp_path / "manifest.sqlite"
@@ -803,7 +937,7 @@ class TestHashPoolCalibration:
 
         monkeypatch.setattr(_cf, "ProcessPoolExecutor", _boom)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"solo": str(tmp_path)},
             output_path=str(out),
             recursive_map={"solo": False},
@@ -820,7 +954,7 @@ class TestHashPoolCalibration:
         """The cache key is stable for identical inputs and changes when any
         of (cpu count, source path, recursive flag) changes — so a different
         machine or folder set correctly misses and re-measures."""
-        from app.views.workers.scan_worker import hash_pool_fingerprint as fp
+        from core.app_service.scan_runner import hash_pool_fingerprint as fp
 
         base = fp({"a": "/x"}, {"a": True}, 8)
         assert base == fp({"a": "/x"}, {"a": True}, 8)  # stable
@@ -835,7 +969,7 @@ class TestHashPoolCalibration:
         breadcrumb: pre-#526 the key had no recipe component."""
         import scanner.dedup as dedup
         import scanner.hasher as hasher
-        from app.views.workers.scan_worker import hash_pool_fingerprint as fp
+        from core.app_service.scan_runner import hash_pool_fingerprint as fp
 
         base = fp({"a": "/x"}, {"a": True}, 8)
         monkeypatch.setattr(hasher, "HASH_RECIPE_VERSION", "999")
@@ -845,7 +979,7 @@ class TestHashPoolCalibration:
         assert base != fp({"a": "/x"}, {"a": True}, 8)  # grouping strategy matters
 
     def test_cached_rates_skip_measurement_and_reproject(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Cache hit: the function re-projects the cached rates to the current
         file count WITHOUT re-measuring (the timing helpers would raise), and
@@ -870,10 +1004,11 @@ class TestHashPoolCalibration:
         assert large == "process"
 
     def test_fresh_calibration_emits_measured_rates(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Cache miss: a fresh measurement is dispatched via bus.hash_pool_measured
-        so the dialog can persist it (the inbound half of the cache)."""
+        so the client can persist it — app/web/routes/scan.py:175 calls
+        store_hash_pool_rates (the inbound half of the cache)."""
         import core.app_service.scan_runner as scan_runner_mod
 
         monkeypatch.setattr(
@@ -906,7 +1041,7 @@ class TestHashPoolCalibration:
         under its fingerprint AND flushed to disk, so the next session reads it
         back. Qt-free (no dialog) — exercises the real JsonSettings round-trip."""
         import json
-        from app.views.workers.scan_worker import store_hash_pool_rates
+        from core.app_service.scan_runner import store_hash_pool_rates
         from infrastructure.settings import JsonSettings
 
         settings_path = tmp_path / "settings.json"
@@ -922,7 +1057,7 @@ class TestHashPoolCalibration:
 
     def test_valid_hash_pool_rates_predicate(self):
         """Boundary validator for hand-editable settings.json cache entries."""
-        from app.views.workers.scan_worker import _valid_hash_pool_rates as ok
+        from core.app_service.scan_runner import _valid_hash_pool_rates as ok
 
         assert ok({"thread_per_file": 1.0, "process_per_file": 0.5, "spawn": 0.1})
         assert not ok(None)
@@ -930,7 +1065,7 @@ class TestHashPoolCalibration:
         assert not ok({"thread_per_file": "x", "process_per_file": 1, "spawn": 1})  # type
 
     def test_malformed_cached_rates_trigger_remeasure(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """A corrupt/partial cached entry (e.g. hand-edited settings.json) is
         treated as a cache miss and re-measured, not crashed on."""
@@ -961,7 +1096,7 @@ class TestHashPoolCalibration:
     def test_derive_bktree_floor_crossover_and_clamp(self):
         """The floor is the measured brute-vs-BK crossover, clamped so a noisy
         micro-measurement can't yield a silly value."""
-        from app.views.workers.scan_worker import (
+        from core.app_service.scan_runner import (
             _GROUP_FLOOR_MAX,
             _GROUP_FLOOR_MIN,
             _derive_bktree_floor,
@@ -977,12 +1112,12 @@ class TestHashPoolCalibration:
         assert _derive_bktree_floor(0.0, 1e-6) == _GROUP_FLOOR_MAX
 
     def test_fresh_calibration_sets_grouping_floor(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """A fresh calibration derives the BK-tree floor from the measured
         grouping micro-rates and returns it as the second element of the tuple."""
         import core.app_service.scan_runner as scan_runner_mod
-        from app.views.workers.scan_worker import _derive_bktree_floor
+        from core.app_service.scan_runner import _derive_bktree_floor
 
         monkeypatch.setattr(
             scan_runner_mod, "_time_hash_executor",
@@ -1002,12 +1137,12 @@ class TestHashPoolCalibration:
         assert calibrated_floor == _derive_bktree_floor(1e-7, 1e-5)
 
     def test_cached_group_rates_set_floor_without_measuring(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Cache hit carrying grouping micro-rates derives the floor with no
         re-measurement (the timing helpers would raise)."""
         import core.app_service.scan_runner as scan_runner_mod
-        from app.views.workers.scan_worker import _derive_bktree_floor
+        from core.app_service.scan_runner import _derive_bktree_floor
 
         def boom(*a):
             raise AssertionError("cache hit must not re-measure")
@@ -1026,7 +1161,7 @@ class TestHashPoolCalibration:
         assert calibrated_floor == _derive_bktree_floor(1e-7, 1e-5)
 
     def test_legacy_cache_without_group_keys_floor_stays_none(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """A pre-#526 cache entry (hash rates only, no grouping keys) still
         serves the hash pick, but the grouping floor falls back to None so
@@ -1052,7 +1187,7 @@ class TestHashPoolCalibration:
         """Build FileRecord stubs for (path_str, label) pairs.
 
         Uses file_type='skip' so the worker never tries to read real files —
-        the same seam TestScanWorkerPerDeviceHashPools uses.
+        the same seam TestPipelinePerDeviceHashPools uses.
         """
         from scanner.walker import FileRecord
 
@@ -1062,7 +1197,7 @@ class TestHashPoolCalibration:
         ]
 
     def test_multi_device_with_remote_forces_process_pool(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """#609 — when a scan spans ≥2 devices and at least one is remote
         (NAS), auto resolves to **'process'** without consulting the flat
@@ -1118,7 +1253,7 @@ class TestHashPoolCalibration:
         )
 
     def test_single_device_all_local_still_runs_calibration(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """#554 — a single-device all-local scan must still run the normal
         thread-vs-process calibration (the guard must NOT trigger). Process
@@ -1149,7 +1284,7 @@ class TestHashPoolCalibration:
         )
 
 
-class TestScanWorkerExifPipeline:
+class TestPipelineExifPipeline:
     """#450 — hash→exif pipeline overlap.
 
     The behavioural contract:
@@ -1163,14 +1298,13 @@ class TestScanWorkerExifPipeline:
     """
 
     def test_missing_exiftool_logs_warning_and_completes(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """When exiftool isn't on PATH, the consumer latches the
         ``exiftool_missing`` flag, drains the queue, and the worker
         surfaces the install hint after consumer.join() — scan still
         produces a manifest.
         """
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.exif as _exif
 
         _write_jpeg(tmp_path / "a.jpg")
@@ -1182,7 +1316,7 @@ class TestScanWorkerExifPipeline:
         monkeypatch.setattr(_exif, "ExiftoolProcess", raise_missing)
 
         out = tmp_path / "manifest.sqlite"
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -1198,7 +1332,7 @@ class TestScanWorkerExifPipeline:
         assert out.exists(), "manifest must still be written when exiftool is missing"
 
     def test_no_consumer_thread_leak_after_success(
-        self, qapp, tmp_path
+        self, tmp_path
     ):
         """After a successful scan no thread named ``exif-consumer``
         should remain alive — the consumer must drain on sentinel and
@@ -1206,10 +1340,9 @@ class TestScanWorkerExifPipeline:
         """
         import threading
 
-        from app.views.workers.scan_worker import ScanWorker
 
         _write_jpeg(tmp_path / "a.jpg")
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -1221,59 +1354,16 @@ class TestScanWorkerExifPipeline:
         assert not leaked, f"exif-consumer thread leaked: {leaked!r}"
 
 
-class TestScanWorkerLogging:
-    def test_scan_progress_and_errors_forwarded_to_loguru(
-        self, qapp, tmp_path
-    ):
-        """Progress lines and per-file skip records flow through loguru.
-
-        Regression for issue #49: scan errors used to live only in the
-        dialog's transient log box, so "the scan stopped" reports had no
-        artifact to attach. After the fix, every progress emission lands
-        in the rotating ``app_<date>.log`` (via loguru) — and a corrupt
-        file (#57) shows up there with its path and synthetic exception
-        type for forensics.
-        """
-        from loguru import logger
-
-        from app.views.workers.scan_worker import ScanWorker
-
-        # Same fixture shape as the corrupt-image test — one valid JPEG
-        # plus one truncated JPEG so we exercise both progress lines and
-        # per-file skip-record forwarding.
-        good = tmp_path / "good.jpg"
-        bad = tmp_path / "bad_truncated.jpg"
-        _write_jpeg(good, color=(0, 128, 255))
-        full = tmp_path / "_full.jpg"
-        Image.new("RGB", (200, 150), (200, 100, 50)).save(full, "JPEG")
-        bad.write_bytes(full.read_bytes()[:1024])
-        full.unlink()
-
-        captured: list[str] = []
-        sink_id = logger.add(lambda msg: captured.append(str(msg)), level="INFO")
-        try:
-            worker = ScanWorker(
-                sources={"src": str(tmp_path)},
-                output_path=str(tmp_path / "manifest.sqlite"),
-                recursive_map={"src": False},
-                workers=2,
-            )
-            worker.run()
-        finally:
-            logger.remove(sink_id)
-
-        joined = "\n".join(captured)
-        assert "scan: " in joined, \
-            f"scan progress should be tagged with 'scan: ' prefix in loguru: {joined!r}"
-        assert "Done." in joined, \
-            f"final 'Done.' terminator should land in loguru: {joined!r}"
-        assert "bad_truncated.jpg" in joined, \
-            f"corrupt file path should land in loguru for forensics: {joined!r}"
-        assert "ImageDecodeError" in joined, \
-            f"synthetic exception type should land in loguru: {joined!r}"
+# GAP left by #646 (surfaced, not created): the desktop client mirrored every
+# progress line into the rotating app_<date>.log via loguru, and
+# TestScanWorkerLogging pinned it (issue #49 — "the scan stopped" reports need
+# an artifact to attach). SseScanBus (app/web/routes/scan.py:135) fans out over
+# SSE only, so the web client has no such log and the test had nothing left to
+# assert. Restoring it is a web-behaviour change, deliberately out of scope for
+# the cutover PR.
 
 
-class TestScanWorkerLateCancel:
+class TestPipelineLateCancel:
     """#463 — cancel checks at the entry of every opaque post-HASH stage
     (CLASSIFY/SCORE/AUTO-SELECT/WRITE) so a late user-cancel actually
     stops the pipeline.
@@ -1287,7 +1377,7 @@ class TestScanWorkerLateCancel:
     """
 
     def test_cancel_after_hash_skips_classify_through_write(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Set ``isInterruptionRequested = True`` immediately after the
         HASH worker finishes the only file. By the time the pipeline
@@ -1304,7 +1394,6 @@ class TestScanWorkerLateCancel:
             string ``scan_dialog`` distinguishes as a clean cancel,
             not a red error modal).
         """
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.hasher as _hasher
         import scanner.dedup as _dedup
         import scanner.scoring as _scoring
@@ -1321,7 +1410,7 @@ class TestScanWorkerLateCancel:
         # original.
         out.write_bytes(b"PRIOR-MANIFEST-SENTINEL")
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -1399,7 +1488,7 @@ class TestScanWorkerLateCancel:
         )
 
     def test_cancel_before_write_only_preserves_existing_manifest(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Defense-in-depth complement to the test above: even if every
         earlier cancel check somehow failed, the WRITE-stage check
@@ -1410,7 +1499,6 @@ class TestScanWorkerLateCancel:
         check). Confirms the WRITE check fires in isolation, not just
         as a downstream consequence of an earlier check.
         """
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.manifest as _manifest
 
         a = tmp_path / "a.jpg"
@@ -1418,7 +1506,7 @@ class TestScanWorkerLateCancel:
         out = tmp_path / "manifest.sqlite"
         out.write_bytes(b"PRIOR-MANIFEST-SENTINEL")
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -1466,7 +1554,7 @@ class TestScanWorkerLateCancel:
         )
 
 
-class TestScanWorkerWalkCancel:
+class TestPipelineWalkCancel:
     """#491 — cancel during the WALK stage must propagate into
     ``scanner.walker.scan_sources`` via the new ``cancel_check`` hook,
     and the worker must early-return before HASH starts.
@@ -1479,7 +1567,7 @@ class TestScanWorkerWalkCancel:
     """
 
     def test_walk_stage_observes_cancel_check_and_skips_hash(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Pre-set the interruption flag before ``run()`` starts. The
         walker's ``cancel_check`` predicate (a bound reference to
@@ -1500,7 +1588,6 @@ class TestScanWorkerWalkCancel:
         Cancel is driven via worker._cancel_token.request() (real token path)
         rather than monkeypatching, matching the scan_runner.py contract.
         """
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.walker as _walker
         import scanner.hasher as _hasher
         import scanner.manifest as _manifest
@@ -1512,7 +1599,7 @@ class TestScanWorkerWalkCancel:
         out = tmp_path / "manifest.sqlite"
         out.write_bytes(b"PRIOR-MANIFEST-SENTINEL")
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -1545,7 +1632,7 @@ class TestScanWorkerWalkCancel:
         def must_not_run_write(*args, **kwargs):
             raise AssertionError(
                 "write_manifest called after WALK-stage cancel — the "
-                "post-WALK gate at scan_worker.py did not fire"
+                "post-WALK gate at scan_runner.py did not fire"
             )
 
         monkeypatch.setattr(_hasher, "compute_hashes", must_not_run_hash)
@@ -1579,7 +1666,7 @@ class TestScanWorkerWalkCancel:
         )
 
 
-class TestScanWorkerPerDeviceHashPools:
+class TestPipelinePerDeviceHashPools:
     """#548 — the HASH stage's thread path runs one ThreadPoolExecutor PER
     PHYSICAL DEVICE concurrently, so NAS-latency-bound reads overlap
     HDD-seek-bound reads instead of queueing behind them in one flat pool.
@@ -1589,7 +1676,7 @@ class TestScanWorkerPerDeviceHashPools:
     such drives) injected via a patched ``scan_sources``, and a patched
     ``run_hash_for_record`` so nothing touches disk. The seams are the same
     ones the established ``TestHashPoolSetting`` tests use (patch the late
-    imports the worker resolves inside ``_run_pipeline``).
+    imports the worker resolves inside ``run_pipeline``).
     """
 
     def _records_two_devices(self):
@@ -1691,13 +1778,12 @@ class TestScanWorkerPerDeviceHashPools:
         return constructed
 
     def test_one_pool_per_device_with_correct_worker_counts(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Two devices → two ThreadPoolExecutors, J: (NAS) gets 8 workers and
         D: (local) gets min(4, cpu). A flat single pool would construct one
         executor with self.workers — this asserts the per-device fan-out."""
         import os
-        from app.views.workers.scan_worker import ScanWorker
 
         records = self._records_two_devices()
         self._install_synthetic_pipeline(
@@ -1705,7 +1791,7 @@ class TestScanWorkerPerDeviceHashPools:
         )
         constructed = self._spy_thread_pools(monkeypatch)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -1726,14 +1812,13 @@ class TestScanWorkerPerDeviceHashPools:
         )
 
     def test_spinning_local_device_capped_to_one_worker(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """#548 PR-B / #552 — a local device the seek probe flags as a spinning
         HDD gets a 1-worker pool (single sequential reader, seek-minimising) so
         the one spindle is never bounced between concurrently-open files, while
         the NAS still gets 8. This is the end-to-end proof that the rotational
         cap reaches the fan-out, not just the unit-level hash_workers_for_root."""
-        from app.views.workers.scan_worker import ScanWorker
 
         records = self._records_two_devices()
         self._install_synthetic_pipeline(
@@ -1744,7 +1829,7 @@ class TestScanWorkerPerDeviceHashPools:
         )
         constructed = self._spy_thread_pools(monkeypatch)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -1761,12 +1846,11 @@ class TestScanWorkerPerDeviceHashPools:
         )
 
     def test_hash_results_preserve_input_order_across_devices(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """Records on two devices complete in arbitrary pool-interleaved
         order, but hash_results MUST stay in original input index order —
         classify()'s union-find group_ids depend on walk order."""
-        from app.views.workers.scan_worker import ScanWorker
 
         records = self._records_two_devices()
         captured = self._install_synthetic_pipeline(
@@ -1774,7 +1858,7 @@ class TestScanWorkerPerDeviceHashPools:
         )
         self._spy_thread_pools(monkeypatch)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -1789,12 +1873,11 @@ class TestScanWorkerPerDeviceHashPools:
         )
 
     def test_cancel_during_hash_across_pools_emits_cancelled(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """A user-cancel mid-HASH with N device pools must tear down cleanly:
         no deadlock, consumers get sentinels, exactly ['Scan cancelled.']
         fires and the prior manifest survives (classify never runs)."""
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.dedup as _dedup
 
         records = self._records_two_devices()
@@ -1811,7 +1894,7 @@ class TestScanWorkerPerDeviceHashPools:
 
         monkeypatch.setattr(_dedup, "classify", must_not_classify)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -1835,7 +1918,7 @@ class TestScanWorkerPerDeviceHashPools:
         )
 
     def test_cancel_during_hash_hard_kills_exiftool_consumers(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """#561 — a user-cancel during HASH must hard-kill the exiftool consumer
         processes, not just sentinel-and-join-with-timeout. A consumer wedged
@@ -1853,7 +1936,6 @@ class TestScanWorkerPerDeviceHashPools:
         import time
         import scanner.exif as _exif
         import scanner.hasher as _hasher
-        from app.views.workers.scan_worker import ScanWorker
 
         killed: list[int] = []
 
@@ -1887,7 +1969,7 @@ class TestScanWorkerPerDeviceHashPools:
             return idx, record, None
 
         # worker is created before fake_compute so the closure can reference it.
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -1917,11 +1999,10 @@ class TestScanWorkerPerDeviceHashPools:
             "wedged consumer unblocks and nothing orphans — none were killed"
         )
 
-    def test_single_device_uses_one_pool(self, qapp, tmp_path, monkeypatch):
+    def test_single_device_uses_one_pool(self, tmp_path, monkeypatch):
         """The common case (one device) must construct exactly one pool —
         zero regression for single-device users."""
         import os
-        from app.views.workers.scan_worker import ScanWorker
         from scanner.walker import FileRecord
 
         records = [
@@ -1934,7 +2015,7 @@ class TestScanWorkerPerDeviceHashPools:
         )
         constructed = self._spy_thread_pools(monkeypatch)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -1951,9 +2032,9 @@ class TestScanWorkerPerDeviceHashPools:
         )
 
     def test_close_unblocks_route_outcome_on_full_exif_queue(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
-        """#594 — requestInterruption() (dialog close) must tear the worker down
+        """#594 — a user cancel (the client closing the scan) must tear the run down
         even when the parent drain thread is wedged in ``_route_outcome``'s
         cooperative ``exif_queue.put`` loop because the queue is full.
 
@@ -1975,8 +2056,6 @@ class TestScanWorkerPerDeviceHashPools:
         import threading
         import time
         import scanner.exif as _exif
-        from PySide6.QtCore import Qt
-        from app.views.workers.scan_worker import ScanWorker
         from scanner.walker import FileRecord
 
         # exif_workers=1 → _EXIF_QUEUE_MAXSIZE = 2 * chunk_size(500) * 1 = 1000.
@@ -2012,7 +2091,7 @@ class TestScanWorkerPerDeviceHashPools:
         # no-op so teardown can't touch a fake exiftool process.
         monkeypatch.setattr(_exif, "batch_read_extracts", lambda *a, **k: {})
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},
@@ -2031,12 +2110,7 @@ class TestScanWorkerPerDeviceHashPools:
             worker._cancel_token.request()
 
         failed: list[str] = []
-        # DirectConnection: run() executes in a sub-thread below so the test can
-        # time-bound a hang, but the worker's affinity is the main (test) thread.
-        # Under the default AutoConnection a cross-thread failed.emit() would queue
-        # to a main-thread event loop that isn't running here, and the capture would
-        # be lost — force Direct so the slot fires inline in the run() thread.
-        worker.failed.connect(failed.append, Qt.ConnectionType.DirectConnection)
+        worker.failed.connect(failed.append)
 
         done = threading.Event()
 
@@ -2069,7 +2143,7 @@ class TestStratifiedSample:
     (source-order) device alone."""
 
     def test_multi_device_sample_spans_all_devices(self):
-        from app.views.workers.scan_worker import _stratified_sample
+        from core.app_service.scan_runner import _stratified_sample
         from scanner.walker import FileRecord
 
         # 50 D: records first, then 50 J: records — a naive records[:10]
@@ -2099,7 +2173,7 @@ class TestStratifiedSample:
     def test_single_device_sample_is_prefix_slice(self):
         """One device → behaviour identical to records[:n] (the common case
         stays byte-for-byte unchanged)."""
-        from app.views.workers.scan_worker import _stratified_sample
+        from core.app_service.scan_runner import _stratified_sample
         from scanner.walker import FileRecord
 
         recs = [
@@ -2112,7 +2186,7 @@ class TestStratifiedSample:
     def test_sample_capped_at_n_when_devices_have_few_records(self):
         """Round-robin stops at n even when buckets are uneven, and never
         exceeds the available records."""
-        from app.views.workers.scan_worker import _stratified_sample
+        from core.app_service.scan_runner import _stratified_sample
         from scanner.walker import FileRecord
 
         recs = [
@@ -2141,7 +2215,7 @@ class TestScanTeardownGaps:
     """
 
     def test_process_cancel_never_calls_shutdown_wait_true(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """#549(b) — cancel mid-process-hash must tear down with
         shutdown(wait=False), never wait=True. A revert to the
@@ -2150,7 +2224,6 @@ class TestScanTeardownGaps:
         this spy records every shutdown ``wait`` and fails if any is True."""
         import concurrent.futures as _cf
         import scanner.hasher as _hasher
-        from app.views.workers.scan_worker import ScanWorker
         from scanner.dedup import HashResult
 
         _write_jpeg(tmp_path / "only.jpg")
@@ -2172,7 +2245,7 @@ class TestScanTeardownGaps:
         # first hashed record requests cancel via the real token, so walk
         # completes normally and the process-branch drain loop is the thing
         # that cancels.
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"solo": str(tmp_path)},
             output_path=str(out),
             recursive_map={"solo": False},
@@ -2201,14 +2274,13 @@ class TestScanTeardownGaps:
         )
 
     def test_process_pool_workers_assigned_to_kill_job(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """#549(a) — the process-pool worker pids are registered with the #460
         KILL_ON_JOB_CLOSE job. Drop the assignment call and a force-kill of the
         app orphans python.exe workers still reading the disks (verified #549)."""
         import concurrent.futures as _cf
         import scanner.exif as _exif
-        from app.views.workers.scan_worker import ScanWorker
 
         _write_jpeg(tmp_path / "only.jpg")
         out = tmp_path / "manifest.sqlite"
@@ -2236,7 +2308,7 @@ class TestScanTeardownGaps:
 
         monkeypatch.setattr(_exif, "assign_pid_to_kill_job", fake_assign)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"solo": str(tmp_path)},
             output_path=str(out),
             recursive_map={"solo": False},
@@ -2258,7 +2330,7 @@ class TestScanTeardownGaps:
         assert out.exists(), "the scan must still complete and write its manifest"
 
     def test_process_branch_uses_per_device_pools(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """#610 — process branch must spawn ONE ProcessPoolExecutor per device,
         sized by ``hash_workers_for_root(dev)``. Pins the fix that closes the
@@ -2276,7 +2348,6 @@ class TestScanTeardownGaps:
         import concurrent.futures as _cf
         import scanner.workers as _workers
         import scanner.hasher as _hasher
-        from app.views.workers.scan_worker import ScanWorker
         from scanner.dedup import HashResult
         from scanner.walker import FileRecord
 
@@ -2330,7 +2401,7 @@ class TestScanTeardownGaps:
 
         monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"d": "D:\\", "j": "J:\\"},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"d": False, "j": False},
@@ -2602,12 +2673,12 @@ class TestBoundedExifQueueCancelSafety:
         )
 
 
-class TestScanWorkerReadKneeRamp:
+class TestPipelineReadKneeRamp:
     """#551 Phase 2 — the in-pipeline read-knee ramp wiring (thread branch).
 
     Default-OFF: when ``autotune_read_knee`` is unset the reader path is
     byte-identical to the pre-#551 thread branch (guarded by the existing
-    ``TestScanWorkerPerDeviceHashPools`` tests). These tests drive the flag-ON
+    ``TestPipelinePerDeviceHashPools`` tests). These tests drive the flag-ON
     path with synthetic records. The ramp's own knee math is unit-tested in
     ``tests/test_autotune.py``; here we verify the *integration*: pools stay at
     MAX, the per-device Semaphore is sized right, the cache path short-circuits,
@@ -2713,13 +2784,12 @@ class TestScanWorkerReadKneeRamp:
             "a finally on every read, or the per-device Semaphore deadlocks"
         )
 
-    def test_flag_on_keeps_reader_pools_at_static_max(self, qapp, tmp_path, monkeypatch):
+    def test_flag_on_keeps_reader_pools_at_static_max(self, tmp_path, monkeypatch):
         # Flag ON must NOT shrink the reader pools — they stay sized at the static
         # MAX (hash_workers_for_root); the ramp caps *active* reads via a Semaphore,
         # not via pool size. Skip records → no ramp, but the gated path still runs.
         import os as _os
 
-        from app.views.workers.scan_worker import ScanWorker
 
         records = self._records("J:", 4, file_type="skip") + self._records(
             "D:", 4, file_type="skip"
@@ -2727,7 +2797,7 @@ class TestScanWorkerReadKneeRamp:
         self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
         constructed = self._spy_thread_pools(monkeypatch)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"src": False},
@@ -2743,12 +2813,11 @@ class TestScanWorkerReadKneeRamp:
             f"flag-on must keep reader pools at static MAX; got {constructed!r}"
         )
 
-    def test_flag_off_builds_no_read_permit_semaphore(self, qapp, tmp_path, monkeypatch):
+    def test_flag_off_builds_no_read_permit_semaphore(self, tmp_path, monkeypatch):
         # Default-OFF: no per-device read Semaphore is constructed (a read-permit
         # for J: would be Semaphore(8)). The in-flight bound is still built — since
         # #587 it is a ByteBudget (a Condition), not the old #570
         # compute_inflight Semaphore(128).
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.byte_budget as _bb
 
         records = self._records("J:", 4, file_type="skip")
@@ -2764,7 +2833,7 @@ class TestScanWorkerReadKneeRamp:
 
         monkeypatch.setattr(_bb, "ByteBudget", spy_bb)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"src": False},
@@ -2775,17 +2844,16 @@ class TestScanWorkerReadKneeRamp:
         assert built, "the #587 ByteBudget in-flight bound should still be built (flag off)"
         assert 8 not in sem_values, "flag-off must not build a per-device read Semaphore"
 
-    def test_cached_knee_starts_semaphore_at_knee(self, qapp, tmp_path, monkeypatch):
+    def test_cached_knee_starts_semaphore_at_knee(self, tmp_path, monkeypatch):
         # Flag ON + a valid cached knee for the NAS → its reader Semaphore starts
         # at the cached knee (2), skipping the ramp (no Semaphore(1), no MAX=8).
-        from app.views.workers.scan_worker import ScanWorker
         from scanner.autotune import AUTOTUNE_RECIPE_VERSION
 
         records = self._records("J:", 5)
         self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
         sem_values = self._spy_semaphores(monkeypatch)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"src": False},
@@ -2798,12 +2866,11 @@ class TestScanWorkerReadKneeRamp:
         assert 2 in sem_values, "cached knee must start the NAS read Semaphore at 2"
         assert 1 not in sem_values, "a cache hit must skip the ramp (no Semaphore(1))"
 
-    def test_gated_scan_completes_and_preserves_order(self, qapp, tmp_path, monkeypatch):
+    def test_gated_scan_completes_and_preserves_order(self, tmp_path, monkeypatch):
         # GUARD deadlock guard + determinism. Flag ON, local device a spinning HDD
         # → reader Semaphore is 1 (no ramp). _gated_read MUST release the permit in
         # its finally on every read, or Semaphore(1) deadlocks on read #2. The scan
         # must complete and hash_results must stay in original idx order.
-        from app.views.workers.scan_worker import ScanWorker
 
         records = self._records("D:", 6)
         captured = self._install(
@@ -2813,7 +2880,7 @@ class TestScanWorkerReadKneeRamp:
             seek_penalty=lambda r: str(r).upper() == "D:",  # spinning HDD → Semaphore(1)
         )
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"src": False},
@@ -2829,14 +2896,13 @@ class TestScanWorkerReadKneeRamp:
         )
 
     def test_active_ramp_records_and_emits_on_sole_ramping_freeze(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         # Drive the full ramp protocol deterministically via a fake ramp: the
         # worker must record(nbytes>0, level_tag=acquire-budget), widen the
         # Semaphore on a level close, and — for a SOLE-ramping device — reach the
         # emit (augmenting summary() with device + sole_ramping) once it freezes.
         import scanner.autotune as _at
-        from app.views.workers.scan_worker import ScanWorker
 
         seen = {"records": []}
 
@@ -2889,7 +2955,7 @@ class TestScanWorkerReadKneeRamp:
         records = self._records("J:", 10)  # 10 image files > 8 gate → ramp on J:
         self._install(monkeypatch, records, remote_drive=lambda r: str(r).upper() == "J:")
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"src": False},
@@ -2968,7 +3034,7 @@ class TestScanWorkerReadKneeRamp:
 
         return fake_read
 
-    def _drive_real_ramp(self, qapp, tmp_path, monkeypatch, *, fast_max_inflight,
+    def _drive_real_ramp(self, tmp_path, monkeypatch, *, fast_max_inflight,
                          n_records=44):
         """Run a full gated scan on a single NAS (max_c 8) with the REAL ramp and
         the in-flight cliff. Returns ``(captured_ramp, emitted_knees)``. ``n_records``
@@ -2976,9 +3042,7 @@ class TestScanWorkerReadKneeRamp:
         knee=2 after ~3) so the post-freeze slow tail stays short."""
         import scanner.autotune as _at
         import scanner.hasher as _hasher
-        from PySide6.QtCore import Qt
 
-        from app.views.workers.scan_worker import ScanWorker
 
         real_cls = _at.ReadKneeRamp
         built: list = []
@@ -3001,7 +3065,7 @@ class TestScanWorkerReadKneeRamp:
         monkeypatch.setattr(_hasher, "read_for_record",
                             self._cliff_read(fast_max_inflight))
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "m.sqlite"),
             recursive_map={"src": False},
@@ -3010,18 +3074,18 @@ class TestScanWorkerReadKneeRamp:
         )
         emitted: list = []
         worker.read_knee_measured.connect(
-            lambda s: emitted.append(s.get("knee")), Qt.DirectConnection
+            lambda s: emitted.append(s.get("knee"))
         )
         self._run_with_watchdog(worker, timeout=30)
         assert len(built) == 1, "exactly one real ramp should be built (single NAS)"
         return built[0], emitted
 
-    def test_synthetic_throttled_nas_finds_knee_2(self, qapp, tmp_path, monkeypatch):
+    def test_synthetic_throttled_nas_finds_knee_2(self, tmp_path, monkeypatch):
         # Cliff at > 2 in-flight: c=1,2 fast (rising gain → climb), c=4 collapses
         # (gain(2→4) < 0.15) → the REAL ramp must freeze at knee=2, and the
         # sole-ramping emit must carry that real knee out to be cached.
         ramp, emitted = self._drive_real_ramp(
-            qapp, tmp_path, monkeypatch, fast_max_inflight=2
+            tmp_path, monkeypatch, fast_max_inflight=2
         )
         assert ramp.knee() == 2, (
             f"real ReadKneeRamp must detect knee=2 on a >2-in-flight cliff; "
@@ -3032,14 +3096,14 @@ class TestScanWorkerReadKneeRamp:
             f"caching; got {emitted!r}"
         )
 
-    def test_synthetic_throttled_nas_finds_knee_1(self, qapp, tmp_path, monkeypatch):
+    def test_synthetic_throttled_nas_finds_knee_1(self, tmp_path, monkeypatch):
         # A DIFFERENT cliff (> 1 in-flight) must yield a DIFFERENT knee, so a
         # regression that hardcodes / always-returns 2 (the _FakeRamp failure mode)
         # fails GATE-1. c=1 (serial) fast, c=2 collapses (gain(1→2) < 0.15) → knee=1.
         # Collapse-based, so unlike a knee=4 curve it needs no fast-regime scaling
         # and is not GIL-flaky.
         ramp, emitted = self._drive_real_ramp(
-            qapp, tmp_path, monkeypatch, fast_max_inflight=1, n_records=30
+            tmp_path, monkeypatch, fast_max_inflight=1, n_records=30
         )
         assert ramp.knee() == 1, (
             f"real ReadKneeRamp must detect knee=1 on a >1-in-flight cliff; "
@@ -3065,12 +3129,11 @@ class TestByteBudgetPipelineBound:
     """
 
     def test_reader_pool_is_backpressured_by_byte_budget(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         import threading
         import time as _time
 
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.byte_budget as _bb
         import scanner.hasher as _hasher
 
@@ -3101,7 +3164,7 @@ class TestByteBudgetPipelineBound:
         monkeypatch.setattr(_hasher, "_hashes_from_data", blocked_hashes)
         monkeypatch.setattr(_bb, "default_budget_bytes", lambda: BUDGET)
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"S": str(tmp_path)},
             output_path=str(tmp_path / "out.sqlite"),
             recursive_map={"S": True},
@@ -3149,7 +3212,7 @@ class TestByteBudgetPipelineBound:
 
 
 class TestPostHashCancelKillsExif:
-    """#607 / T7 — closing the scan dialog DURING the post-HASH EXIF drain
+    """#607 / T7 — a user cancel DURING the post-HASH EXIF drain
     must hard-kill exiftool so consumers wedged inside ``proc.execute()``
     can exit promptly.
 
@@ -3172,12 +3235,11 @@ class TestPostHashCancelKillsExif:
     """
 
     def test_post_hash_cancel_kills_exiftool_and_exits_promptly(
-        self, qapp, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         import threading as _threading
         import time as _time
 
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.exif as _exif
 
         # Two source files — HASH completes in two records, then the worker
@@ -3192,7 +3254,7 @@ class TestPostHashCancelKillsExif:
             (tmp_path / f"a{i}.mov").write_bytes(b"fake mov content")
         out = tmp_path / "manifest.sqlite"
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(out),
             recursive_map={"src": False},
@@ -3256,15 +3318,10 @@ class TestPostHashCancelKillsExif:
 
         _threading.Thread(target=watcher, daemon=True).start()
 
-        # DirectConnection so emit() from the background worker thread
-        # delivers to the test thread's list synchronously — without this
-        # the default AutoConnection queues the signal on the test thread's
-        # (non-running) event loop and `failed` stays empty.
-        from PySide6.QtCore import Qt as _Qt
         failed: list[str] = []
         finished: list[str] = []
-        worker.failed.connect(failed.append, _Qt.ConnectionType.DirectConnection)
-        worker.finished.connect(finished.append, _Qt.ConnectionType.DirectConnection)
+        worker.failed.connect(failed.append)
+        worker.finished.connect(finished.append)
 
         # Run the worker on a background thread so a deadlock at the
         # unbounded t.join() is observable as "thread alive after 15 s",
@@ -3304,60 +3361,27 @@ class TestPostHashCancelKillsExif:
         # behaviour that unwedges the consumer.
         assert exif_kill_calls["n"] >= 1, (
             "ExiftoolProcess.kill() was never called from the post-HASH "
-            "join — the cancel-aware fix at scan_worker.py is missing or "
+            "join — the cancel-aware fix at scan_runner.py is missing or "
             "broken; consumers would have stayed wedged."
         )
 
 
 class TestCancelTokenWiring:
-    """Verify that _CancelToken is correctly wired into ScanWorker.
+    """Verify that _CancelToken is correctly wired into run_pipeline.
 
-    These tests exercise the REAL cancel path — no isInterruptionRequested
-    monkeypatching — so that the daemon threads' self._cancel_token.is_set()
-    reads have genuine layer-1 coverage. They must catch any regression where
-    requestInterruption() stops propagating into the token.
+    This exercises the REAL cancel path — no cancel_check monkeypatching —
+    so the daemon threads' ``cancel_token.is_set()`` reads have genuine
+    layer-1 coverage. #646 dropped the sibling that asserted the desktop
+    QThread override propagated into the token: with that client gone the
+    assertion had no production code left on either side of it.
     """
 
-    def test_requestInterruption_sets_token(self, qapp, tmp_path):
-        """worker.requestInterruption() must set _cancel_token synchronously.
-
-        isInterruptionRequested() returns True immediately after the call
-        (no running QThread needed — requestInterruption is synchronous).
-        If the override is dropped or miswired, both assertions fail.
-        """
-        from app.views.workers.scan_worker import ScanWorker
-
-        worker = ScanWorker(
-            sources={"src": str(tmp_path)},
-            output_path=str(tmp_path / "manifest.sqlite"),
-        )
-
-        # Before any cancellation — both must be clear.
-        assert not worker._cancel_token.is_set(), (
-            "_cancel_token must be clear on a fresh ScanWorker"
-        )
-        assert not worker.isInterruptionRequested(), (
-            "isInterruptionRequested() must return False before requestInterruption()"
-        )
-
-        worker.requestInterruption()
-
-        # After cancellation — both must be set.
-        assert worker._cancel_token.is_set(), (
-            "_cancel_token.is_set() must be True after requestInterruption(); "
-            "the requestInterruption override is miswired or missing"
-        )
-        assert worker.isInterruptionRequested(), (
-            "isInterruptionRequested() must return True after requestInterruption(); "
-            "the isInterruptionRequested override is miswired or missing"
-        )
-
-    def test_walk_cancel_via_real_token(self, qapp, tmp_path):
+    def test_walk_cancel_via_real_token(self, tmp_path):
         """Drive walk-stage cancellation through the REAL _cancel_token path.
 
         Unlike the monkeypatch-based sibling in TestCancelWalkStage, this
         test calls worker.requestInterruption() directly (no monkeypatch) so
-        the cancel_check=self.isInterruptionRequested wiring in scan_worker.py
+        the cancel_check=self.isInterruptionRequested wiring in scan_runner.py
         is exercised end-to-end. If cancel_check were accidentally changed to
         self._cancel_token (the object, bypassing the method ref), the
         monkeypatch-based test would remain green but this one would catch it
@@ -3367,13 +3391,12 @@ class TestCancelTokenWiring:
         would start hashing. We pre-set cancellation so the walk returns
         partial/empty records and the pipeline never reaches HASH.
         """
-        from app.views.workers.scan_worker import ScanWorker
         import scanner.hasher as _hasher
 
         for i in range(5):
             _write_jpeg(tmp_path / f"img_{i}.jpg")
 
-        worker = ScanWorker(
+        worker = _PipelineRun(
             sources={"src": str(tmp_path)},
             output_path=str(tmp_path / "manifest.sqlite"),
             recursive_map={"src": False},

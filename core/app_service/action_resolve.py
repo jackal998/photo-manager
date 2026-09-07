@@ -1,16 +1,14 @@
-"""Qt-free pattern-matcher extracted from the Qt dialog layer.
+"""Pattern-matcher behind the selection / action-by-rule routes.
 
-All functions here are Qt-free — no PySide6, stdlib plus the shared
-ranking helper in ``core.services.auto_select`` (#778).  They operate on
-duck-typed PhotoGroup / PhotoRecord objects (attribute access) and are
-byte-identical in behaviour to their origins in:
+Threshold matching, top-N ranking and the encode/decode of the stored
+rule patterns.  Stdlib plus the shared ranking helper in
+``core.services.auto_select`` (#778); the functions operate on duck-typed
+PhotoGroup / PhotoRecord objects (attribute access only).
 
-  - app/views/dialogs/select_dialog.py  (threshold + top-n + encode/decode)
-  - app/views/handlers/file_operations.py  (_FIELD_TO_ATTR, _get_record_field)
-
-The canonical source of truth for the logic is the Qt files above.  This
-module is the Qt-free copy that the web-API route uses.  The anti-drift
-pin lives in tests/test_action_resolve_parity.py.
+This module started life as a copy of the desktop dialog layer's matcher
+and was pinned against it by an anti-drift parity test.  #646 removed that
+client, so this is now the single implementation and
+``tests/test_action_resolve.py`` pins its behaviour directly.
 """
 
 from __future__ import annotations

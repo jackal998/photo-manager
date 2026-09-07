@@ -3,7 +3,7 @@
 All database access is stateless — each function opens its own connection
 via ManifestRepository.  SQLite is the only source of truth.
 
-NO PySide6 imports — this module must stay headless for the FastAPI process.
+No UI imports — this module must stay headless for the FastAPI process.
 
 The D7 per-file consistency guarantee: for delete-decided paths, outcome is
 written to SQLite PER FILE immediately after each successful trash, not in a

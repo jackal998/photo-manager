@@ -896,7 +896,8 @@ class TestResolveMediaTool:
     ) -> None:
         """`_internal/ffmpeg/` is where pyinstaller.spec puts the shipped
         shared build — exe and its DLLs in one directory so Windows resolves
-        the imports from there, and away from PySide6's own av*.dll set.
+        the imports from there, and away from any other av*.dll set that
+        lands in the bundle.
         """
         bundle = tmp_path / "bundle"
         internal = bundle / "_internal"

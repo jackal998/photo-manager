@@ -1,20 +1,21 @@
-"""Unified entry point: Qt desktop app (default) or pywebview web shell.
+"""Entry point for the desktop web shell.
 
 Launch modes
 ------------
-- **Default** (``PHOTO_MANAGER_WEB`` unset / falsey): boots the existing
-  PySide6 desktop app via ``main.main()`` — byte-for-byte the previous
-  behaviour, so the classic Qt path is untouched and remains the default.
-- **Web shell** (``PHOTO_MANAGER_WEB`` truthy): starts the FastAPI app
-  under uvicorn on a loopback port in a daemon thread, then opens a native
-  Edge WebView2 window (via pywebview) pointed at it. This is the desktop
-  packaging of the localhost web app — the replacement shell that lets the
-  Qt UI be removed in a later phase.
+- **Default**: starts the FastAPI app under uvicorn on a loopback port in a
+  daemon thread, then opens a native Edge WebView2 window (via pywebview)
+  pointed at it. This is the desktop packaging of the localhost web app,
+  and since #646 it is the only client.
+- **Smoke** (``PHOTO_MANAGER_WEB_SMOKE`` truthy): same server boot, health
+  check, then exit — no window. Used by the packaging smoke in
+  ``release.yml`` where there is no display.
 
-The Qt and web paths never both run in one process; the env var selects
-exactly one. ``pywebview`` (and its Windows ``.NET``/pythonnet subtree) is
-imported *lazily* inside the web path, so importing this module and the Qt
-path carry no pywebview dependency.
+``PHOTO_MANAGER_WEB`` used to select between the two clients before #646.
+It is accepted and ignored so an existing shell profile keeps working.
+
+``pywebview`` (and its Windows ``.NET``/pythonnet subtree) is imported
+*lazily* inside the window path, so importing this module carries no
+pywebview dependency.
 """
 
 from __future__ import annotations
@@ -46,13 +47,6 @@ def _env_flag_truthy(raw: Optional[str]) -> bool:
     if raw is None:
         return False
     return raw.strip().lower() not in ("", "0", "false", "no", "off")
-
-
-def _web_enabled(env: Optional[dict] = None) -> bool:
-    """True when ``PHOTO_MANAGER_WEB`` selects the web-shell path."""
-    return _env_flag_truthy(
-        (env if env is not None else os.environ).get("PHOTO_MANAGER_WEB")
-    )
 
 
 def _web_smoke_enabled(env: Optional[dict] = None) -> bool:
@@ -123,8 +117,7 @@ def _ensure_webview2(
             "The Microsoft Edge WebView2 Runtime is required for the web "
             "shell but was not found. Install the Evergreen runtime from "
             "https://developer.microsoft.com/microsoft-edge/webview2/ and "
-            "relaunch, or run the classic desktop app (leave "
-            "PHOTO_MANAGER_WEB unset)."
+            "relaunch."
         )
 
 
@@ -174,7 +167,7 @@ def _wait_for_health(port: int, timeout: float = 30.0, interval: float = 0.25) -
 
 def run_web(port: Optional[int] = None) -> int:
     """Boot the embedded server + a native WebView2 window. Blocks until close."""
-    import webview  # lazy: keeps pywebview/.NET off the import + Qt path.
+    import webview  # lazy: keeps pywebview/.NET off the plain import path.
     from loguru import logger
 
     from infrastructure.logging import init_logging
@@ -255,24 +248,15 @@ def _surface_fatal(message: str) -> None:
         ctypes.windll.user32.MessageBoxW(None, message, "Photo Manager", 0x10)
 
 
-def _run_qt() -> int:
-    """Delegate to the classic PySide6 desktop entry point."""
-    from main import main as qt_main
-
-    return qt_main()
-
-
 def main() -> int:
-    """Dispatch to the web smoke, web shell, or Qt desktop app based on env."""
+    """Open the web shell, or run the headless smoke when CI asks for it."""
     if _web_smoke_enabled():
         return run_web_smoke()
-    if _web_enabled():
-        try:
-            return run_web()
-        except RuntimeError as exc:
-            _surface_fatal(str(exc))
-            raise
-    return _run_qt()
+    try:
+        return run_web()
+    except RuntimeError as exc:
+        _surface_fatal(str(exc))
+        raise
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry

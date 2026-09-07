@@ -92,8 +92,6 @@ jobs:
 
       - name: Run pytest with coverage
         if: steps.filter.outputs.backend == 'true'
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: python -m pytest
 
       - name: Per-file coverage floor (every tracked module ≥ 80%)

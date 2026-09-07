@@ -1,4 +1,3 @@
-PySide6>=6.6
 # Desktop web shell (launcher.py): renders the localhost web app in a native
 # Edge WebView2 window. On Windows this pulls pythonnet + clr_loader (the .NET
 # CLR bridge) transitively; other platforms use a native backend.

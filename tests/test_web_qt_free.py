@@ -1,7 +1,9 @@
-"""Headless invariant probe — new Phase 2B modules must import no PySide6.
+"""Headless invariant probe — the web stack must import no PySide6.
 
-Extends the T6 probe pattern from test_ui_probes.py to cover the
-Phase 2B headless modules:
+#646 removed the desktop client and dropped PySide6 from requirements.txt,
+so this probe is what stops it coming back: a stray import here would make
+the web API process need a display it does not have on a server, and would
+put a ~150 MB GUI toolkit back in the installer. Modules covered:
   - core/app_service/review_view.py
   - core/app_service/review_service.py
   - core/app_service/fs_browse.py
@@ -75,8 +77,6 @@ def test_decision_constant_sync():
 
     The review_service uses IGNORE_DECISION's value ('ignore') but defines its
     own VALID_DECISIONS frozenset; this test catches drift between the two.
-    IGNORE_DECISION lives in the Qt-free core.constants so this probe survives
-    the eventual app/views deletion.
     """
     from core.app_service.review_service import VALID_DECISIONS
     from core.constants import IGNORE_DECISION

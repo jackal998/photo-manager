@@ -1,11 +1,11 @@
 """Headless display derivation for the duplicate-review manifest.
 
-Ports the pure logic from app/views/tree_model_builder.py verbatim,
-minus Qt, minus the t() localisation — returns structured kinds instead
-of translated strings so the web client renders its own labels.
+Derives the per-row similarity and the Ref winner for each duplicate
+group, and returns structured kinds rather than translated strings so the
+client renders its own labels.
 
-NO PySide6 imports here — this module must stay headless so it runs in
-the FastAPI process without a display.
+This module must stay headless — it runs in the FastAPI process, which has
+no display.
 """
 
 from __future__ import annotations

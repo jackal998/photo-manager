@@ -1,14 +1,10 @@
 """Windows ``winerror`` → human-reason decoding, shared by both delete paths.
 
 Canonical — and since #757, the only — home for the ``OSError.winerror`` ->
-plain-language reason table. The web delete path
-(``infrastructure/delete_service.py``) and the Qt desktop dialog
-(``app/views/dialogs/execute_action_dialog.py``, whose ``_decode_winerror``
-is now a thin wrapper over ``decode_winerror``) both read the table here, so
-the web port's per-file failure messages read identically to the desktop's
-"Files Failed to Delete" dialog by construction rather than by copy. The
-table originated in the Qt dialog and was lifted here verbatim by #742; #757
-deleted the duplicate it had left behind.
+plain-language reason table, read by the delete path
+(``infrastructure/delete_service.py``). Both clients used to decode their
+own copy; #742 lifted the table here verbatim and #757 deleted the
+duplicate, so a "Files failed to delete" reason has exactly one wording.
 """
 
 from __future__ import annotations

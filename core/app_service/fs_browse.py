@@ -4,7 +4,7 @@ Returns directory listings in a structured format so the web client
 can implement a folder-picker dialog without any server-side path logic
 leaking into the client.
 
-NO PySide6 imports — headless for the FastAPI process.
+No UI imports — headless for the FastAPI process.
 """
 
 from __future__ import annotations

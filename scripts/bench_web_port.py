@@ -1,55 +1,45 @@
-"""Scan-throughput A/B bench: Qt arm vs web arm — the web-port cutover gate (C1/C5).
+"""Scan-throughput bench for the web client — the web-port liveness gate (C1/C5).
 
-Phase 0 of the web port extracted the scan pipeline into a Qt-free
-``core.app_service.scan_runner.run_pipeline`` (scan_runner.py:520).  Both the
-desktop ``ScanWorker`` (QThread) and the web backend
-(``app/web/routes/scan.py`` → ``threading.Thread``) drive that *same*
-pipeline; the only difference between the two arms is the event-dispatch
-mechanism — ``Signal.emit`` (Qt) vs ``queue.put``/SSE (web) — plus, in a
-future phase, the cross-process IPC for scan-in-a-dedicated-worker.
+Phase 0 of the web port extracted the scan pipeline into
+``core.app_service.scan_runner.run_pipeline`` (scan_runner.py:520); the web
+backend (``app/web/routes/scan.py`` → ``threading.Thread``) drives it and
+fans events out over SSE.  This harness runs that same pipeline behind a
+capturing bus and reports files/s, so a catastrophic throughput regression
+in the scan path is caught by CI rather than by a user with a NAS.
 
-This harness measures both arms on the same source roots and reports the
-``web_files_per_s / qt_files_per_s`` ratio so a catastrophic web-arm
-throughput regression is caught before the cutover flips the eval gates
-to blocking.  It is the concrete deliverable behind:
+It is the concrete deliverable behind **Phase-0 exit gate (b)** —
+``bench_web_port.py --pairs 1 --limit 50`` runs without error on the qa
+sandbox and emits valid JSON with ``files_per_s > 0``.
 
-* **Phase-0 exit gate (b)** — ``bench_web_port.py --pairs 1 --limit 50``
-  runs without error on the qa sandbox and emits valid JSON with
-  ``files_per_s > 0`` for the **web** arm.
-* **T6 binding fix** — the Qt arm bootstraps a headless Qt application and
-  the sanity job asserts the **qt** arm's ``files_per_s > 0`` (so the
-  baseline isn't a silent no-op that ``continue-on-error`` swallows).
+The second (desktop) arm and the cross-arm ratio gate were removed with #646.
+The web arm's CLI and JSON shape are unchanged — ``bench-sanity`` in
+``web-eval-gates.yml`` invokes ``--backend web``.
 
-Methodology guardrails (mirrored from ``bench_autotune_604.py``):
+Methodology guardrails:
 
 1. **Pre-scan ``probe_device`` assertion** — every run prints the
    ``device_key`` / ``is_remote_drive`` / ``hash_workers_for_root`` for
    each source volume BEFORE the scan, the #604/#605 confound lesson.
-2. **Alternating arms + ``statistics.median``** — ``--backend both``
-   alternates qt/web per pair so monotonic drift hits both arms equally.
+2. **``statistics.median`` over ``--pairs`` runs** — one slow run does not
+   decide the verdict.
 3. **Bounded per-scan timeout** — every scan has a hard deadline.
 4. **exiftool reap smoke test** — snapshot-diff before/after each scan
    surfaces any ``exiftool.exe`` orphan that survived teardown (T7).
 
-The script is the bench *mechanism*; the authoritative A/B baseline on the
-real rig (NAS / spinning HDD) is a local manual checkpoint per the
-"dev rig = checkpoint" principle — the 5% ratio gate (``--require-ratio``)
-is too tight to assert on a tiny synthetic sandbox.  ``scripts/*`` is
-excluded from coverage by design; this is a developer / CI validation tool.
+The script is the bench *mechanism*; the authoritative baseline on the real
+rig (NAS / spinning HDD) is a local manual checkpoint per the "dev rig =
+checkpoint" principle.  ``scripts/*`` is excluded from coverage by design;
+this is a developer / CI validation tool.
 
 CLI usage
 ---------
 
-    # Both arms on the qa sandbox (the Phase-0 sanity invocation):
-    python scripts/bench_web_port.py \\
-        --sources qa/sandbox/near-duplicates --pairs 1 --limit 50
-
-    # Web arm only (no Qt stack needed):
+    # The qa sandbox (the Phase-0 sanity invocation):
     python scripts/bench_web_port.py --backend web \\
         --sources qa/sandbox/near-duplicates --pairs 1 --limit 50
 
-    # Real-rig A/B with the strict 5% ratio gate enforced:
-    python scripts/bench_web_port.py --backend both --require-ratio \\
+    # Real-rig run with a JSON artifact:
+    python scripts/bench_web_port.py --backend web \\
         --sources "D:\\Takeout-0508" "J:\\圖片" \\
         --pairs 3 --limit 2000 --output bench_web_port.json
 """
@@ -57,7 +47,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import statistics
 import subprocess
 import sys
@@ -72,7 +61,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _DEFAULT_PER_SCAN_TIMEOUT = 1800.0  # seconds — 30 min hard ceiling per scan
 _INTERRUPT_GRACE = 8.0  # seconds to wait after requesting interruption
-_RATIO_FLOOR = 0.95  # web_files_per_s / qt_files_per_s pass threshold (design §1.4)
 _BENCH_ARTIFACT_DIR = (
     Path(__file__).resolve().parent.parent / ".bench_web_port_artifacts"
 )
@@ -82,7 +70,7 @@ _BENCH_ARTIFACT_DIR = (
 class ScanBenchResult:
     """One scan's timing + load-bearing probes, for one backend arm."""
 
-    backend: str               # "qt" | "web"
+    backend: str               # "web"
     pair_idx: int
     sources: list[str]
     wall_s: float
@@ -99,11 +87,7 @@ class ScanBenchResult:
 
 
 # ---------------------------------------------------------------------------
-# Shared probes — duplicated (not imported) from bench_autotune_604.py on
-# purpose: that module imports PySide6 at top level, which would drag Qt into
-# the web arm and defeat the "web arm runs Qt-free" property this bench exists
-# to validate.  These two helpers are pure and small; the duplication keeps
-# the web arm importable without a Qt stack.
+# Probes — the load-bearing pre-scan assertions (#604/#605 confound lesson).
 # ---------------------------------------------------------------------------
 
 
@@ -112,7 +96,7 @@ def probe_device(source: str) -> dict:
 
     The load-bearing assertion the original #604 run skipped — printed BEFORE
     every scan so a misclassified volume (the #605 ``device_key`` confound)
-    is visible in the bench output, not hidden in the ratio.
+    is visible in the bench output, not hidden in the median.
     """
     from scanner.workers import (
         device_key,
@@ -163,8 +147,7 @@ def snapshot_exiftool_pids() -> set[int]:
 def _parse_hashed_counts(lines: list[str]) -> tuple[int, int]:
     """Extract ``(n_walked, n_hashed)`` from the pipeline's progress log lines.
 
-    Both arms route through ``run_pipeline`` → ``bus.log`` and emit the same
-    "Hashing N files …" / "  Hashed N/M …" strings, so one parser serves both.
+    ``run_pipeline`` → ``bus.log`` emits "Hashing N files …" / "  Hashed N/M …".
     """
     n_walked = 0
     n_hashed = 0
@@ -183,7 +166,7 @@ def _parse_hashed_counts(lines: list[str]) -> tuple[int, int]:
 
 
 def _manifest_path(backend: str, pair_idx: int) -> Path:
-    """Per-arm tmp manifest path so the bench never pollutes the real run db."""
+    """Per-run tmp manifest path so the bench never pollutes the real run db."""
     _BENCH_ARTIFACT_DIR.mkdir(exist_ok=True)
     p = _BENCH_ARTIFACT_DIR / f"manifest_{backend}_p{pair_idx}.sqlite"
     if p.exists():
@@ -192,7 +175,7 @@ def _manifest_path(backend: str, pair_idx: int) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Web arm — drive the Qt-free run_pipeline directly through a capturing bus.
+# Web arm — drive run_pipeline directly through a capturing bus.
 # ---------------------------------------------------------------------------
 
 
@@ -200,7 +183,7 @@ class _CapturingBus:
     """A ``ScanProgressBus`` implementation that buffers events in memory.
 
     Stands in for ``SseScanBus`` (app/web/routes/scan.py) — same Protocol, no
-    SSE fan-out / event loop.  The web arm's throughput is the pipeline cost
+    SSE fan-out / event loop.  The measured throughput is the pipeline cost
     plus this bus's (negligible) ``list.append`` per event, which is the
     faithful lower bound for the ``queue.put`` the real SSE bus pays.
     """
@@ -239,7 +222,7 @@ def run_web_scan(
     *, pair_idx: int, sources: list[str], limit: int | None,
     workers: int, hash_pool: str, per_scan_timeout: float,
 ) -> ScanBenchResult:
-    """Run one scan through the web arm: ``run_pipeline`` + a capturing bus."""
+    """Run one scan the way the web backend does: ``run_pipeline`` + a bus."""
     from core.app_service.cancel_token import _CancelToken
     from core.app_service.dtos import ScanConfig
     from core.app_service.scan_runner import run_pipeline
@@ -298,111 +281,7 @@ def run_web_scan(
 
 
 # ---------------------------------------------------------------------------
-# Qt arm — drive the real ScanWorker (QThread) exactly as the desktop does.
-# ---------------------------------------------------------------------------
-
-
-def _ensure_qt_app():
-    """Bootstrap a headless Qt application for the Qt arm, once.
-
-    The T6 contract says "QApplication (offscreen)".  The scan path itself is
-    QtCore-only (proven by bench_autotune_604.py, which runs it under a bare
-    QCoreApplication), so QApplication is not strictly required — but we honour
-    the contract literally and try ``QApplication`` under the offscreen QPA
-    platform first (forward-safe if any imported module incidentally touches
-    QtGui), falling back to ``QCoreApplication`` where the GUI stack is absent.
-    Either way the event loop QThread+signal dispatch needs is live.
-    """
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    try:
-        from PySide6.QtWidgets import QApplication
-        return QApplication.instance() or QApplication([])
-    except Exception:  # pylint: disable=broad-exception-caught
-        from PySide6.QtCore import QCoreApplication
-        return QCoreApplication.instance() or QCoreApplication([])
-
-
-def run_qt_scan(
-    *, pair_idx: int, sources: list[str], limit: int | None,
-    workers: int, hash_pool: str, per_scan_timeout: float,
-) -> ScanBenchResult:
-    """Run one scan through the Qt arm: a real ``ScanWorker`` QThread."""
-    from PySide6.QtCore import Qt
-    from app.views.workers.scan_worker import ScanWorker
-
-    probes = [probe_device(src) for src in sources]
-    _print_probes("qt", pair_idx, probes)
-    per_device_readers = {
-        p["device_key"]: p["hash_workers_for_root"] for p in probes
-    }
-
-    worker = ScanWorker(
-        sources={f"src{i}": str(s) for i, s in enumerate(sources)},
-        output_path=str(_manifest_path("qt", pair_idx)),
-        recursive_map={f"src{i}": True for i in range(len(sources))},
-        limit=limit,
-        workers=workers,
-        hash_pool=hash_pool,
-    )
-
-    sig_lock = threading.Lock()
-    lines: list[str] = []
-    status: list[str] = [""]
-
-    def on_progress(msg: str) -> None:
-        with sig_lock:
-            lines.append(msg)
-
-    def on_finished(_p: str) -> None:
-        with sig_lock:
-            status[0] = "Done."
-
-    def on_failed(msg: str) -> None:
-        with sig_lock:
-            status[0] = msg
-
-    def on_empty() -> None:
-        with sig_lock:
-            status[0] = "Done. (empty)"
-
-    # DirectConnection so slots fire on the worker thread synchronously — the
-    # main thread blocks in worker.wait() so a queued connection's event-loop
-    # dispatch would never run and payloads would be lost. sig_lock guards the
-    # post-join cross-thread read.
-    worker.progress.connect(on_progress, Qt.ConnectionType.DirectConnection)  # type: ignore[arg-type]
-    worker.finished.connect(on_finished, Qt.ConnectionType.DirectConnection)  # type: ignore[arg-type]
-    worker.failed.connect(on_failed, Qt.ConnectionType.DirectConnection)  # type: ignore[arg-type]
-    worker.completed_empty.connect(on_empty, Qt.ConnectionType.DirectConnection)  # type: ignore[arg-type]
-
-    pre_pids = snapshot_exiftool_pids()
-    interrupted = False
-    t0 = time.monotonic()
-    worker.start()
-    deadline = t0 + per_scan_timeout
-    while not worker.wait(1000):
-        if time.monotonic() > deadline:
-            interrupted = True
-            print(f"  TIMEOUT after {per_scan_timeout:.0f}s — requesting interruption")
-            worker.requestInterruption()
-            if not worker.wait(int(_INTERRUPT_GRACE * 1000)):
-                print("  WARN: worker.wait timed out AFTER interrupt — orphaned QThread")
-            break
-    wall_s = time.monotonic() - t0
-
-    with sig_lock:
-        final_status = status[0]
-        captured = list(lines)
-
-    return _finalize(
-        backend="qt", pair_idx=pair_idx, sources=sources, wall_s=wall_s,
-        lines=captured, status=final_status, error="",
-        interrupted=interrupted, per_device_readers=per_device_readers,
-        pre_pids=pre_pids,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Shared finalize + reporting
+# Finalize + reporting
 # ---------------------------------------------------------------------------
 
 
@@ -456,39 +335,18 @@ def _median_fps(results: list[ScanBenchResult], backend: str) -> float | None:
     return statistics.median(vals) if vals else None
 
 
-def _build_summary(
-    results: list[ScanBenchResult], backends: list[str], require_ratio: bool,
-) -> dict:
+def _build_summary(results: list[ScanBenchResult], backends: list[str]) -> dict:
     summary: dict = {"backends": backends}
-    qt_fps = _median_fps(results, "qt")
-    web_fps = _median_fps(results, "web")
-    if "qt" in backends:
-        summary["qt_files_per_s_median"] = qt_fps
     if "web" in backends:
-        summary["web_files_per_s_median"] = web_fps
+        summary["web_files_per_s_median"] = _median_fps(results, "web")
 
-    if qt_fps and web_fps:
-        ratio = web_fps / qt_fps
-        summary["backend_comparison"] = {
-            "ratio": ratio,
-            "threshold": _RATIO_FLOOR,
-            "pass": ratio >= _RATIO_FLOOR,
-            # When require_ratio is off the ratio is reported but not gated —
-            # on a tiny corpus it is dominated by per-scan noise, not parity.
-            "advisory": not require_ratio,
-        }
     if any(r.exiftool_orphans_post_scan > 0 for r in results):
         summary["t7_regression_hit"] = True
 
-    # Liveness gate (Phase-0 (b) + T6): every requested arm must produce a
-    # positive throughput; require_ratio additionally enforces the 5% floor.
+    # Liveness gate (Phase-0 (b)): the scan must produce a positive throughput.
     live = {b: (_median_fps(results, b) or 0.0) > 0 for b in backends}
     summary["liveness"] = live
-    liveness_ok = all(live.values())
-    ratio_ok = True
-    if require_ratio and "backend_comparison" in summary:
-        ratio_ok = summary["backend_comparison"]["pass"]
-    summary["gate_pass"] = liveness_ok and ratio_ok
+    summary["gate_pass"] = all(live.values())
     return summary
 
 
@@ -496,10 +354,10 @@ def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--sources", nargs="+", required=True,
                    help="Source roots, e.g. qa/sandbox/near-duplicates")
-    p.add_argument("--backend", choices=("qt", "web", "both"), default="both",
-                   help="Which arm(s) to measure (default both)")
+    p.add_argument("--backend", choices=("web",), default="web",
+                   help="Which arm to measure (only the web client remains)")
     p.add_argument("--pairs", type=int, default=3,
-                   help="Repeat count; with --backend both, alternates qt/web per pair")
+                   help="Repeat count; the reported throughput is the median")
     p.add_argument("--limit", type=int, default=2000,
                    help="Per-source file cap (bounds wall-time)")
     p.add_argument("--workers", type=int, default=4,
@@ -508,30 +366,22 @@ def main(argv: list[str]) -> int:
                    default="thread", help="Hash-stage executor (default thread)")
     p.add_argument("--per-scan-timeout", type=float, default=_DEFAULT_PER_SCAN_TIMEOUT,
                    help=f"Per-scan hard timeout (default {_DEFAULT_PER_SCAN_TIMEOUT:.0f}s)")
-    p.add_argument("--require-ratio", action="store_true",
-                   help="Also fail when web/qt files-per-s ratio < %.2f "
-                        "(real-corpus gate; too tight for the tiny sandbox)" % _RATIO_FLOOR)
     p.add_argument("--no-warmup", action="store_true",
-                   help="Skip the discarded warm-up scan per arm. The warm-up "
-                        "controls the one-time import / file-cache cold-start that "
-                        "otherwise inflates whichever arm runs first; without it the "
-                        "reported ratio on a tiny corpus is a cold-start artifact.")
+                   help="Skip the discarded warm-up scan. The warm-up controls "
+                        "the one-time import / file-cache cold-start that otherwise "
+                        "inflates the first measured run; without it a tiny corpus "
+                        "reports a cold-start artifact.")
     p.add_argument("--output", default=None,
                    help="Optional JSON artifact path (JSON is always printed to stdout)")
     args = p.parse_args(argv[1:])
 
-    backends = ["qt", "web"] if args.backend == "both" else [args.backend]
-
-    # Bootstrap Qt only when the qt arm is requested, so the web arm runs on a
-    # box without a working Qt GUI stack.
-    if "qt" in backends:
-        _ensure_qt_app()
+    backends = [args.backend]
 
     print("=== bench_web_port ===")
     print(f"sources={args.sources}  backends={backends}  pairs={args.pairs}  "
           f"limit={args.limit}  workers={args.workers}  hash_pool={args.hash_pool}")
 
-    runners = {"qt": run_qt_scan, "web": run_web_scan}
+    runners = {"web": run_web_scan}
     scan_kwargs = dict(
         sources=args.sources, limit=args.limit, workers=args.workers,
         hash_pool=args.hash_pool, per_scan_timeout=args.per_scan_timeout,
@@ -539,10 +389,10 @@ def main(argv: list[str]) -> int:
 
     warmup = not args.no_warmup
     if warmup:
-        # One discarded scan per arm: warms module imports (PIL/rawpy/scanner.*)
-        # and the OS file cache so the first MEASURED run of each arm isn't the
-        # process's cold-start outlier. exiftool spawn + reap is paid per-scan by
-        # every run, so it stays a constant, not a cross-arm confound.
+        # One discarded scan: warms module imports (PIL/rawpy/scanner.*) and the
+        # OS file cache so the first MEASURED run isn't the process's cold-start
+        # outlier. exiftool spawn + reap is paid per-scan by every run, so it
+        # stays a constant.
         print("\n--- warmup (discarded; controls import / file-cache cold-start) ---")
         for backend in backends:
             runners[backend](pair_idx=-1, **scan_kwargs)
@@ -552,7 +402,7 @@ def main(argv: list[str]) -> int:
         for backend in backends:
             results.append(runners[backend](pair_idx=pair_idx, **scan_kwargs))
 
-    summary = _build_summary(results, backends, args.require_ratio)
+    summary = _build_summary(results, backends)
     summary["warmup"] = warmup
     out = {"summary": summary, "results": [asdict(r) for r in results]}
     payload = json.dumps(out, indent=2, ensure_ascii=False)

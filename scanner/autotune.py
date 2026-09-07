@@ -1,9 +1,9 @@
 """Per-device read-concurrency knee detection for the #551 in-pipeline ramp.
 
-Pure logic — no Qt, no Win32, no I/O, and no threads of its own. The pipeline
-wiring (the per-device reader ``Semaphore``, the ``_gated_read`` permit
+Pure logic — no Win32, no I/O, and no threads of its own. The pipeline wiring
+(the per-device reader ``Semaphore``, the ``_gated_read`` permit
 acquire/release, and the ``device_key``-keyed cache round-trip) lives in
-``app/views/workers/scan_worker.py`` (#551 Phase 2); this module only holds the
+``core/app_service/scan_runner.py`` (#551 Phase 2); this module only holds the
 measurement math so it is fully unit-testable at layer 1.
 
 The model (issue #551):
