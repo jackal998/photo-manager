@@ -94,7 +94,7 @@ jobs:
         if: steps.filter.outputs.backend == 'true'
         run: python -m pytest
 
-      - name: Per-file coverage floor (every tracked module ≥ 80%)
+      - name: Per-file coverage floor (every tracked module ≥ 70%)
         if: steps.filter.outputs.backend == 'true'
         run: python scripts/check_coverage_per_file.py
 
