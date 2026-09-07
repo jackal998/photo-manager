@@ -1,0 +1,1 @@
+Reject a near-duplicate threshold below 2 (or above 20) at `POST /api/scan` instead of running a scan that can only report "no near-duplicates found" (#876).

@@ -10,10 +10,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.app_service.cancel_token import _CancelToken
-from core.app_service.dtos import ScanConfig
+from core.app_service.dtos import (
+    NEAR_DUP_THRESHOLD_MAX,
+    NEAR_DUP_THRESHOLD_MIN,
+    ScanConfig,
+)
 from core.app_service.scan_runner import hash_pool_fingerprint
 
 
@@ -215,9 +219,23 @@ class WebScanRequest(BaseModel):
     # Optional pipeline tuning fields — defaults mirror ScanConfig.
     recursive_map: dict[str, bool] = {}
     source_priority: dict[str, int] | None = None
-    threshold: int = 10
+    # #876 — the near-duplicate thresholds are bounded HERE, not only in the
+    # two dialogs. ``classify`` groups on ``0 < distance <= threshold`` and
+    # photographic pHash distances are always even, so a ``1`` returns "no
+    # near-duplicates found" with no error — the same lying outcome #823
+    # removed from the UI. The API is the trust boundary, so a scripted or
+    # hand-rolled client gets a 422 naming the floor instead of a silent
+    # empty tier. Bounds come from the shared constants so the wire contract
+    # and both dialogs cannot drift apart.
+    threshold: int = Field(
+        default=10, ge=NEAR_DUP_THRESHOLD_MIN, le=NEAR_DUP_THRESHOLD_MAX
+    )
+    # The mean-colour gate is a different predicate (an L2 distance, where 0
+    # legitimately means "off") and keeps its own unbounded 0-100 usage.
     mean_color_threshold: int = 30
-    dhash_threshold: int = 10
+    dhash_threshold: int = Field(
+        default=10, ge=NEAR_DUP_THRESHOLD_MIN, le=NEAR_DUP_THRESHOLD_MAX
+    )
     limit: int | None = None
     workers: int = 4
     # None = "server resolves from settings.json" (see resolved_with()); an
