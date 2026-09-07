@@ -58,8 +58,15 @@ import subprocess
 import sys
 
 USER_FACING_PATTERNS = (
-    # The React client — components, hooks, store, api layer, styles.
-    re.compile(r"^frontend/src/.*\.(ts|tsx|css)$"),
+    # The React client — components, hooks, store, api layer.
+    #
+    # ``.css`` is deliberately NOT here. A stylesheet edit has no
+    # scriptable layer-3 assertion: a Playwright driver can read a
+    # computed style, but "did this colour/spacing change look right" is
+    # a human judgement, so demanding a driver for a one-line
+    # `frontend/src/index.css` edit only teaches authors to reach for the
+    # bypass token. Visual regressions are the qa-explore operator's job.
+    re.compile(r"^frontend/src/.*\.(ts|tsx)$"),
     # The FastAPI surface the client talks to (routes + their models).
     re.compile(r"^app/web/.*\.py$"),
 )

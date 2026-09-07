@@ -216,6 +216,37 @@ class TestBlock:
         )
         assert rc == 2
 
+    def test_frontend_suggestion_names_a_doc_that_holds_that_entry(
+        self, monkeypatch, capsys
+    ):
+        """The suggested doc must be one the author can actually edit.
+
+        README's project tree lists `app/web/` file-by-file but
+        `frontend/src/` at directory granularity, so suggesting the README
+        tree for a new component would send the author to an edit with
+        nowhere to land — and an unfollowable instruction is a gate
+        everyone bypasses. Components/hooks point at features.md (which
+        carries a `### Web —` entry per surface); store/lib/api/i18n point
+        at testing.md's per-module table (which carries a row per module).
+        """
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: prune banner'",
+            changed=["frontend/src/components/execute/PruneBanner.tsx"],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "docs/features.md" in err
+        assert "README.md project tree (under frontend/src" not in err
+
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: prune helper'",
+            changed=["frontend/src/lib/pruneBanner.ts"],
+        )
+        assert rc == 2
+        assert "docs/testing.md per-module table" in capsys.readouterr().err
+
     def test_block_message_mentions_suggested_doc(self, monkeypatch, capsys):
         rc = _run(
             monkeypatch,

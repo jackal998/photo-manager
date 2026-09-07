@@ -98,6 +98,17 @@ jobs:
         if: steps.filter.outputs.backend == 'true'
         run: python scripts/check_coverage_per_file.py
 
+      # Doc-reference guards (#646). Both fail when a doc cites a file the
+      # tree no longer has — the rot that let 36 coverage rows and 133
+      # scenario citations describe deleted modules. Not conditioned on
+      # the backend filter: a docs-only PR is exactly the PR that can
+      # introduce a dead citation.
+      - name: docs/testing.md per-module map resolves
+        run: python scripts/check_testing_doc_modules.py
+
+      - name: docs/features.md scenario citations resolve
+        run: python scripts/check_features_scenario_citations.py
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4

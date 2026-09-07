@@ -66,14 +66,29 @@ _DOC_RELEVANT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"^app/web/(routes/)?[^/]+\.py$"),
         "README.md project tree (under app/web/...)",
     ),
+    # The two frontend patterns below deliberately do NOT suggest the
+    # README project tree. That tree lists ``app/web/`` file-by-file (17
+    # files) but ``frontend/src/`` at DIRECTORY granularity (6 lines for
+    # ~90 files), so "update the README tree" would send an author to an
+    # edit with nowhere to land — and a gate whose instruction cannot be
+    # followed is a gate everyone bypasses. Each pattern names the doc
+    # that genuinely carries an entry at that path's granularity.
+    #
+    # Co-located vitest specs (``*.test.ts`` / ``*.test.tsx``) are not new
+    # entries anywhere — they follow their module — so both patterns
+    # exclude them. Nested paths stay in scope (``components/execute/…``,
+    # ``lib/…``) because both target docs do carry nested entries.
     (
-        # Co-located vitest specs (``*.test.ts`` / ``*.test.tsx``) are not
-        # new project-tree entries — they follow their module.
         re.compile(
-            r"^frontend/src/(components|hooks|store|lib|api|i18n)/"
-            r"(?!.*\.test\.).*\.(ts|tsx)$"
+            r"^frontend/src/(components|hooks)/(?!.*\.test\.).*\.(ts|tsx)$"
         ),
-        "README.md project tree (under frontend/src/...)",
+        "docs/features.md (the `### Web —` entry for this surface)",
+    ),
+    (
+        re.compile(
+            r"^frontend/src/(store|lib|api|i18n)/(?!.*\.test\.).*\.(ts|tsx)$"
+        ),
+        "docs/testing.md per-module table (what covers this module)",
     ),
     (
         re.compile(r"^infrastructure/[^/]+\.py$"),

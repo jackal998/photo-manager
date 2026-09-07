@@ -99,6 +99,21 @@ class TestAllow:
         )
         assert rc == 0
 
+    def test_stylesheet_only_change_passes(self, monkeypatch):
+        """A `.css` edit is not a layer-3 surface.
+
+        A Playwright driver can read a computed style, but "does this
+        spacing look right" is a human judgement — so a one-line
+        `index.css` edit has no scriptable assertion to demand, and
+        demanding one only teaches authors to reach for the bypass token.
+        """
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'style: tighten the row gutter'",
+            changed=["frontend/src/index.css"],
+        )
+        assert rc == 0
+
     def test_vitest_bootstrap_alone_passes(self, monkeypatch):
         """``frontend/src/test/`` holds the vitest setup, not UI."""
         rc = _run(
