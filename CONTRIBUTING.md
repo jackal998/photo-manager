@@ -1,8 +1,9 @@
 # Contributing to photo-manager
 
-Welcome. This is a Windows PySide6 desktop app for deduplication scanning
-and review. The notes below are the bits that aren't obvious from the
-code — read them once before your first PR.
+Welcome. This is a Windows desktop app for deduplication scanning
+and review — a local FastAPI + React client in a native window. The
+notes below are the bits that aren't obvious from the code — read them
+once before your first PR.
 
 For environment setup, run instructions, and the usage tour, see the
 [README](README.md).
@@ -70,8 +71,9 @@ The web UI does this for you automatically.
 ## Adding a UI string
 
 **Every user-facing string in the app lives in `translations/<locale>.yml`,
-not in a Python literal.** This is the single most common thing to get
-right (or wrong) when touching the views layer.
+not in a Python or TSX literal.** This is the single most common thing to get
+right (or wrong) when touching the UI. The client fetches the catalog
+from `GET /api/i18n/{locale}` and looks keys up with the `useT` hook.
 
 ### When you add or change a UI string
 
@@ -82,7 +84,7 @@ right (or wrong) when touching the views layer.
    ```python
    from infrastructure.i18n import t
 
-   button = QPushButton(t("scan_dialog.start_button"))
+   raise HTTPException(status_code=400, detail=t("scan.invalid_path"))
    ```
 3. **Add the same key to every other `translations/*.yml`** with a
    translated value. If you don't speak the target language, leave the
@@ -98,13 +100,14 @@ right (or wrong) when touching the views layer.
 ### When you rename a UI string
 
 1. Update `translations/en.yml` and every `translations/*.yml`.
-2. Grep `qa/` for the old English value — drivers and constants in
-   [`qa/scenarios/_uia.py`](qa/scenarios/_uia.py) couple to the
-   English UIA accessible names. Update every match.
-3. The
-   [`test_uia_label_coupling`](tests/test_uia_label_coupling.py) test
-   scans both `app/*.py` and `translations/*.yml` for every UIA
-   constant — a stale constant fails CI.
+2. Grep `qa/` for the old English value — most drivers address
+   elements by `data-testid`, but menu-item and dialog-body assertions
+   still couple to the English copy. Update every match.
+3. If you rename or add a **testid**,
+   [`scripts/check_testid_parity.py`](scripts/check_testid_parity.py)
+   (run in CI via `tests/test_testid_parity.py`) fails on any drift
+   between `frontend/src/testids.ts` and
+   `qa/web/testid_constants.py`.
 
 ### Don't translate
 
@@ -163,7 +166,7 @@ before adding tests. Hard floor for every PR:
 
   Concrete anti-patterns to avoid:
 
-  - Monkeypatching `QStandardItem.setData` to raise so a wrapped
+  - Monkeypatching a store setter to raise so a wrapped
     `except: pass` branch executes.
   - Forcing `_HASH_AVAILABLE = False` to cover the `ImportError`
     fallback when PIL is in fact a hard dependency.
@@ -173,7 +176,7 @@ before adding tests. Hard floor for every PR:
 ### When unit tests can't reach a code path
 
 Some files genuinely can't be unit-tested at layer 1 (require a
-running `QApplication`, a real subprocess, real filesystem semantics).
+running browser, a real subprocess, real filesystem semantics).
 Add the file to `[tool.coverage.run] omit` in `pyproject.toml` with
 a one-line comment naming **(a)** why it can't run in unit tests and
 **(b)** where it IS covered (a specific qa-explore scenario, an
@@ -192,17 +195,18 @@ table needs updating in the same PR.
    the happy path. Layer-2 spot-tests are reactive — only when a
    specific boundary bug surfaces.
 3. **User-facing flow** (button, dialog, menu) → extend or add a
-   `qa/scenarios/sNN_*.py` driver and register it in
-   `qa/scenarios/_batch.py:ALL_SCENARIOS` and
-   `qa/scenarios/_config.py:SCENARIO_SOURCES`. The full authoring
-   guide (naming, helpers in `_uia.py`, fixture conventions,
-   anti-patterns) lives in
-   [`qa/scenarios/AUTHORING.md`](qa/scenarios/AUTHORING.md).
+   `qa/web/scenarios/sNN_*.py` driver and register it in
+   `qa/scenario_ids.py:ALL_SCENARIOS` and
+   `qa/web/scenario_map.yml`. The full authoring guide (naming,
+   shared helpers, fixture conventions, anti-patterns) lives in
+   [`docs/qa/README.md`](docs/qa/README.md) and
+   [`docs/testing.md`](docs/testing.md).
 
-The QA batch runs separately on PRs touching UI/scanner/QA paths
-via [`.github/workflows/qa-batch.yml`](.github/workflows/qa-batch.yml).
-It's currently advisory (not a required check) — but a red qa-batch
-on a UI PR is a genuine signal, don't ignore it.
+The QA batch runs on every PR touching web paths, as the
+`web-scenario-batch` job in
+[`.github/workflows/web-eval-gates.yml`](.github/workflows/web-eval-gates.yml).
+It has been **blocking** since PR #817 — a red batch is a stop, not a
+signal to weigh.
 
 ---
 
@@ -262,8 +266,8 @@ worth knowing up front so your first PR doesn't bounce on style:
   rather than bypassing.
 - **CI must be green** before merge. The required checks today are
   pytest + per-file coverage (`tests.yml`). Lint is local-only — see
-  the Code style section. If the qa-batch workflow runs on your PR
-  and goes red, treat it as a real signal even though it's advisory.
+  the Code style section. The `web-scenario-batch` job runs on every
+  web-touching PR and is blocking — a red batch is a stop.
 
 ---
 

@@ -49,7 +49,7 @@ call, so a token that carries no reason bypasses nothing.
 |---|---|---|
 | `[skip-news: <reason>]` | this changelog gate | `scripts/hooks/news_guard.py` — CI only (`news-gate.yml`), because the fragment's filename needs the PR number |
 | `[docs-not-needed: <reason>]` | `docs/features.md` / doc staleness | `scripts/hooks/docs_guard.py` — PreToolUse hook **and** `pr-gates.yml` |
-| `[qa-not-needed: <reason>]` | `qa/scenarios/sNN_*.py` coverage | `scripts/hooks/qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` |
+| `[qa-not-needed: <reason>]` | `qa/web/scenarios/sNN_*.py` coverage | `scripts/hooks/qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` |
 
 All three reject the following, each with a message naming the problem
 rather than the generic "you forgot the thing" text:
