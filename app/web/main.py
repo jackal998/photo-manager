@@ -28,7 +28,7 @@ from app.web.routes.i18n import router as i18n_router
 from app.web.routes.image import router as image_router
 from app.web.routes.media import router as media_router
 from app.web.routes.review import router as review_router
-from app.web.routes.scan import router as scan_router
+from app.web.routes.scan import _load_settings, router as scan_router
 from app.web.routes.settings import router as settings_router
 
 
@@ -37,6 +37,9 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup init + graceful shutdown.
 
     Startup:
+    - Loads the same settings.json the Qt entry point loads and passes it
+      to both media services, so the web client honours the user's
+      configured cache directories (#874).
     - Constructs a shared ImageService and stores it on app.state.
     - Unregisters the atexit drain for _drain_wic_executor so the Qt
       process path's safety-net remains in place for the Qt app while
@@ -55,9 +58,17 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import infrastructure.transcode_service as _transcode_svc_mod
 
     # Startup ----------------------------------------------------------------
-    image_service = _img_svc_mod.ImageService()
+    # Both services read their cache directory from settings.json
+    # (thumbnail_disk_cache_dir / video_transcode_cache_dir); constructing
+    # them with no settings silently pinned every web cache to the default
+    # %LOCALAPPDATA%/PhotoManager path (#874). _load_settings() is the scan
+    # route's PHOTO_MANAGER_HOME resolver — reused rather than copied a third
+    # time, since a drifting copy is what this bug was. A missing file yields
+    # an empty JsonSettings, so the defaults are unchanged on a fresh install.
+    settings = _load_settings()
+    image_service = _img_svc_mod.ImageService(settings)
     app.state.image_service = image_service
-    transcode_service = _transcode_svc_mod.TranscodeService()
+    transcode_service = _transcode_svc_mod.TranscodeService(settings)
     app.state.transcode_service = transcode_service
     app.state.allowed_roots = []
     # asyncio.Lock for POST /api/execute — prevents concurrent destructive

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import stat
 from pathlib import Path
@@ -10,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.web.main import create_app
+from app.web.main import _lifespan, create_app
 
 
 # ---------------------------------------------------------------------------
@@ -356,3 +358,78 @@ class TestLifespan:
             pass
         # Test passes as long as startup+shutdown completed without error.
         # The unregister correctness is verified via the drain-called-once test.
+
+
+# ---------------------------------------------------------------------------
+# Lifespan: the user's configured cache directories reach both media services
+# ---------------------------------------------------------------------------
+
+def _run_lifespan(app) -> None:
+    """Enter and leave the real lifespan once, without a TestClient.
+
+    Driving the async context manager directly keeps these tests off the
+    ``TestClient`` + ``run_in_executor`` combination that produces
+    order-dependent coverage flakes in this suite.
+    """
+
+    async def _cycle() -> None:
+        async with _lifespan(app):
+            pass
+
+    asyncio.run(_cycle())
+
+
+class TestLifespanSettings:
+    """The lifespan builds both media services from settings.json (#874).
+
+    Constructing them with no settings pinned every web-client cache to the
+    default ``%LOCALAPPDATA%/PhotoManager`` path regardless of what the user
+    configured — so "put the caches on the fast disk" silently did nothing on
+    the web client while it worked on the desktop one.
+    """
+
+    def test_configured_cache_dirs_reach_both_services(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        thumbs = tmp_path / "fast-disk" / "thumbs"
+        transcodes = tmp_path / "fast-disk" / "transcodes"
+        (home / "settings.json").write_text(
+            json.dumps(
+                {
+                    "thumbnail_disk_cache_dir": str(thumbs),
+                    "video_transcode_cache_dir": str(transcodes),
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("PHOTO_MANAGER_HOME", str(home))
+
+        app = create_app(frontend_dist=tmp_path / "no-dist")
+        _run_lifespan(app)
+
+        cache_file = app.state.image_service.image_disk_cache_path(
+            str(tmp_path / "photo.jpg"), 512, 0
+        )
+        assert thumbs in cache_file.parents, (
+            f"thumbnail cache landed at {cache_file}, not under {thumbs}"
+        )
+        base_dir = app.state.transcode_service._base_dir
+        assert transcodes in base_dir.parents, (
+            f"transcode cache landed at {base_dir}, not under {transcodes}"
+        )
+
+    def test_absent_settings_file_keeps_default_cache_dirs(self, tmp_path, monkeypatch):
+        """A fresh install (no settings.json) must keep today's defaults."""
+        home = tmp_path / "home-without-settings"
+        home.mkdir()
+        monkeypatch.setenv("PHOTO_MANAGER_HOME", str(home))
+
+        app = create_app(frontend_dist=tmp_path / "no-dist")
+        _run_lifespan(app)
+
+        default_root = Path.home() / "AppData" / "Local" / "PhotoManager"
+        assert Path(app.state.image_service._disk_dir) == default_root / "thumbs"
+        assert (
+            app.state.transcode_service._base_dir.parent
+            == default_root / "transcodes"
+        )
