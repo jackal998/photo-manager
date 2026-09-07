@@ -1,5 +1,9 @@
 # Scanner-perf saga (#604→#610) — retro 2026-06-08
 
+> Instruments removed with #646 (Qt-client cutover): `scripts/probe_process_monitor.py`
+> and `scripts/probe_pipeline_timeline.py` drove the Qt `ScanWorker` and no longer
+> exist in the tree; they live at the SHAs cited below and in git history.
+
 ## What we shipped (1-paragraph honest summary)
 
 Inside a 36-hour window I shipped four back-to-back scanner-perf changes (#605 GUID device_key, #604 autotune A/B → #586 close, #609 force-process-pool default, #609 audit doc) and the user caught a regression or confounded measurement in every one. The same agent (this session) made the same class of mistake four times: test a convenience subset (D+J), extrapolate to the user's real topology (D+H+J), claim a `physical limit` without measuring it, ship a default-changing fix, then watch the user produce the evidence I should have produced. The fix that ultimately worked (#610 per-device process pool) only exists because the user burned six pushback rounds dragging me into running `probe_process_monitor.py` — a tool that should have existed before #609 ever merged.

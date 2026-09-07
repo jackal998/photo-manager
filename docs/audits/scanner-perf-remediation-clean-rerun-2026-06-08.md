@@ -1,5 +1,9 @@
 # Scanner-perf remediation — clean post-#606 re-run (2026-06-08)
 
+> Instruments removed with #646 (Qt-client cutover): `scripts/bench_autotune_604.py`
+> and `scripts/probe_byte_budget_598.py` drove the Qt `ScanWorker` and no longer
+> exist in the tree; they live at the SHAs cited below and in git history.
+
 **Status:** Decisions made on direct measurement; load-bearing quantities
 asserted at scan-start; the prior #604 conclusion was confounded by
 #605/#583 and is REPLACED. No adversarial-review peer round (single

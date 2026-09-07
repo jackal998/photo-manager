@@ -1,5 +1,9 @@
 # Preview redesign (#622) Phase 3 — session results, 2026-09-06
 
+> Instrument removed with #646 (Qt-client cutover): `scripts/preview_phase3_probe.py`
+> drove the Qt preview stack and no longer exists in the tree; it lives at the
+> SHA cited below and in git history.
+
 Owner-authorised session executed per
 [`preview-phase3-runbook.md`](preview-phase3-runbook.md). Both probe runs at
 commit `a202282` (`git_dirty: false` in both artifacts). Raw JSONs archived

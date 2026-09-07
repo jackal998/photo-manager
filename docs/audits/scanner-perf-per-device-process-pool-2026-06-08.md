@@ -1,5 +1,9 @@
 # Per-device process pools — decision record (2026-06-08, post-#609)
 
+> Instrument removed with #646 (Qt-client cutover): `scripts/probe_process_monitor.py`
+> drove the Qt `ScanWorker` and no longer exists in the tree; it lives at the
+> SHA cited below and in git history.
+
 **Status:** Implement-then-verify. Pre-fix monitor showed real regression
 (50% idle CPU, 900s timeout on the user's actual D+H+J workload). Fix
 applied, **same monitor probe re-run on same args**, post-fix data

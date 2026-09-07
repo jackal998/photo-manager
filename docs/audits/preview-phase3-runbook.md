@@ -1,5 +1,9 @@
 # Preview redesign (#622) Phase 3 — verification runbook
 
+> Instrument removed with #646 (Qt-client cutover): `scripts/preview_phase3_probe.py`
+> and `tests/test_preview_phase3_probe.py` drove the Qt preview stack and no
+> longer exist in the tree; they live at the SHA cited below and in git history.
+
 **Status:** run on the owner's J: NAS on **2026-09-06** at SHA
 `a202282190f5757e6cb373d37f2f4db51e85f9d1`. The
 [Results](#results--2026-09-06-session) table below now carries real
