@@ -523,14 +523,39 @@ class TestStreamCopySelection:
         )
         assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
 
-    def test_second_audio_stream_can_veto_the_copy(self, tmp_path: Path) -> None:
-        """A dual-audio file is only copyable if EVERY audio stream is."""
+    def test_second_audio_stream_does_not_veto_the_copy(self, tmp_path: Path) -> None:
+        """A later audio track is irrelevant: the copy never maps it (#862).
+
+        `_copy_cmd` maps `0:a:0?` only, so a camera/screen-recorder file with
+        AAC first and a PCM commentary track second produces exactly the same
+        stream set either way — and the encode that used to run for it was a
+        multi-second stall bought for nothing.
+        """
         recorder = _run_with(
             tmp_path,
             _probe_streams(
                 _h264_video(),
                 {"codec_type": "audio", "codec_name": "aac"},
                 {"codec_type": "audio", "codec_name": "pcm_s16le"},
+            ),
+        )
+        assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["copy"]
+        # The mapped track is the one that was vetted — and it is the only one.
+        assert "0:a:0?" in recorder.ffmpeg_cmds[0]
+
+    def test_non_copyable_first_audio_still_encodes(self, tmp_path: Path) -> None:
+        """First-audio-only cuts BOTH ways: a PCM first track keeps the encode.
+
+        Mirror image of the test above — same two codecs, opposite order. If
+        the verdict ever regressed to "any audio stream will do", the copy
+        would hand the browser a PCM track it cannot decode.
+        """
+        recorder = _run_with(
+            tmp_path,
+            _probe_streams(
+                _h264_video(),
+                {"codec_type": "audio", "codec_name": "pcm_s16le"},
+                {"codec_type": "audio", "codec_name": "aac"},
             ),
         )
         assert [_recipe_of(c) for c in recorder.ffmpeg_cmds] == ["encode"]
@@ -714,6 +739,85 @@ class TestProbeInvocation:
         cmd = recorder.probe_cmds[0]
         assert isinstance(cmd, list)
         assert cmd[-1] == str(tmp_path / name)
+
+    def test_probe_concurrency_is_capped_at_two(self, tmp_path: Path) -> None:
+        """Four cold requests for four DISTINCT files → at most 2 live probes.
+
+        Distinct sources mean distinct cache keys, so the per-key lock
+        serialises nothing here: before #862 all four ffprobe processes ran
+        at once (measured on the real server: 8 requests → 8 probes), each
+        able to hold a 30 s timeout against the same NAS the capped ffmpeg
+        runs are reading.
+
+        Two mechanisms keep the assertion honest in both directions. The
+        barrier only clears when TWO probes are inside `subprocess.run`
+        simultaneously, so a cap of 1 (or an accidentally serialised probe)
+        breaks it and fails the test. The linger after it is what makes the
+        upper bound real: every probe stays counted for `_LINGER_S` after
+        the barrier clears, so an UNCAPPED probe lets threads 3 and 4 in
+        during that window and the peak reaches 4 — without the linger the
+        first pair could finish before the others arrived and an unbounded
+        implementation would still measure 2.
+        """
+        # Long enough that a non-blocked third/fourth thread is certainly
+        # observed inside the window; paid twice (two capped rounds).
+        _LINGER_S = 0.15
+        svc = _make_service(tmp_path)
+        sources = []
+        for i in range(4):
+            src = tmp_path / f"clip{i}.mov"
+            src.write_bytes(bytes([i]) * 10)
+            sources.append(src)
+
+        pair_barrier = threading.Barrier(2)
+        counter_lock = threading.Lock()
+        live = [0]
+        peak = [0]
+
+        def _fake_run(cmd, **kwargs):
+            if _is_probe(cmd):
+                with counter_lock:
+                    live[0] += 1
+                    peak[0] = max(peak[0], live[0])
+                try:
+                    # Clears only once a SECOND probe is also in flight.
+                    pair_barrier.wait(timeout=10)
+                    time.sleep(_LINGER_S)
+                finally:
+                    with counter_lock:
+                        live[0] -= 1
+                return _probe_unknown()
+            out_index = cmd.index("-y") + 1
+            Path(cmd[out_index]).write_bytes(b"fake-mp4")
+
+            class _Ok:
+                returncode = 0
+                stderr = b""
+            return _Ok()
+
+        errors: list = []
+
+        def _thread_fn(src: Path) -> None:
+            try:
+                svc.get_transcoded_path(src)
+            except Exception as exc:  # noqa: BLE001 - reported below
+                errors.append(exc)
+
+        with patch("subprocess.run", side_effect=_fake_run):
+            threads = [
+                threading.Thread(target=_thread_fn, args=(s,)) for s in sources
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=30)
+
+        assert not errors, f"thread errors: {errors}"
+        assert all(not t.is_alive() for t in threads), "a probe thread hung"
+        assert peak[0] == 2, (
+            f"peak concurrent ffprobe was {peak[0]}, expected exactly 2 "
+            f"(>2 = the cap is not held; <2 = the test never proved anything)"
+        )
 
     def test_probe_is_bounded_and_not_shelled(self, tmp_path: Path) -> None:
         """shell=False and a finite timeout are what keep a hostile filename

@@ -47,9 +47,10 @@ Cache design mirrors image_service.py:
       source so the second caller finds the cache hit after the first
       finishes, never re-transcodes.
   (b) Module-level BoundedSemaphore(_TRANSCODE_SEM): limits the total
-      number of concurrent ffmpeg sub-processes to 2.  Acquired only
-      around the subprocess call; released in a finally block.  Cache
-      hits bypass both guards.
+      number of concurrent MEDIA sub-processes — ffmpeg and the #853
+      ffprobe alike (#862) — to 2.  Acquired only around each
+      subprocess call; released in a finally block.  Cache hits bypass
+      both guards.
 """
 
 from __future__ import annotations
@@ -69,7 +70,8 @@ from loguru import logger
 # Bump to invalidate the on-disk cache namespace.
 TRANSCODE_RECIPE_VERSION = "1"
 
-# Hard cap on concurrent ffmpeg processes.
+# Hard cap on concurrent media sub-processes: ffmpeg encodes/remuxes and
+# the #853 ffprobe verdict share it (#862).
 _TRANSCODE_SEM = threading.BoundedSemaphore(2)
 
 # Per-cache-key locks: serialise concurrent requests for the same source.
@@ -382,7 +384,8 @@ class TranscodeService:
         Thread-safe: two concurrent requests for the same ``source``
         serialise on the per-key Lock; the second caller returns the
         cache hit without re-transcoding.  The total number of
-        concurrent ffmpeg processes is capped at 2.
+        concurrent media sub-processes — ffmpeg and ffprobe together
+        (#862) — is capped at 2.
         """
         if self._ffmpeg is None:
             raise TranscodeUnavailable(
@@ -572,8 +575,18 @@ class TranscodeService:
 
         True only when ffprobe reports that the first video stream is
         H.264 **in a browser-decodable pixel format**
-        (:data:`_COPYABLE_PIX_FMTS` — 8-bit 4:2:0) and every audio stream
-        is one of :data:`_COPYABLE_AUDIO_CODECS`.
+        (:data:`_COPYABLE_PIX_FMTS` — 8-bit 4:2:0) and the FIRST audio
+        stream, if there is one, is one of
+        :data:`_COPYABLE_AUDIO_CODECS`.
+
+        Only the first audio stream is judged (#862) because it is the
+        only one the copy can produce: :meth:`_copy_cmd` maps
+        ``0:v:0`` + ``0:a:0?``, so every later audio track is dropped
+        from the output whichever recipe runs.  Vetoing on one used to
+        send a camera/screen-recorder file with AAC first and a PCM
+        commentary track second through the full libx264 encode, whose
+        output is the same ``h264 + aac`` pair the copy would have
+        produced — a multi-second stall bought for nothing.
 
         Never raises and never blocks a request: ffprobe missing, a
         non-zero exit, a timeout, unparseable output, or a file with no
@@ -581,6 +594,12 @@ class TranscodeService:
         behaviour (full libx264 encode).  The failure is logged once —
         the caller only reaches here on a cache miss, and a successful
         encode then makes the next request a cache hit.
+
+        The probe holds :data:`_TRANSCODE_SEM` while it runs (#862), so
+        ffprobe and ffmpeg share one cap of 2 concurrent media
+        sub-processes.  It is acquired and released around the probe
+        alone, before :meth:`_run_ffmpeg` acquires it for the encode —
+        sequentially, never nested, so the two cannot deadlock.
         """
         if self._ffprobe is None:
             return False
@@ -594,6 +613,14 @@ class TranscodeService:
             "-show_entries", "stream=codec_type,codec_name,pix_fmt",
             str(source),
         ]
+        # Same cap as the encode (#862).  Before #853 every media
+        # sub-process this service spawned was bounded by _TRANSCODE_SEM;
+        # adding an unbounded probe meant N cold requests for N distinct
+        # files could hold N ffprobe processes for up to _PROBE_TIMEOUT_S
+        # each, all reading the same (possibly NAS) disk the capped
+        # ffmpeg runs are reading.  Sharing the existing semaphore
+        # restores that invariant with one number instead of two.
+        _TRANSCODE_SEM.acquire()
         try:
             result = subprocess.run(
                 cmd,
@@ -608,6 +635,8 @@ class TranscodeService:
                 "ffprobe failed for {} ({}) — re-encoding", source.name, exc
             )
             return False
+        finally:
+            _TRANSCODE_SEM.release()
 
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace")
@@ -638,11 +667,12 @@ class TranscodeService:
             # normalises to yuv420p — see _encode_cmd).
             return False
 
-        return all(
-            s.get("codec_name") in _COPYABLE_AUDIO_CODECS
-            for s in streams
-            if s.get("codec_type") == "audio"
-        )
+        audio = [s for s in streams if s.get("codec_type") == "audio"]
+        if not audio:
+            # A silent clip: `-map 0:a:0?` is optional, so the copy just
+            # produces a video-only MP4.
+            return True
+        return audio[0].get("codec_name") in _COPYABLE_AUDIO_CODECS
 
     @staticmethod
     def _remove_tmp(tmp_path: Path) -> None:
