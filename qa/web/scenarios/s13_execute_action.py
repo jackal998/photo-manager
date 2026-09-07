@@ -1,6 +1,6 @@
 """Web scenario s13 — Destructive execute round-trip (canonical Execute Action).
 
-Ported from qa/scenarios/s13_execute_action.py (Qt UIA).
+Ported from the desktop s13_execute_action driver.
 
 Qt intent:
   - Regenerate a disposable 5-JPEG near-duplicate fixture (random gradients
@@ -66,7 +66,7 @@ Qt divergences:
     which avoids cross-run manifest state leakage and makes cleanup trivial.
 
 MIXED-MANIFEST phase (#733 — the regression the OLD gate missed):
-  Qt intent: ``_complete_delete_groups`` (app/views/dialogs/execute_action_dialog.py)
+  Qt intent: ``_complete_delete_groups`` (the desktop Execute Action dialog)
   fires the pre-execute "All Files Will Be Deleted" confirm whenever ANY GROUP
   in scope would have every one of its members deleted — a per-group
   "complete" check, not a whole-scope one. Before #733 the web port's gate
@@ -113,7 +113,7 @@ MIXED-MANIFEST phase (#733 — the regression the OLD gate missed):
        absence-based contract as the primary phase above, s54's precedent).
 
   Qt divergences (mixed-manifest phase):
-    - Qt's ``_complete_delete_groups`` gate is unit-level (app/views tests);
+    - Qt's ``_complete_delete_groups`` gate was unit-level on the desktop side;
       this phase is the web's layer-3 proof that ``completeDeleteGroupIds``
       (ExecuteDialog.tsx) reproduces the same per-group semantics live,
       including the DeleteConfirmDialog copy naming the qualifying group

@@ -1,6 +1,6 @@
 """Web scenario s52 — Similarity % measured against the displayed Ref (#253).
 
-Ported from qa/scenarios/s52_similarity_against_displayed_ref.py (Qt UIA).
+Ported from the desktop s52_similarity_against_displayed_ref driver.
 
 Qt intent:
   The desktop scenario verifies three invariants that pin the wiring
@@ -71,7 +71,7 @@ Qt divergences:
       manifest.db per run under a tempdir (consistent with s13/s24 harness
       convention) — avoids cross-run stale state.
 
-  D5. The Qt driver uses ``qa/scenarios/_uia`` to drive the scan dialog.
+  D5. The Qt driver uses ``the desktop harness's UI-automation helpers`` to drive the scan dialog.
       The web port uses the standard ``run_scan`` / ``wait_manifest_loaded``
       helpers from ``qa.web._invariants``.
 """

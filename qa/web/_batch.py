@@ -1,8 +1,8 @@
-"""Web QA batch runner — mirrors qa.scenarios._batch for the web harness.
+"""Web QA batch runner — drives the Playwright scenarios in qa/web/scenarios/.
 
-In Phase 1 no web drivers exist yet, so every scenario is marked SKIP.
-Phase 2+ drivers live under qa/web/scenarios/ and are wired in via
-``scenario_map.yml``.
+Every id in ``qa.scenario_ids.ALL_SCENARIOS`` is looked up in
+``scenario_map.yml``: a ``status: done`` row names the driver module to
+import and run; ``todo`` / ``skip`` rows are reported SKIP, never FAIL.
 
 Playwright is imported lazily; if it is not installed, all scenarios
 degrade to SKIP (not FAIL) so CI unit-test jobs don't break.
@@ -50,7 +50,7 @@ def _load_map() -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# Result constants (mirrors qa.scenarios._batch convention)
+# Result constants
 # ---------------------------------------------------------------------------
 PASS = "PASS"
 FAIL = "FAIL"

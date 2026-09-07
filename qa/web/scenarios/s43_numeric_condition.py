@@ -1,6 +1,6 @@
 """Web scenario s43 — ActionDialog numeric threshold on Size (Bytes) (#209).
 
-Ported from qa/scenarios/s43_numeric_condition.py (Qt UIA).
+Ported from the desktop s43_numeric_condition driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 JPEG re-saves at qualities 95/88/80/72/65
@@ -55,7 +55,7 @@ Qt divergences:
       is 'delete', every size<=boundary is unchanged) — the threshold's precise
       partition is the #209 contract.
 
-Desktop source: qa/scenarios/s43_numeric_condition.py
+Desktop source: the s43_numeric_condition driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs)
 """
 from __future__ import annotations

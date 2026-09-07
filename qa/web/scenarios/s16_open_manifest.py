@@ -1,6 +1,6 @@
 """Web scenario s16 — Open Manifest via the filesystem picker.
 
-Ported from qa/scenarios/s16_open_manifest.py (Qt UIA).
+Ported from the desktop s16_open_manifest driver.
 
 Qt intent:
   - File → Open Manifest lets the user pick an existing manifest file from
@@ -16,7 +16,7 @@ Web-observable assertions:
     (same "N groups · M files").
 
 Qt divergences:
-  - Qt drives QFileDialog (a native OS dialog) which UIA can only partially
+  - Qt drives QFileDialog (a native OS dialog) which the desktop tree could only partially
     inspect; the web picker is in-DOM and asserted by testid. The ``.db``
     extension (which the web fs-browse now flags as a manifest alongside
     ``.sqlite``) is exercised directly here.

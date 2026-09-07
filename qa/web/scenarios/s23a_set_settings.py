@@ -21,7 +21,7 @@ an isolated tmpdir). The per-scenario settings reset in qa/web/_batch.py
 into later scan scenarios — the web analog of the Qt batch's per-scenario
 ``configure`` step.
 
-Desktop source: qa/scenarios/s23a_set_settings.py
+Desktop source: the s23a_set_settings driver (removed with #646)
 Fixtures:       qa/sandbox/unique, qa/sandbox/near-duplicates (distinct basenames)
 """
 from __future__ import annotations

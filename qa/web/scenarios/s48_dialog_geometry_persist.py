@@ -9,7 +9,7 @@ dialog) and D7 (Set Action dialog) in
 ``docs/audits/web-divergence-list-2026-07.md`` are exactly what this scenario
 now covers.
 
-Qt intent (``qa/scenarios/s48_dialog_geometry_persist.py``): for each
+Qt intent (the desktop s48_dialog_geometry_persist driver): for each
 resizable dialog — capture the initial rect, resize it via Win32 MoveWindow,
 close, reopen, assert the restored rect matches. The web port keeps the same
 shape with real user gestures instead of Win32 calls:
@@ -43,7 +43,7 @@ Qt -> web divergences:
     s39_layout_persist, next to the preview-panel width it shares a ticket
     with.
 
-Desktop source: qa/scenarios/s48_dialog_geometry_persist.py
+Desktop source: the s48_dialog_geometry_persist driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates
 """
 from __future__ import annotations

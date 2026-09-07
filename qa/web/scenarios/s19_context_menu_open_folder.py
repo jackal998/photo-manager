@@ -1,6 +1,6 @@
 """Web scenario s19 — context-menu "Open folder" reveals the file (#— parity).
 
-Ported from qa/scenarios/s19_context_menu_open_folder.py (Qt UIA).
+Ported from the desktop s19_context_menu_open_folder driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates; right-click neardup_00_q95.jpg → "Open

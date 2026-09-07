@@ -1,6 +1,6 @@
 """Web scenario s24 — Open a manifest whose source files no longer exist.
 
-Ported from qa/scenarios/s24_stale_manifest_paths.py (Qt UIA, #123).
+Ported from the desktop s24_stale_manifest_paths driver (#123).
 
 Qt intent:
   - Open a VALID sqlite manifest whose SOURCE files have since been

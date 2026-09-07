@@ -1,6 +1,6 @@
 """Web scenario s34 — execute-time lock-confirm, Cancel verdict (non-destructive).
 
-Ported from qa/scenarios/s34_lock_confirm_at_execute.py (Qt UIA, #182).
+Ported from the desktop s34_lock_confirm_at_execute driver (#182).
 
 Qt intent:
   - Scan the 5-JPEG near-duplicates fixture; mark every row 'delete'; lock the

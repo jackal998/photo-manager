@@ -1,6 +1,6 @@
 """Web scenario s53 — Lock / Unlock / Set-Action via the EXECUTE dialog menu.
 
-Ported from qa/scenarios/s53_execute_dialog_lock_decision.py (Qt UIA).
+Ported from the desktop s53_execute_dialog_lock_decision driver.
 
 Qt intent (5-file near-duplicates fixture):
   Three non-regex paths on the Execute Action dialog's file-row right-click:
@@ -68,7 +68,7 @@ Qt divergences:
       single dialog open throughout. The safety contract (no silent
       overwrite) is identical; only the post-dismiss dialog state differs.
 
-Desktop source: qa/scenarios/s53_execute_dialog_lock_decision.py
+Desktop source: the s53_execute_dialog_lock_decision driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates/ (5 JPEGs)
 """
 from __future__ import annotations

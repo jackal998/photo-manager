@@ -1,7 +1,7 @@
 """Web scenario s12 — Save Manifest Decisions, ported as the live-persistence
 durability guarantee (#673 Save-Manifest sub-item).
 
-Ported from qa/scenarios/s12_save_manifest.py (Qt UIA).
+Ported from the desktop s12_save_manifest driver.
 
 Qt intent
 ---------

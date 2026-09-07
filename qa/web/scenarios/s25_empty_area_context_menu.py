@@ -1,6 +1,6 @@
 """Web scenario s25 — context menu only on rows, never on empty surfaces.
 
-Ported from qa/scenarios/s25_empty_area_context_menu.py (Qt UIA).
+Ported from the desktop s25_empty_area_context_menu driver.
 
 Qt intent (four branches pinning the "no popup on non-row right-clicks" guard):
   A: right-click below the last populated row → no popup.

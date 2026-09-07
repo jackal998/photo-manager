@@ -1,6 +1,6 @@
 """Web scenario s42 — Keep-worthiness scoring pipeline (#187).
 
-Ported from qa/scenarios/s42_scoring.py (Qt UIA / SQLite read).
+Ported from the desktop s42_scoring driver (desktop + SQLite read).
 
 Scope: COMPOSITE SCORE + PER-DIMENSION SIGNALS.
   #680 serialises gps_present / exif_tag_count / xmp_derived into every
@@ -119,7 +119,7 @@ def _sm_suffix(file_path: str) -> str:
 
     Takes everything after the 'scoring-mixed' component and joins with
     forward slashes — matching the MIXED_* constants and the Qt read logic
-    in qa/scenarios/s42_scoring.py lines 119-124.
+    in the desktop s42_scoring driver lines 119-124.
     """
     parts = Path(file_path).parts
     try:
@@ -350,7 +350,7 @@ def run(*, base_url: str) -> None:
                         )
 
             # ── Assert 3: per-dimension scoring signals (#680) ───────────────
-            # Mirrors qa/scenarios/s42_scoring.py::_verify_mixed_pre, which
+            # Mirrors the desktop s42_scoring driver::_verify_mixed_pre, which
             # reads the same three values out of the SQLite columns. Reading
             # them through GET /api/manifest is what makes this the API
             # contract rather than a DB backdoor.

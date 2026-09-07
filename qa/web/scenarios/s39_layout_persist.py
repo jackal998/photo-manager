@@ -53,7 +53,7 @@ Parity note (web-port-tech-design.md:2485, needs_rework category): the
 assertion weakens from screen-pixel window position to "preview panel width
 survives page.reload()" — see qa/web/scenario_map.yml notes for this entry.
 
-Desktop source: qa/scenarios/s39_window_geometry_persist.py
+Desktop source: the s39_window_geometry_persist driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates
 """
 from __future__ import annotations

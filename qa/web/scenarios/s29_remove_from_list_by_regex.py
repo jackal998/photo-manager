@@ -1,6 +1,6 @@
 """Web scenario s29 — bulk regex "remove from list" writes deferred ignore decision.
 
-Ported from qa/scenarios/s29_remove_from_list_by_regex.py (Qt UIA).
+Ported from the desktop s29_remove_from_list_by_regex driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files in one group).

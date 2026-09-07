@@ -1,6 +1,6 @@
 """Web scenario s63 — late-stage cancel + beforeunload scan-guard.
 
-Ported from qa/scenarios/s63_late_cancel_and_main_window_guard.py (Qt UIA).
+Ported from the desktop s63_late_cancel_and_main_window_guard driver.
 
 Qt intent (ONE scenario, TWO parts):
   - Part 1 (_part1_late_cancel): cancel a scan at the post-WALK HASH stage and

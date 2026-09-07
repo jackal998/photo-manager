@@ -1,6 +1,6 @@
 """Web scenario s60 — Execute Action filter by action type (#502 / #676).
 
-Ported from qa/scenarios/s60_execute_filter_by_action_type.py (Qt UIA).
+Ported from the desktop s60_execute_filter_by_action_type driver.
 
 Qt intent:
   - Two visual clusters of 4 near-dups each; mark cluster A delete + cluster B
@@ -78,7 +78,7 @@ fixture lives in a tmpdir that is removed on exit, so nothing accumulates in
 the repo; the recycled copies grow the bin by 2 per run until emptied — same
 destructive-scenario contract as s13.
 
-Desktop source: qa/scenarios/s60_execute_filter_by_action_type.py
+Desktop source: the s60_execute_filter_by_action_type driver (removed with #646)
 Fixture:        qa/sandbox/exif-edge/{tz_offset,subsecond}.jpg (copied twice each)
 """
 from __future__ import annotations

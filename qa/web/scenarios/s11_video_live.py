@@ -1,6 +1,6 @@
 """Web scenario s11 — Live Photo pair (photo-manager#88 regression guard).
 
-Ported from qa/scenarios/s11_video_live.py (Qt UIA / SQLite, #88).
+Ported from the desktop s11_video_live driver (desktop + SQLite, #88).
 
 Qt intent:
   - Scan qa/sandbox/live-photo (IMG_0001.HEIC + IMG_0001.MOV).

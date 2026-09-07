@@ -1,6 +1,6 @@
 """Web scenario s15 — Right-click context menu: set action → delete.
 
-Ported from qa/scenarios/s15_context_menu.py (Qt UIA).
+Ported from the desktop s15_context_menu driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files in one group).

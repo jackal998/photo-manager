@@ -1,6 +1,6 @@
 """Web scenario s03 — Cancel scan mid-run (two samples: HASH-stage + WALK-stage).
 
-Ported from qa/scenarios/s03_cancel_scan.py (Qt UIA).
+Ported from the desktop s03_cancel_scan driver.
 
 Qt intent:
   - Kick off a scan, cancel it mid-run, and prove the cancel is *clean*:
@@ -77,7 +77,7 @@ Qt → web divergences:
     closes, so the stage marker ('Hashing' / 'Walking') must be read BEFORE
     clicking Cancel (the same constraint s04 documents for its log assertions).
   - D5 (large source for BOTH samples): Qt's Sample 1 used the small sandbox
-    because Windows UIA scans run slowly enough to land a post-HASH cancel on a
+    because Windows desktop-tree scans run slowly enough to land a post-HASH cancel on a
     handful of files.  The headless web batch needs the large source for Sample
     1 too — see the module note above.  Same two-stage coverage (HASH + WALK),
     different fixture.

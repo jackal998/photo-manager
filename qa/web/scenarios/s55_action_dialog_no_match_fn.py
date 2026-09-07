@@ -1,6 +1,6 @@
 """Web scenario s55 — ActionDialog C1: no-match_fn informational placeholder.
 
-Ported from qa/scenarios/s55_action_dialog_no_match_fn.py (Qt UIA).
+Ported from the desktop s55_action_dialog_no_match_fn driver.
 
 Qt intent:
   - Scan qa/sandbox/unique (10 truly-unique JPEGs → 0 dedup groups, so the
@@ -30,11 +30,11 @@ Web divergences:
       instead. The ActionDialog is still reachable because ``manifest.path`` is
       set — a real scan, NOT ``completed_empty`` (10 files ARE walked).
   D2. The note text is asserted via the rendered DOM (inner_text) instead of a
-      Qt UIA window_text() probe.
+      the desktop tree window_text() probe.
 
 Non-destructive: no decisions are written; no files are deleted.
 
-Desktop source: qa/scenarios/s55_action_dialog_no_match_fn.py
+Desktop source: the s55_action_dialog_no_match_fn driver (removed with #646)
 Fixture:        qa/sandbox/unique (10 truly-unique JPEGs)
 """
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Web scenario s01 — Happy path: pre-scan gating → scan → post-load state.
 
-Ported from qa/scenarios/s01_happy_path.py (Qt UIA).
+Ported from the desktop s01_happy_path driver.
 
 Qt intent (the three load-bearing "post-load UI state" behaviours):
   #42 — first-run empty-state hint visible at startup, hidden after a
@@ -46,7 +46,7 @@ Qt divergences:
   3. Radix portal mechanic (no Qt counterpart): DropdownMenu.Content is
      portalled and rendered lazily, so the menu TRIGGER (MENU_ACTION) must be
      clicked before an item's disabled-state is in the DOM, and Escape is
-     pressed afterwards to close the menu.  Qt's pywinauto can read menu-item
+     pressed afterwards to close the menu.  The desktop harness could read menu-item
      enablement without opening the menu; the web cannot.
   4. Sources: the Qt scenario configures three sources (huge / near-duplicates
      / unique).  The web port scans near-duplicates alone — sufficient for a

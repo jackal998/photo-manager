@@ -1,6 +1,6 @@
 """Web scenario s02 — Empty folder: scan a freshly-created empty directory.
 
-Ported from qa/scenarios/s02_empty_folder.py (Qt UIA).
+Ported from the desktop s02_empty_folder driver.
 
 Qt intent:
   - Scan a source with zero image files.

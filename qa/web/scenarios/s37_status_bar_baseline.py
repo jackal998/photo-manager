@@ -1,6 +1,6 @@
 """Web scenario s37 — Status-bar baseline: idle at startup, summary after load.
 
-Ported from qa/scenarios/s37_status_bar_baseline.py (Qt UIA).
+Ported from the desktop s37_status_bar_baseline driver.
 
 Qt intent (#138, #140):
   #138 — The startup ``Ready`` status must persist beyond a 3 s window

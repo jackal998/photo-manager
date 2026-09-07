@@ -1,6 +1,6 @@
 """Web scenario s56 — ActionDialog Apply with field=Score writes decisions (#392).
 
-Ported from qa/scenarios/s56_action_dialog_apply_by_score.py (Qt UIA).
+Ported from the desktop s56_action_dialog_apply_by_score driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 JPEG re-saves at qualities 95/88/80/72/65
@@ -27,11 +27,11 @@ Web slice:
 
 Qt divergences:
   - Qt reads decisions directly from SQLite; the web port uses GET /api/manifest.
-  - Qt drives the dialog via UIA (AccessibleName/AutomationId helpers); the web
+  - Qt drives the dialog via the desktop tree (AccessibleName/AutomationId helpers); the web
     port drives by testid (same contract, different harness).
   - Qt has a _reset_fixture_decisions() cleanup step; the web port uses a temp
     manifest that is shutil.rmtree'd in the finally block — no restore needed.
-  - Qt's preview-list and counter pre-Apply UIA probe is omitted; the web port
+  - Qt's preview-list and counter pre-Apply desktop-tree probe is omitted; the web port
     asserts the counter shows a digit > 0 as a sufficient proxy.
   - Qt's close_action_dialog call is implicit: the ActionDialog auto-closes on
     successful Apply (confirmed in ActionDialog.tsx handleDeleteConfirmConfirm).

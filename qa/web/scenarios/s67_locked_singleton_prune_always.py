@@ -1,5 +1,5 @@
 """Web scenario s67 — D6 regression guard: locked singleton under prune="always"
-(#686, web port of qa/scenarios/s67_locked_singleton_prune_always.py).
+(#686, web port of the desktop s67_locked_singleton_prune_always driver).
 
 Qt intent
 ---------
@@ -46,7 +46,7 @@ Web divergences vs Qt
       desktop driver. The copied file staying on disk corroborates outcome=
       'ignored' (removed from review, not deleted).
 
-Desktop source: qa/scenarios/s67_locked_singleton_prune_always.py
+Desktop source: the s67_locked_singleton_prune_always driver (removed with #646)
 """
 from __future__ import annotations
 

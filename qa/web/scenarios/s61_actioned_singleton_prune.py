@@ -1,5 +1,5 @@
 """Web scenario s61 — mixed-bucket singleton prune on the "ask" path
-(#686, web port of qa/scenarios/s61_actioned_singleton_prune.py).
+(#686, web port of the desktop s61_actioned_singleton_prune driver).
 
 Qt intent
 ---------
@@ -58,7 +58,7 @@ Assertions read sqlite directly — a held singleton (outcome='') is a
 single-member group the web review view filters out (orphan-skip), so GET
 /api/manifest cannot observe it. See s67 for the same rationale.
 
-Desktop source: qa/scenarios/s61_actioned_singleton_prune.py
+Desktop source: the s61_actioned_singleton_prune driver (removed with #646)
 """
 from __future__ import annotations
 

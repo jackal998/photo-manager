@@ -1,6 +1,6 @@
 """Web scenario s05 — Heavy-image preview + full-res render.
 
-Ported from qa/scenarios/s05_huge_preview.py (Qt UIA).
+Ported from the desktop s05_huge_preview driver.
 
 Qt intent:
   - Scan qa/sandbox/huge (a single 50-MP JPEG) without crashing.

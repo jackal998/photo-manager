@@ -41,7 +41,7 @@ comparing coordinates, not by looking at the page. Phase 6 loads a synthetic
      opposite failure: a margin subtracted twice slides the list up under it);
   d. the header stays pinned to the top of the container while rows scroll.
 
-Desktop source: qa/scenarios/s47_column_layout_persist.py
+Desktop source: the s47_column_layout_persist driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates + a synthetic 30-group manifest
 """
 from __future__ import annotations

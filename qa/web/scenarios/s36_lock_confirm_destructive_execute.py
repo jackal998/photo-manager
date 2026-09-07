@@ -1,6 +1,6 @@
 """Web scenario s36 — lock-confirm -> Unlock & Apply -> delete fires on the locked row.
 
-Ported from qa/scenarios/s36_lock_confirm_destructive_execute.py (Qt UIA).
+Ported from the desktop s36_lock_confirm_destructive_execute driver.
 
 Qt intent:
   - Scan a disposable 5-JPEG fixture regenerated from scratch each run (s13 clone).
@@ -8,7 +8,7 @@ Qt intent:
   - Lock exactly one row (the q95 file) via the separate lock-regex flow.
   - Open ExecuteActionDialog; click Execute.
   - Qt dialog ordering (Execute → all-delete confirm → THEN lock-confirm): the Qt
-    UIA ``_on_execute_requested`` pre-execute scan detects the locked-delete row and
+    the desktop ``_on_execute_requested`` pre-execute scan detects the locked-delete row and
     raises the LockConfirmDialog AFTER the user confirms the all-delete warning.
   - Drive Unlock & Apply to All (``LOCK_CONFIRM_APPLY_ALL_UNLOCKED``).
   - Assert all 5 fixture files were removed and manifest ``executed=1`` for every row.
@@ -53,7 +53,7 @@ Qt divergences:
     web ordering; the assertions wait for the web-correct sequence.
   - Qt's ``_probe_confirm`` validates the shape of the Qt ConfirmBox. The web port
     checks LOCK_CONFIRM_DIALOG visibility and optionally asserts the q95 filename appears
-    in the dialog body — a lightweight structural probe with no Qt UIA equivalent.
+    in the dialog body — a lightweight structural probe with no desktop equivalent.
   - Qt cleans up via FIXTURE_DIR.unlink (per-file) because the fixture is disposable and
     regenerated. The web port uses shutil.rmtree(tmpdir) to remove both copies and the
     temp manifest in one call.

@@ -1,6 +1,6 @@
 """Web scenario s65 — passenger-bridge forms correctly on real burst photos.
 
-Ported from qa/scenarios/s65_passenger_bridge.py (Qt UIA / sqlite-direct, #544).
+Ported from the desktop s65_passenger_bridge driver (desktop + sqlite-direct, #544).
 
 Qt intent:
   Scan the two passenger-bridge fixture directories (passenger-bridge-a and
@@ -19,7 +19,7 @@ Qt intent:
   a numeric similarity (``N%`` / ``N*%``), never a bare ``—`` (which signals a
   no-pHash row like a Live Photo MOV).
 
-  The Qt driver reads the manifest directly via sqlite3 to avoid UIA row
+  The Qt driver reads the manifest directly via sqlite3 to avoid desktop-tree row
   y-filtering; this web port does the same via GET /api/manifest.
 
 PRE-CONDITIONS:
@@ -59,7 +59,7 @@ Qt divergences:
        the serialised manifest via GET /api/manifest?path= (the same HTTP
        endpoint asserted by s24/s13/s05).  The data contract is identical
        (review_view._build_file_row lines 121-149); only the read path differs.
-  (ii) The Qt driver opens the scan dialog via UIA (open_scan_dialog +
+  (ii) The Qt driver opens the scan dialog via the desktop tree (open_scan_dialog +
        read_configured_sources) and expects the fixture sources to be
        pre-configured in the running app's settings.  The web port copies the
        two fixture directories into two tmpdir sources and adds them in order,

@@ -1,15 +1,15 @@
 """Web scenario s51 — Execute dialog preview pane is visible (#165).
 
-Ported from qa/scenarios/s51_execute_dialog_preview.py (Qt UIA).
+Ported from the desktop s51_execute_dialog_preview driver.
 
 Qt intent:
   - Scan qa/sandbox/near-duplicates (5 neardup_NN_qXX.jpg files in one group).
   - Mark all rows 'delete' so the Execute button enables and the dialog
     has rows the user can click.
   - Open ExecuteActionDialog.
-  - Assert the QSplitter + PreviewPane header are present in the UIA tree
+  - Assert the QSplitter + PreviewPane header are present in the desktop tree
     (proves preview-enabled layout wired up; task_runner is not None).
-  - Click a file row; confirm the app does not crash (UIA still responsive).
+  - Click a file row; confirm the app does not crash (the desktop tree still responsive).
   - Close without clicking Execute.
   - Confirm manifest decisions are unchanged (Close is non-destructive).
 
@@ -21,7 +21,7 @@ Web-observable assertions:
   3. Manifest decisions are unchanged after Close (non-destructive).
 
 Qt divergences:
-  - Qt locates the QSplitter by UIA class_name='QSplitter' — no DOM
+  - Qt locates the QSplitter by desktop class_name='QSplitter' — no DOM
     equivalent.  The web port asserts ``execute-preview-pane`` visibility,
     which is the structural equivalent (the pane only mounts when the
     preview-enabled layout fires).
@@ -29,7 +29,7 @@ Qt divergences:
     testid is ``execute-preview-pane``; the heading text is not independently
     testid'd. We assert pane visibility instead.
   - Qt clicks the first TreeItem descendant to drive show_single and confirms
-    no crash via a second UIA locate.  The web port right-clicks the first
+    no crash via a second desktop-tree locate.  The web port right-clicks the first
     execute-tree row to trigger selection (the click itself is the selection
     trigger), then asserts ``execute-preview-image`` becomes visible.
 """
