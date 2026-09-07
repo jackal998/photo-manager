@@ -1,8 +1,11 @@
 # Preview redesign (#622) Phase 3 — verification runbook
 
-> Instrument removed with #646 (Qt-client cutover): `scripts/preview_phase3_probe.py`
-> and `tests/test_preview_phase3_probe.py` drove the Qt preview stack and no
-> longer exist in the tree; they live at the SHA cited below and in git history.
+> Instruments removed with #646 (Qt-client cutover): `scripts/preview_phase3_probe.py`
+> drove the Qt preview stack; `scripts/preview_phase3_analysis.py` (its Qt-free
+> analysis half, last carried at `782cac5`) and `tests/test_preview_phase3_probe.py`
+> had no other caller once the harness went. None of the three exists in the
+> tree; all live at the SHA cited below and in git history. The commands below
+> are kept as the record of how the readings were taken.
 
 **Status:** run on the owner's J: NAS on **2026-09-06** at SHA
 `a202282190f5757e6cb373d37f2f4db51e85f9d1`. The
