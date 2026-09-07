@@ -33,10 +33,12 @@ import {
   SCAN_AUTO_SELECT,
   SCAN_AUTOTUNE,
   SCAN_COLOR_THRESHOLD,
+  SCAN_DHASH_PARITY_NOTE,
   SCAN_DHASH_THRESHOLD,
   SCAN_DIALOG,
   SCAN_OUTPUT_PATH,
   SCAN_OUTPUT_BROWSE,
+  SCAN_PHASH_PARITY_NOTE,
   SCAN_PHASH_THRESHOLD,
   SCAN_SOURCE_LIST,
   SCAN_START_BUTTON,
@@ -77,6 +79,26 @@ const DEFAULT_PHASH_THRESHOLD = 10;
 const DEFAULT_DHASH_THRESHOLD = 10;
 const DEFAULT_MEAN_COLOR_THRESHOLD = 30;
 
+// Near-duplicate Hamming-distance range for the pHash + dHash inputs (#823).
+// Mirrors Qt's NEAR_DUP_THRESHOLD_MIN/MAX exactly. The floor is 2, not 1:
+// `classify` groups on `0 < distance <= threshold`, and photographic pHashes
+// always carry exactly 32 of their 64 bits, so every pairwise distance is
+// even (0 of 86_400 measured distances were odd —
+// docs/audits/visual-autoselect-feasibility.md §3c/§9). A threshold of 1
+// therefore admits nothing: it switched the near-duplicate tier OFF while
+// presenting itself as the strictest position. The mean-colour gate is a
+// different predicate and keeps its own 0–100 range.
+const NEAR_DUP_THRESHOLD_MIN = 2;
+const NEAR_DUP_THRESHOLD_MAX = 20;
+
+// Build-time English default for the helper rendered under both hash inputs
+// (#823). The localized copy comes from `web.scan.threshold_parity_note`;
+// this is the useT() fallback that serves before the catalog loads.
+const THRESHOLD_PARITY_NOTE_EN =
+  "Starts at 2: photo pHashes always differ by an even number of bits, so " +
+  "an odd value usually matches the same files as the even one below it, " +
+  "and 1 would match nothing at all. 2 is the strictest useful setting.";
+
 /**
  * Parse a threshold `<input type="number">`'s raw string value to an int
  * clamped to `[min, max]`. An empty or non-numeric value falls back to
@@ -93,6 +115,24 @@ function clampThresholdInput(
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
+}
+
+/**
+ * The same clamp, rendered back as the string the input should DISPLAY.
+ *
+ * Used on blur so the field shows the value that would actually run (#823).
+ * Deliberately not applied on every keystroke: clamping mid-type corrupts a
+ * clear-and-retype (clearing would snap the field straight back to the
+ * default, so the next digit appends onto it). Blur is the moment the user
+ * has finished with the field, which is exactly when Qt's QSpinBox snaps too.
+ */
+function snapThresholdInput(
+  raw: string,
+  min: number,
+  max: number,
+  fallback: number
+): string {
+  return String(clampThresholdInput(raw, min, max, fallback));
 }
 
 /**
@@ -389,14 +429,14 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     // request-build time (empty/NaN falls back to the Qt default).
     const phashThreshold = clampThresholdInput(
       phashThresholdInput,
-      1,
-      20,
+      NEAR_DUP_THRESHOLD_MIN,
+      NEAR_DUP_THRESHOLD_MAX,
       DEFAULT_PHASH_THRESHOLD
     );
     const dhashThreshold = clampThresholdInput(
       dhashThresholdInput,
-      1,
-      20,
+      NEAR_DUP_THRESHOLD_MIN,
+      NEAR_DUP_THRESHOLD_MAX,
       DEFAULT_DHASH_THRESHOLD
     );
     const meanColorThreshold = clampThresholdInput(
@@ -405,6 +445,17 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       100,
       DEFAULT_MEAN_COLOR_THRESHOLD
     );
+
+    // Snap the DISPLAYED values to what is actually about to run (#823).
+    // The `min` attribute only makes the browser set `rangeUnderflow`; it
+    // never corrects the field, so typing 1 used to leave "1" on screen while
+    // the request carried 2 — the scan dialog quietly disagreeing with itself
+    // about the very setting this ticket exists to stop it lying about. Qt's
+    // QSpinBox snaps the shown value, so this is also what keeps the two
+    // clients honest in the same way. Purely presentational: `req` below is
+    // built from the clamped locals either way.
+    setPhashThresholdInput(String(phashThreshold));
+    setDhashThresholdInput(String(dhashThreshold));
 
     const req: WebScanRequest = {
       sources: sourcesMap,
@@ -515,7 +566,17 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         data-testid={SCAN_DIALOG}
-        className="max-w-xl"
+        // The shared DialogContent is a fixed, vertically-centred box with no
+        // height cap, so it simply grows off both edges of the viewport. With
+        // Advanced settings expanded this dialog was already 807px tall in an
+        // 800px window — Start Scan sat 20px from the bottom edge — so the two
+        // #823 helper lines pushed the button off-screen entirely and the live
+        // s17 run could no longer click it ("element is outside of the
+        // viewport"). Cap the height here and let the body scroll. Scoped to
+        // this dialog rather than the shared ui/dialog.tsx: this is the only
+        // surface tall enough to need it, and every other dialog keeps the
+        // unchanged centred behaviour.
+        className="max-w-xl max-h-[90vh] overflow-y-auto"
         // Prevent Radix from closing on overlay click while running, or
         // while the filesystem picker is open over this dialog (the picker
         // is a nested layer — a click inside it must not dismiss the scan
@@ -691,17 +752,27 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   htmlFor="scan-phash-threshold-input"
                   className="text-sm text-neutral-700"
                 >
-                  pHash Similarity Threshold (default: 10, range: 1–20)
+                  pHash Similarity Threshold (default: 10, range: 2–20)
                 </label>
                 <input
                   id="scan-phash-threshold-input"
                   type="number"
-                  min={1}
-                  max={20}
+                  min={NEAR_DUP_THRESHOLD_MIN}
+                  max={NEAR_DUP_THRESHOLD_MAX}
                   data-testid={SCAN_PHASH_THRESHOLD}
                   value={phashThresholdInput}
                   disabled={isRunning}
                   onChange={(e) => setPhashThresholdInput(e.target.value)}
+                  onBlur={() =>
+                    setPhashThresholdInput((raw) =>
+                      snapThresholdInput(
+                        raw,
+                        NEAR_DUP_THRESHOLD_MIN,
+                        NEAR_DUP_THRESHOLD_MAX,
+                        DEFAULT_PHASH_THRESHOLD
+                      )
+                    )
+                  }
                   className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
                 />
                 <p
@@ -710,6 +781,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 >
                   How many bits two 64-bit pHashes may differ before grouping. Lower = stricter.
                 </p>
+                <p
+                  className="text-xs text-neutral-500"
+                  data-testid={SCAN_PHASH_PARITY_NOTE}
+                >
+                  {t("web.scan.threshold_parity_note", THRESHOLD_PARITY_NOTE_EN)}
+                </p>
               </div>
 
               <div className="flex flex-col gap-1">
@@ -717,17 +794,27 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   htmlFor="scan-dhash-threshold-input"
                   className="text-sm text-neutral-700"
                 >
-                  dHash Confidence Threshold (default: 10, range: 1–20)
+                  dHash Confidence Threshold (default: 10, range: 2–20)
                 </label>
                 <input
                   id="scan-dhash-threshold-input"
                   type="number"
-                  min={1}
-                  max={20}
+                  min={NEAR_DUP_THRESHOLD_MIN}
+                  max={NEAR_DUP_THRESHOLD_MAX}
                   data-testid={SCAN_DHASH_THRESHOLD}
                   value={dhashThresholdInput}
                   disabled={isRunning}
                   onChange={(e) => setDhashThresholdInput(e.target.value)}
+                  onBlur={() =>
+                    setDhashThresholdInput((raw) =>
+                      snapThresholdInput(
+                        raw,
+                        NEAR_DUP_THRESHOLD_MIN,
+                        NEAR_DUP_THRESHOLD_MAX,
+                        DEFAULT_DHASH_THRESHOLD
+                      )
+                    )
+                  }
                   className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
                 />
                 <p
@@ -735,6 +822,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   title="A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
                 >
                   Second hash that confirms a pHash match. Lower = stricter confirmation.
+                </p>
+                <p
+                  className="text-xs text-neutral-500"
+                  data-testid={SCAN_DHASH_PARITY_NOTE}
+                >
+                  {t("web.scan.threshold_parity_note", THRESHOLD_PARITY_NOTE_EN)}
                 </p>
               </div>
 

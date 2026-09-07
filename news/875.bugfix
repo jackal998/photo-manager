@@ -1,0 +1,1 @@
+Floor the pHash and dHash near-duplicate thresholds at 2 on both the Qt and web scan dialogs, and explain in the tooltip/helper that odd values usually match the same files as the even value below them — position 1 admitted nothing at all and silently switched near-duplicate detection off (#823)

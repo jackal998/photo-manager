@@ -53,6 +53,17 @@ class _SourceEntry:
     recursive: bool = True
 
 
+# Near-duplicate Hamming-distance range offered by the pHash and dHash
+# controls (#823). The floor is 2, not 1: ``classify`` groups on
+# ``0 < distance <= threshold``, so 1 admits only distance-1 pairs — which
+# photographic content essentially never produces (every pHash has exactly
+# 32 of 64 bits set, so distances come out even; 0 of 86_400 measured
+# distances were odd). At 1 the near-duplicate tier is off, not strict.
+# 2 is the strictest setting that still detects anything.
+NEAR_DUP_THRESHOLD_MIN = 2
+NEAR_DUP_THRESHOLD_MAX = 20
+
+
 # #424 — scan progress UI: stage label, files-per-sec, ETA helpers.
 # Pure functions kept module-private so unit tests can pin the
 # formatting contract without instantiating QDialog.
@@ -546,16 +557,28 @@ class ScanDialog(QDialog):
         params_layout.setContentsMargins(0, 0, 0, 0)
 
         # pHash threshold
+        #
+        # Floor is 2, not 1 (#823). The near-duplicate predicate is
+        # ``0 < distance <= threshold`` (scanner/dedup.py ``classify``), so a
+        # threshold of 1 admits only distance-1 pairs — and on photographic
+        # content every pHash carries exactly 32 of 64 set bits, which makes
+        # every pairwise distance even (measured: 0 of 86_400 distances odd
+        # over the 1_500-hash study corpus, docs/audits/
+        # visual-autoselect-feasibility.md §3c/§9). Position 1 therefore did
+        # not "tighten" the tier, it switched it off, and each odd position
+        # above it admitted exactly what the even one below it admitted. The
+        # predicate is right; the control was lying about it — so the fix is
+        # the floor plus honest copy, not a change to dedup.
         phash_label = QLabel(t("scan_dialog.phash_label"))
         phash_desc = QLabel(t("scan_dialog.phash_desc"))
         phash_desc.setStyleSheet("color: #555;")
         phash_desc.setToolTip(_tip(t("scan_dialog.phash_tooltip")))
         phash_row = QHBoxLayout()
         self._phash_slider = QSlider(Qt.Orientation.Horizontal)
-        self._phash_slider.setRange(1, 20)
+        self._phash_slider.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._phash_slider.setValue(10)
         self._phash_spin = QSpinBox()
-        self._phash_spin.setRange(1, 20)
+        self._phash_spin.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._phash_spin.setValue(10)
         self._phash_spin.setFixedWidth(60)
         self._phash_slider.valueChanged.connect(self._phash_spin.setValue)
@@ -570,17 +593,18 @@ class ScanDialog(QDialog):
 
         # dHash confidence threshold (#517) — the second, independent
         # perceptual hash that confirms a pHash near-dup match (high vs low
-        # confidence). Sits directly below pHash; mirrors its 1–20 range.
+        # confidence). Sits directly below pHash; mirrors its 2–20 range
+        # (floor raised from 1 in #823 for the same parity reason).
         dhash_label = QLabel(t("scan_dialog.dhash_label"))
         dhash_desc = QLabel(t("scan_dialog.dhash_desc"))
         dhash_desc.setStyleSheet("color: #555;")
         dhash_desc.setToolTip(_tip(t("scan_dialog.dhash_tooltip")))
         dhash_row = QHBoxLayout()
         self._dhash_slider = QSlider(Qt.Orientation.Horizontal)
-        self._dhash_slider.setRange(1, 20)
+        self._dhash_slider.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._dhash_slider.setValue(10)
         self._dhash_spin = QSpinBox()
-        self._dhash_spin.setRange(1, 20)
+        self._dhash_spin.setRange(NEAR_DUP_THRESHOLD_MIN, NEAR_DUP_THRESHOLD_MAX)
         self._dhash_spin.setValue(10)
         self._dhash_spin.setFixedWidth(60)
         self._dhash_slider.valueChanged.connect(self._dhash_spin.setValue)
