@@ -114,7 +114,12 @@ export function ExecuteContextMenu({
 
   function handleSetByField() {
     onClose();
-    openActionDialog();
+    // #893 — null, not omitted: the Execute route opens the dialog with NO
+    // row seed, mirroring Qt's ExecuteActionDialog._open_select_by_dialog,
+    // which constructs `ActionDialog(...)` without `row_values`
+    // (app/views/dialogs/execute_action_dialog.py:1043-1051). The main-tree
+    // selection behind this modal is not the scope being decided here.
+    openActionDialog(undefined, null);
   }
 
   return (

@@ -9,6 +9,7 @@
 import { type ChangeEvent, useCallback, useRef, useState } from "react";
 
 import { useT } from "@/i18n/useT";
+import { reverseParseSimple } from "@/lib/patternSummary";
 import { escapeRegex } from "@/lib/regexEscape";
 import {
   ACTION_REGEX_ROW,
@@ -81,9 +82,21 @@ export function RegexPanel({
   const t = useT();
   const regexInputRef = useRef<HTMLInputElement>(null);
 
-  // Simple row local state (NOT stored in Zustand — derived from regex is optional)
-  const [simpleOp, setSimpleOp] = useState<SimpleOp>("contains");
-  const [simpleText, setSimpleText] = useState("");
+  // Simple row local state (NOT stored in Zustand — derived from regex is
+  // optional). Seeded from the incoming pattern (#893): on open that is the
+  // highlighted row's value, so the Simple row reads ("contains", <value>)
+  // instead of starting blank. ActionDialog keys this panel on the selected
+  // field, so a field change remounts it and re-derives from the re-seeded
+  // pattern — the web analog of Qt calling `_try_parse_simple` after each
+  // auto-seed (select_dialog.py:1387-1400). A pattern Simple cannot represent
+  // (a real regex) parses to null and falls back to the blank default, which
+  // is what the panel showed before #893 in every case.
+  const [simpleOp, setSimpleOp] = useState<SimpleOp>(
+    () => reverseParseSimple(pattern)?.op ?? "contains"
+  );
+  const [simpleText, setSimpleText] = useState(
+    () => reverseParseSimple(pattern)?.text ?? ""
+  );
 
   const regexError = validateRegex(pattern);
   const isValid = pattern === "" || regexError === null;
@@ -96,11 +109,7 @@ export function RegexPanel({
     (op: SimpleOp, text: string) => {
       setSimpleOp(op);
       setSimpleText(text);
-      if (text === "") {
-        onPatternChange("");
-      } else {
-        onPatternChange(simpleToRegex(op, text));
-      }
+      onPatternChange(text === "" ? "" : simpleToRegex(op, text));
     },
     [onPatternChange]
   );

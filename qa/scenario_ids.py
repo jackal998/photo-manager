@@ -295,6 +295,13 @@ ALL_SCENARIOS = [
     # desktop counterpart driver for s72 (the feature does not
     # exist in the desktop UI to drive); only the web scenario below is real.
     "s72_apply_best_copy",
+    # s73 (#893 + #894) — two defects from the owner's first trial of the web
+    # client, both WEB-ONLY: the Set-Action dialog must seed its matcher from
+    # the highlighted row (#893 — Qt's `row_values` half of the pre-fill, which
+    # the port dropped), and the document must never become the scroller
+    # (#894 — a CSS-layout property with no desktop analog at all, since Qt
+    # laid the main window out with QSplitter widgets rather than flexbox).
+    "s73_action_seed_and_page_scroll",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -308,4 +315,5 @@ ALL_SCENARIOS = [
 # every id against `qa/web/scenarios/`.
 WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s72_apply_best_copy",
+    "s73_action_seed_and_page_scroll",
 })
