@@ -75,6 +75,18 @@ vi.mock("@/api/client", async (importOriginal) => {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Several tests below replace store ACTIONS with spies
+// (`useAppStore.setState({ setActionPattern: mock })`). `resetStore()` rewinds
+// state slices only, so those spies survived into every later test in the file
+// — a test that drives the real store round trip then silently observed a
+// no-op. Captured at import time, before any test has run, and restored in
+// `beforeEach`.
+const PRISTINE_ACTIONS = {
+  setActionPattern: useAppStore.getState().setActionPattern,
+  setActionField: useAppStore.getState().setActionField,
+  openActionDialog: useAppStore.getState().openActionDialog,
+};
+
 function openDialog() {
   act(() => {
     useAppStore.setState((s) => ({
@@ -95,6 +107,7 @@ function openDialog() {
         previewTruncated: false,
         actionError: null,
         actionRunning: false,
+        rowValues: {},
       },
     }));
   });
@@ -121,6 +134,7 @@ function resetStore() {
         previewTruncated: false,
         actionError: null,
         actionRunning: false,
+        rowValues: {},
       },
     }));
   });
@@ -138,6 +152,7 @@ describe("ActionDialog", () => {
     previewMock = vi.fn().mockResolvedValue(undefined);
     applyMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({
+      ...PRISTINE_ACTIONS,
       previewBulkDecide: previewMock,
       applyBulkDecide: applyMock,
     } as never);
@@ -799,5 +814,115 @@ describe("ActionDialog", () => {
     expect(patchSettings).not.toHaveBeenCalledWith({
       [RECENT_PATTERNS_KEY]: [["File Name", "A"]],
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // 24-26. #893 — highlighted-row seed (the VALUE half of #735's field pre-fill)
+  //
+  // These drive the REAL store actions (openActionDialog / setActionField), not
+  // mocks: the bug being guarded is that the dialog opened with an empty
+  // matcher, and only the store↔panel round trip can show it. The row below is
+  // the one the user right-clicked; its folder/basename are what the server
+  // matches a regex against (core/app_service/review_view.py:134-135).
+  // -------------------------------------------------------------------------
+
+  const SEED_ROW_PATH = "C:/Photos/2024 Trip/IMG_0042 (1).HEIC";
+
+  function seedManifest() {
+    act(() => {
+      useAppStore.setState((s) => ({
+        manifest: {
+          ...s.manifest,
+          path: "/manifests/test.db",
+          totalFiles: 2,
+          totalGroups: 1,
+          groups: [
+            {
+              group_number: 1,
+              member_count: 1,
+              items: [
+                {
+                  file_path: SEED_ROW_PATH,
+                  basename: "IMG_0042 (1).HEIC",
+                  folder: "C:/Photos/2024 Trip",
+                  action: "EXACT",
+                  user_decision: "",
+                  is_locked: false,
+                  is_ref_winner: false,
+                  similarity: "EXACT",
+                  score: 0.5,
+                  file_size_bytes: 1234,
+                  pixel_width: 4032,
+                  pixel_height: 3024,
+                  shot_date: null,
+                  creation_date: null,
+                  phash: null,
+                  hamming_distance: null,
+                  thumbnail_url: "/api/thumb?path=x",
+                },
+              ],
+            },
+          ],
+        },
+      })) ;
+    });
+  }
+
+  it("#893 seeds the matcher from the highlighted row's value for the opening field", () => {
+    seedManifest();
+    act(() => {
+      useAppStore.getState().openActionDialog("Folder", SEED_ROW_PATH);
+    });
+    render(<ActionDialog />);
+
+    // Simple row reads back as ("contains", <the row's folder>) — the state the
+    // Qt dialog opened in, and what the user adjusts from.
+    expect((screen.getByTestId(ACTION_SIMPLE_OP) as HTMLSelectElement).value).toBe(
+      "contains"
+    );
+    expect((screen.getByTestId(ACTION_SIMPLE_TEXT) as HTMLInputElement).value).toBe(
+      "C:/Photos/2024 Trip"
+    );
+    // The regex line is the escaped literal, so it matches the row it came from.
+    expect((screen.getByTestId(ACTION_REGEX_INPUT) as HTMLInputElement).value).toBe(
+      "C:/Photos/2024 Trip"
+    );
+  });
+
+  it("#893 re-seeds on a field change while the matcher is still the old seed", async () => {
+    const user = userEvent.setup();
+    seedManifest();
+    act(() => {
+      useAppStore.getState().openActionDialog("Folder", SEED_ROW_PATH);
+    });
+    render(<ActionDialog />);
+
+    await user.selectOptions(screen.getAllByTestId(ACTION_FIELD_COMBO)[0], "File Name");
+
+    // The basename carries regex metacharacters — proving the seed is escaped
+    // rather than pasted raw.
+    expect(useAppStore.getState().action.pattern).toBe("IMG_0042 \\(1\\)\\.HEIC");
+    expect((screen.getByTestId(ACTION_SIMPLE_TEXT) as HTMLInputElement).value).toBe(
+      "IMG_0042 (1).HEIC"
+    );
+  });
+
+  it("#893 keeps a pattern the user edited when the field changes", async () => {
+    const user = userEvent.setup();
+    seedManifest();
+    act(() => {
+      useAppStore.getState().openActionDialog("Folder", SEED_ROW_PATH);
+    });
+    render(<ActionDialog />);
+
+    // The user narrows the seed by hand (Qt #347 A1: losing this has no undo).
+    const simpleText = screen.getByTestId(ACTION_SIMPLE_TEXT) as HTMLInputElement;
+    await user.clear(simpleText);
+    await user.type(simpleText, "2024");
+    expect(useAppStore.getState().action.pattern).toBe("2024");
+
+    await user.selectOptions(screen.getAllByTestId(ACTION_FIELD_COMBO)[0], "File Name");
+
+    expect(useAppStore.getState().action.pattern).toBe("2024");
   });
 });

@@ -272,6 +272,15 @@ export interface ActionState {
   actionError: string | null;
   /** True while POST /api/action/bulk-decide is in flight. */
   actionRunning: boolean;
+  /**
+   * #893 — the highlighted row's value per seedable field, captured when the
+   * dialog opens. Empty when no row was highlighted. Read by `setActionField`
+   * to decide whether a field change may replace the pattern, and by the
+   * dialog to seed the initial one. Web analog of the `row_values` dict Qt's
+   * `_get_highlighted_row_values` passed to `ActionDialog`
+   * (app/views/handlers/dialog_handler.py:119-160).
+   */
+  rowValues: Readonly<Record<string, string>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -531,13 +540,27 @@ export interface AppActions {
    * with that field selected instead of the default. Omitted / invalid
    * values fall back to the default field — unchanged prior behaviour for
    * every existing argless callsite.
+   *
+   * `rowPath` (#893) names the highlighted row whose values seed the pattern:
+   *   - a path  → seed from that row (the right-clicked row),
+   *   - `null`  → no seed (Qt parity: the group-row menu and the Execute
+   *               dialog's Select-by both call `ActionDialog` without
+   *               `row_values` — execute_action_dialog.py:1043),
+   *   - omitted → seed from the store's own highlighted row.
    */
-  openActionDialog(initialField?: string): void;
+  openActionDialog(initialField?: string, rowPath?: string | null): void;
 
   /** Close the action dialog and clear transient state. */
   closeActionDialog(): void;
 
-  /** Update the selected field label. */
+  /**
+   * Update the selected field label.
+   *
+   * #893 — also re-seeds the pattern from `action.rowValues`, but ONLY when
+   * the current pattern is still the previous field's seed (or empty). A
+   * pattern the user typed or edited survives a field change, exactly as in
+   * Qt's `_on_field_changed` (A1 from #347, select_dialog.py:2094-2116).
+   */
   setActionField(field: string): void;
 
   /** Update the pattern string. */

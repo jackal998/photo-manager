@@ -261,13 +261,16 @@ describe("ContextMenu", () => {
       expect(screen.getByTestId(CTX_APPLY_BEST_COPY)).toBeInTheDocument();
     });
 
-    it("By-Field with no clickedCol calls openActionDialog(undefined) and onClose", async () => {
+    it("By-Field with no clickedCol passes (undefined, this row's path) and onClose", async () => {
       const user = userEvent.setup();
       const { onClose } = renderMenu(false, [FILE_PATH], {
         onExecuteSelected: vi.fn(),
       });
       await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
-      expect(openActionDialogMock).toHaveBeenCalledWith(undefined);
+      // #893 — the file variant always names the RIGHT-CLICKED row as the
+      // seed source, even with no column: the dialog must seed from the row
+      // the user aimed at, not from whatever is selected elsewhere.
+      expect(openActionDialogMock).toHaveBeenCalledWith(undefined, FILE_PATH);
       expect(onClose).toHaveBeenCalledOnce();
     });
 
@@ -278,7 +281,7 @@ describe("ContextMenu", () => {
         clickedCol: "size",
       });
       await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
-      expect(openActionDialogMock).toHaveBeenCalledWith("Size (Bytes)");
+      expect(openActionDialogMock).toHaveBeenCalledWith("Size (Bytes)", FILE_PATH);
       expect(onClose).toHaveBeenCalledOnce();
     });
 
@@ -289,7 +292,7 @@ describe("ContextMenu", () => {
         clickedCol: "score",
       });
       await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
-      expect(openActionDialogMock).toHaveBeenCalledWith(undefined);
+      expect(openActionDialogMock).toHaveBeenCalledWith(undefined, FILE_PATH);
     });
 
     it("Execute-selected invokes the wired onExecuteSelected prop and onClose", async () => {
@@ -334,11 +337,15 @@ describe("ContextMenu", () => {
       expect(onClose).toHaveBeenCalledOnce();
     });
 
-    it("By-Field opens argless (group right-click never threads a column)", async () => {
+    it("By-Field opens with no field and no row seed (group right-click)", async () => {
       const user = userEvent.setup();
       renderMenu(false, GROUP_PATHS, { variant: "group" });
       await user.click(screen.getByTestId(CTX_SET_ACTION_BY_FIELD));
-      expect(openActionDialogMock).toHaveBeenCalledWith(undefined);
+      // #893 — null (not undefined) is the explicit "no seed" signal. Omitting
+      // it would make the store fall back to the highlighted FILE row, seeding
+      // a group right-click from an unrelated row; Qt's group-row menu only
+      // ever collected the numeric group fields, i.e. no regex seed at all.
+      expect(openActionDialogMock).toHaveBeenCalledWith(undefined, null);
     });
 
     it("Apply best copy calls applyBestCopy(groupNumber) regardless of variant", async () => {

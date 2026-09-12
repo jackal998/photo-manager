@@ -2,7 +2,7 @@
 phase-4 target).
 
 Before the fix, ``PHASE_TARGETS[4] = 67`` was a frozen constant. The total
-scenario count is 71 today (67 done + 4 permanently-skip), so the gate
+scenario count is 72 today (68 done + 4 permanently-skip), so the gate
 happened to pass — but a newly added ``todo`` scenario would raise the total
 without raising the frozen target, so the gate would keep passing with the
 new scenario silently unported. These tests pin the runtime-derived
@@ -30,16 +30,17 @@ def test_phase4_target_derives_from_source_count() -> None:
 
 
 def test_phase4_target_matches_todays_real_registry() -> None:
-    """Sanity pin: today's real ALL_SCENARIOS count is 71, and the target
-    tracks it exactly (no slack) since all 71 are already non-todo
-    (67 done + 4 skip).
+    """Sanity pin: today's real ALL_SCENARIOS count is 72, and the target
+    tracks it exactly (no slack) since all 72 are already non-todo
+    (68 done + 4 skip). Bumped 71 -> 72 by #893/#894, which added
+    s73_action_seed_and_page_scroll.
 
     Not a tautology — this would fail if the formula stopped deriving from
     the live registry count.
     """
     all_scenarios = parity._load_all_scenarios()
-    assert len(all_scenarios) == 71
-    assert parity._phase4_target(len(all_scenarios)) == 71
+    assert len(all_scenarios) == 72
+    assert parity._phase4_target(len(all_scenarios)) == 72
 
 
 def test_new_todo_scenario_fails_phase4_gate(monkeypatch) -> None:
