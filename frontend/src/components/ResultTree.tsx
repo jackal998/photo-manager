@@ -56,10 +56,15 @@ type GroupHeaderVRow = {
   memberCount: number;
 };
 
+// `isLast` closes the Daylight group frame (#878). It is carried as ROW DATA
+// rather than expressed as a CSS `:last-child` rule because the tree is
+// virtualised: only the rows near the viewport are mounted, so the DOM's last
+// child is whatever the virtualizer happened to render, not the group's.
 type FileVRow = {
   kind: "file";
   groupNumber: number;
   fileIndex: number; // index into group.items
+  isLast: boolean; // last visible child of its group
 };
 
 type VRow = GroupHeaderVRow | FileVRow;
@@ -169,6 +174,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
             kind: "file",
             groupNumber: group.group_number,
             fileIndex: i,
+            isLast: i === items.length - 1,
           });
         }
       }
@@ -479,7 +485,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     return (
       <div
         data-testid={MAIN_RESULT_TREE}
-        className="flex items-center justify-center h-48 text-sm text-neutral-500"
+        className="flex items-center justify-center h-48 text-sm text-ink-muted"
       >
         Loading manifest…
       </div>
@@ -490,7 +496,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     return (
       <div
         data-testid={MAIN_RESULT_TREE}
-        className="flex items-center justify-center h-48 text-sm text-neutral-400"
+        className="flex items-center justify-center h-48 text-sm text-ink-faint"
       >
         Run a scan or open a manifest to see results.
       </div>
@@ -501,7 +507,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     return (
       <div
         data-testid={MAIN_RESULT_TREE}
-        className="flex items-center justify-center h-48 text-sm text-neutral-400"
+        className="flex items-center justify-center h-48 text-sm text-ink-faint"
       >
         No duplicate groups found.
       </div>
@@ -524,7 +530,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       role="tree"
       aria-activedescendant={activeDomId}
       onKeyDown={handleKeyDown}
-      className="h-full overflow-auto border border-neutral-200 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400"
+      className="h-full overflow-auto bg-panel border border-hairline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm"
       style={{ contain: "strict" }}
     >
       {/* Sticky sort/resize column header (#685). Inside the scroll container so
@@ -614,6 +620,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                     onOpenFullRes={handleOpenFullRes}
                     onContextMenu={handleContextMenu}
                     isSelected={isSelected}
+                    isLastInGroup={vrow.isLast}
                   />
                 )
               )}

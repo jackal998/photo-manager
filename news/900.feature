@@ -1,0 +1,1 @@
+Apply the Daylight theme to the web results tree: 5-state similarity badges that stay distinguishable in grayscale, warm group framing, and a tinted, struck-through row for every file staged for deletion (#900)

@@ -302,6 +302,11 @@ ALL_SCENARIOS = [
     # (#894 — a CSS-layout property with no desktop analog at all, since Qt
     # laid the main window out with QSplitter widgets rather than flexbox).
     "s73_action_seed_and_page_scroll",
+    # WEB-ONLY (#878) — the Daylight theme foundation and the results-tree
+    # visuals it carries. Asserts COMPUTED colours and border styles, which no
+    # vitest can: the tokens are Tailwind v4 `@theme` colours that only become
+    # real utilities once the CSS pipeline runs, and jsdom never runs it.
+    "s74_daylight_theme",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -316,4 +321,5 @@ ALL_SCENARIOS = [
 WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s72_apply_best_copy",
     "s73_action_seed_and_page_scroll",
+    "s74_daylight_theme",
 })
