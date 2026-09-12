@@ -7,27 +7,118 @@
    `tailwindcss-animate` plugin; pure CSS, no plugin system. */
 @import "tw-animate-css";
 
+/* ---------------------------------------------------------------------------
+   Daylight · light — the single definition point for the theme (#878).
+
+   Sources, in the precedence the issue sets: `docs/audits/
+   web-port-feasibility-2026-06-19.md` §9.3 (the prototype's verbatim badge /
+   decision / row colours) wins for badges, decisions and row surfaces; the
+   DAYLIGHT dict in issue #878 wins for app surfaces, borders and text.
+
+   Declared as Tailwind v4 `@theme` colour tokens rather than `var(--…)`
+   arbitrary values, because that is what this project's Tailwind setup
+   already is (`@import "tailwindcss"` + `@tailwindcss/vite`, no config file)
+   and it yields first-class utilities — `bg-app`, `border-hairline`,
+   `text-ink` — that compose with `hover:` and tailwind-merge exactly like the
+   `bg-neutral-*` classes they replace. NO component carries a hex literal.
+   --------------------------------------------------------------------------- */
+@theme {
+  /* Surfaces (#878 dict) */
+  --color-app: #f5efe6;
+  --color-panel: #fffdf9;
+  --color-toolbar: #faf6ee;
+  --color-titlebar: #f3ede3;
+  --color-subtle: #f7ebda;
+
+  /* Hairline borders, warm gray (#878 dict) */
+  --color-hairline: #e7ddcd;
+  --color-hairline-soft: #efe7d8;
+  --color-hairline-input: #ddd2bf;
+
+  /* Text (#878 dict) */
+  --color-ink: #2c2823;
+  --color-ink-muted: #867d70;
+  --color-ink-faint: #a89f8f;
+
+  /* Brand / state accents (#878 dict) */
+  --color-warm: #bd6b39;
+  --color-warm-hover: #cf7c43;
+  --color-danger-warm: #c4503f;
+  --color-positive-warm: #2f8a5a;
+
+  /* Selection — warm accent tint, not the default blue (#878 dict) */
+  --color-select: #f1e3d0;
+  --color-select-ink: #2c2823;
+
+  /* Group framing + delete rows (#878 dict; delete wash from §9.3 delRow) */
+  --color-group-band: #f3e9d8;
+  --color-group-line: #e4d6bd;
+  --color-delete-row: #fdf3f0;
+
+  /* Score mini-bar (§9.3 track / scoreFill) — consumed by slice (b) */
+  --color-score-track: #ece4d6;
+  --color-score-fill: #cdab86;
+
+  /* Similarity badges (§9.3 sim.*) */
+  --color-sim-ref-ink: #a85f2e;
+  --color-sim-ref-bg: #f7ebda;
+  --color-sim-ref-line: #e0bd92;
+  --color-sim-exact-ink: #6a4fb0;
+  --color-sim-exact-bg: #eee8fa;
+  --color-sim-exact-line: #cdbef0;
+  --color-sim-near-ink: #3f6fa8;
+  --color-sim-near-bg: #eef4fb;
+  --color-sim-near-line: #b9d0ea;
+  --color-sim-indirect-ink: #7a756b;
+  --color-sim-indirect-bg: #ffffff;
+  --color-sim-indirect-line: #cfc8bb;
+  --color-sim-none-ink: #8a8278;
+  --color-sim-none-bg: #f1ece2;
+  --color-sim-none-line: #ddd5c8;
+
+  /* Decision control (§9.3 dec.*) — consumed by slice (b) */
+  --color-dec-keep-ink: #2f8a5a;
+  --color-dec-keep-bg: #e7f3ec;
+  --color-dec-keep-line: #bcdcc7;
+  --color-dec-delete-ink: #ffffff;
+  --color-dec-delete-bg: #c4503f;
+  --color-dec-delete-line: #c4503f;
+  --color-dec-remove-ink: #6f6a60;
+  --color-dec-remove-bg: #f1ece2;
+  --color-dec-remove-line: #ddd5c8;
+  --color-dec-undecided-ink: #9a9388;
+  --color-dec-undecided-line: #d8cfc0;
+
+  /* Scrollbar thumb (#878 dict) */
+  --color-scroll-thumb: #ddd2bf;
+  --color-scroll-thumb-hover: #cdbfa6;
+}
+
 @layer base {
+  /* The shadcn token block, remapped from the stock neutral palette onto
+     Daylight (#878) so every `ui/*` primitive — dialog, checkbox, select —
+     inherits the warm surface without a per-component change. HSL triplets
+     keep shadcn's `hsl(var(--x) / <alpha>)` call sites working. */
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 240 10% 3.9%;
+    --background: 36 43% 93%; /* bg_app   #f5efe6 */
+    --foreground: 33 11% 15%; /* text     #2c2823 */
+    --card: 40 100% 99%; /* bg_panel #fffdf9 */
+    --card-foreground: 33 11% 15%;
+    --popover: 40 100% 99%;
+    --popover-foreground: 33 11% 15%;
+    --primary: 23 54% 48%; /* accent   #bd6b39 */
+    --primary-foreground: 40 100% 99%;
+    --secondary: 40 55% 96%; /* bg_toolbar #faf6ee */
+    --secondary-foreground: 33 11% 15%;
+    --muted: 35 64% 91%; /* bg_subtle  #f7ebda */
+    --muted-foreground: 35 9% 48%; /* text_muted #867d70 */
+    --accent: 35 64% 91%;
+    --accent-foreground: 33 11% 15%;
+    --destructive: 8 53% 51%; /* danger   #c4503f */
+    --destructive-foreground: 40 100% 99%;
+    --border: 37 35% 86%; /* border   #e7ddcd */
+    --input: 38 31% 81%; /* border_input #ddd2bf */
+    --ring: 23 54% 48%;
     --radius: 0.5rem;
   }
 
@@ -51,6 +142,33 @@
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
     --ring: 240 4.9% 83.9%;
+
+    /* Dark fallback for the Daylight tokens. The dark "Aperture" palette is
+       explicitly out of scope for #878, so dark keeps the neutral surfaces it
+       has today by pointing the SURFACE / TEXT / BORDER tokens at the shadcn
+       `.dark` triplets directly above — nothing here invents a dark palette.
+       The badge and decision chips are deliberately NOT overridden: they are
+       small coloured pills that stay legible on a dark row, and inventing
+       dark variants for them is the Aperture work this slice must not do. */
+    --color-app: hsl(var(--background));
+    --color-panel: hsl(var(--card));
+    --color-toolbar: hsl(var(--secondary));
+    --color-titlebar: hsl(var(--secondary));
+    --color-subtle: hsl(var(--accent));
+    --color-hairline: hsl(var(--border));
+    --color-hairline-soft: hsl(var(--border));
+    --color-hairline-input: hsl(var(--input));
+    --color-ink: hsl(var(--foreground));
+    --color-ink-muted: hsl(var(--muted-foreground));
+    --color-ink-faint: hsl(var(--muted-foreground));
+    --color-select: hsl(var(--accent));
+    --color-select-ink: hsl(var(--accent-foreground));
+    --color-group-band: hsl(var(--secondary));
+    --color-group-line: hsl(var(--border));
+    --color-delete-row: hsl(var(--destructive) / 0.18);
+    --color-score-track: hsl(var(--muted));
+    --color-scroll-thumb: hsl(var(--border));
+    --color-scroll-thumb-hover: hsl(var(--muted-foreground));
   }
 }
 
@@ -58,5 +176,32 @@
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
+  }
+
+  /* Themed scrollbars (#878 "themed … scrollbars"). WebKit/Blink only, which
+     is what the desktop shell and the QA Playwright runner both are; Firefox
+     falls back to `scrollbar-color` below. */
+  * {
+    scrollbar-color: var(--color-scroll-thumb) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-scroll-thumb);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-scroll-thumb-hover);
   }
 }
