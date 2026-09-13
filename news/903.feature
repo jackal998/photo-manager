@@ -1,0 +1,1 @@
+Retone the result row's decision control, lock and score in the Daylight palette: the staged decision shows as a filled colour chip, the lock is a faint/solid padlock with a matching glyph in the column header, and the Score cell gains a mini bar beside its number (#878)
