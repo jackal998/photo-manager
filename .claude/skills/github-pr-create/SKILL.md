@@ -137,6 +137,18 @@ EOF
 > `--base <that-branch>`. `pr-gates` diffs against the PR's actual base,
 > so don't leave `--base master` on a stacked PR or earlier-stage files
 > surface as "changed".
+>
+> **Strongly coupled PRs ALWAYS use `gh stack` (owner rule, 2026-09-13).**
+> The moment the upper PR opens, link the chain bottom → top:
+> `gh stack link --base <integration-branch> <bottom-PR> … <top-PR>`
+> (PR numbers, branch names or URLs; a stack number as the first argument
+> grows an existing stack). Unlinked, the upper PR still carries the lower
+> PR's commits, and the squash merge underneath it turns every line both
+> PRs touched into a same-line conflict (PR #900 the moment #895 merged).
+> After each merge in the stack, re-check `gh pr view <next> --json
+> mergeable` before handing the next PR over; if it says CONFLICTING,
+> cascade with `git merge origin/<integration-branch>` and a plain push
+> — never rebase, never force-push.
 
 ### Step 4 — News fragment (the easy-to-forget step)
 
