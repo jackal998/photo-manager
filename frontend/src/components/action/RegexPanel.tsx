@@ -166,7 +166,7 @@ export function RegexPanel({
       {!hasGroups && (
         <p
           data-testid={ACTION_SIMPLE_DISABLED_NOTE}
-          className="text-xs italic text-neutral-500"
+          className="text-xs italic text-ink-muted"
         >
           {t(
             "web.action_dialog.simple_disabled_no_match_fn",
@@ -180,7 +180,7 @@ export function RegexPanel({
         data-testid={ACTION_SIMPLE_ROW}
         className="flex items-center gap-2"
       >
-        <span className="text-sm text-neutral-600 flex-shrink-0">
+        <span className="text-sm text-ink-muted flex-shrink-0">
           {t("web.action_dialog.simple_prefix", "Find rows where it")}
         </span>
         <select
@@ -188,7 +188,7 @@ export function RegexPanel({
           value={simpleOp}
           onChange={handleSimpleOpChange}
           disabled={!hasGroups}
-          className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
+          className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm disabled:cursor-not-allowed disabled:bg-subtle disabled:text-ink-faint"
         >
           <option value="contains">
             {t("web.action_dialog.simple_op_contains", "contains")}
@@ -213,13 +213,13 @@ export function RegexPanel({
             "web.action_dialog.simple_text_placeholder",
             "type the text to match…"
           )}
-          className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
+          className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm flex-1 disabled:cursor-not-allowed disabled:bg-subtle disabled:text-ink-faint"
         />
       </div>
 
       {/* Regex row */}
       <div data-testid={ACTION_REGEX_ROW} className="space-y-1">
-        <label className="text-sm font-medium text-neutral-700">
+        <label className="text-sm font-medium text-ink">
           {t("web.action_dialog.regex_label", "Regex:")}
         </label>
         <div className="flex items-center gap-2">
@@ -228,10 +228,10 @@ export function RegexPanel({
             data-testid={ACTION_VALIDATION_ICON}
             className={
               pattern === ""
-                ? "text-neutral-300 text-base select-none w-5 text-center"
+                ? "text-ink-faint text-base select-none w-5 text-center"
                 : isValid
-                ? "text-green-500 text-base select-none w-5 text-center"
-                : "text-red-500 text-base select-none w-5 text-center"
+                ? "text-positive-warm text-base select-none w-5 text-center"
+                : "text-danger-warm text-base select-none w-5 text-center"
             }
             aria-hidden="true"
           >
@@ -247,7 +247,7 @@ export function RegexPanel({
               "web.action_dialog.regex_placeholder",
               "e.g. ^IMG_\\d+\\.HEIC$"
             )}
-            className="rounded border border-neutral-300 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1"
+            className="rounded border border-hairline-input px-2 py-1 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-warm flex-1"
             aria-invalid={!isValid}
           />
         </div>
@@ -256,7 +256,7 @@ export function RegexPanel({
         {regexError !== null && (
           <p
             data-testid={ACTION_VALIDATION_ERROR}
-            className="text-xs text-red-600"
+            className="text-xs text-danger-warm"
           >
             {t("web.action_dialog.invalid_regex", "Invalid regex: {error}", {
               error: regexError,
@@ -272,7 +272,7 @@ export function RegexPanel({
               data-testid={actionCheatsheetTestid(token)}
               type="button"
               onClick={() => handleChip(token)}
-              className="rounded bg-neutral-100 border border-neutral-300 px-2 py-0.5 text-xs font-mono hover:bg-neutral-200 focus:outline-none focus:ring-1 focus:ring-neutral-400"
+              className="rounded bg-subtle border border-hairline-input px-2 py-0.5 text-xs font-mono hover:bg-group-band focus:outline-none focus:ring-1 focus:ring-warm"
               title={`Insert ${token}`}
             >
               {token}

@@ -61,8 +61,18 @@ import urllib.request
 from pathlib import Path
 
 from qa.web._pw import PWContext
-from qa.web._invariants import run_scan
+from qa.web._invariants import (
+    dismiss_modal_overlays,
+    open_scan_dialog,
+    right_click_row,
+    run_scan,
+)
 from qa.web.testid_constants import (
+    CONTEXT_MENU,
+    CTX_SET_ACTION_KEEP,
+    MAIN_STATUS_BAR,
+    PREVIEW_PANE,
+    SCAN_DIALOG,
     row_decision_option_testid,
     row_decision_testid,
     row_file_testid,
@@ -90,6 +100,26 @@ _DEC_KEEP_INK = "rgb(47, 138, 90)"  # --color-dec-keep-ink    #2f8a5a
 _TRANSPARENT = "rgba(0, 0, 0, 0)"  # dec.undecided bg = transparent
 _INK_FAINT = "rgb(168, 159, 143)"  # --color-ink-faint       #a89f8f
 _EM_DASH = "—"
+
+# Slice (e) — the surfaces OUTSIDE the result tree (preview, status bar,
+# context menu, dialogs). Until (e) these were still on Tailwind's stock
+# neutral palette, i.e. cold grey panels floating on the warm canvas.
+_PANEL_BG = "rgb(255, 253, 249)"  # --color-panel     #fffdf9
+_TITLEBAR_BG = "rgb(243, 237, 227)"  # --color-titlebar  #f3ede3
+_SUBTLE_BG = "rgb(247, 235, 218)"  # --color-subtle    #f7ebda
+
+_READ_BG = """(testid) => {
+  const el = document.querySelector(`[data-testid="${testid}"]`);
+  return el ? getComputedStyle(el).backgroundColor : null;
+}"""
+
+# The status TEXT is a <p> with no fill of its own; the strip that carries the
+# titlebar surface is the <footer> around it.
+_READ_STATUS_STRIP_BG = """(testid) => {
+  const el = document.querySelector(`[data-testid="${testid}"]`);
+  const strip = el ? el.closest('footer') : null;
+  return strip ? getComputedStyle(strip).backgroundColor : null;
+}"""
 
 # Reads every similarity badge currently mounted, with the two colour-free
 # cues plus the leading glyph, so the driver can check them as a set.
@@ -435,6 +465,77 @@ def run(*, base_url: str) -> None:
                 "gradient utilities are the kind of class that compiles to "
                 "nothing when renamed, with no test going red."
             )
+
+            # ── 8. The theme reaches the rest of the screen (slice e) ─────────
+            # Slices (a)/(b) themed the tree, header, menu strip and root; a UX
+            # audit then found the preview pane, every context menu and every
+            # dialog still on Tailwind's stock neutral palette — cold grey
+            # floating on warm paper. These four reads are the ones no vitest
+            # assertion can make: in jsdom `bg-panel` and `bg-neutral-50` are
+            # both just strings, and both stay green after the token is gone.
+
+            # 8a. Preview pane — select a row so the pane renders its content.
+            page.get_by_test_id(row_testid).locator('[data-col="name"]').click()
+            page.wait_for_timeout(500)
+            page.get_by_test_id(PREVIEW_PANE).wait_for(
+                state="visible", timeout=5_000
+            )
+            preview_bg = page.evaluate(_READ_BG, PREVIEW_PANE)
+            print(f"probe_status: s74 preview pane background = {preview_bg}")
+            assert preview_bg == _PANEL_BG, (
+                "#878 slice (e) — the preview pane is not the Daylight panel "
+                f"surface: expected {_PANEL_BG} (#fffdf9), got {preview_bg}. "
+                "The pane is a third of the screen; on the stock neutral-50 it "
+                "reads as a cold grey card sitting on warm paper."
+            )
+
+            # 8b. Status bar strip (§9.3 'status #f3ede3').
+            status_bg = page.evaluate(_READ_STATUS_STRIP_BG, MAIN_STATUS_BAR)
+            print(f"probe_status: s74 status bar background = {status_bg}")
+            assert status_bg == _TITLEBAR_BG, (
+                "#878 — the status bar strip is not the titlebar surface: "
+                f"expected {_TITLEBAR_BG} (#f3ede3), got {status_bg}."
+            )
+
+            # 8c. Row context menu: its own surface, and the hover fill of an
+            # item. Hover is read through a real mouse move — a `hover:` class
+            # that lost its token still spells correctly in the DOM.
+            right_click_row(page, row_testid)
+            menu_bg = page.evaluate(_READ_BG, CONTEXT_MENU)
+            print(f"probe_status: s74 context menu background = {menu_bg}")
+            assert menu_bg == _PANEL_BG, (
+                "#878 slice (e) — the row context menu is not the Daylight "
+                f"panel surface: expected {_PANEL_BG} (#fffdf9), got {menu_bg}."
+            )
+
+            keep_item = page.get_by_test_id(CTX_SET_ACTION_KEEP)
+            keep_item.hover()
+            page.wait_for_timeout(300)
+            hover_bg = page.evaluate(_READ_BG, CTX_SET_ACTION_KEEP)
+            print(f"probe_status: s74 context menu item hover = {hover_bg}")
+            assert hover_bg == _SUBTLE_BG, (
+                "#878 slice (e) — a hovered context-menu item fills with "
+                f"{hover_bg}, expected the warm hover tint {_SUBTLE_BG} "
+                "(#f7ebda). A menu whose hover is still neutral-100 is the one "
+                "surface the user's pointer is guaranteed to be on."
+            )
+            page.keyboard.press("Escape")
+            page.get_by_test_id(CONTEXT_MENU).wait_for(
+                state="hidden", timeout=5_000
+            )
+
+            # 8d. One dialog surface — every dialog shares ui/dialog.tsx's
+            # DialogContent, so the Scan dialog stands in for all of them.
+            open_scan_dialog(page)
+            dialog_bg = page.evaluate(_READ_BG, SCAN_DIALOG)
+            print(f"probe_status: s74 scan dialog background = {dialog_bg}")
+            assert dialog_bg == _PANEL_BG, (
+                "#878 slice (e) — the Scan dialog is not the Daylight panel "
+                f"surface: expected {_PANEL_BG} (#fffdf9), got {dialog_bg}. "
+                "Every dialog in the app inherits this one class, so a miss "
+                "here is a miss on all of them."
+            )
+            dismiss_modal_overlays(page)
     finally:
         import shutil
 

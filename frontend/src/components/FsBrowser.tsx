@@ -213,7 +213,7 @@ export function FsBrowser({
           </Button>
           <span
             data-testid={FS_BROWSER_PATH}
-            className="min-w-0 flex-1 truncate font-mono text-xs text-neutral-600"
+            className="min-w-0 flex-1 truncate font-mono text-xs text-ink-muted"
             title={atRoots ? undefined : cwd}
           >
             {atRoots ? t("web.browse.roots", "This PC") : cwd}
@@ -221,21 +221,21 @@ export function FsBrowser({
         </div>
 
         {/* Entry list */}
-        <div className="mt-2 h-64 overflow-auto rounded border border-neutral-200">
+        <div className="mt-2 h-64 overflow-auto rounded border border-hairline">
           {loading ? (
-            <p className="p-3 text-sm text-neutral-400">
+            <p className="p-3 text-sm text-ink-faint">
               {t("web.browse.loading", "Loading…")}
             </p>
           ) : error !== null ? (
             <p
               data-testid={FS_BROWSER_ERROR}
               role="alert"
-              className="p-3 text-sm text-red-600"
+              className="p-3 text-sm text-danger-warm"
             >
               {error}
             </p>
           ) : visible.length === 0 ? (
-            <p className="p-3 text-sm text-neutral-400">
+            <p className="p-3 text-sm text-ink-faint">
               {t("web.browse.empty", "Empty folder")}
             </p>
           ) : (
@@ -252,9 +252,9 @@ export function FsBrowser({
                       onClick={() => handleEntryClick(entry)}
                       onDoubleClick={() => handleEntryDouble(entry)}
                       className={cn(
-                        "flex w-full items-center gap-2 px-3 py-1 text-left text-sm hover:bg-neutral-100",
-                        isSelected && "bg-blue-50",
-                        dimmed && "text-neutral-400"
+                        "flex w-full items-center gap-2 px-3 py-1 text-left text-sm hover:bg-subtle",
+                        isSelected && "bg-select",
+                        dimmed && "text-ink-faint"
                       )}
                     >
                       <span aria-hidden="true">
@@ -262,7 +262,7 @@ export function FsBrowser({
                       </span>
                       <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                       {entry.is_manifest && (
-                        <span className="text-xs text-blue-600">
+                        <span className="text-xs text-warm">
                           {t("web.browse.manifest_tag", "manifest")}
                         </span>
                       )}
@@ -279,7 +279,7 @@ export function FsBrowser({
           <div className="mt-2 flex items-center gap-2">
             <label
               htmlFor="fs-browser-filename-input"
-              className="text-sm text-neutral-700"
+              className="text-sm text-ink"
             >
               {t("web.browse.filename", "File name:")}
             </label>
@@ -289,7 +289,7 @@ export function FsBrowser({
               type="text"
               value={filename}
               onChange={(e) => setFilename(e.target.value)}
-              className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400"
+              className="flex-1 rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm"
             />
           </div>
         )}

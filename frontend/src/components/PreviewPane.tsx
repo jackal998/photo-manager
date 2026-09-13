@@ -49,7 +49,7 @@ function findRow(
 function EmptyState() {
   const t = useT();
   return (
-    <div className="flex items-center justify-center h-full text-neutral-400 text-sm select-none">
+    <div className="flex items-center justify-center h-full text-ink-faint text-sm select-none">
       {t("web.preview.select_file", "Select a file to preview")}
     </div>
   );
@@ -141,7 +141,7 @@ export function PreviewPane() {
   return (
     <div
       data-testid={PREVIEW_PANE}
-      className="flex flex-col h-full bg-neutral-50 border-l border-neutral-200"
+      className="flex flex-col h-full bg-panel border-l border-hairline"
     >
       {previewMode === "grid" && selectedGroupId !== null ? (
         // Grid mode — GroupGrid is keyed on selectedGroupId so a group change
@@ -199,7 +199,7 @@ export function PreviewPane() {
           {/* Metadata sidebar */}
           <div
             data-testid={PREVIEW_INFO}
-            className="flex-shrink-0 p-3 border-t border-neutral-200 bg-white text-xs space-y-1 overflow-y-auto max-h-56"
+            className="flex-shrink-0 p-3 border-t border-hairline bg-panel text-xs space-y-1 overflow-y-auto max-h-56"
           >
             <MetaRow label={t("web.preview.meta_name", "Name")} value={row.basename} mono />
             <MetaRow label={t("web.preview.meta_folder", "Folder")} value={row.folder} mono />
@@ -245,12 +245,12 @@ interface MetaRowProps {
 function MetaRow({ label, value, mono = false }: MetaRowProps) {
   return (
     <div className="flex gap-1.5">
-      <span className="text-neutral-500 w-14 flex-shrink-0">{label}</span>
+      <span className="text-ink-muted w-14 flex-shrink-0">{label}</span>
       <span
         className={
           mono
-            ? "font-mono text-neutral-800 break-all"
-            : "text-neutral-800 break-all"
+            ? "font-mono text-ink break-all"
+            : "text-ink break-all"
         }
         title={value}
       >

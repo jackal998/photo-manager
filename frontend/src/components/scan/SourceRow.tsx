@@ -47,7 +47,7 @@ export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }
         value={entry.label}
         disabled={disabled}
         onChange={(e) => onChange({ ...entry, label: e.target.value })}
-        className="w-28 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
+        className="w-28 rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm disabled:opacity-50"
         aria-label="Source label"
       />
 
@@ -63,7 +63,7 @@ export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }
         value={entry.path}
         disabled={disabled}
         onChange={(e) => onChange({ ...entry, path: e.target.value })}
-        className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 disabled:opacity-50"
+        className="flex-1 rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm disabled:opacity-50"
         aria-label="Source path"
       />
 
@@ -91,7 +91,7 @@ export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }
           data-testid={scanSourceRecursiveTestid(idx)}
           aria-label="Recursive"
         />
-        <span className="text-neutral-600">Recursive</span>
+        <span className="text-ink-muted">Recursive</span>
       </label>
 
       {/* Remove */}
@@ -102,7 +102,7 @@ export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }
         disabled={disabled}
         onClick={() => onRemove(entry.id)}
         aria-label="Remove source"
-        className="shrink-0 text-neutral-500 hover:text-red-600"
+        className="shrink-0 text-ink-muted hover:text-danger-warm"
       >
         ✕
       </Button>

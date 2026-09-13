@@ -228,7 +228,7 @@ export function LockConfirmDialog() {
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         {lockedPaths.length > 0 && (
-          <ul className="max-h-40 overflow-y-auto text-xs text-neutral-600 space-y-0.5 my-2">
+          <ul className="max-h-40 overflow-y-auto text-xs text-ink-muted space-y-0.5 my-2">
             {lockedPaths.map((p) => (
               <li key={p} className="truncate font-mono">
                 {p}

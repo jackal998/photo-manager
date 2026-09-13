@@ -127,13 +127,13 @@ export function ExecuteContextMenu({
       ref={menuRef}
       data-testid={CONTEXT_MENU}
       role="menu"
-      className="absolute z-50 min-w-[170px] rounded-md border border-neutral-200 bg-white py-1 shadow-md text-sm pointer-events-auto"
+      className="absolute z-50 min-w-[170px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm pointer-events-auto"
       style={{ left: x, top: y }}
     >
       <button
         data-testid={CTX_SET_ACTION_DELETE}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleDelete}
       >
         {t("web.context_menu.delete", "Delete")}
@@ -141,7 +141,7 @@ export function ExecuteContextMenu({
       <button
         data-testid={CTX_SET_ACTION_KEEP}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleKeep}
       >
         {t("web.context_menu.keep", "Keep (clear decision)")}
@@ -149,17 +149,17 @@ export function ExecuteContextMenu({
       <button
         data-testid={CTX_SET_ACTION_REMOVE}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleRemove}
       >
         {t("web.context_menu.remove", "Remove from list")}
       </button>
-      <div className="my-1 border-t border-neutral-100" role="separator" />
+      <div className="my-1 border-t border-hairline-soft" role="separator" />
       {isLocked ? (
         <button
           data-testid={CTX_UNLOCK}
           role="menuitem"
-          className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+          className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
           onClick={handleUnlock}
         >
           {t("web.context_menu.unlock", "Unlock")}
@@ -168,17 +168,17 @@ export function ExecuteContextMenu({
         <button
           data-testid={CTX_LOCK}
           role="menuitem"
-          className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+          className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
           onClick={handleLock}
         >
           {t("web.context_menu.lock", "Lock")}
         </button>
       )}
-      <div className="my-1 border-t border-neutral-100" role="separator" />
+      <div className="my-1 border-t border-hairline-soft" role="separator" />
       <button
         data-testid={CTX_SET_ACTION_BY_FIELD}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetByField}
       >
         {t("web.context_menu.set_action_by_field", "Set Action by Field…")}

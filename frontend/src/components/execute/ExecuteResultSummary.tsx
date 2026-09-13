@@ -52,15 +52,15 @@ export function ExecuteResultSummary({
       {failed.length > 0 && (
         <div
           data-testid={EXECUTE_RESULT_FAILED}
-          className="rounded border border-red-300 bg-red-50 p-2"
+          className="rounded border border-danger-warm/40 bg-delete-row p-2"
         >
-          <p className="font-medium text-red-800">
+          <p className="font-medium text-danger-warm">
             {t(
               "web.execute_dialog.files_failed_title",
               "Files Failed to Delete"
             )}
           </p>
-          <ul className="mt-1 list-disc pl-5 text-red-700">
+          <ul className="mt-1 list-disc pl-5 text-danger-warm">
             {failed.map(([path, reason]) => (
               <li key={path} className="break-all">
                 {path} — {reason}

@@ -13,11 +13,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-neutral-900 text-white hover:bg-neutral-700",
+        default: "bg-warm text-panel hover:bg-warm-hover",
         outline:
-          "border border-neutral-200 bg-white hover:bg-neutral-100 hover:text-neutral-900",
-        ghost: "hover:bg-neutral-100 hover:text-neutral-900",
-        destructive: "bg-red-600 text-white hover:bg-red-700",
+          "border border-hairline bg-panel hover:bg-subtle hover:text-ink",
+        ghost: "hover:bg-subtle hover:text-ink",
+        destructive: "bg-danger-warm text-panel hover:bg-danger-warm/90",
       },
       size: {
         default: "h-9 px-4 py-2",

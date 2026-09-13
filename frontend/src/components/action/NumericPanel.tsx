@@ -217,14 +217,14 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
       {mode === "threshold" && (
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-neutral-600 flex-shrink-0">
+            <span className="text-sm text-ink-muted flex-shrink-0">
               {t("web.action_dialog.numeric_threshold_label", "Where the value is")}
             </span>
             <select
               data-testid={ACTION_NUMERIC_CMP}
               value={cmpOp}
               onChange={handleCmpOpChange}
-              className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400"
+              className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm"
             >
               {CMP_OPS.map((op) => {
                 // Map operator symbol(s) to i18n key suffix
@@ -255,13 +255,13 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
                       "type a number…"
                     )
               }
-              className="rounded border border-neutral-300 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1"
+              className="rounded border border-hairline-input px-2 py-1 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-warm flex-1"
             />
           </div>
           {thresholdError !== null && (
             <p
               data-testid={ACTION_NUMERIC_ERROR}
-              className="text-xs text-red-600"
+              className="text-xs text-danger-warm"
             >
               {thresholdError}
             </p>
@@ -272,14 +272,14 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
       {/* Top-N row */}
       {mode === "topn" && (
         <div className="flex items-center gap-2">
-          <span className="text-sm text-neutral-600 flex-shrink-0">
+          <span className="text-sm text-ink-muted flex-shrink-0">
             {t("web.action_dialog.numeric_topn_label", "Pick the")}
           </span>
           <select
             data-testid={ACTION_NUMERIC_ORDER}
             value={order}
             onChange={handleOrderChange}
-            className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400"
+            className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm"
           >
             <option value="top">
               {t("web.action_dialog.numeric_order_top", "Top")}
@@ -295,9 +295,9 @@ export function NumericPanel({ field, onPatternChange }: NumericPanelProps) {
             max={10000}
             value={nValue}
             onChange={handleNChange}
-            className="rounded border border-neutral-300 px-2 py-1 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-neutral-400"
+            className="rounded border border-hairline-input px-2 py-1 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-warm"
           />
-          <span className="text-sm text-neutral-600">
+          <span className="text-sm text-ink-muted">
             {t("web.action_dialog.numeric_topn_suffix", "in each group")}
           </span>
         </div>

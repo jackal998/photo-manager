@@ -411,7 +411,7 @@ export function ActionDialog() {
               {t("web.action_dialog.lock_conflict_title", "Locked rows would be affected")}
             </DialogTitle>
           </DialogHeader>
-          <div className="text-sm text-neutral-700 mb-2">
+          <div className="text-sm text-ink mb-2">
             {t(
               "web.action_dialog.lock_conflict_body",
               "{n} locked row(s) would be affected. Unlock and apply anyway?",
@@ -419,7 +419,7 @@ export function ActionDialog() {
             )}
           </div>
           {lockConflictPaths.length > 0 && (
-            <ul className="max-h-40 overflow-y-auto text-xs text-neutral-600 space-y-0.5 my-2">
+            <ul className="max-h-40 overflow-y-auto text-xs text-ink-muted space-y-0.5 my-2">
               {lockConflictPaths.map((p) => (
                 <li key={p} className="truncate font-mono">{p}</li>
               ))}
@@ -518,7 +518,7 @@ export function ActionDialog() {
               data-testid={ACTION_RECENT_SELECT}
               value={RECENT_SENTINEL}
               onChange={handleRecentSelect}
-              className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1"
+              className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm flex-1"
             >
               <option value={RECENT_SENTINEL} disabled>
                 {visibleRecent.length === 0
@@ -536,7 +536,7 @@ export function ActionDialog() {
                 type="button"
                 data-testid={ACTION_RECENT_CLEAR}
                 onClick={handleClearRecent}
-                className="text-xs text-neutral-500 underline hover:text-neutral-700 flex-shrink-0"
+                className="text-xs text-ink-muted underline hover:text-ink flex-shrink-0"
               >
                 {t("web.action_dialog.recent_clear", "Clear")}
               </button>
@@ -552,7 +552,7 @@ export function ActionDialog() {
               data-testid={ACTION_FIELD_COMBO}
               value={field}
               onChange={handleFieldChange}
-              className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1"
+              className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm flex-1"
             >
               {FIELDS.map(({ key, label }) => (
                 <option key={key} value={label}>
@@ -594,7 +594,7 @@ export function ActionDialog() {
               data-testid={ACTION_ACTION_COMBO}
               value={actionSelectValue}
               onChange={handleActionChange}
-              className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 flex-1"
+              className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm flex-1"
             >
               {ACTION_OPTIONS.map(({ key, wireValue }) => (
                 <option
@@ -611,18 +611,18 @@ export function ActionDialog() {
           <div className="flex items-center gap-2 mt-3">
             <span
               data-testid={ACTION_MATCH_COUNTER}
-              className="text-sm text-neutral-600"
+              className="text-sm text-ink-muted"
             >
               {matchCounterText}
             </span>
             {actionRunning && (
-              <span className="text-xs text-neutral-400">updating…</span>
+              <span className="text-xs text-ink-faint">updating…</span>
             )}
           </div>
 
           {/* Error */}
           {actionError !== null && (
-            <p role="alert" className="text-sm text-red-600 mt-1">
+            <p role="alert" className="text-sm text-danger-warm mt-1">
               {actionError}
             </p>
           )}
@@ -630,12 +630,12 @@ export function ActionDialog() {
           {/* Preview list */}
           {previewSample.length > 0 && (
             <div className="mt-2">
-              <p className="text-xs font-medium text-neutral-500 mb-1">
+              <p className="text-xs font-medium text-ink-muted mb-1">
                 {t("web.action_dialog.preview_label", "Preview")}
               </p>
               <ul
                 data-testid={ACTION_PREVIEW_LIST}
-                className="max-h-40 overflow-y-auto text-xs text-neutral-600 space-y-0.5 rounded border border-neutral-200 p-2 bg-neutral-50"
+                className="max-h-40 overflow-y-auto text-xs text-ink-muted space-y-0.5 rounded border border-hairline p-2 bg-panel"
               >
                 {previewSample.map((p) => (
                   <li key={p} className="truncate font-mono">{p}</li>
@@ -644,7 +644,7 @@ export function ActionDialog() {
               {previewTruncated && (
                 <p
                   data-testid={ACTION_PREVIEW_TRUNCATED}
-                  className="text-xs text-neutral-400 mt-1"
+                  className="text-xs text-ink-faint mt-1"
                 >
                   {t("web.action_dialog.preview_truncated", "…and {n} more", {
                     n: previewMatched - previewSample.length,
@@ -655,7 +655,7 @@ export function ActionDialog() {
           )}
 
           {previewSample.length === 0 && previewMatched === 0 && pattern !== "" && (
-            <p className="text-xs text-neutral-400 mt-2">
+            <p className="text-xs text-ink-faint mt-2">
               {t("web.action_dialog.preview_empty", "No matches")}
             </p>
           )}
@@ -690,7 +690,7 @@ export function ActionDialog() {
           <OverlayResizeHandle
             data-testid={ACTION_RESIZE_HANDLE}
             onMouseDown={overlay.onResizeStart}
-            className="text-neutral-500"
+            className="text-ink-muted"
             label={t("web.overlay.resize", "Resize window")}
           />
         </DialogContent>
