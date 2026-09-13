@@ -111,7 +111,7 @@ export function ColumnHeaderRow({
     <div
       ref={ref}
       data-testid={RESULT_COL_HEADER_ROW}
-      className="sticky top-0 z-10 flex items-center gap-3 px-4 py-1 bg-neutral-100 border-b border-neutral-200 text-xs font-semibold text-neutral-600 select-none"
+      className="sticky top-0 z-10 flex items-center gap-3 px-4 py-1 bg-toolbar border-b border-hairline text-xs font-semibold text-ink-muted select-none"
     >
       {/* Thumbnail spacer — aligns header cells with FileRow's metadata cells. */}
       <div className="flex-shrink-0 w-16" aria-hidden="true" />
@@ -132,7 +132,7 @@ export function ColumnHeaderRow({
             className={cn(
               "relative flex-shrink-0 flex items-center overflow-hidden",
               col.align === "right" ? "justify-end" : "justify-start",
-              col.sortable && "cursor-pointer hover:text-neutral-900"
+              col.sortable && "cursor-pointer hover:text-ink"
             )}
             style={{ width: columnWidths[col.id] }}
             role={col.sortable ? "button" : undefined}
@@ -156,7 +156,7 @@ export function ColumnHeaderRow({
               data-testid={colResizeTestid(col.id)}
               role="separator"
               aria-orientation="vertical"
-              className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-neutral-400/60"
+              className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-hairline-input"
               onMouseDown={(e) => handleResizeStart(e, col.id)}
               onClick={(e) => e.stopPropagation()}
             />

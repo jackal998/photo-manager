@@ -335,7 +335,7 @@ export default function App() {
   // clip explicit, so every scroll happens in the pane that owns it.
   // s73_layout_scroll_and_action_seed asserts both halves.
   return (
-    <div className={cn("h-screen overflow-hidden flex flex-col")}>
+    <div className={cn("h-screen overflow-hidden flex flex-col bg-app text-ink")}>
       {/* ------------------------------------------------------------------ */}
       {/* Menu bar (Qt MenuController parity) — canonical, above the toolbar   */}
       {/* ------------------------------------------------------------------ */}
@@ -355,10 +355,10 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
       {/* Header toolbar                                                       */}
       {/* ------------------------------------------------------------------ */}
-      <header className="flex items-center gap-2 border-b px-4 py-2 flex-wrap">
+      <header className="flex items-center gap-2 border-b border-hairline bg-toolbar px-4 py-2 flex-wrap">
         <button
           data-testid={MAIN_SCAN_BUTTON}
-          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
+          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
           onClick={() => setScanOpen(true)}
         >
           {t("web.toolbar.scan", "Scan")}
@@ -366,7 +366,7 @@ export default function App() {
 
         <button
           data-testid={MAIN_EXECUTE_BUTTON}
-          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={() => openExecuteDialog()}
           // #673 — gate Execute on a loaded manifest, matching the menu
           // Action → Execute, the Set-Action button, and Qt. Without it the
@@ -378,7 +378,7 @@ export default function App() {
 
         <button
           data-testid={ACTION_MAIN_BUTTON}
-          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle disabled:opacity-50 disabled:cursor-not-allowed"
           // #735: openActionDialog now takes an optional initialField: string,
           // so it can no longer be wired directly as a MouseEventHandler (the
           // synthetic event isn't assignable to `string`) — wrap it argless.
@@ -390,7 +390,7 @@ export default function App() {
 
         <button
           data-testid={MAIN_LANG_TOGGLE}
-          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
+          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
           onClick={() => void setLocale(locale === "en" ? "zh_TW" : "en")}
         >
           {locale === "zh_TW" ? "中" : "EN"}
@@ -398,7 +398,7 @@ export default function App() {
 
         <button
           data-testid={MAIN_SETTINGS_BUTTON}
-          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
+          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
           onClick={() => setSettingsOpen(true)}
         >
           {t("web.toolbar.settings", "Settings")}
@@ -415,12 +415,12 @@ export default function App() {
             if (e.key === "Enter") handleManifestOpen();
           }}
           placeholder={t("web.manifest.input_placeholder", "Path to manifest .db…")}
-          className="rounded border border-neutral-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 w-64"
+          className="rounded border border-hairline-input bg-panel px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm w-64"
           aria-label={t("web.manifest.input_aria", "Manifest path")}
         />
         <button
           data-testid={MAIN_MANIFEST_OPEN}
-          className="px-3 py-1 rounded border text-sm hover:bg-neutral-100"
+          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
           onClick={handleManifestOpen}
         >
           {t("web.toolbar.open", "Open")}
@@ -436,7 +436,7 @@ export default function App() {
           {noManifest ? (
             <div
               data-testid={MAIN_EMPTY_STATE}
-              className="flex h-full flex-col items-center justify-center gap-4 text-sm text-neutral-400"
+              className="flex h-full flex-col items-center justify-center gap-4 text-sm text-ink-faint"
             >
               <p>
                 {t(
@@ -447,14 +447,14 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <button
                   data-testid={MAIN_EMPTY_SCAN}
-                  className="rounded border px-4 py-1.5 text-sm text-neutral-700 hover:bg-neutral-100"
+                  className="rounded border border-hairline-input bg-panel px-4 py-1.5 text-sm text-ink hover:bg-subtle"
                   onClick={() => setScanOpen(true)}
                 >
                   {t("web.empty_state.scan", "Scan…")}
                 </button>
                 <button
                   data-testid={MAIN_EMPTY_OPEN}
-                  className="rounded border px-4 py-1.5 text-sm text-neutral-700 hover:bg-neutral-100"
+                  className="rounded border border-hairline-input bg-panel px-4 py-1.5 text-sm text-ink hover:bg-subtle"
                   onClick={() => setManifestBrowseOpen(true)}
                 >
                   {t("web.empty_state.open", "Open Manifest…")}
@@ -473,7 +473,7 @@ export default function App() {
           data-testid={PREVIEW_RESIZE_HANDLE}
           role="separator"
           aria-orientation="vertical"
-          className="w-1 flex-shrink-0 cursor-col-resize bg-neutral-200 hover:bg-neutral-400"
+          className="w-1 flex-shrink-0 cursor-col-resize bg-hairline hover:bg-hairline-input"
           onMouseDown={handlePreviewResizeStart}
         />
         {/* Preview pane — resizable right column, width persists (#739) */}
@@ -488,10 +488,10 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
       {/* Footer status bar                                                    */}
       {/* ------------------------------------------------------------------ */}
-      <footer className="border-t">
+      <footer className="border-t border-hairline bg-titlebar">
         <p
           data-testid={MAIN_STATUS_BAR}
-          className="px-4 py-1 text-sm text-neutral-500"
+          className="px-4 py-1 text-sm text-ink-muted"
         >
           {statusText}
         </p>

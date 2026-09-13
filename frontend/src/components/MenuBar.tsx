@@ -62,11 +62,11 @@ export interface MenuBarProps {
 // ---------------------------------------------------------------------------
 
 const TRIGGER_CLASS =
-  "px-3 py-1 text-sm rounded hover:bg-neutral-100 data-[state=open]:bg-neutral-100 focus:outline-none";
+  "px-3 py-1 text-sm rounded hover:bg-subtle data-[state=open]:bg-subtle focus:outline-none";
 const CONTENT_CLASS =
-  "min-w-[12rem] rounded border border-neutral-200 bg-white py-1 shadow-md z-50";
+  "min-w-[12rem] rounded border border-hairline bg-panel py-1 shadow-md z-50";
 const ITEM_CLASS =
-  "flex items-center justify-between px-3 py-1.5 text-sm cursor-pointer outline-none data-[highlighted]:bg-neutral-100 data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed";
+  "flex items-center justify-between px-3 py-1.5 text-sm cursor-pointer outline-none data-[highlighted]:bg-subtle data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -89,7 +89,7 @@ export function MenuBar({
   return (
     <nav
       data-testid={MAIN_MENU_BAR}
-      className="flex items-center gap-1 border-b bg-neutral-50 px-2 py-0.5"
+      className="flex items-center gap-1 border-b border-hairline bg-titlebar px-2 py-0.5"
       aria-label="Main menu"
     >
       {/* File */}
@@ -106,7 +106,7 @@ export function MenuBar({
             >
               {t("web.menu.file_scan", "Scan Sources…")}
             </DropdownMenu.Item>
-            <DropdownMenu.Separator className="my-1 h-px bg-neutral-200" />
+            <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
             <DropdownMenu.Item
               data-testid={MENU_FILE_OPEN}
               className={ITEM_CLASS}
@@ -133,7 +133,7 @@ export function MenuBar({
             >
               {t("web.menu.action_set", "Set Action by Regex")}
             </DropdownMenu.Item>
-            <DropdownMenu.Separator className="my-1 h-px bg-neutral-200" />
+            <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
             <DropdownMenu.Item
               data-testid={MENU_ACTION_EXECUTE}
               className={ITEM_CLASS}
@@ -180,7 +180,7 @@ export function MenuBar({
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className={CONTENT_CLASS} align="start" sideOffset={2}>
-            <DropdownMenu.Label className="px-3 py-1 text-xs uppercase tracking-wide text-neutral-400">
+            <DropdownMenu.Label className="px-3 py-1 text-xs uppercase tracking-wide text-ink-faint">
               {t("web.menu.view_language", "Language")}
             </DropdownMenu.Label>
             <DropdownMenu.Item

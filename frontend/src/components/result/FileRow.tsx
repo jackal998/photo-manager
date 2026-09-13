@@ -12,6 +12,11 @@ import {
 } from "@/lib/format";
 import type { FileRow as FileRowData } from "@/api/types";
 import type { ColumnId } from "@/lib/resultColumns";
+import {
+  SIMILARITY_BADGE,
+  similarityBadgeBorderClass,
+  similarityBadgeState,
+} from "@/lib/similarityBadge";
 import { DecisionControl } from "./DecisionControl";
 import { LockToggle } from "./LockToggle";
 import {
@@ -48,13 +53,22 @@ interface FileRowProps {
     col?: string
   ) => void;
   isSelected?: boolean;
+  /** True on the group's last visible child (#878). The Daylight group frame
+   *  is closed by a border under this row — it has to come from row DATA
+   *  because the tree is virtualised, so a CSS sibling selector would only
+   *  see the handful of rows currently mounted. */
+  isLastInGroup?: boolean;
 }
 
-export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected }: FileRowProps) {
+export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected, isLastInGroup }: FileRowProps) {
   const t = useT();
   const simLabel = similarityLabel(row.similarity, t);
-  // Passenger rows get a subtle amber highlight on the similarity badge.
-  const isPassenger = row.similarity.kind === "passenger";
+  // Daylight 5-state similarity badge (#878) — colour + border style + weight,
+  // so the state survives a grayscale render. See lib/similarityBadge.ts.
+  const badge = SIMILARITY_BADGE[similarityBadgeState(row.similarity)];
+  // A row staged for deletion gets the soft red wash and a struck-through
+  // filename, so the lowest-salience decision on screen becomes the loudest.
+  const isDeleting = row.user_decision === "delete";
 
   function handleClick(e: MouseEvent) {
     // Ctrl/Cmd toggles, Shift extends a range; a plain click replaces. The
@@ -83,11 +97,16 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
     <div
       data-testid={rowFileTestid(groupId, row.basename)}
       className={cn(
-        "flex items-start gap-3 px-4 py-2 border-b border-neutral-100 hover:bg-neutral-50 cursor-pointer",
-        row.is_ref_winner && "bg-blue-50 hover:bg-blue-100",
-        // Multi-selection highlight wins over the ref-winner tint (tailwind-merge
-        // resolves the bg conflict in favour of the later class).
-        isSelected && "bg-sky-100 ring-1 ring-inset ring-sky-400 hover:bg-sky-100"
+        "flex items-start gap-3 px-4 py-2 border-b border-hairline-soft bg-panel text-ink hover:bg-subtle cursor-pointer",
+        row.is_ref_winner && "bg-toolbar hover:bg-subtle",
+        // Delete wash wins over the keeper tint; selection wins over both
+        // (tailwind-merge resolves each bg conflict in favour of the later
+        // class, so this order IS the precedence).
+        isDeleting && "bg-delete-row hover:bg-delete-row",
+        isSelected &&
+          "bg-select text-select-ink ring-1 ring-inset ring-warm hover:bg-select",
+        // Closes the group frame under its last child (#878).
+        isLastInGroup && "border-b-group-line"
       )}
       aria-selected={isSelected}
       onClick={handleClick}
@@ -95,7 +114,7 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       onContextMenu={handleContextMenu}
     >
       {/* Thumbnail */}
-      <div className="flex-shrink-0 w-16 h-16 bg-neutral-200 rounded overflow-hidden flex items-center justify-center">
+      <div className="flex-shrink-0 w-16 h-16 bg-subtle rounded overflow-hidden flex items-center justify-center">
         <img
           loading="lazy"
           src={row.thumbnail_url}
@@ -110,13 +129,20 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       <div data-col="name" className="flex-shrink-0 min-w-0 overflow-hidden" style={{ width: columnWidths.name }}>
         <div className="flex items-center gap-1 flex-wrap">
           {row.is_ref_winner && (
-            <span className="inline-block text-xs font-semibold bg-blue-100 text-blue-700 rounded px-1 py-0.5 leading-none">
+            <span className="inline-block text-xs font-semibold bg-sim-ref-bg text-sim-ref-ink rounded px-1 py-0.5 leading-none">
               {t("web.format.similarity_ref", "Ref")}
             </span>
           )}
-          <span className="font-semibold text-sm truncate">{row.basename}</span>
+          <span
+            className={cn(
+              "font-semibold text-sm truncate",
+              isDeleting && "line-through text-danger-warm"
+            )}
+          >
+            {row.basename}
+          </span>
         </div>
-        <div className="text-xs text-neutral-500 truncate" title={row.folder}>
+        <div className="text-xs text-ink-muted truncate" title={row.folder}>
           {row.folder}
         </div>
       </div>
@@ -124,39 +150,47 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       {/* Similarity */}
       <div data-col="similarity" className="flex-shrink-0 text-sm overflow-hidden" style={{ width: columnWidths.similarity }}>
         <span
+          data-sim-state={similarityBadgeState(row.similarity)}
           className={cn(
-            "inline-block text-xs rounded px-1 py-0.5",
-            isPassenger
-              ? "bg-amber-100 text-amber-800"
-              : "bg-neutral-100 text-neutral-700"
+            "inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 border",
+            similarityBadgeBorderClass(badge.border),
+            badge.weight,
+            badge.colors
           )}
         >
-          {simLabel}
+          {badge.prefixGlyph && (
+            // Decorative: the state is already carried by the label text plus
+            // the border style, and a screen reader reading "star Ref" would
+            // be noise. Kept OUT of the label span so the cell's queryable
+            // text stays exactly `similarityLabel()`'s output.
+            <span aria-hidden="true">{badge.glyph}</span>
+          )}
+          <span>{simLabel}</span>
         </span>
       </div>
 
       {/* Action */}
-      <div data-col="action" className="flex-shrink-0 text-xs text-neutral-600 truncate" style={{ width: columnWidths.action }} title={row.action}>
+      <div data-col="action" className="flex-shrink-0 text-xs text-ink-muted truncate" style={{ width: columnWidths.action }} title={row.action}>
         {row.action || "—"}
       </div>
 
       {/* Score */}
-      <div data-col="score" className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.score }}>
+      <div data-col="score" className="flex-shrink-0 text-xs text-right text-ink-muted overflow-hidden" style={{ width: columnWidths.score }}>
         {formatScore(row.score)}
       </div>
 
       {/* Dimensions */}
-      <div data-col="dims" className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.dims }}>
+      <div data-col="dims" className="flex-shrink-0 text-xs text-ink-muted overflow-hidden" style={{ width: columnWidths.dims }}>
         {formatDims(row.pixel_width, row.pixel_height)}
       </div>
 
       {/* File size */}
-      <div data-col="size" className="flex-shrink-0 text-xs text-right text-neutral-600 overflow-hidden" style={{ width: columnWidths.size }}>
+      <div data-col="size" className="flex-shrink-0 text-xs text-right text-ink-muted overflow-hidden" style={{ width: columnWidths.size }}>
         {formatBytes(row.file_size_bytes)}
       </div>
 
       {/* Shot date */}
-      <div data-col="date" className="flex-shrink-0 text-xs text-neutral-600 overflow-hidden" style={{ width: columnWidths.date }}>
+      <div data-col="date" className="flex-shrink-0 text-xs text-ink-muted overflow-hidden" style={{ width: columnWidths.date }}>
         {formatDate(row.shot_date)}
       </div>
 

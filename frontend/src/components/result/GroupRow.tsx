@@ -43,19 +43,25 @@ export function GroupRow({
       onClick={onToggle}
       onContextMenu={handleContextMenu}
       className={cn(
-        "w-full flex items-center gap-2 px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200",
-        "text-sm font-medium text-neutral-800 border-b border-neutral-200 text-left"
+        // Daylight group framing (#878): a warm band, a top border opening the
+        // frame, and an accent left strip. The frame is CLOSED by the bottom
+        // border FileRow draws under the group's last child (isLastInGroup) —
+        // the tree is virtualised, so that cannot be a CSS sibling rule.
+        "w-full flex items-center gap-2 px-3 py-1.5 bg-group-band hover:bg-subtle",
+        "border-t border-t-group-line border-b border-b-group-line",
+        "border-l-4 border-l-warm",
+        "text-sm font-semibold text-ink text-left"
       )}
       aria-expanded={expanded}
     >
       {expanded ? (
-        <ChevronDown className="h-4 w-4 flex-shrink-0 text-neutral-500" />
+        <ChevronDown className="h-4 w-4 flex-shrink-0 text-ink-muted" />
       ) : (
-        <ChevronRight className="h-4 w-4 flex-shrink-0 text-neutral-500" />
+        <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-muted" />
       )}
       <span>
         Group {groupNumber}
-        <span className="mx-1 text-neutral-400">·</span>
+        <span className="mx-1 text-ink-faint">·</span>
         {memberCount} {memberCount === 1 ? "file" : "files"}
       </span>
     </button>
