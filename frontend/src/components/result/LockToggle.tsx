@@ -1,7 +1,20 @@
-// Lock toggle — Radix Checkbox, checked = is_locked.
+// Lock toggle — a clickable padlock (#878 slice b).
+//
+// Was a Radix Checkbox. The Daylight design draws the lock as a padlock that
+// is FAINT when the row is unlocked and SOLID (warm accent) when it is locked,
+// so the locked rows in a long tree are scannable without reading each cell —
+// a checkbox renders every row's control at the same weight.
+//
+// Two contracts are deliberately preserved so nothing downstream changes:
+//   * `data-state="checked" | "unchecked"` — what Radix emitted and what the
+//     existing ResultTree tests and any scenario built on them read.
+//   * the click bubbles to FileRow's row-select handler exactly as the Radix
+//     root's did; clicking a padlock still also selects its row.
+// `aria-pressed` is added (a toggle button's native state) and the accessible
+// name stays "Lock row".
 
-import { Checkbox } from "@/components/ui/checkbox";
-import type { CheckedState } from "@radix-ui/react-checkbox";
+import { Lock, LockOpen } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface LockToggleProps {
   checked: boolean;
@@ -14,18 +27,27 @@ export function LockToggle({
   onChange,
   "data-testid": testId,
 }: LockToggleProps) {
-  function handleCheckedChange(state: CheckedState) {
-    // Radix delivers true | false | "indeterminate"; we only use boolean.
-    onChange(state === true);
-  }
-
   return (
-    <Checkbox
-      checked={checked}
-      onCheckedChange={handleCheckedChange}
-      data-testid={testId}
+    <button
+      type="button"
+      aria-pressed={checked}
       aria-label="Lock row"
-      className="mt-0.5"
-    />
+      data-state={checked ? "checked" : "unchecked"}
+      data-testid={testId}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "inline-flex h-4 w-4 items-center justify-center rounded-sm transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warm",
+        // Faint vs solid IS the state cue; the open/closed shackle is the
+        // second, colour-free one (the design's grayscale-safety rule).
+        checked ? "text-warm" : "text-ink-faint hover:text-ink-muted"
+      )}
+    >
+      {checked ? (
+        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+      ) : (
+        <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
+    </button>
   );
 }

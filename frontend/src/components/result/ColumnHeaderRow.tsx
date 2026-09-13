@@ -11,6 +11,7 @@
 
 import type { MouseEvent as ReactMouseEvent, Ref } from "react";
 import { useEffect, useRef, useState } from "react";
+import { Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
 import { COLUMNS, type ColumnId, type SortDirection } from "@/lib/resultColumns";
@@ -163,6 +164,30 @@ export function ColumnHeaderRow({
           </div>
         );
       })}
+
+      {/* Row-chrome headers (#878 slice b). The decision control and the lock
+          padlock are NOT entries in COLUMNS — they are not sortable, not
+          resizable and carry no persisted width — so they get no resize
+          handle and no aria-sort. The design asks for a padlock GLYPH over
+          the lock column rather than the word; the accessible name stays the
+          translated "Lock" (web.column.lock), carried in sr-only text so a
+          screen reader and the i18n passthrough probe both still see it.
+
+          The 9.8rem spacer is the decision control's MEASURED intrinsic width
+          with the English labels (157 px: three h-7/px-2 text-xs segments plus
+          their dividers), which is the only way to park the glyph over the
+          padlocks — the control has no fixed width to share. It is purely
+          decorative alignment: a longer translation slides the glyph a few px
+          off its column and nothing else changes. */}
+      <div className="flex-shrink-0 w-[9.8rem]" aria-hidden="true" />
+      <div
+        data-col-chrome="lock"
+        className="flex-shrink-0 w-4 flex items-center justify-center"
+        title={t("web.column.lock", "Lock")}
+      >
+        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="sr-only">{t("web.column.lock", "Lock")}</span>
+      </div>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import {
 } from "@/lib/format";
 import type { FileRow as FileRowData } from "@/api/types";
 import type { ColumnId } from "@/lib/resultColumns";
+import { scoreBarWidth } from "@/lib/scoreBar";
 import {
   SIMILARITY_BADGE,
   similarityBadgeBorderClass,
@@ -174,9 +175,27 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
         {row.action || "—"}
       </div>
 
-      {/* Score */}
+      {/* Score — number (unchanged text) plus the Daylight mini bar (#878).
+          The bar is aria-hidden and contributes NO text, so the cell's
+          queryable content stays exactly `formatScore()`'s output, which is
+          what the parity counter and every scenario read. Unscored rows
+          (score === null) get the em dash and no track, matching the Qt
+          delegate this ports. */}
       <div data-col="score" className="flex-shrink-0 text-xs text-right text-ink-muted overflow-hidden" style={{ width: columnWidths.score }}>
-        {formatScore(row.score)}
+        <div>{formatScore(row.score)}</div>
+        {row.score !== null && (
+          <div
+            aria-hidden="true"
+            data-score-track=""
+            className="mt-0.5 h-1 w-full rounded-full bg-score-track overflow-hidden"
+          >
+            <div
+              data-score-fill=""
+              className="h-full rounded-full bg-linear-to-r from-score-fill to-score-fill-end"
+              style={{ width: scoreBarWidth(row.score) }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Dimensions */}

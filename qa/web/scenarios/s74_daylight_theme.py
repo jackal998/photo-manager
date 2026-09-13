@@ -32,6 +32,20 @@ What this pins, and why a unit test cannot:
      child comes from row data (`isLastInGroup`), not a CSS sibling rule,
      because the tree is virtualised.
 
+  5. **Exactly one decision chip is filled** (slice b). The active segment
+     wears its own decision's chip (`dec.delete` red for a staged delete,
+     `dec.keep` green for the untouched `''` = keep) and every inactive one is
+     transparent. Read as computed colours — the class-level mapping is in
+     DecisionControl.test.tsx and would pass with every token deleted.
+
+  6. **The padlock reads faint → solid** (slice b), and clicking it still
+     locks the row: `aria-pressed` plus the computed colour, before and after.
+
+  7. **The score mini bar has a real width** (slice b): fill > 0 and ≤ the
+     cell, drawn with the `scoreFill` gradient. A NaN width is valid-looking
+     markup that CSS silently ignores, and a renamed gradient utility compiles
+     to nothing — neither shows up in jsdom.
+
 Fixture: qa/sandbox/near-duplicates/ (5 JPEGs, one group), plain scan — the
 same fixture s72/s73 use. It yields the Ref winner plus near-match rows, i.e.
 two of the five badge states; the five-way mapping itself is pure logic and is
@@ -50,8 +64,10 @@ from qa.web._pw import PWContext
 from qa.web._invariants import run_scan
 from qa.web.testid_constants import (
     row_decision_option_testid,
+    row_decision_testid,
     row_file_testid,
     row_group_testid,
+    row_lock_testid,
 )
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -65,6 +81,15 @@ _APP_BG = "rgb(245, 239, 230)"  # --color-app        #f5efe6
 _DELETE_ROW_BG = "rgb(253, 243, 240)"  # --color-delete-row #fdf3f0
 _GROUP_BAND_BG = "rgb(243, 233, 216)"  # --color-group-band #f3e9d8
 _ACCENT = "rgb(189, 107, 57)"  # --color-warm       #bd6b39
+
+# Slice (b) — decision chips / padlock / score bar (§9.3 dec.* + scoreFill).
+_DEC_DELETE_BG = "rgb(196, 80, 63)"  # --color-dec-delete-bg   #c4503f
+_DEC_DELETE_INK = "rgb(255, 255, 255)"  # --color-dec-delete-ink  #ffffff
+_DEC_KEEP_BG = "rgb(231, 243, 236)"  # --color-dec-keep-bg     #e7f3ec
+_DEC_KEEP_INK = "rgb(47, 138, 90)"  # --color-dec-keep-ink    #2f8a5a
+_TRANSPARENT = "rgba(0, 0, 0, 0)"  # dec.undecided bg = transparent
+_INK_FAINT = "rgb(168, 159, 143)"  # --color-ink-faint       #a89f8f
+_EM_DASH = "—"
 
 # Reads every similarity badge currently mounted, with the two colour-free
 # cues plus the leading glyph, so the driver can check them as a set.
@@ -98,6 +123,59 @@ def _read_row_style(page, row_testid: str) -> dict:
   return {
     background: getComputedStyle(row).backgroundColor,
     nameDecoration: name ? getComputedStyle(name).textDecorationLine : null,
+  };
+}""",
+        row_testid,
+    )
+
+
+def _read_decision_chips(page, decision_testid: str) -> dict:
+    """Computed fill + ink of each segment of one row's decision control."""
+    return page.evaluate(
+        """(testid) => {
+  const out = {};
+  for (const slug of ['none', 'delete', 'ignore']) {
+    const el = document.querySelector(`[data-testid="${testid}-${slug}"]`);
+    if (!el) { out[slug] = null; continue; }
+    const cs = getComputedStyle(el);
+    out[slug] = { bg: cs.backgroundColor, ink: cs.color };
+  }
+  return out;
+}""",
+        decision_testid,
+    )
+
+
+def _read_lock(page, lock_testid: str) -> dict:
+    return page.evaluate(
+        """(testid) => {
+  const el = document.querySelector(`[data-testid="${testid}"]`);
+  if (!el) return null;
+  return {
+    pressed: el.getAttribute('aria-pressed'),
+    color: getComputedStyle(el).color,
+  };
+}""",
+        lock_testid,
+    )
+
+
+def _read_score_bar(page, row_testid: str) -> dict:
+    """The score cell's text plus the mini bar's geometry, for one row."""
+    return page.evaluate(
+        """(testid) => {
+  const row = document.querySelector(`[data-testid="${testid}"]`);
+  if (!row) return null;
+  const cell = row.querySelector('[data-col="score"]');
+  if (!cell) return null;
+  const fill = cell.querySelector('[data-score-fill]');
+  const track = cell.querySelector('[data-score-track]');
+  return {
+    text: (cell.textContent || '').trim(),
+    cellWidth: cell.getBoundingClientRect().width,
+    trackWidth: track ? track.getBoundingClientRect().width : null,
+    fillWidth: fill ? fill.getBoundingClientRect().width : null,
+    fillImage: fill ? getComputedStyle(fill).backgroundImage : null,
   };
 }""",
         row_testid,
@@ -247,6 +325,115 @@ def run(*, base_url: str) -> None:
             assert "line-through" in (after["nameDecoration"] or ""), (
                 "#878 — the filename of a row staged for deletion is not struck "
                 f"through (text-decoration-line={after['nameDecoration']!r})."
+            )
+
+            # ── 5. Decision chips (slice b) ───────────────────────────────────
+            # jsdom can only see the class names (DecisionControl.test.tsx);
+            # the tokens behind them only become real colours after the
+            # Tailwind build, which is what this reads.
+            staged = _read_decision_chips(
+                page, row_decision_testid(group_id, basename)
+            )
+            print(f"probe_status: s74 decision chips (delete staged) = {staged}")
+            assert staged["delete"]["bg"] == _DEC_DELETE_BG, (
+                "#878 — the active Delete segment is not the delete chip: "
+                f"expected {_DEC_DELETE_BG} (#c4503f), got "
+                f"{staged['delete']['bg']}. A staged delete has to be the "
+                "loudest thing in the cell."
+            )
+            assert staged["delete"]["ink"] == _DEC_DELETE_INK, (
+                "#878 — the active Delete segment's label is "
+                f"{staged['delete']['ink']}, expected {_DEC_DELETE_INK} on the "
+                "filled red chip."
+            )
+            for slug in ("none", "ignore"):
+                assert staged[slug]["bg"] == _TRANSPARENT, (
+                    f"#878 — the inactive {slug!r} segment is filled "
+                    f"({staged[slug]['bg']}); dec.undecided is transparent, and "
+                    "exactly one filled chip per row is what makes the staged "
+                    "decision readable at a glance."
+                )
+
+            # A row nobody has touched: "" is KEEP under the #584 model, so its
+            # None segment wears the keep chip — not the undecided grey, which
+            # would make active and inactive indistinguishable.
+            other_basename = Path(items[1]["file_path"]).name
+            undecided = _read_decision_chips(
+                page, row_decision_testid(group_id, other_basename)
+            )
+            print(f"probe_status: s74 decision chips (undecided row) = {undecided}")
+            assert undecided["none"]["bg"] == _DEC_KEEP_BG, (
+                "#878 — an untouched row's None segment is "
+                f"{undecided['none']['bg']}, expected the keep chip "
+                f"{_DEC_KEEP_BG} (#e7f3ec)."
+            )
+            assert undecided["none"]["ink"] == _DEC_KEEP_INK, (
+                "#878 — an untouched row's None label is "
+                f"{undecided['none']['ink']}, expected {_DEC_KEEP_INK} (#2f8a5a)."
+            )
+
+            # ── 6. The padlock reads faint → solid (slice b) ──────────────────
+            lock_testid = row_lock_testid(group_id, other_basename)
+            lock_before = _read_lock(page, lock_testid)
+            print(f"probe_status: s74 lock before click = {lock_before}")
+            assert lock_before["pressed"] == "false", (
+                "#878 — an unlocked row's padlock reports aria-pressed="
+                f"{lock_before['pressed']!r}."
+            )
+            assert lock_before["color"] == _INK_FAINT, (
+                "#878 — an unlocked padlock is "
+                f"{lock_before['color']}, expected the faint ink {_INK_FAINT} "
+                "(#a89f8f). Faint-vs-solid is the whole point: it is what lets "
+                "a locked row be spotted without reading every cell."
+            )
+
+            page.get_by_test_id(lock_testid).click()
+            page.wait_for_timeout(800)
+
+            lock_after = _read_lock(page, lock_testid)
+            print(f"probe_status: s74 lock after click = {lock_after}")
+            assert lock_after["pressed"] == "true", (
+                "#878 — clicking the padlock did not lock the row "
+                f"(aria-pressed={lock_after['pressed']!r}); the toggle must "
+                "still dispatch the same lock action it always did."
+            )
+            assert lock_after["color"] == _ACCENT, (
+                "#878 — a locked padlock is "
+                f"{lock_after['color']}, expected the warm accent {_ACCENT} "
+                "(#bd6b39)."
+            )
+
+            # ── 7. Score mini bar (slice b) ───────────────────────────────────
+            scored = None
+            for item in items:
+                probe = _read_score_bar(
+                    page, row_file_testid(group_id, Path(item["file_path"]).name)
+                )
+                print(f"probe_status: s74 score cell = {probe}")
+                if probe and probe["text"] != _EM_DASH:
+                    scored = probe
+                    break
+            assert scored is not None, (
+                "#878 — every row in the near-duplicates group is unscored, so "
+                "the score bar was never exercised. Either the scorer stopped "
+                "scoring this fixture or the cell's text changed."
+            )
+            assert scored["trackWidth"], (
+                "#878 — a scored row renders no score track; the number is "
+                "back to being the only thing in the cell."
+            )
+            assert 0 < scored["fillWidth"] <= scored["cellWidth"], (
+                "#878 — the score bar fill is "
+                f"{scored['fillWidth']}px against a {scored['cellWidth']}px "
+                "cell. Zero means the ratio never reached the DOM (a NaN width "
+                "is silently ignored by CSS); wider than the cell means the "
+                "clamp in lib/scoreBar.ts was bypassed."
+            )
+            assert "gradient" in (scored["fillImage"] or ""), (
+                "#878 — the score fill is not the scoreFill gradient "
+                f"(background-image={scored['fillImage']!r}). Tailwind's "
+                "gradient utilities are the kind of class that compiles to "
+                "nothing when renamed, with no test going red."
             )
     finally:
         import shutil

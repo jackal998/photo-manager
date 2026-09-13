@@ -104,6 +104,23 @@ describe("ColumnHeaderRow", () => {
     }
   });
 
+  it("heads the lock column with a padlock glyph that keeps its accessible name (#878)", () => {
+    renderHeader();
+    const lockHead = document.querySelector<HTMLElement>(
+      '[data-col-chrome="lock"]'
+    );
+    expect(lockHead).not.toBeNull();
+    // The glyph is decorative; the translated word is what a screen reader
+    // and the i18n passthrough probe must still find.
+    expect(lockHead).toHaveTextContent("Lock");
+    expect(lockHead!.querySelector("svg")).toHaveAttribute(
+      "aria-hidden",
+      "true"
+    );
+    // Chrome headers are not COLUMNS entries: no resize handle, no aria-sort.
+    expect(lockHead!.querySelector('[role="separator"]')).toBeNull();
+  });
+
   it("clicking a sortable header (File Name) calls onToggleSort", () => {
     const { onToggleSort } = renderHeader();
     fireEvent.click(screen.getByTestId(colHeaderTestid("name")));

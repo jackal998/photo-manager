@@ -134,6 +134,39 @@ describe("FileRow delete treatment", () => {
   });
 });
 
+describe("FileRow score mini bar (#878)", () => {
+  function scoreCell(rowEl: HTMLElement): HTMLElement {
+    const cell = rowEl.querySelector<HTMLElement>('[data-col="score"]');
+    if (cell === null) throw new Error("no score cell rendered");
+    return cell;
+  }
+
+  it("keeps the score cell's text exactly the formatted number", () => {
+    // The parity counter and every scenario read this cell by its TEXT. The
+    // bar must therefore contribute none — if it ever renders a label, a
+    // percentage or a title, the cell stops matching its desktop counterpart
+    // and nothing else in the suite would notice.
+    const rowEl = renderRow(makeRow({ score: 0.64 }));
+    expect(scoreCell(rowEl).textContent).toBe("0.6");
+  });
+
+  it("fills the track to the score's fraction", () => {
+    const fill = scoreCell(renderRow(makeRow({ score: 0.25 }))).querySelector(
+      "[data-score-fill]"
+    ) as HTMLElement;
+    expect(fill.style.width).toBe("25%");
+  });
+
+  it("draws no track at all for an unscored row", () => {
+    // score === null is "not a ranking candidate" (a Live Photo MOV
+    // passenger), not "scored zero" — an empty track would read as the
+    // latter.
+    const cell = scoreCell(renderRow(makeRow({ score: null })));
+    expect(cell.querySelector("[data-score-track]")).toBeNull();
+    expect(cell.textContent).toBe("—");
+  });
+});
+
 describe("FileRow group framing", () => {
   it("closes the group frame under the last child only", () => {
     const last = renderRow(makeRow({ basename: "last.jpg" }));

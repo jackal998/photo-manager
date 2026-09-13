@@ -55,9 +55,13 @@
   --color-group-line: #e4d6bd;
   --color-delete-row: #fdf3f0;
 
-  /* Score mini-bar (§9.3 track / scoreFill) — consumed by slice (b) */
+  /* Score mini-bar (§9.3 track / scoreFill). `scoreFill` is written
+     `#cdab86 → #b8946a` in §9.3, i.e. a left-to-right gradient, so it needs
+     two tokens; `-fill` is the start so the name slice (a) already published
+     keeps meaning the same thing. */
   --color-score-track: #ece4d6;
   --color-score-fill: #cdab86;
+  --color-score-fill-end: #b8946a;
 
   /* Similarity badges (§9.3 sim.*) */
   --color-sim-ref-ink: #a85f2e;
@@ -88,6 +92,12 @@
   --color-dec-remove-line: #ddd5c8;
   --color-dec-undecided-ink: #9a9388;
   --color-dec-undecided-line: #d8cfc0;
+  /* §9.3 spells dec.undecided's fill as `transparent` — an inactive segment
+     shows whatever the row underneath it is (panel, keeper tint, delete wash),
+     which is what makes the ACTIVE segment the only filled thing in the cell.
+     Declared as a token rather than "just omit the class" so the chip map in
+     DecisionControl.tsx stays a complete fg/bg/bd triple per state. */
+  --color-dec-undecided-bg: transparent;
 
   /* Scrollbar thumb (#878 dict) */
   --color-scroll-thumb: #ddd2bf;
@@ -149,7 +159,12 @@
        `.dark` triplets directly above — nothing here invents a dark palette.
        The badge and decision chips are deliberately NOT overridden: they are
        small coloured pills that stay legible on a dark row, and inventing
-       dark variants for them is the Aperture work this slice must not do. */
+       dark variants for them is the Aperture work this slice must not do.
+       Slice (b) adds `--color-dec-undecided-bg` (transparent — theme-neutral
+       by construction) and `--color-score-fill-end`, and follows the same
+       rule: the score bar's warm gradient is a few pixels of fill that reads
+       on either surface, while its TRACK, which is a surface, is remapped
+       below like every other surface token. */
     --color-app: hsl(var(--background));
     --color-panel: hsl(var(--card));
     --color-toolbar: hsl(var(--secondary));
