@@ -61,7 +61,7 @@ export function ScanProgress({
           for an unmapped or absent stage — see lib/scanProgress.ts). */}
       <p
         data-testid={SCAN_STATUS_TEXT}
-        className="text-sm font-medium text-neutral-700 truncate"
+        className="text-sm font-medium text-ink truncate"
         aria-live="polite"
       >
         {stageLabel(stageName, t)}
@@ -70,7 +70,7 @@ export function ScanProgress({
       {/* Throughput + ETA (#740) — each suppressed independently when not
           yet meaningful, mirroring the Qt #424 receiver gating. */}
       {(throughputText !== null || eta) && (
-        <p className="text-xs font-mono text-neutral-500">
+        <p className="text-xs font-mono text-ink-muted">
           {throughputText !== null && (
             <span data-testid={SCAN_THROUGHPUT_TEXT}>{throughputText}</span>
           )}
@@ -86,10 +86,10 @@ export function ScanProgress({
         ) : (
           // Indeterminate: animated pulse bar with count text
           <div className="flex flex-col gap-1">
-            <div className="relative h-2 w-full overflow-hidden rounded-full bg-neutral-200">
-              <div className="h-full bg-neutral-500 animate-pulse w-1/3" />
+            <div className="relative h-2 w-full overflow-hidden rounded-full bg-subtle">
+              <div className="h-full bg-warm animate-pulse w-1/3" />
             </div>
-            <span className="text-xs text-neutral-500">{completed} files found</span>
+            <span className="text-xs text-ink-muted">{completed} files found</span>
           </div>
         )}
       </div>
@@ -101,7 +101,7 @@ export function ScanProgress({
         role="log"
         aria-label="Scan log"
         aria-live="polite"
-        className="h-32 overflow-y-auto rounded border border-neutral-200 bg-neutral-50 p-2 text-xs font-mono text-neutral-700 space-y-0.5"
+        className="h-32 overflow-y-auto rounded border border-hairline bg-panel p-2 text-xs font-mono text-ink space-y-0.5"
       >
         {log.map((line, i) => (
           // Index key is acceptable here — log lines only ever append,

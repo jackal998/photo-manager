@@ -37,7 +37,7 @@ export function ImageTile({
   return (
     <div
       data-testid={testId}
-      className="relative aspect-square bg-neutral-200 rounded overflow-hidden cursor-zoom-in select-none"
+      className="relative aspect-square bg-subtle rounded overflow-hidden cursor-zoom-in select-none"
       onDoubleClick={handleDoubleClick}
       title={`${row.basename} — double-click to open full resolution`}
     >

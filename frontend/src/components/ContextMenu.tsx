@@ -194,7 +194,7 @@ export function ContextMenu({
     <button
       data-testid={CTX_SET_ACTION_BY_FIELD}
       role="menuitem"
-      className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+      className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
       onClick={handleSetActionByField}
     >
       {t("web.context_menu.set_action_by_field", "Set Action by Field…")}
@@ -205,7 +205,7 @@ export function ContextMenu({
     <button
       data-testid={CTX_SET_ACTION_REMOVE}
       role="menuitem"
-      className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+      className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
       onClick={handleSetRemove}
     >
       {t("web.context_menu.remove", "Remove from list")}
@@ -218,7 +218,7 @@ export function ContextMenu({
     <button
       data-testid={CTX_APPLY_BEST_COPY}
       role="menuitem"
-      className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+      className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
       onClick={handleApplyBestCopy}
     >
       {t("web.context_menu.apply_best_copy", "Apply best-copy decisions to this group")}
@@ -235,12 +235,12 @@ export function ContextMenu({
         ref={menuRef}
         data-testid={CONTEXT_MENU}
         role="menu"
-        className="fixed z-[200] min-w-[160px] rounded-md border border-neutral-200 bg-white py-1 shadow-md text-sm"
+        className="fixed z-[200] min-w-[160px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm"
         style={{ left: x, top: y }}
       >
         {setActionByFieldItem}
         {removeFromListItem}
-        <div className="my-1 border-t border-neutral-100" role="separator" />
+        <div className="my-1 border-t border-hairline-soft" role="separator" />
         {applyBestCopyItem}
       </div>
     );
@@ -251,13 +251,13 @@ export function ContextMenu({
       ref={menuRef}
       data-testid={CONTEXT_MENU}
       role="menu"
-      className="fixed z-[200] min-w-[160px] rounded-md border border-neutral-200 bg-white py-1 shadow-md text-sm"
+      className="fixed z-[200] min-w-[160px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm"
       style={{ left: x, top: y }}
     >
       <button
         data-testid={CTX_SET_ACTION_KEEP}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetKeep}
       >
         {t("web.context_menu.keep", "Keep (clear decision)")}
@@ -265,7 +265,7 @@ export function ContextMenu({
       <button
         data-testid={CTX_SET_ACTION_DELETE}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetDelete}
       >
         {t("web.context_menu.delete", "Delete")}
@@ -273,17 +273,17 @@ export function ContextMenu({
       <button
         data-testid={CTX_SET_ACTION_REMOVE}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetRemove}
       >
         {t("web.context_menu.remove", "Remove from list")}
       </button>
-      <div className="my-1 border-t border-neutral-100" role="separator" />
+      <div className="my-1 border-t border-hairline-soft" role="separator" />
       {isLocked ? (
         <button
           data-testid={CTX_UNLOCK}
           role="menuitem"
-          className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+          className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
           onClick={handleUnlock}
         >
           {t("web.context_menu.unlock", "Unlock")}
@@ -292,7 +292,7 @@ export function ContextMenu({
         <button
           data-testid={CTX_LOCK}
           role="menuitem"
-          className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+          className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
           onClick={handleLock}
         >
           {t("web.context_menu.lock", "Lock")}
@@ -301,7 +301,7 @@ export function ContextMenu({
       <button
         data-testid={CTX_OPEN_FOLDER}
         role="menuitem"
-        className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+        className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleOpenFolder}
       >
         {t("web.context_menu.open_folder", "Open folder")}
@@ -310,7 +310,7 @@ export function ContextMenu({
           (context_menu.py): separator -> Set Action by Field… -> Execute
           Action (only selected)…. Placed here rather than reordering the
           pre-existing Keep/Delete/Remove/Lock/Open-Folder entries above. */}
-      <div className="my-1 border-t border-neutral-100" role="separator" />
+      <div className="my-1 border-t border-hairline-soft" role="separator" />
       {setActionByFieldItem}
       {/* Rendered only when the caller wires the execute-selected flow (every
           file-variant callsite does). Gating here keeps the item's promise
@@ -319,13 +319,13 @@ export function ContextMenu({
         <button
           data-testid={CTX_EXECUTE_SELECTED}
           role="menuitem"
-          className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none"
+          className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
           onClick={handleExecuteSelected}
         >
           {t("web.context_menu.execute_selected", "Execute Action (only selected)…")}
         </button>
       )}
-      <div className="my-1 border-t border-neutral-100" role="separator" />
+      <div className="my-1 border-t border-hairline-soft" role="separator" />
       {applyBestCopyItem}
     </div>
   );

@@ -180,7 +180,7 @@ export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
       return (
         <div
           data-testid={EXECUTE_TREE}
-          className="flex items-center justify-center h-32 text-sm text-neutral-400"
+          className="flex items-center justify-center h-32 text-sm text-ink-faint"
         >
           No decided rows match the current filter.
         </div>
@@ -191,7 +191,7 @@ export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
       <div
         data-testid={EXECUTE_TREE}
         ref={scrollRef}
-        className="flex-1 overflow-auto border border-neutral-200 rounded"
+        className="flex-1 overflow-auto border border-hairline rounded"
         style={{ contain: "strict" }}
       >
         <div
@@ -245,9 +245,9 @@ function GroupHeaderRow({
   memberCount: number;
 }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-neutral-100 border-b border-neutral-200 text-xs font-semibold text-neutral-600 select-none">
+    <div className="flex items-center gap-2 px-3 py-1.5 bg-group-band border-b border-group-line text-xs font-semibold text-ink-muted select-none">
       <span>Group {groupId}</span>
-      <span className="text-neutral-400 font-normal">
+      <span className="text-ink-faint font-normal">
         {memberCount} {memberCount === 1 ? "file" : "files"}
       </span>
     </div>
@@ -291,14 +291,14 @@ function ExecuteFileRow({
         onContextMenu(vrow.filePath, vrow.isLocked, e.clientX, e.clientY);
       }}
       className={[
-        "flex items-center gap-3 w-full px-3 py-2 text-left select-none border-b border-neutral-100 hover:bg-neutral-50 focus:outline-none focus:ring-inset focus:ring-1 focus:ring-neutral-300",
-        vrow.isSelected ? "bg-blue-50 hover:bg-blue-100" : "",
+        "flex items-center gap-3 w-full px-3 py-2 text-left select-none border-b border-hairline-soft hover:bg-subtle focus:outline-none focus:ring-inset focus:ring-1 focus:ring-warm",
+        vrow.isSelected ? "bg-select hover:bg-select" : "",
       ]
         .join(" ")
         .trim()}
     >
       {/* Thumbnail */}
-      <div className="flex-shrink-0 w-10 h-10 bg-neutral-200 rounded overflow-hidden flex items-center justify-center">
+      <div className="flex-shrink-0 w-10 h-10 bg-subtle rounded overflow-hidden flex items-center justify-center">
         <img
           loading="lazy"
           src={vrow.thumbnailUrl}
@@ -312,7 +312,7 @@ function ExecuteFileRow({
       {/* Name + folder */}
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{vrow.basename}</div>
-        <div className="text-xs text-neutral-500 truncate">{vrow.folder}</div>
+        <div className="text-xs text-ink-muted truncate">{vrow.folder}</div>
       </div>
 
       {/* Decision badge */}
@@ -320,8 +320,8 @@ function ExecuteFileRow({
         className={[
           "flex-shrink-0 inline-block text-xs rounded px-1.5 py-0.5",
           vrow.decision === "delete"
-            ? "bg-red-100 text-red-700"
-            : "bg-neutral-100 text-neutral-600",
+            ? "bg-dec-delete-bg text-dec-delete-ink"
+            : "bg-dec-remove-bg text-dec-remove-ink",
         ].join(" ")}
       >
         {vrow.decision === "delete" ? "Delete" : "Remove"}

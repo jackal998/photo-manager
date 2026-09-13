@@ -125,7 +125,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               data-testid={DLGE_SETTINGS_PRUNE_SELECT}
               value={prunePref}
               onChange={(e) => setPrunePref(normalizePrunePref(e.target.value))}
-              className="rounded border border-neutral-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400"
+              className="rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm"
             >
               <option value="ask">
                 {t("web.settings.prune_ask", "Ask each time")}
@@ -157,7 +157,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           <div className="flex flex-col gap-1">
             <label
               htmlFor="settings-sorting-defaults"
-              className="text-sm font-medium text-neutral-700"
+              className="text-sm font-medium text-ink"
             >
               {t(
                 "web.settings.sorting_defaults_label",
@@ -173,10 +173,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 setSortingError(null);
               }}
               placeholder="null"
-              className="rounded border border-neutral-300 px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-neutral-400"
+              className="rounded border border-hairline-input px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-warm"
             />
             {sortingError !== null && (
-              <p role="alert" className="text-xs text-red-600">
+              <p role="alert" className="text-xs text-danger-warm">
                 {sortingError}
               </p>
             )}

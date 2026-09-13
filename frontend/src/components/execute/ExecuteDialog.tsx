@@ -477,11 +477,11 @@ export function ExecuteDialog() {
         >
         {/* Toolbar row: TypeFilter */}
         <div className="flex items-center gap-3 mt-2 flex-shrink-0">
-          <span className="text-sm text-neutral-600">
+          <span className="text-sm text-ink-muted">
             {t("web.execute_dialog.show_label", "Show:")}
           </span>
           <TypeFilter value={filter} onChange={setFilter} />
-          <span className="text-xs text-neutral-400 ml-auto">
+          <span className="text-xs text-ink-faint ml-auto">
             {/* Singular/plural translated separately, not flattened to
                 "(s)" (review finding) — zh_TW keys carry the same word for
                 both counts since Chinese has no plural marking. */}
@@ -525,7 +525,7 @@ export function ExecuteDialog() {
           {/* Preview pane */}
           <div
             data-testid={EXECUTE_PREVIEW_PANE}
-            className="w-56 flex-shrink-0 flex flex-col items-center justify-start gap-2 rounded border border-neutral-200 p-3 bg-neutral-50"
+            className="w-56 flex-shrink-0 flex flex-col items-center justify-start gap-2 rounded border border-hairline p-3 bg-panel"
           >
             {previewThumbnailUrl !== null ? (
               <img
@@ -535,7 +535,7 @@ export function ExecuteDialog() {
                 className="w-full object-contain rounded max-h-48"
               />
             ) : (
-              <div className="text-xs text-neutral-400 text-center pt-8">
+              <div className="text-xs text-ink-faint text-center pt-8">
                 {t("web.execute_dialog.select_row_to_preview", "Select a row to preview")}
               </div>
             )}
@@ -544,7 +544,7 @@ export function ExecuteDialog() {
 
         {/* Error message */}
         {executeError !== null && (
-          <p role="alert" className="text-sm text-red-600 mt-1">
+          <p role="alert" className="text-sm text-danger-warm mt-1">
             {executeError}
           </p>
         )}
@@ -618,7 +618,7 @@ export function ExecuteDialog() {
         <OverlayResizeHandle
           data-testid={EXECUTE_RESIZE_HANDLE}
           onMouseDown={overlay.onResizeStart}
-          className="text-neutral-500"
+          className="text-ink-muted"
           label={t("web.overlay.resize", "Resize window")}
         />
       </DialogContent>

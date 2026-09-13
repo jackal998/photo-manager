@@ -332,15 +332,16 @@ describe("LockConfirmDialog", () => {
     seedLockConflict("decision", ["/a.jpg"], ["/a.jpg"], "delete");
     const { unmount } = render(<LockConfirmDialog />);
     const decisionBtn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
-    // "default" variant = bg-neutral-900; "destructive" = bg-red-600.
-    expect(decisionBtn.className).toContain("bg-neutral-900");
-    expect(decisionBtn.className).not.toContain("bg-red-600");
+    // Daylight (issue 878): "default" variant = bg-warm (accent terracotta);
+    // "destructive" = bg-danger-warm.
+    expect(decisionBtn.className).toContain("bg-warm");
+    expect(decisionBtn.className).not.toContain("bg-danger-warm");
     unmount();
 
     seedLockConflict("execute", ["/a.jpg"]);
     render(<LockConfirmDialog />);
     const executeBtn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
-    expect(executeBtn.className).toContain("bg-red-600");
+    expect(executeBtn.className).toContain("bg-danger-warm");
   });
 
   // ---------------------------------------------------------------------------
@@ -397,7 +398,7 @@ describe("LockConfirmDialog", () => {
     seedLockConflict("apply-best-copy", ["/a.jpg"], null, undefined, 1);
     render(<LockConfirmDialog />);
     const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
-    expect(btn.className).toContain("bg-neutral-900");
-    expect(btn.className).not.toContain("bg-red-600");
+    expect(btn.className).toContain("bg-warm");
+    expect(btn.className).not.toContain("bg-danger-warm");
   });
 });

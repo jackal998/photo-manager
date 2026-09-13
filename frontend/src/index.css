@@ -102,6 +102,14 @@
   /* Scrollbar thumb (#878 dict) */
   --color-scroll-thumb: #ddd2bf;
   --color-scroll-thumb-hover: #cdbfa6;
+
+  /* Modal scrim — the ONE role slice (e) found with no token. No new hex: the
+     dict's `text` ink doubles as the overlay base, so a dialog dims the warm
+     canvas warmly instead of with a cold pure black. Opacity stays at the call
+     site (`bg-scrim/50`, `/80`) exactly as in the `bg-black/NN` it replaces.
+     Deliberately NOT remapped in `.dark` below — a near-black scrim is correct
+     on either theme, and pointing it at `--foreground` would invert it. */
+  --color-scrim: #2c2823;
 }
 
 @layer base {

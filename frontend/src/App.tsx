@@ -503,7 +503,7 @@ export default function App() {
           <p
             data-testid={MAIN_STATUS_ERROR}
             role="alert"
-            className="px-4 py-1 text-sm text-red-600"
+            className="px-4 py-1 text-sm text-danger-warm"
           >
             {t("web.status.manifest_failed", "Manifest error: {error}", {
               error: manifest.error,
@@ -522,7 +522,7 @@ export default function App() {
           <p
             data-testid={MAIN_EXECUTE_ERROR}
             role="alert"
-            className="px-4 py-1 text-sm text-red-600"
+            className="px-4 py-1 text-sm text-danger-warm"
           >
             {t("web.status.execute_failed", "Action error: {error}", {
               error: executeError,
