@@ -158,8 +158,17 @@ export function ContextMenu({
   // from the right-clicked column (file variant) or opens with no pre-fill
   // (group variant, clickedCol is never threaded there). Mirrors Qt's
   // "Set Action by Field…" -> resolve_initial_field.
+  //
+  // #893 adds the VALUE half: the file variant seeds the pattern from THIS
+  // row (not from whatever happens to be selected), while the group variant
+  // passes null for "no seed" — Qt's group-row menu only collected the
+  // group-level Similarity / Group Count, both numeric and therefore not
+  // regex-seedable here (see lib/actionDialogFields.rowValuesForSeed).
   function handleSetActionByField() {
-    openActionDialog(resolveInitialField(clickedCol));
+    openActionDialog(
+      resolveInitialField(clickedCol),
+      variant === "file" ? filePath : null
+    );
     onClose();
   }
 

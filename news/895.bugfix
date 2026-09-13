@@ -1,0 +1,1 @@
+Seed the Set Action matcher from the highlighted row again, and stop the page itself scrolling so the toolbar stays on screen (#893, #894).

@@ -50,7 +50,11 @@ import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
 import { loadPanelWidths, savePanelWidths, clampPanelWidth } from "../lib/panelWidths";
 import { normalizePrunePref } from "../lib/prune";
 import type { PrunePref } from "../lib/prune";
-import { ACTION_DIALOG_FIELD_OPTIONS } from "../lib/actionDialogFields";
+import {
+  ACTION_DIALOG_FIELD_OPTIONS,
+  rowValuesForSeed,
+  seedPatternFor,
+} from "../lib/actionDialogFields";
 
 // ---------------------------------------------------------------------------
 // Type alias for immer-wrapped set function inside create()
@@ -147,6 +151,7 @@ const initialAction: ActionState = {
   previewTruncated: false,
   actionError: null,
   actionRunning: false,
+  rowValues: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -1000,19 +1005,44 @@ export const useAppStore = create<AppStore>()(
     // Action dialog actions (Set Action by Field / bulk-decide)
     // -----------------------------------------------------------------------
 
-    openActionDialog(initialField) {
+    openActionDialog(initialField, rowPath) {
       set((state) => {
+        // #735: guard against non-string / unrecognised values — callers
+        // wired straight to a DOM event handler (e.g. onClick={openActionDialog})
+        // pass the event object as the first arg, which must fall back to
+        // the default field rather than corrupt the dialog's <select>.
+        const field =
+          typeof initialField === "string" &&
+          ACTION_DIALOG_FIELD_OPTIONS.has(initialField)
+            ? initialField
+            : initialAction.field;
+
+        // #893: which row seeds the pattern. `null` means "explicitly none"
+        // (group-row menu / Execute dialog — Qt passes no row_values there);
+        // omitted means "whatever row is highlighted", which is what the
+        // toolbar button and the menu-bar item get. selectedPaths[0] is the
+        // web analog of Qt's `sel.selectedRows()[0]`; preview.selectedFilePath
+        // is the fallback for a row focused without a multi-select entry.
+        let path: string | null = null;
+        if (typeof rowPath === "string") {
+          path = rowPath === "" ? null : rowPath;
+        } else if (rowPath === undefined) {
+          path = state.selection.selectedPaths[0] ?? state.preview.selectedFilePath;
+        }
+        const row =
+          path === null
+            ? null
+            : state.manifest.groups
+                .flatMap((g) => g.items)
+                .find((r) => r.file_path === path) ?? null;
+        const rowValues = rowValuesForSeed(row);
+
         state.action = {
           ...initialAction,
           actionDialogOpen: true,
-          // #735: guard against non-string / unrecognised values — callers
-          // wired straight to a DOM event handler (e.g. onClick={openActionDialog})
-          // pass the event object as the first arg, which must fall back to
-          // the default field rather than corrupt the dialog's <select>.
-          ...(typeof initialField === "string" &&
-          ACTION_DIALOG_FIELD_OPTIONS.has(initialField)
-            ? { field: initialField }
-            : {}),
+          field,
+          rowValues,
+          pattern: seedPatternFor(rowValues, field),
         };
       });
     },
@@ -1027,6 +1057,16 @@ export const useAppStore = create<AppStore>()(
 
     setActionField(field) {
       set((state) => {
+        // #893 — re-seed from the highlighted row, but never over the user's
+        // own work. Qt's A1 (#347, select_dialog.py:2094-2116): replace only
+        // when the box still holds the PREVIOUS field's auto-seed, or is
+        // empty. When the previous field had no seed, `prevSeed` is "" and
+        // this collapses to the empty-box case — same as Qt, where
+        // `re.escape(row_values.get(prev, ""))` is also "".
+        const prevSeed = seedPatternFor(state.action.rowValues, state.action.field);
+        if (state.action.pattern === prevSeed || state.action.pattern === "") {
+          state.action.pattern = seedPatternFor(state.action.rowValues, field);
+        }
         state.action.field = field;
         // Clear preview when field changes.
         state.action.previewMatched = -1;

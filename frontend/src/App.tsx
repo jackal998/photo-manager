@@ -322,8 +322,20 @@ export default function App() {
   // Render
   // ---------------------------------------------------------------------------
 
+  // #894 — the root carries h-screen (a DEFINITE height), not min-h-screen.
+  // With only a minimum height the column's main size stays indefinite, so
+  // <main>'s `flex-1` (flex-basis: 0%) resolves against an indefinite size and
+  // falls back to its CONTENT height, and ResultTree's `h-full` falls back to
+  // auto. Measured on the base commit at 620x400 with a row selected: the
+  // preview pane's min-content height (424 px) pushed this div to 571 px
+  // against a 400 px viewport, so the document scrolled and the MenuBar /
+  // toolbar left the viewport. The result tree itself never triggers this — it
+  // is `contain: strict`, so even 4918 px of virtualised rows contribute zero
+  // to layout; only the preview pane's content can. overflow-hidden makes the
+  // clip explicit, so every scroll happens in the pane that owns it.
+  // s73_layout_scroll_and_action_seed asserts both halves.
   return (
-    <div className={cn("min-h-screen flex flex-col")}>
+    <div className={cn("h-screen overflow-hidden flex flex-col")}>
       {/* ------------------------------------------------------------------ */}
       {/* Menu bar (Qt MenuController parity) — canonical, above the toolbar   */}
       {/* ------------------------------------------------------------------ */}
