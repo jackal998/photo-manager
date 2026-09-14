@@ -99,6 +99,30 @@ const THRESHOLD_PARITY_NOTE_EN =
   "an odd value usually matches the same files as the even one below it, " +
   "and 1 would match nothing at all. 2 is the strictest useful setting.";
 
+// Build-time English defaults for the three Advanced-settings hover tooltips
+// (copy audit SC3 — they were hardcoded `title=` attributes, so a zh_TW user
+// got English tooltips). The localized copies live at web.scan.*_tooltip.
+const PHASH_TOOLTIP_EN =
+  "Perceptual hash Hamming distance between two images. A 64-bit pHash means " +
+  "images can differ by at most this many bits before being flagged as " +
+  "near-duplicates. Lower = stricter (fewer groups, less noise); higher = " +
+  "more permissive (catches more slightly-edited pairs).";
+
+const DHASH_TOOLTIP_EN =
+  "A second, independent perceptual hash (gradient / brightness based) that " +
+  "confirms a pHash near-duplicate. When two files' dHashes also differ by at " +
+  "most this many bits the match is flagged high-confidence; otherwise " +
+  "low-confidence. Grouping is unchanged either way — but a low-confidence " +
+  "(pHash-only) near-duplicate is never auto-marked for delete by aggressive " +
+  "auto-select. Lower = stricter confirmation.";
+
+const COLOR_TOOLTIP_EN =
+  "L2 distance between the average RGB color of two images. After the pHash " +
+  "check, images whose mean colors differ by more than this value are excluded " +
+  "from grouping — catching pHash false positives where similar DCT structure " +
+  "but different colors were matched. 0 = disabled; higher = more permissive " +
+  "color gate.";
+
 /**
  * Parse a threshold `<input type="number">`'s raw string value to an int
  * clamped to `[min, max]`. An empty or non-numeric value falls back to
@@ -591,19 +615,19 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         }}
       >
         <DialogHeader>
-          <DialogTitle>Scan Sources</DialogTitle>
+          <DialogTitle>{t("web.scan.title", "Scan Sources")}</DialogTitle>
         </DialogHeader>
 
         {/* Source list */}
         <div className="mt-4 flex flex-col gap-1">
           <label className="text-sm font-medium text-ink">
-            Sources
+            {t("web.scan.source_list_header", "Sources")}
           </label>
           <div
             data-testid={SCAN_SOURCE_LIST}
             className="flex flex-col divide-y divide-hairline-soft rounded border border-hairline p-2"
             role="list"
-            aria-label="Scan source list"
+            aria-label={t("web.scan.source_list_aria", "Scan source list")}
           >
             {/* DISPLAY-ONLY alphabetical sort (case-insensitive, by path).
                 Sorts a copy of {entry, idx} pairs for rendering only — the
@@ -641,7 +665,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
             onClick={handleAddSource}
             className="mt-1 self-start"
           >
-            + Add source
+            {t("web.scan.add_source", "+ Add source")}
           </Button>
         </div>
 
@@ -651,14 +675,14 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
             htmlFor="scan-output-path-input"
             className="text-sm font-medium text-ink"
           >
-            Output path
+            {t("web.scan.output_label", "Output path")}
           </label>
           <div className="flex items-center gap-2">
             <input
               id="scan-output-path-input"
               type="text"
               data-testid={SCAN_OUTPUT_PATH}
-              placeholder="e.g. C:/output/scan.db"
+              placeholder={t("web.scan.output_placeholder", "e.g. C:/output/scan.db")}
               value={outputPath}
               disabled={isRunning}
               onChange={(e) => setOutputPath(e.target.value)}
@@ -684,7 +708,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
             data-testid={SCAN_ADVANCED}
             className="cursor-pointer select-none text-sm font-medium text-ink"
           >
-            Advanced settings
+            {t("web.scan.advanced_settings_label", "Advanced settings")}
           </summary>
           <div className="mt-3 flex flex-col gap-2 pl-1">
             {/* Auto-tune reader concurrency — default ON (opt-out, #551 Phase 4) */}
@@ -696,10 +720,16 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   setAutotuneReadKnee(checked === true)
                 }
                 data-testid={SCAN_AUTOTUNE}
-                aria-label="Auto-tune reader concurrency"
+                aria-label={t(
+                  "web.scan.autotune_read_knee_label",
+                  "Auto-tune reader concurrency (experimental)"
+                )}
               />
               <span className="text-ink">
-                Auto-tune reader concurrency (experimental)
+                {t(
+                  "web.scan.autotune_read_knee_label",
+                  "Auto-tune reader concurrency (experimental)"
+                )}
               </span>
             </label>
 
@@ -716,9 +746,11 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   if (!on) setAggressiveDelete(false);
                 }}
                 data-testid={SCAN_AUTO_SELECT}
-                aria-label="Auto select after scan"
+                aria-label={t("web.scan.auto_select_label", "Auto select after scan")}
               />
-              <span className="text-ink">Auto select after scan</span>
+              <span className="text-ink">
+                {t("web.scan.auto_select_label", "Auto select after scan")}
+              </span>
             </label>
 
             {/* Aggressive sub-option — indented; enabled only when auto-select on */}
@@ -730,10 +762,16 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   setAggressiveDelete(checked === true)
                 }
                 data-testid={SCAN_AGGRESSIVE_DELETE}
-                aria-label="Also mark all other files for delete"
+                aria-label={t(
+                  "web.scan.auto_select_aggressive_label",
+                  "Also mark all other files for delete"
+                )}
               />
               <span className={autoSelect ? "text-ink" : "text-ink-faint"}>
-                Also mark all other files for delete
+                {t(
+                  "web.scan.auto_select_aggressive_label",
+                  "Also mark all other files for delete"
+                )}
               </span>
             </label>
 
@@ -744,7 +782,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 the useState + startScanNow wiring above. */}
             <div className="mt-1 flex flex-col gap-3 border-t border-hairline-soft pt-3">
               <span className="text-sm font-medium text-ink">
-                Grouping sensitivity
+                {t("web.scan.grouping_sensitivity_label", "Grouping sensitivity")}
               </span>
 
               <div className="flex flex-col gap-1">
@@ -752,7 +790,10 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   htmlFor="scan-phash-threshold-input"
                   className="text-sm text-ink"
                 >
-                  pHash Similarity Threshold (default: 10, range: 2–20)
+                  {t(
+                    "web.scan.phash_label",
+                    "pHash Similarity Threshold (default: 10, range: 2–20)"
+                  )}
                 </label>
                 <input
                   id="scan-phash-threshold-input"
@@ -777,9 +818,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 />
                 <p
                   className="text-xs text-ink-muted"
-                  title="Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs)."
+                  title={t("web.scan.phash_tooltip", PHASH_TOOLTIP_EN)}
                 >
-                  How many bits two 64-bit pHashes may differ before grouping. Lower = stricter.
+                  {t(
+                    "web.scan.phash_desc",
+                    "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter."
+                  )}
                 </p>
                 <p
                   className="text-xs text-ink-muted"
@@ -794,7 +838,10 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   htmlFor="scan-dhash-threshold-input"
                   className="text-sm text-ink"
                 >
-                  dHash Confidence Threshold (default: 10, range: 2–20)
+                  {t(
+                    "web.scan.dhash_label",
+                    "dHash Confidence Threshold (default: 10, range: 2–20)"
+                  )}
                 </label>
                 <input
                   id="scan-dhash-threshold-input"
@@ -819,9 +866,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 />
                 <p
                   className="text-xs text-ink-muted"
-                  title="A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
+                  title={t("web.scan.dhash_tooltip", DHASH_TOOLTIP_EN)}
                 >
-                  Second hash that confirms a pHash match. Lower = stricter confirmation.
+                  {t(
+                    "web.scan.dhash_desc",
+                    "Second hash that confirms a pHash match. Lower = stricter confirmation."
+                  )}
                 </p>
                 <p
                   className="text-xs text-ink-muted"
@@ -836,7 +886,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   htmlFor="scan-color-threshold-input"
                   className="text-sm text-ink"
                 >
-                  Mean Color Gate (default: 30, range: 0–100)
+                  {t("web.scan.color_label", "Mean Color Gate (default: 30, range: 0–100)")}
                 </label>
                 <input
                   id="scan-color-threshold-input"
@@ -851,9 +901,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 />
                 <p
                   className="text-xs text-ink-muted"
-                  title="L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
+                  title={t("web.scan.color_tooltip", COLOR_TOOLTIP_EN)}
                 >
-                  Reject a pHash match when average colours differ by more than this (L2). 0 = off.
+                  {t(
+                    "web.scan.color_desc",
+                    "Reject a pHash match when average colours differ by more than this (L2). 0 = off."
+                  )}
                 </p>
               </div>
             </div>
@@ -863,7 +916,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         {/* Error message */}
         {showError && (
           <p role="alert" className="mt-2 text-sm text-danger-warm">
-            Error: {scan.error}
+            {t("web.scan.error_prefix", "Error: {error}", { error: scan.error ?? "" })}
           </p>
         )}
 
@@ -889,7 +942,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
               disabled={!canStart}
               onClick={handleStart}
             >
-              Start Scan
+              {t("web.scan.start_button", "Start Scan")}
             </Button>
           </div>
         )}

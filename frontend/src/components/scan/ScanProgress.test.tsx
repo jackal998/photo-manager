@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ScanProgress } from "./ScanProgress";
 import { useI18nStore } from "@/i18n/useI18nStore";
 import {
+  SCAN_CANCEL_BUTTON,
   SCAN_ETA_TEXT,
   SCAN_STATUS_TEXT,
   SCAN_THROUGHPUT_TEXT,
@@ -26,7 +27,7 @@ import {
 
 function setup(overrides: Partial<ComponentProps<typeof ScanProgress>> = {}) {
   const onCancel = vi.fn();
-  render(
+  const view = render(
     <ScanProgress
       stageName="HASH"
       completed={10}
@@ -38,7 +39,7 @@ function setup(overrides: Partial<ComponentProps<typeof ScanProgress>> = {}) {
       {...overrides}
     />
   );
-  return { onCancel };
+  return { onCancel, container: view.container };
 }
 
 describe("ScanProgress", () => {
@@ -120,5 +121,35 @@ describe("ScanProgress", () => {
     setup({ filesPerSec: 0, eta: null });
     expect(screen.queryByTestId(SCAN_THROUGHPUT_TEXT)).not.toBeInTheDocument();
     expect(screen.queryByTestId(SCAN_ETA_TEXT)).not.toBeInTheDocument();
+  });
+
+  // Copy audit SC4 — the chrome around the (already translated) stage label
+  // was hardcoded English, and the indeterminate count line read
+  // "1 files found" at the moment the first file lands.
+
+  it("uses the singular noun for the first file found", () => {
+    const { container } = setup({ total: 0, completed: 1 });
+    expect(container).toHaveTextContent("1 file found");
+    expect(container.textContent).not.toContain("1 files found");
+  });
+
+  it("uses the plural noun once more than one file is found", () => {
+    const { container } = setup({ total: 0, completed: 42 });
+    expect(container).toHaveTextContent("42 files found");
+  });
+
+  it("translates the count line, the ETA label and the Cancel button", () => {
+    useI18nStore.setState({
+      locale: "zh_TW",
+      catalog: {
+        "web.scan.files_found_plural": "已找到 {n} 個檔案",
+        "web.scan.eta_label": "預計剩餘 {eta}",
+        "web.scan.cancel": "取消",
+      },
+    });
+    const { container } = setup({ total: 0, completed: 42, eta: "~2m" });
+    expect(container).toHaveTextContent("已找到 42 個檔案");
+    expect(screen.getByTestId(SCAN_ETA_TEXT)).toHaveTextContent("預計剩餘 ~2m");
+    expect(screen.getByTestId(SCAN_CANCEL_BUTTON)).toHaveTextContent("取消");
   });
 });

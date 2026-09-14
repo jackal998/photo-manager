@@ -8,6 +8,7 @@
 
 import type { MouseEvent } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/useT";
 import type { DecisionValue } from "@/api/types";
 
 interface DecisionControlProps {
@@ -53,6 +54,8 @@ export function DecisionControl({
   disabled = false,
   "data-testid": testId,
 }: DecisionControlProps) {
+  const t = useT();
+
   function handleClick(e: MouseEvent, v: DecisionValue) {
     // Staging a decision shouldn't also select the row — stop the click from
     // bubbling to FileRow's row-select handler.
@@ -63,7 +66,11 @@ export function DecisionControl({
   return (
     <div
       role="group"
-      aria-label="Decision"
+      // Copy audit R5 — the group's accessible name was hardcoded English.
+      // The three OPTION LABELS below are deliberately untouched: the
+      // decision vocabulary (None/Delete/Ignore vs Keep/Delete/Remove) is
+      // audit finding R3/R4, still awaiting the owner's decision.
+      aria-label={t("web.column.decision", "Decision")}
       data-testid={testId}
       className="inline-flex rounded border border-dec-undecided-line overflow-hidden"
     >

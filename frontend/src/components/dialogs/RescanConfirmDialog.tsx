@@ -52,9 +52,6 @@ export function RescanConfirmDialog({
     pendingCount === 1
       ? t("web.rescan_confirm.noun_singular", "pending decision")
       : t("web.rescan_confirm.noun_plural", "pending decisions");
-  // "1 pending decision" / "2 pending decisions" — the count phrase the body
-  // and the QA assertion both key on (Qt parity).
-  const pending = `${pendingCount} ${noun}`;
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
@@ -64,10 +61,16 @@ export function RescanConfirmDialog({
             {t("web.rescan_confirm.title", "Discard pending decisions?")}
           </DialogTitle>
           <DialogDescription>
+            {/* Count and noun are separate placeholders (copy audit RC1):
+                the joined `${count} ${noun}` phrase forced a space that
+                zh_TW does not take before a measure word, and the zh body
+                then repeated the noun's own verb. The English rendering is
+                byte-identical to before ("1 pending decision …"), which is
+                what s27_rescan_confirm asserts. */}
             {t(
               "web.rescan_confirm.body",
-              "You have {pending} on the loaded manifest. Starting a new scan will discard them.",
-              { pending }
+              "You have {count} {noun} on the loaded manifest. Starting a new scan will discard them.",
+              { count: pendingCount, noun }
             )}
           </DialogDescription>
         </DialogHeader>

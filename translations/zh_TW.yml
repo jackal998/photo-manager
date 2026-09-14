@@ -388,14 +388,41 @@ web:
     execute: "執行"
     settings: "設定"
     open: "開啟"
+    set_action: "設定動作…"
   status:
-    summary: "{groups} 個群組 · {files} 個檔案"
+    summary: "{groups} 個{groupWord} · {files} 個{fileWord}"
     loading_manifest: "正在載入清單…"
     scanning: "掃描中{stage}"
     scan_failed: "掃描失敗：{error}"
     manifest_failed: "清單錯誤：{error}"
     execute_failed: "操作錯誤：{error}"
     ready: "就緒"
+    # 中文沒有單複數變化，單／複數兩個鍵刻意相同（與 delete_confirm 一致）。
+    group_singular: "群組"
+    group_plural: "群組"
+    file_singular: "檔案"
+    file_plural: "檔案"
+  # 對應 en.yml 的 web.error.* — 後端拋出的原始開發訊息改由此處的完整句子呈現，
+  # 原始文字仍以次要的技術細節行顯示。
+  error:
+    execute_failed: "無法完成這個動作。"
+    remove_failed: "無法將這些列從清單中移除。"
+    prune_failed: "無法清除單一群組。"
+    classify_failed: "無法檢查單一群組。"
+    save_failed: "無法儲存清單檔。"
+    bulk_decide_failed: "無法套用批次動作。"
+    apply_best_copy_failed: "無法套用最佳版本決策。"
+    reveal_failed: "無法開啟檔案總管。"
+    already_running: "已有動作正在執行中 — 請等待它完成。"
+    locked_paths: "範圍內有部分列已鎖定。"
+    # 後端 4xx／5xx 回應所帶的四個 detail.code。
+    permission_denied: "此應用程式無權存取該位置。"
+    platform_unsupported: "此作業系統不支援這個動作。"
+    bad_request: "該路徑無效。"
+    invalid_pattern: "該樣式不是有效的正規表示式。"
+    not_found: "找不到該檔案或清單檔。"
+    unknown: "無法完成這個要求。"
+    technical_detail: "詳細資訊：{detail}"
   empty_state:
     no_manifest: "尚未載入清單 — 請掃描或開啟清單以開始。"
     scan: "掃描…"
@@ -417,6 +444,7 @@ web:
     resolution: "解析度"
     score: "分數"
     size: "大小"
+    decision: "決策"
   # Mirror of decision.* keys for web-only usage.
   decision:
     delete: "刪除"
@@ -427,12 +455,16 @@ web:
   # Action dialog (Set Action by Field) — web port strings.
   action_dialog:
     title: "依欄位設定動作"
-    field_label: "欄位:"
-    regex_label: "正規式:"
-    regex_placeholder: "例如:^IMG_\\d+\\.HEIC$"
-    set_action_label: "對每筆相符列設定動作:"
+    # 全形冒號：同一份 web 目錄的其他標籤（execute_dialog.show_label、
+    # browse.filename、status.scan_failed）都用「：」，這裡原本是半形（A3）。
+    field_label: "欄位："
+    regex_label: "正規式："
+    regex_placeholder: "例如：^IMG_\\d+\\.HEIC$"
+    set_action_label: "對每筆相符列設定動作："
     apply_button: "套用"
-    simple_prefix: "找出符合條件的列:"
+    # 與英文同樣採「組句」結構（A4）：這一列由前綴 + 運算子 + 文字組成，
+    # 讀作「找出欄位值 包含 IMG」，而不是帶冒號的獨立子句。
+    simple_prefix: "找出欄位值"
     simple_op_contains: "包含"
     simple_op_starts_with: "開頭為"
     simple_op_ends_with: "結尾為"
@@ -443,7 +475,7 @@ web:
     match_counter_topn: "相符 {matched} 筆 (每組最多 {n} × 共 {group_count} 組)"
     match_counter_invalid: "—"
     match_counter_applied: "已套用至 {matched} 列"
-    invalid_regex: "正規式錯誤:{error}"
+    invalid_regex: "正規式錯誤：{error}"
     invalid_threshold: "無法解析「{input}」為此欄位的數值"
     preview_label: "預覽"
     preview_truncated: "…還有 {n} 筆"
@@ -470,7 +502,7 @@ web:
     unlock_and_apply: "解鎖並套用"
     unlocked_only: "僅套用至未鎖定"
     # #741 sub-item B — 最近使用的樣式。
-    recent_button: "最近使用:"
+    recent_button: "最近使用："
     recent_empty: "(尚無最近使用的樣式)"
     recent_clear: "清除"
     # #741 sub-item C — 樣式摘要文字。
@@ -483,13 +515,15 @@ web:
     delete_confirm_button: "標記 {matched} 個檔案為刪除"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
+    aria_main: "主選單"
     file: "檔案"
     file_scan: "掃描來源…"
     file_open: "開啟清單…"
     action: "動作"
-    action_set: "以正規表示式設定動作"
-    action_execute: "執行…"
-    action_execute_selected: "僅執行所選…"
+    # 與對話框標題、右鍵選單同一個說法（M1）；執行項目改用 Qt 的完整說法（M2）。
+    action_set: "依欄位設定動作…"
+    action_execute: "執行動作…"
+    action_execute_selected: "執行動作（僅限所選）…"
     list: "清單"
     list_remove: "從清單移除"
     view: "檢視"
@@ -522,21 +556,65 @@ web:
     stage_score: "正在評分候選"
     stage_write: "正在寫入清單"
     # #823 — 對應 en.yml 的 web.scan.threshold_parity_note。
-    threshold_parity_note: "從 2 開始:照片的 pHash 之間必定相差偶數個位元,因此奇數值通常和小它 1 的偶數值配對到相同的檔案,而 1 則什麼都配對不到。2 是最嚴格且仍然有效的設定。"
+    # 全形標點（Z1）：這段長句原本在同一句中混用半形「:」「,」與全形「。」。
+    threshold_parity_note: "從 2 開始：照片的 pHash 之間必定相差偶數個位元，因此奇數值通常和小它 1 的偶數值配對到相同的檔案，而 1 則什麼都配對不到。2 是最嚴格且仍然有效的設定。"
+    # 掃描對話框（SC1／SC3／SC4／SC5）— 對應 en.yml 的同名鍵。
+    title: "掃描來源"
+    source_list_header: "來源"
+    source_list_aria: "掃描來源清單"
+    add_source: "+ 新增來源"
+    output_label: "輸出路徑"
+    output_placeholder: "例如：C:/output/scan.db"
+    advanced_settings_label: "進階設定"
+    autotune_read_knee_label: "自動調整讀取並行度（實驗性）"
+    auto_select_label: "掃描後自動選取"
+    auto_select_aggressive_label: "同時將其他檔案標記為刪除"
+    grouping_sensitivity_label: "分組敏感度"
+    phash_label: "pHash 相似度閾值（預設：10，範圍：2–20）"
+    phash_desc: "兩張 64 位元 pHash 可相差幾個位元仍算同組。越低 = 越嚴格。"
+    phash_tooltip: "兩張影像之間的感知雜湊 Hamming 距離。64 位元的 pHash 表示兩張影像最多可相差此位元數，即被視為近似重複。越低 = 越嚴格（群組較少，雜訊較少）；越高 = 越寬鬆（可抓到更多輕微編輯過的影像對）。"
+    dhash_label: "dHash 信心閾值（預設：10，範圍：2–20）"
+    dhash_desc: "確認 pHash 配對的第二組雜湊。越低 = 確認越嚴格。"
+    dhash_tooltip: "第二種獨立的感知雜湊（以梯度／亮度為基礎），用來確認 pHash 的近似配對。當兩張影像的 dHash 也相差不超過此位元數時，該配對標記為高信心；否則為低信心。分組行為不變，但低信心（只靠 pHash）的近似配對不會被積極自動選取標記為刪除。越低 = 確認越嚴格。"
+    color_label: "平均色彩閘門（預設：30，範圍：0–100）"
+    color_desc: "平均色彩（L2）差距超過此值時否決該 pHash 配對。0 = 停用。"
+    color_tooltip: "兩張影像之間平均 RGB 色彩的 L2 距離。在 pHash 檢查之後，平均色彩差距超過此值的影像將被排除於分組之外 — 用以排除 pHash 假陽性（DCT 結構相似但色彩不同）。0 = 停用；越高 = 越寬鬆。"
+    error_prefix: "錯誤：{error}"
+    start_button: "開始掃描"
+    progress_aria: "掃描進度"
+    log_aria: "掃描記錄"
+    files_found_singular: "已找到 {n} 個檔案"
+    files_found_plural: "已找到 {n} 個檔案"
+    eta_label: "預計剩餘 {eta}"
+    cancel: "取消"
+    source_row_aria: "來源 {label}"
+    source_unnamed: "未命名"
+    source_label_placeholder: "標籤"
+    source_label_aria: "來源標籤"
+    source_path_placeholder: "路徑"
+    source_path_aria: "來源路徑"
+    recursive: "包含子資料夾"
+    remove_source: "移除來源"
   rescan_confirm:
-    title: "捨棄未儲存的決策?"
-    body: "目前載入的清單上有 {pending} 尚未儲存。開始新的掃描將會捨棄這些決策。"
-    noun_singular: "項待儲存的決策"
-    noun_plural: "項待儲存的決策"
+    # 全形問號，與同一份目錄的其他 zh 標題一致（RC2）。
+    title: "要捨棄未儲存的決策嗎？"
+    # 數量與名詞拆成兩個佔位符（RC1）：中文在量詞前不加空格，而原本在 JS 裡
+    # 組好的單一 {pending} 字串強迫加了一個；名詞也不再和句尾「尚未儲存」重複。
+    body: "目前載入的清單上有 {count}{noun}。開始新的掃描將會捨棄這些決策。"
+    noun_singular: "項尚未儲存的決策"
+    noun_plural: "項尚未儲存的決策"
     cancel: "取消"
     discard_and_rescan: "捨棄並重新掃描"
   execute_dialog:
     files_not_found_title: "找不到檔案"
     files_failed_title: "刪除失敗"
-    title: "執行動作"
+    # 補回 Qt execute_dialog.title 的「— 檢閱」（E6）：這個對話框是破壞性
+    # 動作前的檢閱關卡，只寫「執行動作」會讀成動作本身。
+    title: "執行動作 — 檢閱"
     show_label: "顯示："
     file_count: "{n} 個{fileWord}"
     select_row_to_preview: "選擇一列以預覽"
+    preview_alt: "預覽"
     cancel: "取消"
     execute_selected: "執行所選"
     execute: "執行"
@@ -545,6 +623,14 @@ web:
     # the pattern already used in delete_confirm.file_singular/file_plural).
     file_singular: "檔案"
     file_plural: "檔案"
+    # 整組將被刪除的警告條（E2）與被篩選器隱藏的待刪除列警告（E3）。
+    warning_prefix: "警告："
+    warning_complete_groups: "{groupWord} {groups} 中的所有檔案都將被刪除。請先檢閱下方的決策再按「執行」。"
+    group_singular: "群組"
+    group_plural: "群組"
+    warning_hidden_destructive: "⚠ 目前的篩選條件隱藏了 {n} {rowWord}待刪除的項目 — 切換到「全部決策」或「僅刪除」即可看到。"
+    row_singular: "列"
+    row_plural: "列"
   context_menu:
     keep: "保留（清除決策）"
     delete: "刪除"
@@ -585,8 +671,10 @@ web:
     pronoun_plural: "它們"
   prune_confirm:
     title: "要清除單一群組嗎？"
-    body_mixed: "{plain} 個單一{plainGroupWord}僅剩一個檔案，另外 {actioned} 個帶有尚未執行的刪除/忽略動作。要從清單中移除這些一般單一{plainGroupWord}嗎？"
-    body_actioned_only: "有 {actioned} 個單一{actionedGroupWord}帶有尚未執行的刪除/忽略動作。要將{pronoun}從清單中移除嗎？"
+    # 「刪除／從清單移除」而非「刪除/忽略」（P1）：ignore 是內部的傳輸值，
+    # 使用者在其他每一個畫面看到的都是「從清單移除」。
+    body_mixed: "{plain} 個單一{plainGroupWord}僅剩一個檔案，另外 {actioned} 個帶有尚未執行的刪除／從清單移除動作。要從清單中移除這些一般單一{plainGroupWord}嗎？"
+    body_actioned_only: "有 {actioned} 個單一{actionedGroupWord}帶有尚未執行的刪除／從清單移除動作。要將{pronoun}從清單中移除嗎？"
     body_plain_only: "{plain} 個單一{plainGroupWord}目前僅剩一個檔案。要將{phrase}從清單中移除嗎？"
     include_actioned: "同時移除 {n} 個已設定動作的單一{singletonWord}"
     dont_ask_again: "不再詢問"
@@ -615,13 +703,19 @@ web:
     yes_remove: "是，移除"
   settings:
     title: "設定"
-    prune_singletons_label: "清除單一群組 (ui.prune_singletons)"
+    # 設定檔的原始鍵名移到滑鼠停留說明，不再出現在可見標籤上（ST1）；
+    # 自動調整那一列改用掃描對話框的同一個說法，兩處讀起來一致。
+    prune_singletons_label: "清除單一群組"
+    prune_singletons_desc: "掃描後是否清除單一群組。設定鍵：ui.prune_singletons"
     prune_ask: "每次詢問"
     prune_always: "永遠清除"
     prune_never: "永不清除"
-    autotune_read_knee_label: "自動調校讀取拐點 (ui.scan_dialog.autotune_read_knee)"
-    sorting_defaults_label: "排序預設值 (sorting.defaults — JSON)"
-    sorting_invalid_json: "sorting.defaults 的 JSON 格式無效"
+    autotune_read_knee_label: "自動調整讀取並行度（實驗性）"
+    autotune_read_knee_desc: "在掃描開始時量測每個裝置的最佳讀取並行度，而非使用固定猜測值。預設開啟，不會影響結果。設定鍵：ui.scan_dialog.autotune_read_knee"
+    sorting_defaults_label: "排序預設值"
+    sorting_defaults_desc: "預設的排序欄位，以 JSON 陣列表示。設定鍵：sorting.defaults"
+    sorting_placeholder: "[]"
+    sorting_invalid_json: "JSON 格式無效 — 排序預設值未儲存。"
     cancel: "取消"
     save: "儲存"
   fullres:
@@ -646,6 +740,15 @@ web:
     meta_created: "建立"
   format:
     similarity_ref: "參考"
+    # 對應桌面版 tree.similarity_near_dup（R6）— 原本是寫死的半形「~」。
+    similarity_near_dup: "~近似"
+  # 結果樹的群組標題列（R8）— 原本整列寫死英文。
+  tree:
+    group_label: "群組 {n}"
+    # 量詞留在譯文裡（元件只負責用空白接上數字），渲染成「5 個檔案」，
+    # 與狀態列的 "{files} 個{fileWord}" 讀起來一致。
+    file_singular: "個檔案"
+    file_plural: "個檔案"
   delete_confirm:
     title_groups: "整個群組將被刪除"
     title_all: "刪除所有檔案？"

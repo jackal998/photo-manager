@@ -9,9 +9,10 @@
 // chip rather than another's.
 
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { DecisionControl } from "./DecisionControl";
+import { useI18nStore } from "@/i18n/useI18nStore";
 import type { DecisionValue } from "@/api/types";
 
 const TESTID = "row-decision-1-dup.jpg";
@@ -28,6 +29,23 @@ function renderControl(value: DecisionValue) {
 }
 
 describe("DecisionControl chips", () => {
+  beforeEach(() => {
+    useI18nStore.setState({ locale: "en", catalog: {} });
+  });
+
+  // Copy audit R5 — only the group's accessible NAME moves to the catalog
+  // here. The three option labels stay literal on purpose: the decision
+  // vocabulary (R3/R4) is still waiting on the owner's decision, and
+  // renaming them now would pre-empt it.
+  it("takes the control's accessible name from the catalog", () => {
+    useI18nStore.setState({
+      locale: "zh_TW",
+      catalog: { "web.column.decision": "決策" },
+    });
+    render(<DecisionControl value="" onChange={vi.fn()} data-testid={TESTID} />);
+    expect(screen.getByTestId(TESTID)).toHaveAttribute("aria-label", "決策");
+  });
+
   it("fills the None segment with the KEEP chip when nothing is staged", () => {
     // "" is keep under the #584 decision model — the row survives Execute —
     // so the active None segment is green, not the faint undecided grey the

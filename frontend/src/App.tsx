@@ -9,6 +9,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 
 import { cn } from "./lib/utils";
 import { stageLabel } from "./lib/scanProgress";
+import { describeApiError } from "./lib/apiErrorText";
 import { useAppStore } from "./store/useAppStore";
 import { useScanSSE } from "./hooks/useScanSSE";
 import { useBeforeUnloadGuard } from "./hooks/useBeforeUnloadGuard";
@@ -77,6 +78,30 @@ const CLOSED_MENU: ContextMenuState = {
   col: undefined,
   groupNumber: 0,
 };
+
+/**
+ * Secondary technical line under a status-bar error (copy audit S2).
+ *
+ * Rendered INSIDE the existing alert paragraph (as a block span, not a new
+ * paragraph) so `main-status-error` / `main-execute-error` still carry the
+ * whole message and no testid or layout box is added. Renders nothing when
+ * the failure is fully described by its sentence.
+ */
+function ApiErrorDetail({
+  raw,
+  t,
+}: {
+  raw: string;
+  t: (key: string, fallback: string, params?: Record<string, string | number>) => string;
+}) {
+  const { detail } = describeApiError(raw, t);
+  if (detail === null) return null;
+  return (
+    <span className="block text-xs text-ink-faint">
+      {t("web.error.technical_detail", "Details: {detail}", { detail })}
+    </span>
+  );
+}
 
 export default function App() {
   // ---------------------------------------------------------------------------
@@ -301,10 +326,25 @@ export default function App() {
 
   let statusText: string;
   if (manifest.path !== null) {
+    // Singular/plural picked per count, not flattened into one template —
+    // the single-template form rendered "1 groups · 1 files" (copy audit S1).
+    // Same shape RescanConfirmDialog / LockConfirmDialog already use; zh_TW's
+    // singular and plural values are identical, which is correct for Chinese.
     statusText = t(
       "web.status.summary",
-      "{groups} groups · {files} files",
-      { groups: manifest.totalGroups, files: manifest.totalFiles }
+      "{groups} {groupWord} · {files} {fileWord}",
+      {
+        groups: manifest.totalGroups,
+        groupWord:
+          manifest.totalGroups === 1
+            ? t("web.status.group_singular", "group")
+            : t("web.status.group_plural", "groups"),
+        files: manifest.totalFiles,
+        fileWord:
+          manifest.totalFiles === 1
+            ? t("web.status.file_singular", "file")
+            : t("web.status.file_plural", "files"),
+      }
     );
   } else if (manifest.loading) {
     statusText = t("web.status.loading_manifest", "Loading manifest…");
@@ -385,7 +425,10 @@ export default function App() {
           onClick={() => openActionDialog()}
           disabled={manifestPath === null}
         >
-          {t("web.action_dialog.title", "Set Action")}
+          {/* Own key, not the dialog title's (copy audit T1): a button wants a
+              shorter label than the dialog heading, and the borrowed key's
+              stale "Set Action" fallback disagreed with its own value. */}
+          {t("web.toolbar.set_action", "Set Action…")}
         </button>
 
         <button
@@ -506,8 +549,9 @@ export default function App() {
             className="px-4 py-1 text-sm text-danger-warm"
           >
             {t("web.status.manifest_failed", "Manifest error: {error}", {
-              error: manifest.error,
+              error: describeApiError(manifest.error, t).message,
             })}
+            <ApiErrorDetail raw={manifest.error} t={t} />
           </p>
         )}
         {/* Additive error line: execute.executeError is written by
@@ -525,8 +569,9 @@ export default function App() {
             className="px-4 py-1 text-sm text-danger-warm"
           >
             {t("web.status.execute_failed", "Action error: {error}", {
-              error: executeError,
+              error: describeApiError(executeError, t).message,
             })}
+            <ApiErrorDetail raw={executeError} t={t} />
           </p>
         )}
       </footer>

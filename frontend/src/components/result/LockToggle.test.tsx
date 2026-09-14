@@ -8,9 +8,10 @@
 // and any scenario built on them read that attribute.
 
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { LockToggle } from "./LockToggle";
+import { useI18nStore } from "@/i18n/useI18nStore";
 
 const TESTID = "row-lock-1-dup.jpg";
 
@@ -22,6 +23,21 @@ function renderToggle(checked: boolean, onChange = vi.fn()) {
 }
 
 describe("LockToggle", () => {
+  beforeEach(() => {
+    useI18nStore.setState({ locale: "en", catalog: {} });
+  });
+
+  // Copy audit R9 — the accessible name was a hardcoded English literal, so a
+  // zh_TW screen-reader user still heard English on every row.
+  it("takes its accessible name from the catalog, not a literal", () => {
+    useI18nStore.setState({
+      locale: "zh_TW",
+      catalog: { "web.column.lock": "鎖定" },
+    });
+    renderToggle(false);
+    expect(screen.getByTestId(TESTID)).toHaveAttribute("aria-label", "鎖定");
+  });
+
   it("renders faint when unlocked and solid accent when locked", () => {
     const { el } = renderToggle(false);
     expect(el.className).toContain("text-ink-faint");

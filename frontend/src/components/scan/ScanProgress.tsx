@@ -75,12 +75,19 @@ export function ScanProgress({
             <span data-testid={SCAN_THROUGHPUT_TEXT}>{throughputText}</span>
           )}
           {throughputText !== null && eta && "  —  "}
-          {eta && <span data-testid={SCAN_ETA_TEXT}>ETA {eta}</span>}
+          {eta && (
+            <span data-testid={SCAN_ETA_TEXT}>
+              {t("web.scan.eta_label", "ETA {eta}", { eta })}
+            </span>
+          )}
         </p>
       )}
 
       {/* Progress bar */}
-      <div data-testid={SCAN_PROGRESS_BAR} aria-label="Scan progress">
+      <div
+        data-testid={SCAN_PROGRESS_BAR}
+        aria-label={t("web.scan.progress_aria", "Scan progress")}
+      >
         {isDeterminate ? (
           <Progress value={pct} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} />
         ) : (
@@ -89,7 +96,13 @@ export function ScanProgress({
             <div className="relative h-2 w-full overflow-hidden rounded-full bg-subtle">
               <div className="h-full bg-warm animate-pulse w-1/3" />
             </div>
-            <span className="text-xs text-ink-muted">{completed} files found</span>
+            {/* Split singular/plural — the flattened line read "1 files
+                found" (copy audit SC4). */}
+            <span className="text-xs text-ink-muted">
+              {completed === 1
+                ? t("web.scan.files_found_singular", "{n} file found", { n: completed })
+                : t("web.scan.files_found_plural", "{n} files found", { n: completed })}
+            </span>
           </div>
         )}
       </div>
@@ -99,7 +112,7 @@ export function ScanProgress({
         ref={logRef}
         data-testid={SCAN_PROGRESS_LOG}
         role="log"
-        aria-label="Scan log"
+        aria-label={t("web.scan.log_aria", "Scan log")}
         aria-live="polite"
         className="h-32 overflow-y-auto rounded border border-hairline bg-panel p-2 text-xs font-mono text-ink space-y-0.5"
       >
@@ -119,7 +132,7 @@ export function ScanProgress({
           data-testid={SCAN_CANCEL_BUTTON}
           onClick={onCancel}
         >
-          Cancel
+          {t("web.scan.cancel", "Cancel")}
         </Button>
       </div>
     </div>

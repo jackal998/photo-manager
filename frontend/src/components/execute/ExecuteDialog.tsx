@@ -463,7 +463,9 @@ export function ExecuteDialog() {
           className="cursor-move select-none flex-shrink-0"
           onMouseDown={overlay.onMoveStart}
         >
-          <DialogTitle>{t("web.execute_dialog.title", "Execute Actions")}</DialogTitle>
+          <DialogTitle>
+            {t("web.execute_dialog.title", "Execute Actions — Review")}
+          </DialogTitle>
         </DialogHeader>
 
         {/* Scrollable body (#739 round 2). `flex-auto` is flex:1 1 auto, so its
@@ -531,7 +533,7 @@ export function ExecuteDialog() {
               <img
                 data-testid={EXECUTE_PREVIEW_IMAGE}
                 src={previewThumbnailUrl}
-                alt="Preview"
+                alt={t("web.execute_dialog.preview_alt", "Preview")}
                 className="w-full object-contain rounded max-h-48"
               />
             ) : (

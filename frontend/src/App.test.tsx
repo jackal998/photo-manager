@@ -247,6 +247,54 @@ describe("App status bar", () => {
     expect(screen.getByTestId(MAIN_STATUS_BAR)).toHaveTextContent("Ready");
   });
 
+  // Copy audit S1 — the summary was one flat template, so the commonest
+  // single-group manifest read "1 groups · 1 files". Each count now picks its
+  // own noun, the pattern the confirm dialogs in this client already use.
+
+  function loadManifest(totalGroups: number, totalFiles: number) {
+    act(() => {
+      useAppStore.setState({
+        manifest: {
+          path: "/tmp/test.sqlite",
+          groups: TEST_GROUPS,
+          totalGroups,
+          totalFiles,
+          loading: false,
+          error: null,
+        },
+      });
+    });
+    renderWithProviders(<App />);
+    return screen.getByTestId(MAIN_STATUS_BAR);
+  }
+
+  it("uses singular nouns for a one-group, one-file manifest", () => {
+    const bar = loadManifest(1, 1);
+    expect(bar).toHaveTextContent("1 group · 1 file");
+    expect(bar.textContent).not.toContain("1 groups");
+    expect(bar.textContent).not.toContain("1 files");
+  });
+
+  it("uses plural nouns once either count passes one", () => {
+    expect(loadManifest(3, 12)).toHaveTextContent("3 groups · 12 files");
+  });
+
+  it("mixes singular and plural independently (1 group, 4 files)", () => {
+    expect(loadManifest(1, 4)).toHaveTextContent("1 group · 4 files");
+  });
+
+  it("renders the zh_TW summary from the catalog", () => {
+    useI18nStore.setState({
+      locale: "zh_TW",
+      catalog: {
+        "web.status.summary": "{groups} 個{groupWord} · {files} 個{fileWord}",
+        "web.status.group_singular": "群組",
+        "web.status.file_plural": "檔案",
+      },
+    });
+    expect(loadManifest(1, 4)).toHaveTextContent("1 個群組 · 4 個檔案");
+  });
+
   // #712 — manifest.error was written by ~9 store actions but rendered nowhere.
   // The footer now shows an additive role="alert" line when it is non-null.
 
@@ -274,11 +322,16 @@ describe("App status bar", () => {
     });
     renderWithProviders(<App />);
     const alert = screen.getByTestId(MAIN_STATUS_ERROR);
-    expect(alert).toHaveTextContent("Manifest error: decision PATCH failed");
+    // Copy audit S2: an unrecognised raw string still reaches the user, but
+    // as the technical DETAIL under a user-worded sentence — never as the
+    // whole message.
+    expect(alert).toHaveTextContent("The request could not be completed.");
+    expect(alert).toHaveTextContent("decision PATCH failed");
     expect(alert).toHaveAttribute("role", "alert");
-    // Summary still visible — not masked by the error.
+    // Summary still visible — not masked by the error — and singular for a
+    // single group (copy audit S1: it used to read "1 groups").
     expect(screen.getByTestId(MAIN_STATUS_BAR)).toHaveTextContent(
-      "1 groups · 2 files"
+      "1 group · 2 files"
     );
   });
 
@@ -298,9 +351,11 @@ describe("App status bar", () => {
       });
     });
     renderWithProviders(<App />);
-    expect(screen.getByTestId(MAIN_STATUS_ERROR)).toHaveTextContent(
-      "Manifest error: HTTP 404: Manifest not found: '/bad.db'"
-    );
+    const alert = screen.getByTestId(MAIN_STATUS_ERROR);
+    // A 404 maps onto its own sentence; the server's own text is kept as the
+    // detail so the missing path is still named (copy audit S2).
+    expect(alert).toHaveTextContent("The file or manifest could not be found.");
+    expect(alert).toHaveTextContent("Manifest not found: '/bad.db'");
     expect(screen.getByTestId(MAIN_STATUS_BAR)).toHaveTextContent("Ready");
   });
 
@@ -321,15 +376,17 @@ describe("App status bar", () => {
         execute: {
           ...s.execute,
           executeOpen: false,
-          executeError: "reveal failed: file not found",
+          executeError: "HTTP 500: Failed to launch Explorer: [WinError 2]",
         },
       }));
     });
     renderWithProviders(<App />);
     const alert = screen.getByTestId(MAIN_EXECUTE_ERROR);
-    expect(alert).toHaveTextContent(
-      "Action error: reveal failed: file not found"
-    );
+    // The real string a failed reveal produces (app/web/routes/execute.py's
+    // `detail=f"Failed to launch Explorer: {exc}"`), now rendered as a
+    // sentence plus the OS detail rather than the raw developer text.
+    expect(alert).toHaveTextContent("The file manager could not be opened.");
+    expect(alert).toHaveTextContent("[WinError 2]");
     expect(alert).toHaveAttribute("role", "alert");
   });
 

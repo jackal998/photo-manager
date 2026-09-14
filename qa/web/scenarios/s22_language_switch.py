@@ -22,6 +22,18 @@ Web-observable assertions:
      still reads "掃描"/"執行" after a hard reload.
   4. Finally: locale is restored to "en" via PATCH /api/settings so the
      shared server is left in English for later scenarios in the batch.
+  5. Copy-audit probe (2026-09-14): the toolbar is a three-word sample, so
+     it stayed green while whole surfaces were untranslated — the owner's
+     trial opened the Scan dialog in 中文 and read an entirely English
+     dialog. This scenario now reads the Scan dialog's own chrome and the
+     menu-bar Action entry IN BOTH LOCALES and hard-asserts each, plus
+     prints probe_status lines carrying the observed strings. Assertions
+     (not just probes) because the failure mode is silent: an English
+     string in a zh_TW session looks like working software.
+
+Copy-audit ids covered by step 5: SC1 (Scan dialog was hardcoded English)
+and M1 (the menu entry read "Set Action by Regex", disagreeing with the
+dialog it opens, with the right-click entry, and with the desktop).
 
 Qt divergences:
   - Qt fires a "Switch language?" confirm dialog (Yes/No) before the live
@@ -51,6 +63,11 @@ from qa.web.testid_constants import (
     MAIN_EXECUTE_BUTTON,
     MAIN_LANG_TOGGLE,
     MAIN_SCAN_BUTTON,
+    MENU_ACTION,
+    MENU_ACTION_SET,
+    SCAN_ADVANCED,
+    SCAN_DIALOG,
+    SCAN_START_BUTTON,
 )
 
 _SCAN_EN = "Scan"
@@ -60,6 +77,25 @@ _TOGGLE_EN = "EN"
 _SCAN_ZH = "掃描"
 _EXECUTE_ZH = "執行"
 _TOGGLE_ZH = "中"
+
+# Copy-audit expectations, per locale. Each tuple is
+# (label, testid-or-None, expected-substring).  A None testid means "read the
+# whole Scan dialog's text" — the dialog TITLE has no testid of its own.
+_COPY_EN = {
+    "scan_dialog_title": "Scan Sources",
+    "scan_advanced": "Advanced settings",
+    "scan_start": "Start Scan",
+    "menu_action_set": "Set Action by Field…",
+}
+_COPY_ZH = {
+    "scan_dialog_title": "掃描來源",
+    "scan_advanced": "進階設定",
+    "scan_start": "開始掃描",
+    "menu_action_set": "依欄位設定動作…",
+}
+# Strings that must NOT survive a switch to zh_TW — the exact leaks the
+# owner's trial hit. A zh session showing any of these is the regression.
+_ENGLISH_LEAKS_ZH = ("Start Scan", "Advanced settings", "Scan Sources")
 
 
 def _patch_locale(base_url: str, locale: str) -> None:
@@ -79,6 +115,54 @@ def _patch_locale(base_url: str, locale: str) -> None:
         raise RuntimeError(
             f"PATCH /api/settings failed ({exc.code}): {exc.read().decode()}"
         ) from exc
+
+
+def _read_copy_sample(page, locale_label: str) -> dict[str, str]:
+    """Open the Scan dialog + the Action menu and return the strings they show.
+
+    Leaves the UI exactly as it found it (dialog closed, menu closed) so the
+    caller's next step starts clean.
+    """
+    observed: dict[str, str] = {}
+
+    page.get_by_test_id(MAIN_SCAN_BUTTON).click()
+    dialog = page.get_by_test_id(SCAN_DIALOG)
+    dialog.wait_for(state="visible", timeout=10_000)
+    try:
+        observed["scan_dialog_title"] = dialog.inner_text()
+        observed["scan_advanced"] = page.get_by_test_id(SCAN_ADVANCED).inner_text()
+        observed["scan_start"] = page.get_by_test_id(SCAN_START_BUTTON).inner_text()
+    finally:
+        page.keyboard.press("Escape")
+        dialog.wait_for(state="hidden", timeout=10_000)
+
+    # Radix portals the dropdown content lazily — click the trigger first.
+    page.get_by_test_id(MENU_ACTION).click()
+    try:
+        item = page.get_by_test_id(MENU_ACTION_SET)
+        item.wait_for(state="visible", timeout=5_000)
+        observed["menu_action_set"] = item.inner_text()
+    finally:
+        page.keyboard.press("Escape")
+
+    print(
+        f"probe_status: s22 copy[{locale_label}] "
+        f"scan_advanced={observed['scan_advanced']!r} "
+        f"scan_start={observed['scan_start']!r} "
+        f"menu_action_set={observed['menu_action_set']!r}"
+    )
+    return observed
+
+
+def _assert_copy(observed: dict[str, str], expected: dict[str, str], locale_label: str) -> None:
+    """Every expected substring must appear in the matching observed string."""
+    for key, want in expected.items():
+        got = observed[key]
+        assert want in got, (
+            f"Copy audit [{locale_label}]: expected {key} to contain {want!r}, "
+            f"got {got!r}. An untranslated (or reworded) label here is the "
+            f"exact defect the 2026-09-13 copy audit filed."
+        )
 
 
 def run(*, base_url: str) -> None:
@@ -124,6 +208,11 @@ def run(*, base_url: str) -> None:
             )
 
             # ------------------------------------------------------------------
+            # Step 1b: copy-audit sample in English (SC1 + M1)
+            # ------------------------------------------------------------------
+            _assert_copy(_read_copy_sample(page, "en"), _COPY_EN, "en")
+
+            # ------------------------------------------------------------------
             # Step 2: Click lang toggle → switch to zh_TW (live, no confirm)
             # ------------------------------------------------------------------
             toggle_btn.click()
@@ -155,6 +244,19 @@ def run(*, base_url: str) -> None:
                 f"After zh_TW toggle: expected main-lang-toggle={_TOGGLE_ZH!r} "
                 f"(toggle label for zh_TW), got {toggle_text_zh!r}"
             )
+
+            # ------------------------------------------------------------------
+            # Step 2b: copy-audit sample in zh_TW (SC1 + M1)
+            # ------------------------------------------------------------------
+            observed_zh = _read_copy_sample(page, "zh_TW")
+            _assert_copy(observed_zh, _COPY_ZH, "zh_TW")
+            dialog_text_zh = observed_zh["scan_dialog_title"]
+            for leak in _ENGLISH_LEAKS_ZH:
+                assert leak not in dialog_text_zh, (
+                    f"Copy audit [zh_TW]: the Scan dialog still shows the "
+                    f"English string {leak!r}. This is the owner-trial defect "
+                    f"(SC1) — the dialog was entirely hardcoded English."
+                )
 
             # ------------------------------------------------------------------
             # Step 3: Persistence — hard reload must still read zh_TW

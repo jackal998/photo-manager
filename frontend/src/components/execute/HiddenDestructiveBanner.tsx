@@ -7,7 +7,12 @@
 // assume nothing is pending. Mirrors Qt's #502 hidden-destructive banner
 // line (execute_action_dialog.py:_hidden_pending_delete_count).
 
+import { useT } from "@/i18n/useT";
 import { EXECUTE_HIDDEN_DESTRUCTIVE_BANNER } from "@/testids";
+
+const TEMPLATE_EN =
+  "⚠ {n} pending delete {rowWord} hidden by the current filter — switch to " +
+  "All or Delete only to see them.";
 
 interface HiddenDestructiveBannerProps {
   /** Number of pending delete rows currently hidden by the active filter. */
@@ -15,6 +20,7 @@ interface HiddenDestructiveBannerProps {
 }
 
 export function HiddenDestructiveBanner({ count }: HiddenDestructiveBannerProps) {
+  const t = useT();
   if (count <= 0) return null;
 
   return (
@@ -23,11 +29,20 @@ export function HiddenDestructiveBanner({ count }: HiddenDestructiveBannerProps)
       className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
       role="alert"
     >
-      {/* Wording matches the Qt parity string (en.yml execute_dialog.
-          warning_hidden_destructive) verbatim. */}
+      {/* Wording matches the Qt parity string (execute_dialog.
+          warning_hidden_destructive) — but through the catalog now, and with
+          "row(s)" split into singular/plural (copy audit E3): it was
+          hardcoded English here, so zh_TW never saw a translation, and the
+          flattened "(s)" is the shape this catalog's own comments call a
+          review finding. */}
       <span>
-        ⚠ {count} pending delete row(s) hidden by the current filter — switch
-        to All or Delete only to see them.
+        {t("web.execute_dialog.warning_hidden_destructive", TEMPLATE_EN, {
+          n: count,
+          rowWord:
+            count === 1
+              ? t("web.execute_dialog.row_singular", "row")
+              : t("web.execute_dialog.row_plural", "rows"),
+        })}
       </span>
     </div>
   );

@@ -70,3 +70,49 @@ describe("SettingsDialog — prune_singletons 3-value control", () => {
     );
   });
 });
+
+// Copy audit ST1 + ST2 — the visible labels carried the raw settings-file
+// keys ("Prune singletons (ui.prune_singletons)"), and the JSON textarea's
+// placeholder was the literal word "null", which reads as a bug.
+describe("SettingsDialog — labels are copy, not config keys", () => {
+  beforeEach(() => {
+    seedValues("ask");
+  });
+
+  it("shows no raw config key in any visible label", () => {
+    // Radix portals the dialog outside the render container, so the visible
+    // copy lives on document.body.
+    render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Prune singletons");
+    expect(text).toContain("Sorting defaults");
+    expect(text).not.toContain("ui.prune_singletons");
+    expect(text).not.toContain("ui.scan_dialog.autotune_read_knee");
+    expect(text).not.toContain("sorting.defaults");
+  });
+
+  it("keeps each config key discoverable in the row's hover description", () => {
+    render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    const withKey = Array.from(document.querySelectorAll("[title]")).map(
+      (el) => el.getAttribute("title") ?? ""
+    );
+    expect(withKey.some((v) => v.includes("ui.prune_singletons"))).toBe(true);
+    expect(
+      withKey.some((v) => v.includes("ui.scan_dialog.autotune_read_knee"))
+    ).toBe(true);
+    expect(withKey.some((v) => v.includes("sorting.defaults"))).toBe(true);
+  });
+
+  it("uses the same wording as the Scan dialog for the auto-tune toggle", () => {
+    render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    expect(document.body.textContent).toContain(
+      "Auto-tune reader concurrency (experimental)"
+    );
+  });
+
+  it("hints the JSON field with an empty array, not the word 'null'", () => {
+    render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    const textarea = document.getElementById("settings-sorting-defaults");
+    expect(textarea).toHaveAttribute("placeholder", "[]");
+  });
+});
