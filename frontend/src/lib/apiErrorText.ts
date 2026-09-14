@@ -31,12 +31,31 @@ type Translate = (
 const CONFLICT_RE = /^409 Conflict:\s*(\S+)\s*$/;
 const HTTP_RE = /^HTTP (\d+):\s*([\s\S]*)$/;
 
-/** 409 `detail.code` values the client already discriminates on. */
-const CONFLICT_CODES: Record<string, [string, string]> = {
+/**
+ * Every `detail.code` the backend attaches, mapped to its catalog sentence.
+ *
+ * The first two arrive on a 409 through `ApiConflictError`; the other four
+ * ride on 4xx/5xx bodies (`_path_guard.py:56,64,73`, `execute.py:386,396`,
+ * `action.py:86`) and are recovered below — see `codeFromDetail`.
+ */
+const ERROR_CODES: Record<string, [string, string]> = {
   locked_paths: ["web.error.locked_paths", "Some of the rows in scope are locked."],
   execute_already_running: [
     "web.error.already_running",
     "An action is already running — wait for it to finish.",
+  ],
+  permission_denied: [
+    "web.error.permission_denied",
+    "This app is not allowed to reach that location.",
+  ],
+  platform_unsupported: [
+    "web.error.platform_unsupported",
+    "That action is not available on this operating system.",
+  ],
+  bad_request: ["web.error.bad_request", "That path is not valid."],
+  invalid_pattern: [
+    "web.error.invalid_pattern",
+    "That pattern is not a valid regular expression.",
   ],
 };
 
@@ -77,10 +96,64 @@ const NOT_FOUND: [string, string] = [
   "The file or manifest could not be found.",
 ];
 
+/**
+ * `checkResponse` prefers `detail.message` and throws it as a bare string, so
+ * a `{code, message}` body loses its code before it reaches us. These are the
+ * exact sentences the code-carrying routes emit, matched by prefix. Drift here
+ * is not silent damage: an unmatched sentence falls through to the branch that
+ * shows the server's own words as the primary line, which is the pre-PR
+ * behaviour — never worse, just untranslated.
+ */
+const MESSAGE_CODES: [string, string][] = [
+  // app/web/routes/_path_guard.py:73 and app/web/routes/execute.py:386
+  ["path is outside all allowed roots", "permission_denied"],
+  ["reveal only allowed from localhost", "permission_denied"],
+  // app/web/routes/execute.py:396
+  ["reveal only supported on Windows", "platform_unsupported"],
+  // app/web/routes/_path_guard.py:56,64
+  ["path must not be empty", "bad_request"],
+  ["malformed path:", "bad_request"],
+];
+
 /** Non-empty trimmed string, or null. */
 function orNull(s: string): string | null {
   const trimmed = s.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Recover `(code, humanText)` from a flattened `detail`.
+ *
+ * Two shapes reach us. A body whose second key is not `message` (the
+ * `invalid_pattern` route uses `detail`) is JSON-stringified by
+ * `checkResponse`, so the code survives verbatim — and the raw blob is what
+ * the user used to be shown. A `{code, message}` body arrives as the message
+ * alone, so the code is matched back from the sentence.
+ *
+ * Returns `null` when neither applies.
+ */
+function codeFromDetail(detail: string): { code: string; text: string | null } | null {
+  const trimmed = detail.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      if (typeof parsed.code === "string") {
+        const inner =
+          typeof parsed.message === "string"
+            ? parsed.message
+            : typeof parsed.detail === "string"
+              ? parsed.detail
+              : "";
+        return { code: parsed.code, text: orNull(inner) };
+      }
+    } catch {
+      // not JSON after all — fall through to the sentence match
+    }
+  }
+  for (const [sentence, code] of MESSAGE_CODES) {
+    if (trimmed.startsWith(sentence)) return { code, text: orNull(trimmed) };
+  }
+  return null;
 }
 
 /**
@@ -92,7 +165,7 @@ function orNull(s: string): string | null {
 export function describeApiError(raw: string, t: Translate): ApiErrorText {
   const conflict = CONFLICT_RE.exec(raw);
   if (conflict !== null) {
-    const [key, fallback] = CONFLICT_CODES[conflict[1]] ?? UNKNOWN;
+    const [key, fallback] = ERROR_CODES[conflict[1]] ?? UNKNOWN;
     return { message: t(key, fallback), detail: null };
   }
 
@@ -112,9 +185,25 @@ export function describeApiError(raw: string, t: Translate): ApiErrorText {
       const [key, fallback] = NOT_FOUND;
       return { message: t(key, fallback), detail: orNull(detail) };
     }
-    // A {code, message} body already arrives human-readable (client.ts
-    // prefers detail.message), so it IS the sentence — nothing to demote.
-    return { message: t(UNKNOWN[0], UNKNOWN[1]), detail: orNull(detail) };
+    // A code-carrying body gets its own translated sentence, with the
+    // server's wording kept as the detail — so a zh_TW user finally reads
+    // this class of failure in Chinese.
+    const coded = codeFromDetail(detail);
+    if (coded !== null) {
+      const mapped = ERROR_CODES[coded.code];
+      if (mapped !== undefined) {
+        return { message: t(mapped[0], mapped[1]), detail: coded.text };
+      }
+      // Unknown code: its own text is still the best sentence we have.
+      if (coded.text !== null) return { message: coded.text, detail: null };
+    }
+    // Anything else here already arrived human-readable (checkResponse
+    // prefers detail.message over a JSON blob), so it IS the sentence.
+    // Demoting it to the faint technical line would lose the only words
+    // that tell the user what happened — strictly worse than pre-PR.
+    const sentence = orNull(detail);
+    if (sentence !== null) return { message: sentence, detail: null };
+    return { message: t(UNKNOWN[0], UNKNOWN[1]), detail: null };
   }
 
   return { message: t(UNKNOWN[0], UNKNOWN[1]), detail: orNull(raw) };

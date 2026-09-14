@@ -415,6 +415,11 @@ web:
     reveal_failed: "無法開啟檔案總管。"
     already_running: "已有動作正在執行中 — 請等待它完成。"
     locked_paths: "範圍內有部分列已鎖定。"
+    # 後端 4xx／5xx 回應所帶的四個 detail.code。
+    permission_denied: "此應用程式無權存取該位置。"
+    platform_unsupported: "此作業系統不支援這個動作。"
+    bad_request: "該路徑無效。"
+    invalid_pattern: "該樣式不是有效的正規表示式。"
     not_found: "找不到該檔案或清單檔。"
     unknown: "無法完成這個要求。"
     technical_detail: "詳細資訊：{detail}"

@@ -514,6 +514,14 @@ web:
     reveal_failed: "The file manager could not be opened."
     already_running: "An action is already running — wait for it to finish."
     locked_paths: "Some of the rows in scope are locked."
+    # The four `detail.code` values the 4xx/5xx routes attach
+    # (_path_guard.py:56,64,73 / execute.py:386,396 / action.py:86). Without
+    # these, a non-Windows user right-clicking Open folder read the server's
+    # own English sentence and nothing else.
+    permission_denied: "This app is not allowed to reach that location."
+    platform_unsupported: "That action is not available on this operating system."
+    bad_request: "That path is not valid."
+    invalid_pattern: "That pattern is not a valid regular expression."
     not_found: "The file or manifest could not be found."
     unknown: "The request could not be completed."
     technical_detail: "Details: {detail}"

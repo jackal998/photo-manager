@@ -186,16 +186,33 @@ def wait_log_line(page: "Page", pattern: str, timeout: float = 10_000) -> str:
 # values are identical and this pattern never sees a Chinese string.
 _STATUS_MANIFEST_LOADED = re.compile(r"\d+\s*groups?\s*·\s*\d+\s*files?", re.IGNORECASE)
 
+# Same shape, but capturing each count and the noun that follows it, so the
+# assertion below can require they AGREE. The waiter above deliberately keeps
+# the loose pattern — its job is "has a summary appeared yet", and a
+# disagreeing form should fail fast in the assertion, not time out over 60s.
+_STATUS_SUMMARY_PARTS = re.compile(
+    r"(\d+)\s*(groups?)\s*·\s*(\d+)\s*(files?)", re.IGNORECASE
+)
+
+
+def _noun_agrees(count: str, noun: str) -> bool:
+    """True when `noun`'s plurality matches `count` (1 → singular, else plural)."""
+    return (noun.lower().endswith("s")) != (int(count) == 1)
+
 
 def assert_manifest_summary(status_text: str, *, context: str) -> None:
-    """Assert `status_text` carries the "N group(s) · M file(s)" summary.
+    """Assert `status_text` carries the "N group(s) · M file(s)" summary,
+    with each noun agreeing in number with its own count.
 
     Three scenarios each grew their own `"groups" in status_text` substring
     check, which all three broke together the moment the status bar started
     saying "1 group · 5 files" for a single-group manifest (copy audit S1).
-    The wording contract now lives in exactly one place — this helper and the
-    `_STATUS_MANIFEST_LOADED` pattern above it — so a real wording regression
-    still fails loudly, and a legitimate singular does not.
+    The wording contract now lives in exactly one place.
+
+    The agreement check is the load-bearing half: a pattern that merely
+    allowed `groups?` / `files?` would also accept the pre-fix "1 groups ·
+    1 files", so reverting the S1 fix would leave this helper — and the three
+    scenarios calling it — green, which is the one thing it exists to prevent.
 
     Parameters
     ----------
@@ -204,9 +221,16 @@ def assert_manifest_summary(status_text: str, *, context: str) -> None:
     context:
         Where the caller is asserting from, for the failure message.
     """
-    assert _STATUS_MANIFEST_LOADED.search(status_text), (
+    match = _STATUS_SUMMARY_PARTS.search(status_text)
+    assert match is not None, (
         f"{context}: status bar must carry the manifest summary "
         f'("N group(s) · M file(s)"), got: {status_text!r}'
+    )
+    groups, group_word, files, file_word = match.groups()
+    assert _noun_agrees(groups, group_word) and _noun_agrees(files, file_word), (
+        f"{context}: the summary's nouns must agree in number with their "
+        f"counts — 1 reads 'group'/'file', anything else 'groups'/'files'. "
+        f"Got: {status_text!r}"
     )
 
 
