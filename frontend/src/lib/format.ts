@@ -16,9 +16,9 @@ function assertNever(x: never): string {
  *
  * Rendering rules:
  *   kind "percent"   → "92%"
- *   kind "ref"       → "Ref" (translatable — the one natural-language word here)
+ *   kind "ref"       → "Ref" (translatable)
  *   kind "passenger" → "★ 92%"
- *   kind "near_dup"  → "~"
+ *   kind "near_dup"  → "~dup" (translatable; was a bare hardcoded "~")
  *   kind "none"      → "—"
  *
  * Stays a pure function (no store import, no hooks — this module is used
@@ -42,7 +42,10 @@ export function similarityLabel(
         ? `★ ${Math.round(similarity.percent)}%`
         : "★";
     case "near_dup":
-      return "~";
+      // Copy audit R6: a bare "~" carries no meaning and no translation,
+      // while the desktop (tree.similarity_near_dup) and docs/features.md
+      // both document this cell as "~dup".
+      return t("web.format.similarity_near_dup", "~dup");
     case "none":
       return EM_DASH;
     default:

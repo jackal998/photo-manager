@@ -90,7 +90,7 @@ export function MenuBar({
     <nav
       data-testid={MAIN_MENU_BAR}
       className="flex items-center gap-1 border-b border-hairline bg-titlebar px-2 py-0.5"
-      aria-label="Main menu"
+      aria-label={t("web.menu.aria_main", "Main menu")}
     >
       {/* File */}
       <DropdownMenu.Root>
@@ -131,7 +131,7 @@ export function MenuBar({
               disabled={!manifestLoaded}
               onSelect={onSetAction}
             >
-              {t("web.menu.action_set", "Set Action by Regex")}
+              {t("web.menu.action_set", "Set Action by Field…")}
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
             <DropdownMenu.Item
@@ -140,7 +140,7 @@ export function MenuBar({
               disabled={!manifestLoaded}
               onSelect={onExecute}
             >
-              {t("web.menu.action_execute", "Execute…")}
+              {t("web.menu.action_execute", "Execute Action…")}
             </DropdownMenu.Item>
             <DropdownMenu.Item
               data-testid={MENU_ACTION_EXECUTE_SELECTED}
@@ -148,7 +148,7 @@ export function MenuBar({
               disabled={!manifestLoaded || !hasSelection}
               onSelect={onExecuteSelected}
             >
-              {t("web.menu.action_execute_selected", "Execute (only selected)…")}
+              {t("web.menu.action_execute_selected", "Execute Action (only selected)…")}
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

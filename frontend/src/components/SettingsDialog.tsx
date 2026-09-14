@@ -79,7 +79,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         sortingDefaults = JSON.parse(sortingDefaultsRaw) as unknown;
       } catch {
         setSortingError(
-          t("web.settings.sorting_invalid_json", "Invalid JSON for sorting.defaults")
+          t(
+            "web.settings.sorting_invalid_json",
+            "Invalid JSON — the sorting defaults were not saved."
+          )
         );
         return;
       }
@@ -114,12 +117,18 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
         <div className="mt-4 flex flex-col gap-4">
           {/* ui.prune_singletons — 3-value enum (#686) */}
-          <label className="flex items-center gap-2 text-sm">
+          {/* Copy audit ST1: the raw settings-file key used to sit inside the
+              visible label. It now lives in the row's hover description, so
+              the label reads as copy and the key is still discoverable. */}
+          <label
+            className="flex items-center gap-2 text-sm"
+            title={t(
+              "web.settings.prune_singletons_desc",
+              "Whether singleton groups are pruned after a scan. Config key: ui.prune_singletons"
+            )}
+          >
             <span className="min-w-0">
-              {t(
-                "web.settings.prune_singletons_label",
-                "Prune singletons (ui.prune_singletons)"
-              )}
+              {t("web.settings.prune_singletons_label", "Prune singletons")}
             </span>
             <select
               data-testid={DLGE_SETTINGS_PRUNE_SELECT}
@@ -140,7 +149,15 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           </label>
 
           {/* ui.scan_dialog.autotune_read_knee */}
-          <label className="flex items-center gap-2 text-sm">
+          {/* Same toggle as the Scan dialog's Advanced settings row, so it
+              takes the same words (copy audit ST1). */}
+          <label
+            className="flex items-center gap-2 text-sm"
+            title={t(
+              "web.settings.autotune_read_knee_desc",
+              "Measure each device's best read concurrency at scan start instead of a fixed guess. On by default; never changes results. Config key: ui.scan_dialog.autotune_read_knee"
+            )}
+          >
             <Checkbox
               checked={autotuneReadKnee}
               onCheckedChange={(checked) =>
@@ -149,7 +166,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             />
             {t(
               "web.settings.autotune_read_knee_label",
-              "Auto-tune read knee (ui.scan_dialog.autotune_read_knee)"
+              "Auto-tune reader concurrency (experimental)"
             )}
           </label>
 
@@ -158,11 +175,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             <label
               htmlFor="settings-sorting-defaults"
               className="text-sm font-medium text-ink"
-            >
-              {t(
-                "web.settings.sorting_defaults_label",
-                "Sorting defaults (sorting.defaults — JSON)"
+              title={t(
+                "web.settings.sorting_defaults_desc",
+                "Default sort columns, as a JSON array. Config key: sorting.defaults"
               )}
+            >
+              {t("web.settings.sorting_defaults_label", "Sorting defaults")}
             </label>
             <textarea
               id="settings-sorting-defaults"
@@ -172,7 +190,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 setSortingDefaultsRaw(e.target.value);
                 setSortingError(null);
               }}
-              placeholder="null"
+              // Copy audit ST2: the literal word "null" read as a bug rather
+              // than a hint; an empty array is this key's actual default.
+              placeholder={t("web.settings.sorting_placeholder", "[]")}
               className="rounded border border-hairline-input px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-warm"
             />
             {sortingError !== null && (

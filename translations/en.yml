@@ -479,14 +479,44 @@ web:
     execute: "Execute"
     settings: "Settings"
     open: "Open"
+    # The toolbar button had been borrowing web.action_dialog.title (copy
+    # audit T1); a button wants a shorter label than the dialog's title.
+    set_action: "Set Action…"
   status:
-    summary: "{groups} groups · {files} files"
+    summary: "{groups} {groupWord} · {files} {fileWord}"
     loading_manifest: "Loading manifest…"
     scanning: "Scanning{stage}"
     scan_failed: "Scan failed: {error}"
     manifest_failed: "Manifest error: {error}"
     execute_failed: "Action error: {error}"
     ready: "Ready"
+    # Singular/plural translated separately, not flattened — the old single
+    # template rendered "1 groups · 1 files" (copy audit S1). Same split-key
+    # pattern as web.execute_dialog.file_singular/file_plural. zh_TW has no
+    # plural marking, so its two values are identical — correct, not lazy.
+    group_singular: "group"
+    group_plural: "groups"
+    file_singular: "file"
+    file_plural: "files"
+  # Human sentences for the closed set of backend failure shapes surfaced in
+  # the status bar (copy audit S2). Before this, the raw developer strings the
+  # routes raise ("Execute failed: {exc}", "Failed to launch Explorer: {exc}")
+  # were the whole user-facing message, in English, in both locales. The raw
+  # text is still shown — as a secondary technical line under the sentence.
+  error:
+    execute_failed: "The action could not be completed."
+    remove_failed: "The rows could not be taken off the list."
+    prune_failed: "The singleton groups could not be pruned."
+    classify_failed: "The singleton groups could not be examined."
+    save_failed: "The manifest could not be saved."
+    bulk_decide_failed: "The bulk action could not be applied."
+    apply_best_copy_failed: "The best-copy decisions could not be applied."
+    reveal_failed: "The file manager could not be opened."
+    already_running: "An action is already running — wait for it to finish."
+    locked_paths: "Some of the rows in scope are locked."
+    not_found: "The file or manifest could not be found."
+    unknown: "The request could not be completed."
+    technical_detail: "Details: {detail}"
   empty_state:
     no_manifest: "No manifest loaded — Scan or Open a manifest to begin."
     scan: "Scan…"
@@ -510,6 +540,9 @@ web:
     # Web result tree shows a human-readable size (e.g. "1.2 MB"), so its
     # header reads "Size" — distinct from the desktop's raw-byte "Size (Bytes)".
     size: "Size"
+    # Accessible name of the inline decision control in each file row (copy
+    # audit R5 — it was a hardcoded English aria-label).
+    decision: "Decision"
   # Mirror of decision.* keys for web-only usage.
   decision:
     delete: "delete"
@@ -532,7 +565,9 @@ web:
     simple_op_exact: "exactly matches"
     simple_text_placeholder: "type the text to match…"
     simple_disabled_no_match_fn: "Write-through preview unavailable — Simple inputs are read-only on this entry point."
-    match_counter: "{matched} of {total} match"
+    # "…matched", not "…match": the count-agnostic form. The old value read
+    # "1 of 5 match" for every n (copy audit A1).
+    match_counter: "{matched} of {total} matched"
     match_counter_topn: "{matched} matched (≤{n} per group × {group_count} groups)"
     match_counter_invalid: "—"
     match_counter_applied: "Applied to {matched} rows"
@@ -577,13 +612,18 @@ web:
     delete_confirm_button: "Mark {matched} files for deletion"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
+    aria_main: "Main menu"
     file: "File"
     file_scan: "Scan Sources…"
     file_open: "Open Manifest…"
     action: "Action"
-    action_set: "Set Action by Regex"
-    action_execute: "Execute…"
-    action_execute_selected: "Execute (only selected)…"
+    # "by Field", not "by Regex": regex is one of the dialog's three modes,
+    # and the dialog title + the right-click entry already say Field (copy
+    # audit M1). The Execute entries take Qt's full "Execute Action…" form,
+    # which the web right-click menu already uses (copy audit M2).
+    action_set: "Set Action by Field…"
+    action_execute: "Execute Action…"
+    action_execute_selected: "Execute Action (only selected)…"
     list: "List"
     list_remove: "Remove from List"
     view: "View"
@@ -622,9 +662,59 @@ web:
     # paragraph: the scale starts at 2 and odd values are usually
     # indistinguishable from the even value below them.
     threshold_parity_note: "Starts at 2: photo pHashes always differ by an even number of bits, so an odd value usually matches the same files as the even one below it, and 1 would match nothing at all. 2 is the strictest useful setting."
+    # Scan-dialog chrome (copy audit SC1/SC3/SC4/SC5). The whole dialog was
+    # hardcoded English apart from `browse` and the parity note above, so a
+    # zh_TW user opened an entirely English dialog. Keys mirror the desktop
+    # `scan_dialog.*` block; the English VALUES keep this dialog's existing
+    # wording (the defect was the missing t(), not the wording) — the one
+    # exception is the parity note, which already replaces Qt's trailing
+    # "2 is the strictest useful setting" clause on the *_desc lines (SC2).
+    title: "Scan Sources"
+    source_list_header: "Sources"
+    source_list_aria: "Scan source list"
+    add_source: "+ Add source"
+    output_label: "Output path"
+    output_placeholder: "e.g. C:/output/scan.db"
+    advanced_settings_label: "Advanced settings"
+    autotune_read_knee_label: "Auto-tune reader concurrency (experimental)"
+    auto_select_label: "Auto select after scan"
+    auto_select_aggressive_label: "Also mark all other files for delete"
+    grouping_sensitivity_label: "Grouping sensitivity"
+    phash_label: "pHash Similarity Threshold (default: 10, range: 2–20)"
+    phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter."
+    phash_tooltip: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs)."
+    dhash_label: "dHash Confidence Threshold (default: 10, range: 2–20)"
+    dhash_desc: "Second hash that confirms a pHash match. Lower = stricter confirmation."
+    dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
+    color_label: "Mean Color Gate (default: 30, range: 0–100)"
+    color_desc: "Reject a pHash match when average colours differ by more than this (L2). 0 = off."
+    color_tooltip: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
+    error_prefix: "Error: {error}"
+    start_button: "Start Scan"
+    # Running state (ScanProgress) — copy audit SC4. The count line read
+    # "1 files found", so it takes the same split singular/plural shape as
+    # the status bar.
+    progress_aria: "Scan progress"
+    log_aria: "Scan log"
+    files_found_singular: "{n} file found"
+    files_found_plural: "{n} files found"
+    eta_label: "ETA {eta}"
+    cancel: "Cancel"
+    # Source rows (SourceRow) — copy audit SC5.
+    source_row_aria: "Source {label}"
+    source_unnamed: "unnamed"
+    source_label_placeholder: "Label"
+    source_label_aria: "Source label"
+    source_path_placeholder: "Path"
+    source_path_aria: "Source path"
+    recursive: "Recursive"
+    remove_source: "Remove source"
   rescan_confirm:
     title: "Discard pending decisions?"
-    body: "You have {pending} on the loaded manifest. Starting a new scan will discard them."
+    # The count and its noun are separate placeholders so each locale joins
+    # them its own way — zh_TW takes no space before a measure word, and the
+    # single "{pending}" phrase built in JS forced one (copy audit RC1).
+    body: "You have {count} {noun} on the loaded manifest. Starting a new scan will discard them."
     noun_singular: "pending decision"
     noun_plural: "pending decisions"
     cancel: "Cancel"
@@ -637,10 +727,14 @@ web:
     files_not_found_title: "Files Not Found"
     files_failed_title: "Files Failed to Delete"
     # Dialog chrome (web audit fix 5 — was hardcoded English).
-    title: "Execute Actions"
+    # "— Review" restored from Qt's execute_dialog.title (copy audit E6): the
+    # dialog is a review gate before a destructive run, and the bare
+    # "Execute Actions" reads like the action itself.
+    title: "Execute Actions — Review"
     show_label: "Show:"
     file_count: "{n} {fileWord}"
     select_row_to_preview: "Select a row to preview"
+    preview_alt: "Preview"
     cancel: "Cancel"
     execute_selected: "Execute selected"
     execute: "Execute"
@@ -649,6 +743,19 @@ web:
     # finding — the flattened form read "1 file(s)" for n=1).
     file_singular: "file"
     file_plural: "files"
+    # Banner over the tree when every member of a group is marked for delete
+    # (copy audit E2 — five hardcoded JSX fragments that no locale could
+    # reorder). {groups} is replaced in the component by the clickable
+    # jump anchors, so the template is split on it rather than interpolated.
+    warning_prefix: "Warning:"
+    warning_complete_groups: "{groupWord} {groups} will have ALL files deleted. Review decisions below before clicking Execute."
+    group_singular: "Group"
+    group_plural: "Groups"
+    # Banner when the active type filter is hiding pending delete rows
+    # (copy audit E3 — was hardcoded, and flattened to "row(s)").
+    warning_hidden_destructive: "⚠ {n} pending delete {rowWord} hidden by the current filter — switch to All or Delete only to see them."
+    row_singular: "row"
+    row_plural: "rows"
   # Main result-tree + Execute-dialog right-click menus (ContextMenu.tsx +
   # execute/ExecuteContextMenu.tsx share this namespace — identical verbs,
   # web audit fix 5: was hardcoded English in both).
@@ -694,8 +801,13 @@ web:
   # PruneConfirmDialog (web audit fix 5 — was hardcoded English).
   prune_confirm:
     title: "Prune singleton groups?"
-    body_mixed: "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete/ignore action. Remove the plain singleton {plainGroupWord} from the list?"
-    body_actioned_only: "{actioned} singleton {actionedGroupWord} with an un-executed delete/ignore action remain. Remove {pronoun} from the list?"
+    # "delete / remove-from-list", not "delete/ignore": `ignore` is the
+    # internal wire value for the decision the user is shown as "remove from
+    # list" everywhere else, and it was leaking into both locales here
+    # (copy audit P1). Qt's singleton_prune_confirm.body_actioned_only says
+    # "delete / remove from list" for the same reason.
+    body_mixed: "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete / remove-from-list action. Remove the plain singleton {plainGroupWord} from the list?"
+    body_actioned_only: "{actioned} singleton {actionedGroupWord} with an un-executed delete / remove-from-list action remain. Remove {pronoun} from the list?"
     body_plain_only: "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Remove {phrase} from the list?"
     include_actioned: "Also remove {n} actioned {singletonWord}"
     dont_ask_again: "Don't ask again"
@@ -726,13 +838,24 @@ web:
   # SettingsDialog (web audit fix 5 — was hardcoded English).
   settings:
     title: "Settings"
-    prune_singletons_label: "Prune singletons (ui.prune_singletons)"
+    # Copy audit ST1: the raw settings-file keys were part of the visible
+    # label ("Prune singletons (ui.prune_singletons)"). They move to the
+    # row's hover description, and the auto-tune row adopts the desktop's
+    # wording (scan_dialog.autotune_read_knee_label) so the same toggle reads
+    # the same in both dialogs.
+    prune_singletons_label: "Prune singletons"
+    prune_singletons_desc: "Whether singleton groups are pruned after a scan. Config key: ui.prune_singletons"
     prune_ask: "Ask each time"
     prune_always: "Always prune"
     prune_never: "Never prune"
-    autotune_read_knee_label: "Auto-tune read knee (ui.scan_dialog.autotune_read_knee)"
-    sorting_defaults_label: "Sorting defaults (sorting.defaults — JSON)"
-    sorting_invalid_json: "Invalid JSON for sorting.defaults"
+    autotune_read_knee_label: "Auto-tune reader concurrency (experimental)"
+    autotune_read_knee_desc: "Measure each device's best read concurrency at scan start instead of a fixed guess. On by default; never changes results. Config key: ui.scan_dialog.autotune_read_knee"
+    sorting_defaults_label: "Sorting defaults"
+    sorting_defaults_desc: "Default sort columns, as a JSON array. Config key: sorting.defaults"
+    # Copy audit ST2: the textarea's placeholder was the literal word "null",
+    # which reads as a bug rather than a hint. An empty array is the default.
+    sorting_placeholder: "[]"
+    sorting_invalid_json: "Invalid JSON — the sorting defaults were not saved."
     cancel: "Cancel"
     save: "Save"
   # FullResViewer (web audit fix 5 — was partially hardcoded English).
@@ -756,13 +879,27 @@ web:
     meta_folder: "Folder"
     meta_size: "Size"
     meta_score: "Score"
-    meta_dims: "Dims"
+    # "Resolution", matching web.column.resolution for the same quantity —
+    # "Dims" was the one abbreviation among full-word sibling labels
+    # (copy audit PV1).
+    meta_dims: "Resolution"
     meta_shot: "Shot"
     meta_created: "Created"
   # lib/format.ts similarityLabel() — the one natural-language word among its
   # symbol-only outputs (web audit fix 5).
   format:
     similarity_ref: "Ref"
+    # Copy audit R6: the cell rendered a bare "~" hardcoded in format.ts,
+    # while the desktop (tree.similarity_near_dup) and docs/features.md both
+    # say "~dup". A lone tilde carries no meaning and no translation.
+    similarity_near_dup: "~dup"
+  # Result-tree group header row (copy audit R8) — the row was hardcoded
+  # English, so "Group 3 · 5 files" stayed English in a zh_TW session. The
+  # `tree.*` block was the one Qt namespace never mirrored into web.*.
+  tree:
+    group_label: "Group {n}"
+    file_singular: "file"
+    file_plural: "files"
   # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —
   # the patternSummary branch above was already translated).
   delete_confirm:

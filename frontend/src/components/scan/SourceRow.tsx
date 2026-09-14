@@ -34,37 +34,43 @@ interface SourceRowProps {
 export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }: SourceRowProps) {
   const t = useT();
   return (
-    <div className={cn("flex items-center gap-2 py-1")} role="group" aria-label={`Source ${entry.label || "unnamed"}`}>
+    <div
+      className={cn("flex items-center gap-2 py-1")}
+      role="group"
+      aria-label={t("web.scan.source_row_aria", "Source {label}", {
+        label: entry.label || t("web.scan.source_unnamed", "unnamed"),
+      })}
+    >
       {/* Label */}
       <label className="sr-only" htmlFor={`source-label-${entry.id}`}>
-        Source label
+        {t("web.scan.source_label_aria", "Source label")}
       </label>
       <input
         id={`source-label-${entry.id}`}
         type="text"
         data-testid={scanSourceLabelTestid(idx)}
-        placeholder="Label"
+        placeholder={t("web.scan.source_label_placeholder", "Label")}
         value={entry.label}
         disabled={disabled}
         onChange={(e) => onChange({ ...entry, label: e.target.value })}
         className="w-28 rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm disabled:opacity-50"
-        aria-label="Source label"
+        aria-label={t("web.scan.source_label_aria", "Source label")}
       />
 
       {/* Path */}
       <label className="sr-only" htmlFor={`source-path-${entry.id}`}>
-        Source path
+        {t("web.scan.source_path_aria", "Source path")}
       </label>
       <input
         id={`source-path-${entry.id}`}
         type="text"
         data-testid={scanSourcePathTestid(idx)}
-        placeholder="Path"
+        placeholder={t("web.scan.source_path_placeholder", "Path")}
         value={entry.path}
         disabled={disabled}
         onChange={(e) => onChange({ ...entry, path: e.target.value })}
         className="flex-1 rounded border border-hairline-input px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm disabled:opacity-50"
-        aria-label="Source path"
+        aria-label={t("web.scan.source_path_aria", "Source path")}
       />
 
       {/* Browse for folder */}
@@ -89,9 +95,9 @@ export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }
             onChange({ ...entry, recursive: checked === true })
           }
           data-testid={scanSourceRecursiveTestid(idx)}
-          aria-label="Recursive"
+          aria-label={t("web.scan.recursive", "Recursive")}
         />
-        <span className="text-ink-muted">Recursive</span>
+        <span className="text-ink-muted">{t("web.scan.recursive", "Recursive")}</span>
       </label>
 
       {/* Remove */}
@@ -101,7 +107,7 @@ export function SourceRow({ entry, idx, disabled, onChange, onRemove, onBrowse }
         size="sm"
         disabled={disabled}
         onClick={() => onRemove(entry.id)}
-        aria-label="Remove source"
+        aria-label={t("web.scan.remove_source", "Remove source")}
         className="shrink-0 text-ink-muted hover:text-danger-warm"
       >
         ✕

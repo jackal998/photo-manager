@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { useAppStore } from "@/store/useAppStore";
+import { useI18nStore } from "@/i18n/useI18nStore";
 import { getSettings, patchSettings } from "@/api/client";
 import { ScanDialog } from "./ScanDialog";
 
@@ -136,6 +137,9 @@ describe("ScanDialog", () => {
       manifest: { ...s.manifest, groups: [] },
       settings: s.settings,
     }));
+    // Every test starts English with an empty catalog; the copy tests below
+    // seed a zh_TW catalog explicitly.
+    useI18nStore.setState({ locale: "en", catalog: {} });
   });
 
   it("renders the dialog with the SCAN_DIALOG testid when open", () => {
@@ -776,6 +780,71 @@ describe("ScanDialog", () => {
       Zebra: "/z-path",
       Alpha: "/a-path",
       Mango: "/m-path",
+    });
+  });
+
+  // Copy audit SC1 — this was the largest untranslated surface in the client:
+  // of 935 lines only `browse`, the parity note and the two picker titles went
+  // through t(), so a zh_TW user opened an entirely English Scan dialog.
+  describe("copy is catalog-driven (copy audit SC1/SC3/SC5)", () => {
+    it("renders the zh_TW catalog values for the dialog chrome", async () => {
+      useI18nStore.setState({
+        locale: "zh_TW",
+        catalog: {
+          "web.scan.title": "掃描來源",
+          "web.scan.source_list_header": "來源",
+          "web.scan.add_source": "+ 新增來源",
+          "web.scan.output_label": "輸出路徑",
+          "web.scan.advanced_settings_label": "進階設定",
+          "web.scan.start_button": "開始掃描",
+        },
+      });
+      renderDialog();
+      await waitFor(() => expect(mockGetSettings).toHaveBeenCalled());
+
+      const dialog = screen.getByTestId(SCAN_DIALOG);
+      for (const zh of ["掃描來源", "來源", "+ 新增來源", "輸出路徑", "進階設定"]) {
+        expect(dialog).toHaveTextContent(zh);
+      }
+      expect(screen.getByTestId(SCAN_START_BUTTON)).toHaveTextContent("開始掃描");
+      // The English that used to be unavoidable here.
+      expect(dialog.textContent).not.toContain("Start Scan");
+      expect(dialog.textContent).not.toContain("Advanced settings");
+    });
+
+    it("translates the source row's placeholders and the Recursive label", async () => {
+      useI18nStore.setState({
+        locale: "zh_TW",
+        catalog: {
+          "web.scan.source_label_placeholder": "標籤",
+          "web.scan.source_path_placeholder": "路徑",
+          "web.scan.recursive": "包含子資料夾",
+        },
+      });
+      renderDialog();
+      await waitFor(() => expect(mockGetSettings).toHaveBeenCalled());
+
+      expect(screen.getByTestId(scanSourceLabelTestid(0))).toHaveAttribute(
+        "placeholder",
+        "標籤"
+      );
+      expect(screen.getByTestId(scanSourcePathTestid(0))).toHaveAttribute(
+        "placeholder",
+        "路徑"
+      );
+      expect(screen.getByTestId(SCAN_DIALOG)).toHaveTextContent("包含子資料夾");
+    });
+
+    it("translates the Advanced-settings hover tooltips (copy audit SC3)", async () => {
+      useI18nStore.setState({
+        locale: "zh_TW",
+        catalog: { "web.scan.phash_desc": "兩張 pHash 可相差幾個位元仍算同組。", "web.scan.phash_tooltip": "感知雜湊的 Hamming 距離說明。" },
+      });
+      renderDialog();
+      await waitFor(() => expect(mockGetSettings).toHaveBeenCalled());
+
+      const desc = screen.getByText("兩張 pHash 可相差幾個位元仍算同組。");
+      expect(desc).toHaveAttribute("title", "感知雜湊的 Hamming 距離說明。");
     });
   });
 });

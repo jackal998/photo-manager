@@ -3,6 +3,7 @@
 import type { MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronRight, ChevronDown } from "lucide-react";
+import { useT } from "@/i18n/useT";
 import { rowGroupTestid } from "@/testids";
 
 interface GroupRowProps {
@@ -32,6 +33,8 @@ export function GroupRow({
   onToggle,
   onContextMenu,
 }: GroupRowProps) {
+  const t = useT();
+
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
     onContextMenu?.(memberPaths, groupNumber, e.clientX, e.clientY);
@@ -59,10 +62,17 @@ export function GroupRow({
       ) : (
         <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-muted" />
       )}
+      {/* Copy audit R8: this row was hardcoded English, so a zh_TW session
+          still read "Group 3 · 5 files". `tree.*` is the one desktop
+          namespace never mirrored into `web.*` — web.tree.group_label is
+          that mirror. */}
       <span>
-        Group {groupNumber}
+        {t("web.tree.group_label", "Group {n}", { n: groupNumber })}
         <span className="mx-1 text-ink-faint">·</span>
-        {memberCount} {memberCount === 1 ? "file" : "files"}
+        {memberCount}{" "}
+        {memberCount === 1
+          ? t("web.tree.file_singular", "file")
+          : t("web.tree.file_plural", "files")}
       </span>
     </button>
   );

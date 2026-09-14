@@ -10,11 +10,14 @@
 //     existing ResultTree tests and any scenario built on them read.
 //   * the click bubbles to FileRow's row-select handler exactly as the Radix
 //     root's did; clicking a padlock still also selects its row.
-// `aria-pressed` is added (a toggle button's native state) and the accessible
-// name stays "Lock row".
+// `aria-pressed` is added (a toggle button's native state). The accessible
+// name now comes from web.column.lock — the same word as the column header
+// the control sits under — instead of a hardcoded English "Lock row" that a
+// zh_TW screen-reader user would still have heard in English (copy audit R9).
 
 import { Lock, LockOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/useT";
 
 interface LockToggleProps {
   checked: boolean;
@@ -27,11 +30,12 @@ export function LockToggle({
   onChange,
   "data-testid": testId,
 }: LockToggleProps) {
+  const t = useT();
   return (
     <button
       type="button"
       aria-pressed={checked}
-      aria-label="Lock row"
+      aria-label={t("web.column.lock", "Lock")}
       data-state={checked ? "checked" : "unchecked"}
       data-testid={testId}
       onClick={() => onChange(!checked)}

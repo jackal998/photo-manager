@@ -28,12 +28,26 @@ describe("similarityLabel", () => {
     expect(similarityLabel(sim, t)).toBe("參考");
   });
 
-  it("non-'ref' kinds ignore t entirely (percent/passenger/near_dup/none are symbols, not words)", () => {
+  it("purely symbolic kinds ignore t entirely (percent / none are symbols, not words)", () => {
     const t = vi.fn((_key: string, fallback: string) => fallback);
     expect(similarityLabel({ kind: "percent", percent: 92 }, t)).toBe("92%");
-    expect(similarityLabel({ kind: "near_dup", percent: null }, t)).toBe("~");
     expect(similarityLabel({ kind: "none", percent: null }, t)).toBe("—");
     expect(t).not.toHaveBeenCalled();
+  });
+
+  // Copy audit R6: the near-dup cell rendered a bare hardcoded "~" in both
+  // locales, while the desktop catalog (tree.similarity_near_dup) and
+  // docs/features.md both document the cell as "~dup".
+  it("near_dup renders the translatable '~dup' label, not a bare tilde", () => {
+    const t = vi.fn((_key: string, fallback: string) => fallback);
+    expect(similarityLabel({ kind: "near_dup", percent: null }, t)).toBe("~dup");
+    expect(t).toHaveBeenCalledWith("web.format.similarity_near_dup", "~dup");
+  });
+
+  it("near_dup uses the zh_TW catalog value when one is supplied", () => {
+    expect(similarityLabel({ kind: "near_dup", percent: null }, () => "~近似")).toBe(
+      "~近似"
+    );
   });
 });
 
