@@ -34,6 +34,7 @@ from pathlib import Path
 
 from qa.web._pw import PWContext
 from qa.web._invariants import (
+    assert_manifest_summary,
     assert_status_idle,
     wait_manifest_loaded,
     run_scan,
@@ -68,14 +69,13 @@ def run(*, base_url: str) -> None:
             )
 
             # Step 3 — post-load summary.
-            # The status bar must now show the "N groups · M files" pattern.
-            # wait_manifest_loaded already returns this text; the assertion is
-            # in the match itself.  We additionally validate the return value
-            # is non-empty and mentions both "groups" and "files".
-            assert "groups" in status_text.lower() and "files" in status_text.lower(), (
-                f"Post-scan status bar must contain 'groups' and 'files', "
-                f"got: {status_text!r}"
-            )
+            # The status bar must now show the "N group(s) · M file(s)"
+            # pattern.  wait_manifest_loaded already returns this text; the
+            # assertion is in the match itself.  Re-asserted here through the
+            # shared helper (not a local "groups" substring — the nouns are
+            # per-count since the copy audit, so a one-group manifest reads
+            # "1 group · 5 files"), plus a non-empty check.
+            assert_manifest_summary(status_text, context="s37 post-scan")
             assert status_text.strip(), (
                 "Status bar text must not be empty after manifest load"
             )

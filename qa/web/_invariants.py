@@ -180,8 +180,34 @@ def wait_log_line(page: "Page", pattern: str, timeout: float = 10_000) -> str:
 # ---------------------------------------------------------------------------
 
 # The App.tsx status bar emits "N groups · M files" once a manifest is loaded.
-# Matches both "0 groups · 0 files" (empty scan) and "5 groups · 12 files".
+# Matches "0 groups · 0 files" (empty scan), "5 groups · 12 files", and — since
+# the 2026-09-13 copy audit split the nouns per count (S1) — the singular
+# "1 group · 1 file". zh_TW carries no plural marking, so its two catalog
+# values are identical and this pattern never sees a Chinese string.
 _STATUS_MANIFEST_LOADED = re.compile(r"\d+\s*groups?\s*·\s*\d+\s*files?", re.IGNORECASE)
+
+
+def assert_manifest_summary(status_text: str, *, context: str) -> None:
+    """Assert `status_text` carries the "N group(s) · M file(s)" summary.
+
+    Three scenarios each grew their own `"groups" in status_text` substring
+    check, which all three broke together the moment the status bar started
+    saying "1 group · 5 files" for a single-group manifest (copy audit S1).
+    The wording contract now lives in exactly one place — this helper and the
+    `_STATUS_MANIFEST_LOADED` pattern above it — so a real wording regression
+    still fails loudly, and a legitimate singular does not.
+
+    Parameters
+    ----------
+    status_text:
+        The `main-status-bar` text, as returned by `wait_manifest_loaded`.
+    context:
+        Where the caller is asserting from, for the failure message.
+    """
+    assert _STATUS_MANIFEST_LOADED.search(status_text), (
+        f"{context}: status bar must carry the manifest summary "
+        f'("N group(s) · M file(s)"), got: {status_text!r}'
+    )
 
 
 def wait_manifest_loaded(page: "Page", timeout: float = 60_000) -> str:

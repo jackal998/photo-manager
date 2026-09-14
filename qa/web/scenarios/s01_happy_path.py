@@ -62,6 +62,7 @@ from pathlib import Path
 
 from qa.web._pw import PWContext
 from qa.web._invariants import (
+    assert_manifest_summary,
     assert_status_idle,
     run_scan,
 )
@@ -150,14 +151,12 @@ def run(*, base_url: str) -> int:
             # ── POST-load assertions (port of inv_status + inv_actions) ──────
             # #58 status: the manifest summary line is present.  run_scan
             # already waited on the "N groups · M files" pattern; we re-assert
-            # both tokens explicitly so a wording regression fails loudly (web
-            # analogue of the Qt `Loaded manifest: \d+ group` regex).
-            assert (
-                "groups" in status_text.lower() and "files" in status_text.lower()
-            ), (
-                f"Post-scan status bar must contain 'groups' and 'files', "
-                f"got: {status_text!r}"
-            )
+            # it explicitly so a wording regression fails loudly (web analogue
+            # of the Qt `Loaded manifest: \d+ group` regex).  Asserted through
+            # the shared helper, not a local "groups" substring: the nouns are
+            # per-count since the copy audit, so a one-group manifest reads
+            # "1 group · 5 files".
+            assert_manifest_summary(status_text, context="s01 post-scan")
 
             # #42 post-state: the empty-state hint is gone and the tree appears.
             # App.tsx renders these mutually exclusively (the empty-state node

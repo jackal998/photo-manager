@@ -29,7 +29,11 @@ import tempfile
 from pathlib import Path
 
 from qa.web._pw import PWContext
-from qa.web._invariants import open_manifest_via_picker, run_scan
+from qa.web._invariants import (
+    assert_manifest_summary,
+    open_manifest_via_picker,
+    run_scan,
+)
 from qa.web.testid_constants import MAIN_EMPTY_STATE
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -52,7 +56,10 @@ def run(*, base_url: str) -> None:
                 output_path=db_path,
                 scan_timeout=120_000,
             )
-            assert "groups" in status, f"scan did not load a manifest: {status!r}"
+            # Shared helper, not a local "groups" substring: the summary's
+            # nouns are per-count since the copy audit, so a single-group
+            # manifest reads "1 group · 5 files".
+            assert_manifest_summary(status, context="s16 scan did not load a manifest")
             assert os.path.exists(db_path), f"manifest file not written: {db_path}"
 
             # Reload clears the in-memory manifest → empty state.
