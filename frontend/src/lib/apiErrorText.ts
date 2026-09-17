@@ -65,7 +65,7 @@ const ERROR_CODES: Record<string, [string, string]> = {
  */
 const DETAIL_PREFIXES: [string, string, string][] = [
   ["Execute failed:", "web.error.execute_failed", "The action could not be completed."],
-  ["Remove failed:", "web.error.remove_failed", "The rows could not be taken off the list."],
+  ["Remove failed:", "web.error.remove_failed", "The rows could not be skipped."],
   ["Prune failed:", "web.error.prune_failed", "The singleton groups could not be pruned."],
   [
     "Classify failed:",

@@ -497,7 +497,7 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
             set_row_decision(
                 page,
                 row_decision_testid(group_b_id, _MIXED_GROUP_B_BASENAMES[0]),
-                "Ignore",
+                "Skip",
             )
 
             pre_decisions = _extract_decisions(_get_manifest(base_url, db_path))

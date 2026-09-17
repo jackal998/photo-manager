@@ -15,6 +15,7 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { EXECUTE_TREE, executeRowTestid } from "@/testids";
+import { useT } from "@/i18n/useT";
 import type { Group } from "@/api/types";
 import type { TypeFilterValue } from "./TypeFilter";
 
@@ -244,11 +245,17 @@ function GroupHeaderRow({
   groupId: string;
   memberCount: number;
 }) {
+  // Copy audit E4 — the file/files noun was hardcoded English while
+  // web.execute_dialog.file_singular/file_plural already existed unused.
+  const t = useT();
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 bg-group-band border-b border-group-line text-xs font-semibold text-ink-muted select-none">
       <span>Group {groupId}</span>
       <span className="text-ink-faint font-normal">
-        {memberCount} {memberCount === 1 ? "file" : "files"}
+        {memberCount}{" "}
+        {memberCount === 1
+          ? t("web.execute_dialog.file_singular", "file")
+          : t("web.execute_dialog.file_plural", "files")}
       </span>
     </div>
   );
@@ -273,6 +280,9 @@ function ExecuteFileRow({
 }) {
   // §5.3 scoped row testid: execute-row-{groupId}-{basename}
   const testId = executeRowTestid(vrow.groupId, vrow.basename);
+  // Copy audit E4 / R4 — the decision badge was hardcoded "Delete"/"Remove",
+  // the fourth of four vocabularies for the same three states.
+  const t = useT();
 
   return (
     <button
@@ -324,7 +334,9 @@ function ExecuteFileRow({
             : "bg-dec-remove-bg text-dec-remove-ink",
         ].join(" ")}
       >
-        {vrow.decision === "delete" ? "Delete" : "Remove"}
+        {vrow.decision === "delete"
+          ? t("web.decision.delete", "Delete")
+          : t("web.decision.remove_from_list", "Skip")}
       </span>
     </button>
   );

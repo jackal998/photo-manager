@@ -1,5 +1,5 @@
 // RemoveFromListConfirmDialog — shown before the Execute dialog's row menu
-// finalizes a "Remove from list" (outcome='ignored').
+// finalizes a Skip (outcome='ignored' — the wire value is unchanged).
 //
 // Mirrors Qt's "Remove from List" QMessageBox (default No) in
 // execute_action_dialog.py: removing only updates the manifest, no file on
@@ -47,12 +47,12 @@ export function RemoveFromListConfirmDialog({
       <DialogContent data-testid={EXECUTE_REMOVE_CONFIRM}>
         <DialogHeader>
           <DialogTitle>
-            {t("web.remove_confirm.title", "Remove from list?")}
+            {t("web.remove_confirm.title", "Skip this file?")}
           </DialogTitle>
           <DialogDescription>
             {t(
               "web.remove_confirm.body",
-              "Remove {basename} from the list? This only updates the manifest — no file on disk is touched. The removed row will not appear in the review tree until you re-scan.",
+              "Skip {basename}? The file stays on disk — this only drops the row from this review, and it will not appear again until you re-scan.",
               { basename: basename || t("web.remove_confirm.this_item", "this item") }
             )}
           </DialogDescription>
@@ -70,7 +70,7 @@ export function RemoveFromListConfirmDialog({
             data-testid={EXECUTE_REMOVE_CONFIRM_YES}
             onClick={onConfirm}
           >
-            {t("web.remove_confirm.yes_remove", "Yes, remove")}
+            {t("web.remove_confirm.yes_remove", "Yes, skip it")}
           </Button>
         </DialogFooter>
       </DialogContent>

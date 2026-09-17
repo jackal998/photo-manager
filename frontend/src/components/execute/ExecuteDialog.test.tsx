@@ -635,7 +635,7 @@ describe("ExecuteDialog", () => {
     await user.click(await screen.findByRole("option", { name }));
   }
 
-  it("under 'Remove only' filter, Execute scopes the commit to the visible (ignore) rows", async () => {
+  it("under 'Skip only' filter, Execute scopes the commit to the visible (ignore) rows", async () => {
     const user = userEvent.setup();
     const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
@@ -644,7 +644,7 @@ describe("ExecuteDialog", () => {
     });
     render(<ExecuteDialog />);
 
-    await selectFilter(user, /remove only/i);
+    await selectFilter(user, /skip only/i);
 
     // (B) hidden-destructive banner surfaces — the 1 delete row is hidden.
     expect(
@@ -660,7 +660,7 @@ describe("ExecuteDialog", () => {
     });
   });
 
-  it("hidden-destructive banner is absent under 'all' and 'Delete only' filters", async () => {
+  it("hidden-destructive banner is absent under 'All decided' and 'Delete only' filters", async () => {
     const user = userEvent.setup();
     act(() => {
       openDialog([MIXED_GROUP]);

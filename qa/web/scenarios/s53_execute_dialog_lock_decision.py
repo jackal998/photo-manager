@@ -183,7 +183,7 @@ def run(*, base_url: str) -> None:
             # staging a reversible 'ignore' decision uses the DecisionControl.
             right_click_row(page, row_file_testid(gid, _Q88))
             click_context_item(page, CTX_SET_ACTION_DELETE)
-            set_row_decision(page, row_decision_testid(gid, _Q80), "Ignore")
+            set_row_decision(page, row_decision_testid(gid, _Q80), "Skip")
             seeded = _await(
                 base_url,
                 db_path,

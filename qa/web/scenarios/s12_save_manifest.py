@@ -48,6 +48,16 @@ Web slice
 ---------
   1. tmpdir copy of all 5 near-duplicate fixtures (1 group of 5); db under tmpdir.
      ``run_scan([tmpdir])`` → manifest loaded, 0 decisions.
+  1b. Decision vocabulary in BOTH locales (copy audit batch 2, 2026-09-18):
+     read the three DecisionControl segments and the context-menu Skip item in
+     English, flip the in-app language toggle to 繁體中文 (a live re-render, so
+     the loaded manifest survives — a reload would wipe the store), read them
+     again, toggle back. Every observed string is printed as a ``probe_status:``
+     line AND hard-asserted: the failure modes are a surface drifting back to
+     its own words (audit R4 found four different triples for these three
+     states) and an English label rendering in a zh_TW session. ``"en"`` is
+     restored in the ``finally`` — the toggle persists ``ui.locale`` on the
+     SHARED batch server.
   2. Stage 'Delete' on neardup_00_q95.jpg via the DecisionControl dropdown (the
      canonical reversible keep/delete affordance, PATCH-persisted). GET
      /api/manifest: 1 decision, and that row's ``user_decision == 'delete'``
@@ -86,11 +96,16 @@ from qa.web._invariants import (
     run_scan,
     set_row_decision,
     load_manifest,
+    right_click_row,
 )
 from qa.web.testid_constants import (
+    CONTEXT_MENU,
+    CTX_SET_ACTION_REMOVE,
     MAIN_EMPTY_STATE,
+    MAIN_LANG_TOGGLE,
     row_decision_testid,
     row_decision_option_testid,
+    row_file_testid,
 )
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -196,6 +211,103 @@ def _disk_state(db_path: str, basename: str) -> tuple[bytes, bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# Decision-vocabulary probe (copy audit batch 2, 2026-09-18)
+# ---------------------------------------------------------------------------
+#
+# The owner's decision made Keep / Delete / Skip (保留 / 刪除 / 略過) the ONE
+# vocabulary for the three wire values "" / "delete" / "ignore", replacing four
+# different ones. Two failure modes this block exists to catch, neither of
+# which any testid-based assertion can see:
+#   (a) a surface drifts back to its own words (the audit's R4 finding), and
+#   (b) a surface renders the English word in a zh_TW session (the leak class
+#       the owner's own trial hit, and which s22 catches only for the toolbar).
+# The segment testids and the context-menu testid are unchanged, so this reads
+# the same elements every other scenario already locates.
+_VOCAB_EXPECTED = {
+    "en": {"none": "Keep", "delete": "Delete", "ignore": "Skip"},
+    "zh_TW": {"none": "保留", "delete": "刪除", "ignore": "略過"},
+}
+# One LONG form per locale — the context menu's Skip item. The rule the design
+# set is that this form always names the file's fate on disk first, so the
+# substring asserted is that clause, not the whole sentence.
+_VOCAB_LONG_FATE = {"en": "leave on disk", "zh_TW": "保留在磁碟上"}
+
+
+def _patch_locale(base_url: str, locale: str) -> None:
+    """PATCH /api/settings to set ui.locale=locale."""
+    url = f"{base_url.rstrip('/')}/api/settings"
+    body = json.dumps({"updates": {"ui.locale": locale}}).encode()
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="PATCH",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+        resp.read()
+
+
+def _toggle_locale(page, gid: str, want_toggle_label: str) -> None:
+    """Flip the in-app language toggle and wait for the switch to land.
+
+    The toggle re-renders the tree in place from the i18n store — no reload, so
+    the loaded manifest survives. A reload would NOT work here: it wipes the
+    store to the empty state (the fact step 3 below depends on), and re-opening
+    would then have to wait on ``wait_manifest_loaded``'s status-bar regex,
+    which only matches the ENGLISH "N groups · M files".
+    """
+    page.get_by_test_id(MAIN_LANG_TOGGLE).click()
+    page.wait_for_function(
+        "want => document.querySelector('[data-testid=\"main-lang-toggle\"]')"
+        "?.innerText.trim() === want",
+        arg=want_toggle_label,
+        timeout=10_000,
+    )
+    page.get_by_test_id(row_decision_testid(gid, ROW_TARGET)).wait_for(
+        state="visible", timeout=10_000
+    )
+
+
+def _assert_decision_vocabulary(page, gid: str, locale: str) -> None:
+    """Read the three segments + the context-menu Skip item and assert them."""
+    decision_tid = row_decision_testid(gid, ROW_TARGET)
+    observed = {}
+    for slug in ("none", "delete", "ignore"):
+        seg = page.get_by_test_id(row_decision_option_testid(gid, ROW_TARGET, slug))
+        seg.wait_for(state="visible", timeout=10_000)
+        observed[slug] = seg.inner_text().strip()
+
+    right_click_row(page, row_file_testid(gid, ROW_TARGET))
+    try:
+        item = page.get_by_test_id(CTX_SET_ACTION_REMOVE)
+        item.wait_for(state="visible", timeout=5_000)
+        observed["ctx_skip_long"] = item.inner_text().strip()
+    finally:
+        page.keyboard.press("Escape")
+        page.get_by_test_id(CONTEXT_MENU).wait_for(state="hidden", timeout=5_000)
+
+    print(
+        f"probe_status: s12 decision_vocabulary[{locale}] "
+        f"keep={observed['none']!r} delete={observed['delete']!r} "
+        f"skip={observed['ignore']!r} ctx_skip_long={observed['ctx_skip_long']!r} "
+        f"(control={decision_tid})"
+    )
+
+    for slug, want in _VOCAB_EXPECTED[locale].items():
+        assert observed[slug] == want, (
+            f"decision vocabulary [{locale}]: segment {slug!r} must read {want!r}, "
+            f"got {observed[slug]!r}. Four different vocabularies for these three "
+            f"states was copy audit finding R4; the owner settled it 2026-09-18."
+        )
+    fate = _VOCAB_LONG_FATE[locale]
+    assert fate in observed["ctx_skip_long"], (
+        f"decision vocabulary [{locale}]: the context-menu Skip item must name "
+        f"the file's fate ({fate!r}) — that is the question the word raises. "
+        f"Got {observed['ctx_skip_long']!r}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Scenario entry point
 # ---------------------------------------------------------------------------
 
@@ -204,6 +316,11 @@ def run(*, base_url: str) -> None:
     """A staged decision is durable: it survives reload + reopen and is on disk."""
     tmpdir = tempfile.mkdtemp(prefix="qa_s12_")
     db_path = os.path.join(tmpdir, "s12_manifest.db")
+    # The vocabulary probe below switches the SHARED server to zh_TW. Restoring
+    # "en" is unconditional — a crash mid-probe would otherwise leave every
+    # later scenario in the batch reading Chinese toolbars (the failure shape
+    # s22's own preamble was written to heal).
+    locale_switched = False
     try:
         for basename in _ALL_BASENAMES:
             shutil.copy(str(_NEAR_DUPS_DIR / basename), os.path.join(tmpdir, basename))
@@ -228,8 +345,21 @@ def run(*, base_url: str) -> None:
                 f"got {_decision_count(manifest)}"
             )
 
-            # ── Step 2: stage a decision via the DecisionControl dropdown ────
+            # ── Step 1b: decision vocabulary in BOTH locales (copy audit 2) ──
+            # Runs BEFORE the decision is staged so the row is untouched, and
+            # ends back in English with the page reloaded — step 2 below starts
+            # from the same state it always did.
             gid = _group_id_for(manifest, ROW_TARGET)
+            _assert_decision_vocabulary(page, gid, "en")
+            # The toggle also PATCHes ui.locale, so the shared server is now in
+            # zh_TW until the toggle back — hence the unconditional restore.
+            locale_switched = True
+            _toggle_locale(page, gid, "中")
+            _assert_decision_vocabulary(page, gid, "zh_TW")
+            _toggle_locale(page, gid, "EN")
+            locale_switched = False
+
+            # ── Step 2: stage a decision via the DecisionControl dropdown ────
             set_row_decision(page, row_decision_testid(gid, ROW_TARGET), "Delete")
 
             manifest = _get_manifest(base_url, db_path)
@@ -302,4 +432,9 @@ def run(*, base_url: str) -> None:
             )
 
     finally:
+        if locale_switched:
+            try:
+                _patch_locale(base_url, "en")
+            except Exception as exc:  # noqa: BLE001 — never mask the real failure
+                print(f"probe_status: s12 locale_restore_failed={exc!r}")
         shutil.rmtree(tmpdir, ignore_errors=True)

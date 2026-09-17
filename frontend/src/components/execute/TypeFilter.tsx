@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EXECUTE_TYPE_FILTER } from "@/testids";
+import { useT } from "@/i18n/useT";
 
 export type TypeFilterValue = "all" | "delete" | "ignore";
 
@@ -17,6 +18,13 @@ interface TypeFilterProps {
 }
 
 export function TypeFilter({ value, onChange }: TypeFilterProps) {
+  // Copy audit E1 — the aria-label and all three options were hardcoded
+  // English, and the third read "Remove only". They now carry the one
+  // decision vocabulary (Keep / Delete / Skip, owner decision 2026-09-18);
+  // the option VALUES ("all" / "delete" / "ignore") are the wire values and
+  // are untouched.
+  const t = useT();
+
   function handleChange(raw: string) {
     if (raw === "all" || raw === "delete" || raw === "ignore") {
       onChange(raw);
@@ -28,14 +36,20 @@ export function TypeFilter({ value, onChange }: TypeFilterProps) {
       <SelectTrigger
         className="h-8 w-36 text-xs"
         data-testid={EXECUTE_TYPE_FILTER}
-        aria-label="Filter by decision type"
+        aria-label={t("web.execute_dialog.filter_aria", "Filter by decision type")}
       >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="all">All decided</SelectItem>
-        <SelectItem value="delete">Delete only</SelectItem>
-        <SelectItem value="ignore">Remove only</SelectItem>
+        <SelectItem value="all">
+          {t("web.execute_dialog.filter_all", "All decided")}
+        </SelectItem>
+        <SelectItem value="delete">
+          {t("web.execute_dialog.filter_delete_only", "Delete only")}
+        </SelectItem>
+        <SelectItem value="ignore">
+          {t("web.execute_dialog.filter_skip_only", "Skip only")}
+        </SelectItem>
       </SelectContent>
     </Select>
   );

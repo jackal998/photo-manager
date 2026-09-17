@@ -124,7 +124,7 @@ export function ContextMenu({
   }
 
   function handleSetRemove() {
-    // The result-tree "Remove from list" FINALIZES outcome='ignored' — the rows
+    // The result-tree Skip item FINALIZES outcome='ignored' — the rows
     // leave the review tree immediately, no Execute step — matching the desktop
     // result-tree "Remove from List" (remove_from_review → finalize_outcome).
     // This closes the #694 parity gap (the web previously only STAGED
@@ -208,7 +208,7 @@ export function ContextMenu({
       className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
       onClick={handleSetRemove}
     >
-      {t("web.context_menu.remove", "Remove from list")}
+      {t("web.decision_long.remove_from_list", "Skip — leave on disk, drop from this review")}
     </button>
   );
 
@@ -260,7 +260,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetKeep}
       >
-        {t("web.context_menu.keep", "Keep (clear decision)")}
+        {t("web.decision_long.keep", "Keep this file")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_DELETE}
@@ -268,7 +268,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetDelete}
       >
-        {t("web.context_menu.delete", "Delete")}
+        {t("web.decision_long.delete", "Delete — move to Recycle Bin")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_REMOVE}
@@ -276,7 +276,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetRemove}
       >
-        {t("web.context_menu.remove", "Remove from list")}
+        {t("web.decision_long.remove_from_list", "Skip — leave on disk, drop from this review")}
       </button>
       <div className="my-1 border-t border-hairline-soft" role="separator" />
       {isLocked ? (

@@ -505,7 +505,7 @@ web:
   # text is still shown — as a secondary technical line under the sentence.
   error:
     execute_failed: "The action could not be completed."
-    remove_failed: "The rows could not be taken off the list."
+    remove_failed: "The rows could not be skipped."
     prune_failed: "The singleton groups could not be pruned."
     classify_failed: "The singleton groups could not be examined."
     save_failed: "The manifest could not be saved."
@@ -551,13 +551,37 @@ web:
     # Accessible name of the inline decision control in each file row (copy
     # audit R5 — it was a hardcoded English aria-label).
     decision: "Decision"
-  # Mirror of decision.* keys for web-only usage.
+  # The ONE decision vocabulary for the web client (copy audit R3/R4, owner
+  # decision 2026-09-18): Keep / Delete / Skip for the three wire values
+  # "" / "delete" / "ignore". The key names still mirror the desktop
+  # decision.* keys (and `remove_from_list` is still the wire-level name for
+  # `ignore`) — only the rendered words changed. SHORT forms: the row
+  # DecisionControl segments, the Execute tree's decision badge and the Set
+  # Action combo. Sentence case, not lowercase (copy audit A2).
   decision:
-    delete: "delete"
-    keep: "keep"
-    remove_from_list: "remove from list"
-    lock: "lock"
-    unlock: "unlock"
+    delete: "Delete"
+    keep: "Keep"
+    remove_from_list: "Skip"
+    lock: "Lock"
+    unlock: "Unlock"
+  # LONG forms of the same three decisions: right-click menu items and the
+  # DecisionControl segment tooltips. Two wording rules from the 2026-09-18
+  # design decision: every user-facing "delete" names the Recycle Bin, and
+  # the Skip form names the file's fate ("leave on disk") first.
+  decision_long:
+    keep: "Keep this file"
+    delete: "Delete — move to Recycle Bin"
+    remove_from_list: "Skip — leave on disk, drop from this review"
+  # scanner/dedup.py classification values, rendered in the result tree's
+  # Action column (copy audit R1, values half). The raw enum used to reach
+  # the user verbatim and was identical in both locales. INTERIM: the column
+  # header and whether the column survives at all are a separate layout
+  # round.
+  classification:
+    exact: "Exact copy"
+    review_duplicate: "Near-duplicate"
+    keep: "Best in group"
+    undated: "No date"
   # Action dialog (Set Action by Field) — web port strings.
   action_dialog:
     title: "Set Action by Field"
@@ -633,7 +657,7 @@ web:
     action_execute: "Execute Action…"
     action_execute_selected: "Execute Action (only selected)…"
     list: "List"
-    list_remove: "Remove from List"
+    list_remove: "Skip Selected"
     view: "View"
     view_language: "Language"
     lang_en: "English"
@@ -761,16 +785,24 @@ web:
     group_plural: "Groups"
     # Banner when the active type filter is hiding pending delete rows
     # (copy audit E3 — was hardcoded, and flattened to "row(s)").
-    warning_hidden_destructive: "⚠ {n} pending delete {rowWord} hidden by the current filter — switch to All or Delete only to see them."
+    warning_hidden_destructive: "⚠ {n} pending delete {rowWord} hidden by the current filter — switch to All decided or Delete only to see them."
     row_singular: "row"
     row_plural: "rows"
+    # Type-filter select above the tree (copy audit E1 — was hardcoded
+    # English, and its third option said "Remove only"). The option words
+    # match the Keep/Delete/Skip vocabulary, and the hidden-destructive
+    # banner above names two of them verbatim.
+    filter_aria: "Filter by decision type"
+    filter_all: "All decided"
+    filter_delete_only: "Delete only"
+    filter_skip_only: "Skip only"
   # Main result-tree + Execute-dialog right-click menus (ContextMenu.tsx +
   # execute/ExecuteContextMenu.tsx share this namespace — identical verbs,
   # web audit fix 5: was hardcoded English in both).
+  # The three decision items render web.decision_long.* (copy audit R4 — one
+  # vocabulary on every surface), so context_menu has no keep/delete/remove
+  # keys of its own any more.
   context_menu:
-    keep: "Keep (clear decision)"
-    delete: "Delete"
-    remove: "Remove from list"
     lock: "Lock"
     unlock: "Unlock"
     open_folder: "Open folder"
@@ -780,12 +812,12 @@ web:
   # LockConfirmDialog — was hardcoded English (web audit fix 1 + fix 5).
   lock_confirm:
     title_execute: "Locked files in delete scope"
-    title_remove: "Locked files in remove scope"
+    title_remove: "Locked files in skip scope"
     title_decision: "Locked rows affected"
     title_apply_best_copy: "Locked rows in this group"
     title_prune: "Locked singleton groups"
-    body_execute: "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only."
-    body_remove: "{n} locked {fileWord} {isWord} in the remove list. Unlock and remove, or remove unlocked files only."
+    body_execute: "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out."
+    body_remove: "{n} locked {fileWord} {isWord} about to be skipped (left on disk, dropped from this review). Unlock and skip, or skip the unlocked files only."
     body_decision: "Setting this decision would change {originalPathsLen} row(s); {n} {isWord} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel."
     body_apply_best_copy: "Applying best-copy to this group would affect rows that include {n} locked {rowWord}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel."
     body_prune: "{n} locked singleton {groupWord} would be pruned. Unlock and prune {pronoun}, or keep {pronoun} in the list."
@@ -809,18 +841,21 @@ web:
   # PruneConfirmDialog (web audit fix 5 — was hardcoded English).
   prune_confirm:
     title: "Prune singleton groups?"
-    # "delete / remove-from-list", not "delete/ignore": `ignore` is the
-    # internal wire value for the decision the user is shown as "remove from
-    # list" everywhere else, and it was leaking into both locales here
-    # (copy audit P1). Qt's singleton_prune_confirm.body_actioned_only says
-    # "delete / remove from list" for the same reason.
-    body_mixed: "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete / remove-from-list action. Remove the plain singleton {plainGroupWord} from the list?"
-    body_actioned_only: "{actioned} singleton {actionedGroupWord} with an un-executed delete / remove-from-list action remain. Remove {pronoun} from the list?"
-    body_plain_only: "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Remove {phrase} from the list?"
-    include_actioned: "Also remove {n} actioned {singletonWord}"
+    # "delete / skip", not "delete/ignore": `ignore` is the internal wire
+    # value for the decision the user is shown as "Skip" everywhere else
+    # (copy audit P1, then the 2026-09-18 vocabulary decision), and the raw
+    # word was leaking into both locales here. The verb for the GROUPS this
+    # dialog acts on is "prune", not "skip" — pruning drops whole singleton
+    # groups from the review, which is a different granularity from a
+    # per-file decision, and re-using "Skip" for it would blur the one word
+    # the row control depends on.
+    body_mixed: "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete / skip action. Prune the plain singleton {plainGroupWord} from the list?"
+    body_actioned_only: "{actioned} singleton {actionedGroupWord} with an un-executed delete / skip action remain. Prune {pronoun} from the list?"
+    body_plain_only: "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Prune {phrase} from the list?"
+    include_actioned: "Also prune {n} actioned {singletonWord}"
     dont_ask_again: "Don't ask again"
     keep_all: "Keep all"
-    remove_count: "Remove {n}"
+    remove_count: "Prune {n}"
     # Singular/plural translated separately, not flattened to "(s)" (review
     # finding). zh_TW has no plural marking, so its singular/plural values
     # are identical — that's correct, not lazy.
@@ -837,12 +872,14 @@ web:
     this_group: "this singleton group"
     these_groups: "these singleton groups"
   # RemoveFromListConfirmDialog (web audit fix 5 — was hardcoded English).
+  # Key names keep the wire-level "remove" spelling; the words are the Skip
+  # vocabulary, and the body leads with the file's fate on disk.
   remove_confirm:
-    title: "Remove from list?"
-    body: "Remove {basename} from the list? This only updates the manifest — no file on disk is touched. The removed row will not appear in the review tree until you re-scan."
+    title: "Skip this file?"
+    body: "Skip {basename}? The file stays on disk — this only drops the row from this review, and it will not appear again until you re-scan."
     this_item: "this item"
     cancel: "Cancel"
-    yes_remove: "Yes, remove"
+    yes_remove: "Yes, skip it"
   # SettingsDialog (web audit fix 5 — was hardcoded English).
   settings:
     title: "Settings"

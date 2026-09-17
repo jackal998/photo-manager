@@ -135,7 +135,7 @@ export function PruneConfirmDialog() {
   const description = isMixed
     ? t(
         "web.prune_confirm.body_mixed",
-        "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete/ignore action. Remove the plain singleton {plainGroupWord} from the list?",
+        "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete / skip action. Prune the plain singleton {plainGroupWord} from the list?",
         {
           plain: plain.length,
           actioned: actioned.length,
@@ -147,12 +147,12 @@ export function PruneConfirmDialog() {
     : actioned.length > 0
       ? t(
           "web.prune_confirm.body_actioned_only",
-          "{actioned} singleton {actionedGroupWord} with an un-executed delete/ignore action remain. Remove {pronoun} from the list?",
+          "{actioned} singleton {actionedGroupWord} with an un-executed delete / skip action remain. Prune {pronoun} from the list?",
           { actioned: actioned.length, actionedGroupWord, pronoun: actionedPronoun }
         )
       : t(
           "web.prune_confirm.body_plain_only",
-          "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Remove {phrase} from the list?",
+          "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Prune {phrase} from the list?",
           { plain: plain.length, plainGroupWord, plainHasWord, phrase: plainGroupPhrase }
         );
 
@@ -195,7 +195,7 @@ export function PruneConfirmDialog() {
             />
             {t(
               "web.prune_confirm.include_actioned",
-              "Also remove {n} actioned {singletonWord}",
+              "Also prune {n} actioned {singletonWord}",
               { n: actioned.length, singletonWord: actionedSingletonWord }
             )}
           </label>
@@ -223,7 +223,7 @@ export function PruneConfirmDialog() {
             data-testid={PRUNE_BTN_REMOVE}
             onClick={handleRemove}
           >
-            {t("web.prune_confirm.remove_count", "Remove {n}", { n: removeCount })}
+            {t("web.prune_confirm.remove_count", "Prune {n}", { n: removeCount })}
           </Button>
         </DialogFooter>
       </DialogContent>

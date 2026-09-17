@@ -56,6 +56,45 @@ export function similarityLabel(
 }
 
 /**
+ * The scanner's classification values (`scanner/dedup.py`) as they arrive on
+ * `FileRow.action`, mapped to their catalog key. `""` has no classification.
+ *
+ * Copy audit R1 (values half): the Action column rendered this enum verbatim,
+ * so a zh_TW user read "REVIEW_DUPLICATE" exactly like an en user did.
+ * INTERIM — whether this column keeps carrying the classification at all is a
+ * separate layout decision; this only stops the raw enum reaching the user.
+ */
+const CLASSIFICATION_KEYS: Record<string, string> = {
+  EXACT: "exact",
+  REVIEW_DUPLICATE: "review_duplicate",
+  KEEP: "keep",
+  UNDATED: "undated",
+};
+
+/** English defaults, used when no catalog is loaded (same shape as above). */
+const CLASSIFICATION_DEFAULTS: Record<string, string> = {
+  exact: "Exact copy",
+  review_duplicate: "Near-duplicate",
+  keep: "Best in group",
+  undated: "No date",
+};
+
+/**
+ * Human-readable label for a classification value, or the em dash when the
+ * row carries none. An UNRECOGNISED value is returned verbatim rather than
+ * swallowed — a new classifier output must be visible, not silently blank.
+ */
+export function classificationLabel(
+  action: string,
+  t: (key: string, fallback: string) => string = (_key, fallback) => fallback
+): string {
+  if (!action) return EM_DASH;
+  const key = CLASSIFICATION_KEYS[action];
+  if (key === undefined) return action;
+  return t(`web.classification.${key}`, CLASSIFICATION_DEFAULTS[key]);
+}
+
+/**
  * Format a byte count as a human-readable string (KB / MB / GB).
  *
  * Uses 1024-based units. Values below 1 KB are shown as "N B".

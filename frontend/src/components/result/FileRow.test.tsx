@@ -94,6 +94,36 @@ describe("FileRow similarity badge", () => {
     expect(badgeOf(rowEl).textContent).toContain("★");
   });
 
+  // Copy audit R7 / design Q2 (2026-09-18): the keeper row used to say "Ref"
+  // TWICE — a gold pill beside the filename and the ★ badge in the Similarity
+  // column, both from the same catalog key. Two identical cues on one row
+  // train the eye to ignore both.
+  it("says 'Ref' exactly once on a keeper row — the Similarity badge", () => {
+    const rowEl = renderRow(
+      makeRow({ similarity: { kind: "ref", percent: null }, is_ref_winner: true })
+    );
+    const refCues = within(rowEl).getAllByText("Ref");
+    expect(refCues).toHaveLength(1);
+    expect(badgeOf(rowEl).contains(refCues[0])).toBe(true);
+  });
+
+  it("marks the keeper with a left accent strip and a heavier name than its peers", () => {
+    const keeper = renderRow(
+      makeRow({ similarity: { kind: "ref", percent: null }, is_ref_winner: true })
+    );
+    const peer = renderRow(
+      makeRow({ basename: "peer.jpg", file_path: "/photos/peer.jpg" })
+    );
+    // The strip is the keeper's only left-hand cue now the pill is gone; the
+    // 2px gutter itself is on every row so the keeper costs no layout shift.
+    expect(keeper.className).toContain("border-l-sim-ref-ink");
+    expect(peer.className).toContain("border-l-2");
+    expect(peer.className).not.toContain("border-l-sim-ref-ink");
+
+    expect(within(keeper).getByText("dup.jpg").className).toContain("font-semibold");
+    expect(within(peer).getByText("peer.jpg").className).toContain("font-medium");
+  });
+
   it.each(cases)(
     "keeps %s's cell text exactly similarityLabel()'s output",
     (_name, similarity) => {

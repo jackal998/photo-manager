@@ -19,11 +19,35 @@ interface DecisionControlProps {
 }
 
 // slug is the testid suffix (empty DecisionValue "" → "none" so the id never
-// ends in a bare dash and stays Playwright-addressable).
-const OPTIONS: { value: DecisionValue; slug: string; label: string }[] = [
-  { value: "", slug: "none", label: "None" },
-  { value: "delete", slug: "delete", label: "Delete" },
-  { value: "ignore", slug: "ignore", label: "Ignore" },
+// ends in a bare dash and stays Playwright-addressable) — UNCHANGED by the
+// vocabulary switch, so no scenario locator moves.
+//
+// `labelKey`/`titleKey` are the two halves of the ONE decision vocabulary
+// (copy audit R3/R4, owner decision 2026-09-18): the short word on the
+// segment, the long form in its tooltip. `remove_from_list` is still the
+// catalog key for the `ignore` wire value — only the rendered words are new.
+const OPTIONS: {
+  value: DecisionValue;
+  slug: string;
+  labelKey: string;
+  label: string;
+  title: string;
+}[] = [
+  { value: "", slug: "none", labelKey: "keep", label: "Keep", title: "Keep this file" },
+  {
+    value: "delete",
+    slug: "delete",
+    labelKey: "delete",
+    label: "Delete",
+    title: "Delete — move to Recycle Bin",
+  },
+  {
+    value: "ignore",
+    slug: "ignore",
+    labelKey: "remove_from_list",
+    label: "Skip",
+    title: "Skip — leave on disk, drop from this review",
+  },
 ];
 
 // Daylight decision chips (#878 slice b) — §9.3 `dec.*` of
@@ -35,10 +59,10 @@ const OPTIONS: { value: DecisionValue; slug: string; label: string }[] = [
 // baseline audit's headline finding was that it did not.
 //
 // `""` maps to dec.KEEP, not dec.undecided: under the #584 decision model
-// `''` IS keep (the row survives Execute), and colouring the active `None`
+// `''` IS keep (the row survives Execute), and colouring the active `Keep`
 // segment `undecided` would make active and inactive indistinguishable.
-// `"ignore"` maps to dec.remove — "remove from the manifest" is what the
-// prototype calls the `ignored` outcome.
+// `"ignore"` maps to dec.remove — the TOKEN name is the prototype's word for
+// the `ignored` outcome; the segment itself reads "Skip".
 const ACTIVE_CHIP: Record<DecisionValue, string> = {
   "": "bg-dec-keep-bg text-dec-keep-ink",
   delete: "bg-dec-delete-bg text-dec-delete-ink",
@@ -67,9 +91,6 @@ export function DecisionControl({
     <div
       role="group"
       // Copy audit R5 — the group's accessible name was hardcoded English.
-      // The three OPTION LABELS below are deliberately untouched: the
-      // decision vocabulary (None/Delete/Ignore vs Keep/Delete/Remove) is
-      // audit finding R3/R4, still awaiting the owner's decision.
       aria-label={t("web.column.decision", "Decision")}
       data-testid={testId}
       className="inline-flex rounded border border-dec-undecided-line overflow-hidden"
@@ -83,6 +104,7 @@ export function DecisionControl({
             disabled={disabled}
             aria-pressed={active}
             data-testid={testId ? `${testId}-${opt.slug}` : undefined}
+            title={t(`web.decision_long.${opt.labelKey}`, opt.title)}
             onClick={(e) => handleClick(e, opt.value)}
             className={cn(
               // Geometry is unchanged from the neutral version on purpose:
@@ -96,7 +118,7 @@ export function DecisionControl({
               disabled && "opacity-50 cursor-not-allowed"
             )}
           >
-            {opt.label}
+            {t(`web.decision.${opt.labelKey}`, opt.label)}
           </button>
         );
       })}

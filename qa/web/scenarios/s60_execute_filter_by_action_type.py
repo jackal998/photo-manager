@@ -7,7 +7,7 @@ Qt intent:
     remove-from-list (decision='ignore') via the Set-Action-by-Field regex flow.
   - Open the Execute dialog, drive the type-filter combo:
       "Delete only"  → tree shows cluster A (4 rows);
-      "Remove only"  → tree shows cluster B (4 rows) AND the hidden-destructive
+      "Skip only"    → tree shows cluster B (4 rows) AND the hidden-destructive
                        banner is visible (the 4 hidden pending deletes);
       back to "Delete only" → Execute → cluster A deleted on disk, cluster B
                        SURVIVES on disk with decision='ignore', executed=0.
@@ -38,7 +38,7 @@ Assertions:
      group-B row has user_decision='ignore'.
   3. Execute dialog type filter "Delete only" → only the 2 group-A execute
      rows are present (group-B rows absent); hidden-destructive banner absent.
-  4. Type filter "Remove only" → only the 2 group-B execute rows are present
+  4. Type filter "Skip only" → only the 2 group-B execute rows are present
      (group-A rows absent) AND the hidden-destructive banner IS visible (the
      2 hidden pending deletes).
   5. Back to "Delete only" → Execute → all-delete confirm (group A is fully
@@ -235,7 +235,7 @@ def run(*, base_url: str) -> None:
                 right_click_row(page, row_file_testid(group_a_id, name))
                 click_context_item(page, CTX_SET_ACTION_DELETE)
             for name in _GROUP_B_BASENAMES:
-                set_row_decision(page, row_decision_testid(group_b_id, name), "Ignore")
+                set_row_decision(page, row_decision_testid(group_b_id, name), "Skip")
 
             # ── Assertion 2: decisions persisted as marked ───────────────────
             decisions = _basename_to_decision(_get_manifest(base_url, db_path))
@@ -280,8 +280,8 @@ def run(*, base_url: str) -> None:
                 "(deletes are the visible subset, nothing hidden)."
             )
 
-            # ── Assertion 4: "Remove only" shows ONLY group B + hidden banner ─
-            _select_type_filter(page, "Remove only")
+            # ── Assertion 4: "Skip only" shows ONLY group B + hidden banner ─
+            _select_type_filter(page, "Skip only")
             page.wait_for_timeout(200)
             for name in _GROUP_B_BASENAMES:
                 page.get_by_test_id(execute_row_testid(group_b_id, name)).wait_for(

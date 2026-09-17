@@ -81,7 +81,7 @@ describe("PruneConfirmDialog", () => {
 
     expect(screen.queryByTestId(PRUNE_INCLUDE_ACTIONED)).not.toBeInTheDocument();
     // Dynamic label reflects the plain count.
-    expect(screen.getByTestId(PRUNE_BTN_REMOVE)).toHaveTextContent("Remove 2");
+    expect(screen.getByTestId(PRUNE_BTN_REMOVE)).toHaveTextContent("Prune 2");
 
     await user.click(screen.getByTestId(PRUNE_BTN_REMOVE));
     expect(applyPruneMock).toHaveBeenCalledWith(["/p/a.jpg", "/p/b.jpg"]);
@@ -94,7 +94,7 @@ describe("PruneConfirmDialog", () => {
 
     expect(screen.queryByTestId(PRUNE_INCLUDE_ACTIONED)).not.toBeInTheDocument();
     // Count falls back to the actioned bucket when plain is empty.
-    expect(screen.getByTestId(PRUNE_BTN_REMOVE)).toHaveTextContent("Remove 1");
+    expect(screen.getByTestId(PRUNE_BTN_REMOVE)).toHaveTextContent("Prune 1");
 
     await user.click(screen.getByTestId(PRUNE_BTN_REMOVE));
     expect(applyPruneMock).toHaveBeenCalledWith(["/p/x.jpg"]);
@@ -107,7 +107,7 @@ describe("PruneConfirmDialog", () => {
 
     expect(screen.getByTestId(PRUNE_INCLUDE_ACTIONED)).toBeInTheDocument();
     // Label reflects the dominant (plain) bucket.
-    expect(screen.getByTestId(PRUNE_BTN_REMOVE)).toHaveTextContent("Remove 1");
+    expect(screen.getByTestId(PRUNE_BTN_REMOVE)).toHaveTextContent("Prune 1");
 
     await user.click(screen.getByTestId(PRUNE_BTN_REMOVE));
     expect(applyPruneMock).toHaveBeenCalledWith(["/p/a.jpg"]);
@@ -186,7 +186,7 @@ describe("PruneConfirmDialog", () => {
     seedPrune({ plain: ["/p/a.jpg"] });
     expect(
       screen.getByText(
-        "1 singleton group now has only one file remaining. Remove this singleton group from the list?"
+        "1 singleton group now has only one file remaining. Prune this singleton group from the list?"
       )
     ).toBeInTheDocument();
   });
@@ -196,7 +196,7 @@ describe("PruneConfirmDialog", () => {
     seedPrune({ plain: ["/p/a.jpg", "/p/b.jpg"] });
     expect(
       screen.getByText(
-        "2 singleton groups now have only one file remaining. Remove these singleton groups from the list?"
+        "2 singleton groups now have only one file remaining. Prune these singleton groups from the list?"
       )
     ).toBeInTheDocument();
   });
@@ -206,7 +206,7 @@ describe("PruneConfirmDialog", () => {
     seedPrune({ plain: ["/p/a.jpg"], actioned: ["/p/x.jpg"] });
     expect(
       screen.getByText(
-        "1 singleton group has only one file left, and 1 more carries an un-executed delete/ignore action. Remove the plain singleton group from the list?"
+        "1 singleton group has only one file left, and 1 more carries an un-executed delete / skip action. Prune the plain singleton group from the list?"
       )
     ).toBeInTheDocument();
   });
@@ -215,12 +215,12 @@ describe("PruneConfirmDialog", () => {
     render(<PruneConfirmDialog />);
     seedPrune({ plain: ["/p/a.jpg"], actioned: ["/p/x.jpg"] });
     expect(
-      screen.getByText("Also remove 1 actioned singleton")
+      screen.getByText("Also prune 1 actioned singleton")
     ).toBeInTheDocument();
 
     seedPrune({ plain: ["/p/a.jpg"], actioned: ["/p/x.jpg", "/p/y.jpg"] });
     expect(
-      screen.getByText("Also remove 2 actioned singletons")
+      screen.getByText("Also prune 2 actioned singletons")
     ).toBeInTheDocument();
   });
 

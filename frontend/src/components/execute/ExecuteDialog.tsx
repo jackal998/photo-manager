@@ -2,7 +2,7 @@
 //
 // Responsibilities:
 //   - Reads execute + manifest state from the Zustand store.
-//   - TypeFilter (All / Delete only / Remove only) controls which decided rows
+//   - TypeFilter (All decided / Delete only / Skip only) controls which decided rows
 //     are shown in ExecuteTree.
 //   - AllDeleteBanner surfaces groups where every member is marked delete.
 //   - Inline preview pane (execute-preview-pane) shows the thumbnail of the
@@ -312,7 +312,7 @@ export function ExecuteDialog() {
     setCtxMenu((prev) => ({ ...prev, open: false }));
   }, []);
 
-  // The menu's "Remove from list" defers the destructive finalize to a confirm.
+  // The menu's Skip item defers the destructive finalize to a confirm.
   const handleRequestRemove = useCallback((filePath: string) => {
     setRemoveConfirmPath(filePath);
   }, []);
