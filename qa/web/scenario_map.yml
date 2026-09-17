@@ -397,7 +397,7 @@ scenarios:
       (A_keep via the non-empty lockedToPrune fold, B_keep via the actioned
       bucket). That lock-resolved dialog is ACTIONED-ONLY, so isMixed is false
       and NO opt-in checkbox is rendered (verified live) — Remove itself opts the
-      actioned bucket in and the "Remove 1" label counts ACTIONED, not plain.
+      actioned bucket in and the "Prune 1" label counts ACTIONED, not plain.
       Outcomes read via sqlite (a held singleton is invisible to the manifest
       API). Two generated clusters (qa/web/_prune_fixtures). Removes finalize to
       outcome='ignored' (no file delete). Divergence: accumulation + execute-

@@ -657,7 +657,7 @@ web:
     action_execute: "Execute Action…"
     action_execute_selected: "Execute Action (only selected)…"
     list: "List"
-    list_remove: "Skip Selected"
+    list_remove: "Skip Selected now"
     view: "View"
     view_language: "Language"
     lang_en: "English"
@@ -799,10 +799,18 @@ web:
   # Main result-tree + Execute-dialog right-click menus (ContextMenu.tsx +
   # execute/ExecuteContextMenu.tsx share this namespace — identical verbs,
   # web audit fix 5: was hardcoded English in both).
-  # The three decision items render web.decision_long.* (copy audit R4 — one
-  # vocabulary on every surface), so context_menu has no keep/delete/remove
-  # keys of its own any more.
+  # The Keep and Delete items render web.decision_long.* (copy audit R4 — one
+  # vocabulary on every surface), so context_menu has no keep/delete keys of
+  # its own any more.
+  #
+  # `skip_now` is the ONE exception, and it is deliberate (review round 2).
+  # The row control's Skip STAGES user_decision='ignore' and is reversible
+  # until Execute; THIS item finalizes outcome='ignored' on the spot — the
+  # rows leave the review immediately, with no Execute step and no undo. One
+  # word for both would make the reversible and the irreversible action read
+  # identically, so the immediate one says "now".
   context_menu:
+    skip_now: "Skip now — drop from this review"
     lock: "Lock"
     unlock: "Unlock"
     open_folder: "Open folder"

@@ -227,10 +227,14 @@ _VOCAB_EXPECTED = {
     "en": {"none": "Keep", "delete": "Delete", "ignore": "Skip"},
     "zh_TW": {"none": "保留", "delete": "刪除", "ignore": "略過"},
 }
-# One LONG form per locale — the context menu's Skip item. The rule the design
+# One LONG form per locale — the Skip segment's tooltip. The rule the design
 # set is that this form always names the file's fate on disk first, so the
 # substring asserted is that clause, not the whole sentence.
 _VOCAB_LONG_FATE = {"en": "leave on disk", "zh_TW": "保留在磁碟上"}
+# The marker that separates the IMMEDIATE Skip (result-tree context menu and
+# the List menu — both finalize outcome='ignored' with no confirm and no undo)
+# from the reversible one on the row control.
+_VOCAB_NOW_MARKER = {"en": "Skip now", "zh_TW": "立即略過"}
 
 
 def _patch_locale(base_url: str, locale: str) -> None:
@@ -269,19 +273,21 @@ def _toggle_locale(page, gid: str, want_toggle_label: str) -> None:
 
 
 def _assert_decision_vocabulary(page, gid: str, locale: str) -> None:
-    """Read the three segments + the context-menu Skip item and assert them."""
+    """Read the three segments, the Skip tooltip and the context-menu item."""
     decision_tid = row_decision_testid(gid, ROW_TARGET)
     observed = {}
     for slug in ("none", "delete", "ignore"):
         seg = page.get_by_test_id(row_decision_option_testid(gid, ROW_TARGET, slug))
         seg.wait_for(state="visible", timeout=10_000)
         observed[slug] = seg.inner_text().strip()
+        if slug == "ignore":
+            observed["skip_tooltip"] = (seg.get_attribute("title") or "").strip()
 
     right_click_row(page, row_file_testid(gid, ROW_TARGET))
     try:
         item = page.get_by_test_id(CTX_SET_ACTION_REMOVE)
         item.wait_for(state="visible", timeout=5_000)
-        observed["ctx_skip_long"] = item.inner_text().strip()
+        observed["ctx_skip_now"] = item.inner_text().strip()
     finally:
         page.keyboard.press("Escape")
         page.get_by_test_id(CONTEXT_MENU).wait_for(state="hidden", timeout=5_000)
@@ -289,8 +295,8 @@ def _assert_decision_vocabulary(page, gid: str, locale: str) -> None:
     print(
         f"probe_status: s12 decision_vocabulary[{locale}] "
         f"keep={observed['none']!r} delete={observed['delete']!r} "
-        f"skip={observed['ignore']!r} ctx_skip_long={observed['ctx_skip_long']!r} "
-        f"(control={decision_tid})"
+        f"skip={observed['ignore']!r} skip_tooltip={observed['skip_tooltip']!r} "
+        f"ctx_skip_now={observed['ctx_skip_now']!r} (control={decision_tid})"
     )
 
     for slug, want in _VOCAB_EXPECTED[locale].items():
@@ -300,10 +306,26 @@ def _assert_decision_vocabulary(page, gid: str, locale: str) -> None:
             f"states was copy audit finding R4; the owner settled it 2026-09-18."
         )
     fate = _VOCAB_LONG_FATE[locale]
-    assert fate in observed["ctx_skip_long"], (
-        f"decision vocabulary [{locale}]: the context-menu Skip item must name "
+    assert fate in observed["skip_tooltip"], (
+        f"decision vocabulary [{locale}]: the Skip segment's tooltip must name "
         f"the file's fate ({fate!r}) — that is the question the word raises. "
-        f"Got {observed['ctx_skip_long']!r}."
+        f"Got {observed['skip_tooltip']!r}."
+    )
+    # The STAGED Skip and the IMMEDIATE one must not read alike (review round
+    # 2): the segment stages a reversible `user_decision='ignore'`, the menu
+    # item finalizes `outcome='ignored'` on the spot with no confirm and no
+    # undo. If the menu item ever loses its immediacy marker the two become
+    # indistinguishable, and the irreversible one is the one that looks safe.
+    marker = _VOCAB_NOW_MARKER[locale]
+    assert marker in observed["ctx_skip_now"], (
+        f"decision vocabulary [{locale}]: the result-tree context-menu Skip "
+        f"item finalizes immediately, so its label must carry {marker!r}. "
+        f"Got {observed['ctx_skip_now']!r}."
+    )
+    assert observed["ctx_skip_now"] != observed["skip_tooltip"], (
+        f"decision vocabulary [{locale}]: the reversible (row control) and "
+        f"irreversible (context menu) Skip actions must not share one label; "
+        f"both read {observed['ctx_skip_now']!r}."
     )
 
 

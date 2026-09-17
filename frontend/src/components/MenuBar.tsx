@@ -167,7 +167,7 @@ export function MenuBar({
               disabled={!manifestLoaded || !hasSelection}
               onSelect={onRemoveFromList}
             >
-              {t("web.menu.list_remove", "Skip Selected")}
+              {t("web.menu.list_remove", "Skip Selected now")}
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

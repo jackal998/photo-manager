@@ -529,7 +529,7 @@ web:
     pattern_summary_numeric_threshold: "{field} {op} {value}"
     pattern_summary_numeric_topn: "依 {field} 取每組{order} {n} 筆"
     delete_confirm_title: "確認批次刪除決策"
-    delete_confirm_body: "這將把 {matched} 個檔案標記為刪除，條件為 {summary}。檔案要等到執行「執行動作」時才會移至回收桶。"
+    delete_confirm_body: "這將把 {matched} 個檔案標記為刪除，條件為 {summary}。檔案要等到執行「執行動作」時才會移至資源回收筒。"
     delete_confirm_button: "標記 {matched} 個檔案為刪除"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
@@ -543,7 +543,7 @@ web:
     action_execute: "執行動作…"
     action_execute_selected: "執行動作（僅限所選）…"
     list: "清單"
-    list_remove: "略過所選"
+    list_remove: "立即略過選取項目"
     view: "檢視"
     view_language: "語言"
     lang_en: "English"
@@ -656,9 +656,15 @@ web:
     filter_all: "全部決策"
     filter_delete_only: "僅刪除"
     filter_skip_only: "僅略過"
-  # 三個決策項目改用 web.decision_long.*（copy audit R4 — 全站一套詞彙），
-  # 因此 context_menu 不再有自己的 keep/delete/remove。
+  # 保留與刪除兩個項目改用 web.decision_long.*（copy audit R4 — 全站一套詞彙），
+  # 因此 context_menu 不再有自己的 keep/delete。
+  #
+  # skip_now 是刻意保留的唯一例外（review 第二輪）：列上的「略過」只是暫存
+  # user_decision='ignore'，執行動作前都可以反悔；這個項目則是當場定案
+  # outcome='ignored'，該列立刻離開檢閱且無法復原。兩者用同一個詞會讓可逆與
+  # 不可逆的動作長得一模一樣，所以立即生效的那個要說「立即」。
   context_menu:
+    skip_now: "立即略過 — 從本次檢閱中移除"
     lock: "鎖定"
     unlock: "解除鎖定"
     open_folder: "開啟資料夾"
@@ -671,7 +677,7 @@ web:
     title_decision: "有鎖定的列受影響"
     title_apply_best_copy: "此群組中有鎖定的列"
     title_prune: "鎖定的單一群組"
-    body_execute: "{n} 個鎖定的{fileWord}即將被刪除（移至回收桶）。可解鎖並繼續，或不處理鎖定的檔案。"
+    body_execute: "{n} 個鎖定的{fileWord}即將被刪除（移至資源回收筒）。可解鎖並繼續，或不處理鎖定的檔案。"
     body_remove: "{n} 個鎖定的{fileWord}即將被略過（保留在磁碟上，從本次檢閱中移出）。可解鎖並略過，或僅略過未鎖定的檔案。"
     body_decision: "設定此決策將變更 {originalPathsLen} 列；其中 {n} 列已鎖定。目前尚未刪除任何項目 — 這只是將決策排入佇列。可解鎖並全部設定、僅設定未鎖定的列，或取消。"
     body_apply_best_copy: "套用最佳版本決策到此群組將影響包含 {n} 個鎖定{rowWord}的項目。目前尚未刪除任何項目 — 這只是將保留/刪除決策排入佇列。可解鎖並全部套用、僅套用至未鎖定的列，或取消。"
@@ -779,8 +785,8 @@ web:
     title_groups: "整個群組將被刪除"
     title_all: "刪除所有檔案？"
     yes_delete_all: "是，全部刪除"
-    body_groups: "群組 {groups} 中的所有檔案都將被刪除（共 {n} 個{fileWord}將被刪除）。檔案將移至回收桶。要繼續嗎？"
-    body_all: "{n} 個{fileWord}將被刪除。此操作會將檔案移至回收桶，且不易大量復原。確定要繼續嗎？"
+    body_groups: "群組 {groups} 中的所有檔案都將被刪除（共 {n} 個{fileWord}將被刪除）。檔案將移至資源回收筒。要繼續嗎？"
+    body_all: "{n} 個{fileWord}將被刪除。此操作會將檔案移至資源回收筒，且不易大量復原。確定要繼續嗎？"
     file_singular: "檔案"
     file_plural: "檔案"
     cancel: "取消"

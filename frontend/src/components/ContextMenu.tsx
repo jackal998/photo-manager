@@ -135,6 +135,11 @@ export function ContextMenu({
     // confirmation dialog on this path — that belongs to the execute-dialog
     // remove. Staging a reversible 'ignore' decision stays available via the
     // per-row decision buttons (DecisionControl).
+    //
+    // Hence the label is `web.context_menu.skip_now`, NOT the row control's
+    // `web.decision_long.remove_from_list` (review round 2): the row control
+    // stages and is reversible until Execute, this finalizes on the spot, and
+    // one word for both would make them read identically.
     void removeFromList(targetPaths);
     onClose();
   }
@@ -208,7 +213,7 @@ export function ContextMenu({
       className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
       onClick={handleSetRemove}
     >
-      {t("web.decision_long.remove_from_list", "Skip — leave on disk, drop from this review")}
+      {t("web.context_menu.skip_now", "Skip now — drop from this review")}
     </button>
   );
 
@@ -276,7 +281,7 @@ export function ContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleSetRemove}
       >
-        {t("web.decision_long.remove_from_list", "Skip — leave on disk, drop from this review")}
+        {t("web.context_menu.skip_now", "Skip now — drop from this review")}
       </button>
       <div className="my-1 border-t border-hairline-soft" role="separator" />
       {isLocked ? (
