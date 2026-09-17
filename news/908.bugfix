@@ -1,0 +1,1 @@
+Unify the web decision labels on Keep / Delete / Skip (保留 / 刪除 / 略過) across the row control, right-click menus, Execute filter and badge, and the Set Action combo — three of which were hardcoded English and untranslated in zh_TW — drop the duplicate "Ref" pill from the keeper row, and render the Action column's classifier value through the catalog instead of the raw enum (#908).
