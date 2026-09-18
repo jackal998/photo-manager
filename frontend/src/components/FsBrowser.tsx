@@ -254,7 +254,11 @@ export function FsBrowser({
                       className={cn(
                         "flex w-full items-center gap-2 px-3 py-1 text-left text-sm hover:bg-subtle",
                         isSelected && "bg-select",
-                        dimmed && "text-ink-faint"
+                        // Dimmed ≠ disabled: a save-mode file row is still
+                        // clickable (it copies its name into the filename
+                        // field) and its name is read to decide whether to.
+                        // Text a human reads for meaning is #6b6358.
+                        dimmed && "text-ink-muted"
                       )}
                     >
                       <span aria-hidden="true">

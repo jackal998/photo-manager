@@ -413,6 +413,35 @@ def run(*, base_url: str) -> None:
                 f"{group_style['leftWidth']} wide, expected 4px."
             )
 
+            # 3b. The keeper row's 2px strip is the SAME accent (Q2). It used
+            # to be the Ref badge's own ink #a85f2e, which sits 5/255 from the
+            # group strip directly above it in one vertical line — close
+            # enough to read as a rendering fault rather than as two cues.
+            # Read off the Ref-badged row rather than guessing which item wins.
+            keeper_strip = page.evaluate(
+                """() => {
+  const badge = document.querySelector('[data-sim-state="ref"]');
+  const row = badge ? badge.closest('[data-testid^="row-file-"]') : null;
+  if (!row) return null;
+  const cs = getComputedStyle(row);
+  return { width: cs.borderLeftWidth, color: cs.borderLeftColor };
+}"""
+            )
+            print(f"probe_status: s74 keeper row strip = {keeper_strip}")
+            assert keeper_strip is not None, (
+                "No Ref-badged row on screen, so the keeper strip was never "
+                "exercised."
+            )
+            assert keeper_strip["width"] == "2px", (
+                "#878 — the keeper's left strip is "
+                f"{keeper_strip['width']} wide, expected 2px."
+            )
+            assert keeper_strip["color"] == _ACCENT, (
+                "slice T / Q2 — the keeper's left strip is "
+                f"{keeper_strip['color']}, expected the accent {_ACCENT} "
+                "(#a85a2c) — the same token the group strip above it uses."
+            )
+
             # ── 4. A staged delete is visible on the row ──────────────────────
             basename = Path(items[0]["file_path"]).name
             row_testid = row_file_testid(group_id, basename)
@@ -693,6 +722,11 @@ def run(*, base_url: str) -> None:
                 "slice T — the focus ring's offset is "
                 f"{cursor['outlineOffset']}, expected -2px. Inset is what "
                 "keeps the ring from shifting the row it lands on."
+            )
+            assert cursor["borderRadius"] == "6px", (
+                "slice T — the focus ring's radius is "
+                f"{cursor['borderRadius']}, expected 6px (Q7: it matches the "
+                "row)."
             )
             assert cursor["caretText"] == "▸", (
                 "slice T — the cursor row's caret reads "

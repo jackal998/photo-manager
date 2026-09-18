@@ -528,9 +528,20 @@ describe("ResultTree roving arrow-key cursor (#709)", () => {
     arrow("ArrowDown"); // cursor → a2
 
     const cursor = activeRowElement();
-    expect(cursor).toContainElement(
-      screen.getByTestId(rowFileTestid("1", "a2.jpg"))
-    );
+    const selectedRow = screen.getByTestId(rowFileTestid("1", "a2.jpg"));
+    expect(cursor).toContainElement(selectedRow);
+
+    // Exactly ONE accent stroke on this screen, and it is the cursor's.
+    // a2 is both selected and the cursor here — the shape that exposed it:
+    // selection used to add its own 1px accent ring a pixel inside this
+    // outline, so on a multi-selection the ▸ caret was the only cursor cue
+    // left. Selection is a tint (Q7); the tree container's own focus cue is a
+    // hairline, not a second accent frame.
+    expect(selectedRow.className).toContain("bg-select");
+    expect(selectedRow.className).not.toContain("ring-warm");
+    expect(tree().className).toContain("focus-visible:ring-ink-hairline");
+    expect(tree().className).toContain("focus-visible:ring-1");
+    expect(tree().className).not.toContain("ring-warm");
     // `group-focus-visible:` and not `focus-visible:` — DOM focus never leaves
     // the container (aria-activedescendant), so a row can never match
     // :focus-visible itself; reading the state off the container is what keeps

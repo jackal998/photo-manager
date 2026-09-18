@@ -536,7 +536,12 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       // can never match `:focus-visible` itself — `group-focus-visible:` reads
       // the state off the container that really is focused, while keeping
       // `:focus-visible` semantics so a mouse user never sees the ring.
-      className="group h-full overflow-auto bg-panel border border-hairline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm"
+      // The container's own focus cue is a hairline, deliberately: at 2px
+      // accent it framed the whole tree in the same stroke the cursor ROW
+      // draws, and the loudest accent stroke on screen has to be the one
+      // saying "you are here". This one only says "the tree has focus", which
+      // still needs saying — the cursor may not be placed yet.
+      className="group h-full overflow-auto bg-panel border border-hairline rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ink-hairline"
       style={{ contain: "strict" }}
     >
       {/* Sticky sort/resize column header (#685). Inside the scroll container so
