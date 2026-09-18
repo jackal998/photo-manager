@@ -56,10 +56,13 @@ def render_testids_ts() -> str:
     lines.append("  return `row-group-${groupId}`;")
     lines.append("}")
     lines.append("")
+    # Prefix is `group-`, NOT `row-group-`: the tree is counted and traversed by
+    # PREFIX, so a testid nested inside the group row must not extend the row's
+    # own prefix (see group_keep_best_testid's docstring).
     lines.append(
-        "export function rowGroupKeepBestTestid(groupId: string): string {"
+        "export function groupKeepBestTestid(groupId: string): string {"
     )
-    lines.append("  return `row-group-keep-best-${groupId}`;")
+    lines.append("  return `group-keep-best-${groupId}`;")
     lines.append("}")
     lines.append("")
     lines.append(

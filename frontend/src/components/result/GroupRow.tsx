@@ -7,7 +7,7 @@ import { ChevronRight, ChevronDown } from "lucide-react";
 import { useT } from "@/i18n/useT";
 import { formatBytes } from "@/lib/format";
 import { groupFolderSuffix, groupSizeTotal } from "@/lib/groupSummary";
-import { rowGroupKeepBestTestid, rowGroupTestid } from "@/testids";
+import { groupKeepBestTestid, rowGroupTestid } from "@/testids";
 import type { FileRow } from "@/api/types";
 
 interface GroupRowProps {
@@ -149,7 +149,7 @@ export function GroupRow({
         // misclick on this screen».
         <button
           type="button"
-          data-testid={rowGroupKeepBestTestid(String(groupNumber))}
+          data-testid={groupKeepBestTestid(String(groupNumber))}
           onClick={(e) => {
             // The row toggles on click; this button must not collapse the very
             // group it just wrote decisions into.

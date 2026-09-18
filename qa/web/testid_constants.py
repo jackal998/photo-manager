@@ -703,13 +703,23 @@ def row_group_testid(group_id: str) -> str:
     return f"row-group-{group_id}"
 
 
-def row_group_keep_best_testid(group_id: str) -> str:
+def group_keep_best_testid(group_id: str) -> str:
     """Return the ``data-testid`` for a group header's "Keep best · delete rest".
 
     Group-scoped rather than a bare constant because every visible group header
     renders one, and a single shared testid would make every Playwright
     ``get_by_test_id`` call a strict-mode violation the moment a fixture yields
     two groups.
+
+    **The prefix is ``group-``, deliberately NOT ``row-group-``.** The result
+    tree is counted and traversed by PREFIX, not by exact id —
+    ``_invariants.count_groups`` matches ``[data-testid^="row-group-"]`` and
+    s26 walks ``[data-testid^="row-file-"], [data-testid^="row-group-"]``. A
+    button nested inside the group row and named ``row-group-keep-best-…``
+    therefore counts as a second GROUP: it made s45 fail with "expected the
+    near-duplicates fixture to form 1 group, got 2", which reads as a scanner
+    or fixture regression and is neither. Any future testid added INSIDE a row
+    must not extend that row's prefix.
 
     Parameters
     ----------
@@ -719,9 +729,9 @@ def row_group_keep_best_testid(group_id: str) -> str:
     Returns
     -------
     str
-        ``"row-group-keep-best-{group_id}"``
+        ``"group-keep-best-{group_id}"``
     """
-    return f"row-group-keep-best-{group_id}"
+    return f"group-keep-best-{group_id}"
 
 
 def row_decision_testid(group_id: str, basename: str) -> str:

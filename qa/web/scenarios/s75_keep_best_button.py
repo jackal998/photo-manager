@@ -45,7 +45,7 @@ from qa.web.testid_constants import (
     MAIN_LANG_TOGGLE,
     MAIN_TOAST,
     MAIN_TOAST_UNDO,
-    row_group_keep_best_testid,
+    group_keep_best_testid,
     row_lock_testid,
 )
 
@@ -110,7 +110,7 @@ def _patch_locale(base_url: str, locale: str) -> None:
 
 def _click_keep_best(page, group_id: str) -> None:
     """Click the header button and block until ITS write has responded."""
-    button = page.get_by_test_id(row_group_keep_best_testid(group_id))
+    button = page.get_by_test_id(group_keep_best_testid(group_id))
     button.wait_for(state="visible", timeout=10_000)
     with page.expect_response(
         lambda r: "/api/action/apply-best-copy" in r.url

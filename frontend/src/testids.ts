@@ -167,8 +167,8 @@ export function rowGroupTestid(groupId: string): string {
   return `row-group-${groupId}`;
 }
 
-export function rowGroupKeepBestTestid(groupId: string): string {
-  return `row-group-keep-best-${groupId}`;
+export function groupKeepBestTestid(groupId: string): string {
+  return `group-keep-best-${groupId}`;
 }
 
 export function rowDecisionTestid(groupId: string, basename: string): string {

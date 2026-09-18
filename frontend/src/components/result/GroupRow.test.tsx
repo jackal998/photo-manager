@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GroupRow } from "./GroupRow";
 import type { FileRow as FileRowData } from "@/api/types";
 import { useI18nStore } from "@/i18n/useI18nStore";
-import { rowGroupKeepBestTestid, rowGroupTestid } from "@/testids";
+import { groupKeepBestTestid, rowGroupTestid } from "@/testids";
 
 function makeItem(overrides: Partial<FileRowData> = {}): FileRowData {
   return {
@@ -141,7 +141,7 @@ describe("GroupRow keep-best button (Q5)", () => {
     const onKeepBest = vi.fn();
     renderRow(5, [makeItem()], { onToggle, onKeepBest });
 
-    fireEvent.click(screen.getByTestId(rowGroupKeepBestTestid("3")));
+    fireEvent.click(screen.getByTestId(groupKeepBestTestid("3")));
 
     expect(onKeepBest).toHaveBeenCalledTimes(1);
     // Q5's whole placement argument: the expensive misclick on this screen is
@@ -154,7 +154,7 @@ describe("GroupRow keep-best button (Q5)", () => {
     const onKeepBest = vi.fn();
     renderRow(5, [makeItem()], { onToggle, onKeepBest });
 
-    const button = screen.getByTestId(rowGroupKeepBestTestid("3"));
+    const button = screen.getByTestId(groupKeepBestTestid("3"));
     expect(button.tagName).toBe("BUTTON");
     // The row's own Enter handler must ignore key presses that started on the
     // nested button — otherwise keyboard users collapse the group as a side
@@ -165,7 +165,7 @@ describe("GroupRow keep-best button (Q5)", () => {
 
   it("is absent when no keep-best handler is supplied", () => {
     renderRow(5);
-    expect(screen.queryByTestId(rowGroupKeepBestTestid("3"))).toBeNull();
+    expect(screen.queryByTestId(groupKeepBestTestid("3"))).toBeNull();
   });
 
   it("still toggles on a click on the row itself, and on Enter", () => {

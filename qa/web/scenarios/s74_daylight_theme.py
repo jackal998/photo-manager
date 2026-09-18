@@ -124,10 +124,10 @@ from qa.web.testid_constants import (
     SCAN_DIALOG,
     SCAN_START_BUTTON,
     col_resize_testid,
+    group_keep_best_testid,
     row_decision_option_testid,
     row_decision_testid,
     row_file_testid,
-    row_group_keep_best_testid,
     row_group_testid,
     row_lock_testid,
 )
@@ -672,7 +672,7 @@ def run(*, base_url: str) -> None:
             # but a live layout can evaluate.
             header_geo = page.evaluate(
                 _READ_GROUP_HEADER_GEOMETRY,
-                [row_group_testid(group_id), row_group_keep_best_testid(group_id)],
+                [row_group_testid(group_id), group_keep_best_testid(group_id)],
             )
             print(f"probe_status: s74 group header geometry = {header_geo}")
             assert header_geo is not None, (
