@@ -82,6 +82,7 @@ from pathlib import Path
 from qa.web._pw import PWContext
 from qa.web._invariants import (
     dismiss_modal_overlays,
+    load_manifest,
     open_scan_dialog,
     right_click_row,
     run_scan,
@@ -95,6 +96,7 @@ from qa.web.testid_constants import (
     RESULT_COL_HEADER_ROW,
     SCAN_DIALOG,
     SCAN_START_BUTTON,
+    col_resize_testid,
     row_decision_option_testid,
     row_decision_testid,
     row_file_testid,
@@ -153,6 +155,10 @@ _NARROW_VIEWPORT = {"width": 900, "height": 800}
 # only the row's own right padding (16px) plus sub-pixel rounding; anything
 # larger means the filename is not taking the slack.
 _MAX_GUTTER_PX = 24
+# Far more than the row can pay for at 1280×800 — the drag has to be clamped,
+# not merely survived.
+_DATE_DRAG_PX = 200
+_WIDTHS_KEY = "pm.result-tree.column-widths.v1"
 
 _PANEL_BG = "rgb(255, 253, 249)"  # --color-panel     #fffdf9
 _TITLEBAR_BG = "rgb(243, 237, 227)"  # --color-titlebar  #f3ede3
@@ -996,6 +1002,74 @@ def run(*, base_url: str) -> None:
                 f"padlock at 1280×800 (max {_MAX_GUTTER_PX}). That hole is what "
                 "the fill column exists to close."
             )
+            # 10b. A drag on the LAST column that fits must not delete it.
+            # Shot Date is that column at this width, and shedding is need-based
+            # — so before the clamp, dragging its own handle right pushed it past
+            # the budget, unmounted it mid-drag, and mouseup persisted the
+            # oversized width. With no header cell there is no handle and no
+            # double-click target: the column stayed gone at this window size.
+            handle = page.get_by_test_id(col_resize_testid("date"))
+            hb = handle.bounding_box()
+            assert hb is not None, "slice C — the Shot Date resize handle has no box"
+            cx = hb["x"] + hb["width"] / 2
+            cy = hb["y"] + hb["height"] / 2
+            page.mouse.move(cx, cy)
+            page.mouse.down()
+            page.mouse.move(cx + _DATE_DRAG_PX, cy, steps=8)
+            page.mouse.up()
+            page.wait_for_timeout(200)
+            dragged = page.evaluate(_READ_SHED)
+            stored_date = page.evaluate(
+                "(key) => { const v = localStorage.getItem(key); "
+                "return v ? (JSON.parse(v).date ?? null) : null; }",
+                _WIDTHS_KEY,
+            )
+            print(
+                f"probe_status: s74 after +{_DATE_DRAG_PX}px Shot Date drag = "
+                f"{dragged} stored_date={stored_date}"
+            )
+            assert dragged["date"] > 0, (
+                "slice C — Shot Date is gone after a drag on its OWN handle. "
+                "The drag shed the column it was on, and there is now no handle "
+                "left to undo it with."
+            )
+            assert stored_date is not None and stored_date < 112 + _DATE_DRAG_PX, (
+                f"slice C — the drag persisted date={stored_date}, the full "
+                f"requested width. It was not clamped to what the row can pay "
+                f"for, so the next launch hydrates a width that hides the column."
+            )
+            assert stored_date > 112, (
+                f"slice C — the drag persisted date={stored_date}, no wider than "
+                "the default: the clamp swallowed the resize entirely instead of "
+                "capping it."
+            )
+
+            # …and the clamped width survives the cross-launch boundary without
+            # taking the column with it.
+            page.reload()
+            load_manifest(page, db_path)
+            page.wait_for_timeout(400)
+            reloaded = page.evaluate(_READ_SHED)
+            stored_after = page.evaluate(
+                "(key) => { const v = localStorage.getItem(key); "
+                "return v ? (JSON.parse(v).date ?? null) : null; }",
+                _WIDTHS_KEY,
+            )
+            print(
+                f"probe_status: s74 after reload = {reloaded} "
+                f"stored_date={stored_after}"
+            )
+            assert reloaded["date"] > 0, (
+                "slice C — Shot Date is missing after a reload that hydrated "
+                f"date={stored_after}. A stored width is hiding its own column, "
+                "which is the state the self-heal exists to prevent."
+            )
+            assert stored_after == stored_date, (
+                f"slice C — the stored Shot Date width changed across the "
+                f"reload ({stored_date} → {stored_after}); either it was not "
+                "persisted or the heal is firing on a width that fits."
+            )
+
             page.set_viewport_size(_NARROW_VIEWPORT)
             page.wait_for_timeout(400)
             narrow = page.evaluate(_READ_SHED)

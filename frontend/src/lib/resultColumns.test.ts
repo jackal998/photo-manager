@@ -4,7 +4,10 @@ import { describe, it, expect } from "vitest";
 import {
   COLUMNS,
   DEFAULT_COLUMN_WIDTHS,
+  clampResizeWidth,
   columnCellStyle,
+  columnResizeCeiling,
+  effectiveColumnWidths,
   isScoreCompact,
   makeRowComparator,
   requiredWidth,
@@ -164,6 +167,67 @@ describe("isScoreCompact", () => {
 
   it("is false when the width has not been measured", () => {
     expect(isScoreCompact(null)).toBe(false);
+  });
+});
+
+describe("columnResizeCeiling / clampResizeWidth — a drag can not shed its own column", () => {
+  // The bug this exists for: at a table width where Shot Date is the last thing
+  // that fits, dragging its handle right pushed it past the budget, the column
+  // unmounted under the cursor, and mouseup persisted the oversized width. With
+  // no header cell there is no handle and no double-click target, so the column
+  // stayed gone at that window size until the user narrowed the preview pane.
+  const TABLE = 986; // measured at 1280×800 with the preview open
+
+  it("caps a sheddable column at the width where it still fits", () => {
+    // date's ceiling is measured against the set it survives in — dims is
+    // already shed at this table width, so its width is not in the sum.
+    const withoutDims = COLUMNS.filter((c) => c.id !== "dims");
+    const expected =
+      TABLE - (requiredWidth(withoutDims, DEFAULT_COLUMN_WIDTHS) - DEFAULT_COLUMN_WIDTHS.date);
+    expect(columnResizeCeiling("date", TABLE, DEFAULT_COLUMN_WIDTHS)).toBe(expected);
+    expect(clampResizeWidth("date", 312, TABLE, DEFAULT_COLUMN_WIDTHS)).toBe(expected);
+    // The capped width must actually keep the column on the row.
+    const after = { ...DEFAULT_COLUMN_WIDTHS, date: expected };
+    expect(visibleColumns(TABLE, after).map((c) => c.id)).toContain("date");
+  });
+
+  it("leaves a narrowing drag alone", () => {
+    expect(clampResizeWidth("date", 80, TABLE, DEFAULT_COLUMN_WIDTHS)).toBe(80);
+  });
+
+  it("does not cap a NON-sheddable column — widening name may cost date its place", () => {
+    expect(columnResizeCeiling("name", TABLE, DEFAULT_COLUMN_WIDTHS)).toBeNull();
+    expect(clampResizeWidth("name", 900, TABLE, DEFAULT_COLUMN_WIDTHS)).toBe(900);
+  });
+
+  it("does not cap anything before the table has been measured", () => {
+    expect(clampResizeWidth("date", 999, null, DEFAULT_COLUMN_WIDTHS)).toBe(999);
+  });
+});
+
+describe("effectiveColumnWidths — a stored width can not hide its own column", () => {
+  const TABLE = 986;
+
+  it("falls back to the default for a sheddable column its width would hide", () => {
+    const stale = { ...DEFAULT_COLUMN_WIDTHS, date: 400 };
+    expect(visibleColumns(TABLE, stale).map((c) => c.id)).toContain("date");
+    expect(effectiveColumnWidths(TABLE, stale).date).toBe(DEFAULT_COLUMN_WIDTHS.date);
+    // Only the offending column is touched.
+    expect(effectiveColumnWidths(TABLE, stale).name).toBe(stale.name);
+  });
+
+  it("leaves a stored width alone when it is not the reason the column is gone", () => {
+    // 606px cannot fit Shot Date at ANY width, so nothing is healed and the
+    // user's own number survives for the next time the window is wide enough.
+    const stale = { ...DEFAULT_COLUMN_WIDTHS, date: 400 };
+    expect(effectiveColumnWidths(606, stale)).toEqual(stale);
+  });
+
+  it("leaves a width that fits completely alone", () => {
+    expect(effectiveColumnWidths(TABLE, DEFAULT_COLUMN_WIDTHS)).toEqual(
+      DEFAULT_COLUMN_WIDTHS
+    );
+    expect(effectiveColumnWidths(null, { ...DEFAULT_COLUMN_WIDTHS, date: 400 }).date).toBe(400);
   });
 });
 

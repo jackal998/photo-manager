@@ -222,6 +222,15 @@ export function shedPlan(
   tableWidth: number | null,
   widths: Record<ColumnId, number> = DEFAULT_COLUMN_WIDTHS
 ): ShedPlan {
+  return shedPlanFor(tableWidth, effectiveColumnWidths(tableWidth, widths));
+}
+
+/** The raw arithmetic, with no self-healing — `effectiveColumnWidths` needs to
+ *  ask "would THESE widths shed it?" without recursing back through healing. */
+function shedPlanFor(
+  tableWidth: number | null,
+  widths: Record<ColumnId, number>
+): ShedPlan {
   if (tableWidth === null) return { columns: COLUMNS, scoreCompact: false };
   let columns: readonly ColumnDef[] = COLUMNS;
   for (const id of SHED_ORDER) {
@@ -232,6 +241,87 @@ export function shedPlan(
   }
   const scoreCompact = requiredWidth(columns, widths) > tableWidth;
   return { columns, scoreCompact };
+}
+
+function isShown(plan: ShedPlan, id: ColumnId): boolean {
+  return plan.columns.some((c) => c.id === id);
+}
+
+/**
+ * The widths shedding actually uses — the stored ones, except where a SHEDDABLE
+ * column's own stored width is the only reason it is hidden. Then it falls back
+ * to that column's default.
+ *
+ * This is the self-heal for a width that can otherwise hide a column
+ * permanently: a sheddable column dragged wider than the row can pay for
+ * disappears, and once it is gone there is no header cell left to grab, no
+ * handle to double-click and no way back except making the window wider. A
+ * width is not allowed to be the thing that removes its own escape hatch.
+ *
+ * ONE function, called from two places: `shedPlan` (so the column is back on
+ * screen in the same render) and `ResultTree` (which writes the corrected width
+ * to the store, so the bad value does not sit in localStorage waiting for the
+ * next launch). `columnResizeCeiling` stops new ones being created; this heals
+ * blobs written before that ceiling existed.
+ */
+export function effectiveColumnWidths(
+  tableWidth: number | null,
+  widths: Record<ColumnId, number>
+): Record<ColumnId, number> {
+  if (tableWidth === null) return widths;
+  let out = widths;
+  for (const id of SHED_ORDER) {
+    if (isShown(shedPlanFor(tableWidth, out), id)) continue;
+    const withDefault = { ...out, [id]: DEFAULT_COLUMN_WIDTHS[id] };
+    // Only heal when the DEFAULT would fit. A genuinely narrow table sheds the
+    // column at any width, and pretending otherwise would fight the budget.
+    if (isShown(shedPlanFor(tableWidth, withDefault), id)) out = withDefault;
+  }
+  return out;
+}
+
+/**
+ * The widest a column may be resized to without shedding ITSELF.
+ *
+ * A resize drag is the one place a width is chosen interactively, and a
+ * sheddable column dragged past what the row can pay for would vanish under the
+ * cursor mid-drag — taking its own handle with it. `requiredWidth` is linear in
+ * the dragged width, so the ceiling is exact: back the requested width off by
+ * however much it overflows. Non-sheddable columns have no ceiling (widening
+ * `name` is allowed to cost `date` its place — that is the budget working, and
+ * `name`'s own handle stays reachable).
+ */
+export function columnResizeCeiling(
+  column: ColumnId,
+  tableWidth: number | null,
+  widths: Record<ColumnId, number>
+): number | null {
+  if (tableWidth === null) return null;
+  const order = SHED_ORDER.indexOf(column);
+  if (order < 0) return null;
+  // By the time THIS column is the one at risk, everything shed before it in
+  // the order is already gone — so that is the set to measure against, and the
+  // ceiling is the width at which the row exactly fills the table.
+  const droppedFirst = SHED_ORDER.slice(0, order);
+  const cols = COLUMNS.filter((c) => !droppedFirst.includes(c.id));
+  const base = requiredWidth(cols, widths) - widths[column];
+  return Math.max(MIN_COLUMN_WIDTH, tableWidth - base);
+}
+
+/**
+ * The width a resize drag may commit for `column`: the requested width, capped
+ * at `columnResizeCeiling`. `widths` is the map WITHOUT the requested change —
+ * the ceiling depends on the column's neighbours, never on itself.
+ */
+export function clampResizeWidth(
+  column: ColumnId,
+  requested: number,
+  tableWidth: number | null,
+  widths: Record<ColumnId, number>
+): number {
+  const ceiling = columnResizeCeiling(column, tableWidth, widths);
+  if (ceiling === null) return requested;
+  return Math.min(requested, ceiling);
 }
 
 /** The columns to render for a table of `tableWidth` px. See `shedPlan`. */
