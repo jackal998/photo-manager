@@ -5,6 +5,8 @@ export const RESULT_COL_HEADER_ROW = "result-col-header-row";
 export const MAIN_STATUS_BAR = "main-status-bar";
 export const MAIN_STATUS_ERROR = "main-status-error";
 export const MAIN_EXECUTE_ERROR = "main-execute-error";
+export const MAIN_TOAST = "main-toast";
+export const MAIN_TOAST_UNDO = "main-toast-undo";
 export const MAIN_SCAN_BUTTON = "main-scan-button";
 export const MAIN_EXECUTE_BUTTON = "main-execute-button";
 export const MAIN_LANG_TOGGLE = "main-lang-toggle";
@@ -163,6 +165,10 @@ export function rowFileTestid(groupId: string, basename: string): string {
 
 export function rowGroupTestid(groupId: string): string {
   return `row-group-${groupId}`;
+}
+
+export function rowGroupKeepBestTestid(groupId: string): string {
+  return `row-group-keep-best-${groupId}`;
 }
 
 export function rowDecisionTestid(groupId: string, basename: string): string {

@@ -402,6 +402,16 @@ web:
     group_plural: "群組"
     file_singular: "檔案"
     file_plural: "檔案"
+  # 單一插槽的復原提示（#878 slice G / Q5）。「保留最佳 · 其餘刪除」不再有確認
+  # 對話框，這段文字就是使用者唯一得到的說明；鎖定那一行是按鈕的承諾：永遠不會
+  # 覆蓋鎖定，而且跳過時一定要說出來。中文沒有單複數變化，兩個鍵刻意相同。
+  toast:
+    keep_best: "群組 {n} · 已標記 {count} 個{fileWord}待刪除"
+    file_singular: "檔案"
+    file_plural: "檔案"
+    locked_unchanged_singular: "{count} 個鎖定的檔案未變更"
+    locked_unchanged_plural: "{count} 個鎖定的檔案未變更"
+    undo: "復原"
   # 對應 en.yml 的 web.error.* — 後端拋出的原始開發訊息改由此處的完整句子呈現，
   # 原始文字仍以次要的技術細節行顯示。
   error:
@@ -784,6 +794,10 @@ web:
     # 與狀態列的 "{files} 個{fileWord}" 讀起來一致。
     file_singular: "個檔案"
     file_plural: "個檔案"
+    # 衍生的資料夾後綴（#878 slice G，open questions Q4）。只有跨資料夾時才會
+    # 出現；同一個資料夾時顯示該資料夾的葉節點名稱。{n} 恆 >= 2，沒有單數形。
+    folders_suffix: "{n} 個資料夾"
+    keep_best: "保留最佳 · 其餘刪除"
   delete_confirm:
     title_groups: "整個群組將被刪除"
     title_all: "刪除所有檔案？"

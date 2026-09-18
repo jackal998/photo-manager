@@ -155,6 +155,52 @@ export interface ResultViewState {
 }
 
 // ---------------------------------------------------------------------------
+// Undo toast (#878, layout slice G — open questions Q5)
+// ---------------------------------------------------------------------------
+
+/** One row's decision + lock as they were BEFORE a keep-best write. */
+export interface KeepBestSnapshotRow {
+  file_path: string;
+  decision: DecisionValue;
+  locked: boolean;
+}
+
+/**
+ * The single-slot undo toast raised by "Keep best · delete rest".
+ *
+ * Q5 refused a confirm dialog — «the button does not delete anything … A
+ * confirm dialog in front of a reversible, non-destructive action is the
+ * classic way to teach people to dismiss dialogs without reading, which then
+ * costs you at Execute, where the dialog matters» — and asked for an undo
+ * toast instead. That makes the toast the ONLY safety net on a bulk write, so
+ * it carries the state needed to reverse it rather than a re-run of the
+ * action's inverse.
+ *
+ * SINGLE SLOT, deliberately (the plan's "Pending owner" item 4 asks what
+ * happens on a run of consecutive keep-bests): a second keep-best REPLACES
+ * this object, so Undo always reverses exactly the latest action and never a
+ * half-remembered stack. The alternative — queued toasts, each undoing its own
+ * write — makes "which one does Undo undo?" a question the user has to answer
+ * while a 6-second timer runs.
+ */
+export interface KeepBestToast {
+  /** Monotonic; a new keep-best gets a new id, which restarts the timer. */
+  id: number;
+  groupNumber: number;
+  /** Rows the write marked `delete` — the number the toast reports. */
+  deletedCount: number;
+  /**
+   * Locked rows in the group the write left untouched. Q5: the button «must
+   * never override a lock, and it must say so when it skips one».
+   */
+  lockedCount: number;
+  /** Prior state of every row the write touched — what Undo restores. */
+  snapshot: KeepBestSnapshotRow[];
+  /** True while an Undo is in flight, so the button cannot fire twice. */
+  undoing: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 2C2 — execute state
 // ---------------------------------------------------------------------------
 
@@ -637,6 +683,22 @@ export interface AppActions {
     groupNumber: number,
     opts?: { forceLocked?: boolean; skipLocked?: boolean }
   ): Promise<void>;
+
+  /**
+   * Reverse the keep-best write the current toast describes (#878 slice G,
+   * open questions Q5), then dismiss it. No-op when there is no toast or an
+   * Undo is already in flight.
+   *
+   * Restores BOTH decision and lock from the snapshot, in that order and with
+   * `force_locked` on the decision PATCH — apply-best-copy LOCKS the keeper it
+   * chooses, so a decision-only undo would be refused by the very lock the
+   * action had just created, and the user would get a lock-conflict dialog for
+   * pressing Undo.
+   */
+  undoKeepBest(): Promise<void>;
+
+  /** Clear the toast (its timer expired, or Undo finished). */
+  dismissToast(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +714,8 @@ export interface AppStore extends AppActions {
   resultView: ResultViewState;
   execute: ExecuteState;
   action: ActionState;
+  /** The single-slot undo toast, or null when nothing is showing (slice G). */
+  toast: KeepBestToast | null;
 }
 
 // Re-export BulkDecideResult so callers can import from store/types.

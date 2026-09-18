@@ -73,6 +73,12 @@ type ImmerSetFn = (
 // superseded requests are dropped (see previewBulkDecide / applyBulkDecide).
 let _bulkDecideSeq = 0;
 
+// Monotonic id for the single-slot undo toast (#878 slice G). The Toast
+// component keys its 6-second timer on this, so a keep-best on a SECOND group
+// replaces the toast and restarts the clock rather than inheriting the
+// remainder of the first one's.
+let _toastSeq = 0;
+
 // ---------------------------------------------------------------------------
 // Initial state slices
 // ---------------------------------------------------------------------------
@@ -174,6 +180,7 @@ export const useAppStore = create<AppStore>()(
     },
     execute: { ...initialExecute },
     action: { ...initialAction },
+    toast: null,
 
     // -----------------------------------------------------------------------
     // Scan actions
@@ -1226,6 +1233,19 @@ export const useAppStore = create<AppStore>()(
         state.manifest.error = null;
       });
 
+      // Q5's undo replaces the confirm dialog, so the state it restores has to
+      // be read BEFORE the write — after it, the server's response is the only
+      // truth left and the prior decisions are gone.
+      const before = new Map(
+        (
+          get().manifest.groups.find((g) => g.group_number === groupNumber)
+            ?.items ?? []
+        ).map((row) => [
+          row.file_path,
+          { decision: row.user_decision, locked: row.is_locked },
+        ])
+      );
+
       try {
         const result = await apiApplyBestCopy({
           manifest_path: manifestPath,
@@ -1234,12 +1254,48 @@ export const useAppStore = create<AppStore>()(
           skip_locked: skipLocked,
         });
 
+        const affected = new Set(result.affected_paths);
+        const after =
+          result.groups.find((g) => g.group_number === groupNumber)?.items ?? [];
+        // What the toast reports: rows the write actually marked for deletion,
+        // and locked rows it left alone. Both are derived here rather than read
+        // off the response, which carries only `matched` (keeper + deletes, one
+        // number) and no locked count at all.
+        const deletedCount = after.filter(
+          (row) => affected.has(row.file_path) && row.user_decision === "delete"
+        ).length;
+        // Under skipLocked NO locked row is ever written, so this is every
+        // locked row in the group; under forceLocked the locked rows ARE in
+        // `affected`, so it is correctly 0. Either way the sentence it feeds
+        // ("N locked files unchanged") is true of every row it counts.
+        let lockedCount = 0;
+        for (const [path, prev] of before) {
+          if (prev.locked && !affected.has(path)) lockedCount += 1;
+        }
+
         set((state) => {
           // Replace groups from the authoritative server response — no
           // optimistic update (mirrors applyBulkDecide; the write mixes
           // "" and "delete" across rows, so there is no single value to
           // optimistically apply).
           state.manifest.groups = result.groups;
+          // A write that touched nothing (every member a passenger, or every
+          // target locked) gets no toast — there is nothing to undo and
+          // nothing to report.
+          if (affected.size === 0) return;
+          _toastSeq += 1;
+          state.toast = {
+            id: _toastSeq,
+            groupNumber,
+            deletedCount,
+            lockedCount,
+            snapshot: [...affected].map((path) => ({
+              file_path: path,
+              decision: before.get(path)?.decision ?? "",
+              locked: before.get(path)?.locked ?? false,
+            })),
+            undoing: false,
+          };
         });
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
@@ -1259,6 +1315,70 @@ export const useAppStore = create<AppStore>()(
           });
         }
       }
+    },
+
+    async undoKeepBest() {
+      const toast = get().toast;
+      const manifestPath = get().manifest.path;
+      if (toast === null || toast.undoing || manifestPath === null) return;
+
+      set((state) => {
+        if (state.toast !== null) state.toast.undoing = true;
+        state.manifest.error = null;
+      });
+
+      try {
+        // force_locked, because apply-best-copy locked the keeper it chose —
+        // without it the undo is refused by the lock the action just created.
+        await patchDecisions(
+          manifestPath,
+          toast.snapshot.map((row) => ({
+            file_path: row.file_path,
+            decision: row.decision,
+          })),
+          { forceLocked: true }
+        );
+        // Second PATCH, not an afterthought: the write above both created and
+        // (via force_locked) cleared locks, so the snapshot's lock column is
+        // restored explicitly or the group ends up unlocked-everywhere.
+        await patchLocks(
+          manifestPath,
+          toast.snapshot.map((row) => ({
+            file_path: row.file_path,
+            locked: row.locked,
+          }))
+        );
+        const restored = new Map(
+          toast.snapshot.map((row) => [row.file_path, row])
+        );
+        set((state) => {
+          for (const group of state.manifest.groups) {
+            if (group.group_number !== toast.groupNumber) continue;
+            for (const item of group.items) {
+              const prev = restored.get(item.file_path);
+              if (prev === undefined) continue;
+              item.user_decision = prev.decision;
+              item.is_locked = prev.locked;
+            }
+          }
+          state.toast = null;
+        });
+      } catch (err) {
+        // Leave the toast up on failure — dismissing it would strand the user
+        // with a bulk write they asked to reverse and no way left to reverse
+        // it. The error line under the status bar says what happened.
+        set((state) => {
+          if (state.toast !== null) state.toast.undoing = false;
+          state.manifest.error =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    dismissToast() {
+      set((state) => {
+        state.toast = null;
+      });
     },
   }))
 );

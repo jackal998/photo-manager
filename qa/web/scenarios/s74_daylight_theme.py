@@ -32,6 +32,15 @@ What this pins, and why a unit test cannot:
      child comes from row data (`isLastInGroup`), not a CSS sibling rule,
      because the tree is virtualised.
 
+ 12. **The group header is the REPLY's, and does not compress** (layout slice
+     G). 44px at BOTH densities, a 14px/700 title, a derived byte total the
+     manifest never sends, and the Q5 "Keep best · delete rest" button as a
+     SECONDARY control at 28px. One of these is not a class at all: the gap
+     between the button and the caret's hit area is the arithmetic of two
+     boxes, so only a live layout can evaluate it — and Q5 made that gap a
+     requirement because «a misclick from collapse into a bulk decision is the
+     expensive misclick on this screen».
+
   5. **Exactly one decision chip is filled** (slice b). The active segment
      wears its own decision's chip (`dec.delete` red for a staged delete,
      `dec.keep` green for the untouched `''` = keep) and every inactive one is
@@ -118,6 +127,7 @@ from qa.web.testid_constants import (
     row_decision_option_testid,
     row_decision_testid,
     row_file_testid,
+    row_group_keep_best_testid,
     row_group_testid,
     row_lock_testid,
 )
@@ -482,6 +492,40 @@ _READ_ROW_HEIGHT = """(testid) => {
   return row ? Math.round(row.getBoundingClientRect().height) : null;
 }"""
 
+# Layout slice G — the group header's geometry, its title type, the derived
+# size total and the Q5 button, read in ONE pass so the caret/button gap is
+# measured against the same layout the rest of the numbers came from.
+# The caret is the row's first element child; the button is addressed by its
+# own testid, so a renamed caret wrapper fails loudly rather than silently
+# measuring the gap from the row's left edge.
+_READ_GROUP_HEADER_GEOMETRY = """([rowTestid, buttonTestid]) => {
+  const row = document.querySelector(`[data-testid="${rowTestid}"]`);
+  if (!row) return null;
+  const caret = row.firstElementChild;
+  const button = document.querySelector(`[data-testid="${buttonTestid}"]`);
+  const title = row.querySelector('.font-bold');
+  const mono = [...row.querySelectorAll('.font-mono')];
+  const cs = getComputedStyle(row);
+  const titleCs = title ? getComputedStyle(title) : null;
+  const buttonCs = button ? getComputedStyle(button) : null;
+  return {
+    rowHeight: Math.round(row.getBoundingClientRect().height),
+    paddingLeft: cs.paddingLeft,
+    paddingRight: cs.paddingRight,
+    titleSize: titleCs ? titleCs.fontSize : null,
+    titleWeight: titleCs ? titleCs.fontWeight : null,
+    sizeText: mono.length > 0 ? mono[0].textContent : null,
+    suffixText: mono.length > 1 ? mono[1].textContent : null,
+    buttonHeight: button ? Math.round(button.getBoundingClientRect().height) : null,
+    buttonBg: buttonCs ? buttonCs.backgroundColor : null,
+    buttonRadius: buttonCs ? buttonCs.borderRadius : null,
+    caretToButtonGap:
+      caret && button
+        ? button.getBoundingClientRect().left - caret.getBoundingClientRect().right
+        : null,
+  };
+}"""
+
 
 def _get_manifest(base_url: str, db_path: str) -> dict:
     encoded = urllib.parse.quote(db_path, safe="")
@@ -618,6 +662,63 @@ def run(*, base_url: str) -> None:
             assert group_style["leftWidth"] == "4px", (
                 "#878 — the accent left strip is "
                 f"{group_style['leftWidth']} wide, expected 4px."
+            )
+
+            # 3a-ii. Layout slice G — the header's own geometry and the Q5
+            # button. Every number is an absolute px that exists only after the
+            # CSS build: `h-[44px]` in jsdom is a string that spells correctly
+            # with Tailwind removed entirely, and the caret-to-button GAP is not
+            # a class at all — it is the arithmetic of two boxes, which nothing
+            # but a live layout can evaluate.
+            header_geo = page.evaluate(
+                _READ_GROUP_HEADER_GEOMETRY,
+                [row_group_testid(group_id), row_group_keep_best_testid(group_id)],
+            )
+            print(f"probe_status: s74 group header geometry = {header_geo}")
+            assert header_geo is not None, (
+                "slice G — the group header row was not found."
+            )
+            assert header_geo["rowHeight"] == 44, (
+                f"slice G — the group header measures {header_geo['rowHeight']}px, "
+                "expected 44. That number is ALSO the virtualiser's "
+                "GROUP_HEADER_HEIGHT, so a mismatch drifts the whole list "
+                "without turning a unit test red."
+            )
+            assert header_geo["titleSize"] == "14px", (
+                f"slice G — the group title is {header_geo['titleSize']}, "
+                "expected 14px (REPLY §'Group header': «'Group 12' 14px/700»)."
+            )
+            assert header_geo["titleWeight"] in {"700", "bold"}, (
+                f"slice G — the group title's weight is "
+                f"{header_geo['titleWeight']!r}, expected 700. The title is what "
+                "makes this row read as a heading rather than a row."
+            )
+            # H7: the derived byte total sits beside the id, not off to the
+            # right. The manifest never sends it, so a broken sum renders a
+            # plausible wrong figure — the presence of a unit is the cheapest
+            # live check that something was summed at all.
+            assert header_geo["sizeText"] is not None and any(
+                unit in header_geo["sizeText"] for unit in (" B", "KB", "MB", "GB")
+            ), (
+                "slice G — the group header shows no derived size total "
+                f"(read {header_geo['sizeText']!r})."
+            )
+            assert header_geo["buttonHeight"] == 28, (
+                f"slice G — the Q5 button is {header_geo['buttonHeight']}px tall, "
+                "expected 28."
+            )
+            assert header_geo["buttonBg"] == _PANEL_BG, (
+                "slice G — the Q5 button's fill is "
+                f"{header_geo['buttonBg']}, expected {_PANEL_BG} (#fffdf9). It is "
+                "a SECONDARY button: the one accent-filled control on this "
+                "screen is 'Scan folder'."
+            )
+            assert header_geo["caretToButtonGap"] >= 16, (
+                "slice G — only "
+                f"{header_geo['caretToButtonGap']:.1f}px separate the keep-best "
+                "button from the caret's hit area; Q5 requires >= 16px, because "
+                "«a misclick from collapse into a bulk decision is the expensive "
+                "misclick on this screen»."
             )
 
             # 3b. The keeper row's 2px strip is the SAME accent (Q2). It used
@@ -1384,6 +1485,20 @@ def run(*, base_url: str) -> None:
             assert compact_last == 56, (
                 f"slice R — the compact group's last row measures "
                 f"{compact_last}px, expected 56 (52 + the 4px closing breath)."
+            )
+
+            # Slice G — the band is the ONE row that does not compress: «44px
+            # (comfortable and compact — the group band does not compress)».
+            # The density-keyed class table is exactly the shape that picks up
+            # a neighbour's density by accident, and the virtualiser's
+            # group-header branch is a single constant that would then be wrong.
+            compact_group = page.evaluate(
+                _READ_ROW_HEIGHT, row_group_testid(group_id)
+            )
+            print(f"probe_status: s74 compact group header = {compact_group}")
+            assert compact_group == 44, (
+                f"slice G — the group header measures {compact_group}px at the "
+                "compact density, expected 44 at BOTH densities."
             )
     finally:
         import shutil

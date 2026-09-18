@@ -498,6 +498,18 @@ web:
     group_plural: "groups"
     file_singular: "file"
     file_plural: "files"
+  # The single-slot undo toast (#878 slice G). Open questions Q5 put this in
+  # place of a confirm dialog on "Keep best · delete rest", so this copy is the
+  # only account the user gets of what a bulk write just did — and the locked
+  # line is a promise the button makes: «it must never override a lock, and it
+  # must say so when it skips one».
+  toast:
+    keep_best: "Group {n} · {count} {fileWord} marked for deletion"
+    file_singular: "file"
+    file_plural: "files"
+    locked_unchanged_singular: "{count} locked file unchanged"
+    locked_unchanged_plural: "{count} locked files unchanged"
+    undo: "Undo"
   # Human sentences for the closed set of backend failure shapes surfaced in
   # the status bar (copy audit S2). Before this, the raw developer strings the
   # routes raise ("Execute failed: {exc}", "Failed to launch Explorer: {exc}")
@@ -961,6 +973,13 @@ web:
     group_label: "Group {n}"
     file_singular: "file"
     file_plural: "files"
+    # Derived folder suffix (#878 slice G, open questions Q4). Only rendered
+    # when the group's members span MORE than one folder — the single-folder
+    # case shows the folder's own leaf name, which is data, not copy. So there
+    # is no singular form to split out: {n} is always >= 2 here.
+    folders_suffix: "{n} folders"
+    # Q5's promoted bulk verb, at the right end of the group header.
+    keep_best: "Keep best · delete rest"
   # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —
   # the patternSummary branch above was already translated).
   delete_confirm:

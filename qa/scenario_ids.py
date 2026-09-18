@@ -307,6 +307,13 @@ ALL_SCENARIOS = [
     # vitest can: the tokens are Tailwind v4 `@theme` colours that only become
     # real utilities once the CSS pipeline runs, and jsdom never runs it.
     "s74_daylight_theme",
+    # WEB-ONLY (#878, layout slice G) — the "Keep best · delete rest" button
+    # open questions Q5 promoted onto the group header. s72 covers the ACTION
+    # (via the right-click item); this covers what Q5 attached to the BUTTON:
+    # it skips locked rows with no dialog in the way, the undo toast reports
+    # both counts in both locales, and Undo restores the decisions AND the
+    # lock the write itself created.
+    "s75_keep_best_button",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -322,4 +329,5 @@ WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s72_apply_best_copy",
     "s73_action_seed_and_page_scroll",
     "s74_daylight_theme",
+    "s75_keep_best_button",
 })

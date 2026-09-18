@@ -57,6 +57,12 @@ def render_testids_ts() -> str:
     lines.append("}")
     lines.append("")
     lines.append(
+        "export function rowGroupKeepBestTestid(groupId: string): string {"
+    )
+    lines.append("  return `row-group-keep-best-${groupId}`;")
+    lines.append("}")
+    lines.append("")
+    lines.append(
         "export function rowDecisionTestid(groupId: string, basename: string): string {"
     )
     lines.append("  return `row-decision-${groupId}-${basename}`;")

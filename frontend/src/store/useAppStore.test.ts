@@ -142,6 +142,7 @@ beforeEach(() => {
       prunePending: null,
       scopeGroupNumbers: null,
     },
+    toast: null,
   });
   vi.clearAllMocks();
   // Default the authoritative prune pref to "never" so the maybeOfferPrune tail
@@ -782,6 +783,193 @@ describe("applyBestCopy – 409 locked_paths sets lockConflict op=apply-best-cop
     const { execute, manifest } = useAppStore.getState();
     expect(execute.lockConflict).toBeNull();
     expect(manifest.error).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyBestCopy → undo toast (#878 layout slice G, open questions Q5)
+//
+// Q5 took the confirm dialog away from this action and gave it a toast with an
+// Undo instead. That makes the toast's numbers and its snapshot the only
+// account and the only reversal of a bulk write, so both are tested here
+// against a group shaped like the real one: a keeper, a duplicate, and a
+// locked row the write is required to leave alone.
+// ---------------------------------------------------------------------------
+
+/** keeper + peer + locked peer, the shape apply-best-copy meets in practice. */
+function seedKeepBestGroup(): void {
+  const group = makeGroup(1, [
+    "/photos/keeper.jpg",
+    "/photos/peer.jpg",
+    "/photos/locked.jpg",
+  ]);
+  group.items[1].user_decision = "ignore";
+  group.items[2].is_locked = true;
+  seedManifest([group]);
+}
+
+/** The server's reply when skip_locked narrowed the write to the two unlocked rows. */
+function keepBestResponse() {
+  const after = makeGroup(1, [
+    "/photos/keeper.jpg",
+    "/photos/peer.jpg",
+    "/photos/locked.jpg",
+  ]);
+  after.items[0].user_decision = "";
+  after.items[0].is_locked = true;
+  after.items[1].user_decision = "delete";
+  after.items[2].is_locked = true;
+  return {
+    matched: 2,
+    affected_paths: ["/photos/keeper.jpg", "/photos/peer.jpg"],
+    action_applied: "apply_best_copy",
+    groups: [after],
+  };
+}
+
+describe("applyBestCopy – raises the Q5 undo toast", () => {
+  it("counts the rows it marked delete and the locked rows it skipped", async () => {
+    seedKeepBestGroup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200(keepBestResponse())
+    );
+
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+
+    const { toast } = useAppStore.getState();
+    expect(toast).not.toBeNull();
+    expect(toast!.groupNumber).toBe(1);
+    // The keeper is in affected_paths too, but it was not marked for deletion
+    // — reporting `matched` (2) would over-count by exactly the keeper.
+    expect(toast!.deletedCount).toBe(1);
+    expect(toast!.lockedCount).toBe(1);
+  });
+
+  it("snapshots the PRIOR decision and lock of every row it touched", async () => {
+    seedKeepBestGroup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200(keepBestResponse())
+    );
+
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+
+    const snapshot = useAppStore.getState().toast!.snapshot;
+    expect(snapshot).toHaveLength(2);
+    const byPath = new Map(snapshot.map((r) => [r.file_path, r]));
+    expect(byPath.get("/photos/keeper.jpg")).toEqual({
+      file_path: "/photos/keeper.jpg",
+      decision: "",
+      locked: false,
+    });
+    // "ignore", not "" — a snapshot that assumed undecided would silently turn
+    // Undo into "clear the group" for anyone who had already triaged a row.
+    expect(byPath.get("/photos/peer.jpg")).toEqual({
+      file_path: "/photos/peer.jpg",
+      decision: "ignore",
+      locked: false,
+    });
+    // The locked row was never written, so it is not in the snapshot either.
+    expect(byPath.has("/photos/locked.jpg")).toBe(false);
+  });
+
+  it("raises NO toast when the write touched nothing", async () => {
+    seedManifest([makeGroup(1, ["/photos/a.jpg"])]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({
+        matched: 0,
+        affected_paths: [],
+        action_applied: "apply_best_copy",
+        groups: [makeGroup(1, ["/photos/a.jpg"])],
+      })
+    );
+
+    await useAppStore.getState().applyBestCopy(1);
+
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("a second keep-best REPLACES the toast rather than queueing one", async () => {
+    seedKeepBestGroup();
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200(keepBestResponse()))
+      .mockResolvedValueOnce(ok200(keepBestResponse()));
+
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+    const first = useAppStore.getState().toast!.id;
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+    const second = useAppStore.getState().toast!.id;
+
+    expect(second).toBeGreaterThan(first);
+  });
+});
+
+describe("undoKeepBest – restores the snapshot and dismisses the toast", () => {
+  async function stage() {
+    seedKeepBestGroup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200(keepBestResponse())
+    );
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+  }
+
+  it("PATCHes the prior decisions with force_locked, then the prior locks", async () => {
+    await stage();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+    vi.mocked(client.patchLocks).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().undoKeepBest();
+
+    // force_locked matters: apply-best-copy LOCKED the keeper, so without it
+    // the undo is refused by the lock the action itself had just created.
+    expect(client.patchDecisions).toHaveBeenCalledWith(
+      "/data/scan.db",
+      expect.arrayContaining([
+        { file_path: "/photos/keeper.jpg", decision: "" },
+        { file_path: "/photos/peer.jpg", decision: "ignore" },
+      ]),
+      { forceLocked: true }
+    );
+    expect(client.patchLocks).toHaveBeenCalledWith(
+      "/data/scan.db",
+      expect.arrayContaining([
+        { file_path: "/photos/keeper.jpg", locked: false },
+        { file_path: "/photos/peer.jpg", locked: false },
+      ])
+    );
+  });
+
+  it("puts the rows back and clears the toast", async () => {
+    await stage();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+    vi.mocked(client.patchLocks).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().undoKeepBest();
+
+    const items = useAppStore.getState().manifest.groups[0].items;
+    expect(items[0].user_decision).toBe("");
+    expect(items[0].is_locked).toBe(false);
+    expect(items[1].user_decision).toBe("ignore");
+    // The locked row is still exactly as it was — the undo never touched it.
+    expect(items[2].is_locked).toBe(true);
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("keeps the toast up when the undo fails, so the reversal is not lost", async () => {
+    await stage();
+    vi.mocked(client.patchDecisions).mockRejectedValue(new Error("boom"));
+
+    await useAppStore.getState().undoKeepBest();
+
+    const { toast, manifest } = useAppStore.getState();
+    expect(toast).not.toBeNull();
+    expect(toast!.undoing).toBe(false);
+    expect(manifest.error).toBeTruthy();
+  });
+
+  it("is a no-op with no toast", async () => {
+    seedManifest([makeGroup(1, ["/photos/a.jpg"])]);
+    await useAppStore.getState().undoKeepBest();
+    expect(client.patchDecisions).not.toHaveBeenCalled();
   });
 });
 

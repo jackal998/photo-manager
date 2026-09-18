@@ -28,6 +28,7 @@ import { ActionDialog } from "./components/action/ActionDialog";
 import { ContextMenu } from "./components/ContextMenu";
 import { LockConfirmDialog } from "./components/dialogs/LockConfirmDialog";
 import { PruneConfirmDialog } from "./components/dialogs/PruneConfirmDialog";
+import { Toast } from "./components/Toast";
 import { MenuBar } from "./components/MenuBar";
 import { FsBrowser } from "./components/FsBrowser";
 
@@ -594,6 +595,10 @@ export default function App() {
       <FullResViewer />
       <LockConfirmDialog />
       <PruneConfirmDialog />
+
+      {/* Undo toast (#878 slice G, Q5) — floats above the footer, single slot.
+          Mounted unconditionally; it renders nothing while store.toast is null. */}
+      <Toast />
 
       {/* ------------------------------------------------------------------ */}
       {/* Context menu — rendered at App level so it escapes scroll containers */}
