@@ -1,6 +1,7 @@
 // File row inside a group: thumbnail + metadata columns + decision + lock.
 
 import type { MouseEvent } from "react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
 import {
@@ -24,6 +25,8 @@ import {
   similarityBadgeBorderClass,
   similarityBadgeState,
 } from "@/lib/similarityBadge";
+import { DEFAULT_DENSITY, type Density } from "@/lib/density";
+import { ROW_METRICS } from "@/lib/rowMetrics";
 import { DecisionControl } from "./DecisionControl";
 import { LockToggle } from "./LockToggle";
 import {
@@ -56,8 +59,13 @@ interface FileRowProps {
   /** Columns the table width currently affords (ResultTree computes it from
    *  `visibleColumns`). Omitted = render every column. */
   visibleCols?: ReadonlySet<ColumnId>;
-  /** The <940px score-cell collapse (see `isScoreCompact`). */
+  /** The <940px score-cell collapse (see `isScoreCompact`). ResultTree also
+   *  raises it for the COMPACT density, whose score cell is the same 72px and
+   *  likewise drops the "keep" label. */
   scoreCompact?: boolean;
+  /** Row density (#878 layout slice R). Every metric below is keyed on it —
+   *  see lib/rowMetrics.ts, which the virtualiser's `estimateSize` reads too. */
+  density?: Density;
   onDecision: (filePath: string, value: import("@/api/types").DecisionValue) => void;
   onLock: (filePath: string, locked: boolean) => void;
   onSelect?: (
@@ -85,8 +93,9 @@ interface FileRowProps {
   isLastInGroup?: boolean;
 }
 
-export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, scoreCompact = false, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected, isLastInGroup }: FileRowProps) {
+export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, scoreCompact = false, density = DEFAULT_DENSITY, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected, isLastInGroup }: FileRowProps) {
   const t = useT();
+  const metrics = ROW_METRICS[density];
   const simLabel = similarityLabel(row.similarity, t);
   const shows = (id: ColumnId) => visibleCols === undefined || visibleCols.has(id);
   // Q1 — the classification enum lost its column (it never varies independently
@@ -100,6 +109,10 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
   // A row staged for deletion gets the soft red wash and a struck-through
   // filename, so the lowest-salience decision on screen becomes the loudest.
   const isDeleting = row.user_decision === "delete";
+  // A thumbnail that fails to decode falls back to the warm hatch rather than
+  // to the browser's broken-image glyph (REPLY §"Thumbnail (R6)"). Held as
+  // state because the failure only becomes known when the <img> errors.
+  const [thumbFailed, setThumbFailed] = useState(false);
 
   function handleClick(e: MouseEvent) {
     // Ctrl/Cmd toggles, Shift extends a range; a plain click replaces. The
@@ -127,6 +140,7 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
   return (
     <div
       data-testid={rowFileTestid(groupId, row.basename)}
+      data-density={density}
       className={cn(
         // The separator INSIDE a group is `row-line` (#f4eee3), deliberately
         // lighter than the group rule: inside a group the rows are alternatives
@@ -134,7 +148,13 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
         // is the structural line (layout REPLY L1). `hairline-soft`, which this
         // wore before, is a full step darker and made every row look like its
         // own boundary.
-        "flex items-start gap-3 px-4 py-2 border-b border-row-line bg-panel text-ink hover:bg-subtle cursor-pointer",
+        "flex items-center border-b border-row-line bg-panel text-ink hover:bg-subtle cursor-pointer",
+        // Box geometry, per density (REPLY §"Row heights"). `items-center`, not
+        // `items-start` — R4, and «the single biggest reason the shipped row
+        // reads as a spreadsheet rather than a photo row». The height is the
+        // TOTAL including the 1px bottom border, because that is the number
+        // the virtualiser estimates with (lib/rowMetrics.ts).
+        isLastInGroup ? metrics.rowLast : metrics.row,
         row.is_ref_winner && "bg-toolbar hover:bg-subtle",
         // Keeper cue, half 2 of 2 (copy audit R7 / design Q2, 2026-09-18):
         // a 2px accent strip on the row's left edge replaces the "Ref" pill
@@ -167,16 +187,42 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
     >
-      {/* Thumbnail */}
-      <div className="flex-shrink-0 w-16 h-16 bg-subtle rounded overflow-hidden flex items-center justify-center">
-        <img
-          loading="lazy"
-          src={row.thumbnail_url}
-          width={64}
-          height={64}
-          alt={row.basename}
-          className="object-cover w-full h-full"
-        />
+      {/* Thumbnail — 48/36px, 1px hairline border, and the warm diagonal hatch
+          underneath (REPLY §"Thumbnail (R6)"). The hatch shows before the lazy
+          image decodes and stays if it never does: «it reads as "frame awaiting
+          an image" rather than "broken"». No per-row spinner — «at 40,000 rows
+          spinners are noise». */}
+      <div
+        data-thumb=""
+        className={cn(
+          "thumb-hatch flex flex-shrink-0 items-center justify-center overflow-hidden border border-hairline",
+          metrics.thumb
+        )}
+      >
+        {thumbFailed ? (
+          // Video without a usable thumbnail keeps the hatch and gains the
+          // hairline ▷. Decorative: the row's name cell already says what the
+          // file is, so a screen reader reading "play" here would be noise.
+          row.media_type === "video" && (
+            <span
+              aria-hidden="true"
+              data-thumb-fallback="video"
+              className="text-[12px] leading-none text-ink-hairline"
+            >
+              ▷
+            </span>
+          )
+        ) : (
+          <img
+            loading="lazy"
+            src={row.thumbnail_url}
+            width={metrics.thumbWidth}
+            height={metrics.thumbWidth}
+            alt={row.basename}
+            onError={() => setThumbFailed(true)}
+            className="object-cover w-full h-full"
+          />
+        )}
       </div>
 
       {/* Name + folder */}
@@ -199,8 +245,19 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
             {row.basename}
           </span>
         </div>
-        <div className="text-xs text-ink-muted truncate" title={row.folder}>
-          {row.folder}
+        {/* Folder sub-line — 11px mono, truncated from the LEFT (REPLY L2:
+            «truncate from the left (`direction: rtl` + `text-align: left`), so
+            the leaf stays visible»). A path elided at its END hides the one
+            segment that distinguishes two copies of the same file. The inner
+            `dir="ltr"` isolate is what stops the bidi algorithm reordering the
+            separators inside an otherwise-RTL box. */}
+        <div
+          dir="rtl"
+          data-col-folder=""
+          className="truncate text-left font-mono text-[11px] text-ink-muted"
+          title={row.folder}
+        >
+          <bdi dir="ltr">{row.folder}</bdi>
         </div>
       </div>
 
@@ -211,7 +268,11 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
           // Q1 — the classification's new home now that its column is gone.
           title={classification}
           className={cn(
-            "inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 border",
+            // REPLY §"Similarity badge (R13)": padding 2px 8px, radius 5px,
+            // 11px text, gap 5px, 1px border. The shipped 6/2 pad + r4 + 12px
+            // + gap 4 drifted from the settled badge vocabulary; the weight and
+            // border STYLE stay per-state (they are the grayscale cue).
+            "inline-flex items-center gap-[5px] rounded-[5px] border px-2 py-[2px] text-[11px]",
             similarityBadgeBorderClass(badge.border),
             badge.weight,
             badge.colors
@@ -222,7 +283,7 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
             // the border style, and a screen reader reading "star Ref" would
             // be noise. Kept OUT of the label span so the cell's queryable
             // text stays exactly `similarityLabel()`'s output.
-            <span aria-hidden="true">{badge.glyph}</span>
+            <span aria-hidden="true" className="text-[12px] leading-none">{badge.glyph}</span>
           )}
           <span>{simLabel}</span>
         </span>
@@ -242,32 +303,54 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
           value={row.user_decision}
           onChange={(val) => onDecision(row.file_path, val)}
           disabled={row.is_locked}
+          density={density}
           data-testid={rowDecisionTestid(groupId, row.basename)}
         />
       </div>
 
-      {/* Score — number (unchanged text) plus the Daylight mini bar (#878).
-          The bar is aria-hidden and contributes NO text, so the cell's
-          queryable content stays exactly `formatScore()`'s output, which is
-          what the parity counter and every scenario read. Unscored rows
-          (score === null) get the em dash and no track, matching the Qt
-          delegate this ports. */}
+      {/* Score — the "keep" label riding above the number, then the Daylight
+          mini bar (#878 / REPLY §"Score bar (R15)"). The label stays because
+          «without it a bare bar and a number in a 96px cell is an unlabelled
+          quantity, and this number is the one the "keep best" button acts on»;
+          compact drops it and keeps the number. The bar is aria-hidden and
+          contributes NO text. The NUMBER carries `data-score-value` so the
+          scenarios that used to read the whole cell (when the number was its
+          only content) keep an exact handle now that a label shares the box. */}
       <div
         data-col="score"
         data-col-compact={scoreCompact ? "" : undefined}
-        className={cn("flex-shrink-0 text-xs text-ink-muted overflow-hidden", cellTypeClass("score"))}
+        className={cn("flex-shrink-0 text-ink-muted overflow-hidden", cellTypeClass("score"))}
         style={{ width: scoreCompact ? SCORE_COMPACT_WIDTH : columnWidths.score }}
       >
-        <div>{formatScore(row.score)}</div>
+        <div
+          className={cn(
+            "flex items-baseline mb-[4px]",
+            metrics.showScoreLabel && !scoreCompact
+              ? "justify-between"
+              : "justify-end"
+          )}
+        >
+          {metrics.showScoreLabel && !scoreCompact && (
+            <span data-score-label="" className="font-sans text-[10px] font-medium leading-none">
+              {t("web.score.keep_label", "keep")}
+            </span>
+          )}
+          <span data-score-value="" className="text-[11px] font-semibold leading-none">
+            {formatScore(row.score)}
+          </span>
+        </div>
         {row.score !== null && (
           <div
             aria-hidden="true"
             data-score-track=""
-            className="mt-0.5 h-1 w-full rounded-full bg-score-track overflow-hidden"
+            className="h-[6px] w-full rounded-[3px] bg-score-track overflow-hidden"
           >
             <div
               data-score-fill=""
-              className="h-full rounded-full bg-linear-to-r from-score-fill to-score-fill-end"
+              // SOLID, not a gradient (REPLY): «at 96px a two-stop gradient is
+              // three or four distinguishable pixels of variation, which is
+              // invisible at best and a banding artefact at worst».
+              className="h-full rounded-[3px] bg-score-fill"
               style={{ width: scoreBarWidth(row.score) }}
             />
           </div>
@@ -295,10 +378,11 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
       )}
 
       {/* Lock toggle */}
-      <div className="flex-shrink-0 pt-1">
+      <div className="flex-shrink-0">
         <LockToggle
           checked={row.is_locked}
           onChange={(locked) => onLock(row.file_path, locked)}
+          density={density}
           data-testid={rowLockTestid(groupId, row.basename)}
         />
       </div>

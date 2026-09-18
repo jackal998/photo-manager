@@ -70,16 +70,41 @@ describe("formatBytes / formatScore / formatDate / formatDims (smoke)", () => {
 
   it("formatScore returns an em dash for null", () => {
     expect(formatScore(null)).toBe("—");
-    expect(formatScore(87.25)).toBe("87.3");
+  });
+
+  // Layout REPLY L2: «two decimals, always». Scores inside one near-duplicate
+  // group differ in the SECOND decimal far more often than in the first, so at
+  // one decimal the cell printed the same number for every row in the group —
+  // exactly the rows the user is being asked to choose between.
+  it("formatScore always shows two decimals", () => {
+    expect(formatScore(87.25)).toBe("87.25");
+    expect(formatScore(0.6)).toBe("0.60");
+    expect(formatScore(0.644)).toBe("0.64");
+    expect(formatScore(0.647)).toBe("0.65");
   });
 
   it("formatDate returns an em dash for null", () => {
     expect(formatDate(null)).toBe("—");
   });
 
+  // Layout REPLY L2: «`14 Mar 2021` — no time, no seconds». The locale still
+  // chooses the field order; the explicit `locale` argument exists so this
+  // assertion does not depend on the machine running it.
+  it("formatDate spells the month and drops the time", () => {
+    expect(formatDate("2021-03-14T10:30:00", "en-GB")).toBe("14 Mar 2021");
+    const local = formatDate("2021-03-14T10:30:00");
+    expect(local).toContain("2021");
+    expect(local).not.toContain(":");
+  });
+
   it("formatDims returns an em dash when either dimension is null", () => {
     expect(formatDims(null, 100)).toBe("—");
-    expect(formatDims(1920, 1080)).toBe("1920 × 1080");
+  });
+
+  // Layout REPLY L2: «`4000×3000`, no spaces around ×».
+  it("formatDims joins the two magnitudes with a bare ×", () => {
+    expect(formatDims(1920, 1080)).toBe("1920×1080");
+    expect(formatDims(4000, 3000)).toBe("4000×3000");
   });
 });
 

@@ -18,19 +18,25 @@
 import { Lock, LockOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
+import { DEFAULT_DENSITY, type Density } from "@/lib/density";
+import { ROW_METRICS } from "@/lib/rowMetrics";
 
 interface LockToggleProps {
   checked: boolean;
   onChange: (locked: boolean) => void;
+  /** Row density (#878 layout slice R) — hit target 28/24px. */
+  density?: Density;
   "data-testid"?: string;
 }
 
 export function LockToggle({
   checked,
   onChange,
+  density = DEFAULT_DENSITY,
   "data-testid": testId,
 }: LockToggleProps) {
   const t = useT();
+  const metrics = ROW_METRICS[density];
   return (
     <button
       type="button"
@@ -40,17 +46,26 @@ export function LockToggle({
       data-testid={testId}
       onClick={() => onChange(!checked)}
       className={cn(
-        "inline-flex h-4 w-4 items-center justify-center rounded-sm transition-colors",
+        // 28×28, not 16×16 (REPLY §"Padlock (R17)"): «a 16px target is below a
+        // comfortable pointer target and this is the control that protects a
+        // file from bulk operations — it is the last thing that should be
+        // fiddly. The glyph stays 14px; the growth is all hit area.»
+        "inline-flex items-center justify-center transition-colors",
+        metrics.lock,
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warm",
         // Faint vs solid IS the state cue; the open/closed shackle is the
         // second, colour-free one (the design's grayscale-safety rule).
-        checked ? "text-warm" : "text-ink-faint hover:text-ink-muted"
+        // `ink-hairline` is the ROLE name Q8 published for #a89f8f as a
+        // non-text stroke — same value as the `ink-faint` alias this wore,
+        // moved onto the role name index.css invites slice R to adopt.
+        checked ? "text-warm" : "text-ink-hairline hover:text-ink-muted",
+        "hover:bg-subtle"
       )}
     >
       {checked ? (
-        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+        <Lock className="h-[14px] w-[14px]" aria-hidden="true" />
       ) : (
-        <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
+        <LockOpen className="h-[14px] w-[14px]" aria-hidden="true" />
       )}
     </button>
   );

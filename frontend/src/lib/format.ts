@@ -107,33 +107,53 @@ export function formatBytes(n: number): string {
 }
 
 /**
- * Format a score as a one-decimal string, or an em dash if null.
+ * Format a score as a TWO-decimal string, or an em dash if null.
+ *
+ * Layout REPLY L2 (2026-09-18), cell table: «score number · 11px mono · 600 ·
+ * right · two decimals, always». One decimal collapsed most of a duplicate
+ * group to the same number — scores in a near-duplicate group differ in the
+ * second place far more often than in the first, and the whole point of the
+ * cell is to say why one row was chosen over its neighbour.
  */
 export function formatScore(score: number | null): string {
   if (score === null) return EM_DASH;
-  return score.toFixed(1);
+  return score.toFixed(2);
 }
 
 /**
  * Format an ISO date string as a locale date, or an em dash if null.
  *
- * Uses the browser's default locale. Only the date portion is shown
- * (no time) because shot_date / creation_date precision is day-level
- * in the manifest.
+ * Layout REPLY L2: «`14 Mar 2021` — no time, no seconds». The month is spelled
+ * rather than numbered because `3/14/2021` and `14/3/2021` are the same six
+ * characters in two incompatible orders, and a column of dates is read by
+ * scanning, not by parsing.
+ *
+ * Still LOCALE-AWARE: the field order (and the month's spelling) comes from
+ * the browser's locale, not from a hardcoded template — `locale` exists only
+ * so tests can pin one. Only the date portion is shown, because shot_date /
+ * creation_date precision is day-level in the manifest.
  */
-export function formatDate(iso: string | null): string {
+export function formatDate(iso: string | null, locale?: string): string {
   if (iso === null) return EM_DASH;
   try {
-    return new Date(iso).toLocaleDateString();
+    return new Date(iso).toLocaleDateString(locale, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
   } catch {
     return EM_DASH;
   }
 }
 
 /**
- * Format pixel dimensions as "W × H", or an em dash if either is null.
+ * Format pixel dimensions as "W×H", or an em dash if either is null.
+ *
+ * Layout REPLY L2: «`4000×3000`, no spaces around ×». The cell is right-
+ * aligned mono in a 88px column; the two spaces bought nothing and cost the
+ * column its whole margin at four-digit resolutions.
  */
 export function formatDims(w: number | null, h: number | null): string {
   if (w === null || h === null) return EM_DASH;
-  return `${w} × ${h}`;
+  return `${w}×${h}`;
 }

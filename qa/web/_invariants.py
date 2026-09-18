@@ -641,7 +641,20 @@ def right_click_row(page: "Page", row_testid: str, *, timeout: float = 10_000) -
     row = page.get_by_test_id(row_testid)
     row.wait_for(state="visible", timeout=timeout)
     row.scroll_into_view_if_needed(timeout=timeout)
-    row.click(button="right")
+    # Aim at the THUMBNAIL, which carries no `data-col`, so the menu opens with
+    # NO column threaded — what every caller of this helper assumes (#735's
+    # per-cell pre-fill is reached by right-clicking a specific cell, not by
+    # this helper). Playwright aims `click()` at an element's centre, and #878
+    # layout slice R centres the row's cells vertically (REPLY R4): the
+    # decision control now sits under the row box's centre point, so a
+    # centre right-click resolved `col="action"` and the Set-Action dialog
+    # opened on the Action field instead of its default File Name (measured in
+    # s73). Before centring, the 28px control sat at the top of an 81px row and
+    # the centre landed on bare row background — this restores that target
+    # explicitly instead of by accident.
+    thumb = row.locator("[data-thumb]")
+    target = thumb if thumb.count() == 1 else row
+    target.click(button="right")
     page.get_by_test_id("context-menu").wait_for(state="visible", timeout=timeout)
 
 
@@ -765,10 +778,23 @@ def click_row(
     row = page.get_by_test_id(row_testid)
     row.wait_for(state="visible", timeout=timeout)
     row.scroll_into_view_if_needed(timeout=timeout)
+    # Aim at the FILENAME cell, not at the row box. Playwright's `click()`
+    # targets an element's CENTRE, and #878 layout slice R centres the row's
+    # cells vertically (REPLY R4) — which put the decision control, whose
+    # segments call `stopPropagation` so that staging a decision does not also
+    # select the row, exactly under the row box's centre point. A centre click
+    # then staged a decision and selected nothing (measured: `aria-selected`
+    # stayed "false" while the Keep segment's `aria-pressed` went "true"), and
+    # every scenario that selects a row this way failed downstream with an
+    # empty selection. The filename is what a human clicks to select a row and
+    # is guaranteed non-interactive; the row box is the fallback for any row
+    # shape that has no name cell.
+    name_cell = row.locator('[data-col="name"]')
+    target = name_cell if name_cell.count() == 1 else row
     if modifiers:
-        row.click(modifiers=modifiers)
+        target.click(modifiers=modifiers)
     else:
-        row.click()
+        target.click()
 
 
 def ctrl_click_row(page: "Page", row_testid: str, *, timeout: float = 10_000) -> None:

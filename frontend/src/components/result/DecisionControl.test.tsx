@@ -78,6 +78,73 @@ describe("DecisionControl chips", () => {
     expect(seg.delete.className).toContain("bg-dec-undecided-bg");
   });
 
+  // Layout slice R — the inset track and the two density value sets.
+  it("seats the segments on an inset track, not in a joined box", () => {
+    // REPLY §"Decision control (R16)": «the track is what makes three mutually
+    // exclusive options read as one control with a current value rather than
+    // three adjacent buttons». The joined box it replaces drew 1px dividers
+    // BETWEEN the buttons, which is what made them read as three.
+    render(<DecisionControl value="" onChange={vi.fn()} data-testid={TESTID} />);
+    const track = screen.getByTestId(TESTID);
+    expect(track.className).toContain("bg-dec-track");
+    expect(track.className).toContain("h-[32px]");
+    expect(track.className).toContain("rounded-[9px]");
+    expect(track.className).toContain("p-[3px]");
+    expect(track.className).not.toContain("overflow-hidden");
+    for (const seg of Array.from(track.querySelectorAll("button"))) {
+      expect(seg.className).not.toContain("border-l-dec");
+      expect(seg.className).toContain("h-[26px]");
+      expect(seg.className).toContain("rounded-[7px]");
+    }
+  });
+
+  it("keys the track and segment heights on the density", () => {
+    render(
+      <DecisionControl
+        value=""
+        onChange={vi.fn()}
+        density="compact"
+        data-testid={TESTID}
+      />
+    );
+    const track = screen.getByTestId(TESTID);
+    expect(track.className).toContain("h-[28px]");
+    expect(screen.getByTestId(`${TESTID}-delete`).className).toContain("h-[22px]");
+    expect(screen.getByTestId(`${TESTID}-delete`).className).toContain("px-[8px]");
+  });
+
+  it("reserves the selected segment's border on every segment", () => {
+    // Keep and Skip carry a 1px line when selected and Delete carries none; if
+    // the unselected segments reserved no border, staging a decision would
+    // shift the whole control by 2px — the REPLY's stated reason for the track.
+    const seg = renderControl("");
+    expect(seg.none.className).toContain("border-dec-keep-line");
+    expect(seg.delete.className).toContain("border-transparent");
+    expect(seg.ignore.className).toContain("border-transparent");
+  });
+
+  it("weights the selected segment above the unselected ones", () => {
+    // REPLY: «12px / 600 selected · 12px / 500 unselected», and Delete at 700
+    // because it is the only solid-dark-fill-with-a-light-label in the control
+    // — the redundancy that survives a grayscale render.
+    const seg = renderControl("delete");
+    expect(seg.delete.className).toContain("font-bold");
+    expect(seg.none.className).toContain("font-medium");
+    expect(seg.ignore.className).toContain("font-medium");
+  });
+
+  it("weights a selected Keep at 600, not at Delete's 700", () => {
+    const seg = renderControl("");
+    expect(seg.none.className).toContain("font-semibold");
+    expect(seg.none.className).not.toContain("font-bold");
+  });
+
+  it("hovers only the unselected segments, with a wash over the track", () => {
+    const seg = renderControl("delete");
+    expect(seg.none.className).toContain("hover:bg-white/60");
+    expect(seg.delete.className).not.toContain("hover:bg-white/60");
+  });
+
   it("keeps the three labels and aria-pressed states the store drives", () => {
     const seg = renderControl("delete");
 

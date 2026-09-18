@@ -551,6 +551,14 @@ web:
     # Accessible name of the inline decision control in each file row (copy
     # audit R5 — it was a hardcoded English aria-label).
     decision: "Decision"
+  # Layout slice R (#878): the score cell gained a label above the number —
+  # "without it a bare bar and a number in a 96px cell is an unlabelled
+  # quantity, and this number is the one the 'keep best' button acts on".
+  # Lowercase on purpose: it is a unit label riding above a value, not a
+  # column heading (the column header is web.column.score, "Score"). Dropped
+  # entirely at the compact density.
+  score:
+    keep_label: "keep"
   # The ONE decision vocabulary for the web client (copy audit R3/R4, owner
   # decision 2026-09-18): Keep / Delete / Skip for the three wire values
   # "" / "delete" / "ignore". The key names still mirror the desktop

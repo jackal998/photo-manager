@@ -48,6 +48,7 @@ import type {
 import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
 import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
 import { loadPanelWidths, savePanelWidths, clampPanelWidth } from "../lib/panelWidths";
+import { loadDensity, saveDensity, type Density } from "../lib/density";
 import { normalizePrunePref } from "../lib/prune";
 import type { PrunePref } from "../lib/prune";
 import {
@@ -128,6 +129,7 @@ const initialResultView: ResultViewState = {
   sortDirection: "asc",
   columnWidths: loadColumnWidths(),
   panelWidths: loadPanelWidths(),
+  density: loadDensity(),
 };
 
 const initialExecute: ExecuteState = {
@@ -576,6 +578,19 @@ export const useAppStore = create<AppStore>()(
       if (persist) {
         savePanelWidths({ ...get().resultView.panelWidths });
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // #878 layout slice R — row density
+    // -----------------------------------------------------------------------
+
+    setDensity(density: Density) {
+      set((state) => {
+        state.resultView.density = density;
+      });
+      // No drag to throttle here (a density change is one discrete choice), so
+      // unlike the two width setters this always writes through.
+      saveDensity(density);
     },
 
     // -----------------------------------------------------------------------

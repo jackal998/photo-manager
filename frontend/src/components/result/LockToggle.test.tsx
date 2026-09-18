@@ -38,16 +38,45 @@ describe("LockToggle", () => {
     expect(screen.getByTestId(TESTID)).toHaveAttribute("aria-label", "鎖定");
   });
 
+  // `ink-hairline` is the ROLE name Q8 published for #a89f8f as a non-text
+  // stroke; `ink-faint` is the same value under its old name. Layout slice R
+  // moves this call site onto the role, which index.css explicitly invites.
   it("renders faint when unlocked and solid accent when locked", () => {
     const { el } = renderToggle(false);
-    expect(el.className).toContain("text-ink-faint");
+    expect(el.className).toContain("text-ink-hairline");
     expect(el.className).not.toContain("text-warm");
   });
 
   it("renders the warm accent when locked", () => {
     const { el } = renderToggle(true);
     expect(el.className).toContain("text-warm");
-    expect(el.className).not.toContain("text-ink-faint");
+    expect(el.className).not.toContain("text-ink-hairline");
+  });
+
+  // REPLY §"Padlock (R17)": «28px, not 16px. A 16px target is below a
+  // comfortable pointer target and this is the control that protects a file
+  // from bulk operations — it is the last thing that should be fiddly. The
+  // glyph stays 14px; the growth is all hit area.»
+  it("gives the padlock a 28px hit target with a 14px glyph", () => {
+    const { el } = renderToggle(false);
+    expect(el.className).toContain("h-[28px]");
+    expect(el.className).toContain("w-[28px]");
+    expect(el.querySelector("svg")?.getAttribute("class")).toContain("h-[14px]");
+  });
+
+  it("shrinks the hit target to 24px at the compact density", () => {
+    render(
+      <LockToggle
+        checked={false}
+        onChange={vi.fn()}
+        density="compact"
+        data-testid={TESTID}
+      />
+    );
+    const el = screen.getByTestId(TESTID);
+    expect(el.className).toContain("h-[24px]");
+    // The glyph does NOT shrink with the box — the hit area is what varies.
+    expect(el.querySelector("svg")?.getAttribute("class")).toContain("h-[14px]");
   });
 
   it("reports a locked row through aria-pressed and data-state", () => {

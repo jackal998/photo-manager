@@ -27,6 +27,7 @@ import {
   visibleColumns,
   type ColumnId,
 } from "@/lib/resultColumns";
+import { estimateRowSize } from "@/lib/rowMetrics";
 import type { DecisionValue, FileRow as FileRowData } from "@/api/types";
 
 // ---------------------------------------------------------------------------
@@ -130,6 +131,9 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   const columnWidths = useAppStore((s) => s.resultView.columnWidths);
   const toggleSort = useAppStore((s) => s.toggleSort);
   const setColumnWidth = useAppStore((s) => s.setColumnWidth);
+  // #878 layout slice R — row density. Read here rather than in each row so
+  // the virtualiser's `estimateSize` and the rows it sizes read ONE value.
+  const density = useAppStore((s) => s.resultView.density);
 
   // Collapse state: Set of group_number values that are collapsed.
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -331,15 +335,26 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     () => new Set(visibleColumns(tableWidth, healedWidths).map((c) => c.id)),
     [tableWidth, healedWidths]
   );
-  const scoreCompact = isScoreCompact(tableWidth, healedWidths);
+  // The COMPACT density's score cell is the same 72px box as the <940px
+  // collapse and likewise drops the "keep" label, so the two states raise ONE
+  // flag — which is also what keeps the header cell and the body cells the
+  // same width (they read the same flag).
+  const scoreCompact =
+    isScoreCompact(tableWidth, healedWidths) || density === "compact";
 
   const virtualizer = useVirtualizer({
     count: vrows.length,
     getScrollElement: () => scrollRef.current,
-    // Group header ~34px, file row ~72px (thumbnail 64 + padding).
+    // Four answers, two variables — 72 / 78 / 52 / 56 (lib/rowMetrics.ts).
+    // `isLast` is on the vrow already (it is what closes the group frame), so
+    // the last-in-group breath costs the virtualiser no extra lookup.
     estimateSize: (index) => {
       const vrow = vrows[index];
-      return vrow.kind === "group-header" ? 34 : 72;
+      return estimateRowSize(
+        vrow.kind,
+        vrow.kind === "file" && vrow.isLast,
+        density
+      );
     },
     overscan: 10,
     // The row list starts `scrollMargin` px into the scroll container's
@@ -659,6 +674,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
         columnWidths={columnWidths}
         visibleCols={visibleCols}
         scoreCompact={scoreCompact}
+        density={density}
         sortColumn={sortColumn}
         sortDirection={sortDirection}
         onToggleSort={toggleSort}
@@ -750,6 +766,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                     columnWidths={columnWidths}
                     visibleCols={visibleCols}
                     scoreCompact={scoreCompact}
+                    density={density}
                     onDecision={handleDecision}
                     onLock={handleLock}
                     onSelect={handleRowSelect}

@@ -168,14 +168,23 @@ const SHED_ORDER: readonly ColumnId[] = ["dims", "date"];
 // FileRow / ColumnHeaderRow. These are the numbers `requiredWidth` cannot see
 // from the registry, so a change to either component's markup has to change
 // them here too — the shedThresholds() test is what notices if it does not.
+//
+// They are the COMFORTABLE density's numbers (lib/rowMetrics.ts). Shedding is
+// deliberately NOT density-aware: compact is narrower on every one of these
+// (36px thumb, 24px padlock, 28px padding, 10px gap), so computing the
+// requirement at comfortable over-states it by 22px and sheds a column a
+// hair EARLIER than strictly necessary. That is the safe direction — the
+// failure mode shedding exists to prevent is a row that overflows, and a
+// density-keyed threshold would have to move `visibleColumns` / `isScoreCompact`
+// / `shedThresholds` onto a density argument for 22px of width.
 /** `px-4` on both sides of the row. */
 export const ROW_PADDING_X = 32;
 /** `gap-3` between every item in the row. */
 export const ROW_GAP = 12;
-/** `w-16` thumbnail (and the header's matching spacer). */
-export const ROW_THUMB_WIDTH = 64;
-/** `w-4` padlock cell at the end of the row. */
-export const ROW_LOCK_WIDTH = 16;
+/** 48px thumbnail (and the header's matching spacer) — REPLY §"Thumbnail". */
+export const ROW_THUMB_WIDTH = 48;
+/** 28px padlock hit target at the end of the row — REPLY §"Padlock". */
+export const ROW_LOCK_WIDTH = 28;
 
 /**
  * The width a row needs to render `cols` without overflowing: the columns at
