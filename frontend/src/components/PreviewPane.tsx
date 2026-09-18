@@ -49,7 +49,7 @@ function findRow(
 function EmptyState() {
   const t = useT();
   return (
-    <div className="flex items-center justify-center h-full text-ink-faint text-sm select-none">
+    <div className="flex items-center justify-center h-full text-ink-muted text-sm select-none">
       {t("web.preview.select_file", "Select a file to preview")}
     </div>
   );

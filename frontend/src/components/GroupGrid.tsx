@@ -95,7 +95,7 @@ export function GroupGrid({ groupId }: GroupGridProps): React.ReactElement {
 
   if (group === null) {
     return (
-      <div className="flex items-center justify-center h-full text-ink-faint text-sm select-none">
+      <div className="flex items-center justify-center h-full text-ink-muted text-sm select-none">
         Group not found
       </div>
     );

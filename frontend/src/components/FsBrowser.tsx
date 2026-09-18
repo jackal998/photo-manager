@@ -223,7 +223,7 @@ export function FsBrowser({
         {/* Entry list */}
         <div className="mt-2 h-64 overflow-auto rounded border border-hairline">
           {loading ? (
-            <p className="p-3 text-sm text-ink-faint">
+            <p className="p-3 text-sm text-ink-muted">
               {t("web.browse.loading", "Loading…")}
             </p>
           ) : error !== null ? (
@@ -235,7 +235,7 @@ export function FsBrowser({
               {error}
             </p>
           ) : visible.length === 0 ? (
-            <p className="p-3 text-sm text-ink-faint">
+            <p className="p-3 text-sm text-ink-muted">
               {t("web.browse.empty", "Empty folder")}
             </p>
           ) : (

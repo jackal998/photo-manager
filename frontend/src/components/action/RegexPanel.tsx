@@ -228,7 +228,7 @@ export function RegexPanel({
             data-testid={ACTION_VALIDATION_ICON}
             className={
               pattern === ""
-                ? "text-ink-faint text-base select-none w-5 text-center"
+                ? "text-ink-muted text-base select-none w-5 text-center"
                 : isValid
                 ? "text-positive-warm text-base select-none w-5 text-center"
                 : "text-danger-warm text-base select-none w-5 text-center"
