@@ -46,9 +46,9 @@ describe("DecisionControl chips", () => {
     expect(screen.getByTestId(TESTID)).toHaveAttribute("aria-label", "決策");
   });
 
-  it("fills the None segment with the KEEP chip when nothing is staged", () => {
+  it("fills the Keep segment with the KEEP chip when nothing is staged", () => {
     // "" is keep under the #584 decision model — the row survives Execute —
-    // so the active None segment is green, not the faint undecided grey the
+    // so the active Keep segment is green, not the faint undecided grey the
     // inactive segments wear.
     const seg = renderControl("");
 
@@ -67,7 +67,7 @@ describe("DecisionControl chips", () => {
     expect(seg.none.className).not.toContain("bg-dec-keep-bg");
   });
 
-  it("fills the Ignore segment with the REMOVE chip when ignore is staged", () => {
+  it("fills the Skip segment with the REMOVE chip when ignore is staged", () => {
     const seg = renderControl("ignore");
 
     expect(seg.ignore.className).toContain("bg-dec-remove-bg");
@@ -81,9 +81,9 @@ describe("DecisionControl chips", () => {
   it("keeps the three labels and aria-pressed states the store drives", () => {
     const seg = renderControl("delete");
 
-    expect(seg.none).toHaveTextContent("None");
+    expect(seg.none).toHaveTextContent("Keep");
     expect(seg.delete).toHaveTextContent("Delete");
-    expect(seg.ignore).toHaveTextContent("Ignore");
+    expect(seg.ignore).toHaveTextContent("Skip");
     expect(seg.delete).toHaveAttribute("aria-pressed", "true");
     expect(seg.none).toHaveAttribute("aria-pressed", "false");
   });

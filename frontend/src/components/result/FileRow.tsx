@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
 import {
   similarityLabel,
+  classificationLabel,
   formatBytes,
   formatScore,
   formatDate,
@@ -100,6 +101,15 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       className={cn(
         "flex items-start gap-3 px-4 py-2 border-b border-hairline-soft bg-panel text-ink hover:bg-subtle cursor-pointer",
         row.is_ref_winner && "bg-toolbar hover:bg-subtle",
+        // Keeper cue, half 2 of 2 (copy audit R7 / design Q2, 2026-09-18):
+        // a 2px accent strip on the row's left edge replaces the "Ref" pill
+        // that used to sit beside the filename and duplicated the Similarity
+        // column's ★ Ref badge. Every row reserves the 2px (transparent) so
+        // the keeper's strip costs no horizontal shift. The token is the
+        // same `sim-ref` ink slice (a) gave the badge — one accent, two
+        // channels (position/weight vs. badge), both surviving grayscale.
+        "border-l-2 border-l-transparent",
+        row.is_ref_winner && "border-l-sim-ref-ink",
         // Delete wash wins over the keeper tint; selection wins over both
         // (tailwind-merge resolves each bg conflict in favour of the later
         // class, so this order IS the precedence).
@@ -129,14 +139,13 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       {/* Name + folder */}
       <div data-col="name" className="flex-shrink-0 min-w-0 overflow-hidden" style={{ width: columnWidths.name }}>
         <div className="flex items-center gap-1 flex-wrap">
-          {row.is_ref_winner && (
-            <span className="inline-block text-xs font-semibold bg-sim-ref-bg text-sim-ref-ink rounded px-1 py-0.5 leading-none">
-              {t("web.format.similarity_ref", "Ref")}
-            </span>
-          )}
           <span
             className={cn(
-              "font-semibold text-sm truncate",
+              "text-sm truncate",
+              // Keeper cue, half 1 of 2: the keeper's name is the only one at
+              // weight 600. Every row used to be semibold, which is what made
+              // the dropped "Ref" pill the row's only left-hand keeper signal.
+              row.is_ref_winner ? "font-semibold" : "font-medium",
               isDeleting && "line-through text-danger-warm"
             )}
           >
@@ -171,8 +180,13 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       </div>
 
       {/* Action */}
-      <div data-col="action" className="flex-shrink-0 text-xs text-ink-muted truncate" style={{ width: columnWidths.action }} title={row.action}>
-        {row.action || "—"}
+      {/* Action — the scanner's CLASSIFICATION, rendered through i18n since
+          copy audit R1 (it used to be the raw enum, identical in both
+          locales). The `title` carries the same human wording, not the raw
+          value. INTERIM: the column header and whether this column keeps
+          carrying the classification are a separate layout round. */}
+      <div data-col="action" className="flex-shrink-0 text-xs text-ink-muted truncate" style={{ width: columnWidths.action }} title={classificationLabel(row.action, t)}>
+        {classificationLabel(row.action, t)}
       </div>
 
       {/* Score — number (unchanged text) plus the Daylight mini bar (#878).

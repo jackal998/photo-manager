@@ -680,7 +680,7 @@ def click_context_item(page: "Page", item_testid: str, *, timeout: float = 5_000
 
 
 # DecisionControl button labels → testid option slug (row_decision_option_testid).
-_DECISION_LABEL_TO_SLUG = {"None": "none", "Delete": "delete", "Ignore": "ignore"}
+_DECISION_LABEL_TO_SLUG = {"Keep": "none", "Delete": "delete", "Skip": "ignore"}
 
 
 def set_row_decision(
@@ -688,12 +688,12 @@ def set_row_decision(
 ) -> None:
     """Stage a per-row decision via the result-tree DecisionControl buttons.
 
-    The DecisionControl is a row of three direct-click buttons (``None`` /
-    ``Delete`` / ``Ignore``); one click stages the decision with no menu to open
+    The DecisionControl is a row of three direct-click buttons (``Keep`` /
+    ``Delete`` / ``Skip``); one click stages the decision with no menu to open
     (#744).  Each button's testid is the group decision testid with the option
     slug appended (``row_decision_option_testid``).  This is the affordance for
     STAGING a reversible ``user_decision`` (PATCH /api/decision) — distinct from
-    the context-menu "Remove from list", which FINALIZES ``outcome='ignored'``
+    the context-menu Skip item, which FINALIZES ``outcome='ignored'``
     since #694.
 
     Requires an UNLOCKED row: ``FileRow`` disables the DecisionControl when the
@@ -709,7 +709,7 @@ def set_row_decision(
         The DecisionControl group testid, e.g.
         ``row_decision_testid(group_id, basename)`` from ``testid_constants``.
     label:
-        The button label: ``"None"``, ``"Delete"`` or ``"Ignore"``.
+        The button label: ``"Keep"``, ``"Delete"`` or ``"Skip"``.
     timeout:
         Maximum milliseconds to wait for the button.
 

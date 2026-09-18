@@ -7,7 +7,7 @@ After a destructive op leaves singleton groups, ``ui.prune_singletons="ask"``
 fires the SingletonPruneConfirmDialog. It classifies singletons into a PLAIN
 bucket (no pending decision) and an ACTIONED bucket (an un-executed
 delete/ignore decision). When BOTH exist (mixed layout) the actioned bucket is
-opt-in via a checkbox (default unchecked); the Remove button label is dynamic.
+opt-in via a checkbox (default unchecked); the Prune button label is dynamic.
 Variant D adds the D6 locked-singleton gate: a locked singleton routes through
 the LockConfirmDialog before the prune dialog.
 
@@ -282,8 +282,8 @@ def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) ->
                     # prune only the plain bucket — caught here.
                     assert page.get_by_test_id(PRUNE_INCLUDE_ACTIONED).count() == 0, \
                         "lock-resolved offer must be actioned-only (no mixed opt-in checkbox)"
-                    assert "Remove 1" in page.get_by_test_id(PRUNE_BTN_REMOVE).inner_text(), \
-                        "dynamic Remove label should show the ACTIONED count (1) here"
+                    assert "Prune 1" in page.get_by_test_id(PRUNE_BTN_REMOVE).inner_text(), \
+                        "dynamic Prune label should show the ACTIONED count (1) here"
                     page.get_by_test_id(PRUNE_BTN_REMOVE).click()
                 else:
                     page.get_by_test_id(PRUNE_BTN_KEEP).click()
@@ -292,8 +292,8 @@ def _run_variant(base_url: str, *, label: str, lock: bool, prune_action: str) ->
                 page.get_by_test_id(PRUNE_CONFIRM_DIALOG).wait_for(state="visible", timeout=8_000)
                 assert page.get_by_test_id(PRUNE_INCLUDE_ACTIONED).is_visible(), \
                     "mixed layout must render the actioned opt-in checkbox"
-                assert "Remove 1" in page.get_by_test_id(PRUNE_BTN_REMOVE).inner_text(), \
-                    "dynamic Remove label should show the plain count (1)"
+                assert "Prune 1" in page.get_by_test_id(PRUNE_BTN_REMOVE).inner_text(), \
+                    "dynamic Prune label should show the plain count (1)"
                 if prune_action == "keep":
                     page.get_by_test_id(PRUNE_BTN_KEEP).click()
                 else:

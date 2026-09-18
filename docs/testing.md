@@ -499,6 +499,16 @@ check that only works on privileged hosts) and are the cheapest way to
 observe a value across CI runs before deciding whether it can become an
 assertion.
 
+**s12 additionally carries a decision-vocabulary probe that IS
+hard-asserted** (copy audit batch 2, 2026-09-18): it reads the three
+`DecisionControl` segments and the context-menu Skip item in BOTH
+locales — switching `ui.locale` via `PATCH /api/settings` + reload, and
+restoring `"en"` in a `finally` so a crash cannot leave the shared
+server in zh_TW — printing every observed string before asserting it.
+Asserted rather than merely observed because both failure modes are
+silent: a surface drifting back to its own words for the three
+decisions, and an English label rendering in a zh_TW session.
+
 When a soft probe's target bug is fixed, convert the `print` to
 `failures.append(…)` per the comment block in the scenario. A static
 probe that is `xfail(strict=True)` flips to XPASS-strict the moment the

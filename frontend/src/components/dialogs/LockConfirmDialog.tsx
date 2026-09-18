@@ -183,7 +183,7 @@ export function LockConfirmDialog() {
     op === "execute"
       ? t("web.lock_confirm.title_execute", "Locked files in delete scope")
       : op === "remove"
-        ? t("web.lock_confirm.title_remove", "Locked files in remove scope")
+        ? t("web.lock_confirm.title_remove", "Locked files in skip scope")
         : op === "decision"
           ? t("web.lock_confirm.title_decision", "Locked rows affected")
           : op === "apply-best-copy"
@@ -193,13 +193,13 @@ export function LockConfirmDialog() {
     op === "execute"
       ? t(
           "web.lock_confirm.body_execute",
-          "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or skip locked files only.",
+          "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out.",
           { n, fileWord, isWord }
         )
       : op === "remove"
         ? t(
             "web.lock_confirm.body_remove",
-            "{n} locked {fileWord} {isWord} in the remove list. Unlock and remove, or remove unlocked files only.",
+            "{n} locked {fileWord} {isWord} about to be skipped (left on disk, dropped from this review). Unlock and skip, or skip the unlocked files only.",
             { n, fileWord, isWord }
           )
         : op === "decision"

@@ -234,7 +234,7 @@ def run(*, base_url: str) -> None:
                 "Expected 'Set Action by Field…' in the group-row context menu"
             )
             assert page.get_by_test_id(CTX_SET_ACTION_REMOVE).is_visible(), (
-                "Expected 'Remove from list' in the group-row context menu"
+                "Expected the Skip item in the group-row context menu"
             )
             for absent_testid, label in (
                 (CTX_EXECUTE_SELECTED, "Execute Action (only selected)…"),

@@ -4,7 +4,7 @@
 // _on_tree_context_menu): Set Action {delete, keep, remove from list}, Lock /
 // Unlock, and Set Action by Field…. It is DISTINCT from the result-tree
 // ContextMenu in two ways the desktop contract mandates:
-//   - "Remove from list" FINALIZES the row (outcome='ignored' via
+//   - Skip FINALIZES the row (outcome='ignored' via
 //     store.removeFromList) behind a confirm, rather than staging a decision.
 //     The confirm + removeFromList call is owned by the parent (ExecuteDialog),
 //     reached via onRequestRemove, so this component stays presentational.
@@ -95,7 +95,7 @@ export function ExecuteContextMenu({
     onClose();
   }
 
-  // Remove from list FINALIZES (outcome='ignored') — gated behind the parent's
+  // Skip FINALIZES (outcome='ignored') — gated behind the parent's
   // confirm dialog, mirroring Qt's "Remove from List" QMessageBox (default No).
   function handleRemove() {
     onClose();
@@ -136,7 +136,7 @@ export function ExecuteContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleDelete}
       >
-        {t("web.context_menu.delete", "Delete")}
+        {t("web.decision_long.delete", "Delete — move to Recycle Bin")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_KEEP}
@@ -144,7 +144,7 @@ export function ExecuteContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleKeep}
       >
-        {t("web.context_menu.keep", "Keep (clear decision)")}
+        {t("web.decision_long.keep", "Keep this file")}
       </button>
       <button
         data-testid={CTX_SET_ACTION_REMOVE}
@@ -152,7 +152,7 @@ export function ExecuteContextMenu({
         className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
         onClick={handleRemove}
       >
-        {t("web.context_menu.remove", "Remove from list")}
+        {t("web.decision_long.remove_from_list", "Skip — leave on disk, drop from this review")}
       </button>
       <div className="my-1 border-t border-hairline-soft" role="separator" />
       {isLocked ? (

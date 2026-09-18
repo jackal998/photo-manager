@@ -195,11 +195,11 @@ describe("LockConfirmDialog", () => {
     expect(screen.queryByText(/permanently/i)).not.toBeInTheDocument();
   });
 
-  it("body mentions remove (DEFERRED copy) for remove op", () => {
+  it("body mentions the skip fate (DEFERRED copy) for remove op", () => {
     seedLockConflict("remove", ["/a.jpg"]);
     render(<LockConfirmDialog />);
     expect(
-      screen.getByText(/remove list/i)
+      screen.getByText(/about to be skipped/i)
     ).toBeInTheDocument();
   });
 

@@ -406,7 +406,7 @@ web:
   # 原始文字仍以次要的技術細節行顯示。
   error:
     execute_failed: "無法完成這個動作。"
-    remove_failed: "無法將這些列從清單中移除。"
+    remove_failed: "無法略過這些列。"
     prune_failed: "無法清除單一群組。"
     classify_failed: "無法檢查單一群組。"
     save_failed: "無法儲存清單檔。"
@@ -445,13 +445,31 @@ web:
     score: "分數"
     size: "大小"
     decision: "決策"
-  # Mirror of decision.* keys for web-only usage.
+  # The ONE decision vocabulary for the web client (copy audit R3/R4, owner
+  # decision 2026-09-18): 保留 / 刪除 / 略過 for the three wire values
+  # "" / "delete" / "ignore". SHORT forms — row DecisionControl, the Execute
+  # tree's decision badge, the Set Action combo.
   decision:
     delete: "刪除"
     keep: "保留"
-    remove_from_list: "從清單移除"
+    remove_from_list: "略過"
     lock: "鎖定"
     unlock: "解除鎖定"
+  # LONG forms: right-click menu items and DecisionControl tooltips. Every
+  # user-facing 刪除 names 資源回收筒; 略過 names the file's fate on disk
+  # first.
+  decision_long:
+    keep: "保留此檔案"
+    delete: "刪除 — 移至資源回收筒"
+    remove_from_list: "略過 — 保留在磁碟上，從本次檢閱中移除"
+  # scanner/dedup.py classification values rendered in the Action column
+  # (copy audit R1, values half) — the raw enum used to reach the user
+  # verbatim, identical in both locales.
+  classification:
+    exact: "完全相同"
+    review_duplicate: "相似重複"
+    keep: "群組首選"
+    undated: "無日期"
   # Action dialog (Set Action by Field) — web port strings.
   action_dialog:
     title: "依欄位設定動作"
@@ -511,7 +529,7 @@ web:
     pattern_summary_numeric_threshold: "{field} {op} {value}"
     pattern_summary_numeric_topn: "依 {field} 取每組{order} {n} 筆"
     delete_confirm_title: "確認批次刪除決策"
-    delete_confirm_body: "這將把 {matched} 個檔案標記為刪除，條件為 {summary}。檔案要等到執行「執行動作」時才會移至回收桶。"
+    delete_confirm_body: "這將把 {matched} 個檔案標記為刪除，條件為 {summary}。檔案要等到執行「執行動作」時才會移至資源回收筒。"
     delete_confirm_button: "標記 {matched} 個檔案為刪除"
   # Menu bar (Qt MenuController parity — File / Action / View).
   menu:
@@ -525,7 +543,7 @@ web:
     action_execute: "執行動作…"
     action_execute_selected: "執行動作（僅限所選）…"
     list: "清單"
-    list_remove: "從清單移除"
+    list_remove: "立即略過選取項目"
     view: "檢視"
     view_language: "語言"
     lang_en: "English"
@@ -631,10 +649,22 @@ web:
     warning_hidden_destructive: "⚠ 目前的篩選條件隱藏了 {n} {rowWord}待刪除的項目 — 切換到「全部決策」或「僅刪除」即可看到。"
     row_singular: "列"
     row_plural: "列"
+    # 樹狀清單上方的類型篩選器（copy audit E1 — 原本寫死英文，第三項還叫
+    # 「Remove only」）。用詞與 保留／刪除／略過 一致，上面那條警告會逐字
+    # 引用其中兩項。
+    filter_aria: "依決策類型篩選"
+    filter_all: "全部決策"
+    filter_delete_only: "僅刪除"
+    filter_skip_only: "僅略過"
+  # 保留與刪除兩個項目改用 web.decision_long.*（copy audit R4 — 全站一套詞彙），
+  # 因此 context_menu 不再有自己的 keep/delete。
+  #
+  # skip_now 是刻意保留的唯一例外（review 第二輪）：列上的「略過」只是暫存
+  # user_decision='ignore'，執行動作前都可以反悔；這個項目則是當場定案
+  # outcome='ignored'，該列立刻離開檢閱且無法復原。兩者用同一個詞會讓可逆與
+  # 不可逆的動作長得一模一樣，所以立即生效的那個要說「立即」。
   context_menu:
-    keep: "保留（清除決策）"
-    delete: "刪除"
-    remove: "從清單移除"
+    skip_now: "立即略過 — 從本次檢閱中移除"
     lock: "鎖定"
     unlock: "解除鎖定"
     open_folder: "開啟資料夾"
@@ -643,12 +673,12 @@ web:
     apply_best_copy: "套用最佳版本決策到此群組"
   lock_confirm:
     title_execute: "刪除範圍內有鎖定的檔案"
-    title_remove: "移除範圍內有鎖定的檔案"
+    title_remove: "略過範圍內有鎖定的檔案"
     title_decision: "有鎖定的列受影響"
     title_apply_best_copy: "此群組中有鎖定的列"
     title_prune: "鎖定的單一群組"
-    body_execute: "{n} 個鎖定的{fileWord}即將被刪除（移至回收桶）。可解鎖並繼續，或僅略過鎖定的檔案。"
-    body_remove: "{n} 個鎖定的{fileWord}在移除清單中。可解鎖並移除，或僅移除未鎖定的檔案。"
+    body_execute: "{n} 個鎖定的{fileWord}即將被刪除（移至資源回收筒）。可解鎖並繼續，或不處理鎖定的檔案。"
+    body_remove: "{n} 個鎖定的{fileWord}即將被略過（保留在磁碟上，從本次檢閱中移出）。可解鎖並略過，或僅略過未鎖定的檔案。"
     body_decision: "設定此決策將變更 {originalPathsLen} 列；其中 {n} 列已鎖定。目前尚未刪除任何項目 — 這只是將決策排入佇列。可解鎖並全部設定、僅設定未鎖定的列，或取消。"
     body_apply_best_copy: "套用最佳版本決策到此群組將影響包含 {n} 個鎖定{rowWord}的項目。目前尚未刪除任何項目 — 這只是將保留/刪除決策排入佇列。可解鎖並全部套用、僅套用至未鎖定的列，或取消。"
     body_prune: "{n} 個鎖定的單一{groupWord}將被清除。可解鎖並清除，或將其保留在清單中。"
@@ -671,15 +701,16 @@ web:
     pronoun_plural: "它們"
   prune_confirm:
     title: "要清除單一群組嗎？"
-    # 「刪除／從清單移除」而非「刪除/忽略」（P1）：ignore 是內部的傳輸值，
-    # 使用者在其他每一個畫面看到的都是「從清單移除」。
-    body_mixed: "{plain} 個單一{plainGroupWord}僅剩一個檔案，另外 {actioned} 個帶有尚未執行的刪除／從清單移除動作。要從清單中移除這些一般單一{plainGroupWord}嗎？"
-    body_actioned_only: "有 {actioned} 個單一{actionedGroupWord}帶有尚未執行的刪除／從清單移除動作。要將{pronoun}從清單中移除嗎？"
-    body_plain_only: "{plain} 個單一{plainGroupWord}目前僅剩一個檔案。要將{phrase}從清單中移除嗎？"
-    include_actioned: "同時移除 {n} 個已設定動作的單一{singletonWord}"
+    # 「刪除／略過」而非「刪除/忽略」（P1 + 2026-09-18 詞彙決策）：ignore 是
+    # 內部的傳輸值，使用者在其他每一個畫面看到的都是「略過」。這個對話框處理
+    # 的是「群組」而非單一檔案的決策，所以動詞用「清除」而不是「略過」。
+    body_mixed: "{plain} 個單一{plainGroupWord}僅剩一個檔案，另外 {actioned} 個帶有尚未執行的刪除／略過動作。要從清單中清除這些一般單一{plainGroupWord}嗎？"
+    body_actioned_only: "有 {actioned} 個單一{actionedGroupWord}帶有尚未執行的刪除／略過動作。要將{pronoun}從清單中清除嗎？"
+    body_plain_only: "{plain} 個單一{plainGroupWord}目前僅剩一個檔案。要將{phrase}從清單中清除嗎？"
+    include_actioned: "同時清除 {n} 個已設定動作的單一{singletonWord}"
     dont_ask_again: "不再詢問"
     keep_all: "全部保留"
-    remove_count: "移除 {n} 個"
+    remove_count: "清除 {n} 個"
     # Chinese has no plural marking; singular/plural keys carry the same
     # word. has_singular/has_plural and carry_singular/carry_plural have no
     # natural Chinese placement (kept for catalog-key symmetry, unused here).
@@ -695,12 +726,13 @@ web:
     singleton_plural: "單一群組"
     this_group: "這個單一群組"
     these_groups: "這些單一群組"
+  # 鍵名維持傳輸層的 remove 拼寫，字面用「略過」詞彙，並先講檔案的下場。
   remove_confirm:
-    title: "要從清單中移除嗎？"
-    body: "要將 {basename} 從清單中移除嗎？此操作僅會更新清單檔 — 不會影響硬碟上的檔案。移除的列在重新掃描之前不會出現在檢閱清單中。"
+    title: "要略過這個檔案嗎？"
+    body: "要略過 {basename} 嗎？檔案會保留在磁碟上 — 此操作僅會把該列從本次檢閱中移出，重新掃描之前不會再出現。"
     this_item: "此項目"
     cancel: "取消"
-    yes_remove: "是，移除"
+    yes_remove: "是，略過"
   settings:
     title: "設定"
     # 設定檔的原始鍵名移到滑鼠停留說明，不再出現在可見標籤上（ST1）；
@@ -753,8 +785,8 @@ web:
     title_groups: "整個群組將被刪除"
     title_all: "刪除所有檔案？"
     yes_delete_all: "是，全部刪除"
-    body_groups: "群組 {groups} 中的所有檔案都將被刪除（共 {n} 個{fileWord}將被刪除）。檔案將移至回收桶。要繼續嗎？"
-    body_all: "{n} 個{fileWord}將被刪除。此操作會將檔案移至回收桶，且不易大量復原。確定要繼續嗎？"
+    body_groups: "群組 {groups} 中的所有檔案都將被刪除（共 {n} 個{fileWord}將被刪除）。檔案將移至資源回收筒。要繼續嗎？"
+    body_all: "{n} 個{fileWord}將被刪除。此操作會將檔案移至資源回收筒，且不易大量復原。確定要繼續嗎？"
     file_singular: "檔案"
     file_plural: "檔案"
     cancel: "取消"
