@@ -140,8 +140,42 @@ describe("ColumnHeaderRow", () => {
   });
 
   it("shows the sort-direction indicator on the active column", () => {
+    // ▴/▾ (layout REPLY L1) — the 9px hairline pair, not the old solid ▲/▼.
     renderHeader({ sortColumn: "name", sortDirection: "asc" });
-    expect(screen.getByTestId(colHeaderTestid("name"))).toHaveTextContent("▲");
+    expect(screen.getByTestId(colHeaderTestid("name"))).toHaveTextContent("▴");
+    expect(screen.getByTestId(colHeaderTestid("name"))).not.toHaveTextContent("▾");
+  });
+
+  it("shows no sort glyph on an UNSORTED column at rest (it appears on hover)", () => {
+    // The REPLY is explicit that an unsorted header carries no glyph: a
+    // permanent indicator on every sortable header is noise. The hover ▾ is
+    // there but transparent — asserting it is opacity-0 is what separates "no
+    // glyph at rest" from "no affordance at all".
+    renderHeader({ sortColumn: null });
+    const size = screen.getByTestId(colHeaderTestid("size"));
+    const glyph = size.querySelector('[data-sort-indicator="hover"]');
+    expect(glyph).not.toBeNull();
+    expect(glyph).toHaveClass("opacity-0");
+  });
+
+  it("sheds the columns the table width cannot afford (L3 budget)", () => {
+    // Below 1080 the budget drops dims AND date; every other column, and the
+    // lock chrome head, must survive — a shed that takes the header out of sync
+    // with the rows is the failure this guards.
+    renderHeader({ visibleCols: new Set<ColumnId>(["name", "similarity", "action", "score", "size"]) });
+    expect(screen.getByTestId(colHeaderTestid("name"))).toBeInTheDocument();
+    expect(screen.getByTestId(colHeaderTestid("size"))).toBeInTheDocument();
+    expect(screen.queryByTestId(colHeaderTestid("dims"))).toBeNull();
+    expect(screen.queryByTestId(colHeaderTestid("date"))).toBeNull();
+  });
+
+  it("double-clicking a resize handle restores the column's default width", () => {
+    const { onResize, onToggleSort } = renderHeader();
+    fireEvent.doubleClick(screen.getByTestId(colResizeTestid("name")));
+    expect(onResize).toHaveBeenCalledWith("name", DEFAULT_COLUMN_WIDTHS.name, true);
+    // The handle sits inside the sortable File Name cell — a reset must not
+    // also flip the sort out from under the user.
+    expect(onToggleSort).not.toHaveBeenCalled();
   });
 
   it("a resize drag reports the new width via onResize (live move + commit)", () => {

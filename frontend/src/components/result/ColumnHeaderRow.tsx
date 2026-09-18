@@ -14,11 +14,22 @@ import { useEffect, useRef, useState } from "react";
 import { Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
-import { COLUMNS, type ColumnId, type SortDirection } from "@/lib/resultColumns";
+import {
+  COLUMNS,
+  SCORE_COMPACT_WIDTH,
+  type ColumnId,
+  type SortDirection,
+} from "@/lib/resultColumns";
 import { colHeaderTestid, colResizeTestid, RESULT_COL_HEADER_ROW } from "@/testids";
 
 interface ColumnHeaderRowProps {
   columnWidths: Record<ColumnId, number>;
+  /** Columns the table width currently affords (ResultTree computes it from
+   *  `visibleColumns`). Omitted = render every column — FileRow-style unit
+   *  tests mount the header with no measured width. */
+  visibleCols?: ReadonlySet<ColumnId>;
+  /** The <940px score-cell collapse (see `isScoreCompact`). */
+  scoreCompact?: boolean;
   sortColumn: ColumnId | null;
   sortDirection: SortDirection;
   onToggleSort: (column: ColumnId) => void;
@@ -34,6 +45,8 @@ interface ColumnHeaderRowProps {
 
 export function ColumnHeaderRow({
   columnWidths,
+  visibleCols,
+  scoreCompact = false,
   sortColumn,
   sortDirection,
   onToggleSort,
@@ -101,6 +114,11 @@ export function ColumnHeaderRow({
     };
   }, [drag, onResize]);
 
+  // The shed set, or the whole registry when the table width is unmeasured.
+  const cols = visibleCols
+    ? COLUMNS.filter((c) => visibleCols.has(c.id))
+    : COLUMNS;
+
   function handleResizeStart(e: ReactMouseEvent, column: ColumnId) {
     e.preventDefault();
     // Stop the mousedown from bubbling to the header cell's sort onClick.
@@ -112,30 +130,41 @@ export function ColumnHeaderRow({
     <div
       ref={ref}
       data-testid={RESULT_COL_HEADER_ROW}
-      className="sticky top-0 z-10 flex items-center gap-3 px-4 py-1 bg-toolbar border-b border-hairline text-xs font-semibold text-ink-muted select-none"
+      // 28px including the bottom rule (box-border is Tailwind's global default),
+      // warm chrome one step off the panel, 11px/600 uppercase with .06em
+      // tracking — layout REPLY L1 "Column header". Uppercase + tracking at
+      // 11px is what separates a header from a bold data row at a glance; the
+      // sentence-case `text-xs font-semibold` it replaces read as the first row
+      // of data (audit C1). The height is MEASURED by ResultTree and handed to
+      // the virtualizer as `scrollMargin` (#699) — it is never a constant there.
+      className="sticky top-0 z-10 flex h-7 items-center gap-3 px-4 bg-toolbar border-b border-group-line text-[11px] font-semibold uppercase tracking-[0.06em] leading-none text-ink-muted select-none"
     >
       {/* Thumbnail spacer — aligns header cells with FileRow's metadata cells. */}
       <div className="flex-shrink-0 w-16" aria-hidden="true" />
 
-      {COLUMNS.map((col) => {
+      {cols.map((col) => {
         const isActive = sortColumn === col.id;
-        const indicator = isActive
-          ? sortDirection === "asc"
-            ? " ▲"
-            : " ▼"
-          : "";
         const label = t(col.labelKey, col.labelFallback);
+        const isDragging = drag?.column === col.id;
+        const width =
+          col.id === "score" && scoreCompact
+            ? SCORE_COMPACT_WIDTH
+            : columnWidths[col.id];
         return (
           <div
             key={col.id}
             data-testid={colHeaderTestid(col.id)}
+            data-col-compact={col.id === "score" && scoreCompact ? "" : undefined}
             // relative so the resize handle can anchor to the cell's right edge.
             className={cn(
-              "relative flex-shrink-0 flex items-center overflow-hidden",
+              "relative flex-shrink-0 flex items-center gap-1.5 overflow-hidden",
               col.align === "right" ? "justify-end" : "justify-start",
-              col.sortable && "cursor-pointer hover:text-ink"
+              // `group/sort` drives the hover-only ▾ below without a second
+              // state — the affordance appears where the pointer already is.
+              col.sortable && "group/sort cursor-pointer hover:text-ink",
+              isActive && "text-ink"
             )}
-            style={{ width: columnWidths[col.id] }}
+            style={{ width }}
             role={col.sortable ? "button" : undefined}
             aria-sort={
               col.sortable
@@ -148,38 +177,80 @@ export function ColumnHeaderRow({
             }
             onClick={col.sortable ? () => onToggleSort(col.id) : undefined}
           >
-            <span className="truncate">
-              {label}
-              {indicator}
-            </span>
-            {/* Resize handle — right-edge grab strip. */}
+            <span className="truncate">{label}</span>
+            {/* Sort indicator. Unsorted shows NO glyph at rest (the REPLY is
+                explicit — a permanent ⇅ on every sortable header is noise) and
+                a hairline ▾ on hover; sorted shows ▾/▴ in the accent with the
+                label promoted to `ink`. aria-hidden because `aria-sort` on the
+                cell is what a screen reader reads. */}
+            {col.sortable && (
+              <span
+                aria-hidden="true"
+                data-sort-indicator={isActive ? "active" : "hover"}
+                className={cn(
+                  "flex-shrink-0 text-[9px] leading-none",
+                  isActive
+                    ? "text-warm"
+                    : "text-ink-hairline opacity-0 group-hover/sort:opacity-100"
+                )}
+              >
+                {isActive ? (sortDirection === "asc" ? "▴" : "▾") : "▾"}
+              </span>
+            )}
+            {/* Resize handle — an 8px grab strip on the column's right edge,
+                invisible at rest. It stays INSIDE the cell (rather than
+                straddling the boundary as the REPLY draws it) because the cell
+                clips its own overflow to stop a long translated label spilling
+                into the next column; a half-outside handle would be clipped in
+                half. Hover paints a 2px hairline rule inset 6px top and bottom;
+                dragging paints it in the accent at full height and drops a 1px
+                guide down the body. Double-click restores the default width. */}
             <span
               data-testid={colResizeTestid(col.id)}
               role="separator"
               aria-orientation="vertical"
-              className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-hairline-input"
+              data-resizing={isDragging ? "" : undefined}
+              className="group/resize absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize"
               onMouseDown={(e) => handleResizeStart(e, col.id)}
               onClick={(e) => e.stopPropagation()}
-            />
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onResize(col.id, col.defaultWidth, true);
+              }}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "pointer-events-none absolute right-0 w-0.5",
+                  isDragging
+                    ? "inset-y-0 bg-warm"
+                    : "inset-y-1.5 bg-ink-hairline opacity-0 group-hover/resize:opacity-100"
+                )}
+              />
+              {isDragging && (
+                <span
+                  aria-hidden="true"
+                  data-resize-guide=""
+                  className="pointer-events-none absolute right-0 top-full h-screen w-px bg-group-line"
+                />
+              )}
+            </span>
           </div>
         );
       })}
 
-      {/* Row-chrome headers (#878 slice b). The decision control and the lock
-          padlock are NOT entries in COLUMNS — they are not sortable, not
-          resizable and carry no persisted width — so they get no resize
-          handle and no aria-sort. The design asks for a padlock GLYPH over
-          the lock column rather than the word; the accessible name stays the
+      {/* Row-chrome header (#878 slice b). The lock padlock is NOT an entry in
+          COLUMNS — not sortable, not resizable, no persisted width — so it gets
+          no resize handle and no aria-sort. The design asks for a padlock GLYPH
+          over that column rather than the word; the accessible name stays the
           translated "Lock" (web.column.lock), carried in sr-only text so a
           screen reader and the i18n passthrough probe both still see it.
 
-          The 9.8rem spacer is the decision control's MEASURED intrinsic width
-          with the English labels (157 px: three h-7/px-2 text-xs segments plus
-          their dividers), which is the only way to park the glyph over the
-          padlocks — the control has no fixed width to share. It is purely
-          decorative alignment: a longer translation slides the glyph a few px
-          off its column and nothing else changes. */}
-      <div className="flex-shrink-0 w-[9.8rem]" aria-hidden="true" />
+          The hardcoded decision SPACER that used to sit here — the control's
+          measured intrinsic width, parked here purely to keep the padlock glyph
+          over the padlocks — is GONE: the decision control now lives in the
+          `action` column with a real width, which is exactly what that spacer's
+          comment asked for. */}
       <div
         data-col-chrome="lock"
         className="flex-shrink-0 w-4 flex items-center justify-center"

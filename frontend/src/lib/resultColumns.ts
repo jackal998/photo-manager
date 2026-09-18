@@ -37,26 +37,59 @@ export interface ColumnDef {
   sortable: boolean;
   /** Cell text alignment. Numeric columns right-align like the Qt model. */
   align: "left" | "right";
+  /** Render the BODY cell in `font-mono` (layout REPLY L2: "mono returns,
+   *  selectively" — size · date · dims · score are machine values that have to
+   *  align digit-over-digit down the column). The header label stays sans. */
+  mono: boolean;
 }
 
 // Order here IS the left-to-right render order in both the header and FileRow.
-// Widths mirror the prior fixed Tailwind classes: w-40=160, w-16=64, w-24=96,
-// w-12=48, w-20=80. Keeping them identical means the default (un-resized)
-// layout is pixel-identical to before this change — zero visual churn for the
-// ~21 scenarios that read rows by testid.
+// Widths come from the layout REPLY's "Column budget at 1280×800 with the
+// preview open" (2026-09-18): similarity 92, decision 168, score 96, size 72,
+// date 112, dims 88, with File Name taking the 160px floor the budget sets for
+// it. They replace the ad-hoc Tailwind widths this registry was seeded from.
+//
+// `action` is the DECISION column since open-questions Q1: the classification
+// enum it used to print is fully implied by the similarity badge beside it, so
+// it was a column spent on a value that never varies independently — and worse,
+// it *looked* like the decision while the real decision control sat unlabelled
+// to its right. The classification now lives in that badge's tooltip. The id
+// stays `action` on purpose: it is the localStorage key, the `data-col` value
+// #735's "Set Action by Field…" pre-fill reads, and the testid suffix s45/s47
+// address. This also RESOLVES the #735 mismatch where `rowValuesForSeed` seeded
+// the "Action" field from `row.user_decision` while the cell displayed
+// `row.action` — cell and seed now name the same thing.
+//
 // labelKey uses the web.column.* namespace — the only namespace GET /api/i18n
 // serves to the browser — so these headers translate in zh_TW (not just render
 // the English fallback). The keys mirror the desktop column.* set; web.column.*
 // already exists in translations/{en,zh_TW}.yml.
 export const COLUMNS: readonly ColumnDef[] = [
-  { id: "name", labelKey: "web.column.file_name", labelFallback: "File Name", defaultWidth: 160, sortable: true, align: "left" },
-  { id: "similarity", labelKey: "web.column.similarity", labelFallback: "Similarity", defaultWidth: 64, sortable: false, align: "left" },
-  { id: "action", labelKey: "web.column.action", labelFallback: "Action", defaultWidth: 96, sortable: false, align: "left" },
-  { id: "score", labelKey: "web.column.score", labelFallback: "Score", defaultWidth: 48, sortable: false, align: "right" },
-  { id: "dims", labelKey: "web.column.resolution", labelFallback: "Resolution", defaultWidth: 80, sortable: false, align: "left" },
-  { id: "size", labelKey: "web.column.size", labelFallback: "Size", defaultWidth: 64, sortable: true, align: "right" },
-  { id: "date", labelKey: "web.column.shot_date", labelFallback: "Shot Date", defaultWidth: 96, sortable: false, align: "left" },
+  { id: "name", labelKey: "web.column.file_name", labelFallback: "File Name", defaultWidth: 160, sortable: true, align: "left", mono: false },
+  { id: "similarity", labelKey: "web.column.similarity", labelFallback: "Similarity", defaultWidth: 92, sortable: false, align: "left", mono: false },
+  { id: "action", labelKey: "web.column.action", labelFallback: "Action", defaultWidth: 168, sortable: false, align: "left", mono: false },
+  { id: "score", labelKey: "web.column.score", labelFallback: "Score", defaultWidth: 96, sortable: false, align: "right", mono: true },
+  { id: "dims", labelKey: "web.column.resolution", labelFallback: "Resolution", defaultWidth: 88, sortable: false, align: "right", mono: true },
+  { id: "size", labelKey: "web.column.size", labelFallback: "Size", defaultWidth: 72, sortable: true, align: "right", mono: true },
+  { id: "date", labelKey: "web.column.shot_date", labelFallback: "Shot Date", defaultWidth: 112, sortable: false, align: "left", mono: true },
 ] as const;
+
+// Why File Name is a FIXED, resizable column and not the flex-to-fill column
+// the L3 budget draws ("name → 169px / 281px as columns shed"):
+//
+// A `flex-grow: 1` column's rendered width is `basis + slack`, and `slack` is
+// `table − Σ(all bases) − chrome` — so growing its basis shrinks the slack by
+// the same amount and the BOX never moves. Measured on the real page (s47,
+// 2026-09-18): dragging File Name +120px took its stored width 160 → 280 while
+// its rendered box stayed 374px. A resize handle that visibly does nothing is
+// a worse regression than an unused gutter, and #685's resize + s47's
+// cross-launch persistence are shipped, used behaviour.
+//
+// The consequence, stated plainly for the layout owner: when columns shed, the
+// freed width currently becomes empty space at the right of the row rather than
+// filename. Fixing that properly means picking one of the two shapes real
+// tables use — a non-resizable fill column, or resize-redistributes-against-
+// neighbours — and neither is a slice-C-sized change.
 
 /** Default per-column widths keyed by id (derived from COLUMNS). */
 export const DEFAULT_COLUMN_WIDTHS: Record<ColumnId, number> = COLUMNS.reduce(
@@ -70,6 +103,68 @@ export const DEFAULT_COLUMN_WIDTHS: Record<ColumnId, number> = COLUMNS.reduce(
 /** Minimum width a column can be resized to (px). Guards against a 0-width
  *  column that becomes impossible to grab again. */
 export const MIN_COLUMN_WIDTH = 40;
+
+// ---------------------------------------------------------------------------
+// Column shedding (layout REPLY L3, "Column budget at 1280×800")
+// ---------------------------------------------------------------------------
+//
+// The fixed columns plus their gaps and the thumbnail gutter do not fit the
+// ~945px the table gets at 1280×800 with the preview open. Rather than let the
+// filename truncate to nothing (or the whole row scroll sideways), the table
+// SHEDS the least-comparable columns as its own width falls:
+//
+//   < 1200px  drop "dims"  — resolution is the field most often identical
+//                            across a duplicate group, so it compares least
+//   < 1080px  drop "date"  — dropped after dims because it is a primary sort
+//   <  940px  the score cell goes compact (the REPLY drops the score bar's
+//             "keep" label here and shrinks the cell to 72px; the label itself
+//             is a later slice, so this threshold currently only narrows the
+//             cell — the plumbing is here so the label has nothing to add)
+//
+// Shedding is AUTOMATIC and has no user override (orchestrator decision,
+// 2026-09-18): a hidden per-column toggle would be a second, invisible source
+// of truth for a layout the width already decides.
+//
+// Nothing becomes unreachable — every dropped column is still rendered in the
+// preview pane's metadata table, which is always present. The REPLY also wants
+// dropped columns to stay listed as sort options; there is no sort MENU in the
+// web header today (sorting is click-the-header only, and neither sheddable
+// column is sortable), so there is nothing to keep them listed in — see the PR
+// body. Neither `name` nor `size`, the only two sortable columns, is sheddable,
+// so a shed can never strand an active sort.
+export const SHED_THRESHOLDS = {
+  /** Below this table width (px) the Resolution column is not rendered. */
+  dims: 1200,
+  /** Below this table width (px) the Shot Date column is not rendered. */
+  date: 1080,
+  /** Below this table width (px) the Score cell renders compact. */
+  scoreCompact: 940,
+} as const;
+
+/** Width (px) the Score cell collapses to under `SHED_THRESHOLDS.scoreCompact`. */
+export const SCORE_COMPACT_WIDTH = 72;
+
+/**
+ * The columns to render for a table of `tableWidth` px, in registry order.
+ *
+ * `null` means "not measured yet" (first paint, or a jsdom/headless layout that
+ * reports a 0-width box) and renders the FULL set — shedding may only ever be
+ * driven by a real measurement, never by the absence of one.
+ */
+export function visibleColumns(tableWidth: number | null): readonly ColumnDef[] {
+  if (tableWidth === null) return COLUMNS;
+  return COLUMNS.filter((c) => {
+    if (c.id === "dims") return tableWidth >= SHED_THRESHOLDS.dims;
+    if (c.id === "date") return tableWidth >= SHED_THRESHOLDS.date;
+    return true;
+  });
+}
+
+/** True when the Score cell must render compact (see `SHED_THRESHOLDS`). */
+export function isScoreCompact(tableWidth: number | null): boolean {
+  if (tableWidth === null) return false;
+  return tableWidth < SHED_THRESHOLDS.scoreCompact;
+}
 
 // ---------------------------------------------------------------------------
 // Sort comparators

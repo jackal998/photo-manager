@@ -2,12 +2,13 @@
 // and the delete-row treatment. Rendered directly with explicit props, the way
 // ColumnHeaderRow.test.tsx does — no store, no virtualizer.
 
+import type { ComponentProps } from "react";
 import { render, screen, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 
 import { FileRow } from "./FileRow";
 import type { FileRow as FileRowData, Similarity } from "@/api/types";
-import { DEFAULT_COLUMN_WIDTHS } from "@/lib/resultColumns";
+import { DEFAULT_COLUMN_WIDTHS, type ColumnId } from "@/lib/resultColumns";
 import {
   SIMILARITY_BADGE,
   similarityBadgeState,
@@ -41,7 +42,10 @@ function makeRow(overrides: Partial<FileRowData> = {}): FileRowData {
   };
 }
 
-function renderRow(row: FileRowData) {
+function renderRow(
+  row: FileRowData,
+  overrides: Partial<ComponentProps<typeof FileRow>> = {}
+) {
   render(
     <FileRow
       row={row}
@@ -50,6 +54,7 @@ function renderRow(row: FileRowData) {
       columnWidths={DEFAULT_COLUMN_WIDTHS}
       onDecision={vi.fn()}
       onLock={vi.fn()}
+      {...overrides}
     />
   );
   return screen.getByTestId(rowFileTestid(GROUP_ID, row.basename));
@@ -198,6 +203,83 @@ describe("FileRow score mini bar (#878)", () => {
     const cell = scoreCell(renderRow(makeRow({ score: null })));
     expect(cell.querySelector("[data-score-track]")).toBeNull();
     expect(cell.textContent).toBe("—");
+  });
+});
+
+describe("FileRow Action column = the decision (Q1)", () => {
+  it("puts the decision control inside the Action column, not beside it", () => {
+    const row = renderRow(makeRow());
+    const actionCell = row.querySelector<HTMLElement>('[data-col="action"]');
+    expect(actionCell).not.toBeNull();
+    expect(
+      within(actionCell!).getByTestId(`row-decision-${GROUP_ID}-dup.jpg`)
+    ).toBeInTheDocument();
+  });
+
+  it("no longer prints the classification as a column", () => {
+    // `REVIEW_DUPLICATE` used to render as "Near-duplicate" in its own column
+    // right next to the unlabelled decision control — two things that looked
+    // like the decision. The Action cell must now contain the control and none
+    // of that text.
+    const row = renderRow(makeRow({ action: "REVIEW_DUPLICATE" }));
+    const actionCell = row.querySelector<HTMLElement>('[data-col="action"]');
+    expect(actionCell!.textContent).not.toContain("Near-duplicate");
+    expect(row.querySelector('[data-col="classification"]')).toBeNull();
+  });
+
+  it("keeps the classification reachable on the similarity badge's tooltip", () => {
+    const row = renderRow(makeRow({ action: "EXACT" }));
+    expect(badgeOf(row)).toHaveAttribute("title", "Exact copy");
+  });
+
+  it("says nothing in the tooltip for a row with no classification", () => {
+    // The ref-tier keeper carries action='' — an em dash tooltip, not a stray
+    // enum. (`classificationLabel('')` is the em dash.)
+    const row = renderRow(makeRow({ action: "" }));
+    expect(badgeOf(row)).toHaveAttribute("title", "—");
+  });
+});
+
+describe("FileRow column shedding (L3 budget)", () => {
+  it("drops the dims and date cells the table width cannot afford", () => {
+    const row = renderRow(makeRow(), {
+      visibleCols: new Set<ColumnId>(["name", "similarity", "action", "score", "size"]),
+    });
+    expect(row.querySelector('[data-col="dims"]')).toBeNull();
+    expect(row.querySelector('[data-col="date"]')).toBeNull();
+    // Size and the decision survive — shedding is a budget, not a reset.
+    expect(row.querySelector('[data-col="size"]')).not.toBeNull();
+    expect(row.querySelector('[data-col="action"]')).not.toBeNull();
+  });
+
+  it("renders every cell when the table width is unmeasured", () => {
+    const row = renderRow(makeRow());
+    expect(row.querySelector('[data-col="dims"]')).not.toBeNull();
+    expect(row.querySelector('[data-col="date"]')).not.toBeNull();
+  });
+
+  it("narrows the score cell below the compact threshold", () => {
+    const row = renderRow(makeRow(), { scoreCompact: true });
+    const cell = row.querySelector<HTMLElement>('[data-col="score"]')!;
+    expect(cell.style.width).toBe("72px");
+    expect(cell).toHaveAttribute("data-col-compact");
+  });
+});
+
+describe("FileRow cell typography (REPLY L2)", () => {
+  it("renders the machine-value cells in mono, right-aligning the magnitudes", () => {
+    // Digits that do not line up down the column are the cheapest legibility
+    // loss on this screen — and the registry is the single source both this row
+    // and the header read, so a drift here is a drift everywhere.
+    const row = renderRow(makeRow());
+    for (const id of ["size", "dims", "score", "date"] as const) {
+      expect(row.querySelector(`[data-col="${id}"]`)!.className).toContain("font-mono");
+    }
+    for (const id of ["size", "dims", "score"] as const) {
+      expect(row.querySelector(`[data-col="${id}"]`)!.className).toContain("text-right");
+    }
+    expect(row.querySelector('[data-col="date"]')!.className).not.toContain("text-right");
+    expect(row.querySelector('[data-col="name"]')!.className).not.toContain("font-mono");
   });
 });
 

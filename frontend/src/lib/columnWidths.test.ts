@@ -38,6 +38,36 @@ describe("columnWidths persistence", () => {
     expect(loaded.dims).toBe(200);
   });
 
+  it("hydrates a STALE blob written by an older column set (layout slice C)", () => {
+    // A browser that used the app before the column model changed still holds
+    // widths for ids the registry no longer knows — and the risk is real in
+    // both directions: an unknown key must not leak into the width map (which
+    // would hand a column a width nothing renders, and could resurrect it), and
+    // it must not throw or poison a known column with NaN on the way past. s47
+    // reloads the page against exactly this blob on a developer's machine.
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        classification: 96, // a column id that no longer exists
+        action: 210, // survived the change; still a live id
+        similarity: "92px", // stale SHAPE, not just a stale id
+        name: 240,
+      })
+    );
+    const loaded = loadColumnWidths();
+    expect(Object.keys(loaded).sort()).toEqual(
+      Object.keys(DEFAULT_COLUMN_WIDTHS).sort()
+    );
+    expect(loaded).not.toHaveProperty("classification");
+    expect(loaded.action).toBe(210);
+    expect(loaded.name).toBe(240);
+    expect(loaded.similarity).toBe(DEFAULT_COLUMN_WIDTHS.similarity);
+    for (const v of Object.values(loaded)) {
+      expect(Number.isFinite(v)).toBe(true);
+      expect(v).toBeGreaterThan(0);
+    }
+  });
+
   it("fails open on a malformed JSON blob", () => {
     localStorage.setItem(STORAGE_KEY, "{not valid json");
     expect(loadColumnWidths()).toEqual(DEFAULT_COLUMN_WIDTHS);

@@ -92,6 +92,7 @@ from qa.web.testid_constants import (
     MAIN_RESULT_TREE,
     MAIN_STATUS_BAR,
     PREVIEW_PANE,
+    RESULT_COL_HEADER_ROW,
     SCAN_DIALOG,
     SCAN_START_BUTTON,
     row_decision_option_testid,
@@ -129,6 +130,25 @@ _EM_DASH = "—"
 # Slice (e) — the surfaces OUTSIDE the result tree (preview, status bar,
 # context menu, dialogs). Until (e) these were still on Tailwind's stock
 # neutral palette, i.e. cold grey panels floating on the warm canvas.
+# Layout slice C — the column header is CHROME (the toolbar surface), the rule
+# under it is the group line, and the separator between rows inside a group is
+# the new, lighter row line.
+_TOOLBAR_BG = "rgb(250, 246, 238)"  # --color-toolbar   #faf6ee
+_GROUP_LINE = "rgb(228, 214, 189)"  # --color-group-line #e4d6bd
+_ROW_LINE = "rgb(244, 238, 227)"  # --color-row-line  #f4eee3
+_HEADER_HEIGHT = "28px"  # REPLY L1: 28px INCLUDING the bottom rule
+# The zh-agnostic English defaults `classificationLabel()` falls back to, so the
+# badge tooltip can be checked against the row's own manifest `action`.
+_CLASSIFICATION_EN = {
+    "EXACT": "Exact copy",
+    "REVIEW_DUPLICATE": "Near-duplicate",
+    "KEEP": "Best in group",
+    "UNDATED": "No date",
+}
+# Narrow enough that the L3 budget sheds both dims (<1200px table) and date
+# (<1080px) — the tree is narrower than the window by the preview pane.
+_NARROW_VIEWPORT = {"width": 900, "height": 800}
+
 _PANEL_BG = "rgb(255, 253, 249)"  # --color-panel     #fffdf9
 _TITLEBAR_BG = "rgb(243, 237, 227)"  # --color-titlebar  #f3ede3
 _SUBTLE_BG = "rgb(247, 235, 218)"  # --color-subtle    #f7ebda
@@ -184,6 +204,46 @@ _READ_TYPOGRAPHY = """() => {
   probe.remove();
   const body = getComputedStyle(document.body).fontFamily;
   return { body, bodyFirst: first(body), mono, monoFirst: first(mono) };
+}"""
+
+# Slice C — the column header as chrome, and one body cell's typography. Both
+# are computed-style reads a vitest assertion cannot make: in jsdom `uppercase`,
+# `bg-toolbar` and `font-mono` are all just class strings that survive the token
+# being deleted.
+_READ_COLUMN_HEADER = """(testid) => {
+  const head = document.querySelector(`[data-testid="${testid}"]`);
+  if (!head) return null;
+  const cs = getComputedStyle(head);
+  const action = head.querySelector('[data-testid="col-header-action"]');
+  const handle = head.querySelector('[data-testid="col-resize-name"]');
+  return {
+    height: cs.height,
+    backgroundColor: cs.backgroundColor,
+    fontSize: cs.fontSize,
+    fontWeight: cs.fontWeight,
+    textTransform: cs.textTransform,
+    letterSpacing: cs.letterSpacing,
+    borderBottomWidth: cs.borderBottomWidth,
+    borderBottomColor: cs.borderBottomColor,
+    actionText: action ? (action.textContent || '').trim() : null,
+    classificationHeads:
+      head.querySelectorAll('[data-testid="col-header-classification"]').length,
+    resizeHitWidth: handle ? handle.getBoundingClientRect().width : null,
+  };
+}"""
+
+# Slice C — the shed set, keyed off the width the tree itself measured rather
+# than off the viewport, so a failure says WHY the column is missing.
+_READ_SHED = """() => {
+  const tree = document.querySelector('[data-testid="main-result-tree"]');
+  const row = document.querySelector('[data-testid^="row-file-"]');
+  return {
+    tableWidth: tree ? tree.getAttribute('data-table-width') : null,
+    dims: document.querySelectorAll('[data-col="dims"]').length,
+    size: document.querySelectorAll('[data-col="size"]').length,
+    action: document.querySelectorAll('[data-col="action"]').length,
+    rowPresent: Boolean(row),
+  };
 }"""
 
 # Slice T / Q7 — the row the roving cursor names, as the browser draws it.
@@ -251,6 +311,46 @@ def _read_lock(page, lock_testid: str) -> dict:
   };
 }""",
         lock_testid,
+    )
+
+
+def _read_cell_type(page, row_testid: str, col: str) -> dict:
+    """One body cell's computed alignment + font family, for one row."""
+    return page.evaluate(
+        """([testid, col]) => {
+  const row = document.querySelector(`[data-testid="${testid}"]`);
+  if (!row) return null;
+  const cell = row.querySelector(`[data-col="${col}"]`);
+  if (!cell) return null;
+  const cs = getComputedStyle(cell);
+  return {
+    textAlign: cs.textAlign,
+    fontFamily: cs.fontFamily,
+    text: (cell.textContent || '').trim(),
+  };
+}""",
+        [row_testid, col],
+    )
+
+
+def _read_action_cell(page, row_testid: str, decision_testid: str) -> dict:
+    """What the Action column holds — the decision control, not an enum (Q1)."""
+    return page.evaluate(
+        """([testid, decTestid]) => {
+  const row = document.querySelector(`[data-testid="${testid}"]`);
+  if (!row) return null;
+  const cell = row.querySelector('[data-col="action"]');
+  if (!cell) return null;
+  const badge = row.querySelector('[data-sim-state]');
+  return {
+    holdsDecision: Boolean(cell.querySelector(`[data-testid="${decTestid}"]`)),
+    classificationCells:
+      row.querySelectorAll('[data-col="classification"]').length,
+    badgeTitle: badge ? badge.getAttribute('title') : null,
+    rowBorderColor: getComputedStyle(row).borderBottomColor,
+  };
+}""",
+        [row_testid, decision_testid],
     )
 
 
@@ -583,6 +683,117 @@ def run(*, base_url: str) -> None:
                 "nothing when renamed, with no test going red."
             )
 
+            # ── 7b. Columns + header chrome (layout slice C) ──────────────────
+            # Q1 retired the classification column: it printed a value the
+            # similarity badge beside it already implied, in the one vocabulary
+            # the user never chose, while the REAL decision control sat
+            # unlabelled to its right looking like nothing. "Action" now heads
+            # the decision, and the classification moved into the badge's
+            # tooltip. Every read below is a computed style — in jsdom
+            # `uppercase`, `bg-toolbar` and `font-mono` are class strings that
+            # stay green after the token they name is deleted.
+            header = page.evaluate(_READ_COLUMN_HEADER, RESULT_COL_HEADER_ROW)
+            print(f"probe_status: s74 column header = {header}")
+            assert header is not None, (
+                "slice C — no column header row in the DOM; every assertion "
+                "below is about a header that never rendered."
+            )
+            assert header["height"] == _HEADER_HEIGHT, (
+                f"slice C — the column header is {header['height']} tall, "
+                f"expected {_HEADER_HEIGHT} INCLUDING its bottom rule (REPLY "
+                "L1). ResultTree measures this height and hands it to the "
+                "virtualizer as scrollMargin (#699), so a drift here is a "
+                "windowing bug as well as a visual one."
+            )
+            assert header["backgroundColor"] == _TOOLBAR_BG, (
+                f"slice C — the header is {header['backgroundColor']}, expected "
+                f"the toolbar chrome {_TOOLBAR_BG} (#faf6ee). The header is "
+                "chrome, so it takes the toolbar's warmth, not the panel's."
+            )
+            assert header["fontSize"] == "11px", (
+                f"slice C — the header is {header['fontSize']}, expected 11px."
+            )
+            assert header["textTransform"] == "uppercase", (
+                "slice C — the header's text-transform is "
+                f"{header['textTransform']!r}, expected 'uppercase'. Uppercase "
+                "plus tracking at 11px is the whole difference between a header "
+                "and a bold first row of data (audit C1)."
+            )
+            assert header["letterSpacing"] == "0.66px", (
+                f"slice C — header letter-spacing is {header['letterSpacing']}, "
+                "expected 0.66px (.06em at 11px)."
+            )
+            assert header["borderBottomColor"] == _GROUP_LINE, (
+                "slice C — the header's bottom rule is "
+                f"{header['borderBottomColor']}, expected {_GROUP_LINE} "
+                "(#e4d6bd)."
+            )
+            assert header["classificationHeads"] == 0, (
+                "slice C — a classification column header is still rendered "
+                f"({header['classificationHeads']} of them). Q1 removed that "
+                "column outright."
+            )
+            assert header["actionText"] == "Action", (
+                f"slice C — the decision column reads {header['actionText']!r}, "
+                "expected 'Action' (web.column.action — 動作 in zh_TW). That "
+                "header is the label the decision control never had."
+            )
+            assert header["resizeHitWidth"] == 8, (
+                "slice C — the File Name resize handle's hit area is "
+                f"{header['resizeHitWidth']}px, expected 8 (REPLY L1). A 6px "
+                "target is the affordance users report as 'it never grabs'."
+            )
+
+            # 7b-ii. The Action cell holds the DECISION, and the classification
+            # it replaced is reachable on the badge.
+            first = items[0]
+            first_name = Path(first["file_path"]).name
+            action_cell = _read_action_cell(
+                page,
+                row_file_testid(group_id, first_name),
+                row_decision_testid(group_id, first_name),
+            )
+            print(f"probe_status: s74 action cell = {action_cell}")
+            assert action_cell["holdsDecision"], (
+                "slice C — the decision control is not inside "
+                '[data-col="action"]. Q1 moved it into the column that finally '
+                "names it; leaving it in row-chrome puts the label and the "
+                "control back in different places."
+            )
+            assert action_cell["classificationCells"] == 0, (
+                "slice C — a classification cell is still rendered on the row."
+            )
+            expected_title = _CLASSIFICATION_EN.get(first["action"], "—")
+            assert action_cell["badgeTitle"] == expected_title, (
+                "slice C — the similarity badge's tooltip is "
+                f"{action_cell['badgeTitle']!r}, expected {expected_title!r} "
+                f"for action={first['action']!r}. The tooltip is the ONLY place "
+                "the classification survives now that its column is gone — if "
+                "it is empty, Q1 deleted information instead of moving it."
+            )
+            assert action_cell["rowBorderColor"] == _ROW_LINE, (
+                "slice C — the separator between rows inside a group is "
+                f"{action_cell['rowBorderColor']}, expected {_ROW_LINE} "
+                "(#f4eee3). It is deliberately lighter than the group rule: "
+                "inside a group the rows are alternatives to each other."
+            )
+
+            # 7b-iii. Mono, right-aligned machine values (REPLY L2).
+            size_cell = _read_cell_type(
+                page, row_file_testid(group_id, first_name), "size"
+            )
+            print(f"probe_status: s74 size cell type = {size_cell}")
+            assert size_cell["textAlign"] == "right", (
+                f"slice C — the Size cell is {size_cell['textAlign']}-aligned, "
+                "expected right. Right-aligning magnitudes is what makes a "
+                "column of numbers scannable."
+            )
+            assert "Cascadia Code" in size_cell["fontFamily"], (
+                "slice C — the Size cell renders in "
+                f"{size_cell['fontFamily']!r}; the mono stack is not applied, "
+                "so the digits do not line up down the column."
+            )
+
             # ── 8. The theme reaches the rest of the screen (slice e) ─────────
             # Slices (a)/(b) themed the tree, header, menu strip and root; a UX
             # audit then found the preview pane, every context menu and every
@@ -741,6 +952,47 @@ def run(*, base_url: str) -> None:
             assert cursor["caretColor"] == _ACCENT, (
                 f"slice T — the ▸ caret is {cursor['caretColor']}, expected "
                 f"the accent {_ACCENT} (#a85a2c)."
+            )
+
+            # ── 10. Column shedding (slice C · REPLY L3 budget) ───────────────
+            # LAST on purpose: it narrows the window, and every section above
+            # reads geometry at 1280×800. As the table's own width falls the
+            # budget drops the least-comparable columns rather than truncating
+            # the filename to nothing — dims first (resolution is the field most
+            # often identical across a duplicate group), then date. Keyed off
+            # the width the tree MEASURED (`data-table-width`), so a failure
+            # here says whether the threshold fired or the measurement did.
+            wide = page.evaluate(_READ_SHED)
+            print(f"probe_status: s74 columns at 1280 = {wide}")
+            assert wide["rowPresent"], (
+                "slice C — no file row on screen; the shed probe would pass "
+                "vacuously (zero dims cells because there are zero rows)."
+            )
+            page.set_viewport_size(_NARROW_VIEWPORT)
+            page.wait_for_timeout(400)
+            narrow = page.evaluate(_READ_SHED)
+            print(f"probe_status: s74 columns at 900 = {narrow}")
+            page.set_viewport_size(_VIEWPORT)
+            assert narrow["rowPresent"], (
+                "slice C — the rows unmounted at a 900px viewport; the shed "
+                "assertions below would pass for the wrong reason."
+            )
+            assert narrow["tableWidth"] and float(narrow["tableWidth"]) < 1080, (
+                "slice C — the tree measured "
+                f"{narrow['tableWidth']!r}px at a 900px viewport, which is not "
+                "below the 1080px date threshold. Either the ResizeObserver "
+                "never re-measured or the tree is not the element being sized."
+            )
+            assert narrow["dims"] == 0, (
+                f"slice C — {narrow['dims']} Resolution cells survive a "
+                f"{narrow['tableWidth']}px table; the <1200px shed did not "
+                "fire, so the filename is being squeezed instead."
+            )
+            assert narrow["size"] > 0 and narrow["action"] > 0, (
+                "slice C — shedding took Size or Action with it "
+                f"(size={narrow['size']}, action={narrow['action']}). The "
+                "budget drops dims and date only; Size is SORTABLE and a shed "
+                "must never strand an active sort."
             )
     finally:
         import shutil

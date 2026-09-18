@@ -4,7 +4,10 @@ import { describe, it, expect } from "vitest";
 import {
   COLUMNS,
   DEFAULT_COLUMN_WIDTHS,
+  SHED_THRESHOLDS,
+  isScoreCompact,
   makeRowComparator,
+  visibleColumns,
   type ColumnId,
 } from "./resultColumns";
 import type { FileRow as FileRowData } from "@/api/types";
@@ -27,6 +30,86 @@ describe("resultColumns registry", () => {
   it("marks exactly File Name and Size sortable (s45 scope)", () => {
     const sortable = COLUMNS.filter((c) => c.sortable).map((c) => c.id);
     expect(sortable.sort()).toEqual(["name", "size"]);
+  });
+
+  it("heads the decision column 'Action' and registers no classification column (Q1)", () => {
+    // The decision control's column IS `action` — the classification enum that
+    // used to print there has no column of its own any more. If a later change
+    // re-points this label or re-adds a classification entry, the row goes back
+    // to showing two things that look like the decision.
+    const action = COLUMNS.find((c) => c.id === "action");
+    expect(action?.labelKey).toBe("web.column.action");
+    expect(action?.labelFallback).toBe("Action");
+    expect(COLUMNS.map((c) => c.id)).not.toContain("classification");
+  });
+
+  it("gives the machine-value columns mono + right alignment (REPLY L2)", () => {
+    const mono = COLUMNS.filter((c) => c.mono).map((c) => c.id);
+    expect(mono.sort()).toEqual(["date", "dims", "score", "size"]);
+    const right = COLUMNS.filter((c) => c.align === "right").map((c) => c.id);
+    // Size and dims right-align so magnitudes compare down the column; date is
+    // mono but stays left (it is a fixed-width label, not a magnitude).
+    expect(right.sort()).toEqual(["dims", "score", "size"]);
+  });
+
+  it("uses the L3 column-budget widths", () => {
+    expect(DEFAULT_COLUMN_WIDTHS).toEqual({
+      name: 160,
+      similarity: 92,
+      action: 168,
+      score: 96,
+      dims: 88,
+      size: 72,
+      date: 112,
+    });
+  });
+});
+
+describe("visibleColumns — the L3 shedding budget", () => {
+  const ids = (w: number | null) => visibleColumns(w).map((c) => c.id);
+
+  it("renders every column when the width has not been measured yet", () => {
+    // A 0-width box (first paint / headless layout) must never read as a narrow
+    // table, or the columns vanish on a viewport nobody ever narrowed.
+    expect(ids(null)).toEqual(COLUMNS.map((c) => c.id));
+  });
+
+  it("keeps every column at and above the dims threshold", () => {
+    expect(ids(SHED_THRESHOLDS.dims)).toContain("dims");
+    expect(ids(1280)).toEqual(COLUMNS.map((c) => c.id));
+  });
+
+  it("drops dims one pixel below its threshold, and nothing else", () => {
+    const at = ids(SHED_THRESHOLDS.dims - 1);
+    expect(at).not.toContain("dims");
+    expect(at).toContain("date");
+    expect(at).toContain("name");
+  });
+
+  it("keeps date at its threshold and drops it one pixel below", () => {
+    expect(ids(SHED_THRESHOLDS.date)).toContain("date");
+    const below = ids(SHED_THRESHOLDS.date - 1);
+    expect(below).not.toContain("date");
+    expect(below).not.toContain("dims");
+  });
+
+  it("never sheds a sortable column — a shed can not strand an active sort", () => {
+    for (const w of [1280, 1199, 1079, 939, 320]) {
+      const at = ids(w);
+      expect(at).toContain("name");
+      expect(at).toContain("size");
+    }
+  });
+});
+
+describe("isScoreCompact", () => {
+  it("is false at the threshold and true one pixel below", () => {
+    expect(isScoreCompact(SHED_THRESHOLDS.scoreCompact)).toBe(false);
+    expect(isScoreCompact(SHED_THRESHOLDS.scoreCompact - 1)).toBe(true);
+  });
+
+  it("is false when the width has not been measured", () => {
+    expect(isScoreCompact(null)).toBe(false);
   });
 });
 

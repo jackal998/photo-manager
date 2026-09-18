@@ -99,6 +99,15 @@
   --color-group-band: #f3e9d8;
   --color-group-line: #e4d6bd;
   --color-delete-row: #fdf3f0;
+  /* Row separator INSIDE a group (layout REPLY L1, "Daylight spec for a flat
+     headed table": «**Row separator:** `1px solid #f4eee3` between rows *inside*
+     a group. This is deliberately lighter than the group rule — inside a group
+     the rows are alternatives to each other and want to read as one block; the
+     group boundary is the structural line.»  The only new hex slice C adds:
+     `hairline-soft` (#efe7d8), which the rows wore before, is a full step
+     darker and made every row read as its own structural boundary. The group's
+     CLOSING rule stays `group-line`. */
+  --color-row-line: #f4eee3;
 
   /* Score mini-bar (§9.3 track / scoreFill). `scoreFill` is written
      `#cdab86 → #b8946a` in §9.3, i.e. a left-to-right gradient, so it needs
@@ -242,6 +251,7 @@
     --color-select-ink: hsl(var(--accent-foreground));
     --color-group-band: hsl(var(--secondary));
     --color-group-line: hsl(var(--border));
+    --color-row-line: hsl(var(--border));
     --color-delete-row: hsl(var(--destructive) / 0.18);
     --color-score-track: hsl(var(--muted));
     --color-scroll-thumb: hsl(var(--border));

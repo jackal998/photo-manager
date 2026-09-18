@@ -19,7 +19,12 @@ import { MAIN_RESULT_TREE } from "@/testids";
 import { GroupRow } from "./result/GroupRow";
 import { FileRow } from "./result/FileRow";
 import { ColumnHeaderRow } from "./result/ColumnHeaderRow";
-import { makeRowComparator } from "@/lib/resultColumns";
+import {
+  isScoreCompact,
+  makeRowComparator,
+  visibleColumns,
+  type ColumnId,
+} from "@/lib/resultColumns";
 import type { DecisionValue, FileRow as FileRowData } from "@/api/types";
 
 // ---------------------------------------------------------------------------
@@ -210,14 +215,26 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   // height follows its font, padding and the browser's text metrics.
   const [scrollMargin, setScrollMargin] = useState(0);
 
+  // The table's own available width, measured off the SAME element and the SAME
+  // ResizeObserver as the header height above. The header is a block inside the
+  // scroll container, so its box width is the container's content width — what
+  // the column budget has to fit — and it does not grow when the columns
+  // overflow it. `null` means "not measured yet" (first paint, or a headless
+  // layout that reports a 0-width box): `visibleColumns` renders the full set
+  // for null, so a missing measurement can never masquerade as a narrow table.
+  const [tableWidth, setTableWidth] = useState<number | null>(null);
+
   useLayoutEffect(() => {
     const header = headerRef.current;
     if (header === null) return;
     const measure = () => {
-      const next = header.getBoundingClientRect().height;
+      const rect = header.getBoundingClientRect();
+      const next = rect.height;
       // Skip no-op state updates — a ResizeObserver fires on every layout
       // pass that touches the header (a column drag is one per mousemove).
       setScrollMargin((prev) => (prev === next ? prev : next));
+      const w = rect.width > 0 ? rect.width : null;
+      setTableWidth((prev) => (prev === w ? prev : w));
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
@@ -228,6 +245,15 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     // in the virtualized branch, so re-run once a manifest replaces a
     // loading/empty placeholder and the ref becomes non-null.
   }, [groups]);
+
+  // One shed decision per width change, shared by the header and every row —
+  // two independent computations would be two chances for the header to head a
+  // column the rows no longer draw.
+  const visibleCols = useMemo<ReadonlySet<ColumnId>>(
+    () => new Set(visibleColumns(tableWidth).map((c) => c.id)),
+    [tableWidth]
+  );
+  const scoreCompact = isScoreCompact(tableWidth);
 
   const virtualizer = useVirtualizer({
     count: vrows.length,
@@ -523,6 +549,10 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       // compares, which is how a silently-reintroduced coordinate offset is
       // caught even while `overscan` hides its visual effect.
       data-scroll-margin={scrollMargin}
+      // The measured width the column budget is evaluated against (L3
+      // shedding). Mirrored onto the root so a scenario can assert WHY a column
+      // is missing instead of inferring it from a viewport size.
+      data-table-width={tableWidth ?? ""}
       ref={scrollRef}
       // #709 — the container is the keyboard focus target; the active row is
       // named by aria-activedescendant rather than by moving DOM focus, because
@@ -549,6 +579,8 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       <ColumnHeaderRow
         ref={headerRef}
         columnWidths={columnWidths}
+        visibleCols={visibleCols}
+        scoreCompact={scoreCompact}
         sortColumn={sortColumn}
         sortDirection={sortDirection}
         onToggleSort={toggleSort}
@@ -638,6 +670,8 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                     groupId={String(vrow.groupNumber)}
                     groupNumber={vrow.groupNumber}
                     columnWidths={columnWidths}
+                    visibleCols={visibleCols}
+                    scoreCompact={scoreCompact}
                     onDecision={handleDecision}
                     onLock={handleLock}
                     onSelect={handleRowSelect}
