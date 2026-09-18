@@ -133,13 +133,28 @@ _READ_TOOLBAR = """(testid) => {
     if (bg === 'rgb(168, 90, 44)') accents.push(el.dataset.testid || el.textContent.trim());
   }
   const cs = getComputedStyle(bar);
+  // The overflow is reported as a NUMBER, with the per-child widths and the
+  // resolved font behind it, because the first CI run of this scenario failed
+  // here on a runner with no Segoe UI and the boolean said only "too wide" —
+  // which is a prompt to guess at a floor rather than to set one. The widths
+  // are the measurement the next reader needs.
+  const kids = [];
+  for (const el of bar.children) {
+    kids.push({
+      id: el.dataset.testid || el.tagName,
+      w: Math.round(el.getBoundingClientRect().width),
+    });
+  }
   return {
     height: cs.height,
     backgroundColor: cs.backgroundColor,
     accents,
     // A strip that does not fit is a strip whose right end — where the only
-    // destructive control lives — is off screen.
-    overflowsX: bar.scrollWidth > bar.clientWidth + 1,
+    // destructive control lives — is off screen (or, since it is
+    // `overflow-x: auto`, only reachable by scrolling a toolbar).
+    overflowPx: bar.scrollWidth - bar.clientWidth,
+    font: getComputedStyle(document.body).fontFamily,
+    kids,
   };
 }"""
 
@@ -228,11 +243,13 @@ def run(*, base_url: str) -> None:
                 "The REPLY allows EXACTLY ONE warm-filled control in the "
                 f"toolbar, and it must be the primary. Found: {toolbar['accents']}"
             )
-            assert toolbar["overflowsX"] is False, (
-                "The toolbar overflows its own width at 1280x800, so its right "
-                "end — where the Delete CTA lives — is off screen. The two text "
-                "inputs are the shrinkable members; one of them stopped "
-                "shrinking."
+            assert toolbar["overflowPx"] <= 1, (
+                f"The toolbar overflows its own width by {toolbar['overflowPx']}px "
+                "at 1280x800, so its right end — where the Delete CTA lives — is "
+                "only reachable by scrolling a toolbar. The two text inputs are "
+                "the shrinkable members (filter floor 104px, manifest floor "
+                "56px); widen the shrink, do not relax this assertion. Resolved "
+                f"font: {toolbar['font']}. Child widths: {toolbar['kids']}"
             )
 
             # ── 2. Status strip geometry + #906's two figures at zero ───────

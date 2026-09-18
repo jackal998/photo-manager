@@ -88,8 +88,14 @@ const BTN_DANGER =
 // · background #fffdf9 · border 1px solid #e7ddcd · font 13px · focus border
 // #a85a2c + 2px inset ring #a85a2c at 35%».  `pl-[30px]` instead of the flat
 // 12px because the ⌕ glyph sits inside the box; the 180px floor is relaxed to
-// 140px here so the strip still fits at 1280 beside the web-only manifest
+// 104px here so the strip still fits at 1280 beside the web-only manifest
 // input, which the prototype's toolbar never had to carry.
+//
+// The floor is a MEASUREMENT, not a guess. At 1280 under the shipped stack the
+// strip came to exactly 1280 with both inputs at 140/110 — no headroom — and
+// under a deliberately wider fallback (no Segoe UI on the Linux CI runner, so
+// it falls back to DejaVu/Liberation) it overflowed by 64px and s76 went red.
+// 104 + 56 buys 90px back, leaving ~26px of margin on that stack.
 const FILTER_INPUT =
   "h-[34px] w-full rounded-[8px] border border-hairline bg-panel pl-[30px] pr-3 " +
   "text-[13px] text-ink placeholder:text-ink-muted focus:border-warm " +
@@ -175,7 +181,12 @@ export function Toolbar({
   return (
     <header
       data-testid={MAIN_TOOLBAR}
-      className="flex h-[52px] shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-toolbar px-4"
+      // `overflow-x-auto`, not `hidden`: the floors above are sized from a
+      // measurement on the widest stack we could reproduce, but a font we have
+      // not seen — or a longer label in a third locale — must degrade to a
+      // scrollable strip rather than to a clipped one, because the thing at the
+      // clipped end is the only destructive control on the screen.
+      className="flex h-[52px] shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-hairline bg-toolbar px-4"
     >
       {/* The one primary. */}
       <button data-testid={MAIN_SCAN_BUTTON} className={BTN_PRIMARY} onClick={onScan}>
@@ -209,7 +220,7 @@ export function Toolbar({
 
       {/* Filter (new, slice TB). View-only substring match over basename +
           folder — see lib/rowFilter.ts. */}
-      <div className="relative flex min-w-[140px] flex-[0_1_260px] items-center">
+      <div className="relative flex min-w-[104px] flex-[0_1_260px] items-center">
         <span
           aria-hidden="true"
           className="pointer-events-none absolute left-3 text-[13px] leading-none text-ink-hairline"
@@ -266,7 +277,7 @@ export function Toolbar({
           if (e.key === "Enter") onManifestOpen();
         }}
         placeholder={t("web.manifest.input_placeholder", "Path to manifest .db…")}
-        className="h-[34px] min-w-[110px] flex-[0_1_200px] rounded-[8px] border border-hairline-input bg-panel px-3 text-[13px] text-ink placeholder:text-ink-muted focus:border-warm focus:outline-none focus:ring-2 focus:ring-inset focus:ring-warm/35"
+        className="h-[34px] min-w-[56px] flex-[0_1_200px] rounded-[8px] border border-hairline-input bg-panel px-3 text-[13px] text-ink placeholder:text-ink-muted focus:border-warm focus:outline-none focus:ring-2 focus:ring-inset focus:ring-warm/35"
         aria-label={t("web.manifest.input_aria", "Manifest path")}
       />
       <button
