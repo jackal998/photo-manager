@@ -36,7 +36,7 @@ import urllib.request
 from pathlib import Path
 
 from qa.web._pw import PWContext
-from qa.web._invariants import run_scan, wait_manifest_loaded
+from qa.web._invariants import click_row, run_scan, wait_manifest_loaded
 from qa.web.testid_constants import row_file_testid
 
 # ---------------------------------------------------------------------------
@@ -130,9 +130,12 @@ def run(*, base_url: str) -> None:
             basename = Path(file_path).name
             group_number = manifest["groups"][0]["group_number"]
             row_testid = row_file_testid(str(group_number), basename)
-            row_locator = page.get_by_test_id(row_testid)
-            row_locator.wait_for(state="visible", timeout=10_000)
-            row_locator.click()
+            # Through the shared helper, which aims at the filename cell: a bare
+            # row click targets the row box's CENTRE, and since #878 layout
+            # slice R centred the row's cells that point is the decision
+            # control, whose segments stopPropagation so staging a decision does
+            # not also select the row.
+            click_row(page, row_testid)
 
             # ── Assert PreviewPane renders <video>, not <img> ────────────────
             preview_testid = "preview-single-image"
