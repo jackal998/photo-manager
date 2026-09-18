@@ -20,6 +20,7 @@ import { useCallback, useState, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { selectPreviewMode } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
+import { useDateLocale } from "@/i18n/useDateLocale";
 import { thumbnailUrl, mediaUrl } from "@/api/client";
 import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
 import { formatBytes, formatScore, formatDims, formatDate } from "@/lib/format";
@@ -66,6 +67,8 @@ export function PreviewPane() {
   const openFullRes = useAppStore((s) => s.openFullRes);
   const previewMode = useAppStore(selectPreviewMode);
   const t = useT();
+  // The APP's locale, not the browser's — see useDateLocale.
+  const dateLocale = useDateLocale();
 
   const row = selectedFilePath !== null ? findRow(groups, selectedFilePath) : null;
 
@@ -217,11 +220,11 @@ export function PreviewPane() {
             />
             <MetaRow
               label={t("web.preview.meta_shot", "Shot")}
-              value={formatDate(row.shot_date)}
+              value={formatDate(row.shot_date, dateLocale)}
             />
             <MetaRow
               label={t("web.preview.meta_created", "Created")}
-              value={formatDate(row.creation_date)}
+              value={formatDate(row.creation_date, dateLocale)}
             />
           </div>
         </>

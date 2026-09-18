@@ -168,6 +168,50 @@ describe("GroupRow keep-best button (Q5)", () => {
     expect(screen.queryByTestId(groupKeepBestTestid("3"))).toBeNull();
   });
 
+  it("is disabled while this group's apply is in flight", () => {
+    const onKeepBest = vi.fn();
+    renderRow(5, [makeItem()], { onKeepBest, keepBestPending: true });
+
+    const button = screen.getByTestId(groupKeepBestTestid("3"));
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    // The second apply would read an ALREADY-APPLIED group as its "before",
+    // so the undo toast would snapshot the damage instead of the original.
+    expect(onKeepBest).not.toHaveBeenCalled();
+  });
+});
+
+describe("GroupRow accessible name", () => {
+  beforeEach(() => {
+    useI18nStore.setState({ locale: "en", catalog: {} });
+  });
+
+  it("names the row for the GROUP, not for its whole subtree", () => {
+    renderRow(5, [makeItem()], { onKeepBest: vi.fn() });
+
+    // Without an explicit name, role="button" is named by its subtree, so a
+    // screen reader reads the bulk verb as part of the collapse toggle's
+    // label — the audio version of the misclick Q5's 16px gap prevents.
+    const row = screen.getByRole("button", { name: "Group 3, 5 files" });
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    expect(row.getAttribute("aria-label")).not.toContain("Keep best");
+  });
+
+  it("uses the singular noun for a one-file group", () => {
+    expect(renderRow(1)).toHaveAttribute("aria-label", "Group 3, 1 file");
+  });
+
+  it("reads from the zh_TW catalog", () => {
+    useI18nStore.setState({
+      locale: "zh_TW",
+      catalog: {
+        "web.tree.group_aria": "群組 {n}，{count} {fileWord}",
+        "web.tree.file_plural": "個檔案",
+      },
+    });
+    expect(renderRow(5)).toHaveAttribute("aria-label", "群組 3，5 個檔案");
+  });
+
   it("still toggles on a click on the row itself, and on Enter", () => {
     const onToggle = vi.fn();
     const row = renderRow(5, [makeItem()], { onToggle, onKeepBest: vi.fn() });

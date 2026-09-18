@@ -46,6 +46,7 @@ from qa.web.testid_constants import (
     MAIN_TOAST,
     MAIN_TOAST_UNDO,
     group_keep_best_testid,
+    row_group_testid,
     row_lock_testid,
 )
 
@@ -106,6 +107,20 @@ def _patch_locale(base_url: str, locale: str) -> None:
         raise RuntimeError(
             f"PATCH /api/settings failed ({exc.code}): {exc.read().decode()}"
         ) from exc
+
+
+def _read_shot_date(page) -> "str | None":
+    """Text of the first rendered Shot Date cell, or None if the column is shed."""
+    # Scoped INSIDE a file row: the column header carries `data-col-basis`, not
+    # `data-col`, but scoping anyway keeps this reading a data cell even if that
+    # changes — a header hit would make the assertion about a label, not a date.
+    return page.evaluate(
+        """() => {
+  const row = document.querySelector('[data-testid^="row-file-"]');
+  const cell = row ? row.querySelector('[data-col="date"]') : null;
+  return cell ? cell.textContent.trim() : null;
+}"""
+    )
 
 
 def _click_keep_best(page, group_id: str) -> None:
@@ -184,7 +199,46 @@ def run(*, base_url: str) -> None:
             )
 
             # ── 2. Press the header button (EN) ─────────────────────────────
+            # Q5's real requirement for this button is BEHAVIOURAL: pressing it
+            # must not also collapse the group. A px gap between the button and
+            # the caret is not that assertion — with the button flex-pushed to
+            # the right end, any viewport wide enough passes it. So read the
+            # collapse state either side of the click, and then prove the row
+            # DOES still toggle, or "never collapses" would be satisfied by a
+            # header whose toggle is broken outright.
+            group_row = page.get_by_test_id(row_group_testid(group_id))
+            expanded_before = group_row.get_attribute("aria-expanded")
+
             _click_keep_best(page, group_id)
+
+            expanded_after = group_row.get_attribute("aria-expanded")
+            print(
+                "probe_status: s75 aria-expanded across the button click = "
+                f"{expanded_before!r} → {expanded_after!r}"
+            )
+            assert expanded_after == expanded_before, (
+                "Q5 — clicking 'Keep best · delete rest' changed the group's "
+                f"collapse state ({expanded_before!r} → {expanded_after!r}). The "
+                "expensive misclick on this screen is collapse-into-bulk-"
+                "decision; the button must stop its click reaching the row."
+            )
+
+            # The control half of that pair: the row itself still toggles.
+            page.get_by_test_id(row_group_testid(group_id)).locator(
+                "span", has_text="Group"
+            ).first.click()
+            page.wait_for_timeout(200)
+            toggled = group_row.get_attribute("aria-expanded")
+            print(f"probe_status: s75 aria-expanded after a row click = {toggled!r}")
+            assert toggled != expanded_after, (
+                "Clicking the group header's title did not toggle the group "
+                f"(aria-expanded stayed {toggled!r}) — the assertion above would "
+                "then be passing because nothing toggles at all."
+            )
+            page.get_by_test_id(row_group_testid(group_id)).locator(
+                "span", has_text="Group"
+            ).first.click()
+            page.wait_for_timeout(200)
 
             post = _collect(_get_manifest(base_url, db_path))
             print(f"probe_status: s75 post keep-best state = {post}")
@@ -236,6 +290,46 @@ def run(*, base_url: str) -> None:
             )
             assert "Undo" in toast_en, f"The toast has no Undo: {toast_en!r}"
 
+            # ── 3b. The toast is not a full-width click shield ──────────────
+            # Its positioning wrapper spans the viewport so the box can centre
+            # in it; only `pointer-events-none` on the wrapper (with `-auto` on
+            # the box) stops that from swallowing every click in the band. The
+            # breakage is silent — nothing throws, clicks simply stop landing —
+            # so this hit-tests BOTH halves: a point inside the wrapper but
+            # outside the box must resolve to something that is not the toast,
+            # and the box's own centre must resolve to the toast (otherwise the
+            # first assertion would pass with the toast simply absent).
+            hit = page.evaluate(
+                """(testid) => {
+  const box = document.querySelector(`[data-testid="${testid}"]`);
+  if (!box) return null;
+  const wrapper = box.parentElement;
+  const wr = wrapper.getBoundingClientRect();
+  const br = box.getBoundingClientRect();
+  const outside = document.elementFromPoint(wr.left + 4, br.top + br.height / 2);
+  const inside = document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2);
+  return {
+    outsideIsToast: outside === wrapper || box.contains(outside),
+    insideIsToast: inside === box || box.contains(inside),
+    outsideTag: outside ? outside.tagName : null,
+  };
+}""",
+                MAIN_TOAST,
+            )
+            print(f"probe_status: s75 toast hit-test = {hit}")
+            assert hit is not None, "The toast was not in the DOM for the hit test."
+            assert hit["outsideIsToast"] is False, (
+                "The toast's positioning wrapper is intercepting clicks outside "
+                "the toast box — it spans the full viewport width, so losing "
+                "`pointer-events-none` turns it into an invisible shield over "
+                "the result tree."
+            )
+            assert hit["insideIsToast"] is True, (
+                "A point at the centre of the toast box does not hit the toast "
+                f"(got {hit['outsideTag']!r}) — the assertion above would then "
+                "be passing for the wrong reason."
+            )
+
             # ── 4. Undo restores the decisions AND the locks ────────────────
             with page.expect_response(
                 lambda r: "/api/lock" in r.url and r.request.method == "PATCH",
@@ -259,9 +353,35 @@ def run(*, base_url: str) -> None:
             )
             page.get_by_test_id(MAIN_TOAST).wait_for(state="detached", timeout=5_000)
 
+            # ── 4b. The Shot Date cell follows the APP's locale ─────────────
+            # `formatDate(iso, locale?)` takes an OPTIONAL locale, and every
+            # call site passed `undefined` until this PR — which silently means
+            # "the browser's locale", so an English UI on a zh machine printed
+            # 「2024年2月1日」 in this column. Nothing threw, no test went red,
+            # and on an en-* dev machine it looked perfect. Only a live read of
+            # the same cell under BOTH UI locales can catch it, which is why the
+            # English half is taken here, before the language toggle below.
+            date_en = _read_shot_date(page)
+            print(f"probe_status: s75 shot-date cell (en UI) = {date_en!r}")
+            assert date_en is not None, "No Shot Date cell rendered."
+            assert "年" not in date_en, (
+                f"The Shot Date cell reads {date_en!r} in the ENGLISH UI — "
+                "formatDate is following the browser's locale, not the app's."
+            )
+
             # ── 5. The same toast in zh-TW ──────────────────────────────────
             page.get_by_test_id(MAIN_LANG_TOGGLE).click()
             page.wait_for_timeout(800)
+
+            date_zh = _read_shot_date(page)
+            print(f"probe_status: s75 shot-date cell (zh_TW UI) = {date_zh!r}")
+            assert date_zh is not None and "年" in date_zh, (
+                f"The Shot Date cell reads {date_zh!r} after switching to "
+                "zh_TW — the language switch must reach the dates too, or the "
+                "English assertion above passes on a machine whose browser is "
+                "simply English."
+            )
+
             _click_keep_best(page, group_id)
 
             toast_zh = page.get_by_test_id(MAIN_TOAST)

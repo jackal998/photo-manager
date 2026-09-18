@@ -79,6 +79,13 @@ let _bulkDecideSeq = 0;
 // remainder of the first one's.
 let _toastSeq = 0;
 
+// The classifier values apply-best-copy treats as a positively-identified
+// duplicate, i.e. the rows it may write `delete` onto. Mirrors the server's
+// allowlist (core.services.auto_select.non_keepers_for_aggressive_delete) —
+// used ONLY to decide which locked rows the undo toast should report as
+// skipped, never to predict the write itself, which stays the server's call.
+const _DUPLICATE_ACTIONS = new Set(["EXACT", "REVIEW_DUPLICATE"]);
+
 // ---------------------------------------------------------------------------
 // Initial state slices
 // ---------------------------------------------------------------------------
@@ -181,6 +188,7 @@ export const useAppStore = create<AppStore>()(
     execute: { ...initialExecute },
     action: { ...initialAction },
     toast: null,
+    keepBestPending: [],
 
     // -----------------------------------------------------------------------
     // Scan actions
@@ -1228,9 +1236,16 @@ export const useAppStore = create<AppStore>()(
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
+      // A second apply on the SAME group while the first is still in flight is
+      // refused outright. The UI disables both entry points for the duration,
+      // so this is the belt to that braces: a double-click or an Enter repeat
+      // that slips through would otherwise snapshot a half-applied group.
+      if (get().keepBestPending.includes(groupNumber)) return;
+
       // #718 — clear any stale error before this action has a chance to fail.
       set((state) => {
         state.manifest.error = null;
+        state.keepBestPending.push(groupNumber);
       });
 
       // Q5's undo replaces the confirm dialog, so the state it restores has to
@@ -1264,13 +1279,21 @@ export const useAppStore = create<AppStore>()(
         const deletedCount = after.filter(
           (row) => affected.has(row.file_path) && row.user_decision === "delete"
         ).length;
-        // Under skipLocked NO locked row is ever written, so this is every
-        // locked row in the group; under forceLocked the locked rows ARE in
-        // `affected`, so it is correctly 0. Either way the sentence it feeds
-        // ("N locked files unchanged") is true of every row it counts.
+        // Locked rows the write left alone. Counting every locked row that is
+        // not in `affected` over-reports: the group's Ref-tier passengers and
+        // its keeper are never delete-targets, so a lock on one of them was
+        // never "skipped" by anything. Count only rows the classifier
+        // positively identified as duplicates — the same allowlist the server
+        // uses to build the write-set (core.services.auto_select.
+        // non_keepers_for_aggressive_delete). Under forceLocked those rows ARE
+        // in `affected`, so the count is correctly 0.
         let lockedCount = 0;
-        for (const [path, prev] of before) {
-          if (prev.locked && !affected.has(path)) lockedCount += 1;
+        for (const row of after) {
+          const prev = before.get(row.file_path);
+          if (prev === undefined || !prev.locked) continue;
+          if (affected.has(row.file_path)) continue;
+          if (!_DUPLICATE_ACTIONS.has(row.action)) continue;
+          lockedCount += 1;
         }
 
         set((state) => {
@@ -1283,17 +1306,33 @@ export const useAppStore = create<AppStore>()(
           // target locked) gets no toast — there is nothing to undo and
           // nothing to report.
           if (affected.size === 0) return;
+          // Pressing the button TWICE on one group must not cost the user the
+          // undo. The second apply reads an already-applied group, so its own
+          // "before" is the FIRST apply's result — snapshotting that would make
+          // Undo restore the damage rather than reverse it. So when the
+          // standing toast belongs to this same group, the earlier recording of
+          // each path wins and only paths it never saw are added.
+          const carried =
+            state.toast !== null && state.toast.groupNumber === groupNumber
+              ? state.toast.snapshot
+              : [];
+          const snapshot = [...carried];
+          const seen = new Set(carried.map((row) => row.file_path));
+          for (const path of affected) {
+            if (seen.has(path)) continue;
+            snapshot.push({
+              file_path: path,
+              decision: before.get(path)?.decision ?? "",
+              locked: before.get(path)?.locked ?? false,
+            });
+          }
           _toastSeq += 1;
           state.toast = {
             id: _toastSeq,
             groupNumber,
             deletedCount,
             lockedCount,
-            snapshot: [...affected].map((path) => ({
-              file_path: path,
-              decision: before.get(path)?.decision ?? "",
-              locked: before.get(path)?.locked ?? false,
-            })),
+            snapshot,
             undoing: false,
           };
         });
@@ -1314,6 +1353,15 @@ export const useAppStore = create<AppStore>()(
               err instanceof Error ? err.message : String(err);
           });
         }
+      } finally {
+        // In `finally`, not at the end of the happy path: a 409 opens the
+        // LockConfirmDialog whose own buttons re-run applyBestCopy, and a
+        // group left marked pending would refuse that retry forever.
+        set((state) => {
+          state.keepBestPending = state.keepBestPending.filter(
+            (n) => n !== groupNumber
+          );
+        });
       }
     },
 

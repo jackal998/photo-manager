@@ -120,6 +120,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   const setDecision = useAppStore((s) => s.setDecision);
   const setLock = useAppStore((s) => s.setLock);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
+  const keepBestPending = useAppStore((s) => s.keepBestPending);
   const setSelectedFile = useAppStore((s) => s.setSelectedFile);
   const setSelectedGroup = useAppStore((s) => s.setSelectedGroup);
   const openFullRes = useAppStore((s) => s.openFullRes);
@@ -746,6 +747,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                   groupNumber={vrow.groupNumber}
                   memberCount={vrow.memberCount}
                   items={orderedItemsByGroup.get(vrow.groupNumber) ?? EMPTY_ITEMS}
+                  keepBestPending={keepBestPending.includes(vrow.groupNumber)}
                   onKeepBest={() => {
                     // Q5: «it must never override a lock». skipLocked is the
                     // server flag that means exactly that (locked rows keep

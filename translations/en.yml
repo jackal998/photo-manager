@@ -978,6 +978,11 @@ web:
     # case shows the folder's own leaf name, which is data, not copy. So there
     # is no singular form to split out: {n} is always >= 2 here.
     folders_suffix: "{n} folders"
+    # The group row's own accessible name. Without it the role="button" row is
+    # named by its whole subtree, so a screen reader reads the Q5 bulk verb as
+    # part of the collapse toggle's label — the audio version of the misclick
+    # the button's 16px gap exists to prevent.
+    group_aria: "Group {n}, {count} {fileWord}"
     # Q5's promoted bulk verb, at the right end of the group header.
     keep_best: "Keep best · delete rest"
   # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —

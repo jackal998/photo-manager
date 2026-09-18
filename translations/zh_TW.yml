@@ -797,6 +797,9 @@ web:
     # 衍生的資料夾後綴（#878 slice G，open questions Q4）。只有跨資料夾時才會
     # 出現；同一個資料夾時顯示該資料夾的葉節點名稱。{n} 恆 >= 2，沒有單數形。
     folders_suffix: "{n} 個資料夾"
+    # 群組列自己的無障礙名稱；沒有它的話，role="button" 會把整個子樹（包含
+    # 「保留最佳 · 其餘刪除」）唸成收合切換鈕的標籤。
+    group_aria: "群組 {n}，{count} {fileWord}"
     keep_best: "保留最佳 · 其餘刪除"
   delete_confirm:
     title_groups: "整個群組將被刪除"

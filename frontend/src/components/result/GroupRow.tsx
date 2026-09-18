@@ -22,6 +22,10 @@ interface GroupRowProps {
   /** Q5's "Keep best · delete rest" — omit to render the header without it
    *  (no manifest loaded). */
   onKeepBest?: () => void;
+  /** True while this group's keep-best write is in flight. Disables the
+   *  button: a second apply reads an already-applied group, so it would
+   *  snapshot the damage and leave the undo toast unable to reverse it. */
+  keepBestPending?: boolean;
   /** Right-click on the group header (#735) — opens the reduced group
    *  context menu (Set Action by Field… + Remove from List + Apply
    *  best-copy, #744). */
@@ -40,6 +44,7 @@ export function GroupRow({
   expanded,
   onToggle,
   onKeepBest,
+  keepBestPending = false,
   onContextMenu,
 }: GroupRowProps) {
   const t = useT();
@@ -50,6 +55,21 @@ export function GroupRow({
   );
   const sizeTotal = useMemo(() => groupSizeTotal(items), [items]);
   const folderSuffix = useMemo(() => groupFolderSuffix(items), [items]);
+
+  // A role="button" with no accessible NAME of its own is named by its whole
+  // subtree, so a screen reader announced this row as "Group 1 · 5 files ·
+  // 126.3 KB · near-duplicates Keep best · delete rest, collapsed" — the bulk
+  // verb read out as part of the collapse toggle's label, which is exactly the
+  // confusion Q5's 16px gap exists to prevent in the visual layer. Name the row
+  // for what activating it DOES: it identifies the group and collapses it.
+  const groupLabel = t("web.tree.group_aria", "Group {n}, {count} {fileWord}", {
+    n: groupNumber,
+    count: memberCount,
+    fileWord:
+      memberCount === 1
+        ? t("web.tree.file_singular", "file")
+        : t("web.tree.file_plural", "files"),
+  });
 
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
@@ -75,6 +95,7 @@ export function GroupRow({
       data-testid={rowGroupTestid(String(groupNumber))}
       role="button"
       tabIndex={0}
+      aria-label={groupLabel}
       onClick={onToggle}
       onKeyDown={handleKeyDown}
       onContextMenu={handleContextMenu}
@@ -150,6 +171,7 @@ export function GroupRow({
         <button
           type="button"
           data-testid={groupKeepBestTestid(String(groupNumber))}
+          disabled={keepBestPending}
           onClick={(e) => {
             // The row toggles on click; this button must not collapse the very
             // group it just wrote decisions into.
@@ -161,6 +183,7 @@ export function GroupRow({
             "bg-panel border border-hairline-input",
             "text-[12px] font-semibold text-ink",
             "hover:bg-panel-hover hover:border-ink-hairline",
+            "disabled:opacity-50 disabled:hover:bg-panel disabled:hover:border-hairline-input",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warm"
           )}
         >

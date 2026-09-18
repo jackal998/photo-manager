@@ -10,6 +10,7 @@ import {
   classificationLabel,
   formatBytes,
   formatScore,
+  dateLocaleFor,
   formatDate,
   formatDims,
 } from "./format";
@@ -95,6 +96,28 @@ describe("formatBytes / formatScore / formatDate / formatDims (smoke)", () => {
     const local = formatDate("2021-03-14T10:30:00");
     expect(local).toContain("2021");
     expect(local).not.toContain(":");
+  });
+
+  // The APP's locale must drive the date, not the browser's. Every call site
+  // passed `undefined` until this was fixed, which is why an English UI on a
+  // Taiwanese machine printed 「2024年2月1日」 in the Shot Date column — and
+  // why nothing caught it: `locale` is optional, so forgetting it throws
+  // nothing and looks correct on an en-* dev machine.
+  it("dateLocaleFor maps each UI locale to its BCP-47 tag", () => {
+    expect(dateLocaleFor("en")).toBe("en-GB");
+    expect(dateLocaleFor("zh_TW")).toBe("zh-TW");
+    // An unknown app locale falls back to the UI's default, NOT to the
+    // browser — the point of the map is that the UI decides.
+    expect(dateLocaleFor("klingon")).toBe("en-GB");
+  });
+
+  it("formatDate renders the same instant differently per UI locale", () => {
+    expect(formatDate("2021-03-14T10:30:00", dateLocaleFor("en"))).toBe(
+      "14 Mar 2021"
+    );
+    expect(formatDate("2021-03-14T10:30:00", dateLocaleFor("zh_TW"))).toBe(
+      "2021年3月14日"
+    );
   });
 
   it("formatDims returns an em dash when either dimension is null", () => {

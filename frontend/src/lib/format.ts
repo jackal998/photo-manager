@@ -128,11 +128,35 @@ export function formatScore(score: number | null): string {
  * characters in two incompatible orders, and a column of dates is read by
  * scanning, not by parsing.
  *
- * Still LOCALE-AWARE: the field order (and the month's spelling) comes from
- * the browser's locale, not from a hardcoded template — `locale` exists only
- * so tests can pin one. Only the date portion is shown, because shot_date /
- * creation_date precision is day-level in the manifest.
+ * Still LOCALE-AWARE: the field order (and the month's spelling) comes from a
+ * locale, not from a hardcoded template. Pass the APP's locale via
+ * `useDateLocale()` — omitting it reads the BROWSER's, which is how the
+ * English UI came to print Chinese dates. Only the date portion is shown,
+ * because shot_date / creation_date precision is day-level in the manifest.
  */
+/**
+ * The BCP-47 tag to format dates with, for one of the app's UI locales.
+ *
+ * `formatDate` takes an optional locale and, before this, every caller passed
+ * `undefined` — which means "the BROWSER's locale". On a Taiwanese machine the
+ * English UI therefore printed 「2024年2月1日」 in the Shot Date column, i.e.
+ * the app's own language switch did not reach its dates. `en-GB` rather than
+ * `en-US` because the REPLY's L2 cell table spells the format `14 Mar 2021`,
+ * day before month.
+ *
+ * Unknown codes fall back to `en-GB` rather than to the browser: the point is
+ * that the UI decides, and an unrecognised app locale is a bug in this map,
+ * not an invitation to read the OS again.
+ */
+const _DATE_LOCALES: Record<string, string> = {
+  en: "en-GB",
+  zh_TW: "zh-TW",
+};
+
+export function dateLocaleFor(appLocale: string): string {
+  return _DATE_LOCALES[appLocale] ?? "en-GB";
+}
+
 export function formatDate(iso: string | null, locale?: string): string {
   if (iso === null) return EM_DASH;
   try {

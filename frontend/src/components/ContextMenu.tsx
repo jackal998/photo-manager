@@ -83,6 +83,9 @@ export function ContextMenu({
   const revealInExplorer = useAppStore((s) => s.revealInExplorer);
   const openActionDialog = useAppStore((s) => s.openActionDialog);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
+  const keepBestPending = useAppStore((s) =>
+    s.keepBestPending.includes(groupNumber)
+  );
   const t = useT();
 
   const menuRef = useRef<HTMLDivElement>(null);
@@ -219,11 +222,15 @@ export function ContextMenu({
 
   // Apply best-copy (#744) — present in BOTH variants (it acts on groupNumber,
   // independent of the file-row/group-row targetPaths distinction).
+  // Disabled while a keep-best on this group is in flight (slice G): a second
+  // apply reads an already-applied group, so it would snapshot the damage and
+  // leave the undo toast unable to reverse anything.
   const applyBestCopyItem = (
     <button
       data-testid={CTX_APPLY_BEST_COPY}
       role="menuitem"
-      className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none"
+      disabled={keepBestPending}
+      className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none disabled:opacity-50 disabled:hover:bg-transparent"
       onClick={handleApplyBestCopy}
     >
       {t("web.context_menu.apply_best_copy", "Apply best-copy decisions to this group")}

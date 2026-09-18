@@ -716,6 +716,17 @@ export interface AppStore extends AppActions {
   action: ActionState;
   /** The single-slot undo toast, or null when nothing is showing (slice G). */
   toast: KeepBestToast | null;
+  /**
+   * `group_number`s with a keep-best write in flight (slice G). Both entry
+   * points disable themselves for a group listed here, and `applyBestCopy`
+   * refuses a second call for one.
+   *
+   * This is not spinner bookkeeping: a second apply on a group reads an
+   * ALREADY-APPLIED group as its "before", so without the gate a double-click
+   * snapshots the damage and Undo becomes a no-op — the one path that turns
+   * Q5's undo-instead-of-confirm bargain into no safety net at all.
+   */
+  keepBestPending: number[];
 }
 
 // Re-export BulkDecideResult so callers can import from store/types.

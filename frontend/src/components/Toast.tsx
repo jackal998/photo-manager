@@ -97,6 +97,12 @@ export function Toast() {
     // Bottom-centre, ABOVE the 30px status strip rather than over it — the
     // status bar is where the delete counter and the two error lines live, and
     // a toast that covers them hides exactly the numbers this action changed.
+    // The wrapper spans the full viewport width so the box can centre in it,
+    // which would make it a full-width invisible click shield over the tree.
+    // `pointer-events-none` here and `pointer-events-auto` on the BOX is what
+    // keeps the shield from existing — a pair that must move together, and
+    // whose breakage is silent (nothing throws; clicks just stop landing).
+    // s75 hit-tests both halves.
     <div className="pointer-events-none fixed inset-x-0 bottom-12 z-50 flex justify-center px-4">
       <div
         data-testid={MAIN_TOAST}

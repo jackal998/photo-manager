@@ -713,13 +713,13 @@ def run(*, base_url: str) -> None:
                 "a SECONDARY button: the one accent-filled control on this "
                 "screen is 'Scan folder'."
             )
-            assert header_geo["caretToButtonGap"] >= 16, (
-                "slice G — only "
-                f"{header_geo['caretToButtonGap']:.1f}px separate the keep-best "
-                "button from the caret's hit area; Q5 requires >= 16px, because "
-                "«a misclick from collapse into a bulk decision is the expensive "
-                "misclick on this screen»."
-            )
+            # The caret→button GAP is reported above for the record but is NOT
+            # asserted here: with the button flex-pushed to the right end, any
+            # viewport wide enough to render the row satisfies ">= 16px", so
+            # the assertion passes for every build including a broken one. Q5's
+            # actual requirement is BEHAVIOURAL — the button must not be a
+            # misclick into a bulk decision — and that is asserted in s75,
+            # which clicks it and reads `aria-expanded` either side.
 
             # 3b. The keeper row's 2px strip is the SAME accent (Q2). It used
             # to be the Ref badge's own ink #a85f2e, which sits 5/255 from the
