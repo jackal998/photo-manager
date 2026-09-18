@@ -9,7 +9,6 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 
 import { cn } from "./lib/utils";
 import { stageLabel } from "./lib/scanProgress";
-import { describeApiError } from "./lib/apiErrorText";
 import { useAppStore } from "./store/useAppStore";
 import { useScanSSE } from "./hooks/useScanSSE";
 import { useBeforeUnloadGuard } from "./hooks/useBeforeUnloadGuard";
@@ -30,22 +29,14 @@ import { LockConfirmDialog } from "./components/dialogs/LockConfirmDialog";
 import { PruneConfirmDialog } from "./components/dialogs/PruneConfirmDialog";
 import { Toast } from "./components/Toast";
 import { MenuBar } from "./components/MenuBar";
+import { Toolbar } from "./components/Toolbar";
+import { StatusBar } from "./components/StatusBar";
 import { FsBrowser } from "./components/FsBrowser";
 
 import {
-  ACTION_MAIN_BUTTON,
   MAIN_EMPTY_STATE,
   MAIN_EMPTY_SCAN,
   MAIN_EMPTY_OPEN,
-  MAIN_EXECUTE_BUTTON,
-  MAIN_LANG_TOGGLE,
-  MAIN_MANIFEST_INPUT,
-  MAIN_MANIFEST_OPEN,
-  MAIN_SCAN_BUTTON,
-  MAIN_SETTINGS_BUTTON,
-  MAIN_STATUS_BAR,
-  MAIN_STATUS_ERROR,
-  MAIN_EXECUTE_ERROR,
   PREVIEW_RESIZE_HANDLE,
 } from "./testids";
 
@@ -79,30 +70,6 @@ const CLOSED_MENU: ContextMenuState = {
   col: undefined,
   groupNumber: 0,
 };
-
-/**
- * Secondary technical line under a status-bar error (copy audit S2).
- *
- * Rendered INSIDE the existing alert paragraph (as a block span, not a new
- * paragraph) so `main-status-error` / `main-execute-error` still carry the
- * whole message and no testid or layout box is added. Renders nothing when
- * the failure is fully described by its sentence.
- */
-function ApiErrorDetail({
-  raw,
-  t,
-}: {
-  raw: string;
-  t: (key: string, fallback: string, params?: Record<string, string | number>) => string;
-}) {
-  const { detail } = describeApiError(raw, t);
-  if (detail === null) return null;
-  return (
-    <span className="block text-xs text-ink-muted">
-      {t("web.error.technical_detail", "Details: {detail}", { detail })}
-    </span>
-  );
-}
 
 export default function App() {
   // ---------------------------------------------------------------------------
@@ -321,8 +288,6 @@ export default function App() {
 
   const scan = useAppStore((s) => s.scan);
   const manifest = useAppStore((s) => s.manifest);
-  const executeError = useAppStore((s) => s.execute.executeError);
-  const executeOpen = useAppStore((s) => s.execute.executeOpen);
   const noManifest = manifest.path === null && !manifest.loading;
 
   let statusText: string;
@@ -394,82 +359,20 @@ export default function App() {
       />
 
       {/* ------------------------------------------------------------------ */}
-      {/* Header toolbar                                                       */}
+      {/* Header toolbar (#878 slice TB — components/Toolbar.tsx)              */}
       {/* ------------------------------------------------------------------ */}
-      <header className="flex items-center gap-2 border-b border-hairline bg-toolbar px-4 py-2 flex-wrap">
-        <button
-          data-testid={MAIN_SCAN_BUTTON}
-          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
-          onClick={() => setScanOpen(true)}
-        >
-          {t("web.toolbar.scan", "Scan")}
-        </button>
-
-        <button
-          data-testid={MAIN_EXECUTE_BUTTON}
-          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={() => openExecuteDialog()}
-          // #673 — gate Execute on a loaded manifest, matching the menu
-          // Action → Execute, the Set-Action button, and Qt. Without it the
-          // toolbar opens the destructive-execute dialog over empty groups.
-          disabled={manifestPath === null}
-        >
-          {t("web.toolbar.execute", "Execute")}
-        </button>
-
-        <button
-          data-testid={ACTION_MAIN_BUTTON}
-          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle disabled:opacity-50 disabled:cursor-not-allowed"
-          // #735: openActionDialog now takes an optional initialField: string,
-          // so it can no longer be wired directly as a MouseEventHandler (the
-          // synthetic event isn't assignable to `string`) — wrap it argless.
-          onClick={() => openActionDialog()}
-          disabled={manifestPath === null}
-        >
-          {/* Own key, not the dialog title's (copy audit T1): a button wants a
-              shorter label than the dialog heading, and the borrowed key's
-              stale "Set Action" fallback disagreed with its own value. */}
-          {t("web.toolbar.set_action", "Set Action…")}
-        </button>
-
-        <button
-          data-testid={MAIN_LANG_TOGGLE}
-          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
-          onClick={() => void setLocale(locale === "en" ? "zh_TW" : "en")}
-        >
-          {locale === "zh_TW" ? "中" : "EN"}
-        </button>
-
-        <button
-          data-testid={MAIN_SETTINGS_BUTTON}
-          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
-          onClick={() => setSettingsOpen(true)}
-        >
-          {t("web.toolbar.settings", "Settings")}
-        </button>
-
-        {/* Manifest open control */}
-        <span className="flex-1" />
-        <input
-          data-testid={MAIN_MANIFEST_INPUT}
-          type="text"
-          value={manifestInputValue}
-          onChange={(e) => setManifestInputValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleManifestOpen();
-          }}
-          placeholder={t("web.manifest.input_placeholder", "Path to manifest .db…")}
-          className="rounded border border-hairline-input bg-panel px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-warm w-64"
-          aria-label={t("web.manifest.input_aria", "Manifest path")}
-        />
-        <button
-          data-testid={MAIN_MANIFEST_OPEN}
-          className="px-3 py-1 rounded border border-hairline-input bg-panel text-sm hover:bg-subtle"
-          onClick={handleManifestOpen}
-        >
-          {t("web.toolbar.open", "Open")}
-        </button>
-      </header>
+      <Toolbar
+        manifestPath={manifestPath}
+        locale={locale}
+        manifestInputValue={manifestInputValue}
+        onManifestInputChange={setManifestInputValue}
+        onManifestOpen={handleManifestOpen}
+        onScan={() => setScanOpen(true)}
+        onExecute={() => openExecuteDialog()}
+        onSetAction={() => openActionDialog()}
+        onSettings={() => setSettingsOpen(true)}
+        onSetLocale={(loc) => void setLocale(loc)}
+      />
 
       {/* ------------------------------------------------------------------ */}
       {/* Main — result tree + preview pane side by side                       */}
@@ -530,52 +433,9 @@ export default function App() {
       </main>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Footer status bar                                                    */}
+      {/* Footer status bar (#878 slice TB — components/StatusBar.tsx)         */}
       {/* ------------------------------------------------------------------ */}
-      <footer className="border-t border-hairline bg-titlebar">
-        <p
-          data-testid={MAIN_STATUS_BAR}
-          className="px-4 py-1 text-sm text-ink-muted"
-        >
-          {statusText}
-        </p>
-        {/* Additive error line (#712): manifest.error is written by ~9 store
-            actions (failed load / decision / lock / prune / save) but was
-            rendered nowhere. Show it below the status text — without masking
-            the summary — so the failure is visible. */}
-        {manifest.error !== null && (
-          <p
-            data-testid={MAIN_STATUS_ERROR}
-            role="alert"
-            className="px-4 py-1 text-sm text-danger-warm"
-          >
-            {t("web.status.manifest_failed", "Manifest error: {error}", {
-              error: describeApiError(manifest.error, t).message,
-            })}
-            <ApiErrorDetail raw={manifest.error} t={t} />
-          </p>
-        )}
-        {/* Additive error line: execute.executeError is written by
-            revealInExplorer ("Open folder" in the main-tree context menu)
-            on a failed reveal, but the ONLY other consumer was ExecuteDialog
-            — which isn't mounted/visible unless the user already has it
-            open. Show it here so a reveal failure from the main tree is
-            visible. Suppressed while the Execute dialog IS open to avoid
-            showing the same message twice (ExecuteDialog renders its own
-            copy inline). */}
-        {executeError !== null && !executeOpen && (
-          <p
-            data-testid={MAIN_EXECUTE_ERROR}
-            role="alert"
-            className="px-4 py-1 text-sm text-danger-warm"
-          >
-            {t("web.status.execute_failed", "Action error: {error}", {
-              error: describeApiError(executeError, t).message,
-            })}
-            <ApiErrorDetail raw={executeError} t={t} />
-          </p>
-        )}
-      </footer>
+      <StatusBar statusText={statusText} />
 
       {/* ------------------------------------------------------------------ */}
       {/* Dialogs                                                              */}

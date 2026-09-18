@@ -101,6 +101,7 @@ function seed() {
       columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
       panelWidths: { ...DEFAULT_PANEL_WIDTHS },
       density: DEFAULT_DENSITY,
+      filterText: "",
     },
   });
 }

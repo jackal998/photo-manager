@@ -314,6 +314,14 @@ ALL_SCENARIOS = [
     # both counts in both locales, and Undo restores the decisions AND the
     # lock the write itself created.
     "s75_keep_best_button",
+    # WEB-ONLY (#878, layout slice TB; closes #906) — the 52px toolbar and the
+    # 30px status strip. Covers what only a real browser can settle: the
+    # computed geometry the REPLY fixes, the filter narrowing the virtualised
+    # list (there is no filter control at all before this slice), the counted
+    # bulk verbs' lock-skip + undo, the danger CTA's count, and the density
+    # switch forcing the virtualiser to re-measure — a wrong re-measure shows
+    # up as a scroll landing off, never as a red unit test.
+    "s76_toolbar_status_density",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -330,4 +338,5 @@ WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s73_action_seed_and_page_scroll",
     "s74_daylight_theme",
     "s75_keep_best_button",
+    "s76_toolbar_status_density",
 })

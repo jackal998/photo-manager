@@ -849,7 +849,7 @@ describe("applyBestCopy – raises the Q5 undo toast", () => {
     expect(toast!.groupNumber).toBe(1);
     // The keeper is in affected_paths too, but it was not marked for deletion
     // — reporting `matched` (2) would over-count by exactly the keeper.
-    expect(toast!.deletedCount).toBe(1);
+    expect(toast!.affectedCount).toBe(1);
     expect(toast!.lockedCount).toBe(1);
   });
 
@@ -1956,6 +1956,172 @@ describe("openExecuteDialog – group-pull scope from a selection", () => {
     useAppStore.getState().closeExecuteDialog();
     expect(useAppStore.getState().execute.executeOpen).toBe(false);
     expect(useAppStore.getState().execute.scopeGroupNumbers).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #878 layout slice TB — the toolbar's counted bulk verbs (REPLY L5)
+//
+// L5 gave these verbs the same promise Q5 gave "Keep best · delete rest": they
+// «must respect locks silently-but-visibly», with the undo toast reporting the
+// skipped count. Two things are therefore load-bearing and tested here: the
+// locked rows must never reach the wire (a 409 would raise the LockConfirm
+// modal Q5 ruled out), and the snapshot must be the PRE-write state of exactly
+// the rows that were written.
+// ---------------------------------------------------------------------------
+
+/** Two unlocked rows and one locked row, spanning TWO groups — a ctrl-click
+ *  selection is not confined to a group, which is what makes the toast's
+ *  groupNumber null and its undo walk every group. */
+function seedBulkSelection(): void {
+  const g1 = makeGroup(1, ["/photos/a.jpg", "/photos/locked.jpg"]);
+  g1.items[1].is_locked = true;
+  const g2 = makeGroup(2, ["/photos/b.jpg"]);
+  seedManifest([g1, g2]);
+  useAppStore.setState((s) => ({
+    ...s,
+    selection: {
+      selectedPaths: ["/photos/a.jpg", "/photos/locked.jpg", "/photos/b.jpg"],
+      anchorPath: null,
+      scrollToPath: null,
+    },
+  }));
+}
+
+describe("applyBulkDecision – the toolbar's counted verbs (L5)", () => {
+  it("writes only the UNLOCKED rows and never sends the locked one", async () => {
+    seedBulkSelection();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    expect(client.patchDecisions).toHaveBeenCalledTimes(1);
+    expect(client.patchDecisions).toHaveBeenCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/photos/a.jpg", decision: "delete" },
+        { file_path: "/photos/b.jpg", decision: "delete" },
+      ],
+      // Not forced: the lock never reaches the route, so there is no 409 to
+      // recover from and no LockConfirmDialog in front of a reversible write.
+      { forceLocked: false }
+    );
+  });
+
+  it("leaves the locked row's decision untouched and reports it in the toast", async () => {
+    seedBulkSelection();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    const rows = useAppStore
+      .getState()
+      .manifest.groups.flatMap((g) => g.items);
+    const byPath = new Map(rows.map((r) => [r.file_path, r]));
+    expect(byPath.get("/photos/a.jpg")!.user_decision).toBe("delete");
+    expect(byPath.get("/photos/b.jpg")!.user_decision).toBe("delete");
+    expect(byPath.get("/photos/locked.jpg")!.user_decision).toBe("");
+
+    const { toast } = useAppStore.getState();
+    expect(toast).not.toBeNull();
+    expect(toast!.kind).toBe("bulk-decision");
+    expect(toast!.decision).toBe("delete");
+    expect(toast!.affectedCount).toBe(2);
+    expect(toast!.lockedCount).toBe(1);
+    // Null, not a group number: the selection spanned two groups.
+    expect(toast!.groupNumber).toBeNull();
+  });
+
+  it("snapshots the PRIOR decision of each written row, so Undo can reverse it", async () => {
+    seedBulkSelection();
+    useAppStore.setState((s) => {
+      s.manifest.groups[0].items[0].user_decision = "ignore";
+    });
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    const snapshot = useAppStore.getState().toast!.snapshot;
+    expect(snapshot).toEqual([
+      { file_path: "/photos/a.jpg", decision: "ignore", locked: false },
+      { file_path: "/photos/b.jpg", decision: "", locked: false },
+    ]);
+  });
+
+  it("restores rows in BOTH groups when Undo runs", async () => {
+    seedBulkSelection();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+    vi.mocked(client.patchLocks).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().applyBulkDecision("delete");
+    await useAppStore.getState().undoKeepBest();
+
+    const byPath = new Map(
+      useAppStore
+        .getState()
+        .manifest.groups.flatMap((g) => g.items)
+        .map((r) => [r.file_path, r])
+    );
+    // The second group is the one a group-scoped undo would have missed.
+    expect(byPath.get("/photos/a.jpg")!.user_decision).toBe("");
+    expect(byPath.get("/photos/b.jpg")!.user_decision).toBe("");
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("raises no toast when the write fails — there is nothing to undo", async () => {
+    // A toast offering to undo a write that never landed is worse than no
+    // toast: pressing its Undo would PATCH the "prior" values back over rows
+    // that still hold them, and the user would believe both steps worked.
+    seedBulkSelection();
+    vi.mocked(client.patchDecisions).mockRejectedValue(new Error("server error"));
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    expect(useAppStore.getState().toast).toBeNull();
+    expect(useAppStore.getState().manifest.error).toBe("server error");
+  });
+
+  it("does nothing at all with an empty selection", async () => {
+    seedManifest([makeGroup(1, ["/photos/a.jpg"])]);
+    useAppStore.setState((s) => ({
+      ...s,
+      selection: { selectedPaths: [], anchorPath: null, scrollToPath: null },
+    }));
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    expect(client.patchDecisions).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("reports the skip without a write when EVERY selected row is locked", async () => {
+    // The "silently-but-visibly" case at its limit: nothing happens, and the
+    // user has to be told that nothing happened rather than shown a still list.
+    const g = makeGroup(1, ["/photos/locked.jpg"]);
+    g.items[0].is_locked = true;
+    seedManifest([g]);
+    useAppStore.setState((s) => ({
+      ...s,
+      selection: {
+        selectedPaths: ["/photos/locked.jpg"],
+        anchorPath: null,
+        scrollToPath: null,
+      },
+    }));
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    expect(client.patchDecisions).not.toHaveBeenCalled();
+    const { toast } = useAppStore.getState();
+    expect(toast!.affectedCount).toBe(0);
+    expect(toast!.lockedCount).toBe(1);
+
+    // And its Undo is a plain dismiss — an empty PATCH body is a 422, not a
+    // no-op, so the guard has to be in the action rather than in the UI.
+    await useAppStore.getState().undoKeepBest();
+    expect(client.patchDecisions).not.toHaveBeenCalled();
+    expect(client.patchLocks).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toast).toBeNull();
   });
 });
 

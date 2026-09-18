@@ -119,6 +119,7 @@ from qa.web.testid_constants import (
     CTX_SET_ACTION_KEEP,
     MAIN_RESULT_TREE,
     MAIN_STATUS_BAR,
+    MAIN_STATUS_STRIP,
     PREVIEW_PANE,
     RESULT_COL_HEADER_ROW,
     SCAN_DIALOG,
@@ -212,6 +213,30 @@ _READ_STATUS_STRIP_BG = """(testid) => {
 
 # Reads every similarity badge currently mounted, with the two colour-free
 # cues plus the leading glyph, so the driver can check them as a set.
+# Layout slice TB — the two chrome bars, read together. The count of bars
+# above the toolbar is the F4 assertion («keep only the menu bar»), and it is
+# a property of the PAGE rather than of any element, so it cannot be phrased
+# as a style check on one testid.
+_READ_CHROME_TYPE = """(stripId) => {
+  const strip = document.querySelector(`[data-testid="${stripId}"]`);
+  const menu = document.querySelector('[data-testid="main-menu-bar"]');
+  const toolbar = document.querySelector('[data-testid="main-toolbar"]');
+  const summary = document.querySelector('[data-testid="main-scan-summary"]');
+  let titlebarCount = 0;
+  if (toolbar) {
+    for (const sib of toolbar.parentElement.children) {
+      if (sib === toolbar) break;
+      titlebarCount += 1;
+    }
+  }
+  return {
+    stripFontSize: strip ? getComputedStyle(strip).fontSize : null,
+    menuHeight: menu ? getComputedStyle(menu).height : null,
+    titlebarCount,
+    summaryInsideMenu: !!(menu && summary && menu.contains(summary)),
+  };
+}"""
+
 _READ_BADGES = """() => {
   const out = [];
   for (const el of document.querySelectorAll('[data-sim-state]')) {
@@ -1180,6 +1205,33 @@ def run(*, base_url: str) -> None:
             assert status_bg == _TITLEBAR_BG, (
                 "#878 — the status bar strip is not the titlebar surface: "
                 f"expected {_TITLEBAR_BG} (#f3ede3), got {status_bg}."
+            )
+
+            # 8b-ii. Layout slice TB — the strip's TYPE, and the menu bar it
+            # folded the scan summary into. F11's finding was that the status
+            # bar's font was the gap, not its colours, so 11.5px is the number
+            # that closes it; and F3/F4 dropped the prototype's second titlebar
+            # rather than drawing two chrome bars, so the summary has to be
+            # inside the 33px menu bar rather than above it.
+            chrome = page.evaluate(_READ_CHROME_TYPE, MAIN_STATUS_STRIP)
+            print(f"probe_status: s74 chrome type/geometry = {chrome}")
+            assert chrome["stripFontSize"] == "11.5px", (
+                "F11 — the status strip renders at "
+                f"{chrome['stripFontSize']}, expected 11.5px."
+            )
+            assert chrome["menuHeight"] == "33px", (
+                f"F3 — the menu bar is {chrome['menuHeight']}, expected 33px "
+                "(as shipped). The scan summary must not have changed it."
+            )
+            assert chrome["titlebarCount"] == 1, (
+                "F4 — exactly one chrome bar is drawn above the toolbar. Found "
+                f"{chrome['titlebarCount']} — «two stacked chrome bars cost "
+                "73px of an 800px viewport and give the user nothing the other "
+                "does not»."
+            )
+            assert chrome["summaryInsideMenu"] is True, (
+                "The scan summary is not inside the menu bar — the REPLY folds "
+                "it in rather than drawing a second bar for it."
             )
 
             # 8c. Row context menu: its own surface, and the hover fill of an

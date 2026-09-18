@@ -28,6 +28,7 @@ import {
   type ColumnId,
 } from "@/lib/resultColumns";
 import { estimateRowSize } from "@/lib/rowMetrics";
+import { filterGroups } from "@/lib/rowFilter";
 import type { DecisionValue, FileRow as FileRowData } from "@/api/types";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +117,17 @@ interface ResultTreeProps {
 
 export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProps = {}) {
   const manifest = useAppStore((s) => s.manifest);
-  const groups = useAppStore((s) => s.manifest.groups);
+  const allGroups = useAppStore((s) => s.manifest.groups);
+  // #878 slice TB — the toolbar filter is applied HERE, once, so everything
+  // downstream (the per-group sort memo, `vrows`, the keyboard range, the group
+  // header's own count and size total) describes what is actually on screen.
+  // `filterGroups` returns the store's array by identity when the box is empty,
+  // so the unfiltered render keeps every memo below it.
+  const filterText = useAppStore((s) => s.resultView.filterText);
+  const groups = useMemo(
+    () => filterGroups(allGroups, filterText),
+    [allGroups, filterText]
+  );
   const setDecision = useAppStore((s) => s.setDecision);
   const setLock = useAppStore((s) => s.setLock);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
@@ -377,6 +388,27 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     // ResizeObserver and getBoundingClientRect both return zeroes.
     initialRect: { width: 1024, height: 4000 },
   });
+
+  // #878 slice TB — the density switch changes EVERY row's height, and nothing
+  // re-reads `estimateSize` on its own: @tanstack/react-virtual caches a size
+  // per index and only re-measures when told to. Without this the cached
+  // comfortable sizes survive the switch, so the total scroll height and every
+  // row offset past the first screen stay 72px-based while the rows render at
+  // 52px — which shows up as keyboard scroll-into-view landing short, not as a
+  // red unit test (`overscan: 10` hides it near the top). Slice R deliberately
+  // left this to TB, which owns the switch.
+  //
+  // Gated on a real CHANGE, not merely on `density` being a dependency:
+  // `measure()` DISCARDS the cache, so an unconditional call throws away the
+  // sizes the first layout pass just measured and leaves every row on its
+  // estimate. Both scrollMargin.test.tsx and keyboard.test.tsx caught that —
+  // rows landed 16px out — which is the one place this class of bug is visible.
+  const measuredDensityRef = useRef(density);
+  useEffect(() => {
+    if (measuredDensityRef.current === density) return;
+    measuredDensityRef.current = density;
+    virtualizer.measure();
+  }, [density, virtualizer]);
 
   // Post-scan keeper scroll (Qt #239 parity). loadManifest({ selectKeepers })
   // sets selection.scrollToPath to the first auto-selected KEEP row; bring it

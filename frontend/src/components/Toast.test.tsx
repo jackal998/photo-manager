@@ -12,16 +12,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Toast, TOAST_TIMEOUT_MS } from "./Toast";
 import { useAppStore } from "@/store/useAppStore";
 import { useI18nStore } from "@/i18n/useI18nStore";
-import type { KeepBestToast } from "@/store/types";
+import type { UndoToast } from "@/store/types";
 import { MAIN_TOAST, MAIN_TOAST_UNDO } from "@/testids";
 
-function seedToast(overrides: Partial<KeepBestToast> = {}) {
+function seedToast(overrides: Partial<UndoToast> = {}) {
   act(() => {
     useAppStore.setState({
       toast: {
         id: 1,
+        kind: "keep-best",
         groupNumber: 12,
-        deletedCount: 4,
+        decision: null,
+        affectedCount: 4,
         lockedCount: 0,
         snapshot: [],
         undoing: false,
@@ -61,7 +63,7 @@ describe("Toast", () => {
   });
 
   it("uses the singular noun for a one-file write", () => {
-    seedToast({ deletedCount: 1 });
+    seedToast({ affectedCount: 1 });
     render(<Toast />);
     const toast = screen.getByTestId(MAIN_TOAST);
     expect(toast).toHaveTextContent("1 file marked for deletion");
@@ -166,7 +168,7 @@ describe("Toast", () => {
     act(() => {
       vi.advanceTimersByTime(TOAST_TIMEOUT_MS - 500);
     });
-    seedToast({ id: 2, groupNumber: 13, deletedCount: 2 });
+    seedToast({ id: 2, groupNumber: 13, affectedCount: 2 });
     expect(screen.getByTestId(MAIN_TOAST)).toHaveTextContent("Group 13");
 
     // The first toast's remaining 500ms must NOT dismiss the second one.

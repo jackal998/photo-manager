@@ -111,11 +111,83 @@ MAIN_EMPTY_OPEN = "main-empty-open"
 """'Open Manifest…' action button inside the empty-state placeholder."""
 
 # ---------------------------------------------------------------------------
+# Toolbar + status bar (#878 layout slice TB)
+# ---------------------------------------------------------------------------
+
+MAIN_TOOLBAR = "main-toolbar"
+"""The 52px action strip itself.  Addressable because the layout REPLY fixes
+its height and specifies that EXACTLY ONE control in it carries the warm
+primary fill — both of which are assertions about the strip as a whole, not
+about any button in it."""
+
+MAIN_FILTER_INPUT = "main-filter-input"
+"""Toolbar filter box.  Case-insensitive substring over each row's basename AND
+folder path; groups left with no matching row are hidden.  View-only: it never
+writes a decision, a lock or the manifest, and it is not persisted."""
+
+MAIN_BULK_LABEL = "main-bulk-label"
+"""The counted label in front of the three bulk verbs — "Set 3 selected:" with
+a selection, "Set selected:" without.  L5 put the count IN the label so
+"Delete" never means an unknown number of files."""
+
+MAIN_BULK_VERB_KEEP = "main-bulk-verb-keep"
+"""Bulk 'Keep' verb — writes decision "" to the unlocked rows of the current
+ctrl/shift selection."""
+
+MAIN_BULK_VERB_DELETE = "main-bulk-verb-delete"
+"""Bulk 'Delete' verb — writes decision "delete" to the unlocked rows of the
+current selection.  Locked rows are skipped silently-but-visibly: the undo
+toast reports "N locked file(s) unchanged" (L5, same rule as Q5)."""
+
+MAIN_BULK_VERB_SKIP = "main-bulk-verb-skip"
+"""Bulk 'Skip' verb — writes decision "ignore" to the unlocked rows of the
+current selection."""
+
+MAIN_DELETE_CTA = "main-delete-cta"
+"""The toolbar's danger CTA, "⊗ Delete N files…", far right.  Opens the same
+Execute dialog as MAIN_EXECUTE_BUTTON.  Never hidden: at zero marked rows it is
+DISABLED with the label still reading "Delete 0 files…", so the only
+destructive control on the screen never moves under the cursor."""
+
+MAIN_STATUS_STRIP = "main-status-strip"
+"""The 30px status strip inside the footer.  Distinct from MAIN_STATUS_BAR (the
+summary <p> inside it) because the footer also carries the two conditional
+error lines BELOW the strip — a height assertion on the footer would be an
+assertion about whether an error is showing."""
+
+MAIN_STATUS_DELETE_COUNT = "main-status-delete-count"
+"""'⊗ N marked to delete' in the status strip (#906).  Counts the WHOLE
+manifest, not the filtered view — it is the number Execute acts on."""
+
+MAIN_STATUS_RECLAIM = "main-status-reclaim"
+"""'↺ reclaims X MB' in the status strip (#906) — the byte sum of the
+delete-marked rows, through the same formatBytes the rest of the UI uses."""
+
+MAIN_DENSITY_TOGGLE = "main-density-toggle"
+"""The segmented Comfortable/Compact control at the right end of the status
+strip.  Writes the persisted `resultView.density` preference that layout slice
+R added; the tree re-measures its virtualised rows on the change."""
+
+MAIN_DENSITY_COMFORTABLE = "main-density-comfortable"
+"""'Comfortable' segment of the density control (72px rows)."""
+
+MAIN_DENSITY_COMPACT = "main-density-compact"
+"""'Compact' segment of the density control (52px rows)."""
+
+# ---------------------------------------------------------------------------
 # Menu bar (Qt MenuController parity — File / Action / View)
 # ---------------------------------------------------------------------------
 
 MAIN_MENU_BAR = "main-menu-bar"
 """The top menu bar container (mirrors Qt's QMenuBar)."""
+
+MAIN_SCAN_SUMMARY = "main-scan-summary"
+"""The scan summary folded into the RIGHT end of the menu bar (#878 slice TB,
+F3/F4): "1,284 photos · 3 groups · <source>".  The REPLY dropped the
+prototype's second titlebar — «two stacked chrome bars cost 73px of an 800px
+viewport» — and moved this line into the bar that already has a function.
+Absent until a manifest is loaded; the source name truncates first and never
+wraps."""
 
 MENU_FILE = "menu-file"
 """'File' top-level menu trigger."""
