@@ -17,6 +17,7 @@ import { useT } from "@/i18n/useT";
 import {
   COLUMNS,
   SCORE_COMPACT_WIDTH,
+  columnCellStyle,
   type ColumnId,
   type SortDirection,
 } from "@/lib/resultColumns";
@@ -156,15 +157,22 @@ export function ColumnHeaderRow({
             data-testid={colHeaderTestid(col.id)}
             data-col-compact={col.id === "score" && scoreCompact ? "" : undefined}
             // relative so the resize handle can anchor to the cell's right edge.
+            // `data-col-basis` is the width the STORE holds. The flexible
+            // column renders WIDER than that (it fills what the shed columns
+            // freed), so s47 compares the persisted number against this rather
+            // than against the box — the two stopped being the same thing when
+            // File Name became the fill column.
+            data-col-basis={columnWidths[col.id]}
             className={cn(
-              "relative flex-shrink-0 flex items-center gap-1.5 overflow-hidden",
+              "relative flex items-center gap-1.5 overflow-hidden",
+              !col.flexible && "flex-shrink-0",
               col.align === "right" ? "justify-end" : "justify-start",
               // `group/sort` drives the hover-only ▾ below without a second
               // state — the affordance appears where the pointer already is.
               col.sortable && "group/sort cursor-pointer hover:text-ink",
               isActive && "text-ink"
             )}
-            style={{ width }}
+            style={columnCellStyle(col, width)}
             role={col.sortable ? "button" : undefined}
             aria-sort={
               col.sortable

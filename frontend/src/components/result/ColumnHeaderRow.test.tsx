@@ -63,7 +63,11 @@ function renderStatefulHeader() {
   return {
     /** Every persist=true width, in order — the #685 contract allows exactly one per drag. */
     persisted,
-    nameWidth: () => screen.getByTestId(colHeaderTestid("name")).style.width,
+    /** File Name is the FILL column (layout slice C), so the number the drag
+     *  moves is its flex BASIS — the rendered box is that plus whatever the
+     *  shed columns freed. This is the width the store holds and the one s47
+     *  persists. */
+    nameWidth: () => screen.getByTestId(colHeaderTestid("name")).style.flexBasis,
   };
 }
 

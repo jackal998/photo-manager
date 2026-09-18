@@ -8,8 +8,12 @@ through real user gestures (web mouse-drag is reliable in Playwright, so unlike
 the Qt s47 we do NOT need to forge a saved-state blob via a sidecar):
 
   1. Drag the File Name column's resize handle right by a known delta and assert
-     the rendered header width grew.
-  2. Assert the new width was written to localStorage.
+     the STORED width moved by exactly that delta (`data-col-basis`). Since
+     layout slice C, File Name is the FILL column — its rendered box is the
+     stored width plus whatever the shed columns freed — so the box is asserted
+     against its FLOOR (never narrower than the stored width) while the stored
+     number carries the resize contract.
+  2. Assert the new stored width was written to localStorage.
   3. ``page.reload()`` — the web cross-launch boundary (localStorage survives a
      reload but the loaded manifest does not) — then re-load the same manifest.
   4. Assert the File Name header restores to the resized width (the restore path
@@ -72,11 +76,12 @@ _REPO = Path(__file__).resolve().parents[3]
 _SRC = str(_REPO / "qa" / "sandbox" / "near-duplicates")
 _STORAGE_KEY = "pm.result-tree.column-widths.v1"
 
-# Drag the handle this far right; assert the column grew by clearly more than
-# noise. Tolerance covers sub-pixel rounding between the drag delta, the
+# Drag the handle this far right; assert the STORED width moved by exactly that
+# (layout slice C made File Name the fill column, so its rendered box is stored
+# + slack — the stored number is the one the drag controls 1:1 and the one that
+# persists). Tolerance covers sub-pixel rounding between the drag delta, the
 # store's Math.round, and the rendered boundingBox.
 _DELTA_PX = 120
-_MIN_GROWTH_PX = 50
 _TOL_PX = 6
 
 # ── #699 tall-manifest phase ────────────────────────────────────────────────
@@ -99,6 +104,29 @@ def _header_width(page, col_id: str) -> float:
     if box is None:
         raise AssertionError(f"header cell {col_id!r} has no bounding box")
     return box["width"]
+
+
+def _header_basis(page, col_id: str) -> float:
+    """The width the STORE holds for a column — what the drag moves 1:1.
+
+    Layout slice C made File Name the FILL column: it takes whatever the shed
+    columns freed, so its rendered box is its stored width plus that slack and
+    the two are no longer the same number. The stored width is still what the
+    drag moves, what gets written to localStorage and what hydrates on the next
+    launch, so the persistence assertions below compare against this — and the
+    rendered box is asserted separately (it must never be NARROWER, which is the
+    floor that stops the fill column swallowing a user's resize).
+    """
+    raw = page.get_by_test_id(col_header_testid(col_id)).get_attribute(
+        "data-col-basis"
+    )
+    if raw is None:
+        raise AssertionError(
+            f"header cell {col_id!r} exposes no data-col-basis — the header "
+            f"stopped publishing the width the store holds, so a persisted "
+            f"value can no longer be checked against anything."
+        )
+    return float(raw)
 
 
 def _wait_rows(page, n: int = 5) -> None:
@@ -280,7 +308,11 @@ def run(*, base_url: str) -> None:
             _wait_rows(page)
 
             width_before = _header_width(page, "name")
-            print(f"probe_status: s47 File Name width before={width_before}")
+            basis_before = _header_basis(page, "name")
+            print(
+                f"probe_status: s47 File Name width before={width_before} "
+                f"stored={basis_before}"
+            )
 
             # ── Drag the File Name resize handle right by _DELTA_PX ─────────
             handle = page.get_by_test_id(col_resize_testid("name"))
@@ -296,12 +328,30 @@ def run(*, base_url: str) -> None:
             page.wait_for_timeout(150)
 
             width_after = _header_width(page, "name")
-            print(f"probe_status: s47 File Name width after drag={width_after}")
-            if width_after < width_before + _MIN_GROWTH_PX:
+            basis_after = _header_basis(page, "name")
+            print(
+                f"probe_status: s47 File Name width after drag={width_after} "
+                f"stored={basis_after}"
+            )
+            # The drag moves the STORED width 1:1 with the pointer — that is the
+            # number the store keeps, persists and hydrates. Asserting the exact
+            # delta is stricter than the "it grew by at least 50px" this
+            # replaces: a drag that over- or under-shoots now fails too.
+            if abs((basis_after - basis_before) - _DELTA_PX) > _TOL_PX:
                 failures.append(
-                    f"resize drag did not widen File Name: before={width_before} "
-                    f"after={width_after} (expected +>{_MIN_GROWTH_PX}px) — the "
-                    f"resize-handle drag wiring is broken."
+                    f"resize drag did not move the stored File Name width by "
+                    f"the drag distance: {basis_before} → {basis_after} for a "
+                    f"{_DELTA_PX}px drag (±{_TOL_PX}) — the resize-handle drag "
+                    f"wiring is broken."
+                )
+            # File Name is the FILL column, so its box is stored + slack. The
+            # floor is the contract that matters: it may render wider than the
+            # user's width, never narrower.
+            if width_after + _TOL_PX < basis_after:
+                failures.append(
+                    f"File Name renders {width_after}px against a stored width "
+                    f"of {basis_after}px — the fill column is squeezing the "
+                    f"user's own resize below the floor it sets."
                 )
 
             persisted = page.evaluate(
@@ -310,10 +360,10 @@ def run(*, base_url: str) -> None:
                 _STORAGE_KEY,
             )
             print(f"probe_status: s47 persisted name width={persisted}")
-            if persisted is None or abs(persisted - width_after) > _TOL_PX:
+            if persisted is None or abs(persisted - basis_after) > _TOL_PX:
                 failures.append(
                     f"resized width not persisted to localStorage: "
-                    f"persisted={persisted} after={width_after}."
+                    f"persisted={persisted} stored={basis_after}."
                 )
 
             # ── Reload = cross-launch boundary; re-load the same manifest ──
@@ -323,13 +373,26 @@ def run(*, base_url: str) -> None:
             page.wait_for_timeout(150)
 
             width_restored = _header_width(page, "name")
-            print(f"probe_status: s47 File Name width restored={width_restored}")
+            basis_restored = _header_basis(page, "name")
+            print(
+                f"probe_status: s47 File Name width restored={width_restored} "
+                f"stored={basis_restored}"
+            )
+            # THE cross-launch contract: the width the user chose comes back.
+            if abs(basis_restored - basis_after) > _TOL_PX:
+                failures.append(
+                    f"stored width not restored after reload: "
+                    f"restored={basis_restored} != resized={basis_after} "
+                    f"(±{_TOL_PX}) — the column-width hydration from "
+                    f"localStorage on store creation regressed, or something "
+                    f"resets widths on manifest load."
+                )
             if abs(width_restored - width_after) > _TOL_PX:
                 failures.append(
-                    f"width not restored after reload: restored={width_restored} "
-                    f"!= resized={width_after} (±{_TOL_PX}) — the column-width "
-                    f"hydration from localStorage on store creation regressed, "
-                    f"or something resets widths on manifest load."
+                    f"rendered width not restored after reload: "
+                    f"restored={width_restored} != resized={width_after} "
+                    f"(±{_TOL_PX}) — the stored width came back but the row no "
+                    f"longer lays out the same way."
                 )
 
             still = page.evaluate("(key) => localStorage.getItem(key)", _STORAGE_KEY)

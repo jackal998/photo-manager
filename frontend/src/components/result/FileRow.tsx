@@ -15,6 +15,7 @@ import type { FileRow as FileRowData } from "@/api/types";
 import {
   COLUMNS,
   SCORE_COMPACT_WIDTH,
+  columnCellStyle,
   type ColumnId,
 } from "@/lib/resultColumns";
 import { scoreBarWidth } from "@/lib/scoreBar";
@@ -179,10 +180,11 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
       </div>
 
       {/* Name + folder */}
-      {/* Name + folder. Fixed and resizable, NOT the L3 budget's flex-to-fill
-          column — see the note in lib/resultColumns.ts: a grow column's box
-          ignores its own resize handle while any slack is left, measured. */}
-      <div data-col="name" className="flex-shrink-0 min-w-0 overflow-hidden" style={{ width: columnWidths.name }}>
+      {/* Name + folder — the FILL column (L3). It takes whatever the shed
+          columns freed, which is the point of shedding: the freed width belongs
+          to the one string the user actually reads, not to a gutter on the
+          right. Floor = its own stored width, then the table scrolls. */}
+      <div data-col="name" className="overflow-hidden" style={columnCellStyle(COLUMN_BY_ID.name, columnWidths.name)}>
         <div className="flex items-center gap-1 flex-wrap">
           <span
             className={cn(

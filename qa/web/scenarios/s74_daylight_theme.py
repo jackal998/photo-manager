@@ -145,9 +145,14 @@ _CLASSIFICATION_EN = {
     "KEEP": "Best in group",
     "UNDATED": "No date",
 }
-# Narrow enough that the L3 budget sheds both dims (<1200px table) and date
-# (<1080px) — the tree is narrower than the window by the preview pane.
+# Narrow enough that the row cannot pay for either dims or date — the tree is
+# narrower than the window by the preview pane, so this leaves ~600px of table
+# against a full-set requirement near 1000px.
 _NARROW_VIEWPORT = {"width": 900, "height": 800}
+# Empty row allowed to the right of the padlock. The fill column should leave
+# only the row's own right padding (16px) plus sub-pixel rounding; anything
+# larger means the filename is not taking the slack.
+_MAX_GUTTER_PX = 24
 
 _PANEL_BG = "rgb(255, 253, 249)"  # --color-panel     #fffdf9
 _TITLEBAR_BG = "rgb(243, 237, 227)"  # --color-titlebar  #f3ede3
@@ -237,11 +242,22 @@ _READ_COLUMN_HEADER = """(testid) => {
 _READ_SHED = """() => {
   const tree = document.querySelector('[data-testid="main-result-tree"]');
   const row = document.querySelector('[data-testid^="row-file-"]');
+  const head = document.querySelector('[data-testid="col-header-name"]');
+  const nameCell = row ? row.querySelector('[data-col="name"]') : null;
+  const lock = row ? row.querySelector('[data-testid^="row-lock-"]') : null;
+  const treeBox = tree ? tree.getBoundingClientRect() : null;
+  const lockBox = lock ? lock.getBoundingClientRect() : null;
   return {
     tableWidth: tree ? tree.getAttribute('data-table-width') : null,
     dims: document.querySelectorAll('[data-col="dims"]').length,
+    date: document.querySelectorAll('[data-col="date"]').length,
     size: document.querySelectorAll('[data-col="size"]').length,
     action: document.querySelectorAll('[data-col="action"]').length,
+    nameBasis: head ? Number(head.getAttribute('data-col-basis')) : null,
+    nameWidth: nameCell ? Math.round(nameCell.getBoundingClientRect().width) : null,
+    // How much empty row is left to the RIGHT of the last thing on it. The
+    // whole point of the fill column is that this stays small.
+    gutter: treeBox && lockBox ? Math.round(treeBox.right - lockBox.right) : null,
     rowPresent: Boolean(row),
   };
 }"""
@@ -954,19 +970,31 @@ def run(*, base_url: str) -> None:
                 f"the accent {_ACCENT} (#a85a2c)."
             )
 
-            # ── 10. Column shedding (slice C · REPLY L3 budget) ───────────────
+            # ── 10. Need-based shedding + the fill column (slice C · L3) ──────
             # LAST on purpose: it narrows the window, and every section above
-            # reads geometry at 1280×800. As the table's own width falls the
-            # budget drops the least-comparable columns rather than truncating
-            # the filename to nothing — dims first (resolution is the field most
-            # often identical across a duplicate group), then date. Keyed off
-            # the width the tree MEASURED (`data-table-width`), so a failure
-            # here says whether the threshold fired or the measurement did.
+            # reads geometry at 1280×800. Shedding is need-based — a column goes
+            # only while what is left still does not fit — and the width it
+            # frees goes to the FILENAME, not to a gutter. Keyed off the width
+            # the tree MEASURED (`data-table-width`), so a failure here says
+            # whether the arithmetic fired or the measurement did.
             wide = page.evaluate(_READ_SHED)
             print(f"probe_status: s74 columns at 1280 = {wide}")
             assert wide["rowPresent"], (
                 "slice C — no file row on screen; the shed probe would pass "
                 "vacuously (zero dims cells because there are zero rows)."
+            )
+            assert wide["nameWidth"] > wide["nameBasis"], (
+                "slice C — File Name renders at "
+                f"{wide['nameWidth']}px against a stored basis of "
+                f"{wide['nameBasis']}px, i.e. it is NOT filling the row. The "
+                "width the shed columns freed is sitting in a gutter on the "
+                "right instead of in the one string the user reads."
+            )
+            assert wide["gutter"] is not None and wide["gutter"] <= _MAX_GUTTER_PX, (
+                "slice C — "
+                f"{wide['gutter']}px of empty row is left to the right of the "
+                f"padlock at 1280×800 (max {_MAX_GUTTER_PX}). That hole is what "
+                "the fill column exists to close."
             )
             page.set_viewport_size(_NARROW_VIEWPORT)
             page.wait_for_timeout(400)
@@ -977,22 +1005,26 @@ def run(*, base_url: str) -> None:
                 "slice C — the rows unmounted at a 900px viewport; the shed "
                 "assertions below would pass for the wrong reason."
             )
-            assert narrow["tableWidth"] and float(narrow["tableWidth"]) < 1080, (
+            assert narrow["tableWidth"] and float(narrow["tableWidth"]) < float(
+                wide["tableWidth"]
+            ), (
                 "slice C — the tree measured "
-                f"{narrow['tableWidth']!r}px at a 900px viewport, which is not "
-                "below the 1080px date threshold. Either the ResizeObserver "
-                "never re-measured or the tree is not the element being sized."
+                f"{narrow['tableWidth']!r}px at a 900px viewport, no narrower "
+                f"than the {wide['tableWidth']!r}px it reported at 1280. Either "
+                "the ResizeObserver never re-measured or the tree is not the "
+                "element being sized."
             )
-            assert narrow["dims"] == 0, (
-                f"slice C — {narrow['dims']} Resolution cells survive a "
-                f"{narrow['tableWidth']}px table; the <1200px shed did not "
-                "fire, so the filename is being squeezed instead."
+            assert narrow["dims"] == 0 and narrow["date"] == 0, (
+                f"slice C — Resolution ({narrow['dims']}) or Shot Date "
+                f"({narrow['date']}) cells survive a {narrow['tableWidth']}px "
+                "table, which cannot fit them; the filename is being squeezed "
+                "instead of a column being given up."
             )
             assert narrow["size"] > 0 and narrow["action"] > 0, (
                 "slice C — shedding took Size or Action with it "
-                f"(size={narrow['size']}, action={narrow['action']}). The "
-                "budget drops dims and date only; Size is SORTABLE and a shed "
-                "must never strand an active sort."
+                f"(size={narrow['size']}, action={narrow['action']}). Only dims "
+                "and date are sheddable; Size is SORTABLE and a shed must never "
+                "strand an active sort."
             )
     finally:
         import shutil

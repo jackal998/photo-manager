@@ -249,11 +249,14 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   // One shed decision per width change, shared by the header and every row —
   // two independent computations would be two chances for the header to head a
   // column the rows no longer draw.
+  // Need-based, so the user's own widths are an input: a column the user made
+  // wide can push a later one off the row, and a column they made narrow can
+  // keep one on it.
   const visibleCols = useMemo<ReadonlySet<ColumnId>>(
-    () => new Set(visibleColumns(tableWidth).map((c) => c.id)),
-    [tableWidth]
+    () => new Set(visibleColumns(tableWidth, columnWidths).map((c) => c.id)),
+    [tableWidth, columnWidths]
   );
-  const scoreCompact = isScoreCompact(tableWidth);
+  const scoreCompact = isScoreCompact(tableWidth, columnWidths);
 
   const virtualizer = useVirtualizer({
     count: vrows.length,

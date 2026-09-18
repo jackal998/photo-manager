@@ -41,6 +41,12 @@ export interface ColumnDef {
    *  selectively" — size · date · dims · score are machine values that have to
    *  align digit-over-digit down the column). The header label stays sans. */
   mono: boolean;
+  /** This column FILLS the row's leftover width instead of taking a fixed box
+   *  (layout REPLY L3: "name minimum 160px, then the table scrolls
+   *  horizontally"). Exactly one column is flexible; shedding exists to feed
+   *  it. Its stored width is the flex BASIS **and** its `min-width`, so the
+   *  rendered box is `stored + slack` and never narrower than `stored`. */
+  flexible: boolean;
 }
 
 // Order here IS the left-to-right render order in both the header and FileRow.
@@ -65,31 +71,48 @@ export interface ColumnDef {
 // the English fallback). The keys mirror the desktop column.* set; web.column.*
 // already exists in translations/{en,zh_TW}.yml.
 export const COLUMNS: readonly ColumnDef[] = [
-  { id: "name", labelKey: "web.column.file_name", labelFallback: "File Name", defaultWidth: 160, sortable: true, align: "left", mono: false },
-  { id: "similarity", labelKey: "web.column.similarity", labelFallback: "Similarity", defaultWidth: 92, sortable: false, align: "left", mono: false },
-  { id: "action", labelKey: "web.column.action", labelFallback: "Action", defaultWidth: 168, sortable: false, align: "left", mono: false },
-  { id: "score", labelKey: "web.column.score", labelFallback: "Score", defaultWidth: 96, sortable: false, align: "right", mono: true },
-  { id: "dims", labelKey: "web.column.resolution", labelFallback: "Resolution", defaultWidth: 88, sortable: false, align: "right", mono: true },
-  { id: "size", labelKey: "web.column.size", labelFallback: "Size", defaultWidth: 72, sortable: true, align: "right", mono: true },
-  { id: "date", labelKey: "web.column.shot_date", labelFallback: "Shot Date", defaultWidth: 112, sortable: false, align: "left", mono: true },
+  { id: "name", labelKey: "web.column.file_name", labelFallback: "File Name", defaultWidth: 160, sortable: true, align: "left", mono: false, flexible: true },
+  { id: "similarity", labelKey: "web.column.similarity", labelFallback: "Similarity", defaultWidth: 92, sortable: false, align: "left", mono: false, flexible: false },
+  { id: "action", labelKey: "web.column.action", labelFallback: "Action", defaultWidth: 168, sortable: false, align: "left", mono: false, flexible: false },
+  { id: "score", labelKey: "web.column.score", labelFallback: "Score", defaultWidth: 96, sortable: false, align: "right", mono: true, flexible: false },
+  { id: "dims", labelKey: "web.column.resolution", labelFallback: "Resolution", defaultWidth: 88, sortable: false, align: "right", mono: true, flexible: false },
+  { id: "size", labelKey: "web.column.size", labelFallback: "Size", defaultWidth: 72, sortable: true, align: "right", mono: true, flexible: false },
+  { id: "date", labelKey: "web.column.shot_date", labelFallback: "Shot Date", defaultWidth: 112, sortable: false, align: "left", mono: true, flexible: false },
 ] as const;
 
-// Why File Name is a FIXED, resizable column and not the flex-to-fill column
-// the L3 budget draws ("name → 169px / 281px as columns shed"):
-//
-// A `flex-grow: 1` column's rendered width is `basis + slack`, and `slack` is
-// `table − Σ(all bases) − chrome` — so growing its basis shrinks the slack by
-// the same amount and the BOX never moves. Measured on the real page (s47,
-// 2026-09-18): dragging File Name +120px took its stored width 160 → 280 while
-// its rendered box stayed 374px. A resize handle that visibly does nothing is
-// a worse regression than an unused gutter, and #685's resize + s47's
-// cross-launch persistence are shipped, used behaviour.
-//
-// The consequence, stated plainly for the layout owner: when columns shed, the
-// freed width currently becomes empty space at the right of the row rather than
-// filename. Fixing that properly means picking one of the two shapes real
-// tables use — a non-resizable fill column, or resize-redistributes-against-
-// neighbours — and neither is a slice-C-sized change.
+/**
+ * The style a column's cell takes, in the header and in every row — ONE
+ * function so the two can never disagree about a box.
+ *
+ * The flexible column is `flex: 1 1 <stored>` with `min-width: <stored>`: it
+ * fills whatever the shed columns freed, and can never render narrower than the
+ * width the user chose. Everything else is a plain fixed box.
+ *
+ * **What a user sees when they drag the fill column.** Its rendered width is
+ * `stored + slack`, and `slack` shrinks as `stored` grows — so a drag that
+ * stays inside the current slack moves the STORED width without moving the box.
+ * That is ordinary fill-column behaviour (Explorer's last column does it), and
+ * it is bounded here only because `visibleColumns` is NEED-BASED: slack is
+ * never more than one about-to-be-shed column wide, and the moment the drag
+ * exceeds it a column is given up and the width lands on the filename.
+ * Measured on the real page (s47, 2026-09-18): a +120px drag took the stored
+ * width 160 → 280 and the rendered box 250 → 374 — visibly +124px, because
+ * crossing the slack cost `date` its place. Dragging NARROWER inside the slack
+ * is the case that stays invisible; that is the fill column's contract, not a
+ * broken handle, and `min-width: stored` guarantees the box never renders
+ * narrower than the width the user asked for.
+ *
+ * Under threshold-based shedding this was NOT survivable: slack was whatever
+ * two shed columns freed (measured 214px), so the same drag moved the stored
+ * width 160 → 280 with the box pinned at 374 and the handle looked dead.
+ */
+export function columnCellStyle(
+  col: ColumnDef,
+  width: number
+): { width: number } | { flexGrow: number; flexShrink: number; flexBasis: number; minWidth: number } {
+  if (!col.flexible) return { width };
+  return { flexGrow: 1, flexShrink: 1, flexBasis: width, minWidth: width };
+}
 
 /** Default per-column widths keyed by id (derived from COLUMNS). */
 export const DEFAULT_COLUMN_WIDTHS: Record<ColumnId, number> = COLUMNS.reduce(
@@ -108,18 +131,20 @@ export const MIN_COLUMN_WIDTH = 40;
 // Column shedding (layout REPLY L3, "Column budget at 1280×800")
 // ---------------------------------------------------------------------------
 //
-// The fixed columns plus their gaps and the thumbnail gutter do not fit the
-// ~945px the table gets at 1280×800 with the preview open. Rather than let the
-// filename truncate to nothing (or the whole row scroll sideways), the table
-// SHEDS the least-comparable columns as its own width falls:
+// Shedding is NEED-BASED, not threshold-based: a column is dropped only while
+// what is left still does not fit. The REPLY quotes 1200 / 1080 / 940px, but
+// those numbers are an OUTPUT of its own budget arithmetic with its own widths
+// and chrome — hardcoding them makes the table shed columns it could have
+// afforded the moment any width or the gutter changes. So the arithmetic is the
+// rule here and the thresholds are derived from it (`shedThresholds()`).
 //
-//   < 1200px  drop "dims"  — resolution is the field most often identical
-//                            across a duplicate group, so it compares least
-//   < 1080px  drop "date"  — dropped after dims because it is a primary sort
-//   <  940px  the score cell goes compact (the REPLY drops the score bar's
-//             "keep" label here and shrinks the cell to 72px; the label itself
-//             is a later slice, so this threshold currently only narrows the
-//             cell — the plumbing is here so the label has nothing to add)
+// Drop order — least-comparable first:
+//   1. "dims"  — resolution is the field most often identical across a
+//                duplicate group, so it compares least
+//   2. "date"  — dropped after dims because it is a primary sort
+//   3. the score cell goes compact (the REPLY also drops the score bar's "keep"
+//      label here; that label is a later slice, so today this only narrows the
+//      cell — the plumbing is here so the label has nothing left to add)
 //
 // Shedding is AUTOMATIC and has no user override (orchestrator decision,
 // 2026-09-18): a hidden per-column toggle would be a second, invisible source
@@ -132,38 +157,118 @@ export const MIN_COLUMN_WIDTH = 40;
 // column is sortable), so there is nothing to keep them listed in — see the PR
 // body. Neither `name` nor `size`, the only two sortable columns, is sheddable,
 // so a shed can never strand an active sort.
-export const SHED_THRESHOLDS = {
-  /** Below this table width (px) the Resolution column is not rendered. */
-  dims: 1200,
-  /** Below this table width (px) the Shot Date column is not rendered. */
-  date: 1080,
-  /** Below this table width (px) the Score cell renders compact. */
-  scoreCompact: 940,
-} as const;
 
-/** Width (px) the Score cell collapses to under `SHED_THRESHOLDS.scoreCompact`. */
+/** Width (px) the Score cell collapses to when even the shed set will not fit. */
 export const SCORE_COMPACT_WIDTH = 72;
 
+/** The order columns are given up in, when the row does not fit. */
+const SHED_ORDER: readonly ColumnId[] = ["dims", "date"];
+
+// Row chrome that sits in the same flex line as the columns, mirrored from
+// FileRow / ColumnHeaderRow. These are the numbers `requiredWidth` cannot see
+// from the registry, so a change to either component's markup has to change
+// them here too — the shedThresholds() test is what notices if it does not.
+/** `px-4` on both sides of the row. */
+export const ROW_PADDING_X = 32;
+/** `gap-3` between every item in the row. */
+export const ROW_GAP = 12;
+/** `w-16` thumbnail (and the header's matching spacer). */
+export const ROW_THUMB_WIDTH = 64;
+/** `w-4` padlock cell at the end of the row. */
+export const ROW_LOCK_WIDTH = 16;
+
 /**
- * The columns to render for a table of `tableWidth` px, in registry order.
- *
- * `null` means "not measured yet" (first paint, or a jsdom/headless layout that
- * reports a 0-width box) and renders the FULL set — shedding may only ever be
- * driven by a real measurement, never by the absence of one.
+ * The width a row needs to render `cols` without overflowing: the columns at
+ * their stored widths (the flexible one at its floor, which is the same
+ * number), the thumbnail and padlock chrome, the gaps between all of them, and
+ * the row's horizontal padding.
  */
-export function visibleColumns(tableWidth: number | null): readonly ColumnDef[] {
-  if (tableWidth === null) return COLUMNS;
-  return COLUMNS.filter((c) => {
-    if (c.id === "dims") return tableWidth >= SHED_THRESHOLDS.dims;
-    if (c.id === "date") return tableWidth >= SHED_THRESHOLDS.date;
-    return true;
-  });
+export function requiredWidth(
+  cols: readonly ColumnDef[],
+  widths: Record<ColumnId, number>,
+  scoreCompact = false
+): number {
+  const colSum = cols.reduce(
+    (n, c) =>
+      n + (c.id === "score" && scoreCompact ? SCORE_COMPACT_WIDTH : widths[c.id]),
+    0
+  );
+  // thumbnail + every column + padlock, with a gap between each pair.
+  const itemCount = cols.length + 2;
+  return (
+    ROW_PADDING_X +
+    ROW_THUMB_WIDTH +
+    ROW_LOCK_WIDTH +
+    colSum +
+    ROW_GAP * (itemCount - 1)
+  );
 }
 
-/** True when the Score cell must render compact (see `SHED_THRESHOLDS`). */
-export function isScoreCompact(tableWidth: number | null): boolean {
-  if (tableWidth === null) return false;
-  return tableWidth < SHED_THRESHOLDS.scoreCompact;
+export interface ShedPlan {
+  /** Columns to render, in registry order. */
+  columns: readonly ColumnDef[];
+  /** Whether the Score cell renders at `SCORE_COMPACT_WIDTH`. */
+  scoreCompact: boolean;
+}
+
+/**
+ * What a table of `tableWidth` px can afford, given the user's current widths.
+ *
+ * `null` means "not measured yet" (first paint, or a jsdom/headless layout that
+ * reports a 0-width box) and keeps the FULL set — shedding may only ever be
+ * driven by a real measurement, never by the absence of one.
+ */
+export function shedPlan(
+  tableWidth: number | null,
+  widths: Record<ColumnId, number> = DEFAULT_COLUMN_WIDTHS
+): ShedPlan {
+  if (tableWidth === null) return { columns: COLUMNS, scoreCompact: false };
+  let columns: readonly ColumnDef[] = COLUMNS;
+  for (const id of SHED_ORDER) {
+    if (requiredWidth(columns, widths) <= tableWidth) {
+      return { columns, scoreCompact: false };
+    }
+    columns = columns.filter((c) => c.id !== id);
+  }
+  const scoreCompact = requiredWidth(columns, widths) > tableWidth;
+  return { columns, scoreCompact };
+}
+
+/** The columns to render for a table of `tableWidth` px. See `shedPlan`. */
+export function visibleColumns(
+  tableWidth: number | null,
+  widths: Record<ColumnId, number> = DEFAULT_COLUMN_WIDTHS
+): readonly ColumnDef[] {
+  return shedPlan(tableWidth, widths).columns;
+}
+
+/** True when the Score cell must render compact. See `shedPlan`. */
+export function isScoreCompact(
+  tableWidth: number | null,
+  widths: Record<ColumnId, number> = DEFAULT_COLUMN_WIDTHS
+): boolean {
+  return shedPlan(tableWidth, widths).scoreCompact;
+}
+
+/**
+ * The table widths at which each shed step kicks in, DERIVED from the registry
+ * and the row chrome rather than quoted from the design reply.
+ *
+ * Each value is the smallest table width that still fits the set ABOVE it, so
+ * `tableWidth < shedThresholds().dims` is exactly "dims has been dropped".
+ * Publishing them is what lets a test pin the behaviour at a boundary without
+ * anyone re-typing a number the arithmetic already knows.
+ */
+export function shedThresholds(
+  widths: Record<ColumnId, number> = DEFAULT_COLUMN_WIDTHS
+): { dims: number; date: number; scoreCompact: number } {
+  const withoutDims = COLUMNS.filter((c) => c.id !== "dims");
+  const withoutDate = withoutDims.filter((c) => c.id !== "date");
+  return {
+    dims: requiredWidth(COLUMNS, widths),
+    date: requiredWidth(withoutDims, widths),
+    scoreCompact: requiredWidth(withoutDate, widths),
+  };
 }
 
 // ---------------------------------------------------------------------------
