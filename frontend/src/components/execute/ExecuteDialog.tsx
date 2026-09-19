@@ -483,7 +483,7 @@ export function ExecuteDialog() {
             {t("web.execute_dialog.show_label", "Show:")}
           </span>
           <TypeFilter value={filter} onChange={setFilter} />
-          <span className="text-xs text-ink-faint ml-auto">
+          <span className="text-xs text-ink-muted ml-auto">
             {/* Singular/plural translated separately, not flattened to
                 "(s)" (review finding) — zh_TW keys carry the same word for
                 both counts since Chinese has no plural marking. */}
@@ -537,7 +537,7 @@ export function ExecuteDialog() {
                 className="w-full object-contain rounded max-h-48"
               />
             ) : (
-              <div className="text-xs text-ink-faint text-center pt-8">
+              <div className="text-xs text-ink-muted text-center pt-8">
                 {t("web.execute_dialog.select_row_to_preview", "Select a row to preview")}
               </div>
             )}

@@ -180,7 +180,7 @@ export function MenuBar({
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className={CONTENT_CLASS} align="start" sideOffset={2}>
-            <DropdownMenu.Label className="px-3 py-1 text-xs uppercase tracking-wide text-ink-faint">
+            <DropdownMenu.Label className="px-3 py-1 text-xs uppercase tracking-wide text-ink-muted">
               {t("web.menu.view_language", "Language")}
             </DropdownMenu.Label>
             <DropdownMenu.Item

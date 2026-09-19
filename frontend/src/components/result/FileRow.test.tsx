@@ -116,9 +116,13 @@ describe("FileRow similarity badge", () => {
     );
     // The strip is the keeper's only left-hand cue now the pill is gone; the
     // 2px gutter itself is on every row so the keeper costs no layout shift.
-    expect(keeper.className).toContain("border-l-sim-ref-ink");
+    // The strip is the ACCENT token (Q2), not the Ref badge's own ink: at
+    // #a85f2e it sat 5/255 from the group strip's #a85a2c directly above it,
+    // which reads as a rendering fault rather than two distinct cues.
+    expect(keeper.className).toContain("border-l-warm");
+    expect(keeper.className).not.toContain("border-l-sim-ref-ink");
     expect(peer.className).toContain("border-l-2");
-    expect(peer.className).not.toContain("border-l-sim-ref-ink");
+    expect(peer.className).not.toContain("border-l-warm");
 
     expect(within(keeper).getByText("dup.jpg").className).toContain("font-semibold");
     expect(within(peer).getByText("peer.jpg").className).toContain("font-medium");

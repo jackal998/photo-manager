@@ -767,7 +767,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   "Also mark all other files for delete"
                 )}
               />
-              <span className={autoSelect ? "text-ink" : "text-ink-faint"}>
+              <span className={autoSelect ? "text-ink" : "text-ink-muted"}>
                 {t(
                   "web.scan.auto_select_aggressive_label",
                   "Also mark all other files for delete"

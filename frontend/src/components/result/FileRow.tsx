@@ -108,14 +108,22 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
         // the keeper's strip costs no horizontal shift. The token is the
         // same `sim-ref` ink slice (a) gave the badge — one accent, two
         // channels (position/weight vs. badge), both surviving grayscale.
+        // …and the strip is the ACCENT (Q2), not the badge's own ink: at
+        // #a85f2e it sat 5/255 from the group strip's #a85a2c directly above
+        // it in the same vertical line, which reads as a rendering fault
+        // rather than as two different things.
         "border-l-2 border-l-transparent",
-        row.is_ref_winner && "border-l-sim-ref-ink",
+        row.is_ref_winner && "border-l-warm",
         // Delete wash wins over the keeper tint; selection wins over both
         // (tailwind-merge resolves each bg conflict in favour of the later
         // class, so this order IS the precedence).
         isDeleting && "bg-delete-row hover:bg-delete-row",
-        isSelected &&
-          "bg-select text-select-ink ring-1 ring-inset ring-warm hover:bg-select",
+        // Selection is a TINT, full stop (Q7). It used to add a 1px accent
+        // ring as well; once the keyboard cursor draws a 2px accent outline
+        // the two sat a pixel apart in the same hue, so on a multi-selection
+        // the ▸ caret was the only thing still saying where the cursor was.
+        // Fill = state, stroke = cursor — one stroke on this screen.
+        isSelected && "bg-select text-select-ink hover:bg-select",
         // Closes the group frame under its last child (#878).
         isLastInGroup && "border-b-group-line"
       )}

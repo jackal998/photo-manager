@@ -223,7 +223,7 @@ export function FsBrowser({
         {/* Entry list */}
         <div className="mt-2 h-64 overflow-auto rounded border border-hairline">
           {loading ? (
-            <p className="p-3 text-sm text-ink-faint">
+            <p className="p-3 text-sm text-ink-muted">
               {t("web.browse.loading", "Loading…")}
             </p>
           ) : error !== null ? (
@@ -235,7 +235,7 @@ export function FsBrowser({
               {error}
             </p>
           ) : visible.length === 0 ? (
-            <p className="p-3 text-sm text-ink-faint">
+            <p className="p-3 text-sm text-ink-muted">
               {t("web.browse.empty", "Empty folder")}
             </p>
           ) : (
@@ -254,7 +254,11 @@ export function FsBrowser({
                       className={cn(
                         "flex w-full items-center gap-2 px-3 py-1 text-left text-sm hover:bg-subtle",
                         isSelected && "bg-select",
-                        dimmed && "text-ink-faint"
+                        // Dimmed ≠ disabled: a save-mode file row is still
+                        // clickable (it copies its name into the filename
+                        // field) and its name is read to decide whether to.
+                        // Text a human reads for meaning is #6b6358.
+                        dimmed && "text-ink-muted"
                       )}
                     >
                       <span aria-hidden="true">

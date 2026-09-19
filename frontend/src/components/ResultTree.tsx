@@ -13,6 +13,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/useAppStore";
 import { MAIN_RESULT_TREE } from "@/testids";
 import { GroupRow } from "./result/GroupRow";
@@ -496,7 +497,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     return (
       <div
         data-testid={MAIN_RESULT_TREE}
-        className="flex items-center justify-center h-48 text-sm text-ink-faint"
+        className="flex items-center justify-center h-48 text-sm text-ink-muted"
       >
         Run a scan or open a manifest to see results.
       </div>
@@ -507,7 +508,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     return (
       <div
         data-testid={MAIN_RESULT_TREE}
-        className="flex items-center justify-center h-48 text-sm text-ink-faint"
+        className="flex items-center justify-center h-48 text-sm text-ink-muted"
       >
         No duplicate groups found.
       </div>
@@ -530,7 +531,17 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       role="tree"
       aria-activedescendant={activeDomId}
       onKeyDown={handleKeyDown}
-      className="h-full overflow-auto bg-panel border border-hairline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm"
+      // `group` is what lets the CURSOR ROW draw the Q7 focus ring: DOM focus
+      // never leaves this container (aria-activedescendant, above), so the row
+      // can never match `:focus-visible` itself — `group-focus-visible:` reads
+      // the state off the container that really is focused, while keeping
+      // `:focus-visible` semantics so a mouse user never sees the ring.
+      // The container's own focus cue is a hairline, deliberately: at 2px
+      // accent it framed the whole tree in the same stroke the cursor ROW
+      // draws, and the loudest accent stroke on screen has to be the one
+      // saying "you are here". This one only says "the tree has focus", which
+      // still needs saying — the cursor may not be placed yet.
+      className="group h-full overflow-auto bg-panel border border-hairline rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ink-hairline"
       style={{ contain: "strict" }}
     >
       {/* Sticky sort/resize column header (#685). Inside the scroll container so
@@ -555,6 +566,11 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
               : undefined;
           const isSelected =
             fileRow !== undefined && selectedPaths.includes(fileRow.file_path);
+          // Where the roving keyboard cursor sits (#709). The ring below is a
+          // STROKE, not a third tint: both warm fills are already taken by
+          // selection and hover, and a row can be focused AND selected — the
+          // ring composes over them instead of replacing them (Q7).
+          const isCursor = virtualItem.index === activeIndex;
 
           return (
             <div
@@ -573,7 +589,15 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                   : undefined
               }
               data-index={virtualItem.index}
+              data-cursor={isCursor ? "" : undefined}
               ref={virtualizer.measureElement}
+              className={cn(
+                // 6px to match the row (Q7). Harmless on every other row —
+                // nothing here paints a background.
+                "rounded-md",
+                isCursor &&
+                  "group-focus-visible:outline-2 group-focus-visible:outline-focus-ring group-focus-visible:-outline-offset-2"
+              )}
               style={{
                 position: "absolute",
                 top: 0,
@@ -623,6 +647,25 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                     isLastInGroup={vrow.isLast}
                   />
                 )
+              )}
+              {/* The ▸ cursor caret (Q7). It is what makes the keyboard
+                  cursor survive grayscale and colour-blindness, where the
+                  ring's hue is doing nothing — so it is not optional.
+                  Positioned inside the row's EXISTING left gutter (FileRow's
+                  px-4, GroupRow's 4px strip + px-3) rather than given a
+                  reserved column of its own: that way appearing and
+                  disappearing costs zero layout, and so does the whole
+                  feature — no row moves by a pixel relative to master.
+                  aria-hidden because aria-activedescendant already tells a
+                  screen reader where the cursor is. */}
+              {isCursor && (
+                <span
+                  aria-hidden="true"
+                  data-cursor-caret=""
+                  className="pointer-events-none absolute left-1 top-1/2 z-10 hidden -translate-y-1/2 text-[10px] leading-none text-focus-ring group-focus-visible:block"
+                >
+                  ▸
+                </span>
               )}
             </div>
           );

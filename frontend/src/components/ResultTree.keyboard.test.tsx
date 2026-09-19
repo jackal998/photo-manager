@@ -511,6 +511,66 @@ describe("ResultTree roving arrow-key cursor (#709)", () => {
       screen.getByTestId(rowGroupTestid("2"))
     );
   });
+
+  // Q7 (layout REPLY 2026-09-18) — the cursor has to be SEEN, not only
+  // announced. Until this ring the one visible trace of a cursor move was the
+  // selection tint, which a row can be wearing for four other reasons, so a
+  // sighted keyboard user had no way to tell "what is chosen" from "where I
+  // am". Fill = state, stroke = cursor.
+  //
+  // The ring's COLOUR only exists after the Tailwind build (s74 reads the
+  // computed outline off a real browser). Which ROW carries it — exactly one,
+  // and the one aria-activedescendant names — is pure component logic, and it
+  // is the half that breaks when the cursor moves.
+  it("rings the cursor row only, and the ring follows the cursor", () => {
+    render(<ResultTree />);
+    fireEvent.click(screen.getByTestId(rowFileTestid("1", "a1.jpg")));
+    arrow("ArrowDown"); // cursor → a2
+
+    const cursor = activeRowElement();
+    const selectedRow = screen.getByTestId(rowFileTestid("1", "a2.jpg"));
+    expect(cursor).toContainElement(selectedRow);
+
+    // Exactly ONE accent stroke on this screen, and it is the cursor's.
+    // a2 is both selected and the cursor here — the shape that exposed it:
+    // selection used to add its own 1px accent ring a pixel inside this
+    // outline, so on a multi-selection the ▸ caret was the only cursor cue
+    // left. Selection is a tint (Q7); the tree container's own focus cue is a
+    // hairline, not a second accent frame.
+    expect(selectedRow.className).toContain("bg-select");
+    expect(selectedRow.className).not.toContain("ring-warm");
+    expect(tree().className).toContain("focus-visible:ring-ink-hairline");
+    expect(tree().className).toContain("focus-visible:ring-1");
+    expect(tree().className).not.toContain("ring-warm");
+    // `group-focus-visible:` and not `focus-visible:` — DOM focus never leaves
+    // the container (aria-activedescendant), so a row can never match
+    // :focus-visible itself; reading the state off the container is what keeps
+    // the ring keyboard-only, which is the whole point of :focus-visible.
+    expect(cursor.className).toContain("group-focus-visible:outline-2");
+    expect(cursor.className).toContain("group-focus-visible:outline-focus-ring");
+    expect(cursor.className).toContain("group-focus-visible:-outline-offset-2");
+    // The ▸ caret is the cue that survives grayscale and colour-blindness,
+    // where the ring's hue carries nothing.
+    expect(cursor.querySelector("[data-cursor-caret]")?.textContent).toBe("▸");
+
+    const others = Array.from(
+      tree().querySelectorAll('[role="treeitem"]')
+    ).filter((el) => el !== cursor);
+    expect(others.length).toBeGreaterThan(0);
+    for (const el of others) {
+      expect(el.className).not.toContain("group-focus-visible:outline");
+      expect(el.querySelector("[data-cursor-caret]")).toBeNull();
+    }
+
+    // A ring that stays on the row it first lit is worse than no ring.
+    arrow("ArrowDown"); // cursor → group 2 header
+    const moved = activeRowElement();
+    expect(moved).not.toBe(cursor);
+    expect(moved.className).toContain("group-focus-visible:outline-2");
+    expect(moved.querySelector("[data-cursor-caret]")?.textContent).toBe("▸");
+    expect(cursor.className).not.toContain("group-focus-visible:outline");
+    expect(cursor.querySelector("[data-cursor-caret]")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -46,6 +46,25 @@ What this pins, and why a unit test cannot:
      markup that CSS silently ignores, and a renamed gradient utility compiles
      to nothing — neither shows up in jsdom.
 
+  8. **The app has a typeface at all** (layout slice T). Nothing declared a
+     font family before 2026-09-18, so every surface rendered in whatever the
+     browser defaults to and a zh-TW label fell back per glyph. `--font-sans`
+     / `--font-mono` are `@theme` tokens: like every other token here they
+     exist only after the CSS build, and in jsdom `font-mono` is a string that
+     spells correctly with the token deleted.
+
+  9. **The keyboard cursor is visible** (layout slice T, open questions Q7).
+     The roving cursor is an `aria-activedescendant`, which a sighted user
+     cannot see; its ring is a `group-focus-visible:` variant, i.e. exactly the
+     kind of class that compiles to nothing when the token behind it is renamed
+     — and the ring is the difference between "what is chosen" (the tint) and
+     "where I am" (the stroke). Read as the computed outline of the row the
+     cursor names, after a real key press.
+
+ 10. **The primary button wears the accent** (layout slice T). `bg-warm` and
+     its hover both moved with the Q8 palette fix; the button is the surface
+     that fix exists for (white label at 3.88:1 before, 5.04:1 after).
+
 Fixture: qa/sandbox/near-duplicates/ (5 JPEGs, one group), plain scan — the
 same fixture s72/s73 use. It yields the Ref winner plus near-match rows, i.e.
 two of the five badge states; the five-way mapping itself is pure logic and is
@@ -70,9 +89,11 @@ from qa.web._invariants import (
 from qa.web.testid_constants import (
     CONTEXT_MENU,
     CTX_SET_ACTION_KEEP,
+    MAIN_RESULT_TREE,
     MAIN_STATUS_BAR,
     PREVIEW_PANE,
     SCAN_DIALOG,
+    SCAN_START_BUTTON,
     row_decision_option_testid,
     row_decision_testid,
     row_file_testid,
@@ -90,7 +111,11 @@ _VIEWPORT = {"width": 1280, "height": 800}
 _APP_BG = "rgb(245, 239, 230)"  # --color-app        #f5efe6
 _DELETE_ROW_BG = "rgb(253, 243, 240)"  # --color-delete-row #fdf3f0
 _GROUP_BAND_BG = "rgb(243, 233, 216)"  # --color-group-band #f3e9d8
-_ACCENT = "rgb(189, 107, 57)"  # --color-warm       #bd6b39
+# Layout slice T (2026-09-18): the accent moved #bd6b39 → #a85a2c so the group
+# strip, the ★ Ref border, the Q7 focus ring and the primary button are ONE
+# accent rather than two warm oranges a hair apart. The old value failed AA
+# under a white label (3.88:1); this one clears it at 5.04:1.
+_ACCENT = "rgb(168, 90, 44)"  # --color-warm       #a85a2c
 
 # Slice (b) — decision chips / padlock / score bar (§9.3 dec.* + scoreFill).
 _DEC_DELETE_BG = "rgb(196, 80, 63)"  # --color-dec-delete-bg   #c4503f
@@ -141,6 +166,45 @@ _READ_ROOT_BG = """() => {
   const root = document.querySelector('[data-testid="main-result-tree"]')
     ?.closest('.h-screen') ?? document.body.firstElementChild;
   return getComputedStyle(root).backgroundColor;
+}"""
+
+# Slice T — the two font stacks. `body` is read off a real element; the mono
+# stack has no consumer on the review screen yet (slice C's mono cells are the
+# first), so it is read through a throwaway element carrying the `font-mono`
+# utility. That is the whole assertion worth making: whether the UTILITY
+# resolves to the declared stack. The element is removed again immediately.
+_READ_TYPOGRAPHY = """() => {
+  const first = (ff) =>
+    (ff || '').split(',')[0].trim().replace(/^["']|["']$/g, '');
+  const probe = document.createElement('span');
+  probe.className = 'font-mono';
+  probe.textContent = '0';
+  document.body.appendChild(probe);
+  const mono = getComputedStyle(probe).fontFamily;
+  probe.remove();
+  const body = getComputedStyle(document.body).fontFamily;
+  return { body, bodyFirst: first(body), mono, monoFirst: first(mono) };
+}"""
+
+# Slice T / Q7 — the row the roving cursor names, as the browser draws it.
+# `[data-cursor]` is on the treeitem wrapper, so this is the cursor's own row
+# and not a guess from the selection.
+_READ_CURSOR_ROW = """() => {
+  const row = document.querySelector('[data-cursor]');
+  if (!row) return null;
+  const cs = getComputedStyle(row);
+  const caret = row.querySelector('[data-cursor-caret]');
+  const caretCs = caret ? getComputedStyle(caret) : null;
+  return {
+    outlineColor: cs.outlineColor,
+    outlineWidth: cs.outlineWidth,
+    outlineStyle: cs.outlineStyle,
+    outlineOffset: cs.outlineOffset,
+    borderRadius: cs.borderTopLeftRadius,
+    caretText: caret ? (caret.textContent || '').trim() : null,
+    caretDisplay: caretCs ? caretCs.display : null,
+    caretColor: caretCs ? caretCs.color : null,
+  };
 }"""
 
 
@@ -252,6 +316,30 @@ def run(*, base_url: str) -> None:
                 "and the whole theme is off with every class name still present."
             )
 
+            # ── 1b. Type (layout slice T · REPLY L3 "Root", T1) ───────────────
+            typography = page.evaluate(_READ_TYPOGRAPHY)
+            print(f"probe_status: s74 typography = {typography}")
+            assert typography["bodyFirst"] == "Segoe UI", (
+                "slice T — `body` renders in "
+                f"{typography['bodyFirst']!r}, expected 'Segoe UI' first. "
+                "Nothing declared a family before this slice, so a dropped "
+                "--font-sans is invisible: the app simply goes back to the "
+                f"browser default. Full stack: {typography['body']!r}"
+            )
+            assert "Noto Sans TC" in typography["body"], (
+                "slice T — 'Noto Sans TC' is not in the body stack "
+                f"({typography['body']!r}). It sits ahead of the generic on "
+                "purpose: without it Windows falls back per GLYPH, so a zh-TW "
+                "label renders half in one face and half in another."
+            )
+            assert typography["monoFirst"] == "Cascadia Code", (
+                "slice T — the `font-mono` utility resolves to "
+                f"{typography['monoFirst']!r}, expected 'Cascadia Code' first "
+                f"(full stack {typography['mono']!r}). Slice C's mono metadata "
+                "cells consume this utility; with --font-mono undeclared they "
+                "would silently render in Tailwind's stock mono stack."
+            )
+
             # ── 2. Badge cues survive the Tailwind build ──────────────────────
             badges = page.evaluate(_READ_BADGES)
             print(f"probe_status: s74 similarity badges rendered = {badges}")
@@ -318,11 +406,40 @@ def run(*, base_url: str) -> None:
             )
             assert group_style["leftColor"] == _ACCENT, (
                 "#878 — the group header's accent left strip is "
-                f"{group_style['leftColor']}, expected {_ACCENT} (#bd6b39)."
+                f"{group_style['leftColor']}, expected {_ACCENT} (#a85a2c)."
             )
             assert group_style["leftWidth"] == "4px", (
                 "#878 — the accent left strip is "
                 f"{group_style['leftWidth']} wide, expected 4px."
+            )
+
+            # 3b. The keeper row's 2px strip is the SAME accent (Q2). It used
+            # to be the Ref badge's own ink #a85f2e, which sits 5/255 from the
+            # group strip directly above it in one vertical line — close
+            # enough to read as a rendering fault rather than as two cues.
+            # Read off the Ref-badged row rather than guessing which item wins.
+            keeper_strip = page.evaluate(
+                """() => {
+  const badge = document.querySelector('[data-sim-state="ref"]');
+  const row = badge ? badge.closest('[data-testid^="row-file-"]') : null;
+  if (!row) return null;
+  const cs = getComputedStyle(row);
+  return { width: cs.borderLeftWidth, color: cs.borderLeftColor };
+}"""
+            )
+            print(f"probe_status: s74 keeper row strip = {keeper_strip}")
+            assert keeper_strip is not None, (
+                "No Ref-badged row on screen, so the keeper strip was never "
+                "exercised."
+            )
+            assert keeper_strip["width"] == "2px", (
+                "#878 — the keeper's left strip is "
+                f"{keeper_strip['width']} wide, expected 2px."
+            )
+            assert keeper_strip["color"] == _ACCENT, (
+                "slice T / Q2 — the keeper's left strip is "
+                f"{keeper_strip['color']}, expected the accent {_ACCENT} "
+                "(#a85a2c) — the same token the group strip above it uses."
             )
 
             # ── 4. A staged delete is visible on the row ──────────────────────
@@ -430,7 +547,7 @@ def run(*, base_url: str) -> None:
             assert lock_after["color"] == _ACCENT, (
                 "#878 — a locked padlock is "
                 f"{lock_after['color']}, expected the warm accent {_ACCENT} "
-                "(#bd6b39)."
+                "(#a85a2c)."
             )
 
             # ── 7. Score mini bar (slice b) ───────────────────────────────────
@@ -489,6 +606,23 @@ def run(*, base_url: str) -> None:
                 "reads as a cold grey card sitting on warm paper."
             )
 
+            # The pane's mono metadata values are the one REAL consumer of
+            # `--font-mono` on the review screen today (PreviewPane MetaRow);
+            # 1b proved the utility resolves, this proves something wears it.
+            preview_mono = page.evaluate(
+                """(testid) => {
+  const pane = document.querySelector(`[data-testid="${testid}"]`);
+  const el = pane ? pane.querySelector('.font-mono') : null;
+  return el ? getComputedStyle(el).fontFamily : null;
+}""",
+                PREVIEW_PANE,
+            )
+            print(f"probe_status: s74 preview mono cell font = {preview_mono}")
+            assert preview_mono is not None and "Cascadia Code" in preview_mono, (
+                "slice T — the preview pane's mono metadata value renders in "
+                f"{preview_mono!r}, expected a stack led by 'Cascadia Code'."
+            )
+
             # 8b. Status bar strip (§9.3 'status #f3ede3').
             status_bg = page.evaluate(_READ_STATUS_STRIP_BG, MAIN_STATUS_BAR)
             print(f"probe_status: s74 status bar background = {status_bg}")
@@ -535,7 +669,79 @@ def run(*, base_url: str) -> None:
                 "Every dialog in the app inherits this one class, so a miss "
                 "here is a miss on all of them."
             )
+
+            # 8e. The primary button (layout slice T). `bg-warm` is the default
+            # Button variant, so Start Scan stands in for every primary action
+            # in the app — including the Delete-N CTA slice TB adds. Read here
+            # rather than on the toolbar because the toolbar has no primary
+            # button until that slice.
+            start_bg = page.evaluate(_READ_BG, SCAN_START_BUTTON)
+            print(f"probe_status: s74 primary button background = {start_bg}")
+            assert start_bg == _ACCENT, (
+                "slice T — the primary button is not the Daylight accent: "
+                f"expected {_ACCENT} (#a85a2c), got {start_bg}. This button is "
+                "the surface the Q8 contrast fix exists for — its white label "
+                "measured 3.88:1 on the old accent and 5.04:1 on this one."
+            )
             dismiss_modal_overlays(page)
+
+            # ── 9. The keyboard cursor is visible (slice T · Q7) ──────────────
+            # Focus the tree and press a real arrow: `:focus-visible` is what
+            # keeps the ring keyboard-only, and Chrome only grants it once the
+            # user has interacted with the keyboard. The row itself never takes
+            # DOM focus (the cursor is an aria-activedescendant), so the ring is
+            # a `group-focus-visible:` variant read off the container — exactly
+            # the class shape that compiles to nothing when a token is renamed.
+            page.get_by_test_id(MAIN_RESULT_TREE).focus()
+            page.keyboard.press("ArrowDown")
+            page.wait_for_timeout(300)
+
+            cursor = page.evaluate(_READ_CURSOR_ROW)
+            print(f"probe_status: s74 cursor row = {cursor}")
+            assert cursor is not None, (
+                "slice T — no row carries [data-cursor] after an ArrowDown, so "
+                "the roving cursor (#709) never reached the DOM and there is "
+                "nothing for the Q7 ring to be drawn on."
+            )
+            assert cursor["outlineWidth"] == "2px", (
+                "slice T — the focus ring is "
+                f"{cursor['outlineWidth']} wide, expected 2px. A cursor a "
+                "sighted keyboard user cannot see is the defect Q7 filed."
+            )
+            assert cursor["outlineStyle"] == "solid", (
+                f"slice T — the focus ring is {cursor['outlineStyle']!r}, "
+                "expected 'solid'."
+            )
+            assert cursor["outlineColor"] == _ACCENT, (
+                "slice T — the focus ring is "
+                f"{cursor['outlineColor']}, expected the accent {_ACCENT} "
+                "(#a85a2c). The ring, the group strip, the ★ Ref border and "
+                "the primary button are one accent doing four jobs."
+            )
+            assert cursor["outlineOffset"] == "-2px", (
+                "slice T — the focus ring's offset is "
+                f"{cursor['outlineOffset']}, expected -2px. Inset is what "
+                "keeps the ring from shifting the row it lands on."
+            )
+            assert cursor["borderRadius"] == "6px", (
+                "slice T — the focus ring's radius is "
+                f"{cursor['borderRadius']}, expected 6px (Q7: it matches the "
+                "row)."
+            )
+            assert cursor["caretText"] == "▸", (
+                "slice T — the cursor row's caret reads "
+                f"{cursor['caretText']!r}, expected '▸'. It is what makes the "
+                "cursor survive grayscale and colour-blindness, where the "
+                "ring's hue carries nothing."
+            )
+            assert cursor["caretDisplay"] != "none", (
+                "slice T — the ▸ caret is display:none while the tree holds "
+                "keyboard focus, so the ring is carrying the cursor alone."
+            )
+            assert cursor["caretColor"] == _ACCENT, (
+                f"slice T — the ▸ caret is {cursor['caretColor']}, expected "
+                f"the accent {_ACCENT} (#a85a2c)."
+            )
     finally:
         import shutil
 

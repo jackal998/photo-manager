@@ -616,7 +616,7 @@ export function ActionDialog() {
               {matchCounterText}
             </span>
             {actionRunning && (
-              <span className="text-xs text-ink-faint">updating…</span>
+              <span className="text-xs text-ink-muted">updating…</span>
             )}
           </div>
 
@@ -644,7 +644,7 @@ export function ActionDialog() {
               {previewTruncated && (
                 <p
                   data-testid={ACTION_PREVIEW_TRUNCATED}
-                  className="text-xs text-ink-faint mt-1"
+                  className="text-xs text-ink-muted mt-1"
                 >
                   {t("web.action_dialog.preview_truncated", "…and {n} more", {
                     n: previewMatched - previewSample.length,
@@ -655,7 +655,7 @@ export function ActionDialog() {
           )}
 
           {previewSample.length === 0 && previewMatched === 0 && pattern !== "" && (
-            <p className="text-xs text-ink-faint mt-2">
+            <p className="text-xs text-ink-muted mt-2">
               {t("web.action_dialog.preview_empty", "No matches")}
             </p>
           )}

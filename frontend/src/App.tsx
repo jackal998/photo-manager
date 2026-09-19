@@ -97,7 +97,7 @@ function ApiErrorDetail({
   const { detail } = describeApiError(raw, t);
   if (detail === null) return null;
   return (
-    <span className="block text-xs text-ink-faint">
+    <span className="block text-xs text-ink-muted">
       {t("web.error.technical_detail", "Details: {detail}", { detail })}
     </span>
   );
@@ -479,7 +479,7 @@ export default function App() {
           {noManifest ? (
             <div
               data-testid={MAIN_EMPTY_STATE}
-              className="flex h-full flex-col items-center justify-center gap-4 text-sm text-ink-faint"
+              className="flex h-full flex-col items-center justify-center gap-4 text-sm text-ink-muted"
             >
               <p>
                 {t(

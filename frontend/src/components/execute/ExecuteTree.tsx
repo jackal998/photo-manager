@@ -181,7 +181,7 @@ export const ExecuteTree = forwardRef<ExecuteTreeHandle, ExecuteTreeProps>(
       return (
         <div
           data-testid={EXECUTE_TREE}
-          className="flex items-center justify-center h-32 text-sm text-ink-faint"
+          className="flex items-center justify-center h-32 text-sm text-ink-muted"
         >
           No decided rows match the current filter.
         </div>
@@ -251,7 +251,7 @@ function GroupHeaderRow({
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 bg-group-band border-b border-group-line text-xs font-semibold text-ink-muted select-none">
       <span>Group {groupId}</span>
-      <span className="text-ink-faint font-normal">
+      <span className="text-ink-muted font-normal">
         {memberCount}{" "}
         {memberCount === 1
           ? t("web.execute_dialog.file_singular", "file")

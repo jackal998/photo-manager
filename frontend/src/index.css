@@ -23,6 +23,16 @@
    `bg-neutral-*` classes they replace. NO component carries a hex literal.
    --------------------------------------------------------------------------- */
 @theme {
+  /* Type (layout REPLY 2026-09-18 L3 "Root", T1). Nothing declared a family
+     before this, so every surface rendered in the browser's default UI face —
+     and a zh-TW label fell back per glyph, which is why `Noto Sans TC` sits
+     ahead of the generic rather than after it. Declared here so the `font-sans`
+     / `font-mono` utilities exist (slice C's mono cells consume `font-mono`);
+     applied to `body` in the @layer base block below, because @theme alone
+     never sets a family on anything. */
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Noto Sans TC", sans-serif;
+  --font-mono: "Cascadia Code", ui-monospace, Menlo, monospace;
+
   /* Surfaces (#878 dict) */
   --color-app: #f5efe6;
   --color-panel: #fffdf9;
@@ -35,16 +45,51 @@
   --color-hairline-soft: #efe7d8;
   --color-hairline-input: #ddd2bf;
 
-  /* Text (#878 dict) */
+  /* Text — a 3-tier ink ramp, re-tuned by the design's palette reply (open
+     questions Q8, 2026-09-18) after the #878 values were measured on warm
+     paper: `dim` failed AA at 12px (3.99:1) and `dim2` failed badly (2.58:1).
+       ink         #2c2823
+       ink-muted   #6b6358  5.82:1 on panel, 5.03:1 on subtle  (was 3.99:1)
+       ink-faint   #a89f8f  NON-TEXT only — see below           (value kept) */
   --color-ink: #2c2823;
-  --color-ink-muted: #867d70;
+  --color-ink-muted: #6b6358;
+  /* Q8 retired #a89f8f as a TEXT colour and renamed the ROLE to `hairline`:
+     rules, dividers, disabled glyph strokes, placeholder text — UI components
+     at the 3:1 floor, which it clears. The VALUE is unchanged; only the role
+     narrowed. The token keeps its old name because `--color-hairline` is
+     already the #e7ddcd border and a rename would churn every remaining call
+     site plus LockToggle.test.tsx; `--color-ink-hairline` is published beside
+     it as an alias so slices R/PV can move their call sites onto the role name
+     without a second value change. Both names, one value, until then. */
   --color-ink-faint: #a89f8f;
+  --color-ink-hairline: #a89f8f;
 
-  /* Brand / state accents (#878 dict) */
-  --color-warm: #bd6b39;
-  --color-warm-hover: #cf7c43;
+  /* Brand / state accents (#878 dict; the warm accent re-tuned by Q8). One
+     accent doing four jobs (L3): the group left strip, the Q7 focus ring, the
+     ★ Ref badge border and the primary button. Hover and active go DARKER —
+     the old hover was lighter, which is why it measured worse than rest
+     (3.12:1) instead of better. */
+  --color-warm: #a85a2c;
+  --color-warm-hover: #8f4b23;
+  --color-warm-active: #7a3f1d;
   --color-danger-warm: #c4503f;
   --color-positive-warm: #2f8a5a;
+
+  /* Keyboard-cursor focus ring (open questions Q7). An alias of the accent
+     rather than a fifth hex, so the ring can never drift from the button it
+     has to match; naming the ROLE is what lets later slices reference "the
+     ring" instead of "the accent, used as a ring". */
+  --color-focus-ring: var(--color-warm);
+
+  /* Caution role (open questions Q9). Pulled toward yellow-olive and away from
+     terracotta so it cannot be misread as a primary action, with ▲ as the
+     glyph that carries it in grayscale (danger ⊗ dark fill / light label,
+     caution ▲ pale fill / dark label, positive ✓ pale fill / dark label).
+     TOKENS ONLY in this slice — the banner and chip that consume them are
+     slice E; nothing in the tree references these yet. */
+  --color-caution-ink: #6b4e12;
+  --color-caution-bg: #fdf3d9;
+  --color-caution-line: #e3c264;
 
   /* Selection — warm accent tint, not the default blue (#878 dict) */
   --color-select: #f1e3d0;
@@ -124,19 +169,23 @@
     --card-foreground: 33 11% 15%;
     --popover: 40 100% 99%;
     --popover-foreground: 33 11% 15%;
-    --primary: 23 54% 48%; /* accent   #bd6b39 */
+    /* The Radix/shadcn mirror of --color-warm. Carried to ONE decimal place
+       because the integer triplet for #a85a2c round-trips to rgb(169, 91, 45)
+       — a shade off on every primitive's ring with nothing going red. This
+       triplet is verified to round-trip to exactly rgb(168, 90, 44). */
+    --primary: 22.3 58.5% 41.6%; /* accent   #a85a2c */
     --primary-foreground: 40 100% 99%;
     --secondary: 40 55% 96%; /* bg_toolbar #faf6ee */
     --secondary-foreground: 33 11% 15%;
     --muted: 35 64% 91%; /* bg_subtle  #f7ebda */
-    --muted-foreground: 35 9% 48%; /* text_muted #867d70 */
+    --muted-foreground: 34.7 9.7% 38.2%; /* text_muted #6b6358 */
     --accent: 35 64% 91%;
     --accent-foreground: 33 11% 15%;
     --destructive: 8 53% 51%; /* danger   #c4503f */
     --destructive-foreground: 40 100% 99%;
     --border: 37 35% 86%; /* border   #e7ddcd */
     --input: 38 31% 81%; /* border_input #ddd2bf */
-    --ring: 23 54% 48%;
+    --ring: 22.3 58.5% 41.6%; /* same accent as --primary (Q7) */
     --radius: 0.5rem;
   }
 
@@ -172,7 +221,11 @@
        by construction) and `--color-score-fill-end`, and follows the same
        rule: the score bar's warm gradient is a few pixels of fill that reads
        on either surface, while its TRACK, which is a surface, is remapped
-       below like every other surface token. */
+       below like every other surface token. Slice (T) follows the same rule:
+       `--color-ink-hairline` is a TEXT/stroke token so it is remapped beside
+       its `ink-faint` twin, while `--color-warm-active`, `--color-focus-ring`
+       and the three `caution-*` values are accents and pale chips — the two
+       categories this block has never remapped — so they stay as declared. */
     --color-app: hsl(var(--background));
     --color-panel: hsl(var(--card));
     --color-toolbar: hsl(var(--secondary));
@@ -184,6 +237,7 @@
     --color-ink: hsl(var(--foreground));
     --color-ink-muted: hsl(var(--muted-foreground));
     --color-ink-faint: hsl(var(--muted-foreground));
+    --color-ink-hairline: hsl(var(--muted-foreground));
     --color-select: hsl(var(--accent));
     --color-select-ink: hsl(var(--accent-foreground));
     --color-group-band: hsl(var(--secondary));
@@ -199,6 +253,10 @@
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
+    /* T1 — nothing set a family before this, so the whole app rendered in the
+       browser default. Declared on `body` (not only in @theme) because the
+       `font-sans` utility exists without anything applying it. */
+    font-family: var(--font-sans);
   }
 
   /* Themed scrollbars (#878 "themed … scrollbars"). WebKit/Blink only, which
