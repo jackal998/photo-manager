@@ -422,6 +422,20 @@ EXECUTE_ALL_DELETE_CONFIRM_YES = "execute-all-delete-confirm-yes"
 EXECUTE_ALL_DELETE_CONFIRM_NO = "execute-all-delete-confirm-no"
 """'Cancel' / 'No' button inside the all-delete confirmation sheet."""
 
+EXECUTE_DELETE_CONFIRM_TOTALS = "execute-delete-confirm-totals"
+"""Pinned totals line of the all-delete confirmation sheet (#917 / REPLY Q6):
+'{n} files · {size}'.  Sits OUTSIDE the scrolling row list so the number never
+scrolls out of view."""
+
+EXECUTE_DELETE_CONFIRM_FOLDER = "execute-delete-confirm-folder"
+"""One folder-bucket header inside the confirmation sheet's row list (#917):
+the folder path plus that folder's count + size subtotal.  Repeated once per
+folder, so drivers use ``all()``/``nth()``."""
+
+EXECUTE_DELETE_CONFIRM_REASON = "execute-delete-confirm-reason"
+"""The per-file reason line under one row of the confirmation sheet (#917),
+e.g. 'Exact duplicate of beach-01.jpg'.  Repeated once per delete row."""
+
 EXECUTE_REMOVE_CONFIRM = "execute-remove-confirm"
 """Confirmation sheet shown before the execute-dialog row menu's 'Remove from
 list' finalizes a row (outcome='ignored', no disk delete).  Mirrors Qt's

@@ -453,8 +453,15 @@ _BANNED_MOVE_PATTERNS = (
 )
 
 # Keys whose value legitimately contains the banned wording for a reason
-# unrelated to the legacy MOVE action. Empty today.
-_TRANSLATION_MOVE_ALLOWLIST: dict[str, str] = {}
+# unrelated to the legacy MOVE action.
+_TRANSLATION_MOVE_ALLOWLIST: dict[str, str] = {
+    # The Execute confirm's safety sentence (#917), specified verbatim by the
+    # design REPLY Q6: "Files are moved to the Recycle Bin and can be
+    # restored." It names the Recycle Bin explicitly, so it is the accurate
+    # send2trash wording this probe's own comment permits — the passive form
+    # is the design's, not a resurrection of the folder-MOVE action.
+    "web.delete_confirm.recycle_note": "send2trash wording fixed by design REPLY Q6 (#917)",
+}
 
 
 def _find_english_passthroughs(en_doc, zh_doc) -> list[tuple[str, str]]:

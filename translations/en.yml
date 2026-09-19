@@ -1068,3 +1068,25 @@ web:
     file_singular: "file"
     file_plural: "files"
     cancel: "Cancel"
+    # #917 / design REPLY Q6 — the auditable body of the Execute confirm.
+    # One shape serves the pinned grand total and every folder subtotal, so
+    # the two read as the same kind of fact.
+    count_size: "{n} {fileWord} · {size}"
+    # «The one line the modal must carry regardless of framing, because it is
+    # the whole safety story.»
+    recycle_note: "Files are moved to the Recycle Bin and can be restored."
+    # Per-file reason lines. The vocabulary is Q6's, verbatim, and matches the
+    # Similarity badge the same row wears in the review table — {ref} is the
+    # group's Ref (keeper) basename.
+    reason_exact: "Exact duplicate of {ref}"
+    reason_near: "{percent}% match — same group"
+    reason_linked: "Linked match, {percent}%*"
+    reason_near_dup: "Near-duplicate of {ref}"
+    reason_none: "No comparable image — same group"
+    # The Ref row itself reaches this list only inside an all-delete group.
+    reason_ref: "Group reference copy — the whole group is marked delete"
+    # Fallbacks for a row whose percentage or whose group's Ref is missing:
+    # naming a file we do not have would be worse than a vaguer sentence.
+    reason_exact_generic: "Exact duplicate — same group"
+    reason_near_generic: "Near match — same group"
+    reason_linked_generic: "Linked match"
