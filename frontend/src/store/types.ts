@@ -152,6 +152,17 @@ export interface ResultViewState {
    * preference and its effect; the toggle UI is layout slice TB.
    */
   density: Density;
+  /**
+   * Toolbar filter text (#878, layout slice TB). Case-insensitive substring,
+   * matched against each row's basename AND folder; groups left with no
+   * matching row are hidden (see lib/rowFilter.ts for why both halves).
+   *
+   * View-only and deliberately NOT persisted, unlike the two width maps and
+   * the density above: a filter that survived a reload would hide rows with
+   * no visible cause. It also never reaches the delete counter or the danger
+   * CTA — those count the whole manifest, which is what Execute acts on.
+   */
+  filterText: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,15 +194,31 @@ export interface KeepBestSnapshotRow {
  * write — makes "which one does Undo undo?" a question the user has to answer
  * while a 6-second timer runs.
  */
-export interface KeepBestToast {
-  /** Monotonic; a new keep-best gets a new id, which restarts the timer. */
+export interface UndoToast {
+  /** Monotonic; a new write gets a new id, which restarts the timer. */
   id: number;
-  groupNumber: number;
-  /** Rows the write marked `delete` — the number the toast reports. */
-  deletedCount: number;
   /**
-   * Locked rows in the group the write left untouched. Q5: the button «must
-   * never override a lock, and it must say so when it skips one».
+   * Which bulk write raised it (#878 slice TB widened this from keep-best
+   * only). The two differ in what their sentence can say: keep-best names ONE
+   * group and always writes `delete`, a toolbar verb acts on a ctrl/shift
+   * selection that may span groups and writes whichever decision was pressed.
+   */
+  kind: "keep-best" | "bulk-decision";
+  /** The group keep-best acted on; null for a toolbar verb (see `kind`). */
+  groupNumber: number | null;
+  /**
+   * The decision a toolbar verb wrote — the word its sentence uses. Null for
+   * keep-best, which writes a MIX (`delete` on the duplicates, `` on the
+   * keeper) and so has no single verb to name.
+   */
+  decision: DecisionValue | null;
+  /** Rows the write actually changed — the number the toast reports. */
+  affectedCount: number;
+  /**
+   * Locked rows the write left untouched. Q5 for keep-best («it must never
+   * override a lock, and it must say so when it skips one»); L5 attaches the
+   * same promise to the toolbar verbs: «the verbs must respect locks
+   * silently-but-visibly — same rule as Q5».
    */
   lockedCount: number;
   /** Prior state of every row the write touched — what Undo restores. */
@@ -489,6 +516,12 @@ export interface AppActions {
    */
   setDensity(density: Density): void;
 
+  /**
+   * Set the toolbar filter text (#878, layout slice TB). Pure view state —
+   * not persisted, never written to the manifest. See ResultViewState.filterText.
+   */
+  setFilterText(text: string): void;
+
   /** GET /api/settings and populate settings.values. */
   loadSettings(): Promise<void>;
 
@@ -685,9 +718,22 @@ export interface AppActions {
   ): Promise<void>;
 
   /**
-   * Reverse the keep-best write the current toast describes (#878 slice G,
-   * open questions Q5), then dismiss it. No-op when there is no toast or an
-   * Undo is already in flight.
+   * Write `decision` onto the current ctrl/shift selection (#878 slice TB,
+   * REPLY L5's counted toolbar verbs), skipping LOCKED rows, and raise the
+   * undo toast describing what it did.
+   *
+   * L5: «the verbs must respect locks silently-but-visibly — same rule as Q5,
+   * with the undo toast reporting "1 locked file unchanged"». So the locked
+   * rows are filtered out HERE rather than sent and refused: the 409 path
+   * raises the LockConfirmDialog, and a modal in front of a reversible bulk
+   * decision is exactly what Q5 ruled out. No-op on an empty selection.
+   */
+  applyBulkDecision(decision: DecisionValue): Promise<void>;
+
+  /**
+   * Reverse the bulk write the current toast describes (#878 slice G, open
+   * questions Q5; slice TB reuses it for the toolbar verbs), then dismiss it.
+   * No-op when there is no toast or an Undo is already in flight.
    *
    * Restores BOTH decision and lock from the snapshot, in that order and with
    * `force_locked` on the decision PATCH — apply-best-copy LOCKS the keeper it
@@ -715,7 +761,7 @@ export interface AppStore extends AppActions {
   execute: ExecuteState;
   action: ActionState;
   /** The single-slot undo toast, or null when nothing is showing (slice G). */
-  toast: KeepBestToast | null;
+  toast: UndoToast | null;
   /**
    * `group_number`s with a keep-best write in flight (slice G). Both entry
    * points disable themselves for a group listed here, and `applyBestCopy`

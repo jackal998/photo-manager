@@ -56,6 +56,25 @@ const OPTIONS: {
   },
 ];
 
+/**
+ * `DecisionValue` → its catalog key + English fallback, DERIVED from OPTIONS
+ * above rather than written out a second time.
+ *
+ * Three surfaces now print one of these three words — the row control here,
+ * the toolbar's counted bulk verbs and the undo toast's sentence (#878 slice
+ * TB) — and a decision that reads "Skip" on the row and "Remove" in the toast
+ * is the R3/R4 copy defect one layer up. One table, three readers.
+ */
+export const DECISION_VOCAB: Record<
+  DecisionValue,
+  { key: string; fallback: string }
+> = Object.fromEntries(
+  OPTIONS.map((opt) => [
+    opt.value,
+    { key: `web.decision.${opt.labelKey}`, fallback: opt.label },
+  ])
+) as Record<DecisionValue, { key: string; fallback: string }>;
+
 // Daylight decision chips (#878 slice b) — §9.3 `dec.*` of
 // docs/audits/web-port-feasibility-2026-06-19.md, as @theme tokens.
 //

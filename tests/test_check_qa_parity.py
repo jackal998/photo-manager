@@ -30,19 +30,20 @@ def test_phase4_target_derives_from_source_count() -> None:
 
 
 def test_phase4_target_matches_todays_real_registry() -> None:
-    """Sanity pin: today's real ALL_SCENARIOS count is 74, and the target
-    tracks it exactly (no slack) since all 74 are already non-todo
-    (70 done + 4 skip). Bumped 71 -> 72 by #893/#894, which added
+    """Sanity pin: today's real ALL_SCENARIOS count is 75, and the target
+    tracks it exactly (no slack) since all 75 are already non-todo
+    (71 done + 4 skip). Bumped 71 -> 72 by #893/#894, which added
     s73_action_seed_and_page_scroll; 72 -> 73 by #878, which added
     s74_daylight_theme; 73 -> 74 by #878's layout slice G, which added
-    s75_keep_best_button.
+    s75_keep_best_button; 74 -> 75 by #878's layout slice TB, which added
+    s76_toolbar_status_density.
 
     Not a tautology — this would fail if the formula stopped deriving from
     the live registry count.
     """
     all_scenarios = parity._load_all_scenarios()
-    assert len(all_scenarios) == 74
-    assert parity._phase4_target(len(all_scenarios)) == 74
+    assert len(all_scenarios) == 75
+    assert parity._phase4_target(len(all_scenarios)) == 75
 
 
 def test_new_todo_scenario_fails_phase4_gate(monkeypatch) -> None:

@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "@/i18n/useT";
 import { useAppStore } from "@/store/useAppStore";
+import { DECISION_VOCAB } from "@/components/result/DecisionControl";
 import { MAIN_TOAST, MAIN_TOAST_UNDO } from "@/testids";
 
 /** Q5: «~6 s». */
@@ -72,14 +73,29 @@ export function Toast() {
   if (toast === null) return null;
 
   const fileWord =
-    toast.deletedCount === 1
+    toast.affectedCount === 1
       ? t("web.toast.file_singular", "file")
       : t("web.toast.file_plural", "files");
-  const message = t(
-    "web.toast.keep_best",
-    "Group {n} · {count} {fileWord} marked for deletion",
-    { n: toast.groupNumber, count: toast.deletedCount, fileWord }
-  );
+  // Two sentences, one slot. Keep-best names its group and always writes
+  // `delete`; a toolbar verb (slice TB) acts on a selection that may span
+  // groups and writes whichever of the three decisions was pressed, so its
+  // sentence names the VERB instead — the same three words the row control
+  // and the right-click menu use, from the one decision vocabulary.
+  const message =
+    toast.kind === "bulk-decision"
+      ? t("web.toast.bulk_decision", "{count} {fileWord} set to {verb}", {
+          count: toast.affectedCount,
+          fileWord,
+          verb: t(
+            DECISION_VOCAB[toast.decision ?? ""].key,
+            DECISION_VOCAB[toast.decision ?? ""].fallback
+          ),
+        })
+      : t(
+          "web.toast.keep_best",
+          "Group {n} · {count} {fileWord} marked for deletion",
+          { n: toast.groupNumber ?? 0, count: toast.affectedCount, fileWord }
+        );
   const lockedNote =
     toast.lockedCount > 0
       ? t(

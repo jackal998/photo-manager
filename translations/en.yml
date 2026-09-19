@@ -482,6 +482,22 @@ web:
     # The toolbar button had been borrowing web.action_dialog.title (copy
     # audit T1); a button wants a shorter label than the dialog's title.
     set_action: "Set Action…"
+    # Layout slice TB (#878) — the filter box, the counted bulk verbs and the
+    # danger CTA. L5: the verbs' count lives IN the label «so "Delete" never
+    # means an unknown number», and the CTA keeps its count at zero rather than
+    # disappearing «so the button never moves».
+    filter_placeholder: "Filter photos…"
+    filter_aria: "Filter photos"
+    bulk_set_n: "Set {count} selected:"
+    bulk_set_none: "Set selected:"
+    bulk_hint: "Acts on the rows selected in the list — Ctrl-click to add one, Shift-click for a range. Locked rows are left unchanged."
+    delete_n: "⊗  Delete {count} {fileWord}…"
+  # Row density (#878 slice R's preference, slice TB's switch in the status bar).
+  density:
+    label: "Density"
+    aria: "Row density"
+    comfortable: "Comfortable"
+    compact: "Compact"
   status:
     summary: "{groups} {groupWord} · {files} {fileWord}"
     loading_manifest: "Loading manifest…"
@@ -498,6 +514,11 @@ web:
     group_plural: "groups"
     file_singular: "file"
     file_plural: "files"
+    # #906 — the two figures the 30px strip exists for: «the running answer to
+    # "is this session worth continuing"». Both count the WHOLE manifest, not
+    # the filtered view, because that is what Execute acts on.
+    marked_to_delete: "⊗ {count} marked to delete"
+    reclaims: "↺ reclaims {size}"
   # The single-slot undo toast (#878 slice G). Open questions Q5 put this in
   # place of a confirm dialog on "Keep best · delete rest", so this copy is the
   # only account the user gets of what a bulk write just did — and the locked
@@ -505,6 +526,11 @@ web:
   # must say so when it skips one».
   toast:
     keep_best: "Group {n} · {count} {fileWord} marked for deletion"
+    # Slice TB reuses the same single slot for the toolbar's bulk verbs. Their
+    # selection can span groups, so the sentence names the VERB instead of a
+    # group — {verb} is interpolated from web.decision.*, the one decision
+    # vocabulary the row control and the right-click menu also read.
+    bulk_decision: "{count} {fileWord} set to {verb}"
     file_singular: "file"
     file_plural: "files"
     locked_unchanged_singular: "{count} locked file unchanged"
@@ -682,6 +708,10 @@ web:
     view_language: "Language"
     lang_en: "English"
     lang_zh: "中文 (繁體)"
+    # Scan summary folded into the RIGHT end of the menu bar (#878 slice TB,
+    # F3/F4). The source name is appended separately so it can be the one part
+    # that truncates — «truncate the source name first; never wrap».
+    scan_summary: "{photos} {photoWord} · {groups} {groupWord}"
   # Filesystem picker (FsBrowser).
   browse:
     up: "↑ Up"
@@ -985,6 +1015,12 @@ web:
     group_aria: "Group {n}, {count} {fileWord}"
     # Q5's promoted bulk verb, at the right end of the group header.
     keep_best: "Keep best · delete rest"
+    # Tooltip on that button (and on the right-click item) while the toolbar
+    # filter is active: keep-best is a SERVER-side write scoped by group, so it
+    # would mark rows the filter is hiding while the header shows the filtered
+    # count. Disabled rather than re-scoped — picking a "best" copy from a
+    # visible subset is a different, silently wrong, decision.
+    keep_best_filtered: "Clear the filter to use Keep best"
   # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —
   # the patternSummary branch above was already translated).
   delete_confirm:

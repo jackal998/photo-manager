@@ -389,6 +389,21 @@ web:
     settings: "設定"
     open: "開啟"
     set_action: "設定動作…"
+    # Layout slice TB（#878）：篩選框、帶計數的批次動作、危險 CTA。計數寫在標籤
+    # 裡，「刪除」才不會是一個未知的數字；CTA 在零筆時停用但保留標籤，按鈕不會
+    # 移動位置。
+    filter_placeholder: "篩選照片…"
+    filter_aria: "篩選照片"
+    bulk_set_n: "設定 {count} 個選取項目："
+    bulk_set_none: "設定選取項目："
+    bulk_hint: "作用於清單中選取的列 —— Ctrl 點選可加選一列，Shift 點選可選取範圍。鎖定的列不會被變更。"
+    delete_n: "⊗  刪除 {count} 個{fileWord}…"
+  # 列密度（#878：slice R 的偏好設定，slice TB 在狀態列的切換開關）。
+  density:
+    label: "密度"
+    aria: "列密度"
+    comfortable: "寬鬆"
+    compact: "緊湊"
   status:
     summary: "{groups} 個{groupWord} · {files} 個{fileWord}"
     loading_manifest: "正在載入清單…"
@@ -402,11 +417,19 @@ web:
     group_plural: "群組"
     file_singular: "檔案"
     file_plural: "檔案"
+    # #906 —— 狀態列存在的理由：這兩個數字是「這次整理還值不值得繼續」的即時
+    # 答案。兩者都以整份清單計算，不受篩選影響，因為那才是「執行」會動到的範圍。
+    marked_to_delete: "⊗ {count} 個待刪除"
+    reclaims: "↺ 可回收 {size}"
   # 單一插槽的復原提示（#878 slice G / Q5）。「保留最佳 · 其餘刪除」不再有確認
   # 對話框，這段文字就是使用者唯一得到的說明；鎖定那一行是按鈕的承諾：永遠不會
   # 覆蓋鎖定，而且跳過時一定要說出來。中文沒有單複數變化，兩個鍵刻意相同。
   toast:
     keep_best: "群組 {n} · 已標記 {count} 個{fileWord}待刪除"
+    # slice TB 的工具列批次動作共用同一個插槽。選取範圍可能跨群組，所以句子改
+    # 為說出「動作」；{verb} 由 web.decision.* 帶入，與列控制項、右鍵選單同一套
+    # 用語。
+    bulk_decision: "已將 {count} 個{fileWord}設為{verb}"
     file_singular: "檔案"
     file_plural: "檔案"
     locked_unchanged_singular: "{count} 個鎖定的檔案未變更"
@@ -561,6 +584,9 @@ web:
     view_language: "語言"
     lang_en: "English"
     lang_zh: "中文 (繁體)"
+    # 折入選單列右端的掃描摘要（#878 slice TB，F3/F4）。來源名稱另外接在後面，
+    # 這樣被截斷的永遠是名稱，而不是數字，而且絕不換行。
+    scan_summary: "{photos} 個{photoWord} · {groups} 個{groupWord}"
   # Filesystem picker (FsBrowser).
   browse:
     up: "↑ 上一層"
@@ -801,6 +827,10 @@ web:
     # 「保留最佳 · 其餘刪除」）唸成收合切換鈕的標籤。
     group_aria: "群組 {n}，{count} {fileWord}"
     keep_best: "保留最佳 · 其餘刪除"
+    # 篩選啟用時按鈕與右鍵項目的提示：保留最佳是以群組為範圍的伺服器端寫入，
+    # 會動到被篩選隱藏的列，而標頭顯示的卻是篩選後的數量。選擇停用而非縮小
+    # 範圍 —— 只從看得見的子集挑「最佳」是另一個、而且會悄悄出錯的決定。
+    keep_best_filtered: "清除篩選後才能使用保留最佳"
   delete_confirm:
     title_groups: "整個群組將被刪除"
     title_all: "刪除所有檔案？"

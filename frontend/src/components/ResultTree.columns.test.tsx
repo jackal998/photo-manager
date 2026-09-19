@@ -99,6 +99,7 @@ describe("ResultTree column-model sort", () => {
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
         panelWidths: { ...DEFAULT_PANEL_WIDTHS },
         density: DEFAULT_DENSITY,
+        filterText: "",
       },
     });
     restore = stubOffsetHeight();
@@ -231,6 +232,7 @@ describe("ResultTree — a resize drag can never delete the column it is on (#91
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS, ...overrides },
         panelWidths: { ...DEFAULT_PANEL_WIDTHS },
         density: DEFAULT_DENSITY,
+        filterText: "",
       },
     });
   }
@@ -313,6 +315,7 @@ describe("setColumnWidth store action", () => {
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
         panelWidths: { ...DEFAULT_PANEL_WIDTHS },
         density: DEFAULT_DENSITY,
+        filterText: "",
       },
     });
   });

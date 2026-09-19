@@ -37,6 +37,7 @@ import type {
   ActionState,
   AppStore,
   ExecuteState,
+  KeepBestSnapshotRow,
   ManifestState,
   PreviewMode,
   PreviewState,
@@ -49,6 +50,7 @@ import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
 import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
 import { loadPanelWidths, savePanelWidths, clampPanelWidth } from "../lib/panelWidths";
 import { loadDensity, saveDensity, type Density } from "../lib/density";
+import { visibleSelectedPaths } from "../lib/rowFilter";
 import { normalizePrunePref } from "../lib/prune";
 import type { PrunePref } from "../lib/prune";
 import {
@@ -143,6 +145,9 @@ const initialResultView: ResultViewState = {
   columnWidths: loadColumnWidths(),
   panelWidths: loadPanelWidths(),
   density: loadDensity(),
+  // Slice TB — view-only, and deliberately not hydrated from anywhere: a
+  // filter that came back after a reload hides rows with no visible cause.
+  filterText: "",
 };
 
 const initialExecute: ExecuteState = {
@@ -606,6 +611,16 @@ export const useAppStore = create<AppStore>()(
       // No drag to throttle here (a density change is one discrete choice), so
       // unlike the two width setters this always writes through.
       saveDensity(density);
+    },
+
+    // -----------------------------------------------------------------------
+    // #878 layout slice TB — toolbar filter
+    // -----------------------------------------------------------------------
+
+    setFilterText(text: string) {
+      set((state) => {
+        state.resultView.filterText = text;
+      });
     },
 
     // -----------------------------------------------------------------------
@@ -1329,8 +1344,10 @@ export const useAppStore = create<AppStore>()(
           _toastSeq += 1;
           state.toast = {
             id: _toastSeq,
+            kind: "keep-best",
             groupNumber,
-            deletedCount,
+            decision: null,
+            affectedCount: deletedCount,
             lockedCount,
             snapshot,
             undoing: false,
@@ -1365,10 +1382,110 @@ export const useAppStore = create<AppStore>()(
       }
     },
 
+    async applyBulkDecision(decision: DecisionValue) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+      // VISIBLE selected rows only. The selection survives the toolbar filter,
+      // so it can name rows the filter is hiding; writing to those would be a
+      // bulk write whose extent the user cannot see, and it would disagree with
+      // the count the verb's own label just showed them. Same selector the
+      // label uses (lib/rowFilter.ts) so the two cannot drift.
+      const selected = visibleSelectedPaths(
+        get().manifest.groups,
+        get().resultView.filterText,
+        get().selection.selectedPaths
+      );
+      if (selected.length === 0) return;
+
+      // Index the manifest ONCE. The selection is a path list with no row data
+      // on it, and the two things this action needs per path — the lock and the
+      // prior decision — both live on the row.
+      const rowByPath = new Map<string, { locked: boolean; decision: DecisionValue }>();
+      for (const group of get().manifest.groups) {
+        for (const row of group.items) {
+          rowByPath.set(row.file_path, {
+            locked: row.is_locked,
+            decision: row.user_decision,
+          });
+        }
+      }
+
+      // Split on the LOCK, client-side. L5: «the verbs must respect locks
+      // silently-but-visibly — same rule as Q5». Sending a locked path and
+      // letting the route answer 409 would raise the LockConfirmDialog, and Q5
+      // ruled a modal out in front of a reversible bulk decision; the toast's
+      // "N locked file(s) unchanged" line is the "visibly" half instead.
+      const writable: string[] = [];
+      const snapshot: KeepBestSnapshotRow[] = [];
+      let lockedCount = 0;
+      for (const path of selected) {
+        const row = rowByPath.get(path);
+        // Not in the manifest any more (a reload landed between the click and
+        // here): not ours to write, and not a lock we skipped either.
+        if (row === undefined) continue;
+        if (row.locked) {
+          lockedCount += 1;
+          continue;
+        }
+        writable.push(path);
+        snapshot.push({ file_path: path, decision: row.decision, locked: false });
+      }
+
+      if (writable.length > 0) {
+        // Through setDecisions, not a raw PATCH: it already owns the optimistic
+        // apply and the revert-everything-on-failure path. Locked rows are gone
+        // by now, so its 409 branch is unreachable from here.
+        await get().setDecisions(writable, decision);
+        // setDecisions swallows its failure rather than throwing, so its two
+        // landing places are what "did the write land" has to read. A toast
+        // offering to undo a write that never happened is worse than no toast:
+        // its Undo would PATCH the "prior" values back over rows that still
+        // hold them, and the user would believe both steps worked.
+        //
+        // BOTH branches, not just manifest.error: a `locked_paths` 409 reverts
+        // the optimistic apply and routes to execute.lockConflict instead
+        // (setDecisions above), leaving manifest.error null. The lock filter
+        // here makes that rare rather than impossible — a row locked by
+        // another surface between the index and the PATCH still reaches it —
+        // and when it happens the LockConfirmDialog opens over a toast
+        // claiming "N files set to Delete" that never happened.
+        if (
+          get().manifest.error !== null ||
+          get().execute.lockConflict !== null
+        ) {
+          return;
+        }
+      }
+
+      set((state) => {
+        _toastSeq += 1;
+        state.toast = {
+          id: _toastSeq,
+          kind: "bulk-decision",
+          // A ctrl/shift selection can span groups, so there is no ONE group
+          // to name — which is also what makes undo walk every group.
+          groupNumber: null,
+          decision,
+          affectedCount: writable.length,
+          lockedCount,
+          snapshot,
+          undoing: false,
+        };
+      });
+    },
+
     async undoKeepBest() {
       const toast = get().toast;
       const manifestPath = get().manifest.path;
       if (toast === null || toast.undoing || manifestPath === null) return;
+      // Nothing was written (every selected row was locked) — there is nothing
+      // to reverse, and an empty PATCH body is a 422 rather than a no-op.
+      if (toast.snapshot.length === 0) {
+        set((state) => {
+          state.toast = null;
+        });
+        return;
+      }
 
       set((state) => {
         if (state.toast !== null) state.toast.undoing = true;
@@ -1401,7 +1518,16 @@ export const useAppStore = create<AppStore>()(
         );
         set((state) => {
           for (const group of state.manifest.groups) {
-            if (group.group_number !== toast.groupNumber) continue;
+            // A keep-best toast names ONE group, so the scan stops there; a
+            // toolbar-verb toast (slice TB) has groupNumber null because a
+            // ctrl/shift selection can span groups, and every group has to be
+            // walked or the rows outside the first one never come back.
+            if (
+              toast.groupNumber !== null &&
+              group.group_number !== toast.groupNumber
+            ) {
+              continue;
+            }
             for (const item of group.items) {
               const prev = restored.get(item.file_path);
               if (prev === undefined) continue;

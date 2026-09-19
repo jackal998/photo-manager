@@ -18,10 +18,15 @@
 // nothing is selected (same idiom as Execute (only selected)).
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { useMemo } from "react";
 
 import { useT } from "@/i18n/useT";
+import { useAppStore } from "@/store/useAppStore";
+import { dateLocaleFor } from "@/lib/format";
+import { scanSourceName } from "@/lib/scanSummary";
 import {
   MAIN_MENU_BAR,
+  MAIN_SCAN_SUMMARY,
   MENU_FILE,
   MENU_FILE_SCAN,
   MENU_FILE_OPEN,
@@ -86,10 +91,28 @@ export function MenuBar({
 }: MenuBarProps) {
   const t = useT();
 
+  // Scan summary (#878 slice TB, F3/F4) — read from the store rather than
+  // drilled through props: it is derived from the manifest the store already
+  // holds, and every caller of this component would otherwise have to pass
+  // three fields it does not use for anything else.
+  const groups = useAppStore((s) => s.manifest.groups);
+  const manifestPath = useAppStore((s) => s.manifest.path);
+  const totalGroups = useAppStore((s) => s.manifest.totalGroups);
+  const totalFiles = useAppStore((s) => s.manifest.totalFiles);
+  const sourceName = useMemo(
+    () => scanSourceName(groups, manifestPath),
+    [groups, manifestPath]
+  );
+  const numberLocale = dateLocaleFor(locale);
+
   return (
     <nav
       data-testid={MAIN_MENU_BAR}
-      className="flex items-center gap-1 border-b border-hairline bg-titlebar px-2 py-0.5"
+      // REPLY: «menu bar height 33px (as shipped) · bg #f3ede3 · bottom rule
+      // 1px solid #e7ddcd · triggers left, as shipped». The height was already
+      // 33px from py-0.5 + the trigger box; it is written down now because the
+      // summary on the right must not be what changes it.
+      className="flex h-[33px] shrink-0 items-center gap-1 border-b border-hairline bg-titlebar px-2"
       aria-label={t("web.menu.aria_main", "Main menu")}
     >
       {/* File */}
@@ -202,6 +225,45 @@ export function MenuBar({
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
+
+      {/* «scan summary right-aligned in the same bar, 11.5px #6b6358, 16px
+          from the right edge … truncate the source name first; never wrap».
+          The nav's own padding is 8px, so the extra 8px here makes 16px. */}
+      <span className="min-w-0 flex-1" />
+      {manifestPath !== null && (
+        <span
+          data-testid={MAIN_SCAN_SUMMARY}
+          className="flex min-w-0 items-center gap-1 pr-2 text-[11.5px] whitespace-nowrap text-ink-muted"
+        >
+          <span className="shrink-0">
+            {t("web.menu.scan_summary", "{photos} {photoWord} · {groups} {groupWord}", {
+              photos: totalFiles.toLocaleString(numberLocale),
+              photoWord:
+                totalFiles === 1
+                  ? t("web.status.file_singular", "file")
+                  : t("web.status.file_plural", "files"),
+              groups: totalGroups.toLocaleString(numberLocale),
+              groupWord:
+                totalGroups === 1
+                  ? t("web.status.group_singular", "group")
+                  : t("web.status.group_plural", "groups"),
+            })}
+          </span>
+          {sourceName !== null && (
+            <>
+              <span aria-hidden="true" className="shrink-0">
+                ·
+              </span>
+              {/* The ONLY shrinkable member, so the counts survive a narrow
+                  window and the name is what gives way — «truncate the source
+                  name first». */}
+              <span className="truncate" title={sourceName}>
+                {sourceName}
+              </span>
+            </>
+          )}
+        </span>
+      )}
     </nav>
   );
 }

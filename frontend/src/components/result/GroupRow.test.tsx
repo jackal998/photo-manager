@@ -179,6 +179,36 @@ describe("GroupRow keep-best button (Q5)", () => {
     // so the undo toast would snapshot the damage instead of the original.
     expect(onKeepBest).not.toHaveBeenCalled();
   });
+
+  it("is disabled, with a reason, while the toolbar filter is active", () => {
+    // Round-2 MEDIUM: keep-best is a SERVER-side write scoped by group_number,
+    // so under a filter it marks rows the user cannot see while this header
+    // shows the FILTERED count beside the button. Disabled rather than
+    // re-scoped — picking a "best" copy from a visible subset is a different
+    // and silently wrong decision.
+    const onKeepBest = vi.fn();
+    renderRow(5, [makeItem()], { onKeepBest, keepBestFiltered: true });
+
+    const button = screen.getByTestId(groupKeepBestTestid("3"));
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "Clear the filter to use Keep best");
+    fireEvent.click(button);
+    expect(onKeepBest).not.toHaveBeenCalled();
+  });
+
+  it("carries no title and stays enabled with no filter", () => {
+    // The false-positive half: a gate that refuses everything looks identical
+    // to one that is working, and this button is the fast path through the
+    // whole screen.
+    const onKeepBest = vi.fn();
+    renderRow(5, [makeItem()], { onKeepBest });
+
+    const button = screen.getByTestId(groupKeepBestTestid("3"));
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("title");
+    fireEvent.click(button);
+    expect(onKeepBest).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("GroupRow accessible name", () => {
