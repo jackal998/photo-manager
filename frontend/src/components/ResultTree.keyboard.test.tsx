@@ -62,6 +62,7 @@ import {
 } from "@/testids";
 import { DEFAULT_COLUMN_WIDTHS } from "@/lib/resultColumns";
 import { DEFAULT_PANEL_WIDTHS } from "@/lib/panelWidths";
+import { DEFAULT_DENSITY } from "@/lib/density";
 import type { FileRow as FileRowData, Group } from "@/api/types";
 
 const HEADER_H = 28; // the sticky ColumnHeaderRow measures ~28px in a browser
@@ -121,6 +122,7 @@ function seed(groups: Group[]): void {
       sortDirection: "asc",
       columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
       panelWidths: { ...DEFAULT_PANEL_WIDTHS },
+      density: DEFAULT_DENSITY,
     },
   });
 }

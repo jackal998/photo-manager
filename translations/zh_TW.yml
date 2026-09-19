@@ -445,6 +445,9 @@ web:
     score: "分數"
     size: "大小"
     decision: "決策"
+  # Layout slice R (#878): the score cell's label, riding above the number.
+  score:
+    keep_label: "保留分數"
   # The ONE decision vocabulary for the web client (copy audit R3/R4, owner
   # decision 2026-09-18): 保留 / 刪除 / 略過 for the three wire values
   # "" / "delete" / "ignore". SHORT forms — row DecisionControl, the Execute

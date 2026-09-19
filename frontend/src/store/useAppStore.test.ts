@@ -55,6 +55,7 @@ vi.mock("../api/client", async (importOriginal) => {
 
 import * as client from "../api/client";
 import { useAppStore } from "./useAppStore";
+import { loadDensity } from "../lib/density";
 import type { Group } from "../api/types";
 
 // ---------------------------------------------------------------------------
@@ -1606,5 +1607,32 @@ describe("openExecuteDialog – group-pull scope from a selection", () => {
     useAppStore.getState().closeExecuteDialog();
     expect(useAppStore.getState().execute.executeOpen).toBe(false);
     expect(useAppStore.getState().execute.scopeGroupNumbers).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #878 layout slice R — row density preference
+// ---------------------------------------------------------------------------
+
+describe("setDensity", () => {
+  beforeEach(() => {
+    useAppStore.getState().setDensity("comfortable");
+    localStorage.clear();
+  });
+
+  it("round-trips the preference: set -> localStorage -> re-hydrate", () => {
+    // The bug a user hits is reopening the app and finding the tree back at
+    // comfortable — the same cross-launch contract panelWidths (#739) and
+    // columnWidths (#685) already carry. `loadDensity()` IS what the store
+    // hydrates from at creation, so calling it here is the re-hydrate step.
+    expect(useAppStore.getState().resultView.density).toBe("comfortable");
+
+    useAppStore.getState().setDensity("compact");
+    expect(useAppStore.getState().resultView.density).toBe("compact");
+    expect(localStorage.getItem("density")).toBe("compact");
+    expect(loadDensity()).toBe("compact");
+
+    useAppStore.getState().setDensity("comfortable");
+    expect(loadDensity()).toBe("comfortable");
   });
 });

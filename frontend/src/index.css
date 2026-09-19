@@ -109,13 +109,16 @@
      CLOSING rule stays `group-line`. */
   --color-row-line: #f4eee3;
 
-  /* Score mini-bar (§9.3 track / scoreFill). `scoreFill` is written
-     `#cdab86 → #b8946a` in §9.3, i.e. a left-to-right gradient, so it needs
-     two tokens; `-fill` is the start so the name slice (a) already published
-     keeps meaning the same thing. */
+  /* Score mini-bar (§9.3 track / scoreFill). §9.3 wrote `scoreFill` as the
+     gradient `#cdab86 → #b8946a`, which needed two tokens. Layout slice R
+     retires the gradient — REPLY §"Score bar (R15)": «fill solid #b8946a (not
+     a gradient)», because «at 96px a two-stop gradient is three or four
+     distinguishable pixels of variation, which is invisible at best and a
+     banding artefact at worst». So `--color-score-fill-end` is GONE and
+     `-fill` now carries the end value: one role, one token, one hex — and no
+     new hex enters the theme (#b8946a was already here). */
   --color-score-track: #ece4d6;
-  --color-score-fill: #cdab86;
-  --color-score-fill-end: #b8946a;
+  --color-score-fill: #b8946a;
 
   /* Similarity badges (§9.3 sim.*) */
   --color-sim-ref-ink: #a85f2e;
@@ -152,6 +155,24 @@
      Declared as a token rather than "just omit the class" so the chip map in
      DecisionControl.tsx stays a complete fg/bg/bd triple per state. */
   --color-dec-undecided-bg: transparent;
+  /* Layout slice R gives the three segments an INSET TRACK to sit on — REPLY
+     §"Decision control (R16)": «track background #f3ede3, border 1px solid
+     #e7ddcd, radius 9px, padding 3px». Both values already exist (`titlebar`
+     and `hairline`), so this is an ALIAS naming the ROLE, not a new hex — the
+     same move `--color-focus-ring` makes for the accent. The track is what
+     makes three mutually exclusive options read as one control with a current
+     value rather than as three adjacent buttons. */
+  --color-dec-track: var(--color-titlebar);
+
+  /* Thumbnail placeholder hatch — REPLY §"Thumbnail (R6)": «background
+     repeating-linear-gradient(135deg, #efe7d9 0 7px, #f6f0e6 7px 14px)» …
+     «The warm diagonal hatch, not a flat grey — it reads as "frame awaiting an
+     image" rather than "broken"». One ROLE (the hatch) but a gradient needs
+     two stops, so two tokens; neither value exists elsewhere in the theme
+     (`hairline-soft` is #efe7d8, one step off, and is a BORDER role). Consumed
+     by the `.thumb-hatch` component class below. */
+  --color-thumb-hatch: #efe7d9;
+  --color-thumb-hatch-alt: #f6f0e6;
 
   /* Scrollbar thumb (#878 dict) */
   --color-scroll-thumb: #ddd2bf;
@@ -227,10 +248,14 @@
        small coloured pills that stay legible on a dark row, and inventing
        dark variants for them is the Aperture work this slice must not do.
        Slice (b) adds `--color-dec-undecided-bg` (transparent — theme-neutral
-       by construction) and `--color-score-fill-end`, and follows the same
-       rule: the score bar's warm gradient is a few pixels of fill that reads
-       on either surface, while its TRACK, which is a surface, is remapped
-       below like every other surface token. Slice (T) follows the same rule:
+       by construction), and follows the same rule: the score bar's warm fill
+       is a few pixels that read on either surface, while its TRACK, which is a
+       surface, is remapped below like every other surface token. Slice (R)'s
+       `--color-dec-track` is an alias of `titlebar`, which IS remapped, so it
+       follows its target for free; the two `thumb-hatch` stops are a
+       placeholder fill, not a surface, and stay as declared — the thumbnail
+       they sit behind is an image on either theme. Slice (T) follows the same
+       rule:
        `--color-ink-hairline` is a TEXT/stroke token so it is remapped beside
        its `ink-faint` twin, while `--color-warm-active`, `--color-focus-ring`
        and the three `caution-*` values are accents and pale chips — the two
@@ -294,5 +319,22 @@
 
   ::-webkit-scrollbar-thumb:hover {
     background-color: var(--color-scroll-thumb-hover);
+  }
+}
+
+@layer components {
+  /* The thumbnail's pre-load / failed-decode placeholder (layout slice R,
+     REPLY §"Thumbnail (R6)"). Written as a component class rather than as an
+     arbitrary Tailwind value because a `bg-[repeating-linear-gradient(...)]`
+     utility carries the commas and parentheses through Tailwind's class
+     scanner, where they are a coin flip — and the two stops belong beside the
+     tokens they consume. No spinner per row: «at 40,000 rows spinners are
+     noise». */
+  .thumb-hatch {
+    background-image: repeating-linear-gradient(
+      135deg,
+      var(--color-thumb-hatch) 0 7px,
+      var(--color-thumb-hatch-alt) 7px 14px
+    );
   }
 }

@@ -92,7 +92,7 @@ import urllib.request
 from pathlib import Path
 
 from qa.web._pw import PWContext
-from qa.web._invariants import run_scan
+from qa.web._invariants import click_row, run_scan
 from qa.web.testid_constants import (
     PREVIEW_SINGLE_IMAGE,
     PREVIEW_INFO,
@@ -190,10 +190,14 @@ def run(*, base_url: str) -> None:
             # The result tree is virtualised (@tanstack/react-virtual); scroll
             # the row into view so the virtualiser renders it before clicking.
             row_tid = row_file_testid(group_id, target_basename)
+            # Through the shared helper, which aims at the filename cell. A bare
+            # `row.click()` targets the row box's CENTRE, and since #878 layout
+            # slice R centred the row's cells that point is the decision
+            # control, whose segments stopPropagation so staging a decision does
+            # not also select the row — the click staged a decision and selected
+            # nothing, so the preview never populated.
+            click_row(page, row_tid, timeout=15_000)
             row = page.get_by_test_id(row_tid)
-            row.wait_for(state="visible", timeout=15_000)
-            row.scroll_into_view_if_needed(timeout=15_000)
-            row.click()
 
             # ── Step 4: ASSERT the bounded preview rendered (the real check) ─
             # PreviewPane shows thumbnailUrl(path, 512); the <img> only becomes
@@ -214,7 +218,9 @@ def run(*, base_url: str) -> None:
             # carries inline visibility:hidden until onLoad fires
             # (FullResViewer.tsx:224), so wait_for(state="visible") resolves
             # only once the heavy native decode actually completes.
-            row.dblclick()
+            # The filename cell, for the same reason as the single click above:
+            # the row box's centre is the decision control since slice R.
+            row.locator('[data-col="name"]').dblclick()
             page.get_by_test_id(FULLRES_IMAGE).wait_for(
                 state="visible", timeout=20_000
             )

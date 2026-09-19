@@ -124,7 +124,12 @@ def _open_full_res_viewer(page) -> None:
     """Select the first file row, then double-click its preview tile."""
     row = page.locator('[data-testid^="row-file-"]').first
     row.wait_for(state="visible", timeout=10_000)
-    row.click()
+    # The filename cell, not the row box: Playwright aims a click at an
+    # element's CENTRE, and since #878 layout slice R centred the row's cells
+    # that point is the decision control, whose segments stopPropagation so
+    # staging a decision does not also select the row. (`click_row` does this
+    # by testid; this helper reaches the row by prefix locator instead.)
+    row.locator('[data-col="name"]').click()
     tile = page.get_by_test_id(PREVIEW_SINGLE_IMAGE)
     tile.wait_for(state="visible", timeout=10_000)
     tile.dblclick()

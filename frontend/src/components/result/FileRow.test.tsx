@@ -3,7 +3,7 @@
 // ColumnHeaderRow.test.tsx does — no store, no virtualizer.
 
 import type { ComponentProps } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 
 import { FileRow } from "./FileRow";
@@ -180,13 +180,53 @@ describe("FileRow score mini bar (#878)", () => {
     return cell;
   }
 
-  it("keeps the score cell's text exactly the formatted number", () => {
-    // The parity counter and every scenario read this cell by its TEXT. The
-    // bar must therefore contribute none — if it ever renders a label, a
-    // percentage or a title, the cell stops matching its desktop counterpart
-    // and nothing else in the suite would notice.
+  it("keeps the score VALUE element's text exactly the formatted number", () => {
+    // The parity counter and every scenario read the score by its TEXT. Layout
+    // slice R put a "keep" label in the same cell (REPLY §"Score bar": without
+    // it the number is an unlabelled quantity), so the exact handle moved from
+    // the cell to `[data-score-value]` — the bar and the label must contribute
+    // nothing to it. If the value element ever renders a percentage, a unit or
+    // a title, the number stops matching its desktop counterpart and nothing
+    // else in the suite would notice.
     const rowEl = renderRow(makeRow({ score: 0.64 }));
-    expect(scoreCell(rowEl).textContent).toBe("0.6");
+    const value = scoreCell(rowEl).querySelector("[data-score-value]");
+    expect(value?.textContent).toBe("0.64");
+  });
+
+  it("labels the number at comfortable and drops the label at compact", () => {
+    // REPLY §"Score bar (R15)": «In compact, drop the "keep" label and keep the
+    // number.» A label that survived into compact would eat the 72px cell.
+    const comfy = scoreCell(renderRow(makeRow({ score: 0.64 })));
+    expect(comfy.querySelector("[data-score-label]")?.textContent).toBe("keep");
+
+    const compact = scoreCell(
+      renderRow(makeRow({ basename: "c.jpg", score: 0.64 }), {
+        density: "compact",
+      })
+    );
+    expect(compact.querySelector("[data-score-label]")).toBeNull();
+    expect(compact.querySelector("[data-score-value]")?.textContent).toBe("0.64");
+  });
+
+  it("drops the label when the table narrows, not only when density does", () => {
+    // The <940px collapse renders the SAME 72px cell as compact, so it has to
+    // shed the same label — otherwise the label and the number wrap.
+    const cell = scoreCell(renderRow(makeRow({ score: 0.64 }), { scoreCompact: true }));
+    expect(cell.querySelector("[data-score-label]")).toBeNull();
+  });
+
+  it("fills the track with a solid colour, not a gradient", () => {
+    // REPLY: «fill solid #b8946a (not a gradient)» — «at 96px a two-stop
+    // gradient is three or four distinguishable pixels of variation, which is
+    // invisible at best and a banding artefact at worst». The token behind the
+    // second stop is deleted in this slice, so a surviving gradient utility
+    // would compile to nothing at all.
+    const fill = scoreCell(renderRow(makeRow({ score: 0.25 }))).querySelector(
+      "[data-score-fill]"
+    ) as HTMLElement;
+    expect(fill.className).toContain("bg-score-fill");
+    expect(fill.className).not.toContain("bg-linear-to-r");
+    expect(fill.className).not.toContain("score-fill-end");
   });
 
   it("fills the track to the score's fraction", () => {
@@ -202,7 +242,7 @@ describe("FileRow score mini bar (#878)", () => {
     // latter.
     const cell = scoreCell(renderRow(makeRow({ score: null })));
     expect(cell.querySelector("[data-score-track]")).toBeNull();
-    expect(cell.textContent).toBe("—");
+    expect(cell.querySelector("[data-score-value]")?.textContent).toBe("—");
   });
 });
 
@@ -280,6 +320,128 @@ describe("FileRow cell typography (REPLY L2)", () => {
     }
     expect(row.querySelector('[data-col="date"]')!.className).not.toContain("text-right");
     expect(row.querySelector('[data-col="name"]')!.className).not.toContain("font-mono");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Layout slice R — the row box, the thumbnail, the folder sub-line, density
+// ---------------------------------------------------------------------------
+
+describe("FileRow box geometry (REPLY §Row heights)", () => {
+  it("centres its cells instead of top-aligning them", () => {
+    // R4, and «the single biggest reason the shipped row reads as a spreadsheet
+    // rather than a photo row»: six short cells top-aligned against a 48px
+    // thumbnail leave every value floating with a void beneath it.
+    const row = renderRow(makeRow());
+    expect(row.className).toContain("items-center");
+    expect(row.className).not.toContain("items-start");
+  });
+
+  it("renders the comfortable box at 72px and the compact box at 52px", () => {
+    // These are the numbers ResultTree's `estimateSize` promises the
+    // virtualiser (lib/rowMetrics.ts). Rendering at a different height is the
+    // defect that makes arrow-key scroll-into-view land a row under the header.
+    expect(renderRow(makeRow()).className).toContain("h-[72px]");
+    expect(
+      renderRow(makeRow({ basename: "c.jpg" }), { density: "compact" }).className
+    ).toContain("h-[52px]");
+  });
+
+  it("gives a group's last row the closing breath, at either density", () => {
+    // REPLY L1: «give the last row of each group a 6px bottom pad beyond its
+    // normal padding, and paint the closing rule under that pad… It is one
+    // number in `estimateSize` for the last row.»
+    const comfy = renderRow(makeRow({ basename: "tail.jpg" }), {
+      isLastInGroup: true,
+    });
+    expect(comfy.className).toContain("h-[78px]");
+    expect(comfy.className).toContain("pb-[17px]");
+
+    const compact = renderRow(makeRow({ basename: "tail2.jpg" }), {
+      isLastInGroup: true,
+      density: "compact",
+    });
+    expect(compact.className).toContain("h-[56px]");
+    expect(compact.className).toContain("pb-[11px]");
+  });
+
+  it("keys padding and gap on the density too", () => {
+    const comfy = renderRow(makeRow());
+    expect(comfy.className).toContain("px-4");
+    expect(comfy.className).toContain("gap-3");
+
+    const compact = renderRow(makeRow({ basename: "c.jpg" }), {
+      density: "compact",
+    });
+    expect(compact.className).toContain("px-[14px]");
+    expect(compact.className).toContain("gap-[10px]");
+  });
+});
+
+describe("FileRow thumbnail (REPLY §Thumbnail R6)", () => {
+  function thumb(row: HTMLElement): HTMLElement {
+    const el = row.querySelector<HTMLElement>("[data-thumb]");
+    if (el === null) throw new Error("no thumbnail box rendered");
+    return el;
+  }
+
+  it("draws a 48px hairline-framed box over the warm hatch", () => {
+    const el = thumb(renderRow(makeRow()));
+    expect(el.className).toContain("h-[48px]");
+    expect(el.className).toContain("rounded-[8px]");
+    expect(el.className).toContain("border-hairline");
+    // The hatch is what shows while the lazy image decodes — «it reads as
+    // "frame awaiting an image" rather than "broken"». No spinner per row.
+    expect(el.className).toContain("thumb-hatch");
+    expect(el.querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("shrinks to 36px at the compact density", () => {
+    const el = thumb(renderRow(makeRow(), { density: "compact" }));
+    expect(el.className).toContain("h-[36px]");
+    expect(el.className).toContain("rounded-[6px]");
+  });
+
+  it("falls back to the hatch and a ▷ when a video thumbnail fails to decode", () => {
+    // A real user hits this on a video the extractor could not produce a poster
+    // frame for: without the fallback the browser paints its own broken-image
+    // glyph, which reads as "this file is damaged" rather than "no preview".
+    const row = renderRow(makeRow({ media_type: "video" }));
+    const img = thumb(row).querySelector("img")!;
+    fireEvent.error(img);
+
+    expect(thumb(row).querySelector("img")).toBeNull();
+    expect(
+      thumb(row).querySelector('[data-thumb-fallback="video"]')?.textContent
+    ).toBe("▷");
+  });
+
+  it("leaves a failed IMAGE thumbnail as bare hatch — the ▷ means video", () => {
+    const row = renderRow(makeRow({ media_type: "image" }));
+    fireEvent.error(thumb(row).querySelector("img")!);
+    expect(thumb(row).querySelector("[data-thumb-fallback]")).toBeNull();
+    expect(thumb(row).className).toContain("thumb-hatch");
+  });
+});
+
+describe("FileRow folder sub-line (REPLY L2)", () => {
+  it("truncates the path from the LEFT so the leaf stays visible", () => {
+    // Two copies of one file differ in the part a right-side ellipsis eats
+    // first. `direction: rtl` + `text-align: left` moves the ellipsis to the
+    // head; the inner ltr isolate stops the bidi algorithm reordering the
+    // separators inside the now-RTL box.
+    const row = renderRow(
+      makeRow({ folder: "D:/Photos/2021/03/holiday/second-week" })
+    );
+    const sub = row.querySelector<HTMLElement>("[data-col-folder]")!;
+    expect(sub.getAttribute("dir")).toBe("rtl");
+    expect(sub.className).toContain("truncate");
+    expect(sub.className).toContain("text-left");
+    expect(sub.className).toContain("font-mono");
+    expect(sub.className).toContain("text-[11px]");
+    const isolate = sub.querySelector("bdi");
+    expect(isolate?.getAttribute("dir")).toBe("ltr");
+    expect(isolate?.textContent).toBe("D:/Photos/2021/03/holiday/second-week");
   });
 });
 

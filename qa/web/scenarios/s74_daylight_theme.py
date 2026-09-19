@@ -42,9 +42,27 @@ What this pins, and why a unit test cannot:
      locks the row: `aria-pressed` plus the computed colour, before and after.
 
   7. **The score mini bar has a real width** (slice b): fill > 0 and ≤ the
-     cell, drawn with the `scoreFill` gradient. A NaN width is valid-looking
-     markup that CSS silently ignores, and a renamed gradient utility compiles
-     to nothing — neither shows up in jsdom.
+     cell. A NaN width is valid-looking markup that CSS silently ignores, and
+     a renamed utility compiles to nothing — neither shows up in jsdom. Layout
+     slice R makes the fill SOLID (the REPLY retires the two-stop gradient:
+     "at 96px … invisible at best and a banding artefact at worst"), so this
+     now asserts `background-image: none` and the fill's computed COLOUR —
+     the token that backed the second stop is deleted in that slice, and a
+     surviving gradient utility would silently paint nothing at all.
+
+ 11. **The row's geometry is the REPLY's, at BOTH densities** (layout slice R).
+     Every number in §"Row heights" / §"Thumbnail" / §"Decision control" /
+     §"Padlock" / §"Score bar" is an absolute px value that exists only after
+     the CSS build: in jsdom `h-[72px]` is a string that spells correctly with
+     Tailwind removed entirely. Read as computed boxes — row height (and the
+     6px taller last row of a group, which is a second number in
+     `estimateSize`), the thumbnail's box/radius/border, the decision control's
+     inset track, the padlock's hit area, the score track and its solid fill,
+     the folder sub-line's left-truncation `direction`, and the mono family on
+     a machine-value cell. Then the density preference is flipped in
+     localStorage and the whole set is re-read at compact — a density-keyed
+     class table is exactly the shape that renders one density correctly and
+     the other not at all.
 
   8. **The app has a typeface at all** (layout slice T). Nothing declared a
      font family before 2026-09-18, so every surface rendered in whatever the
@@ -159,6 +177,11 @@ _MAX_GUTTER_PX = 24
 # not merely survived.
 _DATE_DRAG_PX = 200
 _WIDTHS_KEY = "pm.result-tree.column-widths.v1"
+
+# Layout slice R — the row's own geometry, per density (REPLY 2026-09-18).
+_HAIRLINE = "rgb(231, 221, 205)"  # --color-hairline   #e7ddcd
+_SCORE_FILL = "rgb(184, 148, 106)"  # --color-score-fill #b8946a (now SOLID)
+_DENSITY_KEY = "density"
 
 _PANEL_BG = "rgb(255, 253, 249)"  # --color-panel     #fffdf9
 _TITLEBAR_BG = "rgb(243, 237, 227)"  # --color-titlebar  #f3ede3
@@ -386,16 +409,78 @@ def _read_score_bar(page, row_testid: str) -> dict:
   if (!cell) return null;
   const fill = cell.querySelector('[data-score-fill]');
   const track = cell.querySelector('[data-score-track]');
+  // Layout slice R put a "keep" label in this cell beside the number, so the
+  // number's exact handle moved from the cell's textContent to the value
+  // element. Reading the whole cell here would make every row look scored
+  // (`keep—` is not the em dash) and pick an unscored one for the bar checks.
+  const value = cell.querySelector('[data-score-value]');
   return {
-    text: (cell.textContent || '').trim(),
+    text: value ? (value.textContent || '').trim() : (cell.textContent || '').trim(),
     cellWidth: cell.getBoundingClientRect().width,
     trackWidth: track ? track.getBoundingClientRect().width : null,
     fillWidth: fill ? fill.getBoundingClientRect().width : null,
     fillImage: fill ? getComputedStyle(fill).backgroundImage : null,
+    fillColor: fill ? getComputedStyle(fill).backgroundColor : null,
   };
 }""",
         row_testid,
     )
+
+
+# Layout slice R — every box on the row, as the browser computes it. Read as
+# `getBoundingClientRect()` rather than `getComputedStyle().height`: the CSSOM
+# resolves `height` to the CONTENT box, so a border-box row declared 72px tall
+# reports "49px" there and an assertion written against it would be wrong in a
+# way that looks like a layout bug.
+_READ_ROW_GEOMETRY = """([testid, decTestid, lockTestid]) => {
+  const row = document.querySelector(`[data-testid="${testid}"]`);
+  if (!row) return null;
+  const cs = getComputedStyle(row);
+  const thumb = row.querySelector('[data-thumb]');
+  const ts = thumb ? getComputedStyle(thumb) : null;
+  const track = document.querySelector(`[data-testid="${decTestid}"]`);
+  const trackCs = track ? getComputedStyle(track) : null;
+  const selected = track ? track.querySelector('[aria-pressed="true"]') : null;
+  const lock = document.querySelector(`[data-testid="${lockTestid}"]`);
+  const scoreCell = row.querySelector('[data-col="score"]');
+  const scoreTrack = row.querySelector('[data-score-track]');
+  const scoreFill = row.querySelector('[data-score-fill]');
+  const scoreLabel = row.querySelector('[data-score-label]');
+  const folder = row.querySelector('[data-col-folder]');
+  const size = row.querySelector('[data-col="size"]');
+  const h = (el) => el ? Math.round(el.getBoundingClientRect().height) : null;
+  const w = (el) => el ? Math.round(el.getBoundingClientRect().width) : null;
+  return {
+    density: row.dataset.density,
+    rowHeight: h(row),
+    alignItems: cs.alignItems,
+    rowBorderColor: cs.borderBottomColor,
+    thumbWidth: w(thumb),
+    thumbHeight: h(thumb),
+    thumbRadius: ts ? ts.borderTopLeftRadius : null,
+    thumbBorderWidth: ts ? ts.borderTopWidth : null,
+    thumbBorderColor: ts ? ts.borderTopColor : null,
+    decisionHeight: h(track),
+    decisionBg: trackCs ? trackCs.backgroundColor : null,
+    decisionRadius: trackCs ? trackCs.borderTopLeftRadius : null,
+    selectedLabel: selected ? (selected.textContent || '').trim() : null,
+    selectedBg: selected ? getComputedStyle(selected).backgroundColor : null,
+    lockWidth: w(lock),
+    lockHeight: h(lock),
+    scoreCellWidth: w(scoreCell),
+    scoreLabel: scoreLabel ? (scoreLabel.textContent || '').trim() : null,
+    scoreTrackHeight: h(scoreTrack),
+    scoreFillBg: scoreFill ? getComputedStyle(scoreFill).backgroundColor : null,
+    scoreFillImage: scoreFill ? getComputedStyle(scoreFill).backgroundImage : null,
+    folderDirection: folder ? getComputedStyle(folder).direction : null,
+    sizeFont: size ? getComputedStyle(size).fontFamily : null,
+  };
+}"""
+
+_READ_ROW_HEIGHT = """(testid) => {
+  const row = document.querySelector(`[data-testid="${testid}"]`);
+  return row ? Math.round(row.getBoundingClientRect().height) : null;
+}"""
 
 
 def _get_manifest(base_url: str, db_path: str) -> dict:
@@ -698,11 +783,143 @@ def run(*, base_url: str) -> None:
                 "is silently ignored by CSS); wider than the cell means the "
                 "clamp in lib/scoreBar.ts was bypassed."
             )
-            assert "gradient" in (scored["fillImage"] or ""), (
-                "#878 — the score fill is not the scoreFill gradient "
-                f"(background-image={scored['fillImage']!r}). Tailwind's "
-                "gradient utilities are the kind of class that compiles to "
-                "nothing when renamed, with no test going red."
+            # Layout slice R retires the gradient — REPLY §"Score bar (R15)":
+            # «Solid fill, not the prototype's gradient: at 96px a two-stop
+            # gradient is three or four distinguishable pixels of variation,
+            # which is invisible at best and a banding artefact at worst.»
+            # `--color-score-fill-end` is deleted with it, so the assertion
+            # that used to look for "gradient" is now its inverse: a surviving
+            # `bg-linear-to-r from-… to-…` would reference a token that no
+            # longer exists and paint NOTHING, which is exactly the class of
+            # failure this scenario exists to catch.
+            assert scored["fillImage"] == "none", (
+                "slice R — the score fill still carries a background-image "
+                f"({scored['fillImage']!r}); the REPLY retires the two-stop "
+                "gradient for a solid fill, and the token behind its second "
+                "stop is gone."
+            )
+            assert scored["fillColor"] == _SCORE_FILL, (
+                "slice R — the score fill is "
+                f"{scored['fillColor']}, expected the solid {_SCORE_FILL} "
+                "(#b8946a). A Tailwind colour utility naming a deleted token "
+                "compiles to nothing, with no test going red."
+            )
+
+            # ── 7c. Row geometry, comfortable (layout slice R) ────────────────
+            # Every number below is an absolute px value that exists only after
+            # the CSS build. `h-[72px]` in jsdom is a correctly-spelled string
+            # with Tailwind removed entirely, so the only place these can be
+            # checked is here, against the browser's own boxes.
+            geo = page.evaluate(
+                _READ_ROW_GEOMETRY,
+                [
+                    row_testid,
+                    row_decision_testid(group_id, basename),
+                    row_lock_testid(group_id, basename),
+                ],
+            )
+            print(f"probe_status: s74 row geometry (comfortable) = {geo}")
+            assert geo is not None, (
+                "slice R — the file row is not in the DOM; every geometry "
+                "assertion below would pass for the wrong reason."
+            )
+            assert geo["rowHeight"] == 72, (
+                f"slice R — the row measures {geo['rowHeight']}px, not the "
+                "REPLY's 72px total. This is the number ResultTree hands the "
+                "virtualiser as `estimateSize`: when the two disagree, "
+                "arrow-key scroll-into-view lands a row under the sticky "
+                "header and `overscan: 10` hides it until the list is long."
+            )
+            assert geo["alignItems"] == "center", (
+                f"slice R — the row aligns its cells {geo['alignItems']!r}. R4: "
+                "top-aligning six short cells against a 48px thumbnail «is the "
+                "single biggest reason the shipped row reads as a spreadsheet "
+                "rather than a photo row»."
+            )
+            assert geo["rowBorderColor"] == _ROW_LINE, (
+                f"slice R — the in-group separator is {geo['rowBorderColor']}, "
+                f"expected the light row line {_ROW_LINE} (#f4eee3)."
+            )
+            assert geo["thumbWidth"] == 48 and geo["thumbHeight"] == 48, (
+                f"slice R — the thumbnail is {geo['thumbWidth']}×"
+                f"{geo['thumbHeight']}, expected 48×48."
+            )
+            assert geo["thumbRadius"] == "8px", (
+                f"slice R — the thumbnail radius is {geo['thumbRadius']!r}, "
+                "expected 8px."
+            )
+            assert geo["thumbBorderWidth"] == "1px", (
+                f"slice R — the thumbnail border is {geo['thumbBorderWidth']!r}; "
+                "without the 1px hairline a pale photo bleeds into the panel."
+            )
+            assert geo["thumbBorderColor"] == _HAIRLINE, (
+                f"slice R — the thumbnail border is {geo['thumbBorderColor']}, "
+                f"expected the hairline {_HAIRLINE} (#e7ddcd)."
+            )
+            assert geo["decisionHeight"] == 32, (
+                f"slice R — the decision control is {geo['decisionHeight']}px "
+                "tall, expected the REPLY's 32px inset track."
+            )
+            assert geo["decisionBg"] == _TITLEBAR_BG, (
+                f"slice R — the decision track is {geo['decisionBg']}, expected "
+                f"{_TITLEBAR_BG} (#f3ede3). «The track is what makes three "
+                "mutually exclusive options read as one control with a current "
+                "value rather than three adjacent buttons.»"
+            )
+            assert geo["decisionRadius"] == "9px", (
+                f"slice R — the track radius is {geo['decisionRadius']!r}, "
+                "expected 9px."
+            )
+            # Section 4 staged a delete on this row, so its Delete segment is
+            # the selected one — the only solid-dark-fill-with-a-light-label in
+            # the control, which is the cue that survives grayscale.
+            assert geo["selectedBg"] == _DEC_DELETE_BG, (
+                f"slice R — the selected segment fills {geo['selectedBg']}, "
+                f"expected the delete chip {_DEC_DELETE_BG} (#c4503f)."
+            )
+            assert geo["lockWidth"] == 28 and geo["lockHeight"] == 28, (
+                f"slice R — the padlock hit target is {geo['lockWidth']}×"
+                f"{geo['lockHeight']}, expected 28×28. «A 16px target is below "
+                "a comfortable pointer target and this is the control that "
+                "protects a file from bulk operations.»"
+            )
+            assert geo["scoreTrackHeight"] == 6, (
+                f"slice R — the score track is {geo['scoreTrackHeight']}px "
+                "high, expected 6px. «A 4px full-width hairline track reads as "
+                "a progress indicator; 6px with a visible empty remainder "
+                "reads as a score out of one.»"
+            )
+            assert geo["scoreLabel"] == "keep", (
+                f"slice R — the score cell's label is {geo['scoreLabel']!r}, "
+                "expected 'keep'. «Without it a bare bar and a number in a "
+                "96px cell is an unlabelled quantity, and this number is the "
+                "one the \"keep best\" button acts on.»"
+            )
+            assert geo["folderDirection"] == "rtl", (
+                "slice R — the folder sub-line's direction is "
+                f"{geo['folderDirection']!r}, so it truncates from the RIGHT "
+                "and elides the leaf — the one segment that distinguishes two "
+                "copies of the same file (REPLY L2)."
+            )
+            assert "Cascadia" in (geo["sizeFont"] or ""), (
+                f"slice R — the Size cell renders in {geo['sizeFont']!r}; the "
+                "machine-value columns are mono so their digits line up down "
+                "the column (REPLY L2)."
+            )
+
+            # The group's LAST child is 6px taller — a second number in
+            # `estimateSize`, and the one the REPLY calls "one number" (plan
+            # §Contradictions item 3). It is also the only place the closing
+            # breath is visible at all.
+            last_testid = row_file_testid(
+                group_id, Path(items[-1]["file_path"]).name
+            )
+            last_height = page.evaluate(_READ_ROW_HEIGHT, last_testid)
+            print(f"probe_status: s74 last-in-group row height = {last_height}")
+            assert last_height == 78, (
+                f"slice R — the group's last row measures {last_height}px, "
+                "expected 78 (72 + the 6px closing breath). «The group then "
+                "ends with a breath instead of a butt-joint.»"
             )
 
             # ── 7b. Columns + header chrome (layout slice C) ──────────────────
@@ -1099,6 +1316,74 @@ def run(*, base_url: str) -> None:
                 f"(size={narrow['size']}, action={narrow['action']}). Only dims "
                 "and date are sheddable; Size is SORTABLE and a shed must never "
                 "strand an active sort."
+            )
+
+            # ── 11. The COMPACT density (layout slice R) ──────────────────────
+            # The preference is set the way the store hydrates it — its own
+            # localStorage key, read once at store creation — so this exercises
+            # the real cross-launch path rather than poking React state. The
+            # toggle UI that will set it belongs to slice TB; the preference
+            # and its effect are this slice's.
+            page.evaluate(
+                "(key) => localStorage.setItem(key, 'compact')", _DENSITY_KEY
+            )
+            page.reload()
+            load_manifest(page, db_path)
+            page.wait_for_timeout(600)
+
+            compact = page.evaluate(
+                _READ_ROW_GEOMETRY,
+                [
+                    row_testid,
+                    row_decision_testid(group_id, basename),
+                    row_lock_testid(group_id, basename),
+                ],
+            )
+            print(f"probe_status: s74 row geometry (compact) = {compact}")
+            assert compact is not None, (
+                "slice R — no file row after re-hydrating at the compact "
+                "density. A density value the store cannot map indexes the "
+                "metrics table with `undefined` and every row renders with no "
+                "height at all — a blank tree."
+            )
+            assert compact["density"] == "compact", (
+                "slice R — the row reports density="
+                f"{compact['density']!r} after the preference was persisted as "
+                "'compact'; the store is not hydrating from localStorage."
+            )
+            assert compact["rowHeight"] == 52, (
+                f"slice R — the compact row measures {compact['rowHeight']}px, "
+                "expected 52. The virtualiser estimates 52 here, so a row that "
+                "renders taller drifts the whole list."
+            )
+            assert compact["thumbWidth"] == 36 and compact["thumbRadius"] == "6px", (
+                f"slice R — the compact thumbnail is {compact['thumbWidth']}px "
+                f"at radius {compact['thumbRadius']!r}, expected 36px / 6px."
+            )
+            assert compact["decisionHeight"] == 28, (
+                "slice R — the compact decision control is "
+                f"{compact['decisionHeight']}px tall, expected 28."
+            )
+            assert compact["lockWidth"] == 24, (
+                f"slice R — the compact padlock is {compact['lockWidth']}px "
+                "wide, expected 24."
+            )
+            assert compact["scoreCellWidth"] == 72, (
+                f"slice R — the compact score cell is "
+                f"{compact['scoreCellWidth']}px, expected 72."
+            )
+            assert compact["scoreLabel"] is None, (
+                "slice R — the compact score cell still renders its "
+                f"{compact['scoreLabel']!r} label. «In compact, drop the "
+                "'keep' label and keep the number» — at 72px the label and the "
+                "number cannot share a line."
+            )
+
+            compact_last = page.evaluate(_READ_ROW_HEIGHT, last_testid)
+            print(f"probe_status: s74 compact last-in-group row = {compact_last}")
+            assert compact_last == 56, (
+                f"slice R — the compact group's last row measures "
+                f"{compact_last}px, expected 56 (52 + the 4px closing breath)."
             )
     finally:
         import shutil

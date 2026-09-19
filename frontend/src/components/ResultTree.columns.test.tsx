@@ -11,6 +11,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { colHeaderTestid, colResizeTestid } from "@/testids";
 import { DEFAULT_COLUMN_WIDTHS, columnResizeCeiling } from "@/lib/resultColumns";
 import { DEFAULT_PANEL_WIDTHS } from "@/lib/panelWidths";
+import { DEFAULT_DENSITY } from "@/lib/density";
 import type { FileRow as FileRowData, Group } from "@/api/types";
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,7 @@ describe("ResultTree column-model sort", () => {
         sortDirection: "asc",
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
         panelWidths: { ...DEFAULT_PANEL_WIDTHS },
+        density: DEFAULT_DENSITY,
       },
     });
     restore = stubOffsetHeight();
@@ -228,6 +230,7 @@ describe("ResultTree — a resize drag can never delete the column it is on (#91
         sortDirection: "asc",
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS, ...overrides },
         panelWidths: { ...DEFAULT_PANEL_WIDTHS },
+        density: DEFAULT_DENSITY,
       },
     });
   }
@@ -309,6 +312,7 @@ describe("setColumnWidth store action", () => {
         sortDirection: "asc",
         columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
         panelWidths: { ...DEFAULT_PANEL_WIDTHS },
+        density: DEFAULT_DENSITY,
       },
     });
   });

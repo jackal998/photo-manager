@@ -4,6 +4,7 @@
 import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
 import type { ColumnId, SortDirection } from "../lib/resultColumns";
 import type { PanelId } from "../lib/panelWidths";
+import type { Density } from "../lib/density";
 import type { PrunePref } from "../lib/prune";
 
 // ---------------------------------------------------------------------------
@@ -140,6 +141,17 @@ export interface ResultViewState {
    * setPreviewWidth on a resize drag, which also writes back to localStorage.
    */
   panelWidths: Record<PanelId, number>;
+  /**
+   * Row density (#878, layout slice R). Every row metric — height, thumbnail,
+   * padding, gap, decision-control height, padlock hit target, score cell — is
+   * specified twice by the layout REPLY and keyed on this one value, which the
+   * virtualiser's `estimateSize` reads as well as the row itself.
+   *
+   * Hydrated from localStorage at store creation (key "density", mirroring the
+   * #739 panelWidths recipe); default "comfortable". This slice owns the
+   * preference and its effect; the toggle UI is layout slice TB.
+   */
+  density: Density;
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +435,13 @@ export interface AppActions {
    * lib/panelWidths.ts::clampPanelWidth.
    */
   setPreviewWidth(width: number, persist?: boolean): void;
+
+  /**
+   * Set the result-tree row density (#878, layout slice R) and persist it to
+   * localStorage under key "density" (cross-launch). Unlike the two width
+   * setters there is no drag to throttle, so every call persists.
+   */
+  setDensity(density: Density): void;
 
   /** GET /api/settings and populate settings.values. */
   loadSettings(): Promise<void>;

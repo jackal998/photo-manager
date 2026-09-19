@@ -21,6 +21,8 @@ import {
   type ColumnId,
   type SortDirection,
 } from "@/lib/resultColumns";
+import { DEFAULT_DENSITY, type Density } from "@/lib/density";
+import { ROW_METRICS } from "@/lib/rowMetrics";
 import { colHeaderTestid, colResizeTestid, RESULT_COL_HEADER_ROW } from "@/testids";
 
 interface ColumnHeaderRowProps {
@@ -31,6 +33,10 @@ interface ColumnHeaderRowProps {
   visibleCols?: ReadonlySet<ColumnId>;
   /** The <940px score-cell collapse (see `isScoreCompact`). */
   scoreCompact?: boolean;
+  /** Row density (#878 layout slice R). The header's leading thumbnail spacer,
+   *  its trailing padlock spacer, its gap and its horizontal padding must be
+   *  exactly the ROW's — otherwise every header sits off its column. */
+  density?: Density;
   sortColumn: ColumnId | null;
   sortDirection: SortDirection;
   onToggleSort: (column: ColumnId) => void;
@@ -48,6 +54,7 @@ export function ColumnHeaderRow({
   columnWidths,
   visibleCols,
   scoreCompact = false,
+  density = DEFAULT_DENSITY,
   sortColumn,
   sortDirection,
   onToggleSort,
@@ -55,6 +62,7 @@ export function ColumnHeaderRow({
   ref,
 }: ColumnHeaderRowProps) {
   const t = useT();
+  const metrics = ROW_METRICS[density];
 
   // Active resize drag, or null. Driving the window listeners from a useEffect
   // (keyed on this state) instead of adding them imperatively in the mousedown
@@ -138,10 +146,15 @@ export function ColumnHeaderRow({
       // sentence-case `text-xs font-semibold` it replaces read as the first row
       // of data (audit C1). The height is MEASURED by ResultTree and handed to
       // the virtualizer as `scrollMargin` (#699) — it is never a constant there.
-      className="sticky top-0 z-10 flex h-7 items-center gap-3 px-4 bg-toolbar border-b border-group-line text-[11px] font-semibold uppercase tracking-[0.06em] leading-none text-ink-muted select-none"
+      className={cn(
+        "sticky top-0 z-10 flex h-7 items-center bg-toolbar border-b border-group-line text-[11px] font-semibold uppercase tracking-[0.06em] leading-none text-ink-muted select-none",
+        // Gap + horizontal padding come from the ROW's density table, so the
+        // header and the rows under it can never drift apart.
+        metrics.header
+      )}
     >
       {/* Thumbnail spacer — aligns header cells with FileRow's metadata cells. */}
-      <div className="flex-shrink-0 w-16" aria-hidden="true" />
+      <div className={cn("flex-shrink-0", metrics.headerThumbSpacer)} aria-hidden="true" />
 
       {cols.map((col) => {
         const isActive = sortColumn === col.id;
@@ -261,7 +274,10 @@ export function ColumnHeaderRow({
           comment asked for. */}
       <div
         data-col-chrome="lock"
-        className="flex-shrink-0 w-4 flex items-center justify-center"
+        className={cn(
+          "flex-shrink-0 flex items-center justify-center",
+          metrics.headerLockSpacer
+        )}
         title={t("web.column.lock", "Lock")}
       >
         <Lock className="h-3.5 w-3.5" aria-hidden="true" />
