@@ -19,7 +19,14 @@ import { MAIN_RESULT_TREE } from "@/testids";
 import { GroupRow } from "./result/GroupRow";
 import { FileRow } from "./result/FileRow";
 import { ColumnHeaderRow } from "./result/ColumnHeaderRow";
-import { makeRowComparator } from "@/lib/resultColumns";
+import {
+  clampResizeWidth,
+  effectiveColumnWidths,
+  isScoreCompact,
+  makeRowComparator,
+  visibleColumns,
+  type ColumnId,
+} from "@/lib/resultColumns";
 import type { DecisionValue, FileRow as FileRowData } from "@/api/types";
 
 // ---------------------------------------------------------------------------
@@ -210,14 +217,26 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   // height follows its font, padding and the browser's text metrics.
   const [scrollMargin, setScrollMargin] = useState(0);
 
+  // The table's own available width, measured off the SAME element and the SAME
+  // ResizeObserver as the header height above. The header is a block inside the
+  // scroll container, so its box width is the container's content width — what
+  // the column budget has to fit — and it does not grow when the columns
+  // overflow it. `null` means "not measured yet" (first paint, or a headless
+  // layout that reports a 0-width box): `visibleColumns` renders the full set
+  // for null, so a missing measurement can never masquerade as a narrow table.
+  const [tableWidth, setTableWidth] = useState<number | null>(null);
+
   useLayoutEffect(() => {
     const header = headerRef.current;
     if (header === null) return;
     const measure = () => {
-      const next = header.getBoundingClientRect().height;
+      const rect = header.getBoundingClientRect();
+      const next = rect.height;
       // Skip no-op state updates — a ResizeObserver fires on every layout
       // pass that touches the header (a column drag is one per mousemove).
       setScrollMargin((prev) => (prev === next ? prev : next));
+      const w = rect.width > 0 ? rect.width : null;
+      setTableWidth((prev) => (prev === w ? prev : w));
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
@@ -228,6 +247,91 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
     // in the virtualized branch, so re-run once a manifest replaces a
     // loading/empty placeholder and the ref becomes non-null.
   }, [groups]);
+
+  // ── Resize ↔ shedding, and why they have to be kept apart ────────────────
+  //
+  // Shedding is need-based, so the user's widths are an input: a column they
+  // narrow can pay for another, a column they widen can cost one. That is right
+  // BETWEEN gestures and wrong DURING one — a live drag calls setColumnWidth
+  // per mousemove, so re-planning on every move lets the column being dragged
+  // disappear out from under the cursor while the window listeners keep
+  // widening it. Release then persists a width for a column that is no longer
+  // on screen: no header cell, no handle, no double-click target, and at that
+  // window size no way back. Three guards, each closing one step of that:
+  //
+  //   1. FREEZE — the plan is computed from the widths as they were when the
+  //      drag started, and re-planned once on release.
+  //   2. CEILING — a sheddable column's committed width is capped at the width
+  //      where it still fits, so a drag can never shed the column it is on.
+  //   3. HEAL — a stored width that would hide a sheddable column falls back to
+  //      that column's default, in the plan AND in the store, so a blob written
+  //      before guards 1-2 existed cannot keep a column hidden.
+  const [dragWidths, setDragWidths] = useState<Record<ColumnId, number> | null>(
+    null
+  );
+  // Every input this callback reads lives in a ref, so its identity NEVER
+  // changes. ColumnHeaderRow's drag effect keys on the onResize identity and
+  // re-assigns the drag's own width ref when it re-runs (#796) — a callback
+  // that changed on each mousemove would reset the pending width to the one the
+  // drag started from, and a release right after a move would persist that.
+  const columnWidthsRef = useRef(columnWidths);
+  columnWidthsRef.current = columnWidths;
+  const tableWidthRef = useRef(tableWidth);
+  tableWidthRef.current = tableWidth;
+  const dragWidthsRef = useRef<Record<ColumnId, number> | null>(null);
+
+  const handleColumnResize = useCallback(
+    (column: ColumnId, width: number, persist = true) => {
+      const live = columnWidthsRef.current;
+      // Guard 1 — the first live move of a drag freezes the plan's input.
+      if (!persist && dragWidthsRef.current === null) {
+        dragWidthsRef.current = live;
+        setDragWidths(live);
+      }
+      // Guard 2 — cap against the OTHER columns' widths (the ceiling never
+      // depends on the dragged column's own current value).
+      const capped = clampResizeWidth(
+        column,
+        width,
+        tableWidthRef.current,
+        dragWidthsRef.current ?? live
+      );
+      setColumnWidth(column, capped, persist);
+      // Guard 1 — release re-plans against what was actually committed.
+      if (persist) {
+        dragWidthsRef.current = null;
+        setDragWidths(null);
+      }
+    },
+    [setColumnWidth]
+  );
+
+  // Guard 3 — the healed map is what the plan sees. `effectiveColumnWidths` is
+  // the single definition; the effect below writes the same correction back to
+  // the store so it does not survive into the next launch.
+  const planWidths = dragWidths ?? columnWidths;
+  const healedWidths = useMemo(
+    () => effectiveColumnWidths(tableWidth, planWidths),
+    [tableWidth, planWidths]
+  );
+
+  useEffect(() => {
+    if (dragWidths !== null) return; // never correct the store mid-drag
+    for (const id of Object.keys(healedWidths) as ColumnId[]) {
+      if (healedWidths[id] !== columnWidths[id]) {
+        setColumnWidth(id, healedWidths[id], true);
+      }
+    }
+  }, [healedWidths, columnWidths, dragWidths, setColumnWidth]);
+
+  // One shed decision per width change, shared by the header and every row —
+  // two independent computations would be two chances for the header to head a
+  // column the rows no longer draw.
+  const visibleCols = useMemo<ReadonlySet<ColumnId>>(
+    () => new Set(visibleColumns(tableWidth, healedWidths).map((c) => c.id)),
+    [tableWidth, healedWidths]
+  );
+  const scoreCompact = isScoreCompact(tableWidth, healedWidths);
 
   const virtualizer = useVirtualizer({
     count: vrows.length,
@@ -523,6 +627,10 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       // compares, which is how a silently-reintroduced coordinate offset is
       // caught even while `overscan` hides its visual effect.
       data-scroll-margin={scrollMargin}
+      // The measured width the column budget is evaluated against (L3
+      // shedding). Mirrored onto the root so a scenario can assert WHY a column
+      // is missing instead of inferring it from a viewport size.
+      data-table-width={tableWidth ?? ""}
       ref={scrollRef}
       // #709 — the container is the keyboard focus target; the active row is
       // named by aria-activedescendant rather than by moving DOM focus, because
@@ -549,10 +657,12 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       <ColumnHeaderRow
         ref={headerRef}
         columnWidths={columnWidths}
+        visibleCols={visibleCols}
+        scoreCompact={scoreCompact}
         sortColumn={sortColumn}
         sortDirection={sortDirection}
         onToggleSort={toggleSort}
-        onResize={setColumnWidth}
+        onResize={handleColumnResize}
       />
       {/* Total height spacer for the virtualizer */}
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
@@ -638,6 +748,8 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                     groupId={String(vrow.groupNumber)}
                     groupNumber={vrow.groupNumber}
                     columnWidths={columnWidths}
+                    visibleCols={visibleCols}
+                    scoreCompact={scoreCompact}
                     onDecision={handleDecision}
                     onLock={handleLock}
                     onSelect={handleRowSelect}

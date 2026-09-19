@@ -12,7 +12,12 @@ import {
   formatDims,
 } from "@/lib/format";
 import type { FileRow as FileRowData } from "@/api/types";
-import type { ColumnId } from "@/lib/resultColumns";
+import {
+  COLUMNS,
+  SCORE_COMPACT_WIDTH,
+  columnCellStyle,
+  type ColumnId,
+} from "@/lib/resultColumns";
 import { scoreBarWidth } from "@/lib/scoreBar";
 import {
   SIMILARITY_BADGE,
@@ -27,6 +32,19 @@ import {
   rowLockTestid,
 } from "@/testids";
 
+// Alignment + mono are properties of the COLUMN, not of this component: the
+// header reads the same registry, so deriving the body cell's classes from it
+// is what stops the two drifting (layout REPLY L2 — size · date · dims · score
+// are machine values and must align digit-over-digit down the column).
+const COLUMN_BY_ID = Object.fromEntries(
+  COLUMNS.map((c) => [c.id, c])
+) as Record<ColumnId, (typeof COLUMNS)[number]>;
+
+function cellTypeClass(id: ColumnId): string {
+  const col = COLUMN_BY_ID[id];
+  return cn(col.mono && "font-mono", col.align === "right" && "text-right");
+}
+
 interface FileRowProps {
   row: FileRowData;
   groupId: string;
@@ -35,6 +53,11 @@ interface FileRowProps {
   /** Per-column widths from the result-view store — keeps each cell aligned
    *  with the ColumnHeaderRow above and honours user resizes (#685 / s47). */
   columnWidths: Record<ColumnId, number>;
+  /** Columns the table width currently affords (ResultTree computes it from
+   *  `visibleColumns`). Omitted = render every column. */
+  visibleCols?: ReadonlySet<ColumnId>;
+  /** The <940px score-cell collapse (see `isScoreCompact`). */
+  scoreCompact?: boolean;
   onDecision: (filePath: string, value: import("@/api/types").DecisionValue) => void;
   onLock: (filePath: string, locked: boolean) => void;
   onSelect?: (
@@ -62,9 +85,15 @@ interface FileRowProps {
   isLastInGroup?: boolean;
 }
 
-export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected, isLastInGroup }: FileRowProps) {
+export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, scoreCompact = false, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected, isLastInGroup }: FileRowProps) {
   const t = useT();
   const simLabel = similarityLabel(row.similarity, t);
+  const shows = (id: ColumnId) => visibleCols === undefined || visibleCols.has(id);
+  // Q1 — the classification enum lost its column (it never varies independently
+  // of the badge beside it). It stays REACHABLE here: the badge's tooltip says
+  // it in the legend's own words, via the same web.classification.* keys the
+  // column used, so nothing the column carried became unreachable.
+  const classification = classificationLabel(row.action, t);
   // Daylight 5-state similarity badge (#878) — colour + border style + weight,
   // so the state survives a grayscale render. See lib/similarityBadge.ts.
   const badge = SIMILARITY_BADGE[similarityBadgeState(row.similarity)];
@@ -99,7 +128,13 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
     <div
       data-testid={rowFileTestid(groupId, row.basename)}
       className={cn(
-        "flex items-start gap-3 px-4 py-2 border-b border-hairline-soft bg-panel text-ink hover:bg-subtle cursor-pointer",
+        // The separator INSIDE a group is `row-line` (#f4eee3), deliberately
+        // lighter than the group rule: inside a group the rows are alternatives
+        // to each other and want to read as one block, and the group boundary
+        // is the structural line (layout REPLY L1). `hairline-soft`, which this
+        // wore before, is a full step darker and made every row look like its
+        // own boundary.
+        "flex items-start gap-3 px-4 py-2 border-b border-row-line bg-panel text-ink hover:bg-subtle cursor-pointer",
         row.is_ref_winner && "bg-toolbar hover:bg-subtle",
         // Keeper cue, half 2 of 2 (copy audit R7 / design Q2, 2026-09-18):
         // a 2px accent strip on the row's left edge replaces the "Ref" pill
@@ -145,7 +180,11 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       </div>
 
       {/* Name + folder */}
-      <div data-col="name" className="flex-shrink-0 min-w-0 overflow-hidden" style={{ width: columnWidths.name }}>
+      {/* Name + folder — the FILL column (L3). It takes whatever the shed
+          columns freed, which is the point of shedding: the freed width belongs
+          to the one string the user actually reads, not to a gutter on the
+          right. Floor = its own stored width, then the table scrolls. */}
+      <div data-col="name" className="overflow-hidden" style={columnCellStyle(COLUMN_BY_ID.name, columnWidths.name)}>
         <div className="flex items-center gap-1 flex-wrap">
           <span
             className={cn(
@@ -169,6 +208,8 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
       <div data-col="similarity" className="flex-shrink-0 text-sm overflow-hidden" style={{ width: columnWidths.similarity }}>
         <span
           data-sim-state={similarityBadgeState(row.similarity)}
+          // Q1 — the classification's new home now that its column is gone.
+          title={classification}
           className={cn(
             "inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 border",
             similarityBadgeBorderClass(badge.border),
@@ -187,14 +228,22 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
         </span>
       </div>
 
-      {/* Action */}
-      {/* Action — the scanner's CLASSIFICATION, rendered through i18n since
-          copy audit R1 (it used to be the raw enum, identical in both
-          locales). The `title` carries the same human wording, not the raw
-          value. INTERIM: the column header and whether this column keeps
-          carrying the classification are a separate layout round. */}
-      <div data-col="action" className="flex-shrink-0 text-xs text-ink-muted truncate" style={{ width: columnWidths.action }} title={classificationLabel(row.action, t)}>
-        {classificationLabel(row.action, t)}
+      {/* Action — the DECISION (open questions Q1). This column used to print
+          the scanner's classification while the real decision control sat
+          unlabelled to its right, which made the impostor the most confusable
+          thing on the row. "Action" now names the thing the user acts on, and
+          the control has a real column with a real width instead of the
+          header's hardcoded alignment spacer. The `data-col="action"` value is
+          unchanged, so #735's right-click pre-fill still opens the Set Action
+          dialog on its "Action" field — and that field's seed
+          (`row.user_decision`) finally matches what the cell shows. */}
+      <div data-col="action" className="flex-shrink-0 overflow-hidden" style={{ width: columnWidths.action }}>
+        <DecisionControl
+          value={row.user_decision}
+          onChange={(val) => onDecision(row.file_path, val)}
+          disabled={row.is_locked}
+          data-testid={rowDecisionTestid(groupId, row.basename)}
+        />
       </div>
 
       {/* Score — number (unchanged text) plus the Daylight mini bar (#878).
@@ -203,7 +252,12 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
           what the parity counter and every scenario read. Unscored rows
           (score === null) get the em dash and no track, matching the Qt
           delegate this ports. */}
-      <div data-col="score" className="flex-shrink-0 text-xs text-right text-ink-muted overflow-hidden" style={{ width: columnWidths.score }}>
+      <div
+        data-col="score"
+        data-col-compact={scoreCompact ? "" : undefined}
+        className={cn("flex-shrink-0 text-xs text-ink-muted overflow-hidden", cellTypeClass("score"))}
+        style={{ width: scoreCompact ? SCORE_COMPACT_WIDTH : columnWidths.score }}
+      >
         <div>{formatScore(row.score)}</div>
         {row.score !== null && (
           <div
@@ -220,30 +274,25 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, onDecision, o
         )}
       </div>
 
-      {/* Dimensions */}
-      <div data-col="dims" className="flex-shrink-0 text-xs text-ink-muted overflow-hidden" style={{ width: columnWidths.dims }}>
-        {formatDims(row.pixel_width, row.pixel_height)}
-      </div>
+      {/* Dimensions — first to go when the table narrows (L3): resolution is
+          the field most often identical across a duplicate group. */}
+      {shows("dims") && (
+        <div data-col="dims" className={cn("flex-shrink-0 text-xs text-ink-muted overflow-hidden", cellTypeClass("dims"))} style={{ width: columnWidths.dims }}>
+          {formatDims(row.pixel_width, row.pixel_height)}
+        </div>
+      )}
 
       {/* File size */}
-      <div data-col="size" className="flex-shrink-0 text-xs text-right text-ink-muted overflow-hidden" style={{ width: columnWidths.size }}>
+      <div data-col="size" className={cn("flex-shrink-0 text-xs text-ink-muted overflow-hidden", cellTypeClass("size"))} style={{ width: columnWidths.size }}>
         {formatBytes(row.file_size_bytes)}
       </div>
 
-      {/* Shot date */}
-      <div data-col="date" className="flex-shrink-0 text-xs text-ink-muted overflow-hidden" style={{ width: columnWidths.date }}>
-        {formatDate(row.shot_date)}
-      </div>
-
-      {/* Decision control */}
-      <div className="flex-shrink-0">
-        <DecisionControl
-          value={row.user_decision}
-          onChange={(val) => onDecision(row.file_path, val)}
-          disabled={row.is_locked}
-          data-testid={rowDecisionTestid(groupId, row.basename)}
-        />
-      </div>
+      {/* Shot date — shed after dims, because it is a primary sort (L3). */}
+      {shows("date") && (
+        <div data-col="date" className={cn("flex-shrink-0 text-xs text-ink-muted overflow-hidden", cellTypeClass("date"))} style={{ width: columnWidths.date }}>
+          {formatDate(row.shot_date)}
+        </div>
+      )}
 
       {/* Lock toggle */}
       <div className="flex-shrink-0 pt-1">

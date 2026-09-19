@@ -8,8 +8,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import { ResultTree } from "./ResultTree";
 import { useAppStore } from "@/store/useAppStore";
-import { colHeaderTestid } from "@/testids";
-import { DEFAULT_COLUMN_WIDTHS } from "@/lib/resultColumns";
+import { colHeaderTestid, colResizeTestid } from "@/testids";
+import { DEFAULT_COLUMN_WIDTHS, columnResizeCeiling } from "@/lib/resultColumns";
 import { DEFAULT_PANEL_WIDTHS } from "@/lib/panelWidths";
 import type { FileRow as FileRowData, Group } from "@/api/types";
 
@@ -173,6 +173,130 @@ describe("ResultTree column-model sort", () => {
       "row-file-1-b.jpg",
       "row-file-1-c.jpg",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shedding ↔ resize interaction (#912 round 3)
+// ---------------------------------------------------------------------------
+//
+// The tree's available width is measured off the header's box, which jsdom
+// reports as 0 — so shedding is inert here unless the box is stubbed. 986px is
+// the real measurement at 1280×800 with the preview open: the full set needs
+// 996px, so Resolution is shed and Shot Date is the last column that fits. That
+// is exactly the state where dragging Shot Date's handle used to delete it.
+
+/** Give every element a box `width` px wide, so the header measures as the table. */
+function stubWidth(width: number) {
+  const original = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+    return {
+      x: 0, y: 0, top: 0, left: 0, right: width, bottom: 28,
+      width, height: 28, toJSON: () => ({}),
+    } as DOMRect;
+  };
+  return () => {
+    Element.prototype.getBoundingClientRect = original;
+  };
+}
+
+function dragHandle(colId: string, byPx: number) {
+  const handle = screen.getByTestId(colResizeTestid(colId));
+  act(() => {
+    fireEvent.mouseDown(handle, { clientX: 0 });
+  });
+  act(() => {
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: byPx, buttons: 1 }));
+  });
+}
+
+function releaseDrag() {
+  act(() => {
+    window.dispatchEvent(new MouseEvent("mouseup"));
+  });
+}
+
+describe("ResultTree — a resize drag can never delete the column it is on (#912)", () => {
+  const TABLE = 986;
+  let restoreOffset: (() => void) | undefined;
+  let restoreRect: (() => void) | undefined;
+
+  function seedWidths(overrides: Partial<Record<string, number>> = {}) {
+    useAppStore.setState({
+      resultView: {
+        sortColumn: null,
+        sortDirection: "asc",
+        columnWidths: { ...DEFAULT_COLUMN_WIDTHS, ...overrides },
+        panelWidths: { ...DEFAULT_PANEL_WIDTHS },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    seedWidths();
+    restoreOffset = stubOffsetHeight();
+    restoreRect = stubWidth(TABLE);
+    seed();
+  });
+
+  afterEach(() => {
+    restoreRect?.();
+    restoreOffset?.();
+  });
+
+  it("sheds Resolution but keeps Shot Date at this table width (the setup)", () => {
+    render(<ResultTree />);
+    expect(screen.queryByTestId(colHeaderTestid("dims"))).toBeNull();
+    expect(screen.getByTestId(colHeaderTestid("date"))).toBeInTheDocument();
+  });
+
+  it("keeps Shot Date mounted through a drag well past the slack, and commits the clamp", () => {
+    render(<ResultTree />);
+    dragHandle("date", 200); // 112 → 312 requested, far past what the row can pay for
+    // Mid-drag: the column the cursor is on must still be there. This is the
+    // failure — once it unmounts, the pointer is over nothing and the window
+    // listeners keep widening a column with no handle left.
+    expect(screen.getByTestId(colHeaderTestid("date"))).toBeInTheDocument();
+    releaseDrag();
+    expect(screen.getByTestId(colHeaderTestid("date"))).toBeInTheDocument();
+
+    const stored = useAppStore.getState().resultView.columnWidths.date;
+    expect(stored).toBe(columnResizeCeiling("date", TABLE, DEFAULT_COLUMN_WIDTHS));
+    expect(stored).toBeGreaterThan(DEFAULT_COLUMN_WIDTHS.date); // the drag DID widen it
+    // And the number that outlives the session is the clamped one.
+    expect(
+      JSON.parse(localStorage.getItem("pm.result-tree.column-widths.v1") as string).date
+    ).toBe(stored);
+  });
+
+  it("freezes the shed plan during a drag on a NON-sheddable column", () => {
+    render(<ResultTree />);
+    // Widening File Name by 300 costs more than the row has spare, so Shot Date
+    // has to go — but not until the gesture is over. A column vanishing mid-drag
+    // reflows every cell under the cursor the user is still dragging.
+    dragHandle("name", 300);
+    expect(screen.getByTestId(colHeaderTestid("date"))).toBeInTheDocument();
+    releaseDrag();
+    expect(screen.queryByTestId(colHeaderTestid("date"))).toBeNull();
+    expect(useAppStore.getState().resultView.columnWidths.name).toBe(460);
+  });
+
+  it("self-heals a stored width that would keep a column hidden", () => {
+    // What a browser holds after hitting the bug above, or after using the app
+    // on a wider monitor: a Shot Date width this table cannot afford. Without
+    // the heal the column never renders again at this size, and there is no
+    // handle left to fix it with.
+    seedWidths({ date: 400 });
+    render(<ResultTree />);
+    expect(screen.getByTestId(colHeaderTestid("date"))).toBeInTheDocument();
+    expect(useAppStore.getState().resultView.columnWidths.date).toBe(
+      DEFAULT_COLUMN_WIDTHS.date
+    );
+    // The correction is written through, so the bad value does not come back.
+    expect(
+      JSON.parse(localStorage.getItem("pm.result-tree.column-widths.v1") as string).date
+    ).toBe(DEFAULT_COLUMN_WIDTHS.date);
   });
 });
 
