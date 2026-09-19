@@ -49,6 +49,9 @@ from qa.web._invariants import click_row, ctrl_click_row, run_scan
 from qa.web.testid_constants import (
     EXECUTE_DIALOG,
     MAIN_BULK_LABEL,
+    MAIN_MANIFEST_INPUT,
+    MAIN_MANIFEST_OPEN,
+    group_keep_best_testid,
     MAIN_BULK_VERB_DELETE,
     MAIN_DELETE_CTA,
     MAIN_DENSITY_COMFORTABLE,
@@ -342,8 +345,71 @@ def run(*, base_url: str) -> None:
                 manifest_data
             ), "The filter wrote to the manifest — it must be view-only."
 
+            # ── 4b. A filter NARROWS what the bulk verbs act on ─────────────
+            # The selection survives the filter (typing must not destroy the
+            # user's picks), so it can name rows nobody can see. The label and
+            # the write read one selector, and this is where that is checked
+            # end-to-end: select every row, filter down to one, and the label
+            # must say 1 — a jsdom test cannot settle it because the hidden
+            # rows are not merely styled away, they are out of the DOM.
             filter_box.fill("")
             page.wait_for_timeout(300)
+            click_row(page, row_file_testid(group_id, sorted(names)[0]))
+            for name in sorted(names)[1:]:
+                ctrl_click_row(page, row_file_testid(group_id, name))
+            page.wait_for_timeout(200)
+            label_all = page.get_by_test_id(MAIN_BULK_LABEL).inner_text()
+            filter_box.fill("q95")
+            page.wait_for_timeout(300)
+            label_filtered = page.get_by_test_id(MAIN_BULK_LABEL).inner_text()
+            print(
+                "probe_status: s76 bulk label across a filter = "
+                f"{label_all!r} → {label_filtered!r}"
+            )
+            assert "5" in label_all, (
+                f"Expected all five rows selected, label read {label_all!r}."
+            )
+            assert "1" in label_filtered and "5" not in label_filtered, (
+                "The bulk label still counts rows the filter is hiding: "
+                f"{label_filtered!r}. The verb would then write to rows the "
+                "user cannot see, with a count that disagrees with the label "
+                "it was pressed under."
+            )
+
+            # ── 4c. Keep-best is GATED while the filter is active ───────────
+            # It is a server-side write scoped by group_number, so under a
+            # filter it marks rows the header is not showing while the header
+            # shows the filtered count beside the button.
+            keep_best = page.get_by_test_id(group_keep_best_testid(group_id))
+            filtered_disabled = keep_best.is_disabled()
+            filtered_title = keep_best.get_attribute("title")
+            print(
+                "probe_status: s76 keep-best while filtered = "
+                f"disabled={filtered_disabled} title={filtered_title!r}"
+            )
+            assert filtered_disabled is True, (
+                "'Keep best · delete rest' is still clickable under an active "
+                "filter — it would mark rows the filter is hiding."
+            )
+            assert filtered_title == "Clear the filter to use Keep best", (
+                f"The disabled button gives no reason: title={filtered_title!r}"
+            )
+
+            filter_box.fill("")
+            page.wait_for_timeout(300)
+            cleared_disabled = keep_best.is_disabled()
+            print(
+                f"probe_status: s76 keep-best after clearing = disabled={cleared_disabled}"
+            )
+            # The false-positive half: a gate that refuses everything looks
+            # exactly like one that works.
+            assert cleared_disabled is False, (
+                "'Keep best · delete rest' stayed disabled after the filter was "
+                "cleared — the gate is refusing the ordinary case too."
+            )
+            page.get_by_test_id(row_file_testid(group_id, sorted(names)[0])).click()
+            page.wait_for_timeout(200)
+
             restored = _visible_rows(page)
             assert sorted(restored) == sorted(before_filter), (
                 f"Clearing the filter restored {restored}, expected the original "
@@ -501,6 +567,81 @@ def run(*, base_url: str) -> None:
                 assert leaked not in (
                     zh_cta + zh_marked + (zh_placeholder or "") + zh_density
                 ), f"English {leaked!r} leaked into the zh_TW toolbar/status bar."
+
+            # ── 10. Narrow viewport: the manifest pair sheds, the CTA stays ──
+            # Below ~1100px the strip's compression runs out, and the control
+            # at the scrolled-off end would be the Delete CTA — the only
+            # destructive thing on the screen. So the manifest path input and
+            # its Open button shed instead: they are the one group with an
+            # exact duplicate (File → Open Manifest…, which opens the picker),
+            # so dropping them costs a redundant path, not a capability.
+            page.get_by_test_id(MAIN_LANG_TOGGLE).click()
+            page.wait_for_timeout(600)
+            page.set_viewport_size({"width": 1000, "height": 800})
+            page.wait_for_timeout(500)
+            narrow = page.evaluate(_READ_TOOLBAR, MAIN_TOOLBAR)
+            manifest_present = page.get_by_test_id(MAIN_MANIFEST_INPUT).count()
+            open_present = page.get_by_test_id(MAIN_MANIFEST_OPEN).count()
+            cta_right = page.evaluate(
+                """(testid) => {
+  const el = document.querySelector(`[data-testid="${testid}"]`);
+  if (!el) return null;
+  return { right: el.getBoundingClientRect().right, inner: window.innerWidth };
+}""",
+                MAIN_DELETE_CTA,
+            )
+            print(
+                f"probe_status: s76 at 1000px toolbar={narrow['overflowPx']}px over, "
+                f"manifest_input={manifest_present} open={open_present} cta={cta_right}"
+            )
+            assert manifest_present == 0 and open_present == 0, (
+                "The manifest path input / Open button did not shed at 1000px "
+                f"(input={manifest_present}, open={open_present}), so the strip "
+                "has to scroll to reach the Delete CTA."
+            )
+            # 1000px is BELOW the design width, so the contract here is weaker
+            # than the zero-overflow one asserted at 1280 above: what must hold
+            # is that the one destructive control is fully on screen and
+            # clickable, not that the strip's padding box is untouched. The
+            # measured residue is ~7px of the container's own 16px right
+            # padding — nothing is clipped, and `overflow-x: auto` remains the
+            # net underneath. The number is printed either way, so a future
+            # regression arrives with its measurement rather than a verdict.
+            assert narrow["overflowPx"] <= 16, (
+                f"The toolbar overflows by {narrow['overflowPx']}px at 1000px "
+                "after shedding — more than its own right padding can absorb, "
+                f"so content is genuinely cut off. Child widths: {narrow['kids']}"
+            )
+            assert cta_right is not None and cta_right["right"] <= cta_right["inner"], (
+                "The Delete CTA's right edge is outside the viewport at 1000px "
+                f"({cta_right}) — the one destructive control is off screen."
+            )
+            # Hit-tested rather than clicked: every decision was undone above,
+            # so the CTA is legitimately DISABLED here and a click would hang
+            # waiting for it to become actionable. What matters at this width
+            # is that the point a user would aim at resolves to the button and
+            # not to something covering it.
+            cta_hit = page.evaluate(
+                """(testid) => {
+  const el = document.querySelector(`[data-testid="${testid}"]`);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  return hit === el || el.contains(hit);
+}""",
+                MAIN_DELETE_CTA,
+            )
+            print(f"probe_status: s76 CTA hit-testable at 1000px = {cta_hit}")
+            assert cta_hit is True, (
+                "The Delete CTA's own centre does not resolve to the CTA at "
+                "1000px — it is covered or outside the scrolled strip."
+            )
+            page.set_viewport_size({"width": 1280, "height": 800})
+            page.wait_for_timeout(400)
+            assert page.get_by_test_id(MAIN_MANIFEST_INPUT).count() == 1, (
+                "The manifest input did not come BACK at 1280px — a shed that "
+                "never restores is a removal."
+            )
     finally:
         # ALWAYS put the server back to English — `ui.locale` lives in the
         # server's settings file, not in the browser context PWContext discards.

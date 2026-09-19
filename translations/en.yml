@@ -1015,6 +1015,12 @@ web:
     group_aria: "Group {n}, {count} {fileWord}"
     # Q5's promoted bulk verb, at the right end of the group header.
     keep_best: "Keep best · delete rest"
+    # Tooltip on that button (and on the right-click item) while the toolbar
+    # filter is active: keep-best is a SERVER-side write scoped by group, so it
+    # would mark rows the filter is hiding while the header shows the filtered
+    # count. Disabled rather than re-scoped — picking a "best" copy from a
+    # visible subset is a different, silently wrong, decision.
+    keep_best_filtered: "Clear the filter to use Keep best"
   # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —
   # the patternSummary branch above was already translated).
   delete_confirm:

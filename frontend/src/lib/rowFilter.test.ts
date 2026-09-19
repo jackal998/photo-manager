@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { filterGroups } from "./rowFilter";
+import { filterGroups, visibleSelectedPaths } from "./rowFilter";
 import type { FileRow, Group } from "@/api/types";
 
 function mkRow(folder: string, basename: string): FileRow {
@@ -96,5 +96,49 @@ describe("filterGroups", () => {
     const before = JSON.stringify(GROUPS);
     filterGroups(GROUPS, "sunset");
     expect(JSON.stringify(GROUPS)).toBe(before);
+  });
+});
+
+describe("visibleSelectedPaths", () => {
+  const ALL = [
+    "/photos/2019/Taiwan/IMG_0001.JPG",
+    "/photos/2019/Taiwan/sunset.jpg",
+    "/photos/2021/Japan/IMG_9000.jpg",
+    "/photos/2021/Japan/IMG_9001.jpg",
+  ];
+
+  it("returns the selection by identity when no filter is active", () => {
+    expect(visibleSelectedPaths(GROUPS, "", ALL)).toBe(ALL);
+    expect(visibleSelectedPaths(GROUPS, "  ", ALL)).toBe(ALL);
+  });
+
+  it("drops selected rows the filter is hiding", () => {
+    // The bug this closes: the selection SURVIVES the filter (typing must not
+    // destroy the user's picks), so without this the toolbar counted 4 and the
+    // verb wrote to 4 while only 2 were on screen — a bulk write whose extent
+    // the user cannot see.
+    expect(visibleSelectedPaths(GROUPS, "japan", ALL)).toEqual([
+      "/photos/2021/Japan/IMG_9000.jpg",
+      "/photos/2021/Japan/IMG_9001.jpg",
+    ]);
+  });
+
+  it("keeps the SELECTION's order, not the tree's", () => {
+    const reversed = [...ALL].reverse();
+    expect(visibleSelectedPaths(GROUPS, "japan", reversed)).toEqual([
+      "/photos/2021/Japan/IMG_9001.jpg",
+      "/photos/2021/Japan/IMG_9000.jpg",
+    ]);
+  });
+
+  it("is empty when the filter hides every selected row", () => {
+    expect(
+      visibleSelectedPaths(GROUPS, "japan", ["/photos/2019/Taiwan/sunset.jpg"])
+    ).toEqual([]);
+  });
+
+  it("gives the hidden picks back when the filter is cleared", () => {
+    expect(visibleSelectedPaths(GROUPS, "japan", ALL)).toHaveLength(2);
+    expect(visibleSelectedPaths(GROUPS, "", ALL)).toHaveLength(4);
   });
 });

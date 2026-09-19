@@ -26,11 +26,14 @@
 // a floor); every button is `shrink-0`. At 1280px — the review viewport, and
 // what s76 runs at — that resolves with the inputs near their floors.
 
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 
 import { useT } from "@/i18n/useT";
 import { useAppStore } from "@/store/useAppStore";
 import { deleteTotals } from "@/lib/deleteTotals";
+import { visibleSelectedPaths } from "@/lib/rowFilter";
+import { toolbarShedPlan } from "@/lib/toolbarShed";
 import { DECISION_VOCAB } from "@/components/result/DecisionControl";
 import type { DecisionValue } from "@/api/types";
 import {
@@ -129,12 +132,35 @@ export function Toolbar({
   const t = useT();
   const filterText = useAppStore((s) => s.resultView.filterText);
   const setFilterText = useAppStore((s) => s.setFilterText);
-  const selectedCount = useAppStore((s) => s.selection.selectedPaths.length);
+  const selectedPaths = useAppStore((s) => s.selection.selectedPaths);
   const applyBulkDecision = useAppStore((s) => s.applyBulkDecision);
   // #906 — read off the whole manifest, never the filtered view: this is the
   // number Execute acts on (see lib/deleteTotals.ts).
   const groups = useAppStore((s) => s.manifest.groups);
   const { count: deleteCount } = deleteTotals(groups);
+
+  // The count in the label is the count the verb writes — same selector as
+  // `applyBulkDecision`, because a selection survives the filter and can name
+  // rows nobody can see (lib/rowFilter.ts).
+  const selectedCount = visibleSelectedPaths(groups, filterText, selectedPaths)
+    .length;
+
+  // Shed the manifest-open pair on a narrow strip. Measured off the strip
+  // itself rather than the window, for the same reason slice C measures the
+  // table rather than the viewport: the preview pane's width is the user's,
+  // and a viewport number would be wrong the moment they drag it.
+  const barRef = useRef<HTMLElement>(null);
+  const [barWidth, setBarWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const el = barRef.current;
+    if (el === null) return;
+    const measure = () => setBarWidth(el.clientWidth || null);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const shed = toolbarShedPlan(barWidth);
 
   const bulkLabel =
     selectedCount > 0
@@ -180,6 +206,7 @@ export function Toolbar({
 
   return (
     <header
+      ref={barRef}
       data-testid={MAIN_TOOLBAR}
       // `overflow-x-auto`, not `hidden`: the floors above are sized from a
       // measurement on the widest stack we could reproduce, but a font we have
@@ -265,7 +292,12 @@ export function Toolbar({
 
       {/* Web-only manifest open control (F10) — secondary, kept by owner
           decision. Shrinkable: a path never fits anyway and the filesystem
-          picker behind File → Open Manifest… is the real entry point. */}
+          picker behind File → Open Manifest… is the real entry point — which
+          is also why this pair is the one that SHEDS on a narrow strip
+          (lib/toolbarShed.ts): it is the only group with an exact duplicate
+          elsewhere, so dropping it costs a redundant path, not a capability. */}
+      {shed.manifestOpen && (
+      <>
       <input
         data-testid={MAIN_MANIFEST_INPUT}
         type="text"
@@ -287,6 +319,8 @@ export function Toolbar({
       >
         {t("web.toolbar.open", "Open")}
       </button>
+      </>
+      )}
 
       <button
         data-testid={MAIN_LANG_TOGGLE}

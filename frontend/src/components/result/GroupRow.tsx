@@ -26,6 +26,14 @@ interface GroupRowProps {
    *  button: a second apply reads an already-applied group, so it would
    *  snapshot the damage and leave the undo toast unable to reverse it. */
   keepBestPending?: boolean;
+  /** True while the toolbar filter is narrowing the list. Keep-best is a
+   *  SERVER-side write scoped by `group_number`, so it marks rows the filter
+   *  is hiding while this header shows the FILTERED count — a bulk delete
+   *  whose extent disagrees with the number beside the button. Disabled
+   *  rather than re-scoped: narrowing the write to the visible rows would
+   *  pick a "best" copy from a subset, which is a different (and silently
+   *  wrong) decision. */
+  keepBestFiltered?: boolean;
   /** Right-click on the group header (#735) — opens the reduced group
    *  context menu (Set Action by Field… + Remove from List + Apply
    *  best-copy, #744). */
@@ -45,6 +53,7 @@ export function GroupRow({
   onToggle,
   onKeepBest,
   keepBestPending = false,
+  keepBestFiltered = false,
   onContextMenu,
 }: GroupRowProps) {
   const t = useT();
@@ -171,7 +180,15 @@ export function GroupRow({
         <button
           type="button"
           data-testid={groupKeepBestTestid(String(groupNumber))}
-          disabled={keepBestPending}
+          disabled={keepBestPending || keepBestFiltered}
+          title={
+            keepBestFiltered
+              ? t(
+                  "web.tree.keep_best_filtered",
+                  "Clear the filter to use Keep best"
+                )
+              : undefined
+          }
           onClick={(e) => {
             // The row toggles on click; this button must not collapse the very
             // group it just wrote decisions into.

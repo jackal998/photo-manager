@@ -86,6 +86,12 @@ export function ContextMenu({
   const keepBestPending = useAppStore((s) =>
     s.keepBestPending.includes(groupNumber)
   );
+  // Same gate as the group header's button (slice TB round 2): keep-best is a
+  // server-side write scoped by group_number, so under an active filter it
+  // marks rows the user cannot see while the header shows a filtered count.
+  const keepBestFiltered = useAppStore(
+    (s) => s.resultView.filterText.trim() !== ""
+  );
   const t = useT();
 
   const menuRef = useRef<HTMLDivElement>(null);
@@ -229,7 +235,12 @@ export function ContextMenu({
     <button
       data-testid={CTX_APPLY_BEST_COPY}
       role="menuitem"
-      disabled={keepBestPending}
+      disabled={keepBestPending || keepBestFiltered}
+      title={
+        keepBestFiltered
+          ? t("web.tree.keep_best_filtered", "Clear the filter to use Keep best")
+          : undefined
+      }
       className="w-full text-left px-3 py-1.5 hover:bg-subtle focus:bg-subtle focus:outline-none disabled:opacity-50 disabled:hover:bg-transparent"
       onClick={handleApplyBestCopy}
     >

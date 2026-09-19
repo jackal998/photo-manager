@@ -65,3 +65,33 @@ export function filterGroups(
   }
   return out;
 }
+
+/**
+ * The selected paths that are actually ON SCREEN under the current filter.
+ *
+ * The selection survives a filter (typing in the box must not destroy what the
+ * user picked, and clearing it must give the picks back), so `selectedPaths`
+ * can name rows nobody can see. Every surface that COUNTS or ACTS on the
+ * selection has to agree about that, or the toolbar says "Set 5 selected:" and
+ * the verb writes to two rows the user cannot point at — a bulk write with no
+ * visible extent, which is precisely what L5's counted label exists to prevent.
+ *
+ * One function, two callers — `Toolbar`'s label and `applyBulkDecision` — so
+ * the number in the label and the number the write touches cannot drift apart.
+ * Order follows the SELECTION, not the tree, matching the unfiltered case.
+ *
+ * Returns `selectedPaths` by identity when the filter is empty: the common
+ * case pays nothing, and the array stays reference-stable for React.
+ */
+export function visibleSelectedPaths(
+  groups: readonly Group[],
+  filterText: string,
+  selectedPaths: readonly string[]
+): readonly string[] {
+  if (filterText.trim() === "") return selectedPaths;
+  const visible = new Set<string>();
+  for (const group of filterGroups(groups, filterText)) {
+    for (const row of group.items) visible.add(row.file_path);
+  }
+  return selectedPaths.filter((path) => visible.has(path));
+}

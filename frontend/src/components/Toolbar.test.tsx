@@ -5,7 +5,7 @@
 
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 
 import { Toolbar } from "./Toolbar";
 import { useAppStore } from "@/store/useAppStore";
@@ -20,6 +20,26 @@ import {
   MAIN_FILTER_INPUT,
   MAIN_SCAN_BUTTON,
 } from "@/testids";
+
+// The toolbar measures its own width through a ResizeObserver to decide the
+// manifest-open shed (lib/toolbarShed.ts); jsdom has no ResizeObserver at all.
+// The stub never fires, so `barWidth` stays null and `toolbarShedPlan(null)`
+// renders EVERYTHING — which is the behaviour these tests want, and is the
+// same "a missing measurement is not a narrow toolbar" rule the function
+// itself is table-tested on.
+class NoopResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+beforeAll(() => {
+  vi.stubGlobal("ResizeObserver", NoopResizeObserver);
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
 
 function mkRow(
   basename: string,
@@ -136,6 +156,56 @@ describe("Toolbar bulk verbs (L5)", () => {
     expect(spy).toHaveBeenCalledWith("");
   });
 
+  it("counts only the selected rows the FILTER leaves visible", async () => {
+    // The selection survives the filter, so it can name rows nobody can see.
+    // The label and `applyBulkDecision` read one selector (visibleSelectedPaths)
+    // precisely so the number shown and the number written cannot drift: five
+    // selected, a filter that leaves two → "Set 2 selected:", and the verb
+    // writes those two.
+    const spy = vi.fn().mockResolvedValue(undefined);
+    const items = [
+      mkRow("keep_a.jpg"),
+      mkRow("keep_b.jpg"),
+      mkRow("other_c.jpg"),
+      mkRow("other_d.jpg"),
+      mkRow("other_e.jpg"),
+    ];
+    seed(items, items.map((r) => r.file_path));
+    act(() => {
+      useAppStore.setState({
+        applyBulkDecision: spy,
+        resultView: { ...useAppStore.getState().resultView, filterText: "keep_" },
+      });
+    });
+    renderToolbar();
+
+    expect(screen.getByTestId(MAIN_BULK_LABEL)).toHaveTextContent(
+      "Set 2 selected:"
+    );
+
+    await userEvent.click(screen.getByTestId(MAIN_BULK_VERB_DELETE));
+    expect(spy).toHaveBeenCalledWith("delete");
+    // The store half — that the write touches exactly those two — is asserted
+    // against the real action in useAppStore.test.ts; here the label is what
+    // must agree with it.
+  });
+
+  it("disables the verbs when the filter hides every selected row", () => {
+    const items = [mkRow("a.jpg"), mkRow("b.jpg")];
+    seed(items, [items[0].file_path]);
+    act(() => {
+      useAppStore.setState({
+        resultView: {
+          ...useAppStore.getState().resultView,
+          filterText: "no-such-row",
+        },
+      });
+    });
+    renderToolbar();
+    expect(screen.getByTestId(MAIN_BULK_LABEL)).toHaveTextContent("Set selected:");
+    expect(screen.getByTestId(MAIN_BULK_VERB_DELETE)).toBeDisabled();
+  });
+
   it("renders the zh_TW label from the catalog, not the English fallback", () => {
     useI18nStore.setState({
       locale: "zh_TW",
@@ -152,6 +222,13 @@ describe("Toolbar bulk verbs (L5)", () => {
 describe("Toolbar danger CTA (#906)", () => {
   beforeEach(() => {
     useI18nStore.setState({ locale: "en", catalog: {} });
+    // The store is a module singleton, so a filter left behind by another
+    // block would silently change what this one counts.
+    act(() => {
+      useAppStore.setState({
+        resultView: { ...useAppStore.getState().resultView, filterText: "" },
+      });
+    });
   });
 
   it("carries the delete-marked COUNT and opens the execute flow", async () => {
@@ -231,6 +308,11 @@ describe("Toolbar primary", () => {
     // exactly one answer». jsdom cannot resolve Tailwind to a colour, so the
     // check is on the utility class; s76 asserts the computed rgb in a browser.
     useI18nStore.setState({ locale: "en", catalog: {} });
+    act(() => {
+      useAppStore.setState({
+        resultView: { ...useAppStore.getState().resultView, filterText: "" },
+      });
+    });
     seed([mkRow("a.jpg", "delete")]);
     const { container } = renderToolbar();
     const warm = container.querySelectorAll("header button.bg-warm");

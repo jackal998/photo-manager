@@ -780,6 +780,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                   memberCount={vrow.memberCount}
                   items={orderedItemsByGroup.get(vrow.groupNumber) ?? EMPTY_ITEMS}
                   keepBestPending={keepBestPending.includes(vrow.groupNumber)}
+                  keepBestFiltered={filterText.trim() !== ""}
                   onKeepBest={() => {
                     // Q5: «it must never override a lock». skipLocked is the
                     // server flag that means exactly that (locked rows keep

@@ -50,6 +50,7 @@ import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
 import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
 import { loadPanelWidths, savePanelWidths, clampPanelWidth } from "../lib/panelWidths";
 import { loadDensity, saveDensity, type Density } from "../lib/density";
+import { visibleSelectedPaths } from "../lib/rowFilter";
 import { normalizePrunePref } from "../lib/prune";
 import type { PrunePref } from "../lib/prune";
 import {
@@ -1384,7 +1385,16 @@ export const useAppStore = create<AppStore>()(
     async applyBulkDecision(decision: DecisionValue) {
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
-      const selected = get().selection.selectedPaths;
+      // VISIBLE selected rows only. The selection survives the toolbar filter,
+      // so it can name rows the filter is hiding; writing to those would be a
+      // bulk write whose extent the user cannot see, and it would disagree with
+      // the count the verb's own label just showed them. Same selector the
+      // label uses (lib/rowFilter.ts) so the two cannot drift.
+      const selected = visibleSelectedPaths(
+        get().manifest.groups,
+        get().resultView.filterText,
+        get().selection.selectedPaths
+      );
       if (selected.length === 0) return;
 
       // Index the manifest ONCE. The selection is a path list with no row data
@@ -1426,10 +1436,25 @@ export const useAppStore = create<AppStore>()(
         // apply and the revert-everything-on-failure path. Locked rows are gone
         // by now, so its 409 branch is unreachable from here.
         await get().setDecisions(writable, decision);
-        // setDecisions swallows its failure into manifest.error rather than
-        // throwing, so that is what "did the write land" has to read. A toast
-        // offering to undo a write that never happened is worse than no toast.
-        if (get().manifest.error !== null) return;
+        // setDecisions swallows its failure rather than throwing, so its two
+        // landing places are what "did the write land" has to read. A toast
+        // offering to undo a write that never happened is worse than no toast:
+        // its Undo would PATCH the "prior" values back over rows that still
+        // hold them, and the user would believe both steps worked.
+        //
+        // BOTH branches, not just manifest.error: a `locked_paths` 409 reverts
+        // the optimistic apply and routes to execute.lockConflict instead
+        // (setDecisions above), leaving manifest.error null. The lock filter
+        // here makes that rare rather than impossible — a row locked by
+        // another surface between the index and the PATCH still reaches it —
+        // and when it happens the LockConfirmDialog opens over a toast
+        // claiming "N files set to Delete" that never happened.
+        if (
+          get().manifest.error !== null ||
+          get().execute.lockConflict !== null
+        ) {
+          return;
+        }
       }
 
       set((state) => {

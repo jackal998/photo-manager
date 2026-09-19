@@ -1989,6 +1989,16 @@ function seedBulkSelection(): void {
 }
 
 describe("applyBulkDecision – the toolbar's counted verbs (L5)", () => {
+  beforeEach(() => {
+    // The store is a module singleton and this action now reads the filter,
+    // so a filterText left by a sibling test would silently shrink the
+    // selection the next one writes — the test-order failure that is
+    // indistinguishable from a real regression.
+    useAppStore.setState((s) => {
+      s.resultView.filterText = "";
+    });
+  });
+
   it("writes only the UNLOCKED rows and never sends the locked one", async () => {
     seedBulkSelection();
     vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
@@ -2079,6 +2089,85 @@ describe("applyBulkDecision – the toolbar's counted verbs (L5)", () => {
 
     expect(useAppStore.getState().toast).toBeNull();
     expect(useAppStore.getState().manifest.error).toBe("server error");
+  });
+
+  it("writes ONLY the selected rows the filter leaves visible", async () => {
+    // Round-2 MEDIUM: the selection survives the filter, so without the
+    // visible-selection selector this wrote to rows the user could not see —
+    // a bulk delete with no visible extent, and a count that disagreed with
+    // the label the verb was pressed under.
+    const g1 = makeGroup(1, ["/photos/keep_a.jpg", "/photos/keep_b.jpg"]);
+    const g2 = makeGroup(2, ["/photos/other_c.jpg"]);
+    seedManifest([g1, g2]);
+    useAppStore.setState((s) => {
+      s.selection = {
+        selectedPaths: [
+          "/photos/keep_a.jpg",
+          "/photos/keep_b.jpg",
+          "/photos/other_c.jpg",
+        ],
+        anchorPath: null,
+        scrollToPath: null,
+      };
+      s.resultView.filterText = "keep_";
+    });
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    expect(client.patchDecisions).toHaveBeenCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/photos/keep_a.jpg", decision: "delete" },
+        { file_path: "/photos/keep_b.jpg", decision: "delete" },
+      ],
+      { forceLocked: false }
+    );
+    const byPath = new Map(
+      useAppStore
+        .getState()
+        .manifest.groups.flatMap((g) => g.items)
+        .map((r) => [r.file_path, r])
+    );
+    expect(byPath.get("/photos/other_c.jpg")!.user_decision).toBe("");
+    expect(useAppStore.getState().toast!.affectedCount).toBe(2);
+  });
+
+  it("does nothing when the filter hides every selected row", async () => {
+    const g = makeGroup(1, ["/photos/a.jpg"]);
+    seedManifest([g]);
+    useAppStore.setState((s) => {
+      s.selection = {
+        selectedPaths: ["/photos/a.jpg"],
+        anchorPath: null,
+        scrollToPath: null,
+      };
+      s.resultView.filterText = "no-such-row";
+    });
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    expect(client.patchDecisions).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("raises no toast when a stale lock turns the write into a 409", async () => {
+    // Round-2 LOW: the lock filter makes this rare, not impossible — a row
+    // locked by another surface between the index and the PATCH still reaches
+    // it. setDecisions routes `locked_paths` to execute.lockConflict and
+    // leaves manifest.error NULL, so reading only manifest.error left a toast
+    // claiming "N files set to Delete" over a write that was reverted, with
+    // the LockConfirmDialog opening on top of it.
+    seedBulkSelection();
+    vi.mocked(client.patchDecisions).mockRejectedValue(
+      new client.ApiConflictError("locked_paths", ["/photos/a.jpg"])
+    );
+
+    await useAppStore.getState().applyBulkDecision("delete");
+
+    expect(useAppStore.getState().execute.lockConflict).not.toBeNull();
+    expect(useAppStore.getState().manifest.error).toBeNull();
+    expect(useAppStore.getState().toast).toBeNull();
   });
 
   it("does nothing at all with an empty selection", async () => {
