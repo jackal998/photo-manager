@@ -46,22 +46,36 @@ function safeBytes(n: number): number {
 }
 
 /**
- * Bucket every delete-marked row in `groups` by its folder.
+ * Bucket the delete-marked rows Execute is about to act on, by folder.
+ *
+ * `scopePaths` is the SAME scope the execute call will send: `null` means the
+ * unscoped commit (every delete row in `groups`), and a list narrows to those
+ * paths — "Execute (only selected)" sends `sel.selectedPaths`, a non-"all"
+ * type filter sends the visible decided rows. Listing rows outside that scope
+ * would name files the run will NOT delete and make the pinned total disagree
+ * with what the server does, which is the one number this dialog exists to be
+ * trusted on.
  *
  * Folders come back in ascending path order (deterministic across renders and
  * across a manifest reload that reorders groups); rows keep their manifest
- * order inside each bucket. Counting the WHOLE passed-in set — not a filtered
- * view — mirrors `deleteTotals`: this is what Execute will act on.
+ * order inside each bucket.
  */
 export function deleteFolderBuckets(
-  groups: readonly Group[]
+  groups: readonly Group[],
+  scopePaths: readonly string[] | null = null
 ): DeleteFolderBucket[] {
+  const scope = scopePaths === null ? null : new Set(scopePaths);
   const byFolder = new Map<string, DeleteFolderBucket>();
   for (const group of groups) {
+    // The Ref is read from the WHOLE group, never from the scoped subset: the
+    // keeper a row is a duplicate "of" does not stop existing because it was
+    // not selected, and a scope-narrowed lookup would silently drop the
+    // basename out of every reason line.
     const ref = group.items.find((row) => row.similarity.kind === "ref");
     const refBasename = ref !== undefined ? ref.basename : null;
     for (const row of group.items) {
       if (row.user_decision !== "delete") continue;
+      if (scope !== null && !scope.has(row.file_path)) continue;
       let bucket = byFolder.get(row.folder);
       if (bucket === undefined) {
         bucket = { folder: row.folder, count: 0, bytes: 0, rows: [] };

@@ -30,7 +30,7 @@ import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
 
 import { useAppStore } from "@/store/useAppStore";
 import { nextSelection, type SelectionResult } from "@/lib/multiSelect";
-import { deleteTotals } from "@/lib/deleteTotals";
+import { deleteFolderBuckets } from "@/lib/deleteConfirmRows";
 import {
   EXECUTE_DIALOG,
   EXECUTE_BTN_EXECUTE,
@@ -179,6 +179,14 @@ export function ExecuteDialog() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   // The complete-delete group IDs backing the currently-open confirm (#733).
   const [deleteConfirmGroupIds, setDeleteConfirmGroupIds] = useState<string[]>([]);
+  // The scope_paths the queued execute call will send, mirrored into state so
+  // the confirm dialog's row list can be narrowed by it (#917). `null` = the
+  // unscoped commit. Kept beside the group IDs rather than read off
+  // `pendingExecOptsRef` because a ref does not re-render the dialog, and a
+  // list that lags one gate behind would name the PREVIOUS run's files.
+  const [deleteConfirmScopePaths, setDeleteConfirmScopePaths] = useState<
+    string[] | null
+  >(null);
   // Pending execute opts queued while the delete-confirm dialog is open.
   const pendingExecOptsRef = useRef<{ scopePaths?: string[]; forceLocked?: boolean } | null>(null);
 
@@ -342,6 +350,7 @@ export function ExecuteDialog() {
       if (ids.length > 0) {
         pendingExecOptsRef.current = {};
         setDeleteConfirmGroupIds(ids);
+        setDeleteConfirmScopePaths(null);
         setDeleteConfirmOpen(true);
       } else {
         void executeDecisions();
@@ -360,6 +369,9 @@ export function ExecuteDialog() {
     if (ids.length > 0) {
       pendingExecOptsRef.current = { scopePaths };
       setDeleteConfirmGroupIds(ids);
+      // The COMMIT scope, not `gateScope`: the confirm lists what will be
+      // deleted, and the two deliberately differ in this branch (see above).
+      setDeleteConfirmScopePaths(scopePaths);
       setDeleteConfirmOpen(true);
     } else {
       void executeDecisions({ scopePaths });
@@ -373,6 +385,7 @@ export function ExecuteDialog() {
     if (ids.length > 0) {
       pendingExecOptsRef.current = { scopePaths };
       setDeleteConfirmGroupIds(ids);
+      setDeleteConfirmScopePaths(scopePaths);
       setDeleteConfirmOpen(true);
     } else {
       void executeDecisions({ scopePaths });
@@ -404,13 +417,19 @@ export function ExecuteDialog() {
   // Render
   // -------------------------------------------------------------------------
 
-  // Count of delete-scoped rows for the DeleteConfirmDialog body. Routed
-  // through `deleteTotals` (#917) so this count and the confirm dialog's
-  // folder buckets are summed by one function over one set of rows — a second
-  // hand-rolled reduce is how the header and the list start disagreeing.
+  // Count of delete rows for the DeleteConfirmDialog body — narrowed by the
+  // SAME scope_paths the queued execute call will send (#917), because the
+  // dialog's job is to describe that call. Unscoped ("Execute" with no
+  // filter) keeps every delete row, as before. Summed from the same
+  // `deleteFolderBuckets` the dialog renders, so the sentence, the pinned
+  // total and the list below it cannot disagree.
   const deleteCount = useMemo(
-    () => deleteTotals(scopedGroups).count,
-    [scopedGroups]
+    () =>
+      deleteFolderBuckets(scopedGroups, deleteConfirmScopePaths).reduce(
+        (acc, bucket) => acc + bucket.count,
+        0
+      ),
+    [scopedGroups, deleteConfirmScopePaths]
   );
 
   return (
@@ -419,6 +438,7 @@ export function ExecuteDialog() {
       open={deleteConfirmOpen}
       deleteCount={deleteCount}
       groups={scopedGroups}
+      scopePaths={deleteConfirmScopePaths}
       groupIds={deleteConfirmGroupIds}
       onConfirm={handleDeleteConfirmConfirm}
       onCancel={handleDeleteConfirmCancel}

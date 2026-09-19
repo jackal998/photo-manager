@@ -74,6 +74,13 @@ export interface DeleteConfirmDialogProps {
    */
   groups?: readonly Group[];
   /**
+   * The execute call's scope — exactly the `scope_paths` that will be sent.
+   * `null`/omitted = the unscoped commit (every delete row in `groups`).
+   * "Execute (only selected)" passes the selection, so the list names the
+   * files that will actually be deleted rather than the whole group's.
+   */
+  scopePaths?: readonly string[] | null;
+  /**
    * The complete-delete group IDs (as strings) backing this confirm.
    * Optional/empty for callers with no group concept (the field-based
    * bulk-decide ActionDialog) — falls back to the generic copy below.
@@ -95,6 +102,7 @@ export function DeleteConfirmDialog({
   open,
   deleteCount,
   groups,
+  scopePaths = null,
   groupIds = [],
   patternSummary,
   onConfirm,
@@ -112,8 +120,8 @@ export function DeleteConfirmDialog({
       : t("web.delete_confirm.file_plural", "files");
 
   const buckets = useMemo(
-    () => (groups === undefined ? [] : deleteFolderBuckets(groups)),
-    [groups]
+    () => (groups === undefined ? [] : deleteFolderBuckets(groups, scopePaths)),
+    [groups, scopePaths]
   );
   const hasRowList = buckets.length > 0;
   // The pinned total describes the list directly below it, so it is summed

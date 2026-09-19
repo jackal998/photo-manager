@@ -388,6 +388,41 @@ describe("DeleteConfirmDialog — folder buckets and reason lines (#917)", () =>
     );
   });
 
+  it("narrows the list and the pinned total to the execute scope", () => {
+    // PR #921 review, HIGH: "Execute (only selected)" sends
+    // scope_paths=selection; a dialog listing the whole group names files that
+    // will NOT be deleted and pins a total the server contradicts.
+    render(
+      <DeleteConfirmDialog
+        open={true}
+        deleteCount={1}
+        groups={twoFolderGroups()}
+        scopePaths={["/photos/trip/beach-01-copy.jpg"]}
+        groupIds={["1"]}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getAllByTestId(EXECUTE_DELETE_CONFIRM_FOLDER)).toHaveLength(1);
+    expect(screen.getByTestId(EXECUTE_DELETE_CONFIRM_TOTALS)).toHaveTextContent(
+      "1 file · 12.0 KB"
+    );
+    const reasons = screen.getAllByTestId(EXECUTE_DELETE_CONFIRM_REASON);
+    expect(reasons).toHaveLength(1);
+    // The out-of-scope row is gone from the list…
+    expect(screen.queryByText("beach-01-web.jpg")).toBeNull();
+    // …while the Ref it duplicates is still named, though it is not in scope.
+    expect(reasons[0]).toHaveTextContent("Exact duplicate of beach-01.jpg");
+  });
+
+  it("lists every delete row when scopePaths is null (unscoped Execute)", () => {
+    renderWithGroups(twoFolderGroups());
+    expect(screen.getAllByTestId(EXECUTE_DELETE_CONFIRM_REASON)).toHaveLength(2);
+    expect(screen.getByTestId(EXECUTE_DELETE_CONFIRM_TOTALS)).toHaveTextContent(
+      "2 files · 24.0 KB"
+    );
+  });
+
   it("omitting groups keeps the compact dialog with no row list (additive prop)", () => {
     renderDialog(true, 3, ["3"]);
     expect(screen.queryByTestId(EXECUTE_DELETE_CONFIRM_TOTALS)).toBeNull();

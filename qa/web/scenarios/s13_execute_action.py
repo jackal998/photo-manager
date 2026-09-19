@@ -168,6 +168,7 @@ from qa.web._pw import PWContext
 from qa.web._invariants import (
     run_scan,
     right_click_row,
+    click_row,
     click_context_item,
     open_execute_dialog,
     set_row_decision,
@@ -176,6 +177,8 @@ from qa.web.testid_constants import (
     CTX_SET_ACTION_DELETE,
     EXECUTE_DIALOG,
     EXECUTE_BTN_EXECUTE,
+    EXECUTE_BTN_EXECUTE_SELECTED,
+    execute_row_testid,
     EXECUTE_ALL_DELETE_CONFIRM,
     EXECUTE_ALL_DELETE_CONFIRM_YES,
     EXECUTE_ALL_DELETE_CONFIRM_NO,
@@ -252,11 +255,12 @@ def _execute_dialog_open(page) -> bool:
 def _ensure_execute_dialog_closed(page) -> None:
     """Dismiss EXECUTE_DIALOG if it is still up.
 
-    Cancelling the delete confirm normally cascade-closes the Execute dialog
-    (the sibling-Radix divergence documented in ``_run_mixed_manifest_phase``),
-    but that is an observed behaviour, not a contract — so anything that needs
-    the MAIN window reachable (the language toggle) closes it defensively
-    instead of assuming.
+    Since the #721 guard (ExecuteDialog's ``onInteractOutside`` calls
+    ``e.preventDefault()`` unconditionally), cancelling the delete confirm
+    leaves the Execute dialog OPEN — a cascade-close is no longer possible.
+    Anything that needs the MAIN window reachable (the language toggle) must
+    therefore close it explicitly; this helper stays tolerant of both states
+    so it survives a future change in either direction.
     """
     if not _execute_dialog_open(page):
         return
@@ -738,15 +742,18 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
             confirm_no.click()
             confirm_sheet.wait_for(state="hidden", timeout=5_000)
 
-            # WEB DIVERGENCE (observed live): DeleteConfirmDialog is a SIBLING
-            # Radix Dialog, not nested inside ExecuteDialog's DOM (ExecuteDialog.tsx
-            # renders ``<><DeleteConfirmDialog/><Dialog ...EXECUTE_DIALOG/></>``),
-            # so dismissing it registers as an interact-outside on ExecuteDialog —
-            # the same cascade s34/s53 document for the nested LOCK_CONFIRM_DIALOG.
-            # ExecuteDialog's onInteractOutside only guards ``executeRunning``
-            # (false here — nothing has POSTed yet), so Radix closes it too. Qt
-            # keeps its single dialog open across Cancel; the web returns the
-            # user to the main review tree. Re-open before the next Execute click.
+            # HISTORICAL (kept because the probe below still reports it):
+            # DeleteConfirmDialog is a SIBLING Radix Dialog, not nested inside
+            # ExecuteDialog's DOM (ExecuteDialog.tsx renders
+            # ``<><DeleteConfirmDialog/><Dialog ...EXECUTE_DIALOG/></>``), so
+            # dismissing it once registered as an interact-outside on
+            # ExecuteDialog and cascade-closed it — the same shape s34/s53
+            # document for the nested LOCK_CONFIRM_DIALOG. #721 ended that:
+            # ExecuteDialog's ``onInteractOutside`` now calls
+            # ``e.preventDefault()`` UNCONDITIONALLY (ExecuteDialog.tsx, the
+            # #721 comment block), so Cancel leaves the Execute dialog OPEN and
+            # the probe below reports False. The steps that follow do not
+            # assume either way — they use ``_ensure_execute_dialog_{closed,open}``.
             execute_dialog_closed_after_cancel = (
                 page.get_by_test_id(EXECUTE_DIALOG).count() == 0
                 or not page.get_by_test_id(EXECUTE_DIALOG).is_visible()
@@ -808,6 +815,70 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
                 }""",
                 timeout=15_000,
             )
+
+            # ── Step 5c (#917 review, HIGH): the confirm follows the SCOPE ────
+            # "Execute (only selected)" sends scope_paths=selection. The confirm
+            # must list exactly the selected row — listing the whole group would
+            # name a file the run will NOT delete and pin a total the server
+            # then contradicts. Group A holds two delete rows; select ONE.
+            execute_btn = _ensure_execute_dialog_open(page)
+            selected_basename = _MIXED_GROUP_A_BASENAMES[1]
+            other_basename = _MIXED_GROUP_A_BASENAMES[0]
+            click_row(page, execute_row_testid(group_a_id, selected_basename))
+            exec_selected_btn = page.get_by_test_id(EXECUTE_BTN_EXECUTE_SELECTED)
+            exec_selected_btn.wait_for(state="visible", timeout=10_000)
+            exec_selected_btn.click()
+            confirm_sheet.wait_for(state="visible", timeout=10_000)
+
+            scoped_reasons = page.get_by_test_id(EXECUTE_DELETE_CONFIRM_REASON)
+            scoped_reason_texts = [
+                scoped_reasons.nth(i).inner_text()
+                for i in range(scoped_reasons.count())
+            ]
+            scoped_totals = (
+                page.get_by_test_id(EXECUTE_DELETE_CONFIRM_TOTALS).inner_text().strip()
+            )
+            scoped_sheet_text = confirm_sheet.inner_text()
+            # The ROW list with the reason lines subtracted. The out-of-scope
+            # row's basename legitimately appears INSIDE a reason line — it is
+            # group A's Ref, and "Exact duplicate of <ref>" must keep naming it
+            # whether or not the Ref itself was selected. What must not appear
+            # is a ROW for it.
+            listed_rows_text = scoped_sheet_text
+            for text in scoped_reason_texts:
+                listed_rows_text = listed_rows_text.replace(text, "")
+            print(
+                f"probe_status: s13 confirm[scoped] totals={scoped_totals!r} "
+                f"reasons={scoped_reason_texts!r} selected={selected_basename!r}"
+            )
+
+            assert len(scoped_reason_texts) == 1, (
+                "Execute-selected confirm must list exactly the 1 selected row; "
+                f"got {len(scoped_reason_texts)} reason lines: {scoped_reason_texts!r}"
+            )
+            assert re.search(r"\b1 file\b", scoped_totals), (
+                "Execute-selected confirm total must say '1 file' (the row the "
+                f"server will be sent); got {scoped_totals!r}"
+            )
+            assert selected_basename in listed_rows_text, (
+                f"the selected row {selected_basename!r} is missing from the "
+                f"scoped confirm's row list; got {listed_rows_text!r}"
+            )
+            assert other_basename not in listed_rows_text, (
+                f"the UNSELECTED row {other_basename!r} is listed as a ROW in "
+                "the scoped confirm — the dialog is naming a file "
+                f"Execute-selected will not delete; got {listed_rows_text!r}"
+            )
+
+            page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM_NO).click()
+            confirm_sheet.wait_for(state="hidden", timeout=5_000)
+            # Cancel is a no-op: both group-A files must still be on disk, so
+            # the unscoped Execute below still has both to delete.
+            for path in group_a_paths:
+                assert os.path.exists(path), (
+                    f"Cancelling the scoped confirm must delete nothing; "
+                    f"{path!r} is gone"
+                )
 
             # ── Step 6: Execute again, drive YES this time ────────────────────
             execute_btn = _ensure_execute_dialog_open(page)

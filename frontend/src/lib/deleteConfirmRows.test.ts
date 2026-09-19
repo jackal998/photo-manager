@@ -118,6 +118,64 @@ describe("deleteFolderBuckets", () => {
     expect(ref?.refBasename).toBeNull();
   });
 
+  // The scope argument is the reviewer-found HIGH on PR #921: "Execute (only
+  // selected)" sends scope_paths=selection, but the dialog was listing every
+  // delete row in the group — naming files that would NOT be deleted and
+  // pinning a total the server would contradict.
+  describe("execute scope", () => {
+    const threeDeletes = (): Group[] => [
+      mkGroup(1, [
+        mkRow("ref.jpg", "/photos", "", 9_000, { kind: "ref", percent: null }),
+        mkRow("a.jpg", "/photos", "delete", 1_000),
+        mkRow("b.jpg", "/photos", "delete", 2_000),
+        mkRow("c.jpg", "/photos", "delete", 4_000),
+      ]),
+    ];
+
+    it("lists only the selected row when the scope is a selection of 1 of 3", () => {
+      const buckets = deleteFolderBuckets(threeDeletes(), ["/photos/b.jpg"]);
+      expect(buckets).toHaveLength(1);
+      expect(buckets[0]).toMatchObject({ count: 1, bytes: 2_000 });
+      expect(buckets[0].rows.map((r) => r.basename)).toEqual(["b.jpg"]);
+    });
+
+    it("lists only the visible rows when the scope is a filtered subset", () => {
+      const buckets = deleteFolderBuckets(threeDeletes(), [
+        "/photos/a.jpg",
+        "/photos/c.jpg",
+      ]);
+      expect(buckets[0]).toMatchObject({ count: 2, bytes: 5_000 });
+      expect(buckets[0].rows.map((r) => r.basename)).toEqual(["a.jpg", "c.jpg"]);
+    });
+
+    it("lists every delete row when the scope is null (unscoped commit)", () => {
+      const buckets = deleteFolderBuckets(threeDeletes(), null);
+      expect(buckets[0]).toMatchObject({ count: 3, bytes: 7_000 });
+      // …and omitting the argument entirely behaves the same.
+      expect(deleteFolderBuckets(threeDeletes())[0].count).toBe(3);
+    });
+
+    it("keeps naming the group's Ref even when the Ref is out of scope", () => {
+      // The keeper a row duplicates does not stop existing because it was not
+      // selected — a scope-narrowed Ref lookup would blank every reason line.
+      const buckets = deleteFolderBuckets(threeDeletes(), ["/photos/a.jpg"]);
+      expect(buckets[0].rows[0].refBasename).toBe("ref.jpg");
+    });
+
+    it("drops a folder whose every delete row is out of scope", () => {
+      const buckets = deleteFolderBuckets(
+        [
+          mkGroup(1, [
+            mkRow("keep.jpg", "/photos/trip", "delete", 1_000),
+            mkRow("gone.jpg", "/photos/other", "delete", 1_000),
+          ]),
+        ],
+        ["/photos/other/gone.jpg"]
+      );
+      expect(buckets.map((b) => b.folder)).toEqual(["/photos/other"]);
+    });
+  });
+
   it("counts a row with a non-finite size as 0 bytes, not NaN", () => {
     const buckets = deleteFolderBuckets([
       mkGroup(1, [mkRow("bad.jpg", "/photos", "delete", Number.NaN)]),
