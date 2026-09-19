@@ -26,7 +26,7 @@
 // a floor); every button is `shrink-0`. At 1280px — the review viewport, and
 // what s76 runs at — that resolves with the inputs near their floors.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 
 import { useT } from "@/i18n/useT";
@@ -137,13 +137,20 @@ export function Toolbar({
   // #906 — read off the whole manifest, never the filtered view: this is the
   // number Execute acts on (see lib/deleteTotals.ts).
   const groups = useAppStore((s) => s.manifest.groups);
-  const { count: deleteCount } = deleteTotals(groups);
+  // Both figures below walk EVERY row of the manifest, and the toolbar
+  // re-renders on unrelated store changes (a keystroke in the manifest path
+  // box, a selection that did not change what is visible). Memoised on the
+  // three inputs each actually reads — at 40,000 rows a per-render sweep is
+  // paid on every keystroke, and the values are pure functions of these.
+  const deleteCount = useMemo(() => deleteTotals(groups).count, [groups]);
 
   // The count in the label is the count the verb writes — same selector as
   // `applyBulkDecision`, because a selection survives the filter and can name
   // rows nobody can see (lib/rowFilter.ts).
-  const selectedCount = visibleSelectedPaths(groups, filterText, selectedPaths)
-    .length;
+  const selectedCount = useMemo(
+    () => visibleSelectedPaths(groups, filterText, selectedPaths).length,
+    [groups, filterText, selectedPaths]
+  );
 
   // Shed the manifest-open pair on a narrow strip. Measured off the strip
   // itself rather than the window, for the same reason slice C measures the

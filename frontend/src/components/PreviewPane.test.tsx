@@ -7,7 +7,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PreviewPane } from "./PreviewPane";
 import { FullResViewer } from "./FullResViewer";
 import { useAppStore } from "@/store/useAppStore";
-import { PREVIEW_PANE, PREVIEW_SINGLE_IMAGE, PREVIEW_INFO, FULLRES_DIALOG, FULLRES_IMAGE } from "@/testids";
+import {
+  PREVIEW_PANE,
+  PREVIEW_SINGLE_IMAGE,
+  PREVIEW_INFO,
+  PREVIEW_TITLE,
+  PREVIEW_DECISION,
+  PREVIEW_KEEP_WORTHINESS,
+  FULLRES_DIALOG,
+  FULLRES_IMAGE,
+} from "@/testids";
 import type { Group } from "@/api/types";
 
 // #787 — the HEVC capability probe. Mocked here so these tests exercise the
@@ -184,9 +193,17 @@ describe("PreviewPane", () => {
       expect(screen.getByTestId(PREVIEW_INFO)).toHaveTextContent("MB");
     });
 
-    it("info panel shows formatted score", () => {
+    it("keep-worthiness carries the formatted score (it left the metadata table)", () => {
+      // Layout slice PV / REPLY P7: the five metadata rows are «Name · Folder
+      // · Size · Resolution · Shot date» — Score moved OUT, because the row
+      // already carries it and the pane says it under its own name (P6). The
+      // number itself must not have been lost in that move, which is what this
+      // test is for: it is the same assertion, re-aimed at the new home.
       render(<PreviewPane />);
-      expect(screen.getByTestId(PREVIEW_INFO)).toHaveTextContent("88.5");
+      expect(screen.getByTestId(PREVIEW_KEEP_WORTHINESS)).toHaveTextContent(
+        "88.50"
+      );
+      expect(screen.getByTestId(PREVIEW_INFO)).not.toHaveTextContent("88.50");
     });
 
     it("info panel shows pixel dimensions", () => {
@@ -203,15 +220,159 @@ describe("PreviewPane", () => {
       expect(infoEl.textContent).toMatch(/2024/);
     });
 
-    it("image scroll container has overflow-y-scroll class (not auto) — #535 invariant", () => {
+    it("scroll container has overflow-y-scroll class (not auto) — #535 invariant", () => {
       render(<PreviewPane />);
-      const img = screen.getByTestId(PREVIEW_SINGLE_IMAGE);
-      // Walk up to the scroll container (the parent of the img).
-      const scrollContainer = img.parentElement;
+      // Slice PV moved the scroller OUT one level — it now wraps the whole
+      // content column, because the metadata table lost its own height cap and
+      // the pane is what scrolls. The invariant is unchanged and so is what it
+      // protects: `scroll`, never `auto`. Found by its marker attribute rather
+      // than by `img.parentElement`, which is now the 4:3 frame.
+      const scrollContainer = screen
+        .getByTestId(PREVIEW_PANE)
+        .querySelector("[data-preview-scroll]");
       expect(scrollContainer).not.toBeNull();
-      // Must have overflow-y:scroll applied (Tailwind class overflow-y-scroll).
-      // We assert the class is present on the container.
       expect(scrollContainer!.className).toMatch(/overflow-y-scroll/);
+      expect(scrollContainer!.className).not.toMatch(/overflow-y-auto/);
+      // …and the second half of the fix that slice PV adds: the frame holding
+      // the image has a FIXED aspect ratio, so a portrait photo's own aspect
+      // never feeds back into the pane's height. Without this the always-on
+      // scrollbar is damping an oscillation instead of removing its source.
+      const frame = screen.getByTestId(PREVIEW_SINGLE_IMAGE).parentElement;
+      expect(frame!.className).toMatch(/aspect-\[4\/3\]/);
+    });
+
+    // -----------------------------------------------------------------------
+    // Layout slice PV (#878) / #905
+    // -----------------------------------------------------------------------
+
+    it("renders the pane title (P2 — the pane had none)", () => {
+      render(<PreviewPane />);
+      // Sentence case in the catalog; CSS does the uppercasing, which is what
+      // keeps zh-TW unaffected by a transform Han characters ignore.
+      expect(screen.getByTestId(PREVIEW_TITLE)).toHaveTextContent(
+        "Preview · Selected photo"
+      );
+    });
+
+    it("renders the basename as the pane heading, truncated with the full name in title", () => {
+      render(<PreviewPane />);
+      const heading = screen.getByRole("heading", { level: 2 });
+      expect(heading).toHaveTextContent("sunset.jpg");
+      expect(heading).toHaveAttribute("title", "sunset.jpg");
+    });
+
+    it("metadata table is exactly five rows: Name, Folder, Size, Resolution, Shot date (P7)", () => {
+      // The contract's fields, in order. Seven rows is what the pane shipped
+      // with (Score and Created rode along); the count is the assertion,
+      // because an extra row is how a 320px pane silently becomes a scroller.
+      render(<PreviewPane />);
+      const labels = Array.from(
+        screen.getByTestId(PREVIEW_INFO).children
+      ).map((el) => el.firstElementChild?.textContent);
+      expect(labels).toEqual([
+        "Name",
+        "Folder",
+        "Size",
+        "Resolution",
+        "Shot date",
+      ]);
+    });
+
+    it("shot date is formatted in the APP's locale, not the browser's", () => {
+      // The bug this pins actually shipped: `formatDate`'s `locale` argument
+      // is optional, so a call site that drops it follows the BROWSER and an
+      // English UI prints 「2024年6月1日」 — no throw, nothing red, invisible
+      // on an en-* dev machine (useDateLocale.ts's own header says so).
+      render(<PreviewPane />);
+      expect(screen.getByTestId(PREVIEW_INFO)).toHaveTextContent("1 Jun 2024");
+    });
+
+    it("decision block dispatches the SAME store action as the row control (#905)", () => {
+      const spy = vi.fn();
+      useAppStore.setState({ setDecision: spy } as Partial<
+        ReturnType<typeof useAppStore.getState>
+      >);
+      render(<PreviewPane />);
+
+      act(() => {
+        fireEvent.click(screen.getByTestId(`${PREVIEW_DECISION}-delete`));
+      });
+      expect(spy).toHaveBeenCalledWith(FILE_PATH, "delete");
+
+      act(() => {
+        fireEvent.click(screen.getByTestId(`${PREVIEW_DECISION}-ignore`));
+      });
+      expect(spy).toHaveBeenLastCalledWith(FILE_PATH, "ignore");
+    });
+
+    it("decision block is three stacked buttons with the row's words and the current state pressed", () => {
+      render(<PreviewPane />);
+      const block = screen.getByTestId(PREVIEW_DECISION);
+      const buttons = Array.from(block.querySelectorAll("button"));
+      // Three, «NOT a 2x2 grid — there are three states now».
+      expect(buttons.map((b) => b.textContent)).toEqual([
+        "Keep",
+        "Delete",
+        "Skip",
+      ]);
+      // `""` IS keep under the #584 decision model, so the untouched row shows
+      // Keep pressed — the same rule the row control follows.
+      expect(buttons.map((b) => b.getAttribute("aria-pressed"))).toEqual([
+        "true",
+        "false",
+        "false",
+      ]);
+    });
+
+    it("keep-worthiness bar fill width tracks the score", () => {
+      // A NaN or missing width is valid-looking markup that CSS ignores
+      // without complaint — the bar then renders empty for every file.
+      render(<PreviewPane />);
+      const fill = screen
+        .getByTestId(PREVIEW_PANE)
+        .querySelector<HTMLElement>("[data-keep-fill]");
+      expect(fill).not.toBeNull();
+      expect(fill!.style.width).toBe("100%");
+    });
+
+    it("a locked row disables every pane decision button and marks the heading", () => {
+      // Locked rows refuse a decision write server-side (the row control is
+      // disabled for the same reason). An enabled button here would be the one
+      // surface that lets a user ask for something the app will refuse — and
+      // the false-positive half matters too, so the unlocked case is asserted
+      // by every other test in this block.
+      act(() => {
+        useAppStore.setState({
+          manifest: {
+            path: "/manifests/test.db",
+            groups: [
+              {
+                group_number: 1,
+                member_count: 1,
+                items: [{ ...testRow, is_locked: true }],
+              },
+            ],
+            totalGroups: 1,
+            totalFiles: 1,
+            loading: false,
+            error: null,
+          },
+        });
+      });
+      render(<PreviewPane />);
+
+      const buttons = Array.from(
+        screen.getByTestId(PREVIEW_DECISION).querySelectorAll("button")
+      );
+      expect(buttons).toHaveLength(3);
+      for (const button of buttons) {
+        expect(button).toBeDisabled();
+        expect(button.getAttribute("title")).toMatch(/locked/i);
+      }
+      // The heading says WHY, in the same glyph the row's padlock uses.
+      expect(
+        screen.getByRole("heading", { level: 2 }).querySelector("svg")
+      ).not.toBeNull();
     });
 
     it("double-click on image calls store.openFullRes with the file path", () => {

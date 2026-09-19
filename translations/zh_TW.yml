@@ -799,16 +799,24 @@ web:
   overlay:
     resize: "調整視窗大小"
   preview:
+    # 預覽窗格自己的標題列（版面切片 PV / REPLY P2）。英文由 CSS 轉成全大寫，
+    # 中文不受影響。
+    title: "預覽 · 選取的照片"
     select_file: "選擇檔案以預覽"
     video_cannot_be_played: "影片無法播放"
     preparing_video: "正在準備影片…"
     meta_name: "名稱"
     meta_folder: "資料夾"
     meta_size: "大小"
-    meta_score: "分數"
-    meta_dims: "尺寸"
-    meta_shot: "拍攝"
-    meta_created: "建立"
+    meta_dims: "解析度"
+    # 與 web.column.shot_date 同一個量，窗格是欄位被收起後的常駐去處（P7）。
+    meta_shot: "拍攝日期"
+    # 窗格內動作區塊的標題（#905）。三個選項的字來自 DECISION_VOCAB
+    # （web.decision.*），與列上的控制項共用同一份。
+    decision_label: "動作"
+    decision_locked: "此檔案已鎖定 — 先解鎖才能變更動作"
+    # REPLY P6 — 列上的分數，在只判斷單一檔案的窗格裡改用它真正的名字。
+    keep_worthiness: "保留價值"
   format:
     similarity_ref: "參考"
     # 對應桌面版 tree.similarity_near_dup（R6）— 原本是寫死的半形「~」。

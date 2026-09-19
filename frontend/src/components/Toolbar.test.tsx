@@ -21,6 +21,26 @@ import {
   MAIN_SCAN_BUTTON,
 } from "@/testids";
 
+// The two whole-manifest sweeps the strip runs per render, wrapped (not
+// replaced) so their CALL COUNT is observable while their behaviour stays
+// exactly the real one — every other test in this file keeps asserting real
+// numbers through these. Counting is the only way to tell a memo from a
+// function that happens to be fast on a three-row fixture.
+const sweeps = vi.hoisted(() => ({
+  deleteTotals: vi.fn(),
+  visibleSelectedPaths: vi.fn(),
+}));
+vi.mock("@/lib/deleteTotals", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/deleteTotals")>();
+  sweeps.deleteTotals.mockImplementation(actual.deleteTotals);
+  return { ...actual, deleteTotals: sweeps.deleteTotals };
+});
+vi.mock("@/lib/rowFilter", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rowFilter")>();
+  sweeps.visibleSelectedPaths.mockImplementation(actual.visibleSelectedPaths);
+  return { ...actual, visibleSelectedPaths: sweeps.visibleSelectedPaths };
+});
+
 // The toolbar measures its own width through a ResizeObserver to decide the
 // manifest-open shed (lib/toolbarShed.ts); jsdom has no ResizeObserver at all.
 // The stub never fires, so `barWidth` stays null and `toolbarShedPlan(null)`
@@ -299,6 +319,59 @@ describe("Toolbar filter", () => {
     renderToolbar();
     await userEvent.type(screen.getByTestId(MAIN_FILTER_INPUT), "a");
     expect(JSON.stringify(useAppStore.getState().manifest.groups)).toBe(before);
+  });
+});
+
+describe("Toolbar per-render sweeps (review-916 LOW)", () => {
+  it("does not re-walk the manifest when only an unrelated prop changes", async () => {
+    // Both figures walk EVERY row, and the toolbar re-renders on things that
+    // cannot have changed either one — a keystroke in the manifest path box is
+    // the cheapest example and the one a user holds down. Before the memo each
+    // of those keystrokes cost two full sweeps of the manifest; at 40,000 rows
+    // that is the whole typing latency budget.
+    //
+    // Asserted by CALL COUNT on the two pure functions, which is the only
+    // thing that distinguishes "memoised" from "fast enough on a 3-row
+    // fixture". The second half — that the memo still RECOMPUTES when its
+    // inputs move — is covered by every count assertion above, all of which
+    // would freeze at their first value if the deps were wrong.
+    useI18nStore.setState({ locale: "en", catalog: {} });
+    act(() => {
+      useAppStore.setState({
+        resultView: { ...useAppStore.getState().resultView, filterText: "" },
+      });
+    });
+    seed([mkRow("a.jpg", "delete"), mkRow("b.jpg")], ["/photos/a.jpg"]);
+
+    const toolbar = (manifestInputValue: string) => (
+      <Toolbar
+        manifestPath="/m/test.db"
+        locale="en"
+        manifestInputValue={manifestInputValue}
+        onManifestInputChange={() => {}}
+        onManifestOpen={() => {}}
+        onScan={() => {}}
+        onExecute={() => {}}
+        onSetAction={() => {}}
+        onSettings={() => {}}
+        onSetLocale={() => {}}
+      />
+    );
+
+    sweeps.deleteTotals.mockClear();
+    sweeps.visibleSelectedPaths.mockClear();
+    const { rerender } = render(toolbar(""));
+    const afterFirst = {
+      del: sweeps.deleteTotals.mock.calls.length,
+      sel: sweeps.visibleSelectedPaths.mock.calls.length,
+    };
+    expect(afterFirst.del).toBeGreaterThan(0);
+    expect(afterFirst.sel).toBeGreaterThan(0);
+
+    rerender(toolbar("/m/some/path.db"));
+
+    expect(sweeps.deleteTotals.mock.calls.length).toBe(afterFirst.del);
+    expect(sweeps.visibleSelectedPaths.mock.calls.length).toBe(afterFirst.sel);
   });
 });
 

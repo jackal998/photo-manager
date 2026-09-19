@@ -6,6 +6,7 @@ import {
   savePanelWidths,
   clampPanelWidth,
   DEFAULT_PANEL_WIDTHS,
+  LEGACY_DEFAULT_PANEL_WIDTHS,
   MIN_PANEL_WIDTH,
 } from "./panelWidths";
 
@@ -41,6 +42,37 @@ describe("panelWidths persistence", () => {
   it("fails open on a malformed JSON blob", () => {
     localStorage.setItem(STORAGE_KEY, "{not valid json");
     expect(loadPanelWidths()).toEqual(DEFAULT_PANEL_WIDTHS);
+  });
+
+  // ------------------------------------------------------------------------
+  // Layout slice PV — the 288 → 320 default move (REPLY P1)
+  // ------------------------------------------------------------------------
+
+  it("the default is 320, and the legacy default it replaces is 288", () => {
+    // Pinned as numbers, not as "whatever the module says": the whole point of
+    // the migration below is that these two are DIFFERENT, and a test written
+    // against the constants alone would keep passing if they were made equal.
+    expect(DEFAULT_PANEL_WIDTHS.preview).toBe(320);
+    expect(LEGACY_DEFAULT_PANEL_WIDTHS.preview).toBe(288);
+  });
+
+  it("migrates a persisted OLD DEFAULT (288) to the new default", () => {
+    // The drag handler writes the whole map on any resize, so most browsers
+    // that ever touched the splitter carry an explicit 288 that nobody chose.
+    // Without this, the new default reaches only brand-new browsers and the
+    // pane the REPLY specced at 320 ships at 288 for every existing user.
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ preview: 288 }));
+    expect(loadPanelWidths().preview).toBe(320);
+  });
+
+  it("keeps a width the user actually chose", () => {
+    // The false-positive half: a migration that rewrote every stored value
+    // would look identical to a working one on the test above, and would throw
+    // away the resize P1 explicitly protects («a persisted user value wins»).
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ preview: 420 }));
+    expect(loadPanelWidths().preview).toBe(420);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ preview: 289 }));
+    expect(loadPanelWidths().preview).toBe(289);
   });
 });
 

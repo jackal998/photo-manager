@@ -95,7 +95,13 @@ export const DECISION_VOCAB: Record<
 // light label in the control», the same grayscale-inversion rule the badges
 // follow. Every segment reserves the 1px as `border-transparent` when it is not
 // selected, so selection can never shift the control by a pixel.
-const ACTIVE_CHIP: Record<DecisionValue, string> = {
+//
+// EXPORTED because layout slice PV's preview-pane decision block wears the
+// same treatment: «selected = as the row control's selected treatment … same
+// colours, same glyphs, same words as the row control — this block must never
+// fight it». One table, two readers; a second copy of these class strings is
+// exactly how the two controls end up a shade apart.
+export const DECISION_ACTIVE_CHIP: Record<DecisionValue, string> = {
   "": "bg-dec-keep-bg border-dec-keep-line text-dec-keep-ink font-semibold",
   delete: "bg-dec-delete-bg border-transparent text-dec-delete-ink font-bold",
   ignore: "bg-dec-remove-bg border-dec-remove-line text-dec-remove-ink font-semibold",
@@ -160,7 +166,7 @@ export function DecisionControl({
               "inline-flex items-center border text-[12px] leading-none transition-colors",
               metrics.decisionSegment,
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm",
-              active ? ACTIVE_CHIP[opt.value] : INACTIVE_CHIP,
+              active ? DECISION_ACTIVE_CHIP[opt.value] : INACTIVE_CHIP,
               disabled && "opacity-50 cursor-not-allowed"
             )}
           >

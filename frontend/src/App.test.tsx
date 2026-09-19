@@ -26,6 +26,7 @@ import {
   DLGE_SETTINGS_DIALOG,
   EXECUTE_DIALOG,
   PREVIEW_PANE,
+  PREVIEW_INFO,
   LOCK_CONFIRM_DIALOG,
 } from "./testids";
 import type { Group } from "./api/types";
@@ -504,8 +505,11 @@ describe("PreviewPane is always mounted in main layout", () => {
     renderWithProviders(<App />);
     // PreviewPane should show the selected file info.
     expect(screen.getByTestId(PREVIEW_PANE)).toBeInTheDocument();
-    // Info panel should be visible with the filename.
-    expect(screen.getByText("ref.jpg")).toBeInTheDocument();
+    // Info panel should be visible with the filename. Scoped to the info
+    // panel because layout slice PV also prints the basename as the pane's
+    // HEADING, so a bare getByText now matches two nodes — the ambiguity is
+    // the new layout, not a regression.
+    expect(screen.getByTestId(PREVIEW_INFO)).toHaveTextContent("ref.jpg");
   });
 });
 

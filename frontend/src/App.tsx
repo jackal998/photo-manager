@@ -415,12 +415,17 @@ export default function App() {
             />
           )}
         </div>
-        {/* Drag handle — resizable tree/preview boundary (#739, was fixed w-72) */}
+        {/* Drag handle — resizable tree/preview boundary (#739, was fixed w-72).
+            Layout slice PV: 4px, TRANSPARENT at rest, a hairline on hover and
+            the accent while dragging. A permanently-drawn rule here read as a
+            second border beside the pane's own, which is what made the
+            boundary look like a seam rather than a control. */}
         <div
           data-testid={PREVIEW_RESIZE_HANDLE}
           role="separator"
           aria-orientation="vertical"
-          className="w-1 flex-shrink-0 cursor-col-resize bg-hairline hover:bg-hairline-input"
+          data-dragging={previewDrag !== null ? "" : undefined}
+          className="w-1 flex-shrink-0 cursor-col-resize bg-transparent hover:bg-group-line data-[dragging]:bg-warm"
           onMouseDown={handlePreviewResizeStart}
         />
         {/* Preview pane — resizable right column, width persists (#739) */}
