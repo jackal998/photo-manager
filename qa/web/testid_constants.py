@@ -508,6 +508,30 @@ PREVIEW_SINGLE_IMAGE = "preview-single-image"
 PREVIEW_INFO = "preview-info"
 """Metadata / EXIF info section below the preview image."""
 
+PREVIEW_TITLE = "preview-title"
+"""The pane's own title strip (layout slice PV / REPLY P2).
+
+42px tall, "PREVIEW · SELECTED PHOTO"／「預覽 · 選取的照片」 at 11px/700
+uppercase.  The pane had no title at all before the slice, which is what let
+it read as a continuation of the table rather than as its own surface."""
+
+PREVIEW_DECISION = "preview-decision"
+"""The decision block under the preview metadata table (#905).
+
+Three full-width stacked buttons, NOT the row's segmented track: each option's
+own button is ``preview-decision-{slug}`` with the SAME slugs the row control
+uses (``none`` / ``delete`` / ``ignore``), because both render the one
+``DECISION_VOCAB`` table and dispatch the same ``store.setDecision``.  Disabled
+together when the selected row is locked, the same rule the row control
+follows."""
+
+PREVIEW_KEEP_WORTHINESS = "preview-keep-worthiness"
+"""The keep-worthiness bar under the decision block (REPLY P6).
+
+The score the row also carries, given a label and a solid-fill bar in the pane
+because the pane is where a single file is judged.  The VALUE is queryable text
+(``formatScore``); the bar itself is ``aria-hidden``, like the row's."""
+
 PREVIEW_RESIZE_HANDLE = "preview-resize-handle"
 """Drag handle for resizing the preview pane (#739).  Sits between the result
 tree and the preview pane in App.tsx; mousedown here begins a resize drag

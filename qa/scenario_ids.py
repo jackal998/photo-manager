@@ -322,6 +322,16 @@ ALL_SCENARIOS = [
     # switch forcing the virtualiser to re-measure — a wrong re-measure shows
     # up as a scroll landing off, never as a red unit test.
     "s76_toolbar_status_density",
+    # WEB-ONLY (#878, layout slice PV; closes #905) — the preview pane. Covers
+    # what only a real browser can settle: the 4:3 image frame's computed
+    # aspect, radius and #24211e surround (a fixed aspect is what removes the
+    # #535 oscillation's source rather than damping it, and jsdom resolves
+    # `aspect-ratio` to nothing), the pane's own 320px width as a property of
+    # the flex row rather than of the constant, #905 end-to-end (a decision set
+    # in the PANE reaching the ROW's chip and the manifest), the lock gate on a
+    # REAL server-side lock with its false-positive half, and the whole pane in
+    # zh_TW including the Shot date row under both UI locales.
+    "s77_preview_pane",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -339,4 +349,5 @@ WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s74_daylight_theme",
     "s75_keep_best_button",
     "s76_toolbar_status_density",
+    "s77_preview_pane",
 })

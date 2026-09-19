@@ -15,9 +15,28 @@ export type PanelId = "preview";
 
 const STORAGE_KEY = "panelWidths";
 
-/** Default preview-pane width (px) — matches the prior fixed `w-72` (18rem)
- *  Tailwind class, so an unresized layout is pixel-identical to before. */
+/** Default preview-pane width (px).
+ *
+ *  Layout slice PV (REPLY §"Preview pane", P1) moves this from 288 to 320:
+ *  «320 rather than the prototype's 340: at 1280 with the table's column
+ *  budget, 340 is where the filename column starts losing characters, and 20px
+ *  of pane is cheaper than 20px of name». The pane now carries a title strip, a
+ *  4:3 image frame, a five-row metadata table and a stacked decision block, and
+ *  288 is where the zh-TW decision labels start wrapping. */
 export const DEFAULT_PANEL_WIDTHS: Record<PanelId, number> = {
+  preview: 320,
+};
+
+/** The defaults this key was written with BEFORE slice PV.
+ *
+ *  P1 is a MAY-DIFFER row: «the number is soft and a persisted user value
+ *  wins». But a value that equals the OLD DEFAULT is not a user value — it is
+ *  what an unresized pane persisted (the drag handler writes the whole map on
+ *  any resize, so every browser that ever touched the splitter has a `preview`
+ *  entry, most of them still 288). Migrating exactly that one value is what
+ *  makes the new default reach users who never dragged; anything else the user
+ *  chose is left alone. */
+export const LEGACY_DEFAULT_PANEL_WIDTHS: Record<PanelId, number> = {
   preview: 288,
 };
 
@@ -65,7 +84,12 @@ export function loadPanelWidths(): Record<PanelId, number> {
         // Only accept finite positive numbers; ignore anything else so a
         // corrupt entry can't render a panel at 0 / NaN width.
         if (typeof v === "number" && Number.isFinite(v) && v > 0) {
-          widths[id] = v;
+          // Slice PV's one-way migration: a stored value that is EXACTLY the
+          // old default is an unresized pane, so it follows the new default;
+          // any other number is the user's own drag and survives untouched.
+          widths[id] = v === LEGACY_DEFAULT_PANEL_WIDTHS[id]
+            ? DEFAULT_PANEL_WIDTHS[id]
+            : v;
         }
       }
     }

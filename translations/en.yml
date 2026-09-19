@@ -975,19 +975,36 @@ web:
     resize: "Resize window"
   # PreviewPane (web audit fix 5 — was hardcoded English).
   preview:
+    # The pane's own title strip (layout slice PV / REPLY P2). Rendered
+    # UPPERCASE by CSS, so the catalog carries sentence case and zh_TW is
+    # unaffected by a transform that does nothing to Han characters.
+    title: "Preview · Selected photo"
+    # Grid mode (a GROUP row is selected, so the pane shows every member as a
+    # tile). The single-file wording names something that is not on screen.
+    title_group: "Preview · Group"
     select_file: "Select a file to preview"
     video_cannot_be_played: "Video cannot be played"
     preparing_video: "Preparing video…"
     meta_name: "Name"
     meta_folder: "Folder"
     meta_size: "Size"
-    meta_score: "Score"
     # "Resolution", matching web.column.resolution for the same quantity —
     # "Dims" was the one abbreviation among full-word sibling labels
     # (copy audit PV1).
     meta_dims: "Resolution"
-    meta_shot: "Shot"
-    meta_created: "Created"
+    # "Shot date", the same quantity web.column.shot_date names — the metadata
+    # table is the permanent home of the columns the table sheds (REPLY P7), so
+    # a bare "Shot" beside full-word siblings was the same abbreviation defect
+    # copy audit PV1 caught on meta_dims. Sentence case, matching its four
+    # sibling LABELS rather than the column header's title case.
+    meta_shot: "Shot date"
+    # Heading of the in-pane decision block (#905). The three OPTION labels
+    # come from DECISION_VOCAB (web.decision.*), shared with the row control.
+    decision_label: "Decision"
+    decision_locked: "This file is locked — unlock it to change its decision"
+    # REPLY P6 — the row's score, named for what it is in a pane that judges
+    # one file rather than compares a column of them.
+    keep_worthiness: "Keep-worthiness"
   # lib/format.ts similarityLabel() — the one natural-language word among its
   # symbol-only outputs (web audit fix 5).
   format:

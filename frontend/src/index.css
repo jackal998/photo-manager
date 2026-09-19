@@ -187,6 +187,21 @@
   --color-thumb-hatch: #efe7d9;
   --color-thumb-hatch-alt: #f6f0e6;
 
+  /* Preview image surround (layout slice PV, REPLY §"Image frame (P3)") — the
+     ONE place a cold neutral would be wrong and the one place a dark field is
+     right: «letterboxing a portrait shot against warm paper tints the viewer's
+     perception of the image's own colour — a warm surround makes a neutral
+     photo look cool, which is exactly wrong in a tool whose job is judging
+     which copy looks better». `#24211e` rather than a pure neutral because it
+     «is dark enough to be perceptually neutral against the photo (the eye
+     adapts to the darkest field) while sharing the palette's warm hue, so the
+     frame does not look like a hole cut in the app». Replaces the shipped
+     `bg-neutral-900` (#171717), which had the right instinct and the wrong
+     execution. Deliberately NOT remapped in `.dark` below, for the same reason
+     the two hatch stops are not: it is a fill sitting BEHIND an image, not a
+     surface of the app, and the image is an image on either theme. */
+  --color-image-surround: #24211e;
+
   /* Scrollbar thumb (#878 dict) */
   --color-scroll-thumb: #ddd2bf;
   --color-scroll-thumb-hover: #cdbfa6;

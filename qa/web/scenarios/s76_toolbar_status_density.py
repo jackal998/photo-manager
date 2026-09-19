@@ -407,7 +407,18 @@ def run(*, base_url: str) -> None:
                 "'Keep best · delete rest' stayed disabled after the filter was "
                 "cleared — the gate is refusing the ordinary case too."
             )
-            page.get_by_test_id(row_file_testid(group_id, sorted(names)[0])).click()
+            # Clear the five-row selection left over from 4b, through the SHARED
+            # helper — the last raw `.click()` in this file, and the one that
+            # bit. Playwright clicks an element's CENTRE, and since slice R
+            # centres the row's cells the centre point sits on whichever cell
+            # the table's current width puts there. Slice PV widened the preview
+            # pane 288 -> 320, the table lost those pixels, and this click
+            # landed on the KEEPER's decision control instead of on empty row —
+            # staging a decision on a row that is never selected, which section
+            # 5's «the bulk verb reached a row that was never selected» then
+            # reported as a bulk-write defect. `click_row` clicks a fixed offset
+            # inside the filename cell and carries that measurement.
+            click_row(page, row_file_testid(group_id, sorted(names)[0]))
             page.wait_for_timeout(200)
 
             restored = _visible_rows(page)
