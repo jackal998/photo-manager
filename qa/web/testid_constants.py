@@ -67,6 +67,20 @@ also shown inside ExecuteDialog while it's open; this is the same #712
 invisible unless the user separately had the Execute dialog open). Conditional
 — absent when ``execute.executeError`` is null."""
 
+MAIN_TOAST = "main-toast"
+"""Single-slot undo toast, floating above the footer (#878 layout slice G).
+
+Raised by "Keep best · delete rest" (and by the equivalent right-click item)
+and auto-dismissed after ~6 s.  Open questions Q5 replaced a confirm dialog
+with this toast — «the button does not delete anything … give it an undo toast
+instead» — so it is the only reversal path for a bulk decision write, which is
+why it is addressable rather than found by text.  Conditional: absent when
+``store.toast`` is null."""
+
+MAIN_TOAST_UNDO = "main-toast-undo"
+"""The toast's Undo button.  Restores the decision AND lock state of every row
+the keep-best write touched, then dismisses the toast."""
+
 MAIN_SCAN_BUTTON = "main-scan-button"
 """'Scan' / 'Re-scan' button that opens the scan dialog."""
 
@@ -687,6 +701,37 @@ def row_group_testid(group_id: str) -> str:
         ``"row-group-{group_id}"``
     """
     return f"row-group-{group_id}"
+
+
+def group_keep_best_testid(group_id: str) -> str:
+    """Return the ``data-testid`` for a group header's "Keep best · delete rest".
+
+    Group-scoped rather than a bare constant because every visible group header
+    renders one, and a single shared testid would make every Playwright
+    ``get_by_test_id`` call a strict-mode violation the moment a fixture yields
+    two groups.
+
+    **The prefix is ``group-``, deliberately NOT ``row-group-``.** The result
+    tree is counted and traversed by PREFIX, not by exact id —
+    ``_invariants.count_groups`` matches ``[data-testid^="row-group-"]`` and
+    s26 walks ``[data-testid^="row-file-"], [data-testid^="row-group-"]``. A
+    button nested inside the group row and named ``row-group-keep-best-…``
+    therefore counts as a second GROUP: it made s45 fail with "expected the
+    near-duplicates fixture to form 1 group, got 2", which reads as a scanner
+    or fixture regression and is neither. Any future testid added INSIDE a row
+    must not extend that row's prefix.
+
+    Parameters
+    ----------
+    group_id:
+        The ``group_id`` value from the manifest row.
+
+    Returns
+    -------
+    str
+        ``"group-keep-best-{group_id}"``
+    """
+    return f"group-keep-best-{group_id}"
 
 
 def row_decision_testid(group_id: str, basename: str) -> str:

@@ -36,6 +36,15 @@
   /* Surfaces (#878 dict) */
   --color-app: #f5efe6;
   --color-panel: #fffdf9;
+  /* Hover fill for a SECONDARY button — anything sitting on `panel` with a
+     `hairline-input` border. The layout REPLY specs the same pair twice, for
+     two different buttons: §"Group header" «hover background #f7f1e7, border
+     #a89f8f» for the Q5 keep-best button, and §"Toolbar" «Everything else
+     secondary … hover bg #f7f1e7 border #a89f8f». One role, so one token —
+     the alternative is the same hex written at each call site, which is how
+     two buttons that are supposed to be the same control end up a shade
+     apart. Introduced by layout slice G, consumed by TB. */
+  --color-panel-hover: #f7f1e7;
   --color-toolbar: #faf6ee;
   --color-titlebar: #f3ede3;
   --color-subtle: #f7ebda;
@@ -147,8 +156,12 @@
   --color-dec-remove-ink: #6f6a60;
   --color-dec-remove-bg: #f1ece2;
   --color-dec-remove-line: #ddd5c8;
-  --color-dec-undecided-ink: #9a9388;
-  --color-dec-undecided-line: #d8cfc0;
+  /* `--color-dec-undecided-ink` (#9a9388) and `--color-dec-undecided-line`
+     (#d8cfc0) were declared here by #903 and never referenced by anything:
+     an inactive segment inherits the row's ink and draws no border, so the
+     "complete fg/bg/bd triple" the comment below describes is a triple of
+     two. Deleted by layout slice G — a token nothing reads is a value the
+     next slice will "reuse" believing it was measured against something. */
   /* §9.3 spells dec.undecided's fill as `transparent` — an inactive segment
      shows whatever the row underneath it is (panel, keeper tint, delete wash),
      which is what makes the ACTIVE segment the only filled thing in the cell.
@@ -262,6 +275,10 @@
        categories this block has never remapped — so they stay as declared. */
     --color-app: hsl(var(--background));
     --color-panel: hsl(var(--card));
+    /* Slice (G)'s secondary-button hover IS a surface, so it is remapped like
+       every other one; `accent` is the hover/highlight surface in this block
+       already (`subtle`, `select`). */
+    --color-panel-hover: hsl(var(--accent));
     --color-toolbar: hsl(var(--secondary));
     --color-titlebar: hsl(var(--secondary));
     --color-subtle: hsl(var(--accent));

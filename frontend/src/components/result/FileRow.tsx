@@ -4,6 +4,7 @@ import type { MouseEvent } from "react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/useT";
+import { useDateLocale } from "@/i18n/useDateLocale";
 import {
   similarityLabel,
   classificationLabel,
@@ -95,6 +96,8 @@ interface FileRowProps {
 
 export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, scoreCompact = false, density = DEFAULT_DENSITY, onDecision, onLock, onSelect, onOpenFullRes, onContextMenu, isSelected, isLastInGroup }: FileRowProps) {
   const t = useT();
+  // The APP's locale, not the browser's — see useDateLocale.
+  const dateLocale = useDateLocale();
   const metrics = ROW_METRICS[density];
   const simLabel = similarityLabel(row.similarity, t);
   const shows = (id: ColumnId) => visibleCols === undefined || visibleCols.has(id);
@@ -373,7 +376,7 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
       {/* Shot date — shed after dims, because it is a primary sort (L3). */}
       {shows("date") && (
         <div data-col="date" className={cn("flex-shrink-0 text-xs text-ink-muted overflow-hidden", cellTypeClass("date"))} style={{ width: columnWidths.date }}>
-          {formatDate(row.shot_date)}
+          {formatDate(row.shot_date, dateLocale)}
         </div>
       )}
 

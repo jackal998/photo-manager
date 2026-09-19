@@ -20,8 +20,15 @@
 
 import type { Density } from "./density";
 
-/** Group-header row height (px). Not density-keyed — slice G owns that row. */
-export const GROUP_HEADER_HEIGHT = 34;
+/**
+ * Group-header row height (px). Deliberately NOT density-keyed: the layout
+ * REPLY §"Group header (H1, H4–H7)" specs it as «44px (comfortable and
+ * compact — the group band does not compress)». The band is the list's only
+ * full-width warm fill and the thing that makes a group read as a heading
+ * rather than a row, so it is the one element that keeps its size when the
+ * rows around it shrink.
+ */
+export const GROUP_HEADER_HEIGHT = 44;
 
 export interface RowMetrics {
   /** Total row height in px INCLUDING the 1px bottom border — the number the

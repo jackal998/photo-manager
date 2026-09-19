@@ -38,6 +38,15 @@ describe("estimateRowSize", () => {
       GROUP_HEADER_HEIGHT
     );
   });
+
+  // The LITERAL, deliberately: the assertions above compare the function to
+  // the constant, so they stay green for any value the constant happens to
+  // hold. Layout REPLY §"Group header": «height 44px». `GroupRow.tsx` spells
+  // the same number as `h-[44px]`, and the two are only checked against each
+  // other by s74's computed-height probe — this is the cheap half of that pair.
+  it("estimates the group header at the REPLY's 44px", () => {
+    expect(GROUP_HEADER_HEIGHT).toBe(44);
+  });
 });
 
 describe("ROW_METRICS", () => {

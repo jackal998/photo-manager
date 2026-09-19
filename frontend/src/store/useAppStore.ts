@@ -73,6 +73,19 @@ type ImmerSetFn = (
 // superseded requests are dropped (see previewBulkDecide / applyBulkDecide).
 let _bulkDecideSeq = 0;
 
+// Monotonic id for the single-slot undo toast (#878 slice G). The Toast
+// component keys its 6-second timer on this, so a keep-best on a SECOND group
+// replaces the toast and restarts the clock rather than inheriting the
+// remainder of the first one's.
+let _toastSeq = 0;
+
+// The classifier values apply-best-copy treats as a positively-identified
+// duplicate, i.e. the rows it may write `delete` onto. Mirrors the server's
+// allowlist (core.services.auto_select.non_keepers_for_aggressive_delete) —
+// used ONLY to decide which locked rows the undo toast should report as
+// skipped, never to predict the write itself, which stays the server's call.
+const _DUPLICATE_ACTIONS = new Set(["EXACT", "REVIEW_DUPLICATE"]);
+
 // ---------------------------------------------------------------------------
 // Initial state slices
 // ---------------------------------------------------------------------------
@@ -174,6 +187,8 @@ export const useAppStore = create<AppStore>()(
     },
     execute: { ...initialExecute },
     action: { ...initialAction },
+    toast: null,
+    keepBestPending: [],
 
     // -----------------------------------------------------------------------
     // Scan actions
@@ -1221,10 +1236,30 @@ export const useAppStore = create<AppStore>()(
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
+      // A second apply on the SAME group while the first is still in flight is
+      // refused outright. The UI disables both entry points for the duration,
+      // so this is the belt to that braces: a double-click or an Enter repeat
+      // that slips through would otherwise snapshot a half-applied group.
+      if (get().keepBestPending.includes(groupNumber)) return;
+
       // #718 — clear any stale error before this action has a chance to fail.
       set((state) => {
         state.manifest.error = null;
+        state.keepBestPending.push(groupNumber);
       });
+
+      // Q5's undo replaces the confirm dialog, so the state it restores has to
+      // be read BEFORE the write — after it, the server's response is the only
+      // truth left and the prior decisions are gone.
+      const before = new Map(
+        (
+          get().manifest.groups.find((g) => g.group_number === groupNumber)
+            ?.items ?? []
+        ).map((row) => [
+          row.file_path,
+          { decision: row.user_decision, locked: row.is_locked },
+        ])
+      );
 
       try {
         const result = await apiApplyBestCopy({
@@ -1234,12 +1269,72 @@ export const useAppStore = create<AppStore>()(
           skip_locked: skipLocked,
         });
 
+        const affected = new Set(result.affected_paths);
+        const after =
+          result.groups.find((g) => g.group_number === groupNumber)?.items ?? [];
+        // What the toast reports: rows the write actually marked for deletion,
+        // and locked rows it left alone. Both are derived here rather than read
+        // off the response, which carries only `matched` (keeper + deletes, one
+        // number) and no locked count at all.
+        const deletedCount = after.filter(
+          (row) => affected.has(row.file_path) && row.user_decision === "delete"
+        ).length;
+        // Locked rows the write left alone. Counting every locked row that is
+        // not in `affected` over-reports: the group's Ref-tier passengers and
+        // its keeper are never delete-targets, so a lock on one of them was
+        // never "skipped" by anything. Count only rows the classifier
+        // positively identified as duplicates — the same allowlist the server
+        // uses to build the write-set (core.services.auto_select.
+        // non_keepers_for_aggressive_delete). Under forceLocked those rows ARE
+        // in `affected`, so the count is correctly 0.
+        let lockedCount = 0;
+        for (const row of after) {
+          const prev = before.get(row.file_path);
+          if (prev === undefined || !prev.locked) continue;
+          if (affected.has(row.file_path)) continue;
+          if (!_DUPLICATE_ACTIONS.has(row.action)) continue;
+          lockedCount += 1;
+        }
+
         set((state) => {
           // Replace groups from the authoritative server response — no
           // optimistic update (mirrors applyBulkDecide; the write mixes
           // "" and "delete" across rows, so there is no single value to
           // optimistically apply).
           state.manifest.groups = result.groups;
+          // A write that touched nothing (every member a passenger, or every
+          // target locked) gets no toast — there is nothing to undo and
+          // nothing to report.
+          if (affected.size === 0) return;
+          // Pressing the button TWICE on one group must not cost the user the
+          // undo. The second apply reads an already-applied group, so its own
+          // "before" is the FIRST apply's result — snapshotting that would make
+          // Undo restore the damage rather than reverse it. So when the
+          // standing toast belongs to this same group, the earlier recording of
+          // each path wins and only paths it never saw are added.
+          const carried =
+            state.toast !== null && state.toast.groupNumber === groupNumber
+              ? state.toast.snapshot
+              : [];
+          const snapshot = [...carried];
+          const seen = new Set(carried.map((row) => row.file_path));
+          for (const path of affected) {
+            if (seen.has(path)) continue;
+            snapshot.push({
+              file_path: path,
+              decision: before.get(path)?.decision ?? "",
+              locked: before.get(path)?.locked ?? false,
+            });
+          }
+          _toastSeq += 1;
+          state.toast = {
+            id: _toastSeq,
+            groupNumber,
+            deletedCount,
+            lockedCount,
+            snapshot,
+            undoing: false,
+          };
         });
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
@@ -1258,7 +1353,80 @@ export const useAppStore = create<AppStore>()(
               err instanceof Error ? err.message : String(err);
           });
         }
+      } finally {
+        // In `finally`, not at the end of the happy path: a 409 opens the
+        // LockConfirmDialog whose own buttons re-run applyBestCopy, and a
+        // group left marked pending would refuse that retry forever.
+        set((state) => {
+          state.keepBestPending = state.keepBestPending.filter(
+            (n) => n !== groupNumber
+          );
+        });
       }
+    },
+
+    async undoKeepBest() {
+      const toast = get().toast;
+      const manifestPath = get().manifest.path;
+      if (toast === null || toast.undoing || manifestPath === null) return;
+
+      set((state) => {
+        if (state.toast !== null) state.toast.undoing = true;
+        state.manifest.error = null;
+      });
+
+      try {
+        // force_locked, because apply-best-copy locked the keeper it chose —
+        // without it the undo is refused by the lock the action just created.
+        await patchDecisions(
+          manifestPath,
+          toast.snapshot.map((row) => ({
+            file_path: row.file_path,
+            decision: row.decision,
+          })),
+          { forceLocked: true }
+        );
+        // Second PATCH, not an afterthought: the write above both created and
+        // (via force_locked) cleared locks, so the snapshot's lock column is
+        // restored explicitly or the group ends up unlocked-everywhere.
+        await patchLocks(
+          manifestPath,
+          toast.snapshot.map((row) => ({
+            file_path: row.file_path,
+            locked: row.locked,
+          }))
+        );
+        const restored = new Map(
+          toast.snapshot.map((row) => [row.file_path, row])
+        );
+        set((state) => {
+          for (const group of state.manifest.groups) {
+            if (group.group_number !== toast.groupNumber) continue;
+            for (const item of group.items) {
+              const prev = restored.get(item.file_path);
+              if (prev === undefined) continue;
+              item.user_decision = prev.decision;
+              item.is_locked = prev.locked;
+            }
+          }
+          state.toast = null;
+        });
+      } catch (err) {
+        // Leave the toast up on failure — dismissing it would strand the user
+        // with a bulk write they asked to reverse and no way left to reverse
+        // it. The error line under the status bar says what happened.
+        set((state) => {
+          if (state.toast !== null) state.toast.undoing = false;
+          state.manifest.error =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    dismissToast() {
+      set((state) => {
+        state.toast = null;
+      });
     },
   }))
 );

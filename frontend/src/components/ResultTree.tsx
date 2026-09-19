@@ -45,6 +45,10 @@ export interface ContextMenuTarget {
   groupNumber: number;
 }
 
+/** Stable empty array for a group whose items are momentarily missing, so the
+ *  GroupRow's derivation memos do not re-run on every parent render. */
+const EMPTY_ITEMS: readonly FileRowData[] = [];
+
 /** Group-header right-click target (#735) — carries the group's member file
  *  paths for the reduced group context menu's "Remove from List". */
 export interface GroupContextMenuTarget {
@@ -115,6 +119,8 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   const groups = useAppStore((s) => s.manifest.groups);
   const setDecision = useAppStore((s) => s.setDecision);
   const setLock = useAppStore((s) => s.setLock);
+  const applyBestCopy = useAppStore((s) => s.applyBestCopy);
+  const keepBestPending = useAppStore((s) => s.keepBestPending);
   const setSelectedFile = useAppStore((s) => s.setSelectedFile);
   const setSelectedGroup = useAppStore((s) => s.setSelectedGroup);
   const openFullRes = useAppStore((s) => s.openFullRes);
@@ -740,11 +746,19 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
                 <GroupRow
                   groupNumber={vrow.groupNumber}
                   memberCount={vrow.memberCount}
-                  memberPaths={
-                    orderedItemsByGroup
-                      .get(vrow.groupNumber)
-                      ?.map((item) => item.file_path) ?? []
-                  }
+                  items={orderedItemsByGroup.get(vrow.groupNumber) ?? EMPTY_ITEMS}
+                  keepBestPending={keepBestPending.includes(vrow.groupNumber)}
+                  onKeepBest={() => {
+                    // Q5: «it must never override a lock». skipLocked is the
+                    // server flag that means exactly that (locked rows keep
+                    // both their decision and their lock), and it is also what
+                    // keeps the promise of "no confirm step" — without it the
+                    // route answers 409 and the LockConfirmDialog opens, which
+                    // is the dialog Q5 replaced with the undo toast. The
+                    // right-click item deliberately keeps the 409 → dialog
+                    // flow it has had since #744.
+                    void applyBestCopy(vrow.groupNumber, { skipLocked: true });
+                  }}
                   expanded={!collapsed.has(vrow.groupNumber)}
                   onToggle={() => {
                     toggleGroup(vrow.groupNumber);
