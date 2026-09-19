@@ -30,6 +30,7 @@ import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
 
 import { useAppStore } from "@/store/useAppStore";
 import { nextSelection, type SelectionResult } from "@/lib/multiSelect";
+import { deleteTotals } from "@/lib/deleteTotals";
 import {
   EXECUTE_DIALOG,
   EXECUTE_BTN_EXECUTE,
@@ -403,14 +404,12 @@ export function ExecuteDialog() {
   // Render
   // -------------------------------------------------------------------------
 
-  // Count of delete-scoped rows for the DeleteConfirmDialog body.
+  // Count of delete-scoped rows for the DeleteConfirmDialog body. Routed
+  // through `deleteTotals` (#917) so this count and the confirm dialog's
+  // folder buckets are summed by one function over one set of rows — a second
+  // hand-rolled reduce is how the header and the list start disagreeing.
   const deleteCount = useMemo(
-    () =>
-      scopedGroups.reduce(
-        (acc, g) =>
-          acc + g.items.filter((i) => i.user_decision === "delete").length,
-        0
-      ),
+    () => deleteTotals(scopedGroups).count,
     [scopedGroups]
   );
 
@@ -419,6 +418,7 @@ export function ExecuteDialog() {
     <DeleteConfirmDialog
       open={deleteConfirmOpen}
       deleteCount={deleteCount}
+      groups={scopedGroups}
       groupIds={deleteConfirmGroupIds}
       onConfirm={handleDeleteConfirmConfirm}
       onCancel={handleDeleteConfirmCancel}

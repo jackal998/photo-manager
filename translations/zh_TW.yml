@@ -866,3 +866,22 @@ web:
     file_singular: "檔案"
     file_plural: "檔案"
     cancel: "取消"
+    # #917 / 設計 REPLY Q6 —— 執行確認視窗可被逐列檢查的主體。
+    # 釘住的總計與每個資料夾的小計共用同一個格式，讓兩者讀起來是同一種事實。
+    count_size: "{n} 個{fileWord} · {size}"
+    # 「不論版面怎麼變，這個視窗都必須帶著的一行，因為它就是整個安全性說明。」
+    recycle_note: "檔案將移至資源回收筒，可還原。"
+    # 每個檔案的理由行。用語與 Q6 一字不差，也與同一列在檢視表格中的相似度
+    # 標籤一致；{ref} 是該群組 Ref（保留版本）的檔名。
+    reason_exact: "與 {ref} 完全重複"
+    reason_near: "{percent}% 相似 — 同一群組"
+    reason_linked: "間接比對，{percent}%*"
+    reason_near_dup: "與 {ref} 近似重複"
+    reason_none: "無可比對影像 — 同一群組"
+    # Ref 列本身只有在整個群組都標記刪除時才會出現在這份清單裡。
+    reason_ref: "此群組的參考版本 —— 整個群組都標記為刪除"
+    # 缺少百分比或群組沒有 Ref 時的退路：指名一個我們手上沒有的檔案，
+    # 比講得模糊一點更糟。
+    reason_exact_generic: "完全重複 — 同一群組"
+    reason_near_generic: "近似 — 同一群組"
+    reason_linked_generic: "間接比對"

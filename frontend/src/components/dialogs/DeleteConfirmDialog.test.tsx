@@ -13,22 +13,80 @@
 //  10. patternSummary prop (#741 sub-item C): overrides title + shows the
 //      summary sentence + confirm button reads "Mark N files for deletion".
 //  11. Generic callers (no patternSummary) are unaffected — additive prop.
+//  12. #917 / REPLY Q6 — the auditable body when `groups` is passed: pinned
+//      totals line, folder buckets with subtotals, one reason line per file,
+//      the Recycle-Bin sentence, the pinned/scrolling layout, and zh_TW copy.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import type { FileRow, Group, Similarity } from "@/api/types";
+import { useI18nStore } from "@/i18n/useI18nStore";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import {
   ACTION_DELETE_CONFIRM_SUMMARY,
   EXECUTE_ALL_DELETE_CONFIRM,
   EXECUTE_ALL_DELETE_CONFIRM_NO,
   EXECUTE_ALL_DELETE_CONFIRM_YES,
+  EXECUTE_DELETE_CONFIRM_FOLDER,
+  EXECUTE_DELETE_CONFIRM_REASON,
+  EXECUTE_DELETE_CONFIRM_TOTALS,
 } from "@/testids";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function mkRow(
+  basename: string,
+  folder: string,
+  decision: FileRow["user_decision"],
+  bytes: number,
+  similarity: Similarity = { kind: "percent", percent: 100 }
+): FileRow {
+  return {
+    file_path: `${folder}/${basename}`,
+    basename,
+    folder,
+    action: "",
+    user_decision: decision,
+    is_locked: false,
+    is_ref_winner: similarity.kind === "ref",
+    similarity,
+    score: null,
+    file_size_bytes: bytes,
+    pixel_width: null,
+    pixel_height: null,
+    shot_date: null,
+    creation_date: null,
+    phash: null,
+    hamming_distance: null,
+    thumbnail_url: "",
+  };
+}
+
+/** One group whose Ref sits in /photos/trip and whose two delete rows sit in
+ *  two DIFFERENT folders — the mixed case the folder bucketing exists for. */
+function twoFolderGroups(): Group[] {
+  return [
+    {
+      group_number: 1,
+      member_count: 3,
+      items: [
+        mkRow("beach-01.jpg", "/photos/trip", "", 5_000, {
+          kind: "ref",
+          percent: null,
+        }),
+        mkRow("beach-01-copy.jpg", "/photos/trip", "delete", 12_288),
+        mkRow("beach-01-web.jpg", "/photos/keepers", "delete", 12_288, {
+          kind: "percent",
+          percent: 92,
+        }),
+      ],
+    },
+  ];
+}
 
 function renderDialog(open = true, deleteCount = 5, groupIds = ["3"]) {
   const onConfirm = vi.fn();
@@ -50,6 +108,10 @@ function renderDialog(open = true, deleteCount = 5, groupIds = ["3"]) {
 // ---------------------------------------------------------------------------
 
 describe("DeleteConfirmDialog", () => {
+  beforeEach(() => {
+    useI18nStore.setState({ locale: "en", catalog: {} });
+  });
+
   it("is not rendered when open=false", () => {
     renderDialog(false);
     expect(
@@ -167,5 +229,171 @@ describe("DeleteConfirmDialog", () => {
     expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES)).toHaveTextContent(
       "Yes, delete all"
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. #917 / REPLY Q6 — the auditable body.
+// ---------------------------------------------------------------------------
+
+describe("DeleteConfirmDialog — folder buckets and reason lines (#917)", () => {
+  beforeEach(() => {
+    useI18nStore.setState({ locale: "en", catalog: {} });
+  });
+
+  function renderWithGroups(groups: Group[], deleteCount = 2) {
+    return render(
+      <DeleteConfirmDialog
+        open={true}
+        deleteCount={deleteCount}
+        groups={groups}
+        groupIds={["1"]}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+  }
+
+  it("pins a totals line carrying the delete count and the reclaimed size", () => {
+    renderWithGroups(twoFolderGroups());
+    // 12_288 × 2 = 24 KB — the number the user is about to act on.
+    expect(screen.getByTestId(EXECUTE_DELETE_CONFIRM_TOTALS)).toHaveTextContent(
+      "2 files · 24.0 KB"
+    );
+  });
+
+  it("buckets the rows by folder, each header carrying its own subtotal", () => {
+    renderWithGroups(twoFolderGroups());
+    const headers = screen.getAllByTestId(EXECUTE_DELETE_CONFIRM_FOLDER);
+    expect(headers).toHaveLength(2);
+    expect(headers[0]).toHaveTextContent("/photos/keepers");
+    expect(headers[0]).toHaveTextContent("1 file · 12.0 KB");
+    expect(headers[1]).toHaveTextContent("/photos/trip");
+    expect(headers[1]).toHaveTextContent("1 file · 12.0 KB");
+  });
+
+  it("gives every delete row a reason line naming the group's Ref", () => {
+    renderWithGroups(twoFolderGroups());
+    const reasons = screen
+      .getAllByTestId(EXECUTE_DELETE_CONFIRM_REASON)
+      .map((el) => el.textContent);
+    expect(reasons).toEqual([
+      "92% match — same group",
+      "Exact duplicate of beach-01.jpg",
+    ]);
+  });
+
+  it("renders each similarity kind's own reason phrase", () => {
+    renderWithGroups(
+      [
+        {
+          group_number: 1,
+          member_count: 6,
+          items: [
+            mkRow("ref.jpg", "/p", "delete", 1_000, { kind: "ref", percent: null }),
+            mkRow("exact.jpg", "/p", "delete", 1_000, {
+              kind: "percent",
+              percent: 100,
+            }),
+            mkRow("near.jpg", "/p", "delete", 1_000, {
+              kind: "percent",
+              percent: 91,
+            }),
+            mkRow("passenger.jpg", "/p", "delete", 1_000, {
+              kind: "passenger",
+              percent: 88,
+            }),
+            mkRow("neardup.jpg", "/p", "delete", 1_000, {
+              kind: "near_dup",
+              percent: null,
+            }),
+            mkRow("none.jpg", "/p", "delete", 1_000, { kind: "none", percent: null }),
+          ],
+        },
+      ],
+      6
+    );
+    const reasons = screen
+      .getAllByTestId(EXECUTE_DELETE_CONFIRM_REASON)
+      .map((el) => el.textContent);
+    expect(reasons).toEqual([
+      // The Ref row is itself marked delete — it is not a duplicate "of"
+      // anything, so it gets its own phrase rather than naming itself.
+      "Group reference copy — the whole group is marked delete",
+      "Exact duplicate of ref.jpg",
+      "91% match — same group",
+      "Linked match, 88%*",
+      "Near-duplicate of ref.jpg",
+      "No comparable image — same group",
+    ]);
+  });
+
+  it("always carries the Recycle-Bin safety sentence", () => {
+    renderWithGroups(twoFolderGroups());
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toHaveTextContent(
+      "Files are moved to the Recycle Bin and can be restored."
+    );
+  });
+
+  it("scrolls the row list inside a ≥60vh modal, totals and confirm pinned outside it", () => {
+    renderWithGroups(twoFolderGroups());
+    const content = screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM);
+    // The modal is the tall flex column Q6 asks for…
+    expect(content.className).toContain("min-h-[60vh]");
+    expect(content.className).toContain("flex-col");
+    // …the scroll lives on the list, which must be allowed to shrink
+    // (min-h-0) or it grows the dialog instead of scrolling…
+    const scroller = content.querySelector(".overflow-y-auto");
+    expect(scroller).not.toBeNull();
+    expect(scroller?.className).toContain("min-h-0");
+    expect(
+      within(scroller as HTMLElement).getAllByTestId(EXECUTE_DELETE_CONFIRM_FOLDER)
+    ).toHaveLength(2);
+    // …and neither the totals nor the confirm button is inside it.
+    expect(
+      scroller?.contains(screen.getByTestId(EXECUTE_DELETE_CONFIRM_TOTALS))
+    ).toBe(false);
+    expect(
+      scroller?.contains(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES))
+    ).toBe(false);
+  });
+
+  it("reads the totals, subtotal and reason copy from the zh_TW catalog", () => {
+    useI18nStore.setState({
+      locale: "zh_TW",
+      // The zh strings as committed in translations/zh_TW.yml — a key typo in
+      // the component would silently fall back to English here.
+      catalog: {
+        "web.delete_confirm.count_size": "{n} 個{fileWord} · {size}",
+        "web.delete_confirm.file_singular": "檔案",
+        "web.delete_confirm.file_plural": "檔案",
+        "web.delete_confirm.reason_exact": "與 {ref} 完全重複",
+        "web.delete_confirm.reason_near": "{percent}% 相似 — 同一群組",
+        "web.delete_confirm.recycle_note": "檔案將移至資源回收筒，可還原。",
+      },
+    });
+    renderWithGroups(twoFolderGroups());
+    expect(screen.getByTestId(EXECUTE_DELETE_CONFIRM_TOTALS)).toHaveTextContent(
+      "2 個檔案 · 24.0 KB"
+    );
+    expect(
+      screen.getAllByTestId(EXECUTE_DELETE_CONFIRM_FOLDER)[0]
+    ).toHaveTextContent("1 個檔案 · 12.0 KB");
+    const reasons = screen
+      .getAllByTestId(EXECUTE_DELETE_CONFIRM_REASON)
+      .map((el) => el.textContent);
+    expect(reasons).toEqual(["92% 相似 — 同一群組", "與 beach-01.jpg 完全重複"]);
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toHaveTextContent(
+      "檔案將移至資源回收筒，可還原。"
+    );
+  });
+
+  it("omitting groups keeps the compact dialog with no row list (additive prop)", () => {
+    renderDialog(true, 3, ["3"]);
+    expect(screen.queryByTestId(EXECUTE_DELETE_CONFIRM_TOTALS)).toBeNull();
+    expect(screen.queryByTestId(EXECUTE_DELETE_CONFIRM_FOLDER)).toBeNull();
+    expect(
+      screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM).className
+    ).not.toContain("min-h-[60vh]");
   });
 });

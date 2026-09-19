@@ -179,8 +179,12 @@ from qa.web.testid_constants import (
     EXECUTE_ALL_DELETE_CONFIRM,
     EXECUTE_ALL_DELETE_CONFIRM_YES,
     EXECUTE_ALL_DELETE_CONFIRM_NO,
+    EXECUTE_DELETE_CONFIRM_FOLDER,
+    EXECUTE_DELETE_CONFIRM_REASON,
+    EXECUTE_DELETE_CONFIRM_TOTALS,
     EXECUTE_RESULT_MISSING,
     EXECUTE_RESULT_FAILED,
+    MAIN_LANG_TOGGLE,
     row_file_testid,
     row_decision_testid,
 )
@@ -215,6 +219,180 @@ _FIXTURE_BASENAMES = [
     "neardup_03_q72.jpg",
     "neardup_04_q65.jpg",
 ]
+
+
+# ---------------------------------------------------------------------------
+# #917 — the Execute confirm's auditable body (design REPLY Q6)
+# ---------------------------------------------------------------------------
+
+# Per-locale copy the confirm sheet must carry. Regexes rather than literals
+# for the numeric parts: the byte figure depends on the fixture, the shape
+# does not. The safety sentence IS asserted literally — Q6 calls it «the whole
+# safety story», so a silent reword is the regression.
+_CONFIRM_COPY = {
+    "en": {
+        "safety": "Files are moved to the Recycle Bin and can be restored.",
+        "count_size": r"\d+ files? · [\d.]+ (?:B|KB|MB|GB)",
+        "exact_reason": r"Exact duplicate of (\S+)",
+    },
+    "zh_TW": {
+        "safety": "檔案將移至資源回收筒，可還原。",
+        "count_size": r"\d+ 個檔案 · [\d.]+ (?:B|KB|MB|GB)",
+        "exact_reason": r"與 (\S+) 完全重複",
+    },
+}
+
+
+def _execute_dialog_open(page) -> bool:
+    """True when EXECUTE_DIALOG is mounted AND visible."""
+    locator = page.get_by_test_id(EXECUTE_DIALOG)
+    return locator.count() > 0 and locator.is_visible()
+
+
+def _ensure_execute_dialog_closed(page) -> None:
+    """Dismiss EXECUTE_DIALOG if it is still up.
+
+    Cancelling the delete confirm normally cascade-closes the Execute dialog
+    (the sibling-Radix divergence documented in ``_run_mixed_manifest_phase``),
+    but that is an observed behaviour, not a contract — so anything that needs
+    the MAIN window reachable (the language toggle) closes it defensively
+    instead of assuming.
+    """
+    if not _execute_dialog_open(page):
+        return
+    page.keyboard.press("Escape")
+    page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="hidden", timeout=5_000)
+
+
+def _ensure_execute_dialog_open(page):
+    """Open EXECUTE_DIALOG if it is not already up; return its Execute button."""
+    if not _execute_dialog_open(page):
+        open_execute_dialog(page)
+        page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="visible", timeout=10_000)
+    execute_btn = page.get_by_test_id(EXECUTE_BTN_EXECUTE)
+    execute_btn.wait_for(state="visible", timeout=10_000)
+    return execute_btn
+
+
+def _patch_locale(base_url: str, locale: str) -> None:
+    """PATCH /api/settings to set ui.locale (mirrors s22's helper)."""
+    url = f"{base_url.rstrip('/')}/api/settings"
+    body = json.dumps({"updates": {"ui.locale": locale}}).encode()
+    req = urllib.request.Request(
+        url, data=body, method="PATCH", headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+        resp.read()
+
+
+def _probe_confirm_body(
+    page,
+    confirm_sheet,
+    locale_label: str,
+    expected_folder: str,
+    expected_rows: int,
+    known_basenames: list[str],
+) -> None:
+    """Assert the #917 confirm body: totals, folder buckets, reason lines,
+    the Recycle-Bin sentence, and the pinned (non-scrolling) confirm button.
+
+    Q6's argument for all of it: a bare count «can only be accepted or
+    cancelled wholesale», while a list with reasons can be *checked*. Each
+    assertion below is one of those affordances actually reaching the screen.
+    """
+    copy = _CONFIRM_COPY[locale_label]
+
+    # 1. Pinned totals — "N files · X KB".
+    totals = page.get_by_test_id(EXECUTE_DELETE_CONFIRM_TOTALS)
+    totals.wait_for(state="visible", timeout=5_000)
+    totals_text = totals.inner_text().strip()
+    assert re.search(copy["count_size"], totals_text), (
+        f"[{locale_label}] confirm totals must read '<count> <files> · <size>'; "
+        f"got {totals_text!r}"
+    )
+    print(f"probe_status: s13 confirm[{locale_label}] totals={totals_text!r}")
+
+    # 2. Folder buckets — the header carries the folder AND its own subtotal.
+    folders = page.get_by_test_id(EXECUTE_DELETE_CONFIRM_FOLDER)
+    assert folders.count() >= 1, (
+        f"[{locale_label}] expected at least one folder bucket header in the "
+        f"confirm sheet, found {folders.count()}"
+    )
+    folder_text = folders.nth(0).inner_text()
+    assert expected_folder in folder_text, (
+        f"[{locale_label}] folder bucket header must name the folder the rows "
+        f"live in ({expected_folder!r}); got {folder_text!r}"
+    )
+    assert re.search(copy["count_size"], folder_text), (
+        f"[{locale_label}] folder bucket header must carry its own count+size "
+        f"subtotal; got {folder_text!r}"
+    )
+    print(
+        f"probe_status: s13 confirm[{locale_label}] folders={folders.count()} "
+        f"first_header={folder_text!r}"
+    )
+
+    # 3. One reason line per file, and at least one of them NAMES the Ref.
+    reasons = page.get_by_test_id(EXECUTE_DELETE_CONFIRM_REASON)
+    assert reasons.count() == expected_rows, (
+        f"[{locale_label}] expected one reason line per delete row "
+        f"({expected_rows}); got {reasons.count()}"
+    )
+    reason_texts = [reasons.nth(i).inner_text().strip() for i in range(reasons.count())]
+    named_ref = None
+    for text in reason_texts:
+        match = re.search(copy["exact_reason"], text)
+        if match is not None and match.group(1) in known_basenames:
+            named_ref = match.group(1)
+            break
+    assert named_ref is not None, (
+        f"[{locale_label}] no reason line names the group's Ref basename "
+        f"(expected one of {known_basenames}); got {reason_texts!r}"
+    )
+    print(
+        f"probe_status: s13 confirm[{locale_label}] reasons={reason_texts!r} "
+        f"named_ref={named_ref!r}"
+    )
+
+    # 4. The safety sentence, verbatim, in both locales.
+    sheet_text = confirm_sheet.inner_text()
+    assert copy["safety"] in sheet_text, (
+        f"[{locale_label}] the confirm sheet must always carry the "
+        f"Recycle-Bin sentence {copy['safety']!r}; got {sheet_text!r}"
+    )
+
+    # 5. The confirm button is PINNED outside the scroll area: scrolling the
+    #    row list to its bottom must not move the button out of the viewport.
+    #    (With a small fixture the list may not overflow at all — the
+    #    invariant under test is the pinned layout, which holds either way.)
+    page.evaluate(
+        """(testid) => {
+            const sheet = document.querySelector(`[data-testid="${testid}"]`);
+            const scroller = sheet && sheet.querySelector('.overflow-y-auto');
+            if (scroller) scroller.scrollTop = scroller.scrollHeight;
+        }""",
+        EXECUTE_ALL_DELETE_CONFIRM,
+    )
+    yes_box = page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM_YES).bounding_box()
+    viewport = page.viewport_size
+    assert yes_box is not None, (
+        f"[{locale_label}] confirm button has no bounding box — it is not "
+        "rendered or has zero size"
+    )
+    assert (
+        yes_box["y"] >= 0
+        and yes_box["x"] >= 0
+        and yes_box["y"] + yes_box["height"] <= viewport["height"]
+        and yes_box["x"] + yes_box["width"] <= viewport["width"]
+    ), (
+        f"[{locale_label}] confirm button must stay inside the viewport after "
+        f"the row list is scrolled to the bottom; box={yes_box} "
+        f"viewport={viewport}"
+    )
+    print(
+        f"probe_status: s13 confirm[{locale_label}] yes_box_in_viewport=True "
+        f"box={yes_box} viewport={viewport}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +716,22 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
             )
             print(f"probe_status: s13 mixed confirm_text={confirm_text!r}")
 
+            # ── Step 4b (#917): the auditable body, in English ────────────────
+            # Group A is an EXACT pair whose BOTH rows are marked delete, so
+            # the sheet shows one folder bucket, two reason lines, and the Ref
+            # row's sibling names the keeper ("Exact duplicate of <ref>").
+            _probe_confirm_body(
+                page,
+                confirm_sheet,
+                "en",
+                # The leaf dir name, not the absolute path: the manifest stores
+                # the native Windows path and the assertion must not hinge on
+                # separator style.
+                os.path.basename(tmpdir),
+                len(_MIXED_GROUP_A_BASENAMES),
+                _MIXED_GROUP_A_BASENAMES,
+            )
+
             # ── Step 5: drive NO first — cancel must be a true no-op ──────────
             confirm_no = page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM_NO)
             confirm_no.wait_for(state="visible", timeout=5_000)
@@ -574,11 +768,49 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
                 f"pre={pre_decisions} post={post_cancel_decisions}"
             )
 
+            # ── Step 5b (#917): the same body again, in zh_TW ─────────────────
+            # Cancel dropped us back to the main tree (the divergence noted
+            # above), so the language toggle is reachable. Both catalogs must
+            # carry the whole body — a key missing from zh_TW renders English
+            # and is exactly the leak s22 exists to catch, one dialog deeper.
+            _ensure_execute_dialog_closed(page)
+            page.get_by_test_id(MAIN_LANG_TOGGLE).click()
+            page.wait_for_function(
+                """() => {
+                    const el = document.querySelector('[data-testid="main-scan-button"]');
+                    return el && el.innerText.trim() === '掃描';
+                }""",
+                timeout=15_000,
+            )
+            execute_btn = _ensure_execute_dialog_open(page)
+            execute_btn.click()
+            confirm_sheet.wait_for(state="visible", timeout=10_000)
+            _probe_confirm_body(
+                page,
+                confirm_sheet,
+                "zh_TW",
+                os.path.basename(tmpdir),
+                len(_MIXED_GROUP_A_BASENAMES),
+                _MIXED_GROUP_A_BASENAMES,
+            )
+            page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM_NO).click()
+            confirm_sheet.wait_for(state="hidden", timeout=5_000)
+
+            # Back to English before the rest of the phase (and before any
+            # later scenario in the batch inherits a zh_TW settings.json —
+            # the `finally` below re-asserts it even if an assert fires here).
+            _ensure_execute_dialog_closed(page)
+            page.get_by_test_id(MAIN_LANG_TOGGLE).click()
+            page.wait_for_function(
+                """() => {
+                    const el = document.querySelector('[data-testid="main-scan-button"]');
+                    return el && el.innerText.trim() === 'Scan';
+                }""",
+                timeout=15_000,
+            )
+
             # ── Step 6: Execute again, drive YES this time ────────────────────
-            if execute_dialog_closed_after_cancel:
-                open_execute_dialog(page)
-                execute_btn = page.get_by_test_id(EXECUTE_BTN_EXECUTE)
-                execute_btn.wait_for(state="visible", timeout=10_000)
+            execute_btn = _ensure_execute_dialog_open(page)
             execute_btn.click()
             confirm_sheet.wait_for(state="visible", timeout=10_000)
             confirm_yes = page.get_by_test_id(EXECUTE_ALL_DELETE_CONFIRM_YES)
@@ -653,6 +885,13 @@ def _run_mixed_manifest_phase(base_url: str) -> None:
             )
             print("probe_status: s13 mixed-manifest gate + commit OK")
     finally:
+        # The zh_TW round-trip above persists ui.locale via PATCH /api/settings,
+        # so an assertion firing mid-switch would leave every LATER scenario in
+        # the batch running in Chinese (s22's own restore-step reasoning).
+        try:
+            _patch_locale(base_url, "en")
+        except Exception as exc:  # pragma: no cover — best-effort restore
+            print(f"probe_status: s13 locale restore FAILED: {exc!r}")
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
