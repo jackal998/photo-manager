@@ -166,6 +166,10 @@ export function PreviewPane() {
   const [swapAttempted, setSwapAttempted] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [canPlay, setCanPlay] = useState(false);
+  // Whether the still image failed to decode. Held as state because the
+  // failure only becomes known when the <img> errors; reset per selection in
+  // the effect below, beside the video flags.
+  const [imageFailed, setImageFailed] = useState(false);
 
   // The transcode choice is re-made during RENDER on every path change, not in
   // the effect below. Measured in headless Chromium: resetting it from an
@@ -189,6 +193,7 @@ export function PreviewPane() {
     void canPlayHevc();
     setVideoFailed(false);
     setCanPlay(false);
+    setImageFailed(false);
   }, [selectedFilePath]);
 
   const handleVideoError = useCallback(() => {
@@ -233,12 +238,18 @@ export function PreviewPane() {
       {/* Pane title (P2) — the pane had none, which is what let it read as a
           continuation of the table rather than as its own surface. 11px
           uppercase is the hardest text on the screen to read, so it takes
-          `ink-muted` (the L3 `dim2` table), not `ink-faint`. */}
+          `ink-muted` (the L3 `dim2` table), not `ink-faint`.
+          The word follows the MODE: clicking a GROUP row puts the pane in grid
+          mode (`selectPreviewMode`, `useAppStore.ts:1584`), where a strip
+          reading "selected photo" over a wall of tiles names something that is
+          not on screen. */}
       <div
         data-testid={PREVIEW_TITLE}
         className="flex h-[42px] flex-shrink-0 items-center border-b border-hairline-soft px-4 text-[11px] font-bold uppercase tracking-[.05em] text-ink-muted select-none"
       >
-        {t("web.preview.title", "Preview · Selected photo")}
+        {previewMode === "grid"
+          ? t("web.preview.title_group", "Preview · Group")
+          : t("web.preview.title", "Preview · Selected photo")}
       </div>
       {previewMode === "grid" && selectedGroupId !== null ? (
         // Grid mode — GroupGrid is keyed on selectedGroupId so a group change
@@ -312,6 +323,21 @@ export function PreviewPane() {
                   />
                 </>
               )
+            ) : imageFailed ? (
+              // A thumbnail that fails to decode falls back to the warm hatch,
+              // the same placeholder the row thumbnail uses (`FileRow.tsx`,
+              // REPLY R6). Without this the browser renders the `alt` text —
+              // near-black ink on the near-black `image-surround`, which is an
+              // unreadable smudge where the photo should be, and the frame
+              // still looks like it is loading.
+              <div
+                data-preview-hatch=""
+                className="thumb-hatch flex h-full w-full items-center justify-center"
+              >
+                <span className="px-3 text-center text-[12px] text-ink-muted select-none">
+                  {row.basename}
+                </span>
+              </div>
             ) : (
               <img
                 data-testid={PREVIEW_SINGLE_IMAGE}
@@ -319,6 +345,7 @@ export function PreviewPane() {
                 alt={row.basename}
                 className="h-full w-full object-contain cursor-zoom-in"
                 onDoubleClick={handleDoubleClick}
+                onError={() => setImageFailed(true)}
                 draggable={false}
               />
             )}
@@ -488,14 +515,22 @@ function MetaRow({ label, value, odd = false }: MetaRowProps) {
       <span className="flex-shrink-0 text-[12px] font-medium text-ink-muted">
         {label}
       </span>
-      {/* Right-aligned mono (P7). `break-all` stays: a 320px pane holds a
-          folder path only by wrapping it, and wrapping beats truncating here
-          because the folder is what tells two copies apart. */}
+      {/* Right-aligned mono (P7), on ONE line. The first draft wrapped with
+          `break-all`, and a real absolute path took four lines in a 320px pane
+          — which pushed the decision block, the reason #905 exists, below the
+          fold. Long values elide from the LEFT, the same recipe the row's
+          folder sub-line uses (`FileRow.tsx:257-264`, REPLY L2): a path elided
+          at its END hides the one segment that distinguishes two copies, so
+          `dir="rtl"` puts the ellipsis at the start while the inner `dir="ltr"`
+          isolate stops the bidi algorithm reordering the separators. The full
+          value stays in `title` and stays selectable. */}
       <span
-        className="ml-auto break-all text-right font-mono text-[12px] text-ink"
+        dir="rtl"
+        data-meta-value=""
+        className="ml-auto min-w-0 truncate text-left font-mono text-[12px] text-ink"
         title={value}
       >
-        {value}
+        <bdi dir="ltr">{value}</bdi>
       </span>
     </div>
   );

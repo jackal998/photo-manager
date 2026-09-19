@@ -168,14 +168,26 @@ _READ_FRAME = """(imgId) => {
 _READ_META = """(infoId) => {
   const info = document.querySelector(`[data-testid="${infoId}"]`);
   if (!info) return null;
+  const infoRight = info.getBoundingClientRect().right;
   const rows = [];
   for (const row of info.children) {
-    const [label, value] = row.children;
+    const label = row.children[0];
+    const value = row.querySelector('[data-meta-value]');
+    const vr = value ? value.getBoundingClientRect() : null;
+    const cs = value ? getComputedStyle(value) : null;
     rows.push({
       label: label ? label.textContent.trim() : null,
       value: value ? value.textContent.trim() : null,
-      valueAlign: value ? getComputedStyle(value).textAlign : null,
-      valueFont: value ? getComputedStyle(value).fontFamily : null,
+      valueFont: cs ? cs.fontFamily : null,
+      valueDir: value ? value.getAttribute('dir') : null,
+      valueWhiteSpace: cs ? cs.whiteSpace : null,
+      // ONE line: the rendered height against the element's own line box.
+      valueHeight: value ? value.clientHeight : null,
+      valueLineHeight: cs ? parseFloat(cs.lineHeight) : null,
+      // Right-aligned is a GEOMETRIC property here, not `text-align`: the
+      // value box is pushed right by `ml-auto` and its text then elides from
+      // the LEFT, so the edge is what "right-aligned" means on screen.
+      valueRightGap: vr ? infoRight - vr.right : null,
     });
   }
   return rows;
@@ -332,16 +344,62 @@ def run(*, base_url: str) -> None:
                 "Resolution",
                 "Shot date",
             ], f"Metadata labels are {[r['label'] for r in meta]}."
-            assert all(r["valueAlign"] == "right" for r in meta), (
-                "Metadata values are not right-aligned — «right alignment is "
-                "what makes a two-column metadata list read as a table rather "
-                f"than as ragged prose». Got {[r['valueAlign'] for r in meta]}."
+            # Right-aligned as a GEOMETRIC property — every value box's right
+            # edge on the same line, 13px inside the frame (the row padding).
+            assert all(
+                r["valueRightGap"] is not None and abs(r["valueRightGap"] - 13) <= 1
+                for r in meta
+            ), (
+                "Metadata values are not on a common right edge — «right "
+                "alignment is what makes a two-column metadata list read as a "
+                "table rather than as ragged prose, and it puts the values on a "
+                "common edge for comparison when the user clicks between two "
+                f"copies». Got {[r['valueRightGap'] for r in meta]}."
             )
             assert "Cascadia Code" in (meta[0]["valueFont"] or ""), (
                 f"Metadata values are not mono: {meta[0]['valueFont']!r}"
             )
             assert meta[0]["value"] == target, (
                 f"The Name row reads {meta[0]['value']!r}, expected {target!r}."
+            )
+
+            # Every value is ONE line — the Folder row is the one that proves
+            # it, because the fixture's folder is a real absolute path and the
+            # first draft wrapped it to four lines in this 320px pane.
+            folder = meta[1]
+            assert "near-duplicates" in (folder["value"] or ""), (
+                f"Expected the Folder row second; got {folder}."
+            )
+            assert folder["valueDir"] == "rtl", (
+                "The folder value is not `dir=rtl`, so it elides at its END — "
+                "which hides the one segment that tells two copies apart "
+                f"(REPLY L2, FileRow.tsx:257-264). Got {folder['valueDir']!r}."
+            )
+            for row in meta:
+                assert row["valueHeight"] <= (row["valueLineHeight"] or 0) + 1, (
+                    "A metadata value wrapped to more than one line: "
+                    f"{row['label']} is {row['valueHeight']}px tall against a "
+                    f"{row['valueLineHeight']}px line. A wrapped path pushes the "
+                    "decision block — the reason #905 exists — below the fold."
+                )
+
+            # …and the consequence, read directly: the decision block is ON
+            # SCREEN at the review viewport. A height assertion on one cell is
+            # a proxy; this is the thing the user meets.
+            block_top = page.evaluate(
+                """(blockId) => {
+  const el = document.querySelector(`[data-testid="${blockId}"]`);
+  if (!el) return null;
+  return { top: el.getBoundingClientRect().top, inner: window.innerHeight };
+}""",
+                PREVIEW_DECISION,
+            )
+            print(f"probe_status: s77 decision block position = {block_top}")
+            assert block_top is not None and block_top["top"] < block_top["inner"], (
+                "The decision block starts below the fold at 1280x800 "
+                f"({block_top}) — the pane scrolls, so it is reachable, but the "
+                "control #905 exists for is not visible beside the photo it "
+                "judges, which is the whole point."
             )
 
             # The heading says the same basename, at size, above the table.
