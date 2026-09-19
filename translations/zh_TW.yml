@@ -802,6 +802,9 @@ web:
     # 預覽窗格自己的標題列（版面切片 PV / REPLY P2）。英文由 CSS 轉成全大寫，
     # 中文不受影響。
     title: "預覽 · 選取的照片"
+    # 格狀模式（選取的是群組列，窗格顯示整組縮圖）。單檔的說法在這裡指向
+    # 一個畫面上並不存在的東西。
+    title_group: "預覽 · 群組"
     select_file: "選擇檔案以預覽"
     video_cannot_be_played: "影片無法播放"
     preparing_video: "正在準備影片…"

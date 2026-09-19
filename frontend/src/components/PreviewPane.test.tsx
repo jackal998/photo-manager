@@ -254,6 +254,71 @@ describe("PreviewPane", () => {
       );
     });
 
+    it("falls back to the warm hatch when the image fails to decode", () => {
+      // Without this the browser renders the `alt` text — near-black ink on
+      // the near-black `image-surround`, an unreadable smudge in a frame that
+      // still looks like it is loading.
+      render(<PreviewPane />);
+      const pane = screen.getByTestId(PREVIEW_PANE);
+      expect(pane.querySelector("[data-preview-hatch]")).toBeNull();
+
+      act(() => {
+        fireEvent.error(screen.getByTestId(PREVIEW_SINGLE_IMAGE));
+      });
+
+      const hatch = pane.querySelector("[data-preview-hatch]");
+      expect(hatch).not.toBeNull();
+      expect(hatch!.className).toMatch(/\bthumb-hatch\b/);
+      expect(screen.queryByTestId(PREVIEW_SINGLE_IMAGE)).not.toBeInTheDocument();
+      // The user still learns WHICH file this is.
+      expect(hatch!.textContent).toContain("sunset.jpg");
+    });
+
+    it("a long folder path stays on ONE line, elided from the left, full in title", () => {
+      // The first draft wrapped with `break-all`; a real absolute path took
+      // four lines in a 320px pane and pushed the decision block — the reason
+      // #905 exists — below the fold. One line, with the ellipsis at the START
+      // so the leaf (the segment that tells two copies apart) survives.
+      const longFolder =
+        "C:\\Users\\someone\\repository\\photo-manager\\qa\\sandbox\\near-duplicates\\";
+      act(() => {
+        useAppStore.setState({
+          manifest: {
+            path: "/manifests/test.db",
+            groups: [
+              {
+                group_number: 1,
+                member_count: 1,
+                items: [{ ...testRow, folder: longFolder }],
+              },
+            ],
+            totalGroups: 1,
+            totalFiles: 1,
+            loading: false,
+            error: null,
+          },
+        });
+      });
+      render(<PreviewPane />);
+
+      const folderRow = screen.getByTestId(PREVIEW_INFO).children[1];
+      const valueEl = folderRow.querySelector<HTMLElement>("[data-meta-value]");
+      expect(valueEl).not.toBeNull();
+      // `truncate` is `overflow:hidden` + `text-overflow:ellipsis` +
+      // `white-space:nowrap` — the class that makes it ONE line — and the
+      // wrapping class that caused the defect must be gone.
+      expect(valueEl!.className).toMatch(/\btruncate\b/);
+      expect(valueEl!.className).not.toMatch(/break-all/);
+      // rtl + an ltr isolate: the ellipsis lands on the LEFT without the bidi
+      // algorithm reordering the path separators.
+      expect(valueEl!.getAttribute("dir")).toBe("rtl");
+      expect(valueEl!.querySelector("bdi")?.getAttribute("dir")).toBe("ltr");
+      // Nothing is lost: the full path is still in `title` and still the
+      // element's own text, so it can be read and selected.
+      expect(valueEl!).toHaveAttribute("title", longFolder);
+      expect(valueEl!.textContent).toBe(longFolder);
+    });
+
     it("renders the basename as the pane heading, truncated with the full name in title", () => {
       render(<PreviewPane />);
       const heading = screen.getByRole("heading", { level: 2 });
@@ -386,6 +451,32 @@ describe("PreviewPane", () => {
       });
       expect(spy).toHaveBeenCalledWith(FILE_PATH);
     });
+  });
+
+  it("the title names the MODE: 'Group' in grid mode, 'Selected photo' in single", () => {
+    // Clicking a GROUP row puts the pane in grid mode
+    // (`selectPreviewMode`, useAppStore.ts:1584) and it shows every member as
+    // a tile — a strip reading "selected photo" over that wall names something
+    // that is not on screen. Both directions are asserted: a title that said
+    // "Group" always would be just as wrong.
+    seedManifest();
+    act(() => {
+      useAppStore.setState({
+        preview: { selectedFilePath: null, fullResPath: null, selectedGroupId: 1 },
+      });
+    });
+    const { rerender } = render(<PreviewPane />);
+    expect(screen.getByTestId(PREVIEW_TITLE)).toHaveTextContent("Preview · Group");
+
+    act(() => {
+      useAppStore.setState({
+        preview: { selectedFilePath: FILE_PATH, fullResPath: null, selectedGroupId: null },
+      });
+    });
+    rerender(<PreviewPane />);
+    expect(screen.getByTestId(PREVIEW_TITLE)).toHaveTextContent(
+      "Preview · Selected photo"
+    );
   });
 
   it("switches to a different file when store.preview.selectedFilePath changes", () => {

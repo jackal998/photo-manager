@@ -979,6 +979,9 @@ web:
     # UPPERCASE by CSS, so the catalog carries sentence case and zh_TW is
     # unaffected by a transform that does nothing to Han characters.
     title: "Preview · Selected photo"
+    # Grid mode (a GROUP row is selected, so the pane shows every member as a
+    # tile). The single-file wording names something that is not on screen.
+    title_group: "Preview · Group"
     select_file: "Select a file to preview"
     video_cannot_be_played: "Video cannot be played"
     preparing_video: "Preparing video…"
