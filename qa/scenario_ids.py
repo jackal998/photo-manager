@@ -332,6 +332,15 @@ ALL_SCENARIOS = [
     # REAL server-side lock with its false-positive half, and the whole pane in
     # zh_TW including the Shot date row under both UI locales.
     "s77_preview_pane",
+    # WEB-ONLY (#878, layout slice E) — the empty state. The app with nothing
+    # loaded is the first screen a new user sees, and every remaining claim
+    # about it is a number the Tailwind build produces: the primary CTA's 48px
+    # box on the accent (it shipped as one of two identical 32px neutral
+    # buttons), the 25px/700 heading, the 520px column, and exactly ONE filled
+    # button on the screen. Plus two owner decisions that are only visible as
+    # ABSENCE — the dropped Q10 safety line and the un-built recent-sources
+    # list — asserted in both locales.
+    "s78_empty_state",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -350,4 +359,5 @@ WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s75_keep_best_button",
     "s76_toolbar_status_density",
     "s77_preview_pane",
+    "s78_empty_state",
 })

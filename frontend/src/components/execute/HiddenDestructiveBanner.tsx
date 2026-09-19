@@ -9,9 +9,13 @@
 
 import { useT } from "@/i18n/useT";
 import { EXECUTE_HIDDEN_DESTRUCTIVE_BANNER } from "@/testids";
+import { CAUTION_BANNER } from "./cautionBanner";
 
+// The leading glyph moved OUT of the sentence in layout slice E: the caution
+// role owns ▲, and a ⚠ inside the copy would put a second, different warning
+// mark on the same strip in every locale that copied it.
 const TEMPLATE_EN =
-  "⚠ {n} pending delete {rowWord} hidden by the current filter — switch to " +
+  "{n} pending delete {rowWord} hidden by the current filter — switch to " +
   "All decided or Delete only to see them.";
 
 interface HiddenDestructiveBannerProps {
@@ -26,9 +30,14 @@ export function HiddenDestructiveBanner({ count }: HiddenDestructiveBannerProps)
   return (
     <div
       data-testid={EXECUTE_HIDDEN_DESTRUCTIVE_BANNER}
-      className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+      className={CAUTION_BANNER}
       role="alert"
     >
+      {/* Q9's caution glyph, decorative — it is the grayscale separator from
+          the danger role, and the sentence beside it carries the meaning. */}
+      <span aria-hidden="true" className="shrink-0 text-[12px] leading-[1.5]">
+        ▲
+      </span>
       {/* Wording matches the Qt parity string (execute_dialog.
           warning_hidden_destructive) — but through the catalog now, and with
           "row(s)" split into singular/plural (copy audit E3): it was

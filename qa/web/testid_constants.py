@@ -532,6 +532,18 @@ The score the row also carries, given a label and a solid-fill bar in the pane
 because the pane is where a single file is judged.  The VALUE is queryable text
 (``formatScore``); the bar itself is ``aria-hidden``, like the row's."""
 
+PREVIEW_LEGEND = "preview-legend"
+"""The similarity legend pinned to the BOTTOM of the preview pane (layout
+slice E; audit row P8).
+
+Five rows, one per similarity state, each a real badge (the same
+``lib/similarityBadge`` spec the row cell wears, at ``min-width: 74px`` so the
+column of pills lines up) beside the phrase that says what the state means.
+It is the pane's last child and sits OUTSIDE the scroller above it, so it
+stays visible while the metadata scrolls — a legend that scrolls away is one
+nobody finds at the moment they need it.  Present whether or not a file is
+selected."""
+
 PREVIEW_RESIZE_HANDLE = "preview-resize-handle"
 """Drag handle for resizing the preview pane (#739).  Sits between the result
 tree and the preview pane in App.tsx; mousedown here begins a resize drag

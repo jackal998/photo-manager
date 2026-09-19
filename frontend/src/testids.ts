@@ -113,6 +113,7 @@ export const PREVIEW_INFO = "preview-info";
 export const PREVIEW_TITLE = "preview-title";
 export const PREVIEW_DECISION = "preview-decision";
 export const PREVIEW_KEEP_WORTHINESS = "preview-keep-worthiness";
+export const PREVIEW_LEGEND = "preview-legend";
 export const PREVIEW_RESIZE_HANDLE = "preview-resize-handle";
 export const FULLRES_DIALOG = "fullres-dialog";
 export const FULLRES_IMAGE = "fullres-image";

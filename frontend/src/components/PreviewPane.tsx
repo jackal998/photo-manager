@@ -64,6 +64,7 @@ import {
 } from "@/testids";
 import type { DecisionValue, FileRow } from "@/api/types";
 import { GroupGrid } from "./GroupGrid";
+import { SimilarityLegend } from "./SimilarityLegend";
 
 // ---------------------------------------------------------------------------
 // Shared geometry (REPLY §"Preview pane")
@@ -454,6 +455,10 @@ export function PreviewPane() {
       ) : (
         <EmptyState />
       )}
+      {/* Similarity legend (audit P8, layout slice E) — the pane's last child
+          and the only one outside the scroller above, so the key to the badge
+          code stays on screen while the metadata scrolls under it. */}
+      <SimilarityLegend />
     </div>
   );
 }

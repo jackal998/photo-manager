@@ -14,6 +14,7 @@ import {
   PREVIEW_TITLE,
   PREVIEW_DECISION,
   PREVIEW_KEEP_WORTHINESS,
+  PREVIEW_LEGEND,
   FULLRES_DIALOG,
   FULLRES_IMAGE,
 } from "@/testids";
@@ -142,6 +143,37 @@ describe("PreviewPane", () => {
     // Image and info panel must NOT be present in empty state.
     expect(screen.queryByTestId(PREVIEW_SINGLE_IMAGE)).not.toBeInTheDocument();
     expect(screen.queryByTestId(PREVIEW_INFO)).not.toBeInTheDocument();
+  });
+
+  it("mounts the similarity legend outside the scroller, in BOTH pane modes", () => {
+    // Layout slice E (audit P8). The legend is the key to a five-way code the
+    // table prints in a 92px cell; a key that scrolls away with the metadata
+    // is one nobody finds at the moment they need it. Two claims, and the
+    // second is the one a "move it into the content column" refactor breaks
+    // silently: it is the pane's LAST child and it is not inside
+    // [data-preview-scroll].
+    const { rerender } = render(<PreviewPane />);
+    const emptyPane = screen.getByTestId(PREVIEW_PANE);
+    expect(emptyPane.lastElementChild).toBe(screen.getByTestId(PREVIEW_LEGEND));
+
+    seedManifest();
+    act(() => {
+      useAppStore.setState({
+        preview: {
+          selectedFilePath: FILE_PATH,
+          fullResPath: null,
+          selectedGroupId: null,
+        },
+      });
+    });
+    rerender(<PreviewPane />);
+    const pane = screen.getByTestId(PREVIEW_PANE);
+    const legend = screen.getByTestId(PREVIEW_LEGEND);
+    expect(pane.lastElementChild).toBe(legend);
+    expect(
+      pane.querySelector("[data-preview-scroll]")!.contains(legend)
+    ).toBe(false);
+    expect(legend.className).toContain("flex-shrink-0");
   });
 
   it("shows empty state when selectedFilePath is set but file not in manifest", () => {
