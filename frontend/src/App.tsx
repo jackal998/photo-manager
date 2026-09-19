@@ -381,31 +381,66 @@ export default function App() {
         {/* Result tree takes remaining width */}
         <div className="flex-1 min-w-0 overflow-hidden">
           {noManifest ? (
+            // Empty state (layout slice E · audit E1–E5, REPLY L4: E1/E3/E4/E5
+            // MUST-MATCH). It was one 14px muted sentence between two identical
+            // neutral buttons — «the first screen a new user sees and the only
+            // one that has to convert; heading, body, and a primary CTA at size
+            // are not polish there». The two handlers and both testids are
+            // unchanged: this is the same Scan / Open pair, at size.
+            //
+            // Two things the prototype draws that are deliberately NOT here:
+            // the safety pill (audit E6 — Q10 dropped, no "nothing is deleted"
+            // line is drawn anywhere) and the Recent-sources list (E7 — dropped
+            // by design: it needs a scan-history store whose stale paths would
+            // fail on the app's FIRST screen). E2's three rotated tiles
+            // simplify to one — the stack was decoration.
             <div
               data-testid={MAIN_EMPTY_STATE}
-              className="flex h-full flex-col items-center justify-center gap-4 text-sm text-ink-muted"
+              className="flex h-full flex-col items-center justify-center overflow-y-auto px-6 py-10"
             >
-              <p>
-                {t(
-                  "web.empty_state.no_manifest",
-                  "No manifest loaded — Scan or Open a manifest to begin."
-                )}
-              </p>
-              <div className="flex items-center gap-3">
-                <button
-                  data-testid={MAIN_EMPTY_SCAN}
-                  className="rounded border border-hairline-input bg-panel px-4 py-1.5 text-sm text-ink hover:bg-subtle"
-                  onClick={() => setScanOpen(true)}
+              <div className="flex w-full max-w-[520px] flex-col items-center text-center">
+                <div
+                  aria-hidden="true"
+                  className="mb-[26px] flex h-24 w-24 select-none items-center justify-center rounded-[20px] border border-hairline-input bg-panel text-[34px] leading-none text-warm shadow-md"
                 >
-                  {t("web.empty_state.scan", "Scan…")}
-                </button>
-                <button
-                  data-testid={MAIN_EMPTY_OPEN}
-                  className="rounded border border-hairline-input bg-panel px-4 py-1.5 text-sm text-ink hover:bg-subtle"
-                  onClick={() => setManifestBrowseOpen(true)}
-                >
-                  {t("web.empty_state.open", "Open Manifest…")}
-                </button>
+                  ⧉
+                </div>
+                <h2 className="text-[25px] font-bold leading-tight tracking-[-.01em] text-ink">
+                  {t(
+                    "web.empty_state.heading",
+                    "Find duplicate & similar photos"
+                  )}
+                </h2>
+                {/* E4 — the body copy keeps the `no_manifest` key it has always
+                    had (every catalog and test references it by that name); what
+                    changed is that it says what the app DOES rather than which
+                    state it is in. */}
+                <p className="mt-[11px] max-w-[430px] text-[14px] leading-[1.6] text-ink-muted">
+                  {t(
+                    "web.empty_state.no_manifest",
+                    "Point it at a folder or drive. It finds exact duplicates and visually similar shots, then groups them so you can review and clean up — safely."
+                  )}
+                </p>
+                {/* E5 — both CTAs h48 / r12; only ONE of them is filled, the
+                    same single-primary rule the toolbar follows. The primary
+                    takes the accent flat (no gradient, no shadow) per slice T,
+                    which retired both on this button. */}
+                <div className="mt-[26px] flex items-center gap-[11px]">
+                  <button
+                    data-testid={MAIN_EMPTY_SCAN}
+                    className="inline-flex h-12 items-center justify-center whitespace-nowrap rounded-[12px] border border-warm bg-warm px-[24px] text-[15px] font-bold leading-none text-white hover:bg-warm-hover hover:border-warm-hover active:bg-warm-active active:border-warm-active focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm"
+                    onClick={() => setScanOpen(true)}
+                  >
+                    {t("web.empty_state.scan", "Scan…")}
+                  </button>
+                  <button
+                    data-testid={MAIN_EMPTY_OPEN}
+                    className="inline-flex h-12 items-center justify-center whitespace-nowrap rounded-[12px] border border-hairline-input bg-panel px-[22px] text-[15px] font-semibold leading-none text-ink hover:bg-panel-hover hover:border-ink-hairline focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm"
+                    onClick={() => setManifestBrowseOpen(true)}
+                  >
+                    {t("web.empty_state.open", "Open Manifest…")}
+                  </button>
+                </div>
               </div>
             </div>
           ) : (

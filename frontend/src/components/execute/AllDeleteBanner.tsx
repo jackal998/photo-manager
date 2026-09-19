@@ -16,6 +16,7 @@ import {
   EXECUTE_ALL_DELETE_BANNER,
   executeAllDeleteJumpTestid,
 } from "@/testids";
+import { CAUTION_BANNER } from "./cautionBanner";
 
 const TEMPLATE_EN =
   "{groupWord} {groups} will have ALL files deleted. Review decisions below " +
@@ -56,9 +57,16 @@ export function AllDeleteBanner({
   return (
     <div
       data-testid={EXECUTE_ALL_DELETE_BANNER}
-      className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+      className={CAUTION_BANNER}
       role="alert"
     >
+      {/* The ▲ is the caution role's grayscale cue (Q9): danger is the only
+          DARK fill with a light label, caution and positive are both pale, so
+          the glyph is what separates them where colour cannot. Decorative —
+          the sentence beside it already says what is wrong. */}
+      <span aria-hidden="true" className="shrink-0 text-[12px] leading-[1.5]">
+        ▲
+      </span>
       <span className="font-semibold shrink-0">
         {t("web.execute_dialog.warning_prefix", "Warning:")}
       </span>
@@ -71,7 +79,7 @@ export function AllDeleteBanner({
               type="button"
               data-testid={executeAllDeleteJumpTestid(gid)}
               onClick={() => onJumpToGroup(gid)}
-              className="underline font-semibold hover:text-amber-700 focus:outline-none focus:ring-1 focus:ring-amber-500 rounded"
+              className="underline font-semibold hover:brightness-125 focus:outline-none focus:ring-1 focus:ring-caution-line rounded"
             >
               {gid}
             </button>

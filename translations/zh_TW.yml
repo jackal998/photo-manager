@@ -457,7 +457,12 @@ web:
     unknown: "無法完成這個要求。"
     technical_detail: "詳細資訊：{detail}"
   empty_state:
-    no_manifest: "尚未載入清單 — 請掃描或開啟清單以開始。"
+    # 版面切片 E（audit E3/E4）。原本只有一句說明「目前沒有清單」的灰字；
+    # 這是新使用者看到的第一個畫面，所以改成說明這個程式做什麼，並把兩條
+    # 入口放大。`no_manifest` 保留原本的 key 名稱（各處呼叫與測試都用它），
+    # 內容改為標題下方的說明文字。
+    heading: "找出重複與相似的照片"
+    no_manifest: "指定一個資料夾或磁碟機，它會找出完全相同與外觀相似的照片，並分組讓你安全地檢閱與清理。"
     scan: "掃描…"
     open: "開啟清單…"
   manifest:
@@ -685,7 +690,9 @@ web:
     warning_complete_groups: "{groupWord} {groups} 中的所有檔案都將被刪除。請先檢閱下方的決策再按「執行」。"
     group_singular: "群組"
     group_plural: "群組"
-    warning_hidden_destructive: "⚠ 目前的篩選條件隱藏了 {n} {rowWord}待刪除的項目 — 切換到「全部決策」或「僅刪除」即可看到。"
+    # 版面切片 E：警告條改用 Q9 的 caution 角色後，▲ 由元件繪出，原本寫在
+    # 句首的 ⚠ 就從文案移除，否則同一條上會出現兩個不同的警告符號。
+    warning_hidden_destructive: "目前的篩選條件隱藏了 {n} {rowWord}待刪除的項目 — 切換到「全部決策」或「僅刪除」即可看到。"
     row_singular: "列"
     row_plural: "列"
     # 樹狀清單上方的類型篩選器（copy audit E1 — 原本寫死英文，第三項還叫
@@ -820,6 +827,14 @@ web:
     decision_locked: "此檔案已鎖定 — 先解鎖才能變更動作"
     # REPLY P6 — 列上的分數，在只判斷單一檔案的窗格裡改用它真正的名字。
     keep_worthiness: "保留價值"
+    # 釘在窗格底部的相似度圖例（audit P8，版面切片 E）。每個徽章狀態一句
+    # 說明 —— 這些意義原本只存在於欄位的 hover 提示裡。
+    legend_title: "相似度圖例"
+    legend_ref: "選定保留的檔案"
+    legend_exact: "完全相同"
+    legend_near: "外觀相近"
+    legend_indirect: "間接關聯"
+    legend_none: "影片／無影像"
   format:
     similarity_ref: "參考"
     # 對應桌面版 tree.similarity_near_dup（R6）— 原本是寫死的半形「~」。

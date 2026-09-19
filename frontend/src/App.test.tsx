@@ -11,6 +11,9 @@ import { useAppStore } from "./store/useAppStore";
 import { useI18nStore } from "./i18n/useI18nStore";
 import { translate, interpolate } from "./i18n/useT";
 import {
+  FS_BROWSER,
+  MAIN_EMPTY_OPEN,
+  MAIN_EMPTY_SCAN,
   MAIN_EMPTY_STATE,
   MAIN_EXECUTE_BUTTON,
   MAIN_LANG_TOGGLE,
@@ -237,6 +240,87 @@ describe("App result tree", () => {
     renderWithProviders(<App />);
     expect(screen.getByTestId(MAIN_RESULT_TREE)).toBeInTheDocument();
     expect(screen.queryByTestId(MAIN_EMPTY_STATE)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Empty state (layout slice E — audit E1-E5, REPLY L4 «E1/E3/E4/E5 MUST-MATCH»)
+// ---------------------------------------------------------------------------
+//
+// This is the first screen a new user sees and the only one that has to
+// convert, so the composition itself is the behaviour: a heading, a body that
+// says what the app does, and TWO ways in of which exactly one is primary.
+// The computed px (h48 / r12 / the accent fill) are `qa/web/scenarios/
+// s78_empty_state.py` — in jsdom `h-12` and `bg-warm` are strings that spell
+// correctly with the token deleted.
+
+describe("App empty state", () => {
+  beforeEach(() => resetStore());
+
+  it("renders the heading, the body copy and both CTAs", () => {
+    renderWithProviders(<App />);
+    const empty = screen.getByTestId(MAIN_EMPTY_STATE);
+    expect(empty).toHaveTextContent("Find duplicate & similar photos");
+    expect(empty).toHaveTextContent("Point it at a folder or drive");
+    // The heading is a real heading element, not a styled div: the empty
+    // state is the whole page here, so it owns the page's only heading.
+    expect(empty.querySelector("h2")?.textContent).toBe(
+      "Find duplicate & similar photos"
+    );
+    expect(screen.getByTestId(MAIN_EMPTY_SCAN)).toBeInTheDocument();
+    expect(screen.getByTestId(MAIN_EMPTY_OPEN)).toBeInTheDocument();
+  });
+
+  it("renders the heading and body in zh_TW", () => {
+    act(() => {
+      useI18nStore.setState({
+        locale: "zh_TW",
+        catalog: {
+          "web.empty_state.heading": "找出重複與相似的照片",
+          "web.empty_state.no_manifest":
+            "指定一個資料夾或磁碟機，它會找出完全相同與外觀相似的照片，並分組讓你安全地檢閱與清理。",
+          "web.empty_state.scan": "掃描…",
+          "web.empty_state.open": "開啟清單…",
+        },
+      });
+    });
+    renderWithProviders(<App />);
+    const empty = screen.getByTestId(MAIN_EMPTY_STATE);
+    expect(empty).toHaveTextContent("找出重複與相似的照片");
+    expect(empty).toHaveTextContent("指定一個資料夾或磁碟機");
+    expect(screen.getByTestId(MAIN_EMPTY_SCAN)).toHaveTextContent("掃描…");
+    // An English leak here is the copy-audit R8 defect one surface over.
+    expect(empty.textContent).not.toContain("Find duplicate");
+  });
+
+  it("opens the Scan dialog from the primary CTA", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<App />);
+    expect(screen.queryByTestId(SCAN_DIALOG)).not.toBeInTheDocument();
+    await user.click(screen.getByTestId(MAIN_EMPTY_SCAN));
+    expect(screen.getByTestId(SCAN_DIALOG)).toBeInTheDocument();
+  });
+
+  it("opens the manifest picker from the secondary CTA", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<App />);
+    expect(screen.queryByTestId(FS_BROWSER)).not.toBeInTheDocument();
+    await user.click(screen.getByTestId(MAIN_EMPTY_OPEN));
+    expect(screen.getByTestId(FS_BROWSER)).toBeInTheDocument();
+  });
+
+  it("draws no safety line and no recent-sources list", () => {
+    // Owner decisions on this slice: Q10's "Nothing is deleted until you
+    // review and confirm" pill is dropped everywhere (audit row E6 withdrawn),
+    // and E7's recent sources is not built — it would need a scan-history
+    // store whose stale paths fail on the app's FIRST screen. Both are things
+    // the prototype draws, so "we simply have not built it yet" and "we
+    // decided against it" look identical without this test.
+    renderWithProviders(<App />);
+    const empty = screen.getByTestId(MAIN_EMPTY_STATE);
+    expect(empty.textContent).not.toContain("Nothing is deleted");
+    expect(empty.textContent).not.toContain("不會刪除");
+    expect(empty.textContent).not.toContain("Recent sources");
   });
 });
 

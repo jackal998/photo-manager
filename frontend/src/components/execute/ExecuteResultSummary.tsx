@@ -35,12 +35,19 @@ export function ExecuteResultSummary({
       {missing.length > 0 && (
         <div
           data-testid={EXECUTE_RESULT_MISSING}
-          className="rounded border border-amber-300 bg-amber-50 p-2"
+          className="rounded-[8px] border border-caution-line border-l-[3px] bg-caution-bg px-[12px] py-[10px] text-caution-ink"
         >
-          <p className="font-medium text-amber-800">
+          {/* Not found is the caution half of the post-execute split (the
+              failed half below keeps the danger role): the files are gone,
+              which is the outcome the user asked for, reported rather than
+              warned about. Same three tokens as the two banners above. */}
+          <p className="text-[13px] font-medium leading-[1.5]">
+            <span aria-hidden="true" className="mr-2 text-[12px]">
+              ▲
+            </span>
             {t("web.execute_dialog.files_not_found_title", "Files Not Found")}
           </p>
-          <ul className="mt-1 list-disc pl-5 text-amber-700">
+          <ul className="mt-1 list-disc pl-5 text-[13px] leading-[1.5]">
             {missing.map((path) => (
               <li key={path} className="break-all">
                 {path}

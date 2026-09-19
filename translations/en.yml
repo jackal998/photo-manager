@@ -564,7 +564,13 @@ web:
     unknown: "The request could not be completed."
     technical_detail: "Details: {detail}"
   empty_state:
-    no_manifest: "No manifest loaded — Scan or Open a manifest to begin."
+    # Layout slice E (audit E3/E4). The screen was one muted sentence saying
+    # which STATE the app was in; it is the first thing a new user sees, so it
+    # now says what the app DOES and offers the two ways in. `no_manifest`
+    # keeps its key name (every catalog, call site and test references it by
+    # that name) and carries the body copy under the heading.
+    heading: "Find duplicate & similar photos"
+    no_manifest: "Point it at a folder or drive. It finds exact duplicates and visually similar shots, then groups them so you can review and clean up — safely."
     scan: "Scan…"
     open: "Open Manifest…"
   manifest:
@@ -835,7 +841,10 @@ web:
     group_plural: "Groups"
     # Banner when the active type filter is hiding pending delete rows
     # (copy audit E3 — was hardcoded, and flattened to "row(s)").
-    warning_hidden_destructive: "⚠ {n} pending delete {rowWord} hidden by the current filter — switch to All decided or Delete only to see them."
+    # Layout slice E: the leading ⚠ left the COPY when the banner took the Q9
+    # caution role, whose glyph is ▲ and is rendered by the component — two
+    # different warning marks on one strip was the alternative.
+    warning_hidden_destructive: "{n} pending delete {rowWord} hidden by the current filter — switch to All decided or Delete only to see them."
     row_singular: "row"
     row_plural: "rows"
     # Type-filter select above the tree (copy audit E1 — was hardcoded
@@ -1005,6 +1014,16 @@ web:
     # REPLY P6 — the row's score, named for what it is in a pane that judges
     # one file rather than compares a column of them.
     keep_worthiness: "Keep-worthiness"
+    # Similarity legend pinned to the bottom of the pane (audit P8, layout
+    # slice E). One phrase per badge state — what the pill MEANS, which until
+    # now lived only in the cell's hover tooltip. Lowercase: each phrase reads
+    # as the continuation of the badge beside it, not as its own heading.
+    legend_title: "Similarity legend"
+    legend_ref: "chosen keeper"
+    legend_exact: "exact duplicate"
+    legend_near: "near match"
+    legend_indirect: "linked indirectly"
+    legend_none: "video / no image"
   # lib/format.ts similarityLabel() — the one natural-language word among its
   # symbol-only outputs (web audit fix 5).
   format:
