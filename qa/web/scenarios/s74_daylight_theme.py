@@ -92,6 +92,18 @@ What this pins, and why a unit test cannot:
      its hover both moved with the Q8 palette fix; the button is the surface
      that fix exists for (white label at 3.88:1 before, 5.04:1 after).
 
+ 13. **The similarity legend is PINNED, and the caution banner is caution**
+     (layout slice E). Two claims no vitest can make. The legend's whole point
+     is that it survives the pane scrolling, so the scroller is driven to its
+     end and the legend's bottom edge is then compared with the PANE's — at
+     scroll-top a legend inside the content column looks identical. And the
+     execute dialog's all-delete banner is read as COMPUTED colour after every
+     row in the group is staged delete through the row control: `bg-caution-bg`
+     in jsdom is a string that spells correctly with the token deleted, and
+     the three values (#fdf3d9 fill, #6b4e12 ink, #e3c264 3px left rule) plus
+     the ▲ glyph ARE the Q9 role. Until this slice both banners were on
+     Tailwind's stock amber scale — the last off-palette surface in the tree.
+
 Fixture: qa/sandbox/near-duplicates/ (5 JPEGs, one group), plain scan — the
 same fixture s72/s73 use. It yields the Ref winner plus near-match rows, i.e.
 two of the five badge states; the five-way mapping itself is pure logic and is
@@ -110,13 +122,16 @@ from qa.web._pw import PWContext
 from qa.web._invariants import (
     dismiss_modal_overlays,
     load_manifest,
+    open_execute_dialog,
     open_scan_dialog,
     right_click_row,
     run_scan,
+    set_row_decision,
 )
 from qa.web.testid_constants import (
     CONTEXT_MENU,
     CTX_SET_ACTION_KEEP,
+    EXECUTE_ALL_DELETE_BANNER,
     MAIN_RESULT_TREE,
     MAIN_STATUS_BAR,
     MAIN_STATUS_STRIP,
@@ -194,6 +209,13 @@ _HAIRLINE = "rgb(231, 221, 205)"  # --color-hairline   #e7ddcd
 _SCORE_FILL = "rgb(184, 148, 106)"  # --color-score-fill #b8946a (now SOLID)
 _DENSITY_KEY = "density"
 
+# Slice E — the caution role (open questions Q9). Declared as tokens by slice
+# T with nothing consuming them; the execute dialog's two warning banners are
+# the first consumer.
+_CAUTION_BG = "rgb(253, 243, 217)"  # --color-caution-bg   #fdf3d9
+_CAUTION_INK = "rgb(107, 78, 18)"  # --color-caution-ink  #6b4e12
+_CAUTION_LINE = "rgb(227, 194, 100)"  # --color-caution-line #e3c264
+
 _PANEL_BG = "rgb(255, 253, 249)"  # --color-panel     #fffdf9
 _TITLEBAR_BG = "rgb(243, 237, 227)"  # --color-titlebar  #f3ede3
 _SUBTLE_BG = "rgb(247, 235, 218)"  # --color-subtle    #f7ebda
@@ -249,6 +271,51 @@ _READ_BADGES = """() => {
     });
   }
   return out;
+}"""
+
+# Slice E — the similarity legend, read as a POSITION as well as a list. The
+# scroller beside it is driven to its end first: "pinned" and "happens to be
+# at the bottom right now" are the same picture until something scrolls.
+_READ_LEGEND = """(paneId) => {
+  const pane = document.querySelector(`[data-testid="${paneId}"]`);
+  const legend = pane ? pane.querySelector('[data-testid="preview-legend"]') : null;
+  if (!pane || !legend) return null;
+  const scroller = pane.querySelector('[data-preview-scroll]');
+  if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  const badges = Array.from(legend.querySelectorAll('[data-legend-state]'));
+  return {
+    count: badges.length,
+    states: badges.map((b) => b.dataset.legendState),
+    minWidths: badges.map((b) => getComputedStyle(b).minWidth),
+    cues: badges.map((b) => {
+      const cs = getComputedStyle(b);
+      return `${cs.borderTopStyle}/${cs.fontWeight}`;
+    }),
+    inScroller: scroller ? scroller.contains(legend) : false,
+    bottomGap: Math.round(
+      pane.getBoundingClientRect().bottom - legend.getBoundingClientRect().bottom
+    ),
+  };
+}"""
+
+# Slice E / open questions Q9 — the caution banner in the execute dialog. Read
+# as COMPUTED colour: `bg-caution-bg` in jsdom is a string that survives the
+# token being deleted, and the three values below are the whole role.
+_READ_CAUTION_BANNER = """(testid) => {
+  const el = document.querySelector(`[data-testid="${testid}"]`);
+  if (!el) return null;
+  const cs = getComputedStyle(el);
+  return {
+    backgroundColor: cs.backgroundColor,
+    borderLeftWidth: cs.borderLeftWidth,
+    borderLeftColor: cs.borderLeftColor,
+    borderTopWidth: cs.borderTopWidth,
+    borderRadius: cs.borderTopLeftRadius,
+    color: cs.color,
+    fontSize: cs.fontSize,
+    fontWeight: cs.fontWeight,
+    text: (el.textContent || '').trim(),
+  };
 }"""
 
 _READ_ROOT_BG = """() => {
@@ -1199,6 +1266,50 @@ def run(*, base_url: str) -> None:
                 f"{preview_mono!r}, expected a stack led by 'Cascadia Code'."
             )
 
+            # 8a-ii. The similarity legend footer (layout slice E · audit P8).
+            # PINNED is the whole claim, and it is not a class: the legend must
+            # end where the PANE ends after the content beside it has been
+            # scrolled to the bottom. A legend that rides inside the scroller
+            # looks identical in a screenshot taken at scroll-top and is gone at
+            # the moment a user is comparing two rows — which is the moment the
+            # five-way badge code needs explaining.
+            legend = page.evaluate(_READ_LEGEND, PREVIEW_PANE)
+            print(f"probe_status: s74 similarity legend = {legend}")
+            assert legend is not None, (
+                "slice E — the preview pane has no [data-testid=preview-legend]. "
+                "The badge is a five-way code whose meanings otherwise live only "
+                "in a hover tooltip on a 92px cell."
+            )
+            assert legend["count"] == 5, (
+                f"slice E — the legend lists {legend['count']} states, expected "
+                "5. A legend missing one state is worse than none: the reader "
+                "concludes the missing pill means something else."
+            )
+            assert legend["states"] == ["ref", "exact", "near", "indirect", "none"], (
+                f"slice E — the legend's states are {legend['states']}."
+            )
+            assert legend["inScroller"] is False, (
+                "slice E — the legend is INSIDE [data-preview-scroll]; it must "
+                "be the pane's own last child so it survives the scroll."
+            )
+            assert legend["bottomGap"] is not None and legend["bottomGap"] <= 1, (
+                f"slice E — the legend's bottom edge is {legend['bottomGap']}px "
+                "above the pane's after scrolling the pane to its end; it is "
+                "riding with the content instead of being pinned."
+            )
+            assert legend["minWidths"] == ["74px"] * 5, (
+                f"slice E — the legend's badges report {legend['minWidths']}, "
+                "expected 74px each (REPLY P8). Five pills read as a key only "
+                "when their edges line up; in a ROW the badge still sizes to "
+                "its content, so this class must not migrate into the shared "
+                "badge spec."
+            )
+            assert len(set(legend["cues"])) == 5, (
+                f"slice E — the legend's (border-style, font-weight) pairs are "
+                f"{legend['cues']}: two states render with the same grayscale "
+                "cue in the one place that claims to explain them."
+            )
+
             # 8b. Status bar strip (§9.3 'status #f3ede3').
             status_bg = page.evaluate(_READ_STATUS_STRIP_BG, MAIN_STATUS_BAR)
             print(f"probe_status: s74 status bar background = {status_bg}")
@@ -1552,6 +1663,103 @@ def run(*, base_url: str) -> None:
                 f"slice G — the group header measures {compact_group}px at the "
                 "compact density, expected 44 at BOTH densities."
             )
+
+            # ── 13. The execute dialog's caution banner (slice E · Q9) ───────
+            # The two warning strips were the last off-palette surface in the
+            # themed tree — Tailwind's stock `amber-*`, a cold yellow rectangle
+            # on warm paper. Q9 gives caution its own role, and the only way to
+            # know the role reached the screen is to read the computed colours:
+            # in jsdom `bg-caution-bg` is a string that spells correctly with
+            # the token deleted.
+            #
+            # Staging an ALL-delete group is what makes the banner appear, so
+            # every row goes to Delete first — through the row control, the
+            # same write path a user takes. Section 6 left one row LOCKED and
+            # the control is disabled on a locked row, so the lock comes off
+            # first (and that is itself the unlock path's second exercise).
+            page.set_viewport_size(_VIEWPORT)
+            locked_now = [
+                Path(item["file_path"]).name
+                for group_ in _get_manifest(base_url, db_path)["groups"]
+                for item in group_["items"]
+                if item.get("is_locked")
+            ]
+            print(f"probe_status: s74 locked rows before the all-delete = {locked_now}")
+            for name in locked_now:
+                page.get_by_test_id(row_lock_testid(group_id, name)).click()
+                page.wait_for_timeout(500)
+
+            for item in items:
+                set_row_decision(
+                    page,
+                    row_decision_testid(group_id, Path(item["file_path"]).name),
+                    "Delete",
+                )
+            staged = {
+                Path(item["file_path"]).name: item.get("user_decision", "")
+                for group_ in _get_manifest(base_url, db_path)["groups"]
+                for item in group_["items"]
+            }
+            print(f"probe_status: s74 decisions before opening execute = {staged}")
+            assert set(staged.values()) == {"delete"}, (
+                "slice E — the all-delete banner only renders when every row in "
+                f"the group is marked delete; the manifest reads {staged}."
+            )
+
+            open_execute_dialog(page)
+            banner = page.evaluate(
+                _READ_CAUTION_BANNER, EXECUTE_ALL_DELETE_BANNER
+            )
+            print(f"probe_status: s74 caution banner = {banner}")
+            assert banner is not None, (
+                "slice E — the execute dialog shows no all-delete banner even "
+                "though every row in the group is marked delete."
+            )
+            assert banner["backgroundColor"] == _CAUTION_BG, (
+                "slice E / Q9 — the caution banner's background is "
+                f"{banner['backgroundColor']}, expected {_CAUTION_BG} "
+                "(#fdf3d9). An amber-50 rectangle is the off-palette surface "
+                "this slice exists to retire."
+            )
+            assert banner["color"] == _CAUTION_INK, (
+                f"slice E / Q9 — the banner's text is {banner['color']}, "
+                f"expected {_CAUTION_INK} (#6b4e12, 6.97:1 on the fill)."
+            )
+            assert banner["borderLeftColor"] == _CAUTION_LINE, (
+                f"slice E / Q9 — the banner's left rule is "
+                f"{banner['borderLeftColor']}, expected {_CAUTION_LINE} "
+                "(#e3c264)."
+            )
+            assert banner["borderLeftWidth"] == "3px", (
+                f"slice E / Q9 — the banner's left rule is "
+                f"{banner['borderLeftWidth']}, expected 3px — «1px solid all "
+                "round, 3px on the left»."
+            )
+            assert banner["borderTopWidth"] == "1px", (
+                f"slice E / Q9 — the banner's frame is "
+                f"{banner['borderTopWidth']} on top, expected 1px."
+            )
+            assert banner["borderRadius"] == "8px", (
+                f"slice E / Q9 — the banner's radius is {banner['borderRadius']}."
+            )
+            assert banner["fontSize"] == "13px" and banner["fontWeight"] in {
+                "500",
+                "medium",
+            }, (
+                f"slice E / Q9 — the banner's type is {banner['fontSize']} / "
+                f"{banner['fontWeight']}, expected 13px / 500."
+            )
+            assert "▲" in banner["text"], (
+                f"slice E / Q9 — the caution glyph is missing: {banner['text']!r}. "
+                "In grayscale danger is the only DARK fill with a light label; "
+                "caution and positive are both pale, so the glyph is what "
+                "separates them."
+            )
+            assert "⚠" not in banner["text"], (
+                f"slice E — two warning marks on one strip: {banner['text']!r}."
+            )
+            page.keyboard.press("Escape")
+            dismiss_modal_overlays(page)
     finally:
         import shutil
 
