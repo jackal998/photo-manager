@@ -1,0 +1,82 @@
+[
+  {
+    "query": "I'm building an image scanner that reads JPEGs from a Synology NAS share — it's really slow and I suspect it's opening each file multiple times for SHA-256 and then again for pHash. How do I consolidate those reads?",
+    "should_trigger": true
+  },
+  {
+    "query": "I have exiftool running per-file in a loop over 40,000 HEIC photos and it takes forever. Someone told me about -stay_open but I don't know how to wire it up.",
+    "should_trigger": true
+  },
+  {
+    "query": "My PIL code returns None for DateTimeOriginal even though exiftool shows the date is there. I call img.convert('RGB') before getexif(). Could that be the issue?",
+    "should_trigger": true
+  },
+  {
+    "query": "I'm generating test images for a perceptual hash benchmark. I saved them as JPEG and now the hamming distances are all wrong compared to what I measured before saving. What's going on?",
+    "should_trigger": true
+  },
+  {
+    "query": "My near-duplicate scanner classifies A similar to B and B similar to C, but A and C end up in different groups. I'm doing pairwise comparisons. How do I fix the transitive grouping?",
+    "should_trigger": true
+  },
+  {
+    "query": "Writing pytest for EXIF date extraction — do I need piexif to write test EXIF data into JPEGs or can PIL do it natively?",
+    "should_trigger": true
+  },
+  {
+    "query": "Building a PySide6 QThread that scans a photo folder and emits progress signals. Need it to be cancellable mid-way through a 20k file scan. What's the right pattern?",
+    "should_trigger": true
+  },
+  {
+    "query": "I keep adding new columns to my migration_manifest.sqlite as the schema evolves. How do I handle ALTER TABLE for users who already have an older DB without running a migration script?",
+    "should_trigger": true
+  },
+  {
+    "query": "I'm scanning photos on a NAS and using ThreadPoolExecutor. How many workers should I use — the network is SMB, about 50k files?",
+    "should_trigger": true
+  },
+  {
+    "query": "All my test images with solid background colors are getting the same pHash — 8000000000000000. They're clearly different images. What's happening?",
+    "should_trigger": true
+  },
+  {
+    "query": "How do I resize images to exactly 512x512 pixels in Python without distorting them?",
+    "should_trigger": false
+  },
+  {
+    "query": "What's the best Python library for face recognition across a large photo collection?",
+    "should_trigger": false
+  },
+  {
+    "query": "I want to automatically upload photos from my phone to Google Photos using the API.",
+    "should_trigger": false
+  },
+  {
+    "query": "How do I read GPS coordinates from JPEG EXIF metadata in Python?",
+    "should_trigger": false
+  },
+  {
+    "query": "I'm building a PySide6 app and need to show a progress bar in the status bar while a background task runs. How do I wire up the signals?",
+    "should_trigger": false
+  },
+  {
+    "query": "generate sha256 hash of a file in python",
+    "should_trigger": false
+  },
+  {
+    "query": "How do I compare two images for similarity using OpenCV feature matching and SIFT descriptors?",
+    "should_trigger": false
+  },
+  {
+    "query": "I need to read metadata from a bunch of video files — what Python library handles MP4 and MOV?",
+    "should_trigger": false
+  },
+  {
+    "query": "What's the performance difference between SQLite WAL mode and default journal mode for a read-heavy app?",
+    "should_trigger": false
+  },
+  {
+    "query": "How do I set up pytest fixtures that create temporary directories with some dummy files for testing file I/O code?",
+    "should_trigger": false
+  }
+]
