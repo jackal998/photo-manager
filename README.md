@@ -237,7 +237,7 @@ column), then these columns, left to right:
 | Column | Meaning |
 |--------|---------|
 | **File Name** | File name. Takes whatever width the other columns leave, with a 160 px floor; sortable. |
-| **Similarity** | A badge saying how this row relates to its group's chosen keeper: **★ Ref** (the keeper), `100%` (exact duplicate), `N%` (near match), a dashed `N%` (linked indirectly through another member), or `—` (video / no comparable image). Colour, border style and weight all differ, so the badge still reads in grayscale; the scanner's raw classification sits in its tooltip. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
+| **Similarity** | A badge saying how this row relates to its group's chosen keeper: **★ Ref** (the keeper), `100%` (exact duplicate), `N%` (near match), **★ N%** in a dashed pill (linked indirectly through another member), or `—` (video / no comparable image). The ★ marks the two states that are not a direct measurement against the keeper — the keeper itself, and a transitive match. Colour, border style and weight all differ, so the badge still reads in grayscale; the scanner's raw classification sits in its tooltip. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
 | **Action** | Your decision, as a three-segment control: **Keep** / **Delete** / **Skip**. |
 | **Score** | Keep-worthiness ranking in `[0.0, 1.0]` (#187). Within-group rows sort by this descending — best copy at the top. Empty for Live Photo MOV passengers. |
 | **Resolution** | Pixel dimensions (e.g. `4032×3024`) |
@@ -247,8 +247,11 @@ column), then these columns, left to right:
 Drag a header edge to resize a column — widths persist across launches, the
 chosen sort for the rest of the session. On a narrow window the table sheds
 its least-load-bearing columns rather than squeezing File Name. The padlock
-marks a row locked against bulk operations (#182) — every bulk path below
-skips locked rows and says so.
+marks a row locked against bulk operations (#182). No bulk path below
+overrides a lock silently: the toolbar verbs skip locked rows and say how many
+in their toast, while the Set Action by Field dialog and the right-click
+**Apply best-copy** / **Skip** actions stop and ask, offering **Unlocked only**
+or **Unlock & Apply**.
 
 **Setting decisions:**
 
@@ -272,6 +275,9 @@ skips locked rows and says so.
   Field…**, or the right-click **Set Action by Field…** (which pre-fills the
   field from the column you clicked and seeds the pattern from that row) — pick
   a field, describe what to match, choose **Keep**, **Delete** or **Skip**. The
+  field list is not limited to the visible columns: **Folder**, **Group
+  Count**, **Creation Date**, **Size (Bytes)** and **Lock** are matchable here
+  even though the table no longer shows them. The
   dialog defaults to **Simple** mode (pick contains / starts with / ends with /
   exactly matches and type plain text) and toggles to **Regex** for power
   users; numeric fields add **Threshold** and **Top N per group** modes. Every
@@ -311,9 +317,12 @@ listing every row that carries a decision, with a preview pane beside it.
 - **Show:** filters the list to **All decided**, **Delete only** or
   **Skip only**. If the active filter is hiding rows that are pending delete,
   a banner says so and names the filter to switch to.
-- Right-click any file row to change its decision before executing — the same
-  **Keep this file** / **Delete — move to Recycle Bin** / **Skip** items as the
-  main tree, plus **Lock** / **Unlock** and **Set Action by Field…**.
+- Right-click any file row to change its decision before executing:
+  **Keep this file**, **Delete — move to Recycle Bin**, and
+  **Skip — leave on disk, drop from this review**, plus **Lock** / **Unlock**
+  and **Set Action by Field…**. That third item is the *staged* Skip — the
+  reversible one the row control writes — not the main tree's immediate
+  **Skip now**.
 - If every file in a group would be deleted, a warning banner names those
   groups; each group number is a link that jumps the list to it.
 - Click **Execute** to process every decided row, or select rows first
