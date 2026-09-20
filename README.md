@@ -320,9 +320,9 @@ listing every row that carries a decision, with a preview pane beside it.
 - Right-click any file row to change its decision before executing:
   **Keep this file**, **Delete — move to Recycle Bin**, and
   **Skip — leave on disk, drop from this review**, plus **Lock** / **Unlock**
-  and **Set Action by Field…**. That third item is the *staged* Skip — the
-  reversible one the row control writes — not the main tree's immediate
-  **Skip now**.
+  and **Set Action by Field…**. That item finalizes like the main tree's
+  **Skip now**, but asks for confirmation first — only the row control's Skip
+  is the staged, reversible one.
 - If every file in a group would be deleted, a warning banner names those
   groups; each group number is a link that jumps the list to it.
 - Click **Execute** to process every decided row, or select rows first
