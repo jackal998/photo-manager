@@ -1,0 +1,1 @@
+Cut over to the web client: a local FastAPI service plus a React UI in a pywebview window replace the retired PySide6 desktop app, bringing the Daylight review-screen layout, decision controls, keep-best with undo, an Execute confirm with delete totals, and the zh-TW catalogue (#647).
