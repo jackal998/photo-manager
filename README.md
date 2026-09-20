@@ -11,25 +11,27 @@ Produces `migration_manifest.sqlite` recording each file's dedup classification 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. SCAN (photo-manager)                                                    │
-│     File > Scan Sources…                                                    │
+│     Toolbar "Scan"  (or File › Scan Sources…)                               │
 │     Walks any number of source folders, hashes every file,                  │
 │     writes  migration_manifest.sqlite                                       │
 │                                                                             │
 │  2. REVIEW (photo-manager)                                                  │
-│     File > Open Manifest…                                                   │
-│     Inspect every group — col 0 (Similarity) shows match strength           │
+│     Toolbar "Open"  (or File › Open Manifest…)                              │
+│     Inspect every group — the Similarity badge shows match strength         │
 │     Set decisions per file or in bulk:                                      │
-│       Right-click a file → Set Action → delete / keep                       │
-│       Action > Set Action by Field… → pattern batch across any column       │
+│       Keep / Delete / Skip buttons in each row's Action column              │
+│       Action › Set Action by Field… → pattern batch across any column       │
 │     Every decision is persisted to the manifest as you make it              │
 │                                                                             │
 │  3. EXECUTE (photo-manager)                                                 │
-│     Action > Execute Action…  opens a full tree review (same columns as     │
-│     the main window).  Right-click rows to change decisions before          │
-│     confirming.  If every file in a group is marked delete, a               │
-│     confirmation dialog appears before proceeding.  Confirm to:             │
-│       • delete → send file to recycle bin                                   │
-│       • keep   → left in review; no state written                           │
+│     Toolbar "Execute" (or Action › Execute Action…) opens the               │
+│     "Execute Actions — Review" dialog listing every decided row.            │
+│     Change decisions there, then click Execute.  If every file in a         │
+│     group is marked delete, a confirm dialog lists what will go and         │
+│     where it goes.  Confirm to:                                             │
+│       • Delete → file moved to the Recycle Bin                              │
+│       • Keep   → left in review; no state written                           │
+│       • Skip   → left on disk, dropped from this review                     │
 │                                                                             │
 │  4. MIGRATE (photo-transfer) — legacy / defunct                            │
 │     The MOVE action + dest_path handshake were removed in #433.             │
@@ -187,25 +189,32 @@ happens inside it.
 
 ### Step 1 — Scan sources
 
-**File › Scan Sources…** opens the scan dialog.
+The toolbar's **Scan** button — or **File › Scan Sources…** — opens the scan
+dialog.
 
-1. Browse the embedded folder tree to find source directories.
-   - Double-click or press **+ Add Selected Folder** to add a folder to the list.
+1. Build the **Sources** list.
+   - **+ Add source** appends an empty row; type its **Label** and **Path**, or
+     click that row's **Browse…** to pick a folder in the built-in filesystem
+     picker.
    - The source list is displayed alphabetically by path. Scan order
      (and therefore dedup priority for exact duplicates) is inferred
      from the underlying insertion order, not the displayed row order.
    - Tick or untick the **Recursive** checkbox per source — recursive scans all
      subdirectories; unticked scans only the immediate folder.
-   - Use **×** to remove a source; **Remove All** to clear the list.
-2. Set the **Save manifest to** path (defaults to `migration_manifest.sqlite`).
+   - Use the row's **✕** (*Remove source*) button to drop a source.
+2. Set the **Output path**. It is pre-filled from `sources.output` in
+   `settings.json` and written back there when you start the scan; **Browse…**
+   beside it opens the same picker in save mode.
 3. *(Optional)* Expand **Advanced settings** and tick **Auto select after
    scan** to have the highest-scoring file in each duplicate group marked
    `action="KEEP"` automatically when the scan finishes (#212). Other
    duplicates stay un-decided so deletions still require your explicit
    confirmation. The setting persists across sessions.
-4. Click **Start Scan**. Progress is streamed to the log pane.
-5. When the scan finishes, click **Close & Load** — the manifest loads
-   directly into the review tree.
+4. Click **Start Scan**. Progress is streamed to the log pane, above it the
+   current stage ("Hashing files", "Reading EXIF + scoring signals", …), the
+   running file count and an ETA.
+5. When the scan finishes the dialog closes itself and the new manifest loads
+   straight into the review tree — there is no separate load step.
 
 Source paths are persisted to `settings.json` (`sources.list`) between sessions.
 
@@ -222,42 +231,63 @@ Source paths are persisted to `settings.json` (`sources.list`) between sessions.
 
 The tree shows all files loaded from the manifest.
 
+Each row leads with a thumbnail and a padlock toggle (neither is a sortable
+column), then these columns, left to right:
+
 | Column | Meaning |
 |--------|---------|
-| **Similarity** | Scanner-assigned match type: `exact` / `similar` / *(empty for unmatched)*. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
-| **Action** | Your decision: `delete` / `keep` / *(empty = undecided)* |
+| **File Name** | File name. Takes whatever width the other columns leave, with a 160 px floor; sortable. |
+| **Similarity** | A badge saying how this row relates to its group's chosen keeper: **★ Ref** (the keeper), `100%` (exact duplicate), `N%` (near match), a dashed `N%` (linked indirectly through another member), or `—` (video / no comparable image). Colour, border style and weight all differ, so the badge still reads in grayscale; the scanner's raw classification sits in its tooltip. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
+| **Action** | Your decision, as a three-segment control: **Keep** / **Delete** / **Skip**. |
 | **Score** | Keep-worthiness ranking in `[0.0, 1.0]` (#187). Within-group rows sort by this descending — best copy at the top. Empty for Live Photo MOV passengers. |
-| **Lock** | 🔒 if the row is locked against bulk operations (#182), empty otherwise. Sortable; searchable via the regex dialog as `Locked` / `""`. |
-| **File Name** | File name |
-| **Folder** | Containing directory |
-| **Size (Bytes)** | File size |
-| **Group Count** | Number of files in the duplicate group |
-| **Creation Date** | File creation date |
-| **Shot Date** | EXIF `DateTimeOriginal` |
 | **Resolution** | Pixel dimensions (e.g. `4032×3024`) |
+| **Size** | File size, human-readable (e.g. `1.2 MB`); sortable. |
+| **Shot Date** | EXIF `DateTimeOriginal` |
+
+Drag a header edge to resize a column — widths persist across launches, the
+chosen sort for the rest of the session. On a narrow window the table sheds
+its least-load-bearing columns rather than squeezing File Name. The padlock
+marks a row locked against bulk operations (#182) — every bulk path below
+skips locked rows and says so.
 
 **Setting decisions:**
 
-- *Per file*: right-click a file → **Set Action → delete** / **keep** /
-  **remove from list**.
-- *Multiple files*: select rows (Ctrl/Shift-click), then right-click
-  any of them → **Set Action** opens the same submenu and applies the
-  chosen decision to every selected row.
-- *In bulk*: **Action › Set Action by Field/Regex…** — pick a column,
-  describe what to match, choose an action (`delete`, `keep`, or
-  `remove from list`). The dialog defaults to **Simple** mode (pick
-  contains / starts with / ends with / exactly matches and type plain
-  text) and toggles to **Regex** for power users; both modes share a
-  live preview pane so you see the matched filenames update as you
-  type. The "remove from list" action is a deferred decision: matched
-  rows are flagged and dropped on save, no files are moved or deleted.
-  Right-clicking a row in the main tree (single or multi-select) and
-  in the Execute Action dialog also opens the same dialog.
+- *Per file*: click **Keep** / **Delete** / **Skip** in the row's **Action**
+  column. Right-clicking the row offers the same three as sentences —
+  **Keep this file**, **Delete — move to Recycle Bin**, and
+  **Skip now — drop from this review**. The row control's Skip is a staged,
+  reversible decision; the right-click **Skip now** finalizes on the spot and
+  the rows leave the review immediately.
+- *Multiple files*: select rows (Ctrl-click to add one, Shift-click for a
+  range), then use the toolbar's **Set N selected:** verbs — **Keep** /
+  **Delete** / **Skip** — or right-click any selected row for the same
+  decisions. The toolbar verbs raise a toast naming what was written, how many
+  locked rows were left alone, and offering **Undo**.
+- *Per group*: the group header's **Keep best · delete rest** button, or
+  right-click → **Apply best-copy decisions to this group**, marks the
+  top-scoring row keep and every positively-identified duplicate delete.
+  Both are disabled while the toolbar filter is active — picking a "best" copy
+  out of a filtered subset would be a silently different decision.
+- *In bulk*: the toolbar's **Set Action…** button, **Action › Set Action by
+  Field…**, or the right-click **Set Action by Field…** (which pre-fills the
+  field from the column you clicked and seeds the pattern from that row) — pick
+  a field, describe what to match, choose **Keep**, **Delete** or **Skip**. The
+  dialog defaults to **Simple** mode (pick contains / starts with / ends with /
+  exactly matches and type plain text) and toggles to **Regex** for power
+  users; numeric fields add **Threshold** and **Top N per group** modes. Every
+  mode shares a live preview pane and an "N of M matched" counter, so you see
+  the matched filenames update as you type.
+
+**Finding your way around:** the toolbar's filter box narrows the visible rows
+by name or folder; the status bar carries the running "⊗ N marked to delete"
+and "↺ reclaims X" totals for the whole manifest, plus a **Density**
+switch between **Comfortable** and **Compact** rows.
 
 **Navigating:** click a group header to toggle expand / collapse;
-double-click the preview tile to open the full-resolution viewer
-(Escape closes it). Arrow keys move a roving cursor through the rows,
-and `d` / `k` set delete / keep on the selection (#709).
+double-click a file row or a preview tile to open the full-resolution
+viewer (Ctrl+scroll to zoom, drag to pan, Esc to close). Arrow keys move
+a roving cursor through the rows, and `d` / `k` set delete / keep on the
+selection (#709).
 
 If you close the window while a scan is running you get a Leave / Stay
 prompt; leaving cancels the scan rather than orphaning the worker (#703).
@@ -274,27 +304,40 @@ second file — is plumbed on the backend but not surfaced in the menu; see
 
 ### Step 4 — Execute actions
 
-**Action › Execute Action…** opens a full tree view (same columns as the main
-window) showing all groups for final review.
+The toolbar's **Execute** button, its **⊗ Delete N files…** call to action, or
+**Action › Execute Action…** all open **Execute Actions — Review** — a dialog
+listing every row that carries a decision, with a preview pane beside it.
 
-- Right-click any file row → **Set Action** → change its decision before executing.
-- If every file in a group is marked `delete`, an amber warning banner appears
-  in the dialog. Clicking **Execute** shows a confirmation prompt before proceeding.
-- Click **Execute**. With no rows highlighted, every decided row is
-  processed. Highlight one or more rows first (Ctrl/Shift-click) to
-  scope execution to just those — the button label changes to
-  **Execute Action (highlighted)** when in scope (#211).
+- **Show:** filters the list to **All decided**, **Delete only** or
+  **Skip only**. If the active filter is hiding rows that are pending delete,
+  a banner says so and names the filter to switch to.
+- Right-click any file row to change its decision before executing — the same
+  **Keep this file** / **Delete — move to Recycle Bin** / **Skip** items as the
+  main tree, plus **Lock** / **Unlock** and **Set Action by Field…**.
+- If every file in a group would be deleted, a warning banner names those
+  groups; each group number is a link that jumps the list to it.
+- Click **Execute** to process every decided row, or select rows first
+  (Ctrl/Shift-click) and click **Execute selected** to scope the run to just
+  those. **Execute selected** stays disabled until something is selected.
+- Anything that would empty a whole group raises a confirm dialog first. It
+  lists the files about to go, bucketed by folder with a count and size
+  subtotal per folder and a one-line reason per file ("Exact duplicate of
+  `<ref>`", "94% match — same group", …), keeps the grand total pinned while
+  the list scrolls, and always carries the line *"Files are moved to the
+  Recycle Bin and can be restored."*
 - The chosen rows are then carried out:
-  - `delete` → file sent to the recycle bin (`send2trash`)
-  - `keep` → left in review; no manifest state written (the `outcome` column records `deleted` / `ignored` only)
-  - Files that no longer exist on disk are skipped and listed in a warning dialog.
+  - **Delete** → file sent to the recycle bin (`send2trash`)
+  - **Keep** → left in review; no manifest state written (the `outcome` column records `deleted` / `ignored` only)
+  - Files that no longer exist on disk, and files the OS refused to delete, are
+    listed back in the dialog under **Files Not Found** and **Files Failed to
+    Delete** — the latter with a decoded reason per path.
 
 All decision changes are batch-persisted to SQLite in a single transaction
 immediately before execution.
 
 For the full Execute Action feature surface — lock-confirm dialog,
 preview pane, dialog geometry persistence, all-delete jump-to banner,
-scope-to-highlighted-rows — and for every other user-visible flow in
+scope-to-selected-rows — and for every other user-visible flow in
 the app, see [`docs/features.md`](docs/features.md). This Step 1-4
 walkthrough is the onboarding path; `docs/features.md` is the
 canonical catalogue.
@@ -384,16 +427,17 @@ The default of 10 is calibrated for a personal photo library where the main risk
 ## Keep-worthiness scoring (#187)
 
 Within each duplicate group, every file gets a **composite score** in
-`[0.0, 1.0]` measuring how "keep-worthy" it is. The score column sits
-at the right of the result tree and within-group rows sort by score
+`[0.0, 1.0]` measuring how "keep-worthy" it is. The **Score** column renders it
+as a small bar plus the number, and within-group rows sort by score
 descending — the best copy lands at the top of every group.
 
-To act on the ranking in bulk, open **Action › Set Action by
-Field/Regex…** and use the **"Top N per group"** numeric mode on the
-**Score** column — Top 1 selects each group's best copy to mark
-`keep` (Bottom N selects the lower-ranked copies to mark `delete`).
-Or enable **"Auto select after scan"** in the scan dialog to mark and
-lock each group's top scorer as `keep` automatically.
+To act on the ranking in bulk, open **Action › Set Action by Field…** and use
+the **"Top N per group"** numeric mode on the **Score** field — Top 1 selects
+each group's best copy to mark **Keep** (Bottom N selects the lower-ranked
+copies to mark **Delete**). For a single group, the group header's
+**Keep best · delete rest** button does it in one click. Or enable
+**"Auto select after scan"** in the scan dialog to mark and lock each group's
+top scorer automatically.
 
 ### Algorithm — two tiers
 
@@ -638,8 +682,8 @@ from any installed-app state.
 ## Languages
 
 The UI ships in **English** (`en`) and **Traditional Chinese** (`zh_TW`).
-Switch via **View › Language**; the UI re-renders in place — no app
-restart needed. The chosen locale is persisted in `settings.json` under
+Switch with the toolbar's **EN** / **中** toggle or via
+**View › Language**; the UI re-renders in place — no app restart needed. The chosen locale is persisted in `settings.json` under
 `ui.locale`, and the client fetches the catalog from
 `GET /api/i18n/{locale}`.
 
