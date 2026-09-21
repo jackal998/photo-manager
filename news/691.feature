@@ -1,0 +1,1 @@
+Add a ScanDialog "Advanced settings" section to the web app — auto-select after scan, the aggressive "mark all others for delete" sub-option, and the default-on auto-tune reader-concurrency toggle. (#691)

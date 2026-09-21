@@ -167,10 +167,10 @@ without the determinism break.
 2. **Determinism preserved** — same input, shuffled order → identical
    `group_id`s (extend the parity tests with the lex-min invariant).
 3. **Relabel** — a passenger renders "N% similar to \<nearest\>" not "—" (unit on
-   `_file_similarity` + a `qa/scenarios/sNN` driver, since it touches
-   `app/views/**`).
+   `_file_similarity` + a `qa/web/scenarios/sNN` driver, since it touches
+   the result tree).
 4. **Cache invalidation** — `GROUPING_STRATEGY_VERSION` bump confirmed to flow
-   into `scan_worker.hash_pool_fingerprint`.
+   into `scan_runner.hash_pool_fingerprint`.
 
 ---
 
@@ -182,7 +182,7 @@ without the determinism break.
   [#539](https://github.com/jackal998/photo-manager/issues/539) (same-stem gate),
   [#540](https://github.com/jackal998/photo-manager/issues/540) (aggressive-delete safety net).
 - Code: `scanner/dedup.py` (`_assign_group_ids`, `_classify_near_duplicates`,
-  `_collect_pair_edges`, `_BKTree`), `app/views/tree_model_builder.py`
+  `_collect_pair_edges`, `_BKTree`), `core/app_service/review_view.py`
   (`_pick_ref_winner`, `_file_similarity`), `core/services/auto_select.py`
   (`non_keepers_for_aggressive_delete`).
 - Prior art read during the research: immich (union-find/DSU, recall),

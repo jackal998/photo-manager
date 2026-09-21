@@ -459,3 +459,64 @@ class TestNonKeepersForAggressiveDelete:
         ]
         targets = non_keepers_for_aggressive_delete(rows, keepers={"/keep.jpg"})
         assert targets == set()
+
+    def test_raw_keeper_does_not_demote_the_best_lossy_copy(self):
+        """#824 — a RAW that merges in via the new exact-tier complementary
+        edge can outscore the incumbent and take keepership. The lossy row it
+        displaced must NOT become delete-eligible: it was protected only by
+        being the keeper, and #536's allowlist does not cover it because it
+        carries a real EXACT (a byte-identical sibling exists).
+
+        Without the guard the delete set here is {"/p/A.JPG"} — measured, and
+        the review-time apply_best_copy path then wrote decision='delete' onto
+        that JPEG export."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/p/A.DNG", "g1", 0.95, action=""),          # RAW, new keeper
+            _Row("/p/A.JPG", "g1", 0.50, action="EXACT"),     # was the keeper
+            _Row("/p/A copy.JPG", "g1", 0.40, action=""),     # its SHA keeper
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/p/A.DNG"})
+        assert targets == set(), (
+            "a RAW keeper demoted the best lossy copy into the delete set"
+        )
+
+    def test_raw_keeper_still_deletes_a_duplicate_that_was_never_keeper(self):
+        """The #824 guard is narrow: it spares only the row that WOULD have
+        been keeper without the RAW. A genuine duplicate ranked below that row
+        stays deletable — otherwise a RAW anywhere in a group would silently
+        disable aggressive delete for the whole group."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/p/A.DNG", "g1", 0.95, action=""),           # RAW keeper
+            _Row("/p/best.jpg", "g1", 0.70, action="EXACT"),   # displaced → spared
+            _Row("/p/worse.jpg", "g1", 0.30, action="EXACT",
+                 match_confidence="high"),                      # never keeper → deleted
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/p/A.DNG"})
+        assert targets == {"/p/worse.jpg"}
+
+    def test_all_lossy_group_still_deletes_the_exact_copy(self):
+        """False-positive half of the #824 guard: with no RAW in the group,
+        nothing extra is spared and the asserted duplicate is still deleted."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/p/A.JPG", "g1", 0.95, action=""),
+            _Row("/p/A copy.JPG", "g1", 0.40, action="EXACT",
+                 match_confidence="high"),
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/p/A.JPG"})
+        assert targets == {"/p/A copy.JPG"}
+
+    def test_tiff_keeper_counts_as_raw(self):
+        """``scanner.media.get_file_type`` maps .tif/.tiff to ``raw`` even
+        though ``LOSSY_EXTENSIONS`` also lists them, so the guard's extension
+        set must include them — otherwise a TIFF keeper would demote its JPEG
+        export exactly the way a DNG keeper did."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+        rows = [
+            _Row("/p/A.tiff", "g1", 0.95, action=""),
+            _Row("/p/A.JPG", "g1", 0.50, action="EXACT"),
+        ]
+        targets = non_keepers_for_aggressive_delete(rows, keepers={"/p/A.tiff"})
+        assert targets == set()

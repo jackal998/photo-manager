@@ -69,7 +69,7 @@ pain has informed scenario priorities.
   `qa/sandbox/`) and writes its manifest to `qa/run-manifest.sqlite`.
   The user's root `settings.json` and `migration_manifest.sqlite` are
   not touched.
-- **Every `python main.py` launch is gated.** In default-batch mode
+- **Every app-server launch is gated.** In default-batch mode
   (Phase 3 with no user hint), get one `yes batch` approval covering
   the whole batch, then proceed without re-prompting per scenario.
   In subset/manual mode, pause and ask before each individual launch.
@@ -90,7 +90,7 @@ pain has informed scenario priorities.
   the user to triage before continuing. (UX-friction notes don't
   count toward this cap — they batch into one review block at the
   end regardless of how many there are.)
-- Any startup failure of `main.py` → file as a finding, then stop the
+- Any startup failure of the app server → file as a finding, then stop the
   run. Don't try to diagnose the source.
 
 ---
@@ -101,9 +101,10 @@ Read these and only these. Do not deep-read; you want what the app
 *claims* to do, not how it does it.
 
 1. `README.md` — top section, "What the app does" / "Workflow"
-2. `main.py` — imports + the `__main__` block only (the launch
-   command and any startup args)
-3. `app/views/` — directory listing (filenames only, no contents)
+2. `launcher.py` — the module docstring only (how the app boots and
+   which env vars change that)
+3. `frontend/src/components/` — directory listing (filenames only, no
+   contents)
 
 Stop reading source after this.
 
@@ -134,12 +135,12 @@ If everything is already populated, skip the regen and move on.
 ## Phase 3 — Plan
 
 **Default behavior — invoked with no additional prompt:** run **the
-full scenario batch** via `qa.scenarios._batch`. Don't print the
+full scenario batch** via `qa.web._batch`. Don't print the
 menu, don't ask which to run. Get one `yes batch` approval up front
 (per the gate rule below) and proceed. The full batch typically
-finishes in a few minutes wall-clock (52 scenarios as of 2026-05-19
-— the canonical list lives at
-[`qa/scenarios/_batch.py:ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)).
+finishes in a few minutes wall-clock (71 scenarios as of the Phase-4
+cutover — the canonical list lives at
+[`qa/scenario_ids.py:ALL_SCENARIOS`](../../../qa/scenario_ids.py)).
 
 **Invoked with hints** (e.g. `/qa-explore smoke`, `/qa-explore 1,2,9`,
 `/qa-explore failed 8`): respect the hint, run only the named subset,
@@ -202,9 +203,9 @@ ToolSearch(query: "computer-use", max_results: 30)
 This gets you `screenshot`, `left_click`, `type`, `key`, `scroll`,
 `request_access`, `open_application`, etc. Don't load them one by one.
 
-### 4.0.5 + 4.1 — UIA-first driving and per-scenario loop
+### 4.0.5 + 4.1 — DOM-first driving and per-scenario loop
 
-The operational core of Phase 4 (the cheap UIA navigation channel
+The operational core of Phase 4 (the cheap DOM navigation channel
 plus the per-scenario loop with assertions, screenshots, and
 failure capture) lives in [`phase4-driving.md`](phase4-driving.md).
 Read it when you reach the per-scenario execution step — section
@@ -365,15 +366,15 @@ git operations, no PR. The user triages the friction block manually.
 | Read source (Phase 1 only) | Read, Grep, Glob | orient |
 | List fixtures | Glob | Phase 2 |
 | Run sandbox script | Bash | Phase 2 (gated) |
-| Install QA deps (`pywinauto`) | Bash `pip install -r qa/requirements.txt` | Phase 4.0.5 (gated, one-time) |
-| Launch main.py | Bash, `run_in_background: true` | Phase 4 (gated, every time) |
-| Read UI tree, click by name | `pywinauto` (UIA backend, in-process Python) | Phase 4 — default driver |
+| Install QA deps | Bash `pip install playwright` then `playwright install chromium` | Phase 4.0.5 (gated, one-time) |
+| Launch the app server | Bash, `run_in_background: true` | Phase 4 (gated, once per session) |
+| Read the DOM, click by testid | Playwright via `qa/web/_pw.py` | Phase 4 — default driver |
 | Visual evidence only | `mcp__computer-use__*` screenshot | Phase 4 — fallback / finding frames |
 | File findings | Bash `gh issue create` | Phase 5 (gated, batch-approved) |
 
 ## Scenario drivers
 
-QA scenario authoring conventions (what a `qa/scenarios/sNN_*.py`
+QA scenario authoring conventions (what a `qa/web/scenarios/sNN_*.py`
 driver looks like, how to structure it, how to name slots) live in
 [`scenario-drivers.md`](scenario-drivers.md). Read it when you are
 extending an existing scenario or adding a new one — not needed for
@@ -383,8 +384,9 @@ a pure-exploration run that doesn't write a scenario back.
 
 - Project security gates: `CLAUDE.md` at the repo root
 - Operator doc: `docs/qa/README.md`
-- Scenario drivers: `qa/scenarios/`
-- Shared UIA helpers: `qa/scenarios/_uia.py`
+- Scenario drivers: `qa/web/scenarios/`
+- Shared invariant helpers: `qa/web/_invariants.py`
+- Testid constants: `qa/web/testid_constants.py`
 - Existing fixture helpers: `scripts/make_qa_images.py`
   (`save_jpg`, `phash`, `hamming`, `sha_bytes`)
 - Sandbox generator: `scripts/make_qa_sandbox.py`

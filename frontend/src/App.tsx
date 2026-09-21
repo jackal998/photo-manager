@@ -1,0 +1,522 @@
+// App — root shell.
+//
+// SSE subscription lives HERE (single mount point) so the EventSource
+// survives ScanDialog open/close. ScanDialog does NOT subscribe — it only
+// reads scan state from the store. See ScanDialog.tsx header comment.
+
+import { useState, useCallback, useEffect, useRef } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
+
+import { cn } from "./lib/utils";
+import { stageLabel } from "./lib/scanProgress";
+import { useAppStore } from "./store/useAppStore";
+import { useScanSSE } from "./hooks/useScanSSE";
+import { useBeforeUnloadGuard } from "./hooks/useBeforeUnloadGuard";
+import { useDecisionShortcuts } from "./hooks/useDecisionShortcuts";
+import { useI18nStore } from "./i18n/useI18nStore";
+import { useT } from "./i18n/useT";
+
+import { ScanDialog } from "./components/ScanDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
+import { ResultTree } from "./components/ResultTree";
+import type { ContextMenuTarget, GroupContextMenuTarget } from "./components/ResultTree";
+import { PreviewPane } from "./components/PreviewPane";
+import { FullResViewer } from "./components/FullResViewer";
+import { ExecuteDialog } from "./components/execute/ExecuteDialog";
+import { ActionDialog } from "./components/action/ActionDialog";
+import { ContextMenu } from "./components/ContextMenu";
+import { LockConfirmDialog } from "./components/dialogs/LockConfirmDialog";
+import { PruneConfirmDialog } from "./components/dialogs/PruneConfirmDialog";
+import { Toast } from "./components/Toast";
+import { MenuBar } from "./components/MenuBar";
+import { Toolbar } from "./components/Toolbar";
+import { StatusBar } from "./components/StatusBar";
+import { FsBrowser } from "./components/FsBrowser";
+
+import {
+  MAIN_EMPTY_STATE,
+  MAIN_EMPTY_SCAN,
+  MAIN_EMPTY_OPEN,
+  PREVIEW_RESIZE_HANDLE,
+} from "./testids";
+
+// ---------------------------------------------------------------------------
+// Context menu state
+// ---------------------------------------------------------------------------
+
+interface ContextMenuState {
+  open: boolean;
+  x: number;
+  y: number;
+  filePath: string;
+  isLocked: boolean;
+  targetPaths: string[];
+  /** Which ContextMenu item set to render (#735). */
+  variant: "file" | "group";
+  /** The right-clicked column (file variant only, #735). */
+  col?: string;
+  /** The target row/group's group_number (#744) — Apply best-copy scope. */
+  groupNumber: number;
+}
+
+const CLOSED_MENU: ContextMenuState = {
+  open: false,
+  x: 0,
+  y: 0,
+  filePath: "",
+  isLocked: false,
+  targetPaths: [],
+  variant: "file",
+  col: undefined,
+  groupNumber: 0,
+};
+
+export default function App() {
+  // ---------------------------------------------------------------------------
+  // i18n — initialise once on boot
+  // ---------------------------------------------------------------------------
+
+  const initI18n = useI18nStore((s) => s.initI18n);
+  const setLocale = useI18nStore((s) => s.setLocale);
+  const locale = useI18nStore((s) => s.locale);
+  const t = useT();
+
+  useEffect(() => {
+    void initI18n();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Dialog open states
+  // ---------------------------------------------------------------------------
+
+  const [scanOpen, setScanOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Context menu
+  // ---------------------------------------------------------------------------
+
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>(CLOSED_MENU);
+
+  const handleContextMenu = useCallback((target: ContextMenuTarget) => {
+    // Target-resolution rule (file-manager standard): when the right-clicked
+    // row is part of the current multi-selection, the menu verbs act on the
+    // whole selection; otherwise they act on just that row, and the selection
+    // resets to it so the highlight matches what will be touched. This keeps
+    // single-row scenarios (s15/s25/s35/s53/s60) single-target.
+    const store = useAppStore.getState();
+    const selected = store.selection.selectedPaths;
+    const inSelection = selected.includes(target.filePath);
+    const targetPaths = inSelection ? selected : [target.filePath];
+    if (!inSelection) {
+      store.setSelection([target.filePath]);
+    }
+    setContextMenu({
+      open: true,
+      x: target.x,
+      y: target.y,
+      filePath: target.filePath,
+      isLocked: target.isLocked,
+      targetPaths,
+      variant: "file",
+      col: target.col,
+      groupNumber: target.groupNumber,
+    });
+  }, []);
+
+  // Group-header right-click (#735) — reduced menu (By-Field + Remove +
+  // Apply best-copy, #744), scoped to the group's own member paths
+  // regardless of the current multi-selection (Qt's group-row menu has no
+  // selection interaction).
+  const handleGroupContextMenu = useCallback((target: GroupContextMenuTarget) => {
+    setContextMenu({
+      open: true,
+      x: target.x,
+      y: target.y,
+      filePath: "",
+      isLocked: false,
+      targetPaths: target.memberPaths,
+      variant: "group",
+      col: undefined,
+      groupNumber: target.groupNumber,
+    });
+  }, []);
+
+  const handleContextMenuClose = useCallback(() => {
+    setContextMenu(CLOSED_MENU);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Manifest open control
+  // ---------------------------------------------------------------------------
+
+  const [manifestInputValue, setManifestInputValue] = useState("");
+  const [manifestBrowseOpen, setManifestBrowseOpen] = useState(false);
+  const loadManifest = useAppStore((s) => s.loadManifest);
+  const openExecuteDialog = useAppStore((s) => s.openExecuteDialog);
+  const openActionDialog = useAppStore((s) => s.openActionDialog);
+  const manifestPath = useAppStore((s) => s.manifest.path);
+  const hasSelection = useAppStore((s) => s.selection.selectedPaths.length > 0);
+
+  // ---------------------------------------------------------------------------
+  // Preview-panel resize (#739) — mirrors the #685 column-resize recipe
+  // (ColumnHeaderRow's drag useEffect): the drag tracks window mousemove so it
+  // keeps working once the cursor leaves the thin handle; each move updates the
+  // width in-memory only (persist=false) for live feedback, and the final width
+  // is persisted exactly once at the end of the gesture (persist=true).
+  // ---------------------------------------------------------------------------
+
+  const previewWidth = useAppStore((s) => s.resultView.panelWidths.preview);
+  const setPreviewWidth = useAppStore((s) => s.setPreviewWidth);
+
+  // Active splitter drag, or null. Driving the window listeners from a useEffect
+  // (keyed on this state) instead of adding them imperatively inside the
+  // mousedown handler means React removes them on unmount too — not only on
+  // mouseup — so unmounting mid-drag no longer leaks a window mousemove/mouseup
+  // listener holding a stale setPreviewWidth closure (#851, the #813 class).
+  const [previewDrag, setPreviewDrag] = useState<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const latestPreviewWidthRef = useRef(0);
+
+  useEffect(() => {
+    if (previewDrag === null) return;
+    const { startX, startWidth } = previewDrag;
+    latestPreviewWidthRef.current = startWidth;
+    // Commit the final width to localStorage once (persist=true) — avoids a
+    // localStorage write per mousemove — then end the drag. Shared by every
+    // end-of-drag trigger below so all of them keep the #739 contract of
+    // exactly ONE persisted write per drag.
+    function endDrag() {
+      setPreviewWidth(latestPreviewWidthRef.current, true);
+      setPreviewDrag(null);
+    }
+    // The handle sits LEFT of the preview pane: dragging left (negative
+    // delta) widens the preview; dragging right narrows it.
+    function onMove(ev: globalThis.MouseEvent) {
+      // The button is already up: it was released somewhere we never heard
+      // about — outside the window, with no focus change, so neither `mouseup`
+      // nor `blur` reached us (#851). Without this the next move over the page
+      // would keep resizing the preview pane with no button held, and the
+      // layout would stick to the cursor until the user clicked again.
+      if (ev.buttons === 0) {
+        endDrag();
+        return;
+      }
+      latestPreviewWidthRef.current = startWidth - (ev.clientX - startX);
+      setPreviewWidth(latestPreviewWidthRef.current, false);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", endDrag);
+    // A release outside the window usually takes focus with it, and a
+    // system-level gesture (touch/pen cancel, native drag) cancels the pointer
+    // without a mouseup — end the drag on both rather than leaving the window
+    // listeners live (#851).
+    window.addEventListener("blur", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+    // Unconditional removal: the cleanup runs on every drag-state change AND on
+    // unmount, so no path can leave a window listener behind.
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", endDrag);
+      window.removeEventListener("blur", endDrag);
+      window.removeEventListener("pointercancel", endDrag);
+    };
+  }, [previewDrag, setPreviewWidth]);
+
+  const handlePreviewResizeStart = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault();
+      setPreviewDrag({ startX: e.clientX, startWidth: previewWidth });
+    },
+    [previewWidth]
+  );
+
+  // "Execute (only selected)": snapshot the current main-tree selection and
+  // open the execute dialog scoped to those rows' groups (#430 group-pull).
+  // Reads the live selection via getState (the gating subscription above keeps
+  // the menu item enabled/disabled; the click itself needs the latest set).
+  const handleExecuteSelectedOnly = useCallback(() => {
+    const selected = useAppStore.getState().selection.selectedPaths;
+    if (selected.length === 0) return;
+    openExecuteDialog(selected);
+  }, [openExecuteDialog]);
+
+  // List → Remove from List (#678-D): same live-selection read as
+  // handleExecuteSelectedOnly, routed through the SAME store.removeFromList
+  // path the context menu uses (finalize outcome='ignored', lock-aware 409).
+  const handleRemoveFromListSelected = useCallback(() => {
+    const store = useAppStore.getState();
+    const selected = store.selection.selectedPaths;
+    if (selected.length === 0) return;
+    void store.removeFromList(selected);
+  }, []);
+
+  const handleManifestOpen = useCallback(() => {
+    const path = manifestInputValue.trim();
+    if (path === "") return;
+    void loadManifest(path);
+  }, [manifestInputValue, loadManifest]);
+
+  // Filesystem-picker path for Open Manifest (menu + empty-state affordances).
+  const handleManifestPicked = useCallback(
+    (path: string) => {
+      setManifestInputValue(path);
+      void loadManifest(path);
+    },
+    [loadManifest]
+  );
+
+  // ---------------------------------------------------------------------------
+  // SSE subscription — single mount at App level
+  // ---------------------------------------------------------------------------
+
+  const taskId = useAppStore((s) => s.scan.taskId);
+  useScanSSE(taskId);
+
+  // Warn before the tab unloads while a scan is running (Qt close-guard #468).
+  useBeforeUnloadGuard();
+
+  // Bare 'd' / 'k' decision shortcuts over the main-tree selection (#615 parity).
+  useDecisionShortcuts();
+
+  // ---------------------------------------------------------------------------
+  // Status bar text
+  // ---------------------------------------------------------------------------
+
+  const scan = useAppStore((s) => s.scan);
+  const manifest = useAppStore((s) => s.manifest);
+  const noManifest = manifest.path === null && !manifest.loading;
+
+  let statusText: string;
+  if (manifest.path !== null) {
+    // Singular/plural picked per count, not flattened into one template —
+    // the single-template form rendered "1 groups · 1 files" (copy audit S1).
+    // Same shape RescanConfirmDialog / LockConfirmDialog already use; zh_TW's
+    // singular and plural values are identical, which is correct for Chinese.
+    statusText = t(
+      "web.status.summary",
+      "{groups} {groupWord} · {files} {fileWord}",
+      {
+        groups: manifest.totalGroups,
+        groupWord:
+          manifest.totalGroups === 1
+            ? t("web.status.group_singular", "group")
+            : t("web.status.group_plural", "groups"),
+        files: manifest.totalFiles,
+        fileWord:
+          manifest.totalFiles === 1
+            ? t("web.status.file_singular", "file")
+            : t("web.status.file_plural", "files"),
+      }
+    );
+  } else if (manifest.loading) {
+    statusText = t("web.status.loading_manifest", "Loading manifest…");
+  } else if (scan.status === "running") {
+    // #740 — localize the stage name (was the raw SSE stage id, e.g. "HASH").
+    const stage = scan.stageName !== "" ? ` — ${stageLabel(scan.stageName, t)}` : "";
+    statusText = t("web.status.scanning", "Scanning{stage}", { stage });
+  } else if (scan.status === "failed" && scan.error !== null) {
+    statusText = t("web.status.scan_failed", "Scan failed: {error}", { error: scan.error });
+  } else {
+    statusText = t("web.status.ready", "Ready");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
+  // #894 — the root carries h-screen (a DEFINITE height), not min-h-screen.
+  // With only a minimum height the column's main size stays indefinite, so
+  // <main>'s `flex-1` (flex-basis: 0%) resolves against an indefinite size and
+  // falls back to its CONTENT height, and ResultTree's `h-full` falls back to
+  // auto. Measured on the base commit at 620x400 with a row selected: the
+  // preview pane's min-content height (424 px) pushed this div to 571 px
+  // against a 400 px viewport, so the document scrolled and the MenuBar /
+  // toolbar left the viewport. The result tree itself never triggers this — it
+  // is `contain: strict`, so even 4918 px of virtualised rows contribute zero
+  // to layout; only the preview pane's content can. overflow-hidden makes the
+  // clip explicit, so every scroll happens in the pane that owns it.
+  // s73_layout_scroll_and_action_seed asserts both halves.
+  return (
+    <div className={cn("h-screen overflow-hidden flex flex-col bg-app text-ink")}>
+      {/* ------------------------------------------------------------------ */}
+      {/* Menu bar (Qt MenuController parity) — canonical, above the toolbar   */}
+      {/* ------------------------------------------------------------------ */}
+      <MenuBar
+        manifestLoaded={manifestPath !== null}
+        hasSelection={hasSelection}
+        locale={locale}
+        onScan={() => setScanOpen(true)}
+        onOpenManifest={() => setManifestBrowseOpen(true)}
+        onSetAction={openActionDialog}
+        onExecute={() => openExecuteDialog()}
+        onExecuteSelected={handleExecuteSelectedOnly}
+        onRemoveFromList={handleRemoveFromListSelected}
+        onSetLocale={(loc) => void setLocale(loc)}
+      />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Header toolbar (#878 slice TB — components/Toolbar.tsx)              */}
+      {/* ------------------------------------------------------------------ */}
+      <Toolbar
+        manifestPath={manifestPath}
+        locale={locale}
+        manifestInputValue={manifestInputValue}
+        onManifestInputChange={setManifestInputValue}
+        onManifestOpen={handleManifestOpen}
+        onScan={() => setScanOpen(true)}
+        onExecute={() => openExecuteDialog()}
+        onSetAction={() => openActionDialog()}
+        onSettings={() => setSettingsOpen(true)}
+        onSetLocale={(loc) => void setLocale(loc)}
+      />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Main — result tree + preview pane side by side                       */}
+      {/* ------------------------------------------------------------------ */}
+      <main className="flex-1 overflow-hidden flex flex-row">
+        {/* Result tree takes remaining width */}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          {noManifest ? (
+            // Empty state (layout slice E · audit E1–E5, REPLY L4: E1/E3/E4/E5
+            // MUST-MATCH). It was one 14px muted sentence between two identical
+            // neutral buttons — «the first screen a new user sees and the only
+            // one that has to convert; heading, body, and a primary CTA at size
+            // are not polish there». The two handlers and both testids are
+            // unchanged: this is the same Scan / Open pair, at size.
+            //
+            // Two things the prototype draws that are deliberately NOT here:
+            // the safety pill (audit E6 — Q10 dropped, no "nothing is deleted"
+            // line is drawn anywhere) and the Recent-sources list (E7 — dropped
+            // by design: it needs a scan-history store whose stale paths would
+            // fail on the app's FIRST screen). E2's three rotated tiles
+            // simplify to one — the stack was decoration.
+            <div
+              data-testid={MAIN_EMPTY_STATE}
+              className="flex h-full flex-col items-center justify-center overflow-y-auto px-6 py-10"
+            >
+              <div className="flex w-full max-w-[520px] flex-col items-center text-center">
+                <div
+                  aria-hidden="true"
+                  className="mb-[26px] flex h-24 w-24 select-none items-center justify-center rounded-[20px] border border-hairline-input bg-panel text-[34px] leading-none text-warm shadow-md"
+                >
+                  ⧉
+                </div>
+                <h2 className="text-[25px] font-bold leading-tight tracking-[-.01em] text-ink">
+                  {t(
+                    "web.empty_state.heading",
+                    "Find duplicate & similar photos"
+                  )}
+                </h2>
+                {/* E4 — the body copy keeps the `no_manifest` key it has always
+                    had (every catalog and test references it by that name); what
+                    changed is that it says what the app DOES rather than which
+                    state it is in. */}
+                <p className="mt-[11px] max-w-[430px] text-[14px] leading-[1.6] text-ink-muted">
+                  {t(
+                    "web.empty_state.no_manifest",
+                    "Point it at a folder or drive. It finds exact duplicates and visually similar shots, then groups them so you can review and clean up — safely."
+                  )}
+                </p>
+                {/* E5 — both CTAs h48 / r12; only ONE of them is filled, the
+                    same single-primary rule the toolbar follows. The primary
+                    takes the accent flat (no gradient, no shadow) per slice T,
+                    which retired both on this button. */}
+                <div className="mt-[26px] flex items-center gap-[11px]">
+                  <button
+                    data-testid={MAIN_EMPTY_SCAN}
+                    className="inline-flex h-12 items-center justify-center whitespace-nowrap rounded-[12px] border border-warm bg-warm px-[24px] text-[15px] font-bold leading-none text-white hover:bg-warm-hover hover:border-warm-hover active:bg-warm-active active:border-warm-active focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm"
+                    onClick={() => setScanOpen(true)}
+                  >
+                    {t("web.empty_state.scan", "Scan…")}
+                  </button>
+                  <button
+                    data-testid={MAIN_EMPTY_OPEN}
+                    className="inline-flex h-12 items-center justify-center whitespace-nowrap rounded-[12px] border border-hairline-input bg-panel px-[22px] text-[15px] font-semibold leading-none text-ink hover:bg-panel-hover hover:border-ink-hairline focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warm"
+                    onClick={() => setManifestBrowseOpen(true)}
+                  >
+                    {t("web.empty_state.open", "Open Manifest…")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <ResultTree
+              onContextMenu={handleContextMenu}
+              onGroupContextMenu={handleGroupContextMenu}
+            />
+          )}
+        </div>
+        {/* Drag handle — resizable tree/preview boundary (#739, was fixed w-72).
+            Layout slice PV: 4px, TRANSPARENT at rest, a hairline on hover and
+            the accent while dragging. A permanently-drawn rule here read as a
+            second border beside the pane's own, which is what made the
+            boundary look like a seam rather than a control. */}
+        <div
+          data-testid={PREVIEW_RESIZE_HANDLE}
+          role="separator"
+          aria-orientation="vertical"
+          data-dragging={previewDrag !== null ? "" : undefined}
+          className="w-1 flex-shrink-0 cursor-col-resize bg-transparent hover:bg-group-line data-[dragging]:bg-warm"
+          onMouseDown={handlePreviewResizeStart}
+        />
+        {/* Preview pane — resizable right column, width persists (#739) */}
+        <div
+          className="flex-shrink-0 overflow-hidden"
+          style={{ width: previewWidth }}
+        >
+          <PreviewPane />
+        </div>
+      </main>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Footer status bar (#878 slice TB — components/StatusBar.tsx)         */}
+      {/* ------------------------------------------------------------------ */}
+      <StatusBar statusText={statusText} />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Dialogs                                                              */}
+      {/* ------------------------------------------------------------------ */}
+      <ScanDialog open={scanOpen} onOpenChange={setScanOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <FsBrowser
+        open={manifestBrowseOpen}
+        mode="file"
+        title={t("web.browse.title_manifest", "Open manifest")}
+        initialPath={manifestInputValue.trim() || undefined}
+        onConfirm={handleManifestPicked}
+        onOpenChange={setManifestBrowseOpen}
+      />
+      <ExecuteDialog />
+      <ActionDialog />
+      <FullResViewer />
+      <LockConfirmDialog />
+      <PruneConfirmDialog />
+
+      {/* Undo toast (#878 slice G, Q5) — floats above the footer, single slot.
+          Mounted unconditionally; it renders nothing while store.toast is null. */}
+      <Toast />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Context menu — rendered at App level so it escapes scroll containers */}
+      {/* ------------------------------------------------------------------ */}
+      {contextMenu.open && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          filePath={contextMenu.filePath}
+          isLocked={contextMenu.isLocked}
+          targetPaths={contextMenu.targetPaths}
+          variant={contextMenu.variant}
+          clickedCol={contextMenu.col}
+          groupNumber={contextMenu.groupNumber}
+          onExecuteSelected={handleExecuteSelectedOnly}
+          onClose={handleContextMenuClose}
+        />
+      )}
+    </div>
+  );
+}

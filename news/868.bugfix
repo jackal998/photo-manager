@@ -1,0 +1,1 @@
+Bundle a pinned LGPL ffmpeg/ffprobe in the Windows release so the HEVC video fallback works without a manual install (#854).

@@ -1,7 +1,7 @@
 # qa-explore — scenario driver authoring
 
 This file holds the QA scenario authoring conventions —
-what a `qa/scenarios/sNN_*.py` driver looks like, how to
+what a `qa/web/scenarios/sNN_*.py` driver looks like, how to
 structure it, how to name slots. The main [`SKILL.md`](SKILL.md)
 points here when Claude is extending or adding a scenario.
 
@@ -9,107 +9,84 @@ points here when Claude is extending or adding a scenario.
 
 ## Scenario drivers
 
-Each scenario has a pre-built driver under `qa/scenarios/`. Drivers
+Each scenario has a pre-built driver under `qa/web/scenarios/`. Drivers
 are version-controlled, deterministic, and print structured `step:` /
 `key=value` lines to stdout. Run a single driver with
-`.venv/Scripts/python.exe -m qa.scenarios.<module>` while the app is
-running.
+`.venv/Scripts/python.exe -m qa.web._batch <name> --base-url
+http://127.0.0.1:8765` while the server is running.
 
 For the canonical, always-current list of scenarios see
-[`qa.scenarios._batch.ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)
-or `Glob("qa/scenarios/s*.py")`. The directory is the source of
-truth — this doc no longer enumerates scenarios inline, because
-the table drifted twice and the maintenance cost outweighed the
-value (#323). Slot numbers go `sNN_<short_slug>.py`; slots are
-append-only (gaps from retired scenarios stay gaps so re-numbering
-doesn't churn git history and external issue references). Each
-driver's module docstring describes what it covers.
+[`qa/scenario_ids.py`](../../../qa/scenario_ids.py) (`ALL_SCENARIOS`),
+[`qa/web/scenario_map.yml`](../../../qa/web/scenario_map.yml), or
+`Glob("qa/web/scenarios/s*.py")`. Those registries are the source of
+truth — this doc no longer enumerates scenarios inline, because the
+table drifted twice and the maintenance cost outweighed the value
+(#323). Slot numbers go `sNN_<short_slug>.py`; slots are append-only
+(gaps from retired scenarios stay gaps so re-numbering doesn't churn
+git history or break external issue references). Each driver's module
+docstring describes what it covers, what it deliberately omits, and how
+it diverges from the desktop scenario it was ported from.
 
 Several drivers also call cross-scenario invariant probes from
-`qa/scenarios/_invariants.py` — they assert that the status bar matches
+`qa/web/_invariants.py` — they assert that the status bar matches
 an expected shape after a manifest-changing action, that all
 manifest-gated menu items toggle as one set, and that destructive
-confirmation prompts have Yes/No buttons + a count in the body. Those
-probes print `inv: <name> ok=<bool> ...` lines to stdout. Failures
-escalate to the driver's existing FAIL/return-1 path.
+confirmation dialogs carry a count. Those probes print
+`inv: <name> ok=<bool> ...` lines to stdout. Failures escalate to the
+driver's existing FAIL path.
 
-Source-folder configuration is per-scenario. Before launching the
-app, write the right `qa/settings.json` by running:
+## Registering a new driver
 
-```
-.venv/Scripts/python.exe -m qa.scenarios.configure <scenario_name>
-```
+Three places, or the scenario never runs:
 
-This is allowlisted in `.claude/settings.json` so it doesn't prompt.
-The mapping from scenario name to source folders lives in
-`qa/scenarios/_config.py`.
+1. `qa/scenario_ids.py` — add the id to `ALL_SCENARIOS`, with a comment
+   saying what it covers.
+2. `qa/web/scenario_map.yml` — add the row: `scenario`,
+   `playwright_module`, `status: done`, and a `notes` field recording
+   the assertions and the honest omissions.
+3. `qa/web/testid_constants.py` — add any new testid, mirroring
+   `frontend/src/testids.ts`.
 
-When you build a NEW scenario driver, add it to `ALL_SCENARIOS` in
-`qa/scenarios/_batch.py` (the canonical list used by the batch
-runner and CI) AND to `SCENARIO_SOURCES` in `qa/scenarios/_config.py`
-(folder mapping). Keep drivers short — they should encode the
-canonical happy path, nothing more. Open-ended exploration is the
+`tests/test_all_scenarios_registered.py` fails loudly on any of the four
+ways (1) and (2) can drift apart from each other or from the files on
+disk; `scripts/check_testid_parity.py` covers (3).
+
+Keep drivers short — they should encode the canonical happy path plus
+the load-bearing assertions, nothing more. Open-ended exploration is the
 LLM's job, on top of the driver's output.
 
-If your driver needs a NEW shared helper that issues a click and
-expects a window to appear afterwards (popup, dialog, context menu),
-mirror the verify-and-retry shape of `_click_btn_and_wait_for_dialog`
-or `right_click_tree_row` — fire the click, check the expected
-window appeared within a short per-attempt timeout, and retry up to
-3× on miss. "Click and assume" is a known flake source on Windows
-(see the foreground-lock note in Phase 4.0.5); treat the
-verify-and-retry pattern as a hard requirement for new helpers, not
-a stylistic choice.
+## Conventions that exist because they were paid for
 
-**Cleanup convention — drivers that spawn external shell windows
-(Notepad, Explorer, etc. via `os.startfile`, `explorer.exe`,
-`QDesktopServices::openUrl`) MUST clean them up before returning.**
-Otherwise each batch run leaves windows piled up on the operator's
-desktop. The pattern, used by s18 and s19:
+**Wait for the API response, not for the render.** A write helper that
+clicks and returns immediately races the store update — that family of
+flake (#850) is why the shared helpers wait on the response before
+asserting. New helpers follow the same shape.
 
-```python
-baseline = _uia.list_top_level_windows(_uia.DEFAULT_SHELL_CLASSES)
-# … perform the click …
-time.sleep(1.0)
-closed = _uia.close_new_shell_windows(baseline)
-print(f"  closed_shell_windows={[(c, t) for _h, c, t in closed]!r}")
-```
+**Assert the committed value, not the rendered cell,** when the point
+of the scenario is persistence. `GET /api/manifest` is the
+authoritative serialisation; a rendered cell can be optimistic.
 
-`close_new_shell_windows` sends `WM_CLOSE` (NEVER `taskkill` on
-explorer.exe — that nukes the user's whole shell). The default class
-allowlist (`DEFAULT_SHELL_CLASSES = ("CabinetWClass", "Notepad",
-"Notepad++")`) covers the windows we know how to close safely; if a
-user has a different default text editor (VSCode, Sublime), those
-windows leak — document the residual in the driver header.
+**Duplicate-to-observe.** The scanner drops singletons, so a fixture
+that must appear in the manifest needs a byte-identical twin copied
+into a tmpdir at runtime (the s05 pattern). Don't fight the scanner —
+give it a pair.
 
-**Batch runner.** When the user wants to run several (or all) scenarios
-in one go, use `qa.scenarios._batch`:
+**Own your temp state.** Each driver creates its own manifest under a
+tmpdir and cleans up. Nothing writes to the repo fixture tree; the
+scanner only reads it.
+
+## Batch runner
 
 ```
-.venv/Scripts/python.exe -m qa.scenarios._batch              # full sweep
-.venv/Scripts/python.exe -m qa.scenarios._batch s04_corrupted s09_walker_exclusions
+.venv/Scripts/python.exe -m qa.web._batch                 # full sweep
+.venv/Scripts/python.exe -m qa.web._batch s04_corrupted s09_walker_exclusions
 ```
 
-For each scenario it: configures `qa/settings.json` → launches
-`main.py` → polls (ctypes `EnumWindows`) until the main window is
-visible (max 8 s; typically <2 s) → runs the driver → closes the
-window → waits for the subprocess to exit → moves to the next.
-Prints a final SUMMARY table with rc per scenario. The full batch
-(52 scenarios as of 2026-05-19 — see
-[`qa.scenarios._batch.ALL_SCENARIOS`](../../../qa/scenarios/_batch.py)
-for the canonical list) typically finishes in a few minutes
-wall-clock locally and ~5 minutes per shard on CI's 5-way matrix.
-Each app launch is still a real launch — get the user's "yes batch"
-once before starting.
+For each id it: looks the id up in `scenario_map.yml` → imports the
+named module → calls `run(page, base_url)` → records PASS / FAIL /
+ERROR / SKIP. A `status: todo` or `status: skip` row is SKIP, never
+FAIL, so a partially-ported set keeps the job green. Prints a final
+SUMMARY table with the result per scenario.
 
-**Optional optimization — skip the per-run Bash prompt.** Add this
-to `.allow` in `.claude/settings.json` so driver runs don't prompt:
-
-```json
-"Bash(.venv/Scripts/python.exe -m qa.scenarios.*:*)"
-```
-
-The launch of `main.py` itself stays gated by design — that's the
-security boundary. Driver runs are read-only against an
-already-running app, so allowlisting them is safe.
-
+The server is started once for the whole batch and reused — get the
+user's "yes batch" before starting it, and kill it by PID at the end.

@@ -9,7 +9,21 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from core.models import PhotoGroup, PhotoRecord
+from core.models import PhotoGroup
+
+
+def _sort_value(value: Any, numeric: bool) -> Any:
+    """Comparable sort key for one field value.
+
+    None is substituted with the type-appropriate zero (numeric → 0,
+    string/other → "") so a field with mixed None and non-None values sorts
+    without a float-vs-tuple ``TypeError``. Direction is applied by the
+    caller via ``list.sort(reverse=...)`` — this returns the natural-order
+    key only.
+    """
+    if value is None:
+        return 0 if numeric else ""
+    return value if numeric else str(value)
 
 
 class SortService:
@@ -53,20 +67,22 @@ class SortService:
             field_is_numeric.setdefault(field_name, True)
 
         for group in groups_list:
-            # Build a decorated list with adjusted values for per-key order
-            decorated: list[tuple[tuple[Any, ...], PhotoRecord]] = []
-            for item in group.items:
-                row: list[Any] = []
-                for field_name, ascending in sort_keys:
-                    value = getattr(item, field_name, None)
-                    if value is None:
-                        value = 0 if field_is_numeric[field_name] else ""
-                    if isinstance(value, (int, float)):
-                        row.append(value if ascending else -value)
-                    else:
-                        # For strings/others, embed a leading flag to control order
-                        row.append((0, str(value)) if ascending else (1, str(value)))
-                decorated.append((tuple(row), item))
-
-            decorated.sort(key=lambda x: x[0])
-            group.items = [it for _, it in decorated]
+            # Stable multi-key sort: apply the keys from lowest to highest
+            # priority (right to left), each in its own direction. Python's
+            # sort is stable, so a higher-priority key applied later preserves
+            # the order a lower-priority key already established within its
+            # ties — yielding the same lexicographic result as one combined
+            # key. This replaces the old decorated-tuple hack, which could not
+            # invert a STRING field for a descending sort: it embedded a
+            # constant leading flag and left the string comparison ascending,
+            # so descending-on-a-string silently produced ascending (#791).
+            items = list(group.items)
+            for field_name, ascending in reversed(sort_keys):
+                numeric = field_is_numeric[field_name]
+                items.sort(
+                    key=lambda it, fn=field_name, num=numeric: _sort_value(
+                        getattr(it, fn, None), num
+                    ),
+                    reverse=not ascending,
+                )
+            group.items = items

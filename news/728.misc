@@ -1,0 +1,1 @@
+Extract Qt-free logic ahead of the web-port Qt removal: relocate `ALL_SCENARIOS` (→ `qa/scenario_ids.py`), the #258 legacy-settings migration (→ `core/app_service/settings_migration.py`, now also applied on `GET /api/settings`), and `IGNORE_DECISION` (→ `core/constants.py`) so the web CI gates + tests survive — PySide6 untouched (#728)

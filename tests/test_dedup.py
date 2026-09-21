@@ -94,6 +94,24 @@ class TestExactDuplicate:
         kept = "/takeout/b.jpg"  # takeout priority 0 > jdrive priority 1
         assert Path(rows["/jdrive/a.jpg"].duplicate_of).as_posix() == kept
 
+    def test_same_priority_tie_keeper_is_deterministic(self):
+        """Two byte-identical files with the SAME source label (same priority)
+        must pick the same keeper regardless of input order — the
+        lexicographically smallest path, not whichever came first (#792)."""
+        def keeper_for(order: list[str]) -> str:
+            hrs = [
+                _hr(p, sha256="dup", source_label="jdrive", exif_date=_dt())
+                for p in order
+            ]
+            rows = _rows(classify(hrs, source_priority={"jdrive": 0}))
+            exact = [r for r in rows.values() if r.action == "EXACT"]
+            assert len(exact) == 1  # exactly one duplicate flagged
+            return Path(exact[0].duplicate_of).as_posix()
+
+        forward = keeper_for(["/jdrive/b.jpg", "/jdrive/a.jpg"])
+        reverse = keeper_for(["/jdrive/a.jpg", "/jdrive/b.jpg"])
+        assert forward == reverse == "/jdrive/a.jpg"
+
 
 # ---------------------------------------------------------------------------
 # Dynamic source priority
@@ -651,6 +669,217 @@ class TestUnderGroupingFix:
             gids = {r1[path].group_id, r2[path].group_id, r3[path].group_id}
             assert len(gids) == 1, f"{path} group_id is order-dependent: {gids}"
             assert None not in gids, f"{path} orphaned in some order"
+
+
+# ---------------------------------------------------------------------------
+# #824 — the exact tier draws an edge for complementary buckets
+# ---------------------------------------------------------------------------
+
+class TestComplementaryGroupEdge:
+    """#824 — an exact-pHash bucket that the classifier declines to *decide*
+    (RAW+lossy complementary, or all-RAW) must still be *grouped*.
+
+    The pair the user actually loses today is the one whose filenames differ:
+    a same-stem RAW+JPG is grouped by the walker's filename cluster
+    (``_collect_pair_edges``, pinned by ``TestSameStemCaptureGate``), and the
+    near-duplicate tier's predicate is ``0 < distance <= threshold``, which
+    excludes distance 0. So a renamed / relocated JPEG export of a RAW fell
+    through every tier and both files ended up as invisible singletons —
+    ``ManifestRepository.load`` never yields a row with ``group_id IS NULL``.
+    """
+
+    PH = "a" * 16          # 32 set bits — clears the #516 entropy guard
+
+    def _raw(self, path="/cam/DSC_0021.nef", **kw):
+        return _hr(path, sha256="raw-sha", phash=self.PH, file_type="raw",
+                   source_label="jdrive", exif_date=_dt(), **kw)
+
+    def _jpg(self, path="/exports/holiday-01.jpg", **kw):
+        return _hr(path, sha256="jpg-sha", phash=self.PH, file_type="jpeg",
+                   source_label="jdrive", exif_date=_dt(), **kw)
+
+    def test_renamed_raw_and_jpeg_export_share_group_id(self):
+        """The headline bug: identical pHash, RAW + lossy, unrelated names and
+        directories (so no walker pair edge), distance 0 (so no near-dup edge).
+        Before #824 both were orphaned to group_id=None and never shown to the
+        user side by side."""
+        rows = _rows(classify([self._raw(), self._jpg()]))
+        g_raw = rows["/cam/DSC_0021.nef"].group_id
+        g_jpg = rows["/exports/holiday-01.jpg"].group_id
+        assert g_raw is not None, "RAW original orphaned — the #824 hole"
+        assert g_raw == g_jpg
+        # The action policy is untouched: complementary means keep both.
+        assert rows["/cam/DSC_0021.nef"].action == ""
+        assert rows["/exports/holiday-01.jpg"].action == ""
+
+    def test_complementary_pair_never_auto_delete_eligible(self):
+        """Grouping must not turn a complementary RAW original into a
+        delete candidate. The #536 allowlist (only EXACT / REVIEW_DUPLICATE
+        rows are aggressive-delete eligible) is what protects it — this test
+        exercises the real post-scan sequence: classify -> score -> select."""
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+
+        result = classify([self._raw(), self._jpg()])
+        rows = _rows(result)
+        # Stand in for scanner.scoring: the JPEG scores higher, so the RAW is
+        # the non-keeper — the exact arrangement that would delete an original.
+        rows["/exports/holiday-01.jpg"].score = 0.9
+        rows["/cam/DSC_0021.nef"].score = 0.4
+
+        keepers = top_score_path_per_group(result)
+        assert keepers == {rows["/exports/holiday-01.jpg"].source_path}
+        assert non_keepers_for_aggressive_delete(result, keepers) == set(), (
+            "a complementary RAW original became aggressive-delete eligible"
+        )
+        # And no row asks the executor to destroy anything.
+        for row in result:
+            assert row.action == ""
+            assert "duplicate" not in row.reason
+
+    def test_all_raw_bucket_shares_group_id(self):
+        """``len(lossy) < 2`` (scanner/dedup.py) is reachable only for an
+        all-RAW bucket — a CR2 and its DNG conversion hash identically but have
+        different SHAs. Same shot, so same group; still no dedup decision."""
+        cr2 = self._raw("/cam/IMG_0001.cr2")
+        dng = _hr("/cam/IMG_0001.dng", sha256="dng-sha", phash=self.PH,
+                  file_type="raw", source_label="jdrive", exif_date=_dt())
+        rows = _rows(classify([cr2, dng]))
+        g_cr2 = rows["/cam/IMG_0001.cr2"].group_id
+        assert g_cr2 is not None and g_cr2 == rows["/cam/IMG_0001.dng"].group_id
+        assert rows["/cam/IMG_0001.cr2"].action == ""
+        assert rows["/cam/IMG_0001.dng"].action == ""
+
+    def test_all_lossy_exact_group_unchanged(self):
+        """Regression pin — passes on base AND after #824. The all-lossy
+        format-duplicate path keeps its keeper/duplicate row shape and its
+        lex-min group_id; #824 must not perturb it."""
+        heic = _hr("/a/shot.heic", sha256="h1", phash=self.PH, file_type="heic",
+                   source_label="jdrive", exif_date=_dt())
+        jpeg = _hr("/b/shot.jpg", sha256="h2", phash=self.PH, file_type="jpeg",
+                   source_label="jdrive", exif_date=_dt())
+        rows = _rows(classify([heic, jpeg]))
+        assert rows["/a/shot.heic"].action == ""
+        assert rows["/b/shot.jpg"].action == "EXACT"
+        assert rows["/b/shot.jpg"].duplicate_of == rows["/a/shot.heic"].source_path
+        gid = rows["/a/shot.heic"].group_id
+        assert gid == rows["/b/shot.jpg"].group_id
+        assert Path(gid).as_posix() == "/a/shot.heic", "lex-min anchor moved"
+
+    def test_no_edge_when_dhash_disagrees(self):
+        """#524's precision gate survives: two different scenes that collide on
+        the coarse pHash but disagree on dHash are NOT the same shot, so the
+        complementary edge must not be drawn either."""
+        raw = self._raw(dhash="f0f0f0f0f0f0f0f0")
+        jpg = self._jpg(dhash="0f0f0f0f0f0f0f0f")   # dHash distance 64
+        rows = _rows(classify([raw, jpg]))
+        assert rows["/cam/DSC_0021.nef"].group_id is None
+        assert rows["/exports/holiday-01.jpg"].group_id is None
+
+    def test_no_edge_when_mean_color_mismatches(self):
+        """#462's flat-image gate survives: a pHash collision between images
+        whose average colours are far apart is a false positive, so no edge."""
+        raw = self._raw(mean_color="10,20,30")
+        jpg = self._jpg(mean_color="200,180,160")
+        rows = _rows(classify([raw, jpg]))
+        assert rows["/cam/DSC_0021.nef"].group_id is None
+        assert rows["/exports/holiday-01.jpg"].group_id is None
+
+    def _reviewer_trio(self) -> list[HashResult]:
+        """RAW + a JPEG that is itself the EXACT duplicate of a byte-identical
+        sibling. Note which JPEG carries EXACT: ``_classify_exact`` keeps the
+        lex-min path, and "/p/A copy.JPG" < "/p/A.JPG" (space sorts before
+        '.'), so the SHA keeper is the *copy* and "/p/A.JPG" is the EXACT."""
+        return [
+            _hr("/p/A.DNG", sha256="dng-sha", phash=self.PH, file_type="raw",
+                source_label="src", exif_date=_dt()),
+            _hr("/p/A.JPG", sha256="jpg-sha", phash=self.PH, file_type="jpeg",
+                source_label="src", exif_date=_dt()),
+            _hr("/p/A copy.JPG", sha256="jpg-sha", phash=self.PH,
+                file_type="jpeg", source_label="src", exif_date=_dt()),
+        ]
+
+    def test_raw_merging_into_a_sha_group_adds_no_delete_candidate(self):
+        """#824 regression — the RAW joins a component that already held a
+        SHA-duplicate pair and outscores its keeper. Grouping must not enlarge
+        the aggressive-delete set: before the guard this returned
+        {"/p/A.JPG"}, while the same trio on the pre-#824 code returns set()
+        because the RAW was not in the group at all."""
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+
+        result = classify(self._reviewer_trio())
+        rows = _rows(result)
+        assert rows["/p/A.JPG"].action == "EXACT"
+        # One component now: the complementary edge unions the RAW in.
+        gids = {rows[p].group_id for p in ("/p/A.DNG", "/p/A.JPG", "/p/A copy.JPG")}
+        assert len(gids) == 1 and None not in gids
+
+        rows["/p/A.DNG"].score = 0.95
+        rows["/p/A.JPG"].score = 0.50
+        rows["/p/A copy.JPG"].score = 0.40
+
+        keepers = top_score_path_per_group(result)
+        assert keepers == {rows["/p/A.DNG"].source_path}
+        assert non_keepers_for_aggressive_delete(result, keepers) == set()
+
+    def test_apply_best_copy_leaves_the_jpeg_export_untouched(self, tmp_path):
+        """#824 regression, review-time twin of the test above. Before the
+        guard, ``apply_best_copy`` wrote ``user_decision='delete'`` onto
+        /p/A.JPG — a JPEG export nothing had asked to delete."""
+        from core.app_service.action_service import apply_best_copy
+        from scanner.manifest import write_manifest
+
+        result = classify(self._reviewer_trio())
+        rows = _rows(result)
+        rows["/p/A.DNG"].score = 0.95
+        rows["/p/A.JPG"].score = 0.50
+        rows["/p/A copy.JPG"].score = 0.40
+
+        manifest = tmp_path / "m.sqlite"
+        write_manifest(result, manifest)
+        apply_best_copy(str(manifest), 1)
+
+        import sqlite3
+        conn = sqlite3.connect(str(manifest))
+        try:
+            state = {
+                Path(sp).as_posix(): (ud, lk)
+                for sp, ud, lk in conn.execute(
+                    "SELECT source_path, user_decision, is_locked"
+                    "  FROM migration_manifest"
+                )
+            }
+        finally:
+            conn.close()
+        assert state["/p/A.DNG"] == ("", 1), "RAW should be the locked keeper"
+        assert state["/p/A.JPG"][0] == "", "JPEG export must not be marked delete"
+        assert state["/p/A copy.JPG"][0] == ""
+
+    def test_complementary_group_id_is_order_independent(self):
+        """The new edge is anchored on the lex-min member, so the component's
+        group_id (the rescore determinism anchor) cannot depend on the order
+        the hasher happened to finish files in."""
+        def build(order):
+            return _rows(classify(list(order)))
+
+        raw = self._raw("/cam/DSC_0021.nef")
+        j1 = self._jpg("/exports/holiday-01.jpg")
+        j2 = _hr("/archive/a-copy.jpg", sha256="jpg2-sha", phash=self.PH,
+                 file_type="jpeg", source_label="jdrive", exif_date=_dt())
+        paths = ("/cam/DSC_0021.nef", "/exports/holiday-01.jpg", "/archive/a-copy.jpg")
+        r1 = build([raw, j1, j2])
+        r2 = build([j2, j1, raw])
+        r3 = build([j1, raw, j2])
+        for path in paths:
+            gids = {r1[path].group_id, r2[path].group_id, r3[path].group_id}
+            assert None not in gids, f"{path} orphaned in some order"
+            assert len(gids) == 1, f"{path} group_id is order-dependent: {gids}"
+        assert Path(r1[paths[0]].group_id).as_posix() == "/archive/a-copy.jpg"
 
 
 # ---------------------------------------------------------------------------

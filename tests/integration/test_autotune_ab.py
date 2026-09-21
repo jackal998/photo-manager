@@ -67,17 +67,41 @@ def _cliff_read(fast_max_inflight, *, fast_s=0.015, slow_s=0.09, data=b"x" * 16)
     return fake_read
 
 
+class _NullBus:
+    """A ``ScanProgressBus`` that discards everything.
+
+    The A/B measures wall-clock, not events; the real SSE bus's per-event
+    cost is measured by ``scripts/bench_web_port.py`` instead.
+    """
+
+    def log(self, msg: str) -> None: ...
+
+    def stage(self, stage_name, completed, total, files_per_sec) -> None: ...
+
+    def failed(self, msg: str) -> None: ...
+
+    def finished(self, output_path: str) -> None: ...
+
+    def completed_empty(self) -> None: ...
+
+    def hash_pool_measured(self, rates: dict) -> None: ...
+
+    def read_knee_measured(self, summary: dict) -> None: ...
+
+
 def _time_one_scan(monkeypatch, tmp_path, *, autotune, knees, n_files):
     """Patch the scan pipeline down to the cliff read, run one full
-    ``ScanWorker.run()`` on a single NAS device, and return the wall-clock
+    ``run_pipeline`` on a single NAS device, and return the wall-clock
     seconds. OFF → static MAX=8; ON → cache-warm Semaphore(knee)."""
     import scanner.dedup as _dedup
     import scanner.hasher as _hasher
     import scanner.walker as _walker
     import scanner.workers as _workers
+    from core.app_service.cancel_token import _CancelToken
+    from core.app_service.dtos import ScanConfig
+    from core.app_service.scan_runner import run_pipeline
     from scanner.dedup import HashResult
     from scanner.walker import FileRecord
-    from app.views.workers.scan_worker import ScanWorker
 
     records = [
         FileRecord(path=Path(rf"J:\img_{i}.jpg"), source_label="src", file_type="jpeg")
@@ -105,20 +129,20 @@ def _time_one_scan(monkeypatch, tmp_path, *, autotune, knees, n_files):
     # warm knee=2 does not. Applied last so it wins over any pipeline default.
     monkeypatch.setattr(_hasher, "read_for_record", _cliff_read(2))
 
-    worker = ScanWorker(
-        sources={"src": str(tmp_path)},
-        output_path=str(tmp_path / "m.sqlite"),
+    config = ScanConfig(
+        sources={"src": tmp_path},
+        output_path=tmp_path / "m.sqlite",
         recursive_map={"src": False},
         workers=2,
         autotune_read_knee=autotune,
-        autotune_knees=knees,
+        autotune_knees=knees or {},
     )
     done = threading.Event()
     elapsed = {}
 
     def _go():
         t0 = time.monotonic()
-        worker.run()
+        run_pipeline(config, _CancelToken(), _NullBus())
         elapsed["s"] = time.monotonic() - t0
         done.set()
 
@@ -131,7 +155,7 @@ def _time_one_scan(monkeypatch, tmp_path, *, autotune, knees, n_files):
     not _RUN,
     reason="layer-2 timing A/B; set PHOTO_MANAGER_RUN_INTEGRATION=1 to run locally",
 )
-def test_warm_autotune_no_regression_vs_static_max(qapp, tmp_path, monkeypatch):
+def test_warm_autotune_no_regression_vs_static_max(tmp_path, monkeypatch):
     from scanner.autotune import AUTOTUNE_RECIPE_VERSION
 
     warm = {r"J:": {"knee": 2, "recipe": AUTOTUNE_RECIPE_VERSION}}

@@ -1,0 +1,1 @@
+The scan dialog now shows a clear "lost connection to the scanner" error if the server connection drops mid-scan, instead of freezing indefinitely with no feedback. Brief network blips still recover automatically. (#661)

@@ -1,0 +1,1 @@
+Align the web result tree's virtualizer coordinates with its scroll container by offsetting them with the sticky column header's measured height, so post-scan scroll-to-keeper lands centred and row windowing is correct near scroll boundaries (#699).

@@ -108,12 +108,12 @@ scan_dialog:
   browse_button: "瀏覽…"
   save_dialog_title: "儲存清單為"
   advanced_settings_label: "進階設定"
-  phash_label: "<b>pHash 相似度閾值</b> (預設:10,範圍:1–20)"
-  phash_desc: "兩張 64 位元 pHash 可相差幾個位元仍算同組。越低 = 越嚴格。"
-  phash_tooltip: "兩張影像之間的感知雜湊 Hamming 距離。64 位元的 pHash 表示兩張影像最多可相差此位元數,即被視為近似重複。越低 = 越嚴格 (群組較少,雜訊較少);越高 = 越寬鬆 (可抓到更多輕微編輯過的影像對)。"
-  dhash_label: "<b>dHash 信心閾值</b> (預設:10,範圍:1–20)"
-  dhash_desc: "確認 pHash 配對的第二組雜湊。越低 = 確認越嚴格。"
-  dhash_tooltip: "第二種獨立的感知雜湊 (以梯度/亮度為基礎),用來確認 pHash 的近似配對。當兩張影像的 dHash 也相差不超過此位元數時,該配對標記為高信心;否則為低信心。分組行為不變,但低信心 (只靠 pHash) 的近似配對不會被積極自動選取標記為刪除。越低 = 確認越嚴格。"
+  phash_label: "<b>pHash 相似度閾值</b> (預設:10,範圍:2–20)"
+  phash_desc: "兩張 64 位元 pHash 可相差幾個位元仍算同組。越低 = 越嚴格;2 是最嚴格且仍然有效的設定。"
+  phash_tooltip: "兩張影像之間的感知雜湊 Hamming 距離。64 位元的 pHash 表示兩張影像最多可相差此位元數,即被視為近似重複。越低 = 越嚴格 (群組較少,雜訊較少);越高 = 越寬鬆 (可抓到更多輕微編輯過的影像對)。刻度從 2 而非 1 開始:照片的 pHash 一律剛好有 64 位元中的 32 位元為 1,因此任兩張之間的距離必為偶數 —— 奇數值通常和小它 1 的偶數值配對到完全相同的檔案,而 1 則什麼都配對不到,等於關掉近似重複偵測而不是收緊它。2 是最嚴格且仍然有效的設定。"
+  dhash_label: "<b>dHash 信心閾值</b> (預設:10,範圍:2–20)"
+  dhash_desc: "確認 pHash 配對的第二組雜湊。越低 = 確認越嚴格;2 是最嚴格且仍然有效的設定。"
+  dhash_tooltip: "第二種獨立的感知雜湊 (以梯度/亮度為基礎),用來確認 pHash 的近似配對。當兩張影像的 dHash 也相差不超過此位元數時,該配對標記為高信心;否則為低信心。分組行為不變,但低信心 (只靠 pHash) 的近似配對不會被積極自動選取標記為刪除。越低 = 確認越嚴格。與 pHash 刻度相同,這裡也從 2 而非 1 開始:奇數值通常確認到和小它 1 的偶數值完全相同的配對,而 1 則什麼都確認不到。2 是最嚴格且仍然有效的設定。"
   color_label: "<b>平均色彩閘門</b> (預設:30,範圍:0–100)"
   color_desc: "平均色彩 (L2) 差距超過此值時否決該 pHash 配對。0 = 停用。"
   color_tooltip: "兩張影像之間平均 RGB 色彩的 L2 距離。在 pHash 檢查之後,平均色彩差距超過此值的影像將被排除於分組之外 — 用以排除 pHash 假陽性 (DCT 結構相似但色彩不同)。0 = 停用;越高 = 越寬鬆。"
@@ -379,3 +379,509 @@ preview:
   click_to_pause: "(點擊暫停)"
   video_not_available: "(無法使用視訊)"
   rebuilding_cache: "正在重建縮圖快取(版本 {version})— 這是一次性操作。"
+
+# Web UI 字串 — 僅供瀏覽器版使用。
+# 鍵前綴:web.*
+web:
+  toolbar:
+    scan: "掃描"
+    execute: "執行"
+    settings: "設定"
+    open: "開啟"
+    set_action: "設定動作…"
+    # Layout slice TB（#878）：篩選框、帶計數的批次動作、危險 CTA。計數寫在標籤
+    # 裡，「刪除」才不會是一個未知的數字；CTA 在零筆時停用但保留標籤，按鈕不會
+    # 移動位置。
+    filter_placeholder: "篩選照片…"
+    filter_aria: "篩選照片"
+    bulk_set_n: "設定 {count} 個選取項目："
+    bulk_set_none: "設定選取項目："
+    bulk_hint: "作用於清單中選取的列 —— Ctrl 點選可加選一列，Shift 點選可選取範圍。鎖定的列不會被變更。"
+    delete_n: "⊗  刪除 {count} 個{fileWord}…"
+  # 列密度（#878：slice R 的偏好設定，slice TB 在狀態列的切換開關）。
+  density:
+    label: "密度"
+    aria: "列密度"
+    comfortable: "寬鬆"
+    compact: "緊湊"
+  status:
+    summary: "{groups} 個{groupWord} · {files} 個{fileWord}"
+    loading_manifest: "正在載入清單…"
+    scanning: "掃描中{stage}"
+    scan_failed: "掃描失敗：{error}"
+    manifest_failed: "清單錯誤：{error}"
+    execute_failed: "操作錯誤：{error}"
+    ready: "就緒"
+    # 中文沒有單複數變化，單／複數兩個鍵刻意相同（與 delete_confirm 一致）。
+    group_singular: "群組"
+    group_plural: "群組"
+    file_singular: "檔案"
+    file_plural: "檔案"
+    # #906 —— 狀態列存在的理由：這兩個數字是「這次整理還值不值得繼續」的即時
+    # 答案。兩者都以整份清單計算，不受篩選影響，因為那才是「執行」會動到的範圍。
+    marked_to_delete: "⊗ {count} 個待刪除"
+    reclaims: "↺ 可回收 {size}"
+  # 單一插槽的復原提示（#878 slice G / Q5）。「保留最佳 · 其餘刪除」不再有確認
+  # 對話框，這段文字就是使用者唯一得到的說明；鎖定那一行是按鈕的承諾：永遠不會
+  # 覆蓋鎖定，而且跳過時一定要說出來。中文沒有單複數變化，兩個鍵刻意相同。
+  toast:
+    keep_best: "群組 {n} · 已標記 {count} 個{fileWord}待刪除"
+    # slice TB 的工具列批次動作共用同一個插槽。選取範圍可能跨群組，所以句子改
+    # 為說出「動作」；{verb} 由 web.decision.* 帶入，與列控制項、右鍵選單同一套
+    # 用語。
+    bulk_decision: "已將 {count} 個{fileWord}設為{verb}"
+    file_singular: "檔案"
+    file_plural: "檔案"
+    locked_unchanged_singular: "{count} 個鎖定的檔案未變更"
+    locked_unchanged_plural: "{count} 個鎖定的檔案未變更"
+    undo: "復原"
+  # 對應 en.yml 的 web.error.* — 後端拋出的原始開發訊息改由此處的完整句子呈現，
+  # 原始文字仍以次要的技術細節行顯示。
+  error:
+    execute_failed: "無法完成這個動作。"
+    remove_failed: "無法略過這些列。"
+    prune_failed: "無法清除單一群組。"
+    classify_failed: "無法檢查單一群組。"
+    save_failed: "無法儲存清單檔。"
+    bulk_decide_failed: "無法套用批次動作。"
+    apply_best_copy_failed: "無法套用最佳版本決策。"
+    reveal_failed: "無法開啟檔案總管。"
+    already_running: "已有動作正在執行中 — 請等待它完成。"
+    locked_paths: "範圍內有部分列已鎖定。"
+    # 後端 4xx／5xx 回應所帶的四個 detail.code。
+    permission_denied: "此應用程式無權存取該位置。"
+    platform_unsupported: "此作業系統不支援這個動作。"
+    bad_request: "該路徑無效。"
+    invalid_pattern: "該樣式不是有效的正規表示式。"
+    not_found: "找不到該檔案或清單檔。"
+    unknown: "無法完成這個要求。"
+    technical_detail: "詳細資訊：{detail}"
+  empty_state:
+    # 版面切片 E（audit E3/E4）。原本只有一句說明「目前沒有清單」的灰字；
+    # 這是新使用者看到的第一個畫面，所以改成說明這個程式做什麼，並把兩條
+    # 入口放大。`no_manifest` 保留原本的 key 名稱（各處呼叫與測試都用它），
+    # 內容改為標題下方的說明文字。
+    heading: "找出重複與相似的照片"
+    no_manifest: "指定一個資料夾或磁碟機，它會找出完全相同與外觀相似的照片，並分組讓你安全地檢閱與清理。"
+    scan: "掃描…"
+    open: "開啟清單…"
+  manifest:
+    input_placeholder: "清單 .db 的路徑…"
+    input_aria: "清單路徑"
+  # Mirror of column.* keys for web-only usage.
+  column:
+    similarity: "相似度"
+    action: "動作"
+    lock: "鎖定"
+    file_name: "檔名"
+    folder: "資料夾"
+    size_bytes: "大小 (位元組)"
+    group_count: "群組數量"
+    creation_date: "建立日期"
+    shot_date: "拍攝日期"
+    resolution: "解析度"
+    score: "分數"
+    size: "大小"
+    decision: "決策"
+  # Layout slice R (#878): the score cell's label, riding above the number.
+  score:
+    keep_label: "保留分數"
+  # The ONE decision vocabulary for the web client (copy audit R3/R4, owner
+  # decision 2026-09-18): 保留 / 刪除 / 略過 for the three wire values
+  # "" / "delete" / "ignore". SHORT forms — row DecisionControl, the Execute
+  # tree's decision badge, the Set Action combo.
+  decision:
+    delete: "刪除"
+    keep: "保留"
+    remove_from_list: "略過"
+    lock: "鎖定"
+    unlock: "解除鎖定"
+  # LONG forms: right-click menu items and DecisionControl tooltips. Every
+  # user-facing 刪除 names 資源回收筒; 略過 names the file's fate on disk
+  # first.
+  decision_long:
+    keep: "保留此檔案"
+    delete: "刪除 — 移至資源回收筒"
+    remove_from_list: "略過 — 保留在磁碟上，從本次檢閱中移除"
+  # scanner/dedup.py classification values rendered in the Action column
+  # (copy audit R1, values half) — the raw enum used to reach the user
+  # verbatim, identical in both locales.
+  classification:
+    exact: "完全相同"
+    review_duplicate: "相似重複"
+    keep: "群組首選"
+    undated: "無日期"
+  # Action dialog (Set Action by Field) — web port strings.
+  action_dialog:
+    title: "依欄位設定動作"
+    # 全形冒號：同一份 web 目錄的其他標籤（execute_dialog.show_label、
+    # browse.filename、status.scan_failed）都用「：」，這裡原本是半形（A3）。
+    field_label: "欄位："
+    regex_label: "正規式："
+    regex_placeholder: "例如：^IMG_\\d+\\.HEIC$"
+    set_action_label: "對每筆相符列設定動作："
+    apply_button: "套用"
+    # 與英文同樣採「組句」結構（A4）：這一列由前綴 + 運算子 + 文字組成，
+    # 讀作「找出欄位值 包含 IMG」，而不是帶冒號的獨立子句。
+    simple_prefix: "找出欄位值"
+    simple_op_contains: "包含"
+    simple_op_starts_with: "開頭為"
+    simple_op_ends_with: "結尾為"
+    simple_op_exact: "完全等於"
+    simple_text_placeholder: "輸入要比對的文字…"
+    simple_disabled_no_match_fn: "即時預覽不可用 — 此入口的簡易輸入為唯讀。"
+    match_counter: "{matched} / {total} 相符"
+    match_counter_topn: "相符 {matched} 筆 (每組最多 {n} × 共 {group_count} 組)"
+    match_counter_invalid: "—"
+    match_counter_applied: "已套用至 {matched} 列"
+    invalid_regex: "正規式錯誤：{error}"
+    invalid_threshold: "無法解析「{input}」為此欄位的數值"
+    preview_label: "預覽"
+    preview_truncated: "…還有 {n} 筆"
+    preview_empty: "無相符項目"
+    numeric_mode_threshold: "門檻值"
+    numeric_mode_topn: "每組前 N 名"
+    numeric_threshold_label: "當數值"
+    numeric_topn_label: "選取每組的"
+    numeric_topn_suffix: "名"
+    numeric_order_top: "前"
+    numeric_order_bottom: "後"
+    numeric_value_placeholder_number: "輸入數字…"
+    numeric_value_placeholder_date: "輸入日期 (YYYY-MM-DD)…"
+    cmp_op_gt: ">"
+    cmp_op_ge: ">="
+    cmp_op_lt: "<"
+    cmp_op_le: "<="
+    cmp_op_eq: "=="
+    cmp_op_ne: "!="
+    cancel: "取消"
+    applying: "套用中…"
+    lock_conflict_title: "有鎖定的列會受影響"
+    lock_conflict_body: "有 {n} 個鎖定的列會受影響。要解鎖並一併套用嗎？"
+    unlock_and_apply: "解鎖並套用"
+    unlocked_only: "僅套用至未鎖定"
+    # #741 sub-item B — 最近使用的樣式。
+    recent_button: "最近使用："
+    recent_empty: "(尚無最近使用的樣式)"
+    recent_clear: "清除"
+    # #741 sub-item C — 樣式摘要文字。
+    pattern_summary_simple: "{field} {op}「{text}」"
+    pattern_summary_regex: "{field} 正規式「{pattern}」"
+    pattern_summary_numeric_threshold: "{field} {op} {value}"
+    pattern_summary_numeric_topn: "依 {field} 取每組{order} {n} 筆"
+    delete_confirm_title: "確認批次刪除決策"
+    delete_confirm_body: "這將把 {matched} 個檔案標記為刪除，條件為 {summary}。檔案要等到執行「執行動作」時才會移至資源回收筒。"
+    delete_confirm_button: "標記 {matched} 個檔案為刪除"
+  # Menu bar (Qt MenuController parity — File / Action / View).
+  menu:
+    aria_main: "主選單"
+    file: "檔案"
+    file_scan: "掃描來源…"
+    file_open: "開啟清單…"
+    action: "動作"
+    # 與對話框標題、右鍵選單同一個說法（M1）；執行項目改用 Qt 的完整說法（M2）。
+    action_set: "依欄位設定動作…"
+    action_execute: "執行動作…"
+    action_execute_selected: "執行動作（僅限所選）…"
+    list: "清單"
+    list_remove: "立即略過選取項目"
+    view: "檢視"
+    view_language: "語言"
+    lang_en: "English"
+    lang_zh: "中文 (繁體)"
+    # 折入選單列右端的掃描摘要（#878 slice TB，F3/F4）。來源名稱另外接在後面，
+    # 這樣被截斷的永遠是名稱，而不是數字，而且絕不換行。
+    scan_summary: "{photos} 個{photoWord} · {groups} 個{groupWord}"
+  # Filesystem picker (FsBrowser).
+  browse:
+    up: "↑ 上一層"
+    roots: "本機"
+    loading: "載入中…"
+    empty: "空資料夾"
+    manifest_tag: "清單"
+    filename: "檔名："
+    cancel: "取消"
+    select_folder: "選擇資料夾"
+    select_file: "開啟"
+    save: "儲存"
+    title_source: "選擇來源資料夾"
+    title_output: "另存清單為"
+    title_manifest: "開啟清單"
+  # Scan dialog — web-only strings added alongside the browse picker.
+  scan:
+    browse: "瀏覽…"
+    # #740 — localized stage labels, matching translations/en.yml's web.scan.stage_*.
+    stage_walk: "正在掃描來源"
+    stage_hash: "正在計算雜湊"
+    stage_exiftool: "正在讀取 EXIF 與評分訊號"
+    stage_classify: "正在分類重複項"
+    stage_score: "正在評分候選"
+    stage_write: "正在寫入清單"
+    # #823 — 對應 en.yml 的 web.scan.threshold_parity_note。
+    # 全形標點（Z1）：這段長句原本在同一句中混用半形「:」「,」與全形「。」。
+    threshold_parity_note: "從 2 開始：照片的 pHash 之間必定相差偶數個位元，因此奇數值通常和小它 1 的偶數值配對到相同的檔案，而 1 則什麼都配對不到。2 是最嚴格且仍然有效的設定。"
+    # 掃描對話框（SC1／SC3／SC4／SC5）— 對應 en.yml 的同名鍵。
+    title: "掃描來源"
+    source_list_header: "來源"
+    source_list_aria: "掃描來源清單"
+    add_source: "+ 新增來源"
+    output_label: "輸出路徑"
+    output_placeholder: "例如：C:/output/scan.db"
+    advanced_settings_label: "進階設定"
+    autotune_read_knee_label: "自動調整讀取並行度（實驗性）"
+    auto_select_label: "掃描後自動選取"
+    auto_select_aggressive_label: "同時將其他檔案標記為刪除"
+    grouping_sensitivity_label: "分組敏感度"
+    phash_label: "pHash 相似度閾值（預設：10，範圍：2–20）"
+    phash_desc: "兩張 64 位元 pHash 可相差幾個位元仍算同組。越低 = 越嚴格。"
+    phash_tooltip: "兩張影像之間的感知雜湊 Hamming 距離。64 位元的 pHash 表示兩張影像最多可相差此位元數，即被視為近似重複。越低 = 越嚴格（群組較少，雜訊較少）；越高 = 越寬鬆（可抓到更多輕微編輯過的影像對）。"
+    dhash_label: "dHash 信心閾值（預設：10，範圍：2–20）"
+    dhash_desc: "確認 pHash 配對的第二組雜湊。越低 = 確認越嚴格。"
+    dhash_tooltip: "第二種獨立的感知雜湊（以梯度／亮度為基礎），用來確認 pHash 的近似配對。當兩張影像的 dHash 也相差不超過此位元數時，該配對標記為高信心；否則為低信心。分組行為不變，但低信心（只靠 pHash）的近似配對不會被積極自動選取標記為刪除。越低 = 確認越嚴格。"
+    color_label: "平均色彩閘門（預設：30，範圍：0–100）"
+    color_desc: "平均色彩（L2）差距超過此值時否決該 pHash 配對。0 = 停用。"
+    color_tooltip: "兩張影像之間平均 RGB 色彩的 L2 距離。在 pHash 檢查之後，平均色彩差距超過此值的影像將被排除於分組之外 — 用以排除 pHash 假陽性（DCT 結構相似但色彩不同）。0 = 停用；越高 = 越寬鬆。"
+    error_prefix: "錯誤：{error}"
+    start_button: "開始掃描"
+    progress_aria: "掃描進度"
+    log_aria: "掃描記錄"
+    files_found_singular: "已找到 {n} 個檔案"
+    files_found_plural: "已找到 {n} 個檔案"
+    eta_label: "預計剩餘 {eta}"
+    cancel: "取消"
+    source_row_aria: "來源 {label}"
+    source_unnamed: "未命名"
+    source_label_placeholder: "標籤"
+    source_label_aria: "來源標籤"
+    source_path_placeholder: "路徑"
+    source_path_aria: "來源路徑"
+    recursive: "包含子資料夾"
+    remove_source: "移除來源"
+  rescan_confirm:
+    # 全形問號，與同一份目錄的其他 zh 標題一致（RC2）。
+    title: "要捨棄未儲存的決策嗎？"
+    # 數量與名詞拆成兩個佔位符（RC1）：中文在量詞前不加空格，而原本在 JS 裡
+    # 組好的單一 {pending} 字串強迫加了一個；名詞也不再和句尾「尚未儲存」重複。
+    body: "目前載入的清單上有 {count}{noun}。開始新的掃描將會捨棄這些決策。"
+    noun_singular: "項尚未儲存的決策"
+    noun_plural: "項尚未儲存的決策"
+    cancel: "取消"
+    discard_and_rescan: "捨棄並重新掃描"
+  execute_dialog:
+    files_not_found_title: "找不到檔案"
+    files_failed_title: "刪除失敗"
+    # 補回 Qt execute_dialog.title 的「— 檢閱」（E6）：這個對話框是破壞性
+    # 動作前的檢閱關卡，只寫「執行動作」會讀成動作本身。
+    title: "執行動作 — 檢閱"
+    show_label: "顯示："
+    file_count: "{n} 個{fileWord}"
+    select_row_to_preview: "選擇一列以預覽"
+    preview_alt: "預覽"
+    cancel: "取消"
+    execute_selected: "執行所選"
+    execute: "執行"
+    executing: "執行中…"
+    # Chinese has no plural marking; both keys carry the same word (matches
+    # the pattern already used in delete_confirm.file_singular/file_plural).
+    file_singular: "檔案"
+    file_plural: "檔案"
+    # 整組將被刪除的警告條（E2）與被篩選器隱藏的待刪除列警告（E3）。
+    warning_prefix: "警告："
+    warning_complete_groups: "{groupWord} {groups} 中的所有檔案都將被刪除。請先檢閱下方的決策再按「執行」。"
+    group_singular: "群組"
+    group_plural: "群組"
+    # 版面切片 E：警告條改用 Q9 的 caution 角色後，▲ 由元件繪出，原本寫在
+    # 句首的 ⚠ 就從文案移除，否則同一條上會出現兩個不同的警告符號。
+    warning_hidden_destructive: "目前的篩選條件隱藏了 {n} {rowWord}待刪除的項目 — 切換到「全部決策」或「僅刪除」即可看到。"
+    row_singular: "列"
+    row_plural: "列"
+    # 樹狀清單上方的類型篩選器（copy audit E1 — 原本寫死英文，第三項還叫
+    # 「Remove only」）。用詞與 保留／刪除／略過 一致，上面那條警告會逐字
+    # 引用其中兩項。
+    filter_aria: "依決策類型篩選"
+    filter_all: "全部決策"
+    filter_delete_only: "僅刪除"
+    filter_skip_only: "僅略過"
+  # 保留與刪除兩個項目改用 web.decision_long.*（copy audit R4 — 全站一套詞彙），
+  # 因此 context_menu 不再有自己的 keep/delete。
+  #
+  # skip_now 是刻意保留的唯一例外（review 第二輪）：列上的「略過」只是暫存
+  # user_decision='ignore'，執行動作前都可以反悔；這個項目則是當場定案
+  # outcome='ignored'，該列立刻離開檢閱且無法復原。兩者用同一個詞會讓可逆與
+  # 不可逆的動作長得一模一樣，所以立即生效的那個要說「立即」。
+  context_menu:
+    skip_now: "立即略過 — 從本次檢閱中移除"
+    lock: "鎖定"
+    unlock: "解除鎖定"
+    open_folder: "開啟資料夾"
+    set_action_by_field: "依欄位設定動作…"
+    execute_selected: "執行動作（僅限所選）…"
+    apply_best_copy: "套用最佳版本決策到此群組"
+  lock_confirm:
+    title_execute: "刪除範圍內有鎖定的檔案"
+    title_remove: "略過範圍內有鎖定的檔案"
+    title_decision: "有鎖定的列受影響"
+    title_apply_best_copy: "此群組中有鎖定的列"
+    title_prune: "鎖定的單一群組"
+    body_execute: "{n} 個鎖定的{fileWord}即將被刪除（移至資源回收筒）。可解鎖並繼續，或不處理鎖定的檔案。"
+    body_remove: "{n} 個鎖定的{fileWord}即將被略過（保留在磁碟上，從本次檢閱中移出）。可解鎖並略過，或僅略過未鎖定的檔案。"
+    body_decision: "設定此決策將變更 {originalPathsLen} 列；其中 {n} 列已鎖定。目前尚未刪除任何項目 — 這只是將決策排入佇列。可解鎖並全部設定、僅設定未鎖定的列，或取消。"
+    body_apply_best_copy: "套用最佳版本決策到此群組將影響包含 {n} 個鎖定{rowWord}的項目。目前尚未刪除任何項目 — 這只是將保留/刪除決策排入佇列。可解鎖並全部套用、僅套用至未鎖定的列，或取消。"
+    body_prune: "{n} 個鎖定的單一{groupWord}將被清除。可解鎖並清除，或將其保留在清單中。"
+    cancel: "取消"
+    unlocked_only: "僅未鎖定"
+    unlock_apply: "解鎖並套用"
+    # Chinese has no plural marking; singular/plural keys carry the same
+    # word. is_singular/is_plural have no natural Chinese copula placement
+    # (the existing sentences read correctly without one) — kept for
+    # catalog-key symmetry with en.yml, not referenced by any template here.
+    file_singular: "檔案"
+    file_plural: "檔案"
+    is_singular: ""
+    is_plural: ""
+    row_singular: "列"
+    row_plural: "列"
+    group_singular: "群組"
+    group_plural: "群組"
+    pronoun_singular: "它們"
+    pronoun_plural: "它們"
+  prune_confirm:
+    title: "要清除單一群組嗎？"
+    # 「刪除／略過」而非「刪除/忽略」（P1 + 2026-09-18 詞彙決策）：ignore 是
+    # 內部的傳輸值，使用者在其他每一個畫面看到的都是「略過」。這個對話框處理
+    # 的是「群組」而非單一檔案的決策，所以動詞用「清除」而不是「略過」。
+    body_mixed: "{plain} 個單一{plainGroupWord}僅剩一個檔案，另外 {actioned} 個帶有尚未執行的刪除／略過動作。要從清單中清除這些一般單一{plainGroupWord}嗎？"
+    body_actioned_only: "有 {actioned} 個單一{actionedGroupWord}帶有尚未執行的刪除／略過動作。要將{pronoun}從清單中清除嗎？"
+    body_plain_only: "{plain} 個單一{plainGroupWord}目前僅剩一個檔案。要將{phrase}從清單中清除嗎？"
+    include_actioned: "同時清除 {n} 個已設定動作的單一{singletonWord}"
+    dont_ask_again: "不再詢問"
+    keep_all: "全部保留"
+    remove_count: "清除 {n} 個"
+    # Chinese has no plural marking; singular/plural keys carry the same
+    # word. has_singular/has_plural and carry_singular/carry_plural have no
+    # natural Chinese placement (kept for catalog-key symmetry, unused here).
+    group_singular: "群組"
+    group_plural: "群組"
+    has_singular: ""
+    has_plural: ""
+    carry_singular: ""
+    carry_plural: ""
+    pronoun_singular: "它們"
+    pronoun_plural: "它們"
+    singleton_singular: "單一群組"
+    singleton_plural: "單一群組"
+    this_group: "這個單一群組"
+    these_groups: "這些單一群組"
+  # 鍵名維持傳輸層的 remove 拼寫，字面用「略過」詞彙，並先講檔案的下場。
+  remove_confirm:
+    title: "要略過這個檔案嗎？"
+    body: "要略過 {basename} 嗎？檔案會保留在磁碟上 — 此操作僅會把該列從本次檢閱中移出，重新掃描之前不會再出現。"
+    this_item: "此項目"
+    cancel: "取消"
+    yes_remove: "是，略過"
+  settings:
+    title: "設定"
+    # 設定檔的原始鍵名移到滑鼠停留說明，不再出現在可見標籤上（ST1）；
+    # 自動調整那一列改用掃描對話框的同一個說法，兩處讀起來一致。
+    prune_singletons_label: "清除單一群組"
+    prune_singletons_desc: "掃描後是否清除單一群組。設定鍵：ui.prune_singletons"
+    prune_ask: "每次詢問"
+    prune_always: "永遠清除"
+    prune_never: "永不清除"
+    autotune_read_knee_label: "自動調整讀取並行度（實驗性）"
+    autotune_read_knee_desc: "在掃描開始時量測每個裝置的最佳讀取並行度，而非使用固定猜測值。預設開啟，不會影響結果。設定鍵：ui.scan_dialog.autotune_read_knee"
+    sorting_defaults_label: "排序預設值"
+    sorting_defaults_desc: "預設的排序欄位，以 JSON 陣列表示。設定鍵：sorting.defaults"
+    sorting_placeholder: "[]"
+    sorting_invalid_json: "JSON 格式無效 — 排序預設值未儲存。"
+    cancel: "取消"
+    save: "儲存"
+  fullres:
+    close: "關閉"
+    video_cannot_be_played: "影片無法播放"
+    preparing_video: "正在準備影片…"
+    too_large: "檔案過大，無法在瀏覽器中預覽原始解析度。"
+    open_in_default_app: "以預設應用程式開啟"
+    zoom_hint: "Ctrl+滾輪縮放 · 拖曳平移 · Esc 關閉"
+  overlay:
+    resize: "調整視窗大小"
+  preview:
+    # 預覽窗格自己的標題列（版面切片 PV / REPLY P2）。英文由 CSS 轉成全大寫，
+    # 中文不受影響。
+    title: "預覽 · 選取的照片"
+    # 格狀模式（選取的是群組列，窗格顯示整組縮圖）。單檔的說法在這裡指向
+    # 一個畫面上並不存在的東西。
+    title_group: "預覽 · 群組"
+    select_file: "選擇檔案以預覽"
+    video_cannot_be_played: "影片無法播放"
+    preparing_video: "正在準備影片…"
+    meta_name: "名稱"
+    meta_folder: "資料夾"
+    meta_size: "大小"
+    meta_dims: "解析度"
+    # 與 web.column.shot_date 同一個量，窗格是欄位被收起後的常駐去處（P7）。
+    meta_shot: "拍攝日期"
+    # 窗格內動作區塊的標題（#905）。三個選項的字來自 DECISION_VOCAB
+    # （web.decision.*），與列上的控制項共用同一份。
+    decision_label: "動作"
+    decision_locked: "此檔案已鎖定 — 先解鎖才能變更動作"
+    # REPLY P6 — 列上的分數，在只判斷單一檔案的窗格裡改用它真正的名字。
+    keep_worthiness: "保留價值"
+    # 釘在窗格底部的相似度圖例（audit P8，版面切片 E）。每個徽章狀態一句
+    # 說明 —— 這些意義原本只存在於欄位的 hover 提示裡。
+    legend_title: "相似度圖例"
+    legend_ref: "選定保留的檔案"
+    legend_exact: "完全相同"
+    legend_near: "外觀相近"
+    legend_indirect: "間接關聯"
+    legend_none: "影片／無影像"
+  format:
+    similarity_ref: "參考"
+    # 對應桌面版 tree.similarity_near_dup（R6）— 原本是寫死的半形「~」。
+    similarity_near_dup: "~近似"
+  # 結果樹的群組標題列（R8）— 原本整列寫死英文。
+  tree:
+    group_label: "群組 {n}"
+    # 量詞留在譯文裡（元件只負責用空白接上數字），渲染成「5 個檔案」，
+    # 與狀態列的 "{files} 個{fileWord}" 讀起來一致。
+    file_singular: "個檔案"
+    file_plural: "個檔案"
+    # 衍生的資料夾後綴（#878 slice G，open questions Q4）。只有跨資料夾時才會
+    # 出現；同一個資料夾時顯示該資料夾的葉節點名稱。{n} 恆 >= 2，沒有單數形。
+    folders_suffix: "{n} 個資料夾"
+    # 群組列自己的無障礙名稱；沒有它的話，role="button" 會把整個子樹（包含
+    # 「保留最佳 · 其餘刪除」）唸成收合切換鈕的標籤。
+    group_aria: "群組 {n}，{count} {fileWord}"
+    keep_best: "保留最佳 · 其餘刪除"
+    # 篩選啟用時按鈕與右鍵項目的提示：保留最佳是以群組為範圍的伺服器端寫入，
+    # 會動到被篩選隱藏的列，而標頭顯示的卻是篩選後的數量。選擇停用而非縮小
+    # 範圍 —— 只從看得見的子集挑「最佳」是另一個、而且會悄悄出錯的決定。
+    keep_best_filtered: "清除篩選後才能使用保留最佳"
+  delete_confirm:
+    title_groups: "整個群組將被刪除"
+    title_all: "刪除所有檔案？"
+    yes_delete_all: "是，全部刪除"
+    body_groups: "群組 {groups} 中的所有檔案都將被刪除（共 {n} 個{fileWord}將被刪除）。檔案將移至資源回收筒。要繼續嗎？"
+    body_all: "{n} 個{fileWord}將被刪除。此操作會將檔案移至資源回收筒，且不易大量復原。確定要繼續嗎？"
+    file_singular: "檔案"
+    file_plural: "檔案"
+    cancel: "取消"
+    # #917 / 設計 REPLY Q6 —— 執行確認視窗可被逐列檢查的主體。
+    # 釘住的總計與每個資料夾的小計共用同一個格式，讓兩者讀起來是同一種事實。
+    count_size: "{n} 個{fileWord} · {size}"
+    # 「不論版面怎麼變，這個視窗都必須帶著的一行，因為它就是整個安全性說明。」
+    recycle_note: "檔案將移至資源回收筒，可還原。"
+    # 每個檔案的理由行。用語與 Q6 一字不差，也與同一列在檢視表格中的相似度
+    # 標籤一致；{ref} 是該群組 Ref（保留版本）的檔名。
+    reason_exact: "與 {ref} 完全重複"
+    reason_near: "{percent}% 相似 — 同一群組"
+    reason_linked: "間接比對，{percent}%*"
+    reason_near_dup: "與 {ref} 近似重複"
+    reason_none: "無可比對影像 — 同一群組"
+    # Ref 列本身只有在整個群組都標記刪除時才會出現在這份清單裡。
+    reason_ref: "此群組的參考版本 —— 整個群組都標記為刪除"
+    # 缺少百分比或群組沒有 Ref 時的退路：指名一個我們手上沒有的檔案，
+    # 比講得模糊一點更糟。
+    reason_exact_generic: "完全重複 — 同一群組"
+    reason_near_generic: "近似 — 同一群組"
+    reason_linked_generic: "間接比對"

@@ -1,0 +1,1 @@
+Strengthen the manifest default-sort test to assert real ordering and drop a send2trash coverage-padding test (#814).

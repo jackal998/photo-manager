@@ -66,7 +66,7 @@ Use GraphQL `addPullRequestReviewThread` instead:
 mutation {
   addPullRequestReviewThread(input: {
     pullRequestReviewId: "<review node id from Phase 1>"
-    path: "app/views/dialogs/save_changes_dialog.py"
+    path: "frontend/src/components/dialogs/DeleteConfirmDialog.tsx"
     line: 142
     side: RIGHT
     body: "**suggestion (non-blocking):** ..."

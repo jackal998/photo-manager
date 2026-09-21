@@ -1,0 +1,1 @@
+Add the first 5 Playwright web-QA scenarios (scan, status bar, context menu, execute preview) plus an advisory CI batch that runs them against a live server. (#667)

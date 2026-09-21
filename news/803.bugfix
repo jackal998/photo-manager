@@ -1,0 +1,1 @@
+Run blocking web read/serve and mutating route I/O off the async event loop so a slow NAS call no longer freezes other requests or the live scan-progress stream (#803).

@@ -1,0 +1,1 @@
+Write settings.json next to photo-manager.exe instead of inside the replaceable _internal tree, through one shared resolver (#882).

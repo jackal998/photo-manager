@@ -1,0 +1,1 @@
+Run the qa-batch Qt UIA shards only on PRs touching a Qt surface — web QA is the gate (#863).

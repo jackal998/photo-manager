@@ -1,0 +1,1 @@
+Revive the shared WIC thread pool between tests so collection order no longer decides whether the suite passes (#832).

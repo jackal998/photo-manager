@@ -1,0 +1,1 @@
+Port Qt destructive guardrails to the web app: the pre-execute confirm now fires whenever ANY group would be entirely deleted, and decision writes on locked rows are gated behind the lock-confirm dialog instead of silently overwriting (#733)

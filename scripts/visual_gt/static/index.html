@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>visual ground truth</title>
+<style>
+  :root { color-scheme: dark; --bg:#14161a; --panel:#1d2026; --line:#31353d;
+          --fg:#e7e9ee; --muted:#9aa1ad; --accent:#4d9cf6; --warn:#f6a04d; --bad:#e0574a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--panel);
+           border-bottom:1px solid var(--line); padding:10px 16px; }
+  .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .grow { flex:1 1 auto; }
+  .muted { color:var(--muted); }
+  .pill { border:1px solid var(--line); border-radius:99px; padding:1px 10px; font-size:12px; }
+  main { padding:16px; }
+  #tiles { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
+  .tile { position:relative; width:280px; background:var(--panel);
+          border:2px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; }
+  .tile.ranked { border-color:var(--accent); }
+  .tile.excluded { border-color:var(--bad); opacity:.45; }
+  .tile img { display:block; width:100%; height:210px; object-fit:contain; background:#000; }
+  .tile .meta { padding:6px 8px; font-size:12px; color:var(--muted);
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .badge { position:absolute; top:6px; left:6px; background:var(--accent); color:#0b0d10;
+           font-weight:700; border-radius:6px; min-width:26px; text-align:center; padding:2px 6px; }
+  .tile .tools { position:absolute; top:6px; right:6px; display:flex; gap:4px; }
+  .tools button { background:#000a; color:var(--fg); border:1px solid var(--line);
+                  border-radius:6px; padding:2px 8px; cursor:pointer; font-size:12px; }
+  .idx { position:absolute; bottom:34px; left:6px; background:#000a; border-radius:5px;
+         padding:0 6px; font-size:11px; color:var(--muted); }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:16px 0 0; padding:10px 12px; }
+  legend { color:var(--muted); font-size:12px; padding:0 6px; }
+  .chip { border:1px solid var(--line); background:transparent; color:var(--fg);
+          border-radius:99px; padding:4px 12px; cursor:pointer; margin:0 6px 6px 0; }
+  .chip.on { background:var(--accent); color:#0b0d10; border-color:var(--accent); }
+  .chip.conf.on { background:var(--warn); border-color:var(--warn); }
+  .actions { margin-top:16px; display:flex; gap:10px; align-items:center; }
+  .actions button { font-size:15px; padding:8px 20px; border-radius:8px; cursor:pointer;
+                    border:1px solid var(--line); background:var(--panel); color:var(--fg); }
+  #submit { background:var(--accent); color:#0b0d10; border-color:var(--accent); font-weight:600; }
+  #msg { min-height:20px; margin-top:10px; color:var(--warn); }
+  #zoom { position:fixed; inset:0; background:#000e; display:none; z-index:20;
+          align-items:center; justify-content:center; }
+  #zoom.on { display:flex; }
+  #zoom img { max-width:96vw; max-height:92vh; object-fit:contain; }
+  kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px;
+        padding:0 5px; font-size:11px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <strong id="progress">loading…</strong>
+    <span class="pill" id="source">—</span>
+    <span class="pill" id="stratum">—</span>
+    <span class="grow muted" id="summary"></span>
+    <span class="muted"><kbd>1-9</kbd> rank · <kbd>x</kbd>+digit exclude ·
+      <kbd>z</kbd>+digit zoom · <kbd>Enter</kbd> submit · <kbd>s</kbd> skip ·
+      <kbd>←</kbd>/<kbd>→</kbd> move without saving</span>
+  </div>
+</header>
+
+<main>
+  <div id="tiles"></div>
+
+  <fieldset><legend>case tags (multi-select)</legend><div id="tags"></div></fieldset>
+  <fieldset><legend>confidence (required)</legend><div id="conf"></div></fieldset>
+
+  <div class="actions">
+    <button id="back">← Back</button>
+    <button id="forward">Forward →</button>
+    <button id="skip">Skip (s)</button>
+    <button id="submit">Submit (Enter)</button>
+    <span class="muted" id="hint"></span>
+  </div>
+  <div id="msg"></div>
+</main>
+
+<div id="zoom"><img alt="zoomed photo"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let state = null, group = null, index = 0;
+let ranks = new Map(), excluded = new Set(), tags = new Set(), confidence = null;
+let pending = null;   // "x" or "z" while waiting for a digit
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.status);
+  return body;
+}
+
+function resetGroupState() {
+  ranks = new Map(); excluded = new Set(); tags = new Set(); confidence = null; pending = null;
+}
+
+async function loadState() {
+  state = await api("/api/state");
+  buildChips();
+}
+
+async function loadGroup(i) {
+  if (i < 0 || i >= state.total) { $("msg").textContent = "no such group"; return; }
+  index = i; resetGroupState();
+  group = await api("/api/group/" + i);
+  render();
+}
+
+function buildChips() {
+  $("tags").innerHTML = "";
+  state.case_tags.forEach((t) => {
+    const b = document.createElement("button");
+    b.className = "chip"; b.textContent = t;
+    b.onclick = () => { tags.has(t) ? tags.delete(t) : tags.add(t); render(); };
+    b.dataset.tag = t; $("tags").appendChild(b);
+  });
+  $("conf").innerHTML = "";
+  state.confidence_choices.forEach((c) => {
+    const b = document.createElement("button");
+    b.className = "chip conf"; b.textContent = c;
+    b.onclick = () => { confidence = confidence === c ? null : c; render(); };
+    b.dataset.conf = c; $("conf").appendChild(b);
+  });
+}
+
+function compactRanks() {
+  const ordered = [...ranks.entries()].sort((a, b) => a[1] - b[1]);
+  ranks = new Map(ordered.map(([p], i) => [p, i + 1]));
+}
+
+function toggleRank(path) {
+  if (excluded.has(path)) return;
+  if (ranks.has(path)) { ranks.delete(path); compactRanks(); }
+  else ranks.set(path, ranks.size + 1);
+  render();
+}
+
+function toggleExclude(path) {
+  if (excluded.has(path)) excluded.delete(path);
+  else { excluded.add(path); ranks.delete(path); compactRanks(); }
+  render();
+}
+
+function zoom(member) {
+  const img = $("zoom").querySelector("img");
+  img.src = member.zoom; $("zoom").classList.add("on");
+}
+
+function render() {
+  $("progress").textContent =
+    `${state.labelled} / ${state.total} labelled — group #${index + 1}`;
+  $("source").textContent = group.source;
+  $("stratum").textContent = group.stratum;
+  // Must match the server: a re-post is refused with 409 unless it carries
+  // overwrite:true, which Submit only sends after an explicit confirm.
+  $("summary").textContent = group.summary +
+    (group.labelled ? "  (already labelled — Submit asks before replacing; Skip just moves on)" : "");
+
+  const box = $("tiles"); box.innerHTML = "";
+  group.members.forEach((m, j) => {
+    const tile = document.createElement("div");
+    tile.className = "tile" + (ranks.has(m.path) ? " ranked" : "") + (excluded.has(m.path) ? " excluded" : "");
+    tile.onclick = () => toggleRank(m.path);
+    tile.ondblclick = (e) => { e.stopPropagation(); zoom(m); };
+
+    const img = document.createElement("img");
+    img.src = m.thumb; img.loading = "eager"; img.alt = m.name;
+    img.onerror = () => { img.alt = "decode failed: " + m.name; };
+    tile.appendChild(img);
+
+    if (ranks.has(m.path)) {
+      const badge = document.createElement("div");
+      badge.className = "badge"; badge.textContent = ranks.get(m.path);
+      tile.appendChild(badge);
+    }
+    const idx = document.createElement("div");
+    idx.className = "idx"; idx.textContent = "key " + (j + 1);
+    tile.appendChild(idx);
+
+    const tools = document.createElement("div");
+    tools.className = "tools";
+    const zoomBtn = document.createElement("button");
+    zoomBtn.textContent = "⤢"; zoomBtn.title = "zoom (2048px)";
+    zoomBtn.onclick = (e) => { e.stopPropagation(); zoom(m); };
+    const exBtn = document.createElement("button");
+    exBtn.textContent = excluded.has(m.path) ? "included" : "exclude";
+    exBtn.title = "not the same moment";
+    exBtn.onclick = (e) => { e.stopPropagation(); toggleExclude(m.path); };
+    tools.append(zoomBtn, exBtn); tile.appendChild(tools);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const size = m.file_size_bytes ? (m.file_size_bytes / 1048576).toFixed(1) + " MB" : "?";
+    meta.textContent = `${m.name} · ${m.shot_date || "no date"} · ${size}`;
+    meta.title = m.path;
+    tile.appendChild(meta);
+    box.appendChild(tile);
+  });
+
+  document.querySelectorAll("#tags .chip").forEach((b) =>
+    b.classList.toggle("on", tags.has(b.dataset.tag)));
+  document.querySelectorAll("#conf .chip").forEach((b) =>
+    b.classList.toggle("on", confidence === b.dataset.conf));
+  $("hint").textContent = pending === "x" ? "exclude which? press a digit"
+    : pending === "z" ? "zoom which? press a digit" : "";
+}
+
+async function post(payload) {
+  $("msg").textContent = "";
+  try {
+    const res = await api("/api/label", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index, ...payload }),
+    });
+    state = res;
+    await loadGroup(Math.min(index + 1, state.total - 1));
+  } catch (err) { $("msg").textContent = String(err.message || err); }
+}
+
+function submit() {
+  // An already-labelled group needs overwrite:true or the server answers
+  // 409 — ask first, so a stray Enter cannot replace a real judgement.
+  if (group.labelled &&
+      !confirm("This group is already labelled. Replace the saved labels?")) {
+    $("msg").textContent = "kept the existing labels";
+    return;
+  }
+  return post({
+    ranks: Object.fromEntries(ranks), excluded: [...excluded],
+    case_tags: [...tags], confidence,
+    overwrite: group.labelled || undefined,
+  });
+}
+
+// Skip on an already-labelled group just moves on: posting a skipped
+// row-set there would overwrite the judgement that is already saved.
+const skip = () => group.labelled ? loadGroup(index + 1) : post({ skipped: true });
+
+$("submit").onclick = submit;
+$("skip").onclick = skip;
+$("back").onclick = () => loadGroup(index - 1);
+$("forward").onclick = () => loadGroup(index + 1);
+$("zoom").onclick = () => $("zoom").classList.remove("on");
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  if ($("zoom").classList.contains("on")) { $("zoom").classList.remove("on"); return; }
+  if (e.key === "Escape") { pending = null; render(); return; }
+  if (pending && /^[1-9]$/.test(e.key)) {
+    const m = group.members[Number(e.key) - 1];
+    if (m) { pending === "x" ? toggleExclude(m.path) : zoom(m); }
+    pending = null; render(); return;
+  }
+  if (e.key === "x" || e.key === "z") { pending = e.key; render(); return; }
+  if (/^[1-9]$/.test(e.key)) {
+    const m = group.members[Number(e.key) - 1];
+    if (m) toggleRank(m.path);
+    return;
+  }
+  if (e.key === "ArrowRight") { e.preventDefault(); loadGroup(index + 1); return; }
+  if (e.key === "ArrowLeft") { e.preventDefault(); loadGroup(index - 1); return; }
+  if (e.key === "Enter") { e.preventDefault(); submit(); return; }
+  if (e.key === "s") skip();
+});
+
+(async () => {
+  await loadState();
+  await loadGroup(state.next_index >= state.total ? state.total - 1 : state.next_index);
+})().catch((err) => { $("msg").textContent = String(err); });
+</script>
+</body>
+</html>

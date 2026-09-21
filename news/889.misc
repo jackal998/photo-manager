@@ -1,0 +1,1 @@
+Retarget the docs, qa-scenario and zombie guards at the web client — they matched only deleted paths and had gone silently inert (#646).

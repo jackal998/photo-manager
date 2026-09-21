@@ -1,0 +1,1 @@
+End the web preview-panel resize drag on an off-window release, so the layout no longer sticks to the cursor (#851).

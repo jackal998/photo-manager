@@ -1,6 +1,6 @@
 ---
 name: scanner-perf-patterns
-description: Audit photo-manager scanner and worker-thread code for known performance and threading anti-patterns. Use when /pr-review's diff touches scanner/**.py, app/views/workers/**.py, or adds a QThread / QRunnable / ThreadPoolExecutor — this skill flags per-row I/O in loops, nested O(N²) over filesystem, subprocess-in-loop without -stay_open batching, QThread.run() without progress/cancel, and missing timeouts. Composes with global photo-scanner-patterns for the domain boundary catalogue.
+description: Audit photo-manager scanner and worker-thread code for known performance and threading anti-patterns. Use when /pr-review's diff touches scanner/**.py, core/app_service/scan_runner.py, or adds a threading.Thread / ThreadPoolExecutor / run_in_executor call — this skill flags per-row I/O in loops, nested O(N²) over filesystem, subprocess-in-loop without -stay_open batching, background work without progress/cancel, and missing timeouts. Composes with global photo-scanner-patterns for the domain boundary catalogue.
 origin: local
 ---
 
@@ -30,8 +30,9 @@ re-deriving the patterns.
 `/pr-review` invokes this skill when the diff touches:
 
 - `scanner/**.py`
-- `app/views/workers/**.py`
-- Any new `QThread`, `QRunnable`, or `ThreadPoolExecutor`
+- `core/app_service/scan_runner.py`
+- Any new `threading.Thread`, `ThreadPoolExecutor`,
+  `ProcessPoolExecutor`, or `loop.run_in_executor` call
 
 Skip otherwise.
 
@@ -61,11 +62,13 @@ Skip otherwise.
   flag. The project batches via `-stay_open` for thousands of
   files; per-file spawn is the documented 10–100× slowdown.
 
-### Blocking call inside a `QThread.run()` without progress / cancel
+### Blocking work on a background thread without progress / cancel
 
-- New `class FooWorker(QThread)` whose `run()` has no `emit()`
-  progress and no `if self._cancel: return` check → ⚠ for
-  "user can't tell what's happening / can't abort".
+- A new `threading.Thread` target that runs a long pipeline but
+  publishes nothing to the SSE bus and never checks its
+  `CancelToken` → ⚠ for "user can't tell what's happening / can't
+  abort". `app/web/routes/scan.py` is the reference shape: a bus
+  event per stage, a token checked between them.
 - The pattern documented in the global `photo-scanner-patterns`
   skill — match it.
 
@@ -82,7 +85,7 @@ Skip otherwise.
   the documented design.
 - O(N²) over tiny lists (group decisions in a single dedup group,
   typically <100 elements) — that's bounded; don't be pedantic.
-- A QThread without progress when the workload is sub-second
+- A background thread without progress when the workload is sub-second
   (e.g., loading a small config file).
 - `subprocess.run` of internal scripts the project itself ships
   with a known runtime.

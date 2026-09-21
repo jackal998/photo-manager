@@ -1,0 +1,1 @@
+Add web qa scenario s61 variant `lock_apply_remove`, driving Remove after Unlock & Apply on the singleton-prune lock gate (#713).

@@ -1,0 +1,1 @@
+Pin the #811 scanner-robustness fixes with the acceptance tests #793 asks for: a real malformed-EXIF JPEG that must still be hashed into the manifest, and an exiftool-missing run where a JPEG dated only in XMP keeps its shot_date instead of being filed as UNDATED (#835)

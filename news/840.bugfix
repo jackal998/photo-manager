@@ -1,0 +1,1 @@
+End a result-tree column-resize drag when the mouse is released outside the window, instead of leaving the column resizing on every later mouse move (#796)

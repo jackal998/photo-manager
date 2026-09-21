@@ -1,0 +1,1 @@
+Remux videos whose first audio track is copyable even when a later track is not, and cap concurrent ffprobe with the same 2-process semaphore as ffmpeg (#862).

@@ -1,0 +1,1 @@
+Honour `thumbnail_disk_cache_dir` and `video_transcode_cache_dir` in the web client — its lifespan built both media services without settings, so every cache landed in `%LOCALAPPDATA%` regardless of configuration (#874).

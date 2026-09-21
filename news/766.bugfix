@@ -1,0 +1,1 @@
+Cancelling the lock-confirm prompt in the "Set Action by Field" dialog now keeps that dialog open (matching the desktop app) so your field/pattern selection is preserved and you can adjust and retry, instead of closing it. (#764)

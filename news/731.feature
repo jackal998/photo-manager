@@ -1,0 +1,1 @@
+Add a web group-grid multi-tile video view with a coordinated playback controller (broadcast play/pause, master scrub, shared volume/mute) so a duplicate group's videos can be reviewed side-by-side — completing web video parity with the Qt grid. (#731)

@@ -2,11 +2,15 @@
 before a QA-related commit.
 
 When ``git commit`` is about to run and the staged diff touches files
-that commonly spawn Photo Manager subprocesses (``qa/scenarios/*.py``,
+that commonly spawn Photo Manager subprocesses (``qa/web/*.py``,
 ``tests/test_*dialog*.py``, ``tests/test_*scenario*.py``), scan for
-python processes still running this repo's ``main.py`` or
-``qa.scenarios.*`` modules. Print PIDs + a one-line cleanup command
+python processes still running this repo's ``launcher.py`` or
+``qa.web.*`` modules. Print PIDs + a one-line cleanup command
 to stderr so the developer notices before the commit lands.
+
+Retargeted by #646 (Phase-4 cutover): the staged-file patterns and the
+process match named ``qa/scenarios/`` and ``main.py``, both deleted with
+the Qt client, so the hook would have gone silent.
 
 Rationale: this session's run of #182 produced 15 zombie pytest
 processes from auto-backgrounded commands whose stdout/stderr never
@@ -36,13 +40,30 @@ import sys
 # Pattern for files whose changes suggest the developer was running
 # Photo Manager subprocesses recently (and may have left zombies).
 _QA_RELEVANT_PATTERNS = (
-    re.compile(r"^qa/scenarios/.*\.py$"),
+    re.compile(r"^qa/web/.*\.py$"),
     re.compile(r"^tests/test_.*dialog.*\.py$"),
     re.compile(r"^tests/test_qa_.*\.py$"),
-    # The main GUI entry point. Touching it suggests local GUI
-    # smoke-testing during development.
-    re.compile(r"^main\.py$"),
+    # The app entry point. Touching it suggests local smoke-testing
+    # (it boots uvicorn + the pywebview shell) during development.
+    re.compile(r"^launcher\.py$"),
 )
+
+# A python command line that belongs to this repo's app or web QA batch.
+# Both halves must hold: the repo name AND one of the two entry points,
+# so an unrelated python process in another checkout is not reported.
+_PHOTO_MANAGER_ENTRY_POINTS = ("launcher.py", "qa.web")
+
+
+def _is_photo_manager_cmdline(cmd: str) -> bool:
+    """Return True when ``cmd`` looks like this repo's app / QA process.
+
+    Split out of :func:`_list_photo_manager_processes` so the match rule
+    is testable without shelling out to ``wmic`` (the retarget in #646
+    changed exactly this rule and nothing covered it).
+    """
+    return "photo-manager" in cmd and any(
+        token in cmd for token in _PHOTO_MANAGER_ENTRY_POINTS
+    )
 
 
 def _staged_files() -> list[str]:
@@ -63,7 +84,7 @@ def _qa_relevant(files: list[str]) -> list[str]:
 
 def _list_photo_manager_processes() -> list[tuple[int, str]]:
     """Return ``[(pid, command_snippet), …]`` for python.exe processes
-    running this repo's main.py or any ``qa.scenarios`` module.
+    running this repo's launcher.py or any ``qa.web`` module.
 
     Implementation: ``wmic process where Name='python.exe' get …``
     returns CSV. wmic is deprecated on Windows 11 but the older API
@@ -108,10 +129,7 @@ def _list_photo_manager_processes() -> list[tuple[int, str]]:
         cmd = cmd.strip()
         if not cmd:
             continue
-        # Match either main.py from this repo or any qa.scenarios import.
-        if (
-            "photo-manager" in cmd and ("main.py" in cmd or "qa.scenarios" in cmd)
-        ):
+        if _is_photo_manager_cmdline(cmd):
             results.append((pid, cmd))
     return results
 

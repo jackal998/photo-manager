@@ -1,0 +1,1 @@
+Web grid video tiles now show a real decoded poster frame behind the play glyph (Shell/WIC rescue attempt, shared with Qt) instead of a static dark placeholder, with dark fallback if the poster fails to load (#734)

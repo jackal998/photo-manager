@@ -1,0 +1,1 @@
+The web scan dialog now resets its state once a scan finishes or is cancelled, so reopening it shows your current scan sources instead of the previous run's stale ones. (#761)

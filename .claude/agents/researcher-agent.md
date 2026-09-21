@@ -2,7 +2,7 @@
 name: researcher-agent
 description: Multi-angle read-only investigator. Spawned by /work (or manually) before any development begins. Probes the codebase, issue history, test coverage, and call graph from three independent angles simultaneously, then synthesises a structured research brief LEAD uses to decide the development workflow.
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 ---
 
 # researcher-agent — pre-development investigator

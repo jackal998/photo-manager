@@ -1,0 +1,1 @@
+Add the #622 Phase 3 preview probe and its owner runbook — a headless Qt harness that records per-click time-to-first-paint, the decode route actually taken, RSS and LRU occupancy, and the full-res viewer's open/close lifecycle into one citable JSON (#622).

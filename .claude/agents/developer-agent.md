@@ -2,7 +2,7 @@
 name: developer-agent
 description: Implementation agent spawned by /work with worktree isolation (isolation="worktree"). Receives a research brief and implements the fix or feature, runs tests, self-corrects up to 2 times on failures, then returns a structured completion report. Never commits, pushes, or opens PRs — LEAD owns the git workflow.
 tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write"]
-model: sonnet
+model: opus
 ---
 
 # developer-agent — worktree-isolated implementation

@@ -1,0 +1,1 @@
+Make web dialogs actually animate open and closed — the `animate-in` / `zoom-in-95` classes emitted no CSS until `tw-animate-css` was installed (#852).

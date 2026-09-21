@@ -1,0 +1,1 @@
+Port the scan close-guard to the web app — a `beforeunload` handler warns before the tab unloads while a scan is running (the web analog of the desktop "Scan in progress" close prompt), and the s63 late-cancel + close-guard scenario is now covered in the web QA batch (#704)

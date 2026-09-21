@@ -1,0 +1,1 @@
+Dismiss recycle-bin and system-folder rows left in the manifest by a pre-#482 scan when it is opened, and skip Synology's `#recycle` share folder during a walk (#821)

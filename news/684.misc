@@ -1,0 +1,1 @@
+Add web qa coverage for the result-tree context menu (Open folder reveal, lock/unlock), the empty-area no-menu guard, and the group-header expand/collapse toggle (s19/s25/s35/s40). (#684)

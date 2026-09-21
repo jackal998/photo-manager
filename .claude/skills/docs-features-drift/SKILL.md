@@ -21,12 +21,12 @@ was touched but with stale or incomplete wording.
 `/pr-review` invokes this skill via the Skill tool when Gate 1
 classifies any of the following in the diff:
 
-- `app/views/dialogs/**.py`, `app/views/handlers/**.py`,
-  `app/views/workers/**.py`, `app/views/main_window.py`,
-  `app/views/window_state.py` (non-trivial diff)
+- `app/web/routes/**.py`, `frontend/src/components/**.tsx`,
+  `frontend/src/App.tsx`,
+  `frontend/src/lib/overlayGeometry.ts` (non-trivial diff)
 - `core/services/**.py` or `core/models.py` with return/signature
   changes that flow to UI
-- `qa/scenarios/sNN_*.py` add/rename (signals a new flow)
+- `qa/web/scenarios/sNN_*.py` add/rename (signals a new flow)
 - `settings.json` user-visible key add/remove
 - `translations/*.yml` keys also touched in Python
 

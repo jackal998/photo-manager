@@ -1,0 +1,1 @@
+Result-tree Action column now shows the decision instead of the scanner's classification (which moves to the similarity badge's tooltip), the column header reads as chrome with sort and resize affordances, numeric cells go mono and right-aligned, and the table sheds Resolution then Shot Date as it narrows (#912)

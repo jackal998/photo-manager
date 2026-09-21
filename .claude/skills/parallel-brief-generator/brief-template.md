@@ -34,7 +34,7 @@ they have none into you.
   - [ ] `test -f .claude/settings.json` — must exist. If missing,
         `.worktreeinclude` isn't carrying it; STOP and tell user
         before doing anything else (hooks won't fire).
-  - [ ] `ls qa/scenarios/<your-pre-assigned-slot>_*.py` — should be
+  - [ ] `ls qa/web/scenarios/<your-pre-assigned-slot>_*.py` — should be
         empty (slot is yours). If a file already exists there, slot
         was contested; ask user how to renumber.
 
@@ -67,7 +67,7 @@ Acceptance:
     `.../<repo>/.claude/worktrees/<name>/`) the correct path is
     `../../../.venv/Scripts/python.exe`. From a normal checkout it's
     `.venv/Scripts/python.exe`. Don't burn turns trying both — pick
-    based on `pwd`. (System Python lacks PySide6.)
+    based on `pwd`. (System Python lacks the frontend build.)
   - Branch off `<base-ref>` at SHA `<base-sha>`.
   - No `--no-verify` under any circumstances.
   - No mock-driven test padding — every assertion must catch a real
@@ -90,7 +90,7 @@ session, then reuse.
   4. `PY scripts/check_coverage_per_file.py` — 70% per-file floor on
      every file touched.
   5. If you added a new layer-3 scenario, run it:
-     `PY -m qa.scenarios._batch <sNN>_<name>`
+     `PY -m qa.web._batch <sNN>_<name>`
   6. Commit with conventional-commit message + `Closes #<N>` trailer
      + `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
   7. **Gated:** surface push intent to user, on approval
@@ -99,16 +99,16 @@ session, then reuse.
      `gh pr create --title "<title>" --body "<body>"`. Three gates
      can fail this PR — know which one your scope tripwires:
        * `qa_scenario_guard` (PreToolUse hook) — fires on diffs
-         touching `app/views/{handlers,dialogs,components,workers}/`
-         without a `qa/scenarios/sNN_*.py` change.
+         touching `frontend/src/` and `app/web/`
+         without a `qa/web/scenarios/sNN_*.py` change.
          Bypass: `[qa-not-needed: <reason>]` in title or body.
        * `docs_guard` (PreToolUse hook) — **two triggers**:
-         - **New files** under `app/views/{dialogs,handlers,workers,components,widgets,layout,viewmodels}/`,
+         - **New files** under `app/web/`, `frontend/src/`,
            `infrastructure/`, `scanner/`, `core/{models,services/}`,
-           `tests/test_*.py`, or `qa/scenarios/s*.py` → satisfied
+           `tests/test_*.py`, or `qa/web/scenarios/s*.py` → satisfied
            by ANY edit to `README.md` / `docs/*.md` / `CLAUDE.md`
            / `pyproject.toml`.
-         - **Modified files** under `app/views/{dialogs,handlers}/`
+         - **Modified files** under `app/web/routes/` and `frontend/src/components/`
            crossing the behavioural threshold (≥10 added+deleted
            lines OR any `def` signature change) → **specifically
            require `docs/features.md`**. Other doc touches do NOT

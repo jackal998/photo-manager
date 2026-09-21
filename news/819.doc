@@ -1,0 +1,1 @@
+Add the visual auto-select feasibility study (moment_id / visual_score census, measured costs, proxy-label and human validation, per-capability verdicts) plus the local ground-truth labelling harness under scripts/visual_gt (#819).

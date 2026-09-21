@@ -73,7 +73,7 @@ goes through that rewrite.
 **suggestion (non-blocking):** Move the conditional dialog trigger
 into a named helper.
 
-The branch in `app/views/dialogs/save_changes_dialog.py:142` is the
+The branch in `frontend/src/components/dialogs/DeleteConfirmDialog.tsx:142` is the
 third place this exact "files changed but none in-scope" check
 appears. A `_should_show_save_dialog(...)` helper keeps the rules
 in one spot and lets `docs/features.md` describe the trigger in

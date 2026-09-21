@@ -1,0 +1,1 @@
+Mutating web routes are now CSRF-hardened (#662): requests from foreign origins or DNS-rebound hostnames get 403, closing the browser-borne attack surface on the loopback server; normal app flows and non-browser clients are unaffected.

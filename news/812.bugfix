@@ -1,0 +1,1 @@
+Show the human-readable message from object-shaped API errors instead of a raw JSON blob (#812).

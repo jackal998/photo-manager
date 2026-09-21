@@ -7,7 +7,7 @@ description: Single source of truth for opening a GitHub PR that goes green — 
 
 Opening a PR in this repo has more moving parts than `gh pr create`
 suggests: three independent CI gates (`pr-gates`, `news-gate`, plus
-`tests` / `qa-batch`), two of which need an **input the human/agent
+`tests` / `web-scenario-batch`), two of which need an **input the human/agent
 must supply at create time** (a bypass token in the body, a
 `news/<PR>.<type>` file keyed by the not-yet-existing PR number). That
 responsibility used to live scattered across `/work` Phase 5, the
@@ -29,10 +29,10 @@ source of truth for *doing the steps that make them pass*.
 |---|---|---|
 | On a feature branch, not `master` | `branch-guard` hook (commit-time) | Pre-flight check before any commit/create |
 | `docs/features.md` updated when user-visible behaviour changed | `docs_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: update features.md (via `/update-docs`) **or** put `[docs-not-needed: <reason>]` in the PR body |
-| `qa/scenarios/sNN_*.py` added/extended for user-facing flows | `qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: add a driver **or** put `[qa-not-needed: <reason>]` in the PR body |
-| `news/<PR>.<type>` changelog fragment | `news-gate.yml` `require-news-fragment` (server-only — no client hook, because the filename needs the PR number) | Write it **after** create, or put `[skip-news: <reason>]` in the body |
+| `qa/web/scenarios/sNN_*.py` added/extended for user-facing flows | `qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: add a driver **or** put `[qa-not-needed: <reason>]` in the PR body |
+| `news/<PR>.<type>` changelog fragment | `news-gate.yml` `require-news-fragment` → `scripts/hooks/news_guard.py --ci` (server-only — no client hook, because the filename needs the PR number) | Write it **after** create, or put `[skip-news: <reason>]` in the body |
 | Unit + coverage (70% file / 80% global) | `tests.yml` `pytest` | Run locally before push (`/work` Phase 4 already does) |
-| qa scenario batch | `qa-batch.yml` `qa (1..5)` | Server-side; watch in the tail |
+| qa scenario batch | `web-eval-gates.yml` `web-scenario-batch` | Server-side; watch in the tail |
 | Semantic drift (code ↔ features.md ↔ qa) | `/pr-review` (advisory, in-session) | Run before create when the diff qualifies |
 
 The asymmetry that bites: `docs_guard` / `qa_scenario_guard` run **both**
@@ -70,9 +70,17 @@ record the answer — these become inputs to Steps 2 and 4:
 
 Tokens must be **honest** — they're visible in review and in CI logs.
 Use `[qa-not-needed]` when a layer-3 driver would be padding (e.g.
-asserting a value only a flaky UIA read can observe), not to dodge real
+asserting a value only a flaky DOM read can observe), not to dodge real
 coverage — the project's no-test-padding rule (CLAUDE.md "Testing
 ground rules") applies to the token decision too.
+
+All three tokens share one enforced rule — **write a real reason**: a
+blank one, the literal `<reason>` placeholder pasted from this page,
+and (for `skip-news`) a token whose `]` never arrives are all rejected,
+each with a message naming the problem. The canonical statement of the
+three shapes and that rule lives in
+[`news/README.md`](../../../news/README.md) § Bypass — read it there
+rather than restating it anywhere else.
 
 **Also decide the issue link.** Which issue(s) does this PR *fully
 resolve*? Each one needs a `Closes #N` (or `Fixes #N` / `Resolves #N`)
@@ -129,10 +137,23 @@ EOF
 > `--base <that-branch>`. `pr-gates` diffs against the PR's actual base,
 > so don't leave `--base master` on a stacked PR or earlier-stage files
 > surface as "changed".
+>
+> **Strongly coupled PRs ALWAYS use `gh stack` (owner rule, 2026-09-13).**
+> The moment the upper PR opens, link the chain bottom → top:
+> `gh stack link --base <integration-branch> <bottom-PR> … <top-PR>`
+> (PR numbers, branch names or URLs; a stack number as the first argument
+> grows an existing stack). Unlinked, the upper PR still carries the lower
+> PR's commits, and the squash merge underneath it turns every line both
+> PRs touched into a same-line conflict (PR #900 the moment #895 merged).
+> After each merge in the stack, re-check `gh pr view <next> --json
+> mergeable` before handing the next PR over; if it says CONFLICTING,
+> cascade with `git merge origin/<integration-branch>` and a plain push
+> — never rebase, never force-push.
 
 ### Step 4 — News fragment (the easy-to-forget step)
 
-If Step 1 chose `[skip-news:]`, this step is a no-op — skip to Step 5.
+If Step 1 chose the `skip-news` token, this step is a no-op — skip to
+Step 5.
 
 Otherwise write `news/<PR>.<type>`, one line, present-tense imperative,
 ending `(#<PR-or-issue>)`. Map the head commit's Conventional-Commits
@@ -204,7 +225,7 @@ most one long wakeup if a follow-up depends on the merge.
 - **`github-issue-create`** — when a drive-by finding surfaces while
   opening the PR, file it through that skill rather than bloating this
   PR — deferred work always gets filed, never silently dropped.
-- **CI workflows** (`pr-gates`, `news-gate`, `tests`, `qa-batch`) and
+- **CI workflows** (`pr-gates`, `news-gate`, `tests`, `web-scenario-batch`) and
   **PreToolUse hooks** (`docs_guard`, `qa_scenario_guard`) are the
   enforcers; this skill supplies their inputs and watches their result.
   Do not re-implement their checks here.

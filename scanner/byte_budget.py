@@ -1,7 +1,7 @@
 """Byte-budget semaphore for the HASH-stage compute dispatch (#587 OOM fix).
 
-Pure logic — no Qt, no I/O. The pipeline wiring lives in
-``app/views/workers/scan_worker.py``; this module only holds the byte-budget
+Pure logic — no I/O. The pipeline wiring lives in
+``core/app_service/scan_runner.py``; this module only holds the byte-budget
 math so it is fully unit-testable at layer 1.
 
 The problem it solves (#587):
@@ -57,8 +57,8 @@ class ByteBudget:
                           admitted (without deadlocking) as long as nothing
                           else is in flight.
             cancel_check: Zero-argument callable returning True when the scan
-                          is cancelling.  Passed as ``cancel_flag.is_set`` by
-                          the wiring in scan_worker.py.  Called on each
+                          is cancelling.  Passed as ``self._cancel_token.is_set``
+                          by the wiring in scan_worker.py.  Called on each
                           wake-cycle inside ``acquire`` so the dispatch thread
                           can exit promptly without a long timeout sleep.
         """
@@ -185,7 +185,8 @@ def per_device_budgets(
     Args:
         total_bytes: the global ceiling (e.g. from ``default_budget_bytes``).
         device_keys: the active HASH-stage per-device bucket keys.
-        cancel_check: forwarded to each ByteBudget (``cancel_flag.is_set``).
+        cancel_check: forwarded to each ByteBudget (``self._cancel_token.is_set``,
+                      a zero-arg callable returning bool).
 
     Returns:
         ``{device_key: ByteBudget}`` — one bounded budget per device.

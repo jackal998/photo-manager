@@ -1,0 +1,372 @@
+@import "tailwindcss";
+/* Emits the enter/exit utilities the dialog surfaces already ask for —
+   `animate-in` / `animate-out`, `fade-in-0` / `fade-out-0`,
+   `zoom-in-95` / `zoom-out-95` — in ui/dialog.tsx and FullResViewer.tsx.
+   Without it those class names compile to nothing and every dialog opens
+   and closes with no transition (#852). Tailwind v4 successor of the
+   `tailwindcss-animate` plugin; pure CSS, no plugin system. */
+@import "tw-animate-css";
+
+/* ---------------------------------------------------------------------------
+   Daylight · light — the single definition point for the theme (#878).
+
+   Sources, in the precedence the issue sets: `docs/audits/
+   web-port-feasibility-2026-06-19.md` §9.3 (the prototype's verbatim badge /
+   decision / row colours) wins for badges, decisions and row surfaces; the
+   DAYLIGHT dict in issue #878 wins for app surfaces, borders and text.
+
+   Declared as Tailwind v4 `@theme` colour tokens rather than `var(--…)`
+   arbitrary values, because that is what this project's Tailwind setup
+   already is (`@import "tailwindcss"` + `@tailwindcss/vite`, no config file)
+   and it yields first-class utilities — `bg-app`, `border-hairline`,
+   `text-ink` — that compose with `hover:` and tailwind-merge exactly like the
+   `bg-neutral-*` classes they replace. NO component carries a hex literal.
+   --------------------------------------------------------------------------- */
+@theme {
+  /* Type (layout REPLY 2026-09-18 L3 "Root", T1). Nothing declared a family
+     before this, so every surface rendered in the browser's default UI face —
+     and a zh-TW label fell back per glyph, which is why `Noto Sans TC` sits
+     ahead of the generic rather than after it. Declared here so the `font-sans`
+     / `font-mono` utilities exist (slice C's mono cells consume `font-mono`);
+     applied to `body` in the @layer base block below, because @theme alone
+     never sets a family on anything. */
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Noto Sans TC", sans-serif;
+  --font-mono: "Cascadia Code", ui-monospace, Menlo, monospace;
+
+  /* Surfaces (#878 dict) */
+  --color-app: #f5efe6;
+  --color-panel: #fffdf9;
+  /* Hover fill for a SECONDARY button — anything sitting on `panel` with a
+     `hairline-input` border. The layout REPLY specs the same pair twice, for
+     two different buttons: §"Group header" «hover background #f7f1e7, border
+     #a89f8f» for the Q5 keep-best button, and §"Toolbar" «Everything else
+     secondary … hover bg #f7f1e7 border #a89f8f». One role, so one token —
+     the alternative is the same hex written at each call site, which is how
+     two buttons that are supposed to be the same control end up a shade
+     apart. Introduced by layout slice G, consumed by TB. */
+  --color-panel-hover: #f7f1e7;
+  --color-toolbar: #faf6ee;
+  --color-titlebar: #f3ede3;
+  --color-subtle: #f7ebda;
+
+  /* Hairline borders, warm gray (#878 dict) */
+  --color-hairline: #e7ddcd;
+  --color-hairline-soft: #efe7d8;
+  --color-hairline-input: #ddd2bf;
+
+  /* Text — a 3-tier ink ramp, re-tuned by the design's palette reply (open
+     questions Q8, 2026-09-18) after the #878 values were measured on warm
+     paper: `dim` failed AA at 12px (3.99:1) and `dim2` failed badly (2.58:1).
+       ink         #2c2823
+       ink-muted   #6b6358  5.82:1 on panel, 5.03:1 on subtle  (was 3.99:1)
+       ink-faint   #a89f8f  NON-TEXT only — see below           (value kept) */
+  --color-ink: #2c2823;
+  --color-ink-muted: #6b6358;
+  /* Q8 retired #a89f8f as a TEXT colour and renamed the ROLE to `hairline`:
+     rules, dividers, disabled glyph strokes, placeholder text — UI components
+     at the 3:1 floor, which it clears. The VALUE is unchanged; only the role
+     narrowed. The token keeps its old name because `--color-hairline` is
+     already the #e7ddcd border and a rename would churn every remaining call
+     site plus LockToggle.test.tsx; `--color-ink-hairline` is published beside
+     it as an alias so slices R/PV can move their call sites onto the role name
+     without a second value change. Both names, one value, until then. */
+  --color-ink-faint: #a89f8f;
+  --color-ink-hairline: #a89f8f;
+
+  /* Brand / state accents (#878 dict; the warm accent re-tuned by Q8). One
+     accent doing four jobs (L3): the group left strip, the Q7 focus ring, the
+     ★ Ref badge border and the primary button. Hover and active go DARKER —
+     the old hover was lighter, which is why it measured worse than rest
+     (3.12:1) instead of better. */
+  --color-warm: #a85a2c;
+  --color-warm-hover: #8f4b23;
+  --color-warm-active: #7a3f1d;
+  --color-danger-warm: #c4503f;
+  --color-positive-warm: #2f8a5a;
+
+  /* Keyboard-cursor focus ring (open questions Q7). An alias of the accent
+     rather than a fifth hex, so the ring can never drift from the button it
+     has to match; naming the ROLE is what lets later slices reference "the
+     ring" instead of "the accent, used as a ring". */
+  --color-focus-ring: var(--color-warm);
+
+  /* Caution role (open questions Q9). Pulled toward yellow-olive and away from
+     terracotta so it cannot be misread as a primary action, with ▲ as the
+     glyph that carries it in grayscale (danger ⊗ dark fill / light label,
+     caution ▲ pale fill / dark label, positive ✓ pale fill / dark label).
+     TOKENS ONLY in this slice — the banner and chip that consume them are
+     slice E; nothing in the tree references these yet. */
+  --color-caution-ink: #6b4e12;
+  --color-caution-bg: #fdf3d9;
+  --color-caution-line: #e3c264;
+
+  /* Selection — warm accent tint, not the default blue (#878 dict) */
+  --color-select: #f1e3d0;
+  --color-select-ink: #2c2823;
+
+  /* Group framing + delete rows (#878 dict; delete wash from §9.3 delRow) */
+  --color-group-band: #f3e9d8;
+  --color-group-line: #e4d6bd;
+  --color-delete-row: #fdf3f0;
+  /* Row separator INSIDE a group (layout REPLY L1, "Daylight spec for a flat
+     headed table": «**Row separator:** `1px solid #f4eee3` between rows *inside*
+     a group. This is deliberately lighter than the group rule — inside a group
+     the rows are alternatives to each other and want to read as one block; the
+     group boundary is the structural line.»  The only new hex slice C adds:
+     `hairline-soft` (#efe7d8), which the rows wore before, is a full step
+     darker and made every row read as its own structural boundary. The group's
+     CLOSING rule stays `group-line`. */
+  --color-row-line: #f4eee3;
+
+  /* Score mini-bar (§9.3 track / scoreFill). §9.3 wrote `scoreFill` as the
+     gradient `#cdab86 → #b8946a`, which needed two tokens. Layout slice R
+     retires the gradient — REPLY §"Score bar (R15)": «fill solid #b8946a (not
+     a gradient)», because «at 96px a two-stop gradient is three or four
+     distinguishable pixels of variation, which is invisible at best and a
+     banding artefact at worst». So `--color-score-fill-end` is GONE and
+     `-fill` now carries the end value: one role, one token, one hex — and no
+     new hex enters the theme (#b8946a was already here). */
+  --color-score-track: #ece4d6;
+  --color-score-fill: #b8946a;
+
+  /* Similarity badges (§9.3 sim.*) */
+  --color-sim-ref-ink: #a85f2e;
+  --color-sim-ref-bg: #f7ebda;
+  --color-sim-ref-line: #e0bd92;
+  --color-sim-exact-ink: #6a4fb0;
+  --color-sim-exact-bg: #eee8fa;
+  --color-sim-exact-line: #cdbef0;
+  --color-sim-near-ink: #3f6fa8;
+  --color-sim-near-bg: #eef4fb;
+  --color-sim-near-line: #b9d0ea;
+  --color-sim-indirect-ink: #7a756b;
+  --color-sim-indirect-bg: #ffffff;
+  --color-sim-indirect-line: #cfc8bb;
+  --color-sim-none-ink: #8a8278;
+  --color-sim-none-bg: #f1ece2;
+  --color-sim-none-line: #ddd5c8;
+
+  /* Decision control (§9.3 dec.*) — consumed by slice (b) */
+  --color-dec-keep-ink: #2f8a5a;
+  --color-dec-keep-bg: #e7f3ec;
+  --color-dec-keep-line: #bcdcc7;
+  --color-dec-delete-ink: #ffffff;
+  --color-dec-delete-bg: #c4503f;
+  --color-dec-delete-line: #c4503f;
+  --color-dec-remove-ink: #6f6a60;
+  --color-dec-remove-bg: #f1ece2;
+  --color-dec-remove-line: #ddd5c8;
+  /* `--color-dec-undecided-ink` (#9a9388) and `--color-dec-undecided-line`
+     (#d8cfc0) were declared here by #903 and never referenced by anything:
+     an inactive segment inherits the row's ink and draws no border, so the
+     "complete fg/bg/bd triple" the comment below describes is a triple of
+     two. Deleted by layout slice G — a token nothing reads is a value the
+     next slice will "reuse" believing it was measured against something. */
+  /* §9.3 spells dec.undecided's fill as `transparent` — an inactive segment
+     shows whatever the row underneath it is (panel, keeper tint, delete wash),
+     which is what makes the ACTIVE segment the only filled thing in the cell.
+     Declared as a token rather than "just omit the class" so the chip map in
+     DecisionControl.tsx stays a complete fg/bg/bd triple per state. */
+  --color-dec-undecided-bg: transparent;
+  /* Layout slice R gives the three segments an INSET TRACK to sit on — REPLY
+     §"Decision control (R16)": «track background #f3ede3, border 1px solid
+     #e7ddcd, radius 9px, padding 3px». Both values already exist (`titlebar`
+     and `hairline`), so this is an ALIAS naming the ROLE, not a new hex — the
+     same move `--color-focus-ring` makes for the accent. The track is what
+     makes three mutually exclusive options read as one control with a current
+     value rather than as three adjacent buttons. */
+  --color-dec-track: var(--color-titlebar);
+
+  /* Thumbnail placeholder hatch — REPLY §"Thumbnail (R6)": «background
+     repeating-linear-gradient(135deg, #efe7d9 0 7px, #f6f0e6 7px 14px)» …
+     «The warm diagonal hatch, not a flat grey — it reads as "frame awaiting an
+     image" rather than "broken"». One ROLE (the hatch) but a gradient needs
+     two stops, so two tokens; neither value exists elsewhere in the theme
+     (`hairline-soft` is #efe7d8, one step off, and is a BORDER role). Consumed
+     by the `.thumb-hatch` component class below. */
+  --color-thumb-hatch: #efe7d9;
+  --color-thumb-hatch-alt: #f6f0e6;
+
+  /* Preview image surround (layout slice PV, REPLY §"Image frame (P3)") — the
+     ONE place a cold neutral would be wrong and the one place a dark field is
+     right: «letterboxing a portrait shot against warm paper tints the viewer's
+     perception of the image's own colour — a warm surround makes a neutral
+     photo look cool, which is exactly wrong in a tool whose job is judging
+     which copy looks better». `#24211e` rather than a pure neutral because it
+     «is dark enough to be perceptually neutral against the photo (the eye
+     adapts to the darkest field) while sharing the palette's warm hue, so the
+     frame does not look like a hole cut in the app». Replaces the shipped
+     `bg-neutral-900` (#171717), which had the right instinct and the wrong
+     execution. Deliberately NOT remapped in `.dark` below, for the same reason
+     the two hatch stops are not: it is a fill sitting BEHIND an image, not a
+     surface of the app, and the image is an image on either theme. */
+  --color-image-surround: #24211e;
+
+  /* Scrollbar thumb (#878 dict) */
+  --color-scroll-thumb: #ddd2bf;
+  --color-scroll-thumb-hover: #cdbfa6;
+
+  /* Modal scrim — the ONE role slice (e) found with no token. No new hex: the
+     dict's `text` ink doubles as the overlay base, so a dialog dims the warm
+     canvas warmly instead of with a cold pure black. Opacity stays at the call
+     site (`bg-scrim/50`, `/80`) exactly as in the `bg-black/NN` it replaces.
+     Deliberately NOT remapped in `.dark` below — a near-black scrim is correct
+     on either theme, and pointing it at `--foreground` would invert it. */
+  --color-scrim: #2c2823;
+}
+
+@layer base {
+  /* The shadcn token block, remapped from the stock neutral palette onto
+     Daylight (#878) so every `ui/*` primitive — dialog, checkbox, select —
+     inherits the warm surface without a per-component change. HSL triplets
+     keep shadcn's `hsl(var(--x) / <alpha>)` call sites working. */
+  :root {
+    --background: 36 43% 93%; /* bg_app   #f5efe6 */
+    --foreground: 33 11% 15%; /* text     #2c2823 */
+    --card: 40 100% 99%; /* bg_panel #fffdf9 */
+    --card-foreground: 33 11% 15%;
+    --popover: 40 100% 99%;
+    --popover-foreground: 33 11% 15%;
+    /* The Radix/shadcn mirror of --color-warm. Carried to ONE decimal place
+       because the integer triplet for #a85a2c round-trips to rgb(169, 91, 45)
+       — a shade off on every primitive's ring with nothing going red. This
+       triplet is verified to round-trip to exactly rgb(168, 90, 44). */
+    --primary: 22.3 58.5% 41.6%; /* accent   #a85a2c */
+    --primary-foreground: 40 100% 99%;
+    --secondary: 40 55% 96%; /* bg_toolbar #faf6ee */
+    --secondary-foreground: 33 11% 15%;
+    --muted: 35 64% 91%; /* bg_subtle  #f7ebda */
+    --muted-foreground: 34.7 9.7% 38.2%; /* text_muted #6b6358 */
+    --accent: 35 64% 91%;
+    --accent-foreground: 33 11% 15%;
+    --destructive: 8 53% 51%; /* danger   #c4503f */
+    --destructive-foreground: 40 100% 99%;
+    --border: 37 35% 86%; /* border   #e7ddcd */
+    --input: 38 31% 81%; /* border_input #ddd2bf */
+    --ring: 22.3 58.5% 41.6%; /* same accent as --primary (Q7) */
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+
+    /* Dark fallback for the Daylight tokens. The dark "Aperture" palette is
+       explicitly out of scope for #878, so dark keeps the neutral surfaces it
+       has today by pointing the SURFACE / TEXT / BORDER tokens at the shadcn
+       `.dark` triplets directly above — nothing here invents a dark palette.
+       The badge and decision chips are deliberately NOT overridden: they are
+       small coloured pills that stay legible on a dark row, and inventing
+       dark variants for them is the Aperture work this slice must not do.
+       Slice (b) adds `--color-dec-undecided-bg` (transparent — theme-neutral
+       by construction), and follows the same rule: the score bar's warm fill
+       is a few pixels that read on either surface, while its TRACK, which is a
+       surface, is remapped below like every other surface token. Slice (R)'s
+       `--color-dec-track` is an alias of `titlebar`, which IS remapped, so it
+       follows its target for free; the two `thumb-hatch` stops are a
+       placeholder fill, not a surface, and stay as declared — the thumbnail
+       they sit behind is an image on either theme. Slice (T) follows the same
+       rule:
+       `--color-ink-hairline` is a TEXT/stroke token so it is remapped beside
+       its `ink-faint` twin, while `--color-warm-active`, `--color-focus-ring`
+       and the three `caution-*` values are accents and pale chips — the two
+       categories this block has never remapped — so they stay as declared. */
+    --color-app: hsl(var(--background));
+    --color-panel: hsl(var(--card));
+    /* Slice (G)'s secondary-button hover IS a surface, so it is remapped like
+       every other one; `accent` is the hover/highlight surface in this block
+       already (`subtle`, `select`). */
+    --color-panel-hover: hsl(var(--accent));
+    --color-toolbar: hsl(var(--secondary));
+    --color-titlebar: hsl(var(--secondary));
+    --color-subtle: hsl(var(--accent));
+    --color-hairline: hsl(var(--border));
+    --color-hairline-soft: hsl(var(--border));
+    --color-hairline-input: hsl(var(--input));
+    --color-ink: hsl(var(--foreground));
+    --color-ink-muted: hsl(var(--muted-foreground));
+    --color-ink-faint: hsl(var(--muted-foreground));
+    --color-ink-hairline: hsl(var(--muted-foreground));
+    --color-select: hsl(var(--accent));
+    --color-select-ink: hsl(var(--accent-foreground));
+    --color-group-band: hsl(var(--secondary));
+    --color-group-line: hsl(var(--border));
+    --color-row-line: hsl(var(--border));
+    --color-delete-row: hsl(var(--destructive) / 0.18);
+    --color-score-track: hsl(var(--muted));
+    --color-scroll-thumb: hsl(var(--border));
+    --color-scroll-thumb-hover: hsl(var(--muted-foreground));
+  }
+}
+
+@layer base {
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    /* T1 — nothing set a family before this, so the whole app rendered in the
+       browser default. Declared on `body` (not only in @theme) because the
+       `font-sans` utility exists without anything applying it. */
+    font-family: var(--font-sans);
+  }
+
+  /* Themed scrollbars (#878 "themed … scrollbars"). WebKit/Blink only, which
+     is what the desktop shell and the QA Playwright runner both are; Firefox
+     falls back to `scrollbar-color` below. */
+  * {
+    scrollbar-color: var(--color-scroll-thumb) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-scroll-thumb);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-scroll-thumb-hover);
+  }
+}
+
+@layer components {
+  /* The thumbnail's pre-load / failed-decode placeholder (layout slice R,
+     REPLY §"Thumbnail (R6)"). Written as a component class rather than as an
+     arbitrary Tailwind value because a `bg-[repeating-linear-gradient(...)]`
+     utility carries the commas and parentheses through Tailwind's class
+     scanner, where they are a coin flip — and the two stops belong beside the
+     tokens they consume. No spinner per row: «at 40,000 rows spinners are
+     noise». */
+  .thumb-hatch {
+    background-image: repeating-linear-gradient(
+      135deg,
+      var(--color-thumb-hatch) 0 7px,
+      var(--color-thumb-hatch-alt) 7px 14px
+    );
+  }
+}

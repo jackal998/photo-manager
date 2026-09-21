@@ -1,0 +1,1 @@
+Disable the web Set Action dialog's Simple write-through inputs and show an explanatory note when a scan produces zero duplicate groups, matching the desktop no-match_fn placeholder; the Regex input stays interactive (#689)

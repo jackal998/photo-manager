@@ -1,0 +1,1 @@
+Skip the H.264 re-encode when a video is already browser-playable: the web transcode endpoint now probes the source with ffprobe and stream-copies it into MP4 instead, so a plain H.264 .mov no longer stalls on a pointless encode (#853).

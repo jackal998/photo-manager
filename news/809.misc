@@ -1,0 +1,1 @@
+Scope the tests and frontend CI workflows to least-privilege contents:read permissions (#809).

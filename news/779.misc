@@ -1,0 +1,1 @@
+replace web-eval-gates workflow-level paths filter with a scoped job gate so web QA jobs can later be made required without the stuck-pending trap (#773)

@@ -1,0 +1,1 @@
+Remove the PySide6 desktop client, its qa-explore harness and the Qt CI job; the web shell is now the only client and PySide6 is gone from requirements.txt (#646).

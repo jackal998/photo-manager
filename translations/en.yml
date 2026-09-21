@@ -142,12 +142,12 @@ scan_dialog:
   browse_button: "Browse…"
   save_dialog_title: "Save Manifest As"
   advanced_settings_label: "Advanced settings"
-  phash_label: "<b>pHash Similarity Threshold</b> (default: 10, range: 1–20)"
-  phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter."
-  phash_tooltip: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs)."
-  dhash_label: "<b>dHash Confidence Threshold</b> (default: 10, range: 1–20)"
-  dhash_desc: "Second hash that confirms a pHash match. Lower = stricter confirmation."
-  dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
+  phash_label: "<b>pHash Similarity Threshold</b> (default: 10, range: 2–20)"
+  phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter; 2 is the strictest useful setting."
+  phash_tooltip: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs). The scale starts at 2, not 1, because photographic pHashes always carry exactly 32 of their 64 bits, so the distance between any two of them is even: an odd value usually matches exactly the same files as the even value below it, and 1 would match nothing at all — it would switch near-duplicate detection off rather than tighten it. 2 is the strictest useful setting."
+  dhash_label: "<b>dHash Confidence Threshold</b> (default: 10, range: 2–20)"
+  dhash_desc: "Second hash that confirms a pHash match. Lower = stricter confirmation; 2 is the strictest useful setting."
+  dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation. Like the pHash scale this one starts at 2, not 1: an odd value usually confirms exactly the same pairs as the even value below it, and 1 would confirm nothing. 2 is the strictest useful setting."
   color_label: "<b>Mean Color Gate</b> (default: 30, range: 0–100)"
   color_desc: "Reject a pHash match when average colours differ by more than this (L2). 0 = off."
   color_tooltip: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
@@ -470,3 +470,623 @@ preview:
   click_to_pause: "(Click to pause)"
   video_not_available: "(Video not available)"
   rebuilding_cache: "Rebuilding thumbnail cache (version {version}) — this is a one-time operation."
+
+# Web UI strings — used by the browser-based port only.
+# Dotted-key prefix: web.*
+web:
+  toolbar:
+    scan: "Scan"
+    execute: "Execute"
+    settings: "Settings"
+    open: "Open"
+    # The toolbar button had been borrowing web.action_dialog.title (copy
+    # audit T1); a button wants a shorter label than the dialog's title.
+    set_action: "Set Action…"
+    # Layout slice TB (#878) — the filter box, the counted bulk verbs and the
+    # danger CTA. L5: the verbs' count lives IN the label «so "Delete" never
+    # means an unknown number», and the CTA keeps its count at zero rather than
+    # disappearing «so the button never moves».
+    filter_placeholder: "Filter photos…"
+    filter_aria: "Filter photos"
+    bulk_set_n: "Set {count} selected:"
+    bulk_set_none: "Set selected:"
+    bulk_hint: "Acts on the rows selected in the list — Ctrl-click to add one, Shift-click for a range. Locked rows are left unchanged."
+    delete_n: "⊗  Delete {count} {fileWord}…"
+  # Row density (#878 slice R's preference, slice TB's switch in the status bar).
+  density:
+    label: "Density"
+    aria: "Row density"
+    comfortable: "Comfortable"
+    compact: "Compact"
+  status:
+    summary: "{groups} {groupWord} · {files} {fileWord}"
+    loading_manifest: "Loading manifest…"
+    scanning: "Scanning{stage}"
+    scan_failed: "Scan failed: {error}"
+    manifest_failed: "Manifest error: {error}"
+    execute_failed: "Action error: {error}"
+    ready: "Ready"
+    # Singular/plural translated separately, not flattened — the old single
+    # template rendered "1 groups · 1 files" (copy audit S1). Same split-key
+    # pattern as web.execute_dialog.file_singular/file_plural. zh_TW has no
+    # plural marking, so its two values are identical — correct, not lazy.
+    group_singular: "group"
+    group_plural: "groups"
+    file_singular: "file"
+    file_plural: "files"
+    # #906 — the two figures the 30px strip exists for: «the running answer to
+    # "is this session worth continuing"». Both count the WHOLE manifest, not
+    # the filtered view, because that is what Execute acts on.
+    marked_to_delete: "⊗ {count} marked to delete"
+    reclaims: "↺ reclaims {size}"
+  # The single-slot undo toast (#878 slice G). Open questions Q5 put this in
+  # place of a confirm dialog on "Keep best · delete rest", so this copy is the
+  # only account the user gets of what a bulk write just did — and the locked
+  # line is a promise the button makes: «it must never override a lock, and it
+  # must say so when it skips one».
+  toast:
+    keep_best: "Group {n} · {count} {fileWord} marked for deletion"
+    # Slice TB reuses the same single slot for the toolbar's bulk verbs. Their
+    # selection can span groups, so the sentence names the VERB instead of a
+    # group — {verb} is interpolated from web.decision.*, the one decision
+    # vocabulary the row control and the right-click menu also read.
+    bulk_decision: "{count} {fileWord} set to {verb}"
+    file_singular: "file"
+    file_plural: "files"
+    locked_unchanged_singular: "{count} locked file unchanged"
+    locked_unchanged_plural: "{count} locked files unchanged"
+    undo: "Undo"
+  # Human sentences for the closed set of backend failure shapes surfaced in
+  # the status bar (copy audit S2). Before this, the raw developer strings the
+  # routes raise ("Execute failed: {exc}", "Failed to launch Explorer: {exc}")
+  # were the whole user-facing message, in English, in both locales. The raw
+  # text is still shown — as a secondary technical line under the sentence.
+  error:
+    execute_failed: "The action could not be completed."
+    remove_failed: "The rows could not be skipped."
+    prune_failed: "The singleton groups could not be pruned."
+    classify_failed: "The singleton groups could not be examined."
+    save_failed: "The manifest could not be saved."
+    bulk_decide_failed: "The bulk action could not be applied."
+    apply_best_copy_failed: "The best-copy decisions could not be applied."
+    reveal_failed: "The file manager could not be opened."
+    already_running: "An action is already running — wait for it to finish."
+    locked_paths: "Some of the rows in scope are locked."
+    # The four `detail.code` values the 4xx/5xx routes attach
+    # (_path_guard.py:56,64,73 / execute.py:386,396 / action.py:86). Without
+    # these, a non-Windows user right-clicking Open folder read the server's
+    # own English sentence and nothing else.
+    permission_denied: "This app is not allowed to reach that location."
+    platform_unsupported: "That action is not available on this operating system."
+    bad_request: "That path is not valid."
+    invalid_pattern: "That pattern is not a valid regular expression."
+    not_found: "The file or manifest could not be found."
+    unknown: "The request could not be completed."
+    technical_detail: "Details: {detail}"
+  empty_state:
+    # Layout slice E (audit E3/E4). The screen was one muted sentence saying
+    # which STATE the app was in; it is the first thing a new user sees, so it
+    # now says what the app DOES and offers the two ways in. `no_manifest`
+    # keeps its key name (every catalog, call site and test references it by
+    # that name) and carries the body copy under the heading.
+    heading: "Find duplicate & similar photos"
+    no_manifest: "Point it at a folder or drive. It finds exact duplicates and visually similar shots, then groups them so you can review and clean up — safely."
+    scan: "Scan…"
+    open: "Open Manifest…"
+  manifest:
+    input_placeholder: "Path to manifest .db…"
+    input_aria: "Manifest path"
+  # Mirror of column.* keys for web-only usage (no Qt mnemonic stripping needed).
+  column:
+    similarity: "Similarity"
+    action: "Action"
+    lock: "Lock"
+    file_name: "File Name"
+    folder: "Folder"
+    size_bytes: "Size (Bytes)"
+    group_count: "Group Count"
+    creation_date: "Creation Date"
+    shot_date: "Shot Date"
+    resolution: "Resolution"
+    score: "Score"
+    # Web result tree shows a human-readable size (e.g. "1.2 MB"), so its
+    # header reads "Size" — distinct from the desktop's raw-byte "Size (Bytes)".
+    size: "Size"
+    # Accessible name of the inline decision control in each file row (copy
+    # audit R5 — it was a hardcoded English aria-label).
+    decision: "Decision"
+  # Layout slice R (#878): the score cell gained a label above the number —
+  # "without it a bare bar and a number in a 96px cell is an unlabelled
+  # quantity, and this number is the one the 'keep best' button acts on".
+  # Lowercase on purpose: it is a unit label riding above a value, not a
+  # column heading (the column header is web.column.score, "Score"). Dropped
+  # entirely at the compact density.
+  score:
+    keep_label: "keep"
+  # The ONE decision vocabulary for the web client (copy audit R3/R4, owner
+  # decision 2026-09-18): Keep / Delete / Skip for the three wire values
+  # "" / "delete" / "ignore". The key names still mirror the desktop
+  # decision.* keys (and `remove_from_list` is still the wire-level name for
+  # `ignore`) — only the rendered words changed. SHORT forms: the row
+  # DecisionControl segments, the Execute tree's decision badge and the Set
+  # Action combo. Sentence case, not lowercase (copy audit A2).
+  decision:
+    delete: "Delete"
+    keep: "Keep"
+    remove_from_list: "Skip"
+    lock: "Lock"
+    unlock: "Unlock"
+  # LONG forms of the same three decisions: right-click menu items and the
+  # DecisionControl segment tooltips. Two wording rules from the 2026-09-18
+  # design decision: every user-facing "delete" names the Recycle Bin, and
+  # the Skip form names the file's fate ("leave on disk") first.
+  decision_long:
+    keep: "Keep this file"
+    delete: "Delete — move to Recycle Bin"
+    remove_from_list: "Skip — leave on disk, drop from this review"
+  # scanner/dedup.py classification values, rendered in the result tree's
+  # Action column (copy audit R1, values half). The raw enum used to reach
+  # the user verbatim and was identical in both locales. INTERIM: the column
+  # header and whether the column survives at all are a separate layout
+  # round.
+  classification:
+    exact: "Exact copy"
+    review_duplicate: "Near-duplicate"
+    keep: "Best in group"
+    undated: "No date"
+  # Action dialog (Set Action by Field) — web port strings.
+  action_dialog:
+    title: "Set Action by Field"
+    field_label: "Field:"
+    regex_label: "Regex:"
+    regex_placeholder: "e.g. ^IMG_\\d+\\.HEIC$"
+    set_action_label: "Set action for each match:"
+    apply_button: "Apply"
+    simple_prefix: "Find rows where it"
+    simple_op_contains: "contains"
+    simple_op_starts_with: "starts with"
+    simple_op_ends_with: "ends with"
+    simple_op_exact: "exactly matches"
+    simple_text_placeholder: "type the text to match…"
+    simple_disabled_no_match_fn: "Write-through preview unavailable — Simple inputs are read-only on this entry point."
+    # "…matched", not "…match": the count-agnostic form. The old value read
+    # "1 of 5 match" for every n (copy audit A1).
+    match_counter: "{matched} of {total} matched"
+    match_counter_topn: "{matched} matched (≤{n} per group × {group_count} groups)"
+    match_counter_invalid: "—"
+    match_counter_applied: "Applied to {matched} rows"
+    invalid_regex: "Invalid regex: {error}"
+    invalid_threshold: "Couldn't parse '{input}' as a value for this field"
+    preview_label: "Preview"
+    preview_truncated: "…and {n} more"
+    preview_empty: "No matches"
+    numeric_mode_threshold: "Threshold"
+    numeric_mode_topn: "Top N per group"
+    numeric_threshold_label: "Where the value is"
+    numeric_topn_label: "Pick the"
+    numeric_topn_suffix: "in each group"
+    numeric_order_top: "Top"
+    numeric_order_bottom: "Bottom"
+    numeric_value_placeholder_number: "type a number…"
+    numeric_value_placeholder_date: "type a date (YYYY-MM-DD)…"
+    cmp_op_gt: ">"
+    cmp_op_ge: ">="
+    cmp_op_lt: "<"
+    cmp_op_le: "<="
+    cmp_op_eq: "=="
+    cmp_op_ne: "!="
+    cancel: "Cancel"
+    applying: "Applying…"
+    lock_conflict_title: "Locked rows would be affected"
+    lock_conflict_body: "{n} locked row(s) would be affected. Unlock and apply anyway?"
+    unlock_and_apply: "Unlock & Apply"
+    unlocked_only: "Apply to Unlocked Only"
+    # #741 sub-item B — Recent patterns (mirrors Qt's action_dialog.recent_*).
+    recent_button: "Recent:"
+    recent_empty: "(no recent patterns)"
+    recent_clear: "Clear"
+    # #741 sub-item C — pattern-to-human-summary (mirrors Qt's
+    # action_dialog.pattern_summary_* and delete_regex_confirm.*).
+    pattern_summary_simple: "{field} {op} '{text}'"
+    pattern_summary_regex: "{field} regex '{pattern}'"
+    pattern_summary_numeric_threshold: "{field} {op} {value}"
+    pattern_summary_numeric_topn: "{order} {n} per group by {field}"
+    delete_confirm_title: "Confirm bulk-delete decision"
+    delete_confirm_body: "This will mark {matched} file(s) for deletion via {summary}. Files move to the Recycle Bin only once you run Execute Action."
+    delete_confirm_button: "Mark {matched} files for deletion"
+  # Menu bar (Qt MenuController parity — File / Action / View).
+  menu:
+    aria_main: "Main menu"
+    file: "File"
+    file_scan: "Scan Sources…"
+    file_open: "Open Manifest…"
+    action: "Action"
+    # "by Field", not "by Regex": regex is one of the dialog's three modes,
+    # and the dialog title + the right-click entry already say Field (copy
+    # audit M1). The Execute entries take Qt's full "Execute Action…" form,
+    # which the web right-click menu already uses (copy audit M2).
+    action_set: "Set Action by Field…"
+    action_execute: "Execute Action…"
+    action_execute_selected: "Execute Action (only selected)…"
+    list: "List"
+    list_remove: "Skip Selected now"
+    view: "View"
+    view_language: "Language"
+    lang_en: "English"
+    lang_zh: "中文 (繁體)"
+    # Scan summary folded into the RIGHT end of the menu bar (#878 slice TB,
+    # F3/F4). The source name is appended separately so it can be the one part
+    # that truncates — «truncate the source name first; never wrap».
+    scan_summary: "{photos} {photoWord} · {groups} {groupWord}"
+  # Filesystem picker (FsBrowser).
+  browse:
+    up: "↑ Up"
+    roots: "This PC"
+    loading: "Loading…"
+    empty: "Empty folder"
+    manifest_tag: "manifest"
+    filename: "File name:"
+    cancel: "Cancel"
+    select_folder: "Select folder"
+    select_file: "Open"
+    save: "Save"
+    title_source: "Select source folder"
+    title_output: "Save manifest as"
+    title_manifest: "Open manifest"
+  # Scan dialog — web-only strings added alongside the browse picker.
+  scan:
+    browse: "Browse…"
+    # #740 — localized stage labels for the SSE `stage_name` values
+    # (WALK/HASH/EXIFTOOL/CLASSIFY/SCORE/WRITE, core/app_service/scan_runner.py
+    # STAGE_* constants). Mirrors the desktop scan_dialog.stage_* wording above.
+    stage_walk: "Walking sources"
+    stage_hash: "Hashing files"
+    stage_exiftool: "Reading EXIF + scoring signals"
+    stage_classify: "Classifying duplicates"
+    stage_score: "Scoring keepers"
+    stage_write: "Writing manifest"
+    # #823 — helper under the pHash / dHash threshold inputs. The web
+    # analogue of the desktop scan_dialog.{phash,dhash}_tooltip parity
+    # paragraph: the scale starts at 2 and odd values are usually
+    # indistinguishable from the even value below them.
+    threshold_parity_note: "Starts at 2: photo pHashes always differ by an even number of bits, so an odd value usually matches the same files as the even one below it, and 1 would match nothing at all. 2 is the strictest useful setting."
+    # Scan-dialog chrome (copy audit SC1/SC3/SC4/SC5). The whole dialog was
+    # hardcoded English apart from `browse` and the parity note above, so a
+    # zh_TW user opened an entirely English dialog. Keys mirror the desktop
+    # `scan_dialog.*` block; the English VALUES keep this dialog's existing
+    # wording (the defect was the missing t(), not the wording) — the one
+    # exception is the parity note, which already replaces Qt's trailing
+    # "2 is the strictest useful setting" clause on the *_desc lines (SC2).
+    title: "Scan Sources"
+    source_list_header: "Sources"
+    source_list_aria: "Scan source list"
+    add_source: "+ Add source"
+    output_label: "Output path"
+    output_placeholder: "e.g. C:/output/scan.db"
+    advanced_settings_label: "Advanced settings"
+    autotune_read_knee_label: "Auto-tune reader concurrency (experimental)"
+    auto_select_label: "Auto select after scan"
+    auto_select_aggressive_label: "Also mark all other files for delete"
+    grouping_sensitivity_label: "Grouping sensitivity"
+    phash_label: "pHash Similarity Threshold (default: 10, range: 2–20)"
+    phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter."
+    phash_tooltip: "Perceptual hash Hamming distance between two images. A 64-bit pHash means images can differ by at most this many bits before being flagged as near-duplicates. Lower = stricter (fewer groups, less noise); higher = more permissive (catches more slightly-edited pairs)."
+    dhash_label: "dHash Confidence Threshold (default: 10, range: 2–20)"
+    dhash_desc: "Second hash that confirms a pHash match. Lower = stricter confirmation."
+    dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
+    color_label: "Mean Color Gate (default: 30, range: 0–100)"
+    color_desc: "Reject a pHash match when average colours differ by more than this (L2). 0 = off."
+    color_tooltip: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
+    error_prefix: "Error: {error}"
+    start_button: "Start Scan"
+    # Running state (ScanProgress) — copy audit SC4. The count line read
+    # "1 files found", so it takes the same split singular/plural shape as
+    # the status bar.
+    progress_aria: "Scan progress"
+    log_aria: "Scan log"
+    files_found_singular: "{n} file found"
+    files_found_plural: "{n} files found"
+    eta_label: "ETA {eta}"
+    cancel: "Cancel"
+    # Source rows (SourceRow) — copy audit SC5.
+    source_row_aria: "Source {label}"
+    source_unnamed: "unnamed"
+    source_label_placeholder: "Label"
+    source_label_aria: "Source label"
+    source_path_placeholder: "Path"
+    source_path_aria: "Source path"
+    recursive: "Recursive"
+    remove_source: "Remove source"
+  rescan_confirm:
+    title: "Discard pending decisions?"
+    # The count and its noun are separate placeholders so each locale joins
+    # them its own way — zh_TW takes no space before a measure word, and the
+    # single "{pending}" phrase built in JS forced one (copy audit RC1).
+    body: "You have {count} {noun} on the loaded manifest. Starting a new scan will discard them."
+    noun_singular: "pending decision"
+    noun_plural: "pending decisions"
+    cancel: "Cancel"
+    discard_and_rescan: "Discard & Rescan"
+  # ExecuteResultSummary (#742) — inline Files-Not-Found / Files-Failed-to-Delete
+  # split rendered after Execute, mirroring the desktop's two QMessageBox.warning
+  # dialogs (execute_dialog.files_not_found_*/files_failed_* above) as inline
+  # sections instead of blocking dialogs.
+  execute_dialog:
+    files_not_found_title: "Files Not Found"
+    files_failed_title: "Files Failed to Delete"
+    # Dialog chrome (web audit fix 5 — was hardcoded English).
+    # "— Review" restored from Qt's execute_dialog.title (copy audit E6): the
+    # dialog is a review gate before a destructive run, and the bare
+    # "Execute Actions" reads like the action itself.
+    title: "Execute Actions — Review"
+    show_label: "Show:"
+    file_count: "{n} {fileWord}"
+    select_row_to_preview: "Select a row to preview"
+    preview_alt: "Preview"
+    cancel: "Cancel"
+    execute_selected: "Execute selected"
+    execute: "Execute"
+    executing: "Executing…"
+    # Singular/plural translated separately, not flattened to "(s)" (review
+    # finding — the flattened form read "1 file(s)" for n=1).
+    file_singular: "file"
+    file_plural: "files"
+    # Banner over the tree when every member of a group is marked for delete
+    # (copy audit E2 — five hardcoded JSX fragments that no locale could
+    # reorder). {groups} is replaced in the component by the clickable
+    # jump anchors, so the template is split on it rather than interpolated.
+    warning_prefix: "Warning:"
+    warning_complete_groups: "{groupWord} {groups} will have ALL files deleted. Review decisions below before clicking Execute."
+    group_singular: "Group"
+    group_plural: "Groups"
+    # Banner when the active type filter is hiding pending delete rows
+    # (copy audit E3 — was hardcoded, and flattened to "row(s)").
+    # Layout slice E: the leading ⚠ left the COPY when the banner took the Q9
+    # caution role, whose glyph is ▲ and is rendered by the component — two
+    # different warning marks on one strip was the alternative.
+    warning_hidden_destructive: "{n} pending delete {rowWord} hidden by the current filter — switch to All decided or Delete only to see them."
+    row_singular: "row"
+    row_plural: "rows"
+    # Type-filter select above the tree (copy audit E1 — was hardcoded
+    # English, and its third option said "Remove only"). The option words
+    # match the Keep/Delete/Skip vocabulary, and the hidden-destructive
+    # banner above names two of them verbatim.
+    filter_aria: "Filter by decision type"
+    filter_all: "All decided"
+    filter_delete_only: "Delete only"
+    filter_skip_only: "Skip only"
+  # Main result-tree + Execute-dialog right-click menus (ContextMenu.tsx +
+  # execute/ExecuteContextMenu.tsx share this namespace — identical verbs,
+  # web audit fix 5: was hardcoded English in both).
+  # The Keep and Delete items render web.decision_long.* (copy audit R4 — one
+  # vocabulary on every surface), so context_menu has no keep/delete keys of
+  # its own any more.
+  #
+  # `skip_now` is the ONE exception, and it is deliberate (review round 2).
+  # The row control's Skip STAGES user_decision='ignore' and is reversible
+  # until Execute; THIS item finalizes outcome='ignored' on the spot — the
+  # rows leave the review immediately, with no Execute step and no undo. One
+  # word for both would make the reversible and the irreversible action read
+  # identically, so the immediate one says "now".
+  context_menu:
+    skip_now: "Skip now — drop from this review"
+    lock: "Lock"
+    unlock: "Unlock"
+    open_folder: "Open folder"
+    set_action_by_field: "Set Action by Field…"
+    execute_selected: "Execute Action (only selected)…"
+    apply_best_copy: "Apply best-copy decisions to this group"
+  # LockConfirmDialog — was hardcoded English (web audit fix 1 + fix 5).
+  lock_confirm:
+    title_execute: "Locked files in delete scope"
+    title_remove: "Locked files in skip scope"
+    title_decision: "Locked rows affected"
+    title_apply_best_copy: "Locked rows in this group"
+    title_prune: "Locked singleton groups"
+    body_execute: "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out."
+    body_remove: "{n} locked {fileWord} {isWord} about to be skipped (left on disk, dropped from this review). Unlock and skip, or skip the unlocked files only."
+    body_decision: "Setting this decision would change {originalPathsLen} row(s); {n} {isWord} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel."
+    body_apply_best_copy: "Applying best-copy to this group would affect rows that include {n} locked {rowWord}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel."
+    body_prune: "{n} locked singleton {groupWord} would be pruned. Unlock and prune {pronoun}, or keep {pronoun} in the list."
+    cancel: "Cancel"
+    unlocked_only: "Unlocked only"
+    unlock_apply: "Unlock & Apply"
+    # Singular/plural translated separately, not flattened to "(s)" (review
+    # finding — the flattened templates above previously read "1 locked
+    # file(s) are"). zh_TW has no plural marking, so its singular/plural
+    # values are identical — that's correct, not lazy.
+    file_singular: "file"
+    file_plural: "files"
+    is_singular: "is"
+    is_plural: "are"
+    row_singular: "row"
+    row_plural: "rows"
+    group_singular: "group"
+    group_plural: "groups"
+    pronoun_singular: "it"
+    pronoun_plural: "them"
+  # PruneConfirmDialog (web audit fix 5 — was hardcoded English).
+  prune_confirm:
+    title: "Prune singleton groups?"
+    # "delete / skip", not "delete/ignore": `ignore` is the internal wire
+    # value for the decision the user is shown as "Skip" everywhere else
+    # (copy audit P1, then the 2026-09-18 vocabulary decision), and the raw
+    # word was leaking into both locales here. The verb for the GROUPS this
+    # dialog acts on is "prune", not "skip" — pruning drops whole singleton
+    # groups from the review, which is a different granularity from a
+    # per-file decision, and re-using "Skip" for it would blur the one word
+    # the row control depends on.
+    body_mixed: "{plain} singleton {plainGroupWord} {plainHasWord} only one file left, and {actioned} more {actionedCarryWord} an un-executed delete / skip action. Prune the plain singleton {plainGroupWord} from the list?"
+    body_actioned_only: "{actioned} singleton {actionedGroupWord} with an un-executed delete / skip action remain. Prune {pronoun} from the list?"
+    body_plain_only: "{plain} singleton {plainGroupWord} now {plainHasWord} only one file remaining. Prune {phrase} from the list?"
+    include_actioned: "Also prune {n} actioned {singletonWord}"
+    dont_ask_again: "Don't ask again"
+    keep_all: "Keep all"
+    remove_count: "Prune {n}"
+    # Singular/plural translated separately, not flattened to "(s)" (review
+    # finding). zh_TW has no plural marking, so its singular/plural values
+    # are identical — that's correct, not lazy.
+    group_singular: "group"
+    group_plural: "groups"
+    has_singular: "has"
+    has_plural: "have"
+    carry_singular: "carries"
+    carry_plural: "carry"
+    pronoun_singular: "it"
+    pronoun_plural: "them"
+    singleton_singular: "singleton"
+    singleton_plural: "singletons"
+    this_group: "this singleton group"
+    these_groups: "these singleton groups"
+  # RemoveFromListConfirmDialog (web audit fix 5 — was hardcoded English).
+  # Key names keep the wire-level "remove" spelling; the words are the Skip
+  # vocabulary, and the body leads with the file's fate on disk.
+  remove_confirm:
+    title: "Skip this file?"
+    body: "Skip {basename}? The file stays on disk — this only drops the row from this review, and it will not appear again until you re-scan."
+    this_item: "this item"
+    cancel: "Cancel"
+    yes_remove: "Yes, skip it"
+  # SettingsDialog (web audit fix 5 — was hardcoded English).
+  settings:
+    title: "Settings"
+    # Copy audit ST1: the raw settings-file keys were part of the visible
+    # label ("Prune singletons (ui.prune_singletons)"). They move to the
+    # row's hover description, and the auto-tune row adopts the desktop's
+    # wording (scan_dialog.autotune_read_knee_label) so the same toggle reads
+    # the same in both dialogs.
+    prune_singletons_label: "Prune singletons"
+    prune_singletons_desc: "Whether singleton groups are pruned after a scan. Config key: ui.prune_singletons"
+    prune_ask: "Ask each time"
+    prune_always: "Always prune"
+    prune_never: "Never prune"
+    autotune_read_knee_label: "Auto-tune reader concurrency (experimental)"
+    autotune_read_knee_desc: "Measure each device's best read concurrency at scan start instead of a fixed guess. On by default; never changes results. Config key: ui.scan_dialog.autotune_read_knee"
+    sorting_defaults_label: "Sorting defaults"
+    sorting_defaults_desc: "Default sort columns, as a JSON array. Config key: sorting.defaults"
+    # Copy audit ST2: the textarea's placeholder was the literal word "null",
+    # which reads as a bug rather than a hint. An empty array is the default.
+    sorting_placeholder: "[]"
+    sorting_invalid_json: "Invalid JSON — the sorting defaults were not saved."
+    cancel: "Cancel"
+    save: "Save"
+  # FullResViewer (web audit fix 5 — was partially hardcoded English).
+  fullres:
+    close: "Close"
+    video_cannot_be_played: "Video cannot be played"
+    preparing_video: "Preparing video…"
+    too_large: "File too large for in-browser full-res preview."
+    open_in_default_app: "Open in default app"
+    zoom_hint: "Ctrl+scroll to zoom · Drag to pan · Esc to close"
+  # Shared movable/resizable overlay chrome (#739) — full-res viewer,
+  # Execute Action dialog, Set Action dialog.
+  overlay:
+    resize: "Resize window"
+  # PreviewPane (web audit fix 5 — was hardcoded English).
+  preview:
+    # The pane's own title strip (layout slice PV / REPLY P2). Rendered
+    # UPPERCASE by CSS, so the catalog carries sentence case and zh_TW is
+    # unaffected by a transform that does nothing to Han characters.
+    title: "Preview · Selected photo"
+    # Grid mode (a GROUP row is selected, so the pane shows every member as a
+    # tile). The single-file wording names something that is not on screen.
+    title_group: "Preview · Group"
+    select_file: "Select a file to preview"
+    video_cannot_be_played: "Video cannot be played"
+    preparing_video: "Preparing video…"
+    meta_name: "Name"
+    meta_folder: "Folder"
+    meta_size: "Size"
+    # "Resolution", matching web.column.resolution for the same quantity —
+    # "Dims" was the one abbreviation among full-word sibling labels
+    # (copy audit PV1).
+    meta_dims: "Resolution"
+    # "Shot date", the same quantity web.column.shot_date names — the metadata
+    # table is the permanent home of the columns the table sheds (REPLY P7), so
+    # a bare "Shot" beside full-word siblings was the same abbreviation defect
+    # copy audit PV1 caught on meta_dims. Sentence case, matching its four
+    # sibling LABELS rather than the column header's title case.
+    meta_shot: "Shot date"
+    # Heading of the in-pane decision block (#905). The three OPTION labels
+    # come from DECISION_VOCAB (web.decision.*), shared with the row control.
+    decision_label: "Decision"
+    decision_locked: "This file is locked — unlock it to change its decision"
+    # REPLY P6 — the row's score, named for what it is in a pane that judges
+    # one file rather than compares a column of them.
+    keep_worthiness: "Keep-worthiness"
+    # Similarity legend pinned to the bottom of the pane (audit P8, layout
+    # slice E). One phrase per badge state — what the pill MEANS, which until
+    # now lived only in the cell's hover tooltip. Lowercase: each phrase reads
+    # as the continuation of the badge beside it, not as its own heading.
+    legend_title: "Similarity legend"
+    legend_ref: "chosen keeper"
+    legend_exact: "exact duplicate"
+    legend_near: "near match"
+    legend_indirect: "linked indirectly"
+    legend_none: "video / no image"
+  # lib/format.ts similarityLabel() — the one natural-language word among its
+  # symbol-only outputs (web audit fix 5).
+  format:
+    similarity_ref: "Ref"
+    # Copy audit R6: the cell rendered a bare "~" hardcoded in format.ts,
+    # while the desktop (tree.similarity_near_dup) and docs/features.md both
+    # say "~dup". A lone tilde carries no meaning and no translation.
+    similarity_near_dup: "~dup"
+  # Result-tree group header row (copy audit R8) — the row was hardcoded
+  # English, so "Group 3 · 5 files" stayed English in a zh_TW session. The
+  # `tree.*` block was the one Qt namespace never mirrored into web.*.
+  tree:
+    group_label: "Group {n}"
+    file_singular: "file"
+    file_plural: "files"
+    # Derived folder suffix (#878 slice G, open questions Q4). Only rendered
+    # when the group's members span MORE than one folder — the single-folder
+    # case shows the folder's own leaf name, which is data, not copy. So there
+    # is no singular form to split out: {n} is always >= 2 here.
+    folders_suffix: "{n} folders"
+    # The group row's own accessible name. Without it the role="button" row is
+    # named by its whole subtree, so a screen reader reads the Q5 bulk verb as
+    # part of the collapse toggle's label — the audio version of the misclick
+    # the button's 16px gap exists to prevent.
+    group_aria: "Group {n}, {count} {fileWord}"
+    # Q5's promoted bulk verb, at the right end of the group header.
+    keep_best: "Keep best · delete rest"
+    # Tooltip on that button (and on the right-click item) while the toolbar
+    # filter is active: keep-best is a SERVER-side write scoped by group, so it
+    # would mark rows the filter is hiding while the header shows the filtered
+    # count. Disabled rather than re-scoped — picking a "best" copy from a
+    # visible subset is a different, silently wrong, decision.
+    keep_best_filtered: "Clear the filter to use Keep best"
+  # DeleteConfirmDialog's two remaining hardcoded branches (web audit fix 6 —
+  # the patternSummary branch above was already translated).
+  delete_confirm:
+    title_groups: "Entire group(s) will be deleted"
+    title_all: "Delete all files?"
+    yes_delete_all: "Yes, delete all"
+    body_groups: "Group(s) {groups} will have EVERY file deleted ({n} {fileWord} will be deleted). Files will be sent to the Recycle Bin. Continue?"
+    body_all: "{n} {fileWord} will be deleted. This operation moves files to the recycle bin and cannot easily be undone in bulk. Are you sure?"
+    file_singular: "file"
+    file_plural: "files"
+    cancel: "Cancel"
+    # #917 / design REPLY Q6 — the auditable body of the Execute confirm.
+    # One shape serves the pinned grand total and every folder subtotal, so
+    # the two read as the same kind of fact.
+    count_size: "{n} {fileWord} · {size}"
+    # «The one line the modal must carry regardless of framing, because it is
+    # the whole safety story.»
+    recycle_note: "Files are moved to the Recycle Bin and can be restored."
+    # Per-file reason lines. The vocabulary is Q6's, verbatim, and matches the
+    # Similarity badge the same row wears in the review table — {ref} is the
+    # group's Ref (keeper) basename.
+    reason_exact: "Exact duplicate of {ref}"
+    reason_near: "{percent}% match — same group"
+    reason_linked: "Linked match, {percent}%*"
+    reason_near_dup: "Near-duplicate of {ref}"
+    reason_none: "No comparable image — same group"
+    # The Ref row itself reaches this list only inside an all-delete group.
+    reason_ref: "Group reference copy — the whole group is marked delete"
+    # Fallbacks for a row whose percentage or whose group's Ref is missing:
+    # naming a file we do not have would be worse than a vaguer sentence.
+    reason_exact_generic: "Exact duplicate — same group"
+    reason_near_generic: "Near match — same group"
+    reason_linked_generic: "Linked match"

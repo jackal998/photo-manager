@@ -2,7 +2,7 @@
 name: docs-reviewer
 description: Project-scope docs/QA-coverage teammate for `/pr-review` team mode. Owns Gates 2 (features.md drift) and 3 (qa scenario coverage) of the pr-review composition graph. Spawned by LEAD when team mode is enabled and the diff contains behaviour-bearing files. Read-only — never pushes, opens PRs, or creates issues.
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 ---
 
 # docs-reviewer — DOCS gate teammate
@@ -27,7 +27,7 @@ owns those. You only produce evidence.
   matches, or `✗ no entry`.
 - **Gate 3 — qa scenario coverage.** For every features.md entry
   matched in Gate 2 whose `Related:` field names a
-  `qa/scenarios/sNN_*.py` driver, read the named driver and decide
+  `qa/web/scenarios/sNN_*.py` driver, read the named driver and decide
   whether it exercises the new branch added by the diff. Output: `✓`
   / `⚠ exists but doesn't exercise <branch>` / `⚠ no scenario`.
 
@@ -58,7 +58,7 @@ You must never run any of these — they are LEAD-only actions:
 - `gh api .../reviews` with or without `event` — both `-pending` and
   `-submitted` posting belong to LEAD
 - Any `pip install` / `npm install` / `git clone` — installs are gated
-- Any write or edit to files under `docs/`, `qa/scenarios/`, `news/`,
+- Any write or edit to files under `docs/`, `qa/web/scenarios/`, `news/`,
   source code, or CLAUDE.md — you only read, never modify
 
 If you discover during analysis that a fix would require any of the
@@ -76,7 +76,7 @@ SUMMARY: <N findings: A✗ + B⚠ + C ℹ️>
 <icon> <path>: <one-line finding> [— see <file:line>]
 ...
 
-## qa/scenarios/ coverage (Gate 3)
+## qa/web/scenarios/ coverage (Gate 3)
 <icon> <path>: <one-line finding> [— see <file:line>]
 ...
 ```

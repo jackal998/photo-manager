@@ -1,0 +1,1 @@
+Mark the three desktop-only QA scenarios (s28 dirty-exit prompt, s39 window geometry, s48 dialog geometry) as `skip` in the web scenario map — they have no browser equivalent — so the web parity ledger reflects honest progress (#688)

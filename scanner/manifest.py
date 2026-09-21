@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
     exif_tag_count   INTEGER,
     gps_present      INTEGER NOT NULL DEFAULT 0,
     xmp_derived      INTEGER NOT NULL DEFAULT 0,
-    score            REAL
+    score            REAL,
+    subsec_time_original TEXT,
+    offset_time_original TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
 CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
@@ -44,12 +46,19 @@ INSERT INTO migration_manifest
      phash, hamming_distance, group_id, reason,
      file_size_bytes, shot_date, creation_date, mtime,
      pixel_width, pixel_height,
-     exif_tag_count, gps_present, xmp_derived, score)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)
+     exif_tag_count, gps_present, xmp_derived, score,
+     subsec_time_original, offset_time_original)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?)
 """
 
 
-def write_manifest(rows: list[ManifestRow], output: Path) -> None:
+def write_manifest(
+    rows: list[ManifestRow],
+    output: Path,
+    *,
+    keepers: "set[str] | None" = None,
+    non_keepers_for_delete: "set[str] | None" = None,
+) -> None:
     """Create (or overwrite) the SQLite manifest at ``output``.
 
     #464 — writes to a sibling ``<output>.tmp.sqlite`` first, then
@@ -63,6 +72,29 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
       * A partial write (process killed mid-INSERT, see #460) never
         reaches the destination — the temp file may be left behind for
         cleanup on the next call, but the live manifest stays consistent.
+
+    #651 — ``keepers`` / ``non_keepers_for_delete`` fold the post-scan
+    auto-select decisions (keeper locks, optional aggressive-delete
+    decisions) INTO this same write. When ``keepers is not None`` the
+    schema is lazily migrated and the auto-select UPDATEs run on the
+    SAME tmp connection, BEFORE the single ``conn.commit()`` and the
+    atomic ``os.replace()`` below — so a crash or exception mid-write
+    never leaves a manifest on disk with rows but no keeper lock (the
+    incoherence window the separate post-write call used to leave
+    open). ``keepers is None`` (the default) is the byte-identical
+    pre-#651 code path: no migration, no auto-select UPDATEs.
+
+    Args:
+        rows: Classified manifest rows to insert.
+        output: Destination path for the manifest SQLite file.
+        keepers: Paths receiving ``user_decision=""`` + ``is_locked=1``.
+            ``None`` skips the auto-select write entirely (no
+            auto-select configured for this scan). An empty set is
+            treated the same as ``None`` by the caller's convention —
+            pass ``None`` when there are no keepers to write.
+        non_keepers_for_delete: Paths receiving
+            ``user_decision='delete'`` (the aggressive #393 path).
+            Ignored when ``keepers`` is ``None``.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output.with_name(output.name + ".tmp.sqlite")
@@ -116,10 +148,45 @@ def write_manifest(rows: list[ManifestRow], output: Path) -> None:
                     int(r.gps_present),
                     int(r.xmp_derived),
                     r.score,
+                    r.subsec_time_original,
+                    r.offset_time_original,
                 )
                 for r in rows
             ],
         )
+
+        # #651 — fold the post-scan auto-select writes into this same
+        # connection/transaction, BEFORE commit, so they are part of the
+        # one atomic os.replace() below. keepers is None is the
+        # pre-#651 no-auto-select path — byte-identical, no migration,
+        # no UPDATEs.
+        if keepers is not None:
+            from core.services.auto_select import build_auto_select_writes
+            from infrastructure.manifest_repository import (
+                _UPDATE_DECISION_SQL,
+                _UPDATE_LOCK_SQL,
+                migrate_manifest_schema,
+            )
+
+            # write_manifest's own _DDL above does not include is_locked /
+            # user_decision-is-already-present-but-lock-column-missing on
+            # older schemas — migrate this tmp connection's schema first
+            # so the UPDATEs below never hit a missing column.
+            migrate_manifest_schema(conn)
+            decisions, lock_states = build_auto_select_writes(
+                keepers, non_keepers_for_delete
+            )
+            if decisions:
+                conn.executemany(
+                    _UPDATE_DECISION_SQL,
+                    [(v, k) for k, v in decisions.items()],
+                )
+            if lock_states:
+                conn.executemany(
+                    _UPDATE_LOCK_SQL,
+                    [(1 if v else 0, k) for k, v in lock_states.items()],
+                )
+
         conn.commit()
         # Force WAL checkpoint so the temp DB has no live sidecars when
         # the connection closes — keeps the rename single-file atomic.

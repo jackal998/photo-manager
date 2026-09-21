@@ -18,7 +18,7 @@ Skills live in two homes, split by trust level:
   `github-pr-create/`,
   `github-pr-review-fetch/`, `github-pr-review-pending/`,
   `github-pr-review-submitted/`, `impact-map/`,
-  `parallel-brief-generator/`, `pr-review/`,
+  `parallel-brief-generator/`, `photo-scanner-patterns/`, `pr-review/`,
   `qa-explore/`, `qa-scenario-drift/`, `scanner-perf-patterns/`,
   `skill-pii-audit/`, `sqlite-migration-safety/`,
   `test-padding-patterns/`, `update-docs/`, `work/`. New project skills
@@ -27,7 +27,7 @@ Skills live in two homes, split by trust level:
   `/pr-review` runs the semantic-content review the file-touch
   gates (`docs_guard.py`, `qa_scenario_guard.py`) cannot do — it
   reads the branch diff and compares it against `docs/features.md`
-  entries and `qa/scenarios/sNN_*.py` drivers, reporting drift in
+  entries and `qa/web/scenarios/sNN_*.py` drivers, reporting drift in
   chat. **Acts as a manager** that dispatches to per-gate
   sub-skills (`docs-features-drift`, `qa-scenario-drift`,
   `app-security-patterns`, `sqlite-migration-safety`,
