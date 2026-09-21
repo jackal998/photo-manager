@@ -1,1 +1,0 @@
-Fix stable-tag GitHub releases failing when an empty positional arg was passed to `gh release create` (#789).

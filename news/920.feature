@@ -1,1 +1,0 @@
-Make the first screen say what the app does — the empty state gains a heading, body copy and a primary Scan CTA at size; the preview pane gains a pinned similarity legend naming all five badge states; and the execute dialog's warning banners leave Tailwind's amber scale for the Daylight caution role (#878)

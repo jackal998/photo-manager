@@ -1,1 +1,0 @@
-Enable read-knee autotune by default (#551 Phase 4) — every scan now measures each device's best read concurrency automatically (opt-out via the Scan dialog), instead of the static NAS=8 / HDD=1 / else guess. (#585)

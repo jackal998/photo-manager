@@ -1,1 +1,0 @@
-Wire the #551 in-pipeline read-knee ramp into the scan worker (Phase 2): a per-device semaphore caps active reads and ramps to a measured files/s knee, behind a default-off setting with no user-facing surface yet. (#580)
