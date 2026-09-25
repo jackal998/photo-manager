@@ -50,9 +50,7 @@ Use `$PYTHON` for all `pytest` invocations.
 ## Implementation process
 
 **Step 1 — orient**
-Read every file in the research brief's "Affected files" list. Grep
-for the specific functions / classes mentioned. Understand what exists
-before touching anything.
+The research brief's "Affected files" list is your starting map.
 
 **Step 2 — implement**
 Make the changes described in TASK. Follow the project's existing
@@ -68,7 +66,6 @@ takes too long and LEAD runs the full suite separately).
 
 **Step 4 — self-correct (max 2 rounds)**
 If tests fail:
-- Read the failure output carefully.
 - Fix the immediate cause — don't refactor around it.
 - Re-run the same targeted tests.
 - If still failing after 2 rounds, stop and report the remaining
@@ -123,11 +120,3 @@ Passing: <N> | Failing: <N>
   (see project testing rules in CLAUDE.md)
 - If a change requires installing a new package, stop and report it as
   a FAILED status with "requires install: <package>" — LEAD gates installs
-
-## Token budget
-
-~60k tokens. Spend:
-- 10k: reading affected files + orientation
-- 35k: implementation + test iterations
-- 10k: verification + report writing
-- 5k: buffer

@@ -76,14 +76,14 @@ The skill reads:
    execute flow). Skip otherwise — the inventory in features.md is
    the canonical answer.
 
-Side effects: **none by default** beyond inline sub-skill
-invocations. The skill produces a report in chat. When a gate's
+Side effects: the chat report, plus the post-back to the PR
+(default on unless the user said "preview only" / "dry run" /
+"don't post" — see "Post-back to the PR" below). When a gate's
 condition fires (see Composition graph below), the corresponding
 sub-skill is invoked via the Skill tool, its rubric applied, and
-its findings folded into the report. The optional post-back to
-the PR routes through `github-pr-review-pending/SKILL.md` (creates
-a pending draft review only — human submits in the GitHub UI) and
-is a separate, explicitly-gated step.
+its findings folded into the report. The skill never merges,
+closes, or approves the PR — merging is the owner's call
+(`gh pr merge` is gated in CLAUDE.md).
 
 ## Composition graph
 
@@ -97,11 +97,11 @@ logic) that handles it:
 | **2** — features.md drift | Gate 1 emitted any behaviour-bearing file | → `docs-features-drift/` (project skill) |
 | **3** — qa scenario coverage | Gate 2 matched any features.md entry naming a `qa/web/scenarios/sNN_*.py` driver | → `qa-scenario-drift/` (project skill, chains with Gate 2's match list) |
 | **4** — historical-drift caveat | invoked with a PR number AND that PR predates `docs/features.md` (introduced in PR #263) | **inline** — `git show <pr-head>:docs/features.md` probe + caveat handling |
-| **5** — drive-by observations | always runs after Gates 0-4 | **inline** — catch-all bucket (limit 3) |
+| **5** — drive-by observations | always runs after Gates 0-4 | **inline** — catch-all bucket |
 | **6** — harness security | diff touches `.claude/**`, `scripts/hooks/**`, `settings.json` / `settings.local.json` / `.mcp.json`, or `CLAUDE.md` permissions/install lines | → `/security-scan` (global skill, AgentShield) — auto-invoked, findings folded in |
 | **7** — app-level security | diff has behaviour-bearing Python source files | → `app-security-patterns/` (project skill) → composes `security-review` (global lens) |
 | **8** — SQLite migration safety | diff touches `_MIGRATIONS` list in `infrastructure/manifest_repository.py` OR `CREATE TABLE migration_manifest` in `scanner/manifest.py` | → `sqlite-migration-safety/` (project skill) |
-| **9** — scanner / threading perf | diff touches `scanner/**.py`, `core/app_service/scan_runner.py`, or adds a `threading.Thread` / `ThreadPoolExecutor` / `run_in_executor` call | → `scanner-perf-patterns/` (project skill) → composes `photo-scanner-patterns` (global lens) |
+| **9** — scanner / threading perf | diff touches `scanner/**.py`, `core/app_service/scan_runner.py`, or adds a `threading.Thread` / `ThreadPoolExecutor` / `run_in_executor` call | → `scanner-perf-patterns/` (project skill) → composes `photo-scanner-patterns` (project skill, domain catalogue) |
 | **10** — test padding patterns | diff adds or modifies `tests/test_*.py` or `tests/integration/test_*.py` | → `test-padding-patterns/` (project skill) → composes `python-testing` (global lens) |
 | **11** — PII audit on project skills | diff adds or modifies files under `.claude/skills/<name>/` (NOT `.claude/skills/personal/`) | → `skill-pii-audit/` (project skill) |
 | **Post-back, Mode A** (human-in-loop) | default in human session AND user didn't say "preview only" | → `github-pr-review-pending/` (project skill) → composes `conventional-comments` |
@@ -170,12 +170,15 @@ sequence before sending its `SendMessage` reply.
    so they start in parallel:
    ```python
    Agent(team_name="pr-review-<branch-short>", model="opus",
-         name="docs-reviewer",        subagent_type="docs-reviewer")
+         name="docs-reviewer",        subagent_type="pr-gate-reviewer")
    Agent(team_name="pr-review-<branch-short>", model="opus",
-         name="app-security-reviewer", subagent_type="app-security-reviewer")
+         name="app-security-reviewer", subagent_type="pr-gate-reviewer")
    Agent(team_name="pr-review-<branch-short>", model="opus",
-         name="quality-reviewer",     subagent_type="quality-reviewer")
+         name="quality-reviewer",     subagent_type="pr-gate-reviewer")
    ```
+   All three are instances of one definition
+   (`.claude/agents/pr-gate-reviewer.md`); each learns its gate lane
+   from the task subject below.
 6. **Create tasks** — one `TaskCreate` per teammate. Subjects must
    match the allowlist in `scripts/hooks/team_task_created.py`:
    ```
@@ -356,8 +359,8 @@ When the user runs `/pr-review` (with or without a PR number):
      the diff is behaviour-bearing → emit ✗ "no features.md
      entry exists for the new behaviour introduced by this PR".
 
-6. **Gate 5 — drive-by observations** (inline). Limit to 3
-   incidental observations:
+6. **Gate 5 — drive-by observations** (inline). Report each
+   incidental observation with its evidence, most important first:
    - New conditional dialog/branch with no docstring explaining
      the trigger.
    - README.md § Usage — GUI § Step N text that contradicts the

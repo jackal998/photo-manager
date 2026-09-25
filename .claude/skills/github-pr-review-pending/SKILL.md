@@ -41,9 +41,8 @@ What this skill does on invocation:
 and the draft is visible only to the author's `gh` identity until
 submitted. Those two properties are why no per-POST gate exists
 inside this skill — the action is low-stakes and the caller has
-already decided to invoke. CLAUDE.md's "Opening PRs or pushing to
-a remote" gate doesn't apply: pending reviews aren't published,
-aren't visible to others, and can be deleted in one call.
+already decided to invoke. CLAUDE.md's boundary clarifications list
+posting through this skill as auto-approved.
 
 If the calling code wants a dry-run, it should construct the JSON
 and emit it to chat instead of calling this skill — same Phase 2

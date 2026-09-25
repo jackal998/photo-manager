@@ -1,6 +1,6 @@
 ---
 name: scanner-perf-patterns
-description: Audit photo-manager scanner and worker-thread code for known performance and threading anti-patterns. Use when /pr-review's diff touches scanner/**.py, core/app_service/scan_runner.py, or adds a threading.Thread / ThreadPoolExecutor / run_in_executor call — this skill flags per-row I/O in loops, nested O(N²) over filesystem, subprocess-in-loop without -stay_open batching, background work without progress/cancel, and missing timeouts. Composes with global photo-scanner-patterns for the domain boundary catalogue.
+description: Audit photo-manager scanner and worker-thread code for known performance and threading anti-patterns. Use when /pr-review's diff touches scanner/**.py, core/app_service/scan_runner.py, or adds a threading.Thread / ThreadPoolExecutor / run_in_executor call — this skill flags per-row I/O in loops, nested O(N²) over filesystem, subprocess-in-loop without -stay_open batching, background work without progress/cancel, and missing timeouts. Composes with the project photo-scanner-patterns skill for the domain boundary catalogue.
 origin: local
 ---
 
@@ -9,19 +9,19 @@ origin: local
 Invoked by `/pr-review` Gate 9 when the diff touches scanner or
 worker-thread code. Catches the specific bug patterns that have
 hit this codebase before — most of them documented in the
-global `photo-scanner-patterns` skill.
+`photo-scanner-patterns` skill.
 
-## Composes with global lens
+## Composes with the domain catalogue
 
-**Before applying the patterns below, also read the global
+**Before applying the patterns below, also read the
 `photo-scanner-patterns` skill** (Skill tool) to load the
 boundary failure-mode catalogue: exiftool `-stay_open` batching,
 PIL EXIF extraction quirks, pHash flat-image collision, NAS / SMB
 latency, dedup union-find, single-read SHA+pHash+EXIF, Google
 Takeout sidecar matching, Windows trailing-period folders.
 
-That global skill is written for *implementers* (≈1000+ lines of
-how-to). This skill is the *reviewer's* counterpart — it catches
+That skill is written for *implementers* (long-form how-to).
+This skill is the *reviewer's* counterpart — it catches
 the same issues as code review of the resulting diff, without
 re-deriving the patterns.
 
@@ -69,8 +69,6 @@ Skip otherwise.
   `CancelToken` → ⚠ for "user can't tell what's happening / can't
   abort". `app/web/routes/scan.py` is the reference shape: a bus
   event per stage, a token checked between them.
-- The pattern documented in the global `photo-scanner-patterns`
-  skill — match it.
 
 ### `subprocess.run` without a timeout in user-facing code
 
@@ -102,7 +100,7 @@ section of pr-review's chat report, one line per finding:
 ## See also
 
 - `pr-review/SKILL.md` — the manager that invokes this skill.
-- `photo-scanner-patterns` (global) — boundary catalogue,
+- `photo-scanner-patterns` (project skill) — boundary catalogue,
   composed at the top of this skill.
 - `scanner/manifest.py`, `scanner/dedup.py`,
   `scanner/hasher.py` — code paths most often touched by

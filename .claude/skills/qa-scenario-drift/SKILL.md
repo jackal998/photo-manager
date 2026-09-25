@@ -69,8 +69,8 @@ Outcomes:
 
 - Translation-only changes (no scenario needed).
 - Pure boundary fixes that are intentionally covered by unit
-  tests instead of qa scenarios (see CLAUDE.md "Testing ground
-  rules" — layer 1 vs layer 3 split, and the per-module table
+  tests instead of qa scenarios (see `.claude/rules/testing-policy.md`
+  — layer 1 vs layer 3 split, and the per-module table
   in `docs/testing.md`).
 - Refactors that don't change observable behaviour.
 - Internal docstring/comment edits to a scenario driver.

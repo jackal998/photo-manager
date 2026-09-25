@@ -72,10 +72,6 @@ Acceptance:
   - No `--no-verify` under any circumstances.
   - No mock-driven test padding — every assertion must catch a real
     user-visible bug. (`CLAUDE.md` "Testing hard floor" applies.)
-  - Bridge pattern: if you add a new method on a handler class
-    surfaced via the main-window context menu, also add the proxy on
-    `ActionHandlersImpl` (`feedback_action_handlers_bridge` in
-    auto-memory).
 
 ## Workflow through PR
 
@@ -92,11 +88,13 @@ session, then reuse.
   5. If you added a new layer-3 scenario, run it:
      `PY -m qa.web._batch <sNN>_<name>`
   6. Commit with conventional-commit message + `Closes #<N>` trailer
-     + `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
-  7. **Gated:** surface push intent to user, on approval
-     `git push -u origin <your-branch>`.
-  8. **Gated:** surface PR-create intent, on approval
-     `gh pr create --title "<title>" --body "<body>"`. Three gates
+     + a `Co-Authored-By: <model> <noreply@anthropic.com>` footer naming
+     the model you are actually running as (from your system prompt).
+  7. `git push -u origin <your-branch>` — not policy-gated (CLAUDE.md
+     boundary clarifications); the harness may still prompt.
+  8. `gh pr create --title "<title>" --body "<body>"` — not
+     policy-gated either. Never merge the PR: merging is the owner's
+     call (`gh pr merge` is gated in CLAUDE.md). Three gates
      can fail this PR — know which one your scope tripwires:
        * `qa_scenario_guard` (PreToolUse hook) — fires on diffs
          touching `frontend/src/` and `app/web/`
@@ -141,8 +139,7 @@ session, then reuse.
           Extend `/pr-review` with Gates 7-10 … (#288).
           ```
         - `git add news/<N>.<type> && git commit -m "news(#<N>): ..."`
-        - **Gated:** surface push intent to user, on approval
-          `git push`.
+        - `git push` (not policy-gated).
       If the change genuinely has no user-recordable diff and no
       fragment makes sense, you can amend the PR title or body to
       include `[skip-news: <reason>]` instead. Don't ship a PR

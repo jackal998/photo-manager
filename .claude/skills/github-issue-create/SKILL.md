@@ -1,6 +1,7 @@
 ---
 name: github-issue-create
-description: Standardise new GitHub issue filing — team-prefixed title (`[QA]` / `[FE]` / `[BE]` / `[CI]` / `[DX]` / `[DOCS]`), mandatory **What / Why / How** body sections, label allocation from the existing repo set, and explicit gate before posting. Use whenever an in-session finding is decided to live in the tracker rather than be acted on now: `/work` "out of scope — file as follow-up issue" path, `/pr-review` drive-by observations promoted to issues, deferred audit items, paper-trail observations, layer-3 qa follow-ups, debt the user said "track this for later" on. Sibling to `github-pr-review-{pending,submitted,fetch}` (which only handle PR reviews, not issues).
+description: >-
+  Standardise new GitHub issue filing — team-prefixed title (`[QA]` / `[FE]` / `[BE]` / `[CI]` / `[DX]` / `[DOCS]`), mandatory **What / Why / How** body sections, label allocation from the existing repo set, and explicit gate before posting. Use whenever an in-session finding is decided to live in the tracker rather than be acted on now: `/work` "out of scope — file as follow-up issue" path, `/pr-review` drive-by observations promoted to issues, deferred audit items, paper-trail observations, layer-3 qa follow-ups, debt the user said "track this for later" on. Sibling to `github-pr-review-{pending,submitted,fetch}` (which only handle PR reviews, not issues).
 ---
 
 # github-issue-create — one shape for every new issue
@@ -192,10 +193,8 @@ Skill should also be invoked by other skills:
 
 - **`/work`** — when the researcher-agent's brief surfaces unrelated
   findings, /work's "out of scope — file as follow-up issue" path
-  loads this skill to actually file the issues. Pre-existing memory
-  ([Capture full design space](../../../../.claude/projects/C--Users-J-repository-photo-manager/memory/feedback_capture_full_design_space.md))
-  says deferred work must always be filed — this skill is the
-  mechanic that closes that gap.
+  loads this skill to actually file the issues. Deferred work is
+  always filed — this skill is the mechanic that closes that gap.
 - **`/pr-review`** — Gate 5 drive-by observations that exceed the
   3-finding inline budget OR that the reviewer wants tracked beyond
   the current PR's lifecycle.
@@ -400,10 +399,9 @@ Does NOT compose with:
   exists to document an observation, not to track work. Make this
   explicit in `How`: "Close protocol: re-run X, observe Y, close
   with comment naming both runs." This signals to future readers
-  that "no PR" is the expected resolution. See also the
-  [flake-close-vs-fix](../../../../.claude/projects/C--Users-J-repository-photo-manager/memory/feedback_flake_close_vs_fix.md)
-  memory: even a paper-trail issue can warrant promotion to a fix
-  if the underlying cause is small and well-precedented.
+  that "no PR" is the expected resolution. Even a paper-trail issue
+  can warrant promotion to a fix if the underlying cause is small and
+  well-precedented.
 
 - **Spawned mid-`/work`.** When `/work`'s researcher-agent surfaces
   an unrelated finding, file the issue *before* completing the

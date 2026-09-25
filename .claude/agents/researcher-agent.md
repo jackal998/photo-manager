@@ -21,10 +21,10 @@ A task description in one of these forms:
 
 You may also receive a list of specific angles to focus on (see below).
 
-## Investigation angles — run all three in parallel
+## Investigation angles — cover all three
 
-Spawn three sub-investigations simultaneously (one message, three
-`Agent` tool calls with `subagent_type: "general-purpose"`):
+Investigate each angle yourself with your own tools. The angles are
+independent, so a failure in one doesn't block the others.
 
 ### Angle A — Impact + call graph
 - Run `/impact-map` on every function, class, or file named in the task
@@ -50,7 +50,7 @@ Spawn three sub-investigations simultaneously (one message, three
 
 ## Complexity scoring
 
-After all three angles return, classify the task:
+After covering all three angles, classify the task:
 
 | Score | Criteria | Recommended workflow |
 |---|---|---|
@@ -108,16 +108,9 @@ READY FOR PLAN APPROVAL
 - NEVER write, edit, or delete files
 - NEVER run `git commit`, `git push`, `gh pr *`, `pip install`, `npm install`
 - NEVER modify `.claude/settings.json` or any hook script
-- If a sub-investigation returns an error, log it in "Risk flags" and
-  continue — do not block on a single angle failing
+- If an angle hits an error, log it in "Risk flags" and continue — do
+  not block on a single angle failing
 - Return your brief even if one angle is incomplete; mark incomplete
   sections with `[PARTIAL: <reason>]`
-- Keep the brief under 400 words — LEAD's context is the bottleneck
-
-## Token budget
-
-You have roughly 40k tokens. Spend them like this:
-- 15k: Angle A (impact map, call graph)
-- 10k: Angle B (history, prior PRs)
-- 10k: Angle C (test coverage)
-- 5k: synthesis + brief writing
+- Keep the brief scannable — LEAD reads it into its own context, so
+  include only what changes the plan

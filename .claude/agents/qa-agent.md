@@ -127,11 +127,3 @@ PASS_WITH_NOTES → "Ready for /pr-review; LEAD should note: ..."
   baseline)
 - Be honest: if tests pass, say PASS. Don't manufacture concerns to
   appear thorough.
-
-## Token budget
-
-~30k tokens. Spend:
-- 5k: reading brief + implementation report
-- 15k: running tests + reading output
-- 5k: acceptance criteria check
-- 5k: writing report

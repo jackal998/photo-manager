@@ -8,7 +8,8 @@ origin: local
 
 Invoked by `/pr-review` Gate 10 when the diff adds or modifies
 test files. This project explicitly forbids mock-driven coverage
-padding — see CLAUDE.md "Testing ground rules". This skill
+padding — see `.claude/rules/testing-policy.md` "Testing ground
+rules". This skill
 surfaces the specific anti-patterns called out there.
 
 ## Composes with global lens
@@ -39,8 +40,8 @@ Skip otherwise.
 ### Monkeypatching a stdlib method to raise just to cover an except-pass branch
 
 - `monkeypatch.setattr(store, "set_decisions", lambda *a: 1/0)` to
-  reach a wrapped `except: pass` — flag. CLAUDE.md's anti-pattern
-  list names this shape.
+  reach a wrapped `except: pass` — flag. The testing policy's
+  metric-gaming list names this shape.
 - `monkeypatch.setattr(Image, "getexif", lambda self: None)` —
   flag if used only to cover the `if not exif: return None`
   guard. The right test is a real fixture file with no EXIF.
@@ -131,6 +132,6 @@ note: <file:line> — generic regression-test name: <evidence>
 - `pr-review/SKILL.md` — the manager that invokes this skill.
 - `python-testing` (global) — positive fixture patterns;
   composed at the top of this skill.
-- `CLAUDE.md` "Testing ground rules" — the authoritative
-  source for what padding looks like in this project.
+- `.claude/rules/testing-policy.md` "Testing ground rules" — the
+  authoritative source for what padding looks like in this project.
 - `docs/testing.md` — three-layer model.
