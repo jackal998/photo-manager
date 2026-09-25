@@ -85,9 +85,6 @@ Run this check whenever citing prior-art PRs as templates.
 These apply when the bundle's scope touches `scanner/` — skip them
 otherwise.
 
-- **`read_result_rows` is broken on CI** — has a `y_min=600` filter
-  that drops all rows on the smaller CI render. Use sqlite reads
-  (pattern: s14, s32, s35) for tree-content assertions.
 - **Trailing-period Windows paths**, **Live Photo pair-clusters**,
   **case-insensitive pathlib** — scanner-side correctness gotchas
   worth naming in any brief that walks files or hashes them.

@@ -24,7 +24,9 @@ origin: project-retrospective
 # Photo Scanner Patterns
 
 Patterns extracted from the photo-manager project: a NAS-aware deduplication scanner
-(SHA-256 + pHash + exiftool) with a PySide6 review UI backed by SQLite.
+(SHA-256 + pHash + exiftool) with a web review UI (FastAPI + React) backed by SQLite.
+The Qt/QThread examples below come from its earlier PySide6 client; the
+patterns carry over to any background worker.
 
 ## When to Activate
 

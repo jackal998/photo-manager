@@ -36,7 +36,7 @@ Activate this skill after implementing any non-trivial change to photo-manager s
 | `docs/features.md` | Canonical feature inventory — entry points, triggers, conditions, related PRs/issues/scenarios | Per-feature sections; the alphabetical index table at the top |
 | `pyproject.toml` | Python version for Black / Ruff / Pylint; coverage `omit` list (each entry needs a justification + cross-layer pointer) | `target-version = ["py3XX"]`, `target-version = "py3XX"`, `py-version = "3.XX"`; `[tool.coverage.run] omit = [...]` comments |
 | `docs/testing.md` | The 3-layer model + per-module residual-risk table — canonical answer to "what's covered, what's not, what's the risk" | Per-module rows under each section (`scanner/`, `core/`, `infrastructure/`, `app/`); "Open work" list at the end |
-| `CLAUDE.md` | Hard testing rules (no padding, 3 layers, 70% per-file floor, 3-trigger rule for new features) | "Testing ground rules" section — only update if the policy itself changes |
+| `.claude/rules/testing-policy.md` (+ the floor summary in `CLAUDE.md` "Testing — the hard floor") | Hard testing rules (no padding, 3 layers, 70% per-file floor, 3-trigger rule for new features) | Only update if the policy itself changes |
 
 ---
 
@@ -51,7 +51,7 @@ Work through every item below. Check only the items relevant to your change.
 - [ ] Renamed a file → update `README.md`
 
 ### Schema changed?
-- [ ] Added column(s) to `migration_manifest` → update `README.md` manifest schema table (§ "Scanner features" / manifest schema)
+- [ ] Added user-facing column(s) to `migration_manifest` → describe them in `README.md` § "Scanner features" (prose bullets; there is no schema table)
 - [ ] Updated `_MIGRATIONS` list → verify migration note in `README.md` is still accurate
 
 ### Service / interface changed?

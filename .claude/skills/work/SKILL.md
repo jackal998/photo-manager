@@ -253,12 +253,6 @@ support the "I had to step away mid-watch" case, Phase 0 also accepts:
 
 ## Self-management rules
 
-**Context budget:** After each major phase (research, dev iteration,
-QA), check whether the context window is getting heavy. If the
-conversation has > ~40 tool calls, tell the user: "Context is getting
-heavy — please run `/compact` before we continue." (`/compact` is a
-user-triggered CLI command; LEAD cannot invoke it directly.)
-
 **Loop guard:** Never iterate more than 4 dev→QA cycles without
 surfacing to the human. Autonomous loops that spin indefinitely are
 worse than a pause for input.

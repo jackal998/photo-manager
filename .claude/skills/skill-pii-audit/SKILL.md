@@ -8,9 +8,9 @@ origin: local
 
 Invoked by `/pr-review` Gate 11 when the diff adds or modifies
 files under `.claude/skills/<name>/` (NOT `.claude/skills/personal/<name>/`
-— that path is gitignored by design). Enforces what CLAUDE.md's
-"PII audit before committing a project skill" rule asks the
-author to do manually.
+— that path is gitignored by design). Enforces what
+`.claude/rules/skills-and-setup.md`'s "PII audit before committing
+a project skill" rule asks the author to do manually.
 
 ## When to invoke
 
@@ -101,8 +101,9 @@ pr-review's chat report:
 ## See also
 
 - `pr-review/SKILL.md` — the manager that invokes this skill.
-- `CLAUDE.md` "PII audit before committing a project skill" —
-  the authoritative source for the rule this skill enforces.
+- `.claude/rules/skills-and-setup.md` "PII audit before committing a
+  project skill" — the authoritative source for the rule this skill
+  enforces.
 - `security-scan` (global, AgentShield) — Gate 6 of pr-review;
   scans `.claude/settings.json`, hooks, MCP servers. This
   skill (Gate 11) is the complementary scan on `.claude/skills/`.

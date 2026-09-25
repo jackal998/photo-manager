@@ -10,8 +10,9 @@
 
 Anthropic's experimental Agent Teams feature is opt-in per
 `/pr-review` invocation. When team mode is enabled the LEAD session
-spawns up to three teammates from `.claude/agents/` to apply the
-pr-review gates in parallel:
+spawns up to three teammates — each an instance of
+`.claude/agents/pr-gate-reviewer.md` — to apply the pr-review gates in
+parallel:
 
 - `docs-reviewer` — Gates 2+3 (features.md drift, qa scenario coverage)
 - `app-security-reviewer` — Gate 7 (app-level security patterns)
@@ -56,8 +57,8 @@ classifier short-circuits to CLEAN.
 
 Project `.claude/agents/<name>.md` definitions shadow user-level
 `~/.claude/agents/<name>.md` of the same name. To avoid silent
-shadow, the project's security teammate is named
-`app-security-reviewer` (not `security-reviewer`) — the user-level
+shadow, the project's gate teammate definition is named
+`pr-gate-reviewer` (not `security-reviewer`) — the user-level
 generic-OWASP `security-reviewer` remains unshadowed and reachable
 for ad-hoc invocations.
 

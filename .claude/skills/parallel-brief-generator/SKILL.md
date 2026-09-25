@@ -231,8 +231,7 @@ For each task:
     (PR-X's files in the same gated subdir? if not, don't claim
     its pattern transfers wholesale).
   - **If scope touches `scanner/`**: bake in the scanner-side
-    gotchas (`read_result_rows` y_min=600, trailing periods,
-    Live Photo clusters).
+    gotchas (trailing periods, Live Photo clusters).
   - **If scope adds qa scenarios**: name s13 / s36 as destructive
     if extending recycle-bin coverage.
 

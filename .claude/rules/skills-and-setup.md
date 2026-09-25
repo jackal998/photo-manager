@@ -37,8 +37,9 @@ Skills live in two homes, split by trust level:
   Each sub-skill owns one gate's rubric and is invoked only when
   the diff matches its trigger condition. Invoke manually after
   `git push` and before `gh pr create`; pass an optional PR
-  number to spot-check an existing PR. The skill never posts to
-  GitHub without an explicit follow-up confirmation.
+  number to spot-check an existing PR. Findings post back to the
+  PR by default (pending or submitted review) unless the user says
+  "preview only"; the skill never merges the PR.
 
   `conventional-comments/` defines the uniform label + decoration
   + subject shape (`**suggestion (non-blocking):** …`) and the

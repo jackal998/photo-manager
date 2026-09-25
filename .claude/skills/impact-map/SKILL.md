@@ -50,8 +50,10 @@ covered by an existing test.
      - Layer 2 (`tests/integration/` — real binaries, when present)
      - Layer 3 (`qa/web/scenarios/sNN_*.py` — qa-explore E2E)
    Flag callers with NO coverage at the layer that matters for the
-   change. Boundary changes need layer 2; UI-touching changes need
-   layer 3.
+   change. Boundary changes need layer 1 for our side and layer 3
+   for the happy path (layer 2 only for a named error mode that is
+   hard to trigger through the GUI — step 2); UI-touching changes
+   need layer 3.
 4. **Behavior contract** — write down (in chat, not a file) the inputs,
    outputs, raised exceptions, and side-effects you intend to *preserve*
    versus *change*.

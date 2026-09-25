@@ -9,7 +9,8 @@ origin: local
 Two coordination primitives are available in Claude Code:
 
 1. **Subagents** — the `Agent` tool, delegate tasks within the calling
-   session's context window. Lighter, faster, no extra cost multiplier.
+   session. Lighter than a team, but not free: each one re-establishes
+   context, re-explores, and reports back for LEAD to re-read.
 2. **Agent Teams** — experimental, CLI-only. Independent Claude Code
    processes coordinated by a lead session via shared task list and
    direct-message mailbox. True parallelism, ~4× cost for a
@@ -22,7 +23,7 @@ Two coordination primitives are available in Claude Code:
 | Work fits in one context window | Subagents |
 | Delegate needs full Claude Code tool access per lane | Agent Teams |
 | Each lane invokes its own sub-skills and takes > ~1 min | Agent Teams |
-| Short research / targeted file read | Subagents |
+| Short research / targeted file read | Neither — do it inline |
 | Cost is a concern on a small PR | Subagents (auto-decline in /pr-review team) |
 
 For this project:
@@ -31,7 +32,7 @@ For this project:
 |---|---|---|
 | `/pr-review` gates 2+3, 7, 8+9+10 | **Agent Teams** (opt-in `team` flag) | Each lane runs a sub-skill rubric; sequential wall-clock ~3× longer |
 | `/qa-explore` scenarios | **Deferred** | Blocked on per-teammate `PHOTO_MANAGER_HOME` isolation |
-| Research / grep during a task | **Subagents** (Explore, general-purpose) | Single-pass, within-session |
+| Research / grep during a task | **Inline**; a subagent (Explore, general-purpose) only for a wide multi-file investigation | A few reads/greps cost less than a subagent's re-orientation |
 | Ad-hoc security review | **Subagents** (security-reviewer) | Sequential, fits in LEAD's session |
 
 ## Agent Teams — verified mechanics (Windows CLI, 2026-05-20)
@@ -42,9 +43,9 @@ For this project:
 TeamCreate(name="<team-name>")
 
 # Spawn teammates in one message (parallel start):
-Agent(team_name=..., name="docs-reviewer",        subagent_type="docs-reviewer",       prompt=...)
-Agent(team_name=..., name="app-security-reviewer", subagent_type="app-security-reviewer", prompt=...)
-Agent(team_name=..., name="quality-reviewer",      subagent_type="quality-reviewer",    prompt=...)
+Agent(team_name=..., name="docs-reviewer",        subagent_type="pr-gate-reviewer", prompt=...)
+Agent(team_name=..., name="app-security-reviewer", subagent_type="pr-gate-reviewer", prompt=...)
+Agent(team_name=..., name="quality-reviewer",      subagent_type="pr-gate-reviewer", prompt=...)
 
 # Assign work:
 TaskCreate(team_name=..., assignee="docs-reviewer",       subject="Gates 2+3: ...")
@@ -66,7 +67,7 @@ TeamDelete(name="<team-name>")   # only after all terminations confirmed
 
 ### Communication
 
-- Teammate → LEAD: `SendMessage(to="LEAD", message={...})` — arrives as
+- Teammate → LEAD: `SendMessage(to="team-lead", message={...})` — arrives as
   a `<teammate-message>` turn in LEAD's conversation (no inbox poll needed)
 - LEAD → teammate: `SendMessage(to="<name>", message={...})`
 - Shutdown: send `{"type": "shutdown_request"}`, wait for both
@@ -88,15 +89,19 @@ TeamDelete(name="<team-name>")   # only after all terminations confirmed
 Project agent definitions in `.claude/agents/<name>.md` shadow
 user-level `~/.claude/agents/<name>.md` of the same name.
 
-| File | Teammate | Gates |
-|---|---|---|
-| `.claude/agents/docs-reviewer.md` | `docs-reviewer` | /pr-review Gates 2+3 |
-| `.claude/agents/app-security-reviewer.md` | `app-security-reviewer` | /pr-review Gate 7 |
-| `.claude/agents/quality-reviewer.md` | `quality-reviewer` | /pr-review Gates 8+9+10 |
+One definition, `.claude/agents/pr-gate-reviewer.md`, is spawned once
+per gate lane; the teammate name and the task subject carry the lane:
 
-**Naming:** `app-security-reviewer` (not `security-reviewer`) avoids
-silently shadowing the user-level generic-OWASP agent. See
-`CLAUDE.md § Team mode discipline`.
+| Teammate name | Gates |
+|---|---|
+| `docs-reviewer` | /pr-review Gates 2+3 |
+| `app-security-reviewer` | /pr-review Gate 7 |
+| `quality-reviewer` | /pr-review Gates 8+9+10 |
+
+**Naming:** the definition is `pr-gate-reviewer` (not
+`security-reviewer`) so it never silently shadows the user-level
+generic-OWASP agent. See `.claude/rules/team-and-pipeline-agents.md`
+§ Team mode discipline.
 
 ## Hook wiring
 

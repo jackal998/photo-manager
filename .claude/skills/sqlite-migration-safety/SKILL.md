@@ -1,6 +1,6 @@
 ---
 name: sqlite-migration-safety
-description: Audit photo-manager's SQLite schema migrations for safety. Use when /pr-review's diff touches the _MIGRATIONS list in infrastructure/manifest_repository.py or the CREATE TABLE migration_manifest block in scanner/manifest.py — this skill enforces append-only ordering, backward-compatible defaults, idempotency, and companion edits to ManifestRow + schema SQL + README schema table.
+description: Audit photo-manager's SQLite schema migrations for safety. Use when /pr-review's diff touches the _MIGRATIONS list in infrastructure/manifest_repository.py or the CREATE TABLE migration_manifest block in scanner/manifest.py — this skill enforces append-only ordering, backward-compatible defaults, idempotency, and companion edits to ManifestRow + schema SQL + _POST_DROP_COLUMNS + README § Scanner features.
 origin: local
 ---
 
@@ -59,8 +59,8 @@ on an already-migrated DB. ✗ flag if mid-list insertion.
 
 ### 4. Idempotency
 
-The repo's `_apply_migrations` does `ALTER TABLE` and swallows
-the "duplicate column" error — safe to re-run. Don't break that
+The repo's `migrate_manifest_schema` does `ALTER TABLE` and swallows
+only the "duplicate column" error — safe to re-run. Don't break that
 invariant (e.g., by replacing with `CREATE TABLE`-style schema).
 
 ### 5. Companion edits
@@ -72,15 +72,19 @@ A new migration row MUST also appear:
   from the start, not via migration).
 - As a field on `ManifestRow` (or equivalent dataclass) in
   `scanner/dedup.py` if read by the scanner.
+- In `_POST_DROP_COLUMNS` in `infrastructure/manifest_repository.py`.
+  The structural drop-column migration rebuilds the table from that
+  list after the additive migrations run, so a column missing there
+  is created by the ALTER and then silently dropped again.
 
-If absent in either, ⚠ flag the mismatch.
+If absent in any of these, ⚠ flag the mismatch.
 
-### 6. README schema table
+### 6. README § Scanner features
 
-The README has a manifest schema table. If the migration adds a
-user-facing column (visible in the UI), `update-docs` should
-have flagged a README touch. If README wasn't touched, ⚠
-suggest updating the schema table.
+README's "Scanner features" section documents user-facing manifest
+columns in prose (there is no schema table). If the migration adds a
+user-facing column (visible in the UI) and README wasn't touched, ⚠
+suggest adding it there.
 
 ## Output format
 
@@ -96,7 +100,7 @@ section of pr-review's chat report, one line per finding:
 
 - `pr-review/SKILL.md` — the manager that invokes this skill.
 - `infrastructure/manifest_repository.py` — the `_MIGRATIONS`
-  list and `_apply_migrations` runner.
+  list, `_POST_DROP_COLUMNS`, and the `migrate_manifest_schema` runner.
 - `scanner/manifest.py` — the canonical schema for new manifests.
 - `update-docs/SKILL.md` — write-side companion that updates
-  README schema table after the fact.
+  README § Scanner features after the fact.

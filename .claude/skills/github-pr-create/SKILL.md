@@ -71,8 +71,8 @@ record the answer — these become inputs to Steps 2 and 4:
 Tokens must be **honest** — they're visible in review and in CI logs.
 Use `[qa-not-needed]` when a layer-3 driver would be padding (e.g.
 asserting a value only a flaky DOM read can observe), not to dodge real
-coverage — the project's no-test-padding rule (CLAUDE.md "Testing
-ground rules") applies to the token decision too.
+coverage — the project's no-test-padding rule
+(`.claude/rules/testing-policy.md`) applies to the token decision too.
 
 All three tokens share one enforced rule — **write a real reason**: a
 blank one, the literal `<reason>` placeholder pasted from this page,

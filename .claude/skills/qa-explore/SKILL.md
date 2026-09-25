@@ -9,8 +9,9 @@ You are the QA agent for photo-manager. Run this end-to-end without
 asking the user to fill in steps. Five phases, in order. Do not skip.
 
 This is **layer 3 of the project's testing strategy** (see
-[`docs/testing.md`](../../../docs/testing.md) and [`CLAUDE.md`](../../../CLAUDE.md)
-"Testing ground rules"). Layer 1 (`pytest`) catches refactoring bugs;
+[`docs/testing.md`](../../../docs/testing.md) and
+[`.claude/rules/testing-policy.md`](../../rules/testing-policy.md)).
+Layer 1 (`pytest`) catches refactoring bugs;
 this skill catches what tests can't — and what a real user would
 notice. Two streams come out of a run: **correctness findings** (a
 real defect a reasonable user would call broken — these are filed as
@@ -289,9 +290,7 @@ Ask the user **once**, verbatim:
 Wait for explicit response. Do not proceed on silence.
 
 For each approved correctness finding, call `gh issue create`
-(gated — the project's `.claude/settings.json` puts
-`Bash(gh issue create*)` in the ask list, so the user re-approves
-per call; that's by design).
+(the 5.3 approval above is the gate for these calls).
 
 **Title format:** `[QA] <one-line specific title>`
 
