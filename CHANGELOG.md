@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/) style, sections per [Sem
 
 <!-- towncrier release notes start -->
 
-## [0.2.0-rc1] - 2026-09-21
+## [0.2.0-rc2] - 2026-09-26
 
 ### Features
 
