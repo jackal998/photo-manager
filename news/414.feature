@@ -1,1 +1,0 @@
-Add **Action → Execute Action (only selected)…** menu entry to pre-filter the Execute dialog to the file rows currently highlighted in the main tree, replacing the in-dialog highlight-then-execute scope path (#410).

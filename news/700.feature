@@ -1,1 +1,0 @@
-Add sortable + resizable, persisted columns to the web result tree — click File Name / Size headers to sort (per group, in-session), drag column edges to resize (restored across launches via localStorage) (#700)

@@ -1,1 +1,0 @@
-Clamp Set Action dialog's Recent ▾ menu position to the dialog's current screen so a stale dialog after a multi-monitor disconnect cannot open the menu off-screen (#381).

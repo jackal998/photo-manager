@@ -1,1 +1,0 @@
-Cache the ``scan.hash_pool="auto"`` calibration in ``settings.json`` keyed by a machine+sources fingerprint, so a re-scan of the same library reuses the measured rates (re-projected to the current file count) instead of re-running the ~2s calibration every time (#486).

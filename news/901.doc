@@ -1,1 +1,0 @@
-Stacked PRs must be linked with `gh stack link` the moment the upper PR opens; the PR-create skill now carries the owner's rule, the per-merge `mergeable` re-check and the merge-not-rebase cascade (#901).

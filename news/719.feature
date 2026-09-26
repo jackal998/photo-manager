@@ -1,1 +1,0 @@
-Gate the web toolbar Execute button on a loaded manifest — matching the menu Action → Execute, the Set-Action button, and the Qt desktop — so it no longer opens the execute dialog over an empty manifest (#673)

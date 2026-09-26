@@ -1,1 +1,0 @@
-Expose per-dimension scoring signals (`gps_present`, `exif_tag_count`, `xmp_derived`) in every `GET /api/manifest` FileRow, so the web QA suite can assert each scoring dimension instead of only the composite score (#680).

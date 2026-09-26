@@ -1,1 +1,0 @@
-Apply EXIF Orientation before pHash/dHash so a rotated copy and its upright original land in the same near-duplicate group, and hash the RAW embedded preview at the JPEG path's working resolution from a single LibRaw open (#822, #826).

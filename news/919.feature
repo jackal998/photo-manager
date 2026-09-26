@@ -1,1 +1,0 @@
-Let a photo be decided in the pane it is shown in: the preview pane gains a title, a 4:3 image frame with its similarity badge, a five-row metadata table, Keep/Delete/Skip buttons sharing the row control's vocabulary and lock behaviour, and a keep-worthiness bar (#905)

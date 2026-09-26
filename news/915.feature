@@ -1,1 +1,0 @@
-Promote "Keep best · delete rest" onto every group header — it skips locked rows silently-but-visibly and offers a 6-second undo instead of a confirm dialog; the header now also shows the group's total size and the folder its members share (#915)

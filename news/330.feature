@@ -1,1 +1,0 @@
-Add `/agentic-engineering` project skill — doc-only reference covering Agent Teams vs subagents decision heuristic, verified teammate lifecycle on Windows CLI, /pr-review team-mode integration summary, hook wiring guide, and known limits as of 2026-05-20.
