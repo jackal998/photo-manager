@@ -38,19 +38,22 @@ describe("LockToggle", () => {
     expect(screen.getByTestId(TESTID)).toHaveAttribute("aria-label", "鎖定");
   });
 
-  // `ink-hairline` is the ROLE name Q8 published for #a89f8f as a non-text
-  // stroke; `ink-faint` is the same value under its old name. Layout slice R
-  // moves this call site onto the role, which index.css explicitly invites.
-  it("renders faint when unlocked and solid accent when locked", () => {
+  // Design F1 (#922): the unlocked padlock is a STATE, so it wears `ink-muted`
+  // #6b6358 at rest — not `hairline` #a89f8f (2.58:1 on panel), which carries
+  // no state anywhere. classList, not a className substring: the old markup's
+  // `hover:text-ink-muted` contains "text-ink-muted" and would pass a
+  // substring check while the resting ink was still the hairline.
+  it("renders the unlocked padlock in ink-muted, not the hairline", () => {
     const { el } = renderToggle(false);
-    expect(el.className).toContain("text-ink-hairline");
+    expect(el.classList.contains("text-ink-muted")).toBe(true);
+    expect(el.classList.contains("text-ink-hairline")).toBe(false);
     expect(el.className).not.toContain("text-warm");
   });
 
   it("renders the warm accent when locked", () => {
     const { el } = renderToggle(true);
     expect(el.className).toContain("text-warm");
-    expect(el.className).not.toContain("text-ink-hairline");
+    expect(el.classList.contains("text-ink-muted")).toBe(false);
   });
 
   // REPLY §"Padlock (R17)": «28px, not 16px. A 16px target is below a

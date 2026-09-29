@@ -1,9 +1,10 @@
 // Lock toggle — a clickable padlock (#878 slice b).
 //
-// Was a Radix Checkbox. The Daylight design draws the lock as a padlock that
-// is FAINT when the row is unlocked and SOLID (warm accent) when it is locked,
-// so the locked rows in a long tree are scannable without reading each cell —
-// a checkbox renders every row's control at the same weight.
+// Was a Radix Checkbox. The Daylight design draws the lock as a padlock whose
+// shackle is OPEN (muted ink) when the row is unlocked and CLOSED (warm
+// accent) when it is locked, so the locked rows in a long tree are scannable
+// without reading each cell — a checkbox renders every row's control at the
+// same weight.
 //
 // Two contracts are deliberately preserved so nothing downstream changes:
 //   * `data-state="checked" | "unchecked"` — what Radix emitted and what the
@@ -53,12 +54,13 @@ export function LockToggle({
         "inline-flex items-center justify-center transition-colors",
         metrics.lock,
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warm",
-        // Faint vs solid IS the state cue; the open/closed shackle is the
-        // second, colour-free one (the design's grayscale-safety rule).
-        // `ink-hairline` is the ROLE name Q8 published for #a89f8f as a
-        // non-text stroke — same value as the `ink-faint` alias this wore,
-        // moved onto the role name index.css invites slice R to adopt.
-        checked ? "text-warm" : "text-ink-hairline hover:text-ink-muted",
+        // Design F1 (2026-09-20, #922): the unlocked padlock answers "is this
+        // row protected from the delete verb?" — a STATE, so it cannot wear
+        // `hairline` #a89f8f (2.58:1 on panel), which now carries no state
+        // anywhere. It takes `ink-muted` #6b6358 (5.8:1 panel / 4.7:1 select).
+        // That ink and `warm` are near-identical in grayscale, so the
+        // open/closed shackle below is what separates the two states.
+        checked ? "text-warm" : "text-ink-muted",
         "hover:bg-subtle"
       )}
     >
