@@ -45,6 +45,7 @@ vi.mock("../api/client", async (importOriginal) => {
     // Pass through real implementations so 409 parsing is exercised.
     postExecute: real.postExecute,
     postRemove: real.postRemove,
+    postRestore: real.postRestore,
     postPrune: real.postPrune,
     postSave: real.postSave,
     postReveal: real.postReveal,
@@ -696,6 +697,209 @@ describe("removeFromList – 409 locked_paths sets lockConflict op=remove with o
     expect(execute.lockConflict!.op).toBe("remove");
     expect(execute.lockConflict!.originalPaths).toEqual(paths);
     expect(execute.lockConflict!.paths).toEqual(["/photos/j.jpg"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The immediate Skip's undo toast (#909)
+//
+// "Skip now" / List → Skip Selected now FINALIZE outcome='ignored' on the
+// spot. Before #909 one mis-click dropped a multi-row selection from the
+// review with no confirm and no way back short of a re-scan; the toast is the
+// way back, so what it records and what its Undo sends are the behaviour.
+// ---------------------------------------------------------------------------
+
+/** The JSON body of the n-th fetch call (0-based) on a fetch spy. */
+function fetchBody(spy: { mock: { calls: unknown[][] } }, n: number): unknown {
+  const init = spy.mock.calls[n][1] as { body: string };
+  return JSON.parse(init.body);
+}
+
+describe("removeFromList(undoable) – an immediate Skip raises the undo toast", () => {
+  it("records the skipped rows and reports how many left the review", async () => {
+    const group = makeGroup(1, ["/p/a.jpg", "/p/b.jpg", "/p/c.jpg", "/p/d.jpg"]);
+    group.items[1].user_decision = "delete";
+    seedManifest([group]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ removed: 2, groups: [makeGroup(1, ["/p/c.jpg", "/p/d.jpg"])] })
+    );
+
+    await useAppStore
+      .getState()
+      .removeFromList(["/p/a.jpg", "/p/b.jpg"], false, { undoable: true });
+
+    const { toast } = useAppStore.getState();
+    expect(toast).not.toBeNull();
+    expect(toast!.kind).toBe("skip-now");
+    expect(toast!.affectedCount).toBe(2);
+    expect(toast!.lockedCount).toBe(0);
+    expect(toast!.snapshot.map((r) => r.file_path)).toEqual([
+      "/p/a.jpg",
+      "/p/b.jpg",
+    ]);
+    expect(toast!.prunedPaths).toEqual([]);
+  });
+
+  it("the Execute dialog's already-confirmed Skip raises none", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg", "/p/c.jpg"])]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({ removed: 1, groups: [makeGroup(1, ["/p/b.jpg", "/p/c.jpg"])] })
+    );
+
+    await useAppStore.getState().removeFromList(["/p/a.jpg"]);
+
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("raises none when the skip was refused — nothing was written", async () => {
+    const group = makeGroup(1, ["/p/a.jpg", "/p/b.jpg"]);
+    group.items[0].is_locked = true;
+    seedManifest([group]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: ["/p/a.jpg"] })
+    );
+
+    await useAppStore
+      .getState()
+      .removeFromList(["/p/a.jpg", "/p/b.jpg"], false, { undoable: true });
+
+    expect(useAppStore.getState().toast).toBeNull();
+    expect(useAppStore.getState().execute.lockConflict!.op).toBe("remove");
+  });
+});
+
+describe("undoSkipNow – puts the skipped rows back in the review", () => {
+  function seedSkipToast(prunedPaths: string[] = []): void {
+    useAppStore.setState({
+      toast: {
+        id: 7,
+        kind: "skip-now",
+        groupNumber: null,
+        decision: null,
+        affectedCount: 2,
+        lockedCount: 0,
+        snapshot: [
+          { file_path: "/p/a.jpg", decision: "", locked: false },
+          { file_path: "/p/b.jpg", decision: "delete", locked: false },
+        ],
+        prunedPaths,
+        undoing: false,
+      },
+    });
+  }
+
+  it("POSTs the rows to /api/restore, renders the result and clears the toast", async () => {
+    seedManifest([]);
+    seedSkipToast();
+    const restored = makeGroup(1, ["/p/a.jpg", "/p/b.jpg", "/p/c.jpg"]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ restored: 2, groups: [restored] }));
+
+    await useAppStore.getState().undoSkipNow();
+
+    expect(fetchSpy.mock.calls[0][0]).toBe("/api/restore");
+    expect(fetchBody(fetchSpy, 0)).toEqual({
+      manifest_path: "/data/scan.db",
+      file_paths: ["/p/a.jpg", "/p/b.jpg"],
+    });
+    const state = useAppStore.getState();
+    expect(state.manifest.groups).toEqual([restored]);
+    expect(state.toast).toBeNull();
+  });
+
+  it("keeps the toast up when the restore fails, so the way back is not lost", async () => {
+    seedManifest([]);
+    seedSkipToast();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(errorResponse(422));
+
+    await useAppStore.getState().undoSkipNow();
+
+    const { toast, manifest } = useAppStore.getState();
+    expect(toast).not.toBeNull();
+    expect(toast!.undoing).toBe(false);
+    expect(manifest.error).toBeTruthy();
+  });
+});
+
+describe("immediate Skip + singleton prune – Undo reverses both", () => {
+  function preferAlwaysPrune(plain: string[]): void {
+    vi.mocked(client.postPruneCandidates).mockResolvedValue({
+      plain,
+      actioned: [],
+      locked: [],
+    });
+    vi.mocked(client.getSettings).mockResolvedValue({
+      "sorting.defaults": null,
+      "ui.prune_singletons": "always",
+      "ui.scan_dialog.autotune_read_knee": null,
+    });
+  }
+
+  it("restores the partner the prune took, or the skipped row comes back alone and unseen", async () => {
+    // Skipping one row of a pair leaves its partner a singleton; with the
+    // "always" pref the prune finalizes it too. A row restored without its
+    // partner is a one-member group, which the review tree never shows — an
+    // Undo that visibly does nothing.
+    const pair = makeGroup(1, ["/p/a.jpg", "/p/b.jpg"]);
+    seedManifest([pair]);
+    preferAlwaysPrune(["/p/b.jpg"]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ removed: 1, groups: [] }))
+      .mockResolvedValueOnce(
+        ok200({ pruned: ["/p/b.jpg"], locked_skipped: [], groups: [] })
+      )
+      .mockResolvedValueOnce(ok200({ restored: 2, groups: [pair] }));
+
+    await useAppStore
+      .getState()
+      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+    expect(useAppStore.getState().toast!.prunedPaths).toEqual(["/p/b.jpg"]);
+
+    await useAppStore.getState().undoSkipNow();
+
+    expect(fetchBody(fetchSpy, 2)).toEqual({
+      manifest_path: "/data/scan.db",
+      file_paths: ["/p/a.jpg", "/p/b.jpg"],
+    });
+    expect(useAppStore.getState().manifest.groups).toEqual([pair]);
+  });
+
+  it("an execute's prune never lands in a standing skip toast", async () => {
+    // The skip's toast is still up when the user runs Execute; that prune is
+    // the execute's consequence, not the skip's, so Undo must not revive it.
+    const group = makeGroup(1, ["/p/a.jpg", "/p/b.jpg", "/p/c.jpg"]);
+    group.items[2].user_decision = "delete";
+    seedManifest([group]);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        ok200({ removed: 1, groups: [makeGroup(1, ["/p/b.jpg", "/p/c.jpg"])] })
+      )
+      .mockResolvedValueOnce(
+        ok200({
+          success_paths: ["/p/c.jpg"],
+          failed: [],
+          ignored: [],
+          missing: [],
+          db_write_failed: [],
+          log_path: null,
+          groups: [],
+        })
+      )
+      .mockResolvedValueOnce(
+        ok200({ pruned: ["/p/b.jpg"], locked_skipped: [], groups: [] })
+      );
+
+    await useAppStore
+      .getState()
+      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+    preferAlwaysPrune(["/p/b.jpg"]);
+    await useAppStore.getState().executeDecisions();
+
+    const { toast } = useAppStore.getState();
+    expect(toast!.kind).toBe("skip-now");
+    expect(toast!.prunedPaths).toEqual([]);
   });
 });
 

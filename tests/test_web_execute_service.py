@@ -17,6 +17,7 @@ from core.app_service.execute_service import (
     execute_decisions,
     prune_singletons,
     remove_from_review,
+    restore_to_review,
     save_manifest,
 )
 from infrastructure.manifest_repository import ManifestRepository
@@ -379,6 +380,75 @@ class TestRemoveFromReview:
     def test_missing_manifest_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             remove_from_review(str(tmp_path / "no.sqlite"), ["x"])
+
+
+# ---------------------------------------------------------------------------
+# restore_to_review — the Undo of an immediate Skip (#909)
+# ---------------------------------------------------------------------------
+
+
+class TestRestoreToReview:
+    def _three_row_group(self, tmp_path: Path) -> tuple[Path, list[Path]]:
+        files = _make_real_files(tmp_path, 3)
+        rows = [
+            {
+                "source_path": str(f),
+                "action": "" if i == 0 else "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": None if i == 0 else 2,
+                "outcome": "",
+                # A staged decision the skip must not cost the user.
+                "user_decision": "delete" if i == 1 else "",
+                "file_size_bytes": 64,
+            }
+            for i, f in enumerate(files)
+        ]
+        return _make_manifest(tmp_path, rows), files
+
+    def test_undoes_a_skip_and_the_rows_come_back_as_they_were(self, tmp_path):
+        manifest, (f0, f1, f2) = self._three_row_group(tmp_path)
+        remove_from_review(str(manifest), [str(f0), str(f1)])
+
+        result = restore_to_review(str(manifest), [str(f0), str(f1)])
+
+        assert result["restored"] == 2
+        for f in (f0, f1):
+            assert _read_col(manifest, str(f), "outcome") == ""
+            assert _read_col(manifest, str(f), "executed") == 0
+        # The staged decision survives the skip + undo round-trip.
+        assert _read_col(manifest, str(f1), "user_decision") == "delete"
+        # And the response the frontend renders has the whole group again.
+        [group] = result["groups"]
+        assert {item["file_path"] for item in group["items"]} == {
+            str(f0), str(f1), str(f2)
+        }
+
+    def test_never_returns_a_deleted_row_to_review(self, tmp_path):
+        # A 'deleted' row's file is in the Recycle Bin; putting it back in
+        # review would offer to delete a file that is no longer there.
+        manifest, (f0, _f1, _f2) = self._three_row_group(tmp_path)
+        ManifestRepository().finalize_outcome(str(manifest), [str(f0)], "deleted")
+
+        result = restore_to_review(str(manifest), [str(f0)])
+
+        assert result["restored"] == 0
+        assert _read_col(manifest, str(f0), "outcome") == "deleted"
+        assert _read_col(manifest, str(f0), "executed") == 1
+
+    def test_out_of_root_path_is_not_restored(self, tmp_path):
+        manifest, (f0, _f1, _f2) = self._three_row_group(tmp_path)
+        remove_from_review(str(manifest), [str(f0)])
+
+        result = restore_to_review(
+            str(manifest), [str(f0)], allowed_roots=[str(tmp_path / "elsewhere")]
+        )
+
+        assert result["restored"] == 0
+        assert _read_col(manifest, str(f0), "outcome") == "ignored"
+
+    def test_missing_manifest_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            restore_to_review(str(tmp_path / "no.sqlite"), ["x"])
 
 
 # ---------------------------------------------------------------------------

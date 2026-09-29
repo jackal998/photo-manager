@@ -151,8 +151,11 @@ describe("ContextMenu", () => {
     await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
     // #694: the result-tree "Remove from list" FINALIZES (outcome='ignored') —
     // it must NOT stage a 'ignore' decision. So removeFromList fires and
-    // setDecisions must NOT be called.
-    expect(removeFromListMock).toHaveBeenCalledWith([FILE_PATH]);
+    // setDecisions must NOT be called. #909: flagged `undoable`, so the skip
+    // raises the undo toast — the Execute dialog's confirmed Skip does not.
+    expect(removeFromListMock).toHaveBeenCalledWith([FILE_PATH], false, {
+      undoable: true,
+    });
     expect(setDecisionsMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledOnce();
   });
@@ -222,7 +225,9 @@ describe("ContextMenu", () => {
     const many = ["/a.jpg", "/b.jpg", "/c.jpg"];
     const { onClose } = renderMenu(false, many);
     await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
-    expect(removeFromListMock).toHaveBeenCalledWith(many);
+    expect(removeFromListMock).toHaveBeenCalledWith(many, false, {
+      undoable: true,
+    });
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -332,7 +337,9 @@ describe("ContextMenu", () => {
       const user = userEvent.setup();
       const { onClose } = renderMenu(false, GROUP_PATHS, { variant: "group" });
       await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
-      expect(removeFromListMock).toHaveBeenCalledWith(GROUP_PATHS);
+      expect(removeFromListMock).toHaveBeenCalledWith(GROUP_PATHS, false, {
+        undoable: true,
+      });
       expect(setDecisionsMock).not.toHaveBeenCalled();
       expect(onClose).toHaveBeenCalledOnce();
     });

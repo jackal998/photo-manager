@@ -142,14 +142,17 @@ export function ContextMenu({
     // web analog of Qt's LockedRowsConfirmDialog), and on success it calls
     // maybeOfferPrune (the singleton-prune offer). Like desktop, there is NO
     // confirmation dialog on this path — that belongs to the execute-dialog
-    // remove. Staging a reversible 'ignore' decision stays available via the
-    // per-row decision buttons (DecisionControl).
+    // remove. Instead (#909, design Q5) the skip raises the undo toast:
+    // `undoable` makes removeFromList record the rows and offer "N files
+    // dropped from this review · Undo". Staging a reversible 'ignore'
+    // decision stays available via the per-row decision buttons
+    // (DecisionControl).
     //
     // Hence the label is `web.context_menu.skip_now`, NOT the row control's
     // `web.decision_long.remove_from_list` (review round 2): the row control
     // stages and is reversible until Execute, this finalizes on the spot, and
     // one word for both would make them read identically.
-    void removeFromList(targetPaths);
+    void removeFromList(targetPaths, false, { undoable: true });
     onClose();
   }
 

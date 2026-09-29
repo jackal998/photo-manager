@@ -202,8 +202,14 @@ export interface UndoToast {
    * only). The two differ in what their sentence can say: keep-best names ONE
    * group and always writes `delete`, a toolbar verb acts on a ctrl/shift
    * selection that may span groups and writes whichever decision was pressed.
+   *
+   * "skip-now" (#909) is the immediate Skip — the context menu's "Skip now"
+   * and List → Skip Selected now — which FINALIZES `outcome='ignored'` rather
+   * than staging a decision, so its Undo goes through `undoSkipNow` (POST
+   * /api/restore) instead of a decision PATCH. Its snapshot rows carry the
+   * decision and lock only as a record: the skip changes neither.
    */
-  kind: "keep-best" | "bulk-decision";
+  kind: "keep-best" | "bulk-decision" | "skip-now";
   /** The group keep-best acted on; null for a toolbar verb (see `kind`). */
   groupNumber: number | null;
   /**
@@ -223,6 +229,13 @@ export interface UndoToast {
   lockedCount: number;
   /** Prior state of every row the write touched — what Undo restores. */
   snapshot: KeepBestSnapshotRow[];
+  /**
+   * skip-now only: singletons the prune that followed THIS skip finalized.
+   * Undo must restore them too — skipping one row of a pair leaves its
+   * partner a singleton, and if the prune took the partner, restoring the
+   * skipped row alone brings back a one-member group the tree never shows.
+   */
+  prunedPaths?: string[];
   /** True while an Undo is in flight, so the button cannot fire twice. */
   undoing: boolean;
 }
@@ -584,8 +597,15 @@ export interface AppActions {
    *
    * - On success: replaces manifest.groups from response.groups.
    * - On 409 locked_paths: sets lockConflict (with op="remove").
+   * - `undoable` (#909): the immediate Skip entry points (context menu, List
+   *   menu) pass it so a success raises the "skip-now" undo toast. The
+   *   Execute dialog's Skip does not — it is already behind a confirm.
    */
-  removeFromList(paths: string[], forceLocked?: boolean): Promise<void>;
+  removeFromList(
+    paths: string[],
+    forceLocked?: boolean,
+    opts?: { undoable?: boolean }
+  ): Promise<void>;
 
   /**
    * After a destructive op (execute / finalizing remove) updates the groups,
@@ -596,8 +616,13 @@ export interface AppActions {
    * plain/actioned/locked, and branches: never→noop; locked→open the lock gate;
    * always→auto-prune; ask→open the prune dialog. The web port of Qt's
    * `_maybe_offer_singleton_prune`.
+   *
+   * `undoToastId` (#909): the "skip-now" toast whose skip triggered this
+   * offer. Whatever this offer ends up pruning is added to that toast's
+   * `prunedPaths` (if it is still the standing toast), so its Undo can
+   * restore the partners the skip orphaned.
    */
-  maybeOfferPrune(): Promise<void>;
+  maybeOfferPrune(undoToastId?: number): Promise<void>;
 
   /**
    * POST /api/prune with an explicit `paths` set (#686) to finalize exactly those
@@ -742,6 +767,14 @@ export interface AppActions {
    * pressing Undo.
    */
   undoKeepBest(): Promise<void>;
+
+  /**
+   * Reverse the immediate Skip the current "skip-now" toast describes (#909):
+   * POST /api/restore for the skipped rows plus any singletons the follow-up
+   * prune took, then dismiss the toast. Same no-op and failure rules as
+   * `undoKeepBest` — a failed restore leaves the toast up.
+   */
+  undoSkipNow(): Promise<void>;
 
   /** Clear the toast (its timer expired, or Undo finished). */
   dismissToast(): void;
