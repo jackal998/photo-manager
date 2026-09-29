@@ -26,6 +26,7 @@
 // a floor); every button is `shrink-0`. At 1280px — the review viewport, and
 // what s76 runs at — that resolves with the inputs near their floors.
 
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 
@@ -48,6 +49,11 @@ import {
   MAIN_LANG_TOGGLE,
   MAIN_MANIFEST_INPUT,
   MAIN_MANIFEST_OPEN,
+  MAIN_OVERFLOW_LANG_EN,
+  MAIN_OVERFLOW_LANG_ZH,
+  MAIN_OVERFLOW_MENU,
+  MAIN_OVERFLOW_SET_ACTION,
+  MAIN_OVERFLOW_SETTINGS,
   MAIN_SCAN_BUTTON,
   MAIN_SETTINGS_BUTTON,
   MAIN_TOOLBAR,
@@ -99,6 +105,14 @@ const BTN_DANGER =
 // under a deliberately wider fallback (no Segoe UI on the Linux CI runner, so
 // it falls back to DejaVu/Liberation) it overflowed by 64px and s76 went red.
 // 104 + 56 buys 90px back, leaving ~26px of margin on that stack.
+// The "⋯" overflow menu's popup (#918) — the MenuBar's content/item classes,
+// repeated rather than imported so the two menus read as one family without
+// MenuBar.tsx exporting non-component constants (react-refresh lint).
+const MENU_CONTENT_CLASS =
+  "min-w-[12rem] rounded border border-hairline bg-panel py-1 shadow-md z-50";
+const MENU_ITEM_CLASS =
+  "flex items-center justify-between px-3 py-1.5 text-sm cursor-pointer outline-none data-[highlighted]:bg-subtle data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed";
+
 const FILTER_INPUT =
   "h-[34px] w-full rounded-[8px] border border-hairline bg-panel pl-[30px] pr-3 " +
   "text-[13px] text-ink placeholder:text-ink-muted focus:border-warm " +
@@ -239,6 +253,8 @@ export function Toolbar({
         {t("web.toolbar.execute", "Execute")}
       </button>
 
+      {/* Folds into the "⋯" menu on a narrow strip (#918, second shed stage). */}
+      {!shed.overflowMenu && (
       <button
         data-testid={ACTION_MAIN_BUTTON}
         className={BTN_SECONDARY}
@@ -251,6 +267,7 @@ export function Toolbar({
             shorter label than the dialog heading. */}
         {t("web.toolbar.set_action", "Set Action…")}
       </button>
+      )}
 
       {/* Filter (new, slice TB). View-only substring match over basename +
           folder — see lib/rowFilter.ts. */}
@@ -329,6 +346,64 @@ export function Toolbar({
       </>
       )}
 
+      {/* Second shed stage (#918): below TOOLBAR_OVERFLOW_MENU_WIDTH the
+          manifest shed alone still leaves the strip ~127px over on a wide
+          (non-Segoe) stack, so Set Action…, the language toggle and Settings
+          fold into one "⋯" menu here — every one of them stays one click
+          deeper rather than scrolling the Delete CTA off the end. */}
+      {shed.overflowMenu ? (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            data-testid={MAIN_OVERFLOW_MENU}
+            className={BTN_SECONDARY}
+            aria-label={t("web.toolbar.more_aria", "More actions")}
+            title={t("web.toolbar.more_aria", "More actions")}
+          >
+            ⋯
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className={MENU_CONTENT_CLASS} align="end" sideOffset={4}>
+              <DropdownMenu.Item
+                data-testid={MAIN_OVERFLOW_SET_ACTION}
+                className={MENU_ITEM_CLASS}
+                disabled={manifestPath === null}
+                onSelect={() => onSetAction()}
+              >
+                {t("web.toolbar.set_action", "Set Action…")}
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
+              <DropdownMenu.Label className="px-3 py-1 text-xs uppercase tracking-wide text-ink-muted">
+                {t("web.menu.view_language", "Language")}
+              </DropdownMenu.Label>
+              <DropdownMenu.Item
+                data-testid={MAIN_OVERFLOW_LANG_EN}
+                className={MENU_ITEM_CLASS}
+                onSelect={() => onSetLocale("en")}
+              >
+                <span>{t("web.menu.lang_en", "English")}</span>
+                {locale === "en" && <span aria-hidden="true">✓</span>}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                data-testid={MAIN_OVERFLOW_LANG_ZH}
+                className={MENU_ITEM_CLASS}
+                onSelect={() => onSetLocale("zh_TW")}
+              >
+                <span>{t("web.menu.lang_zh", "中文 (繁體)")}</span>
+                {locale === "zh_TW" && <span aria-hidden="true">✓</span>}
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
+              <DropdownMenu.Item
+                data-testid={MAIN_OVERFLOW_SETTINGS}
+                className={MENU_ITEM_CLASS}
+                onSelect={() => onSettings()}
+              >
+                {t("web.toolbar.settings", "Settings")}
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      ) : (
+      <>
       <button
         data-testid={MAIN_LANG_TOGGLE}
         className={BTN_SECONDARY}
@@ -344,6 +419,8 @@ export function Toolbar({
       >
         {t("web.toolbar.settings", "Settings")}
       </button>
+      </>
+      )}
 
       {/* «Divider before it because it is the only destructive control in the
           toolbar and it should not sit flush against the filter.» */}

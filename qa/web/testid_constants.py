@@ -149,6 +149,25 @@ Execute dialog as MAIN_EXECUTE_BUTTON.  Never hidden: at zero marked rows it is
 DISABLED with the label still reading "Delete 0 files…", so the only
 destructive control on the screen never moves under the cursor."""
 
+MAIN_OVERFLOW_MENU = "main-overflow-menu"
+"""The toolbar's "⋯" overflow trigger (#918).  Rendered ONLY below the second
+shed threshold (lib/toolbarShed.ts), where it replaces the inline Set Action…,
+language toggle and Settings buttons so the strip fits instead of scrolling the
+Delete CTA off its end.  Absent at wider widths — its items are the buttons."""
+
+MAIN_OVERFLOW_SET_ACTION = "main-overflow-set-action"
+"""Overflow-menu item — opens the same Set Action dialog as ACTION_MAIN_BUTTON,
+and is disabled under the same `manifestPath === null` gate (#673)."""
+
+MAIN_OVERFLOW_LANG_EN = "main-overflow-lang-en"
+"""Overflow-menu item — switch the UI to English (checked when active)."""
+
+MAIN_OVERFLOW_LANG_ZH = "main-overflow-lang-zh"
+"""Overflow-menu item — switch the UI to 中文 (繁體) (checked when active)."""
+
+MAIN_OVERFLOW_SETTINGS = "main-overflow-settings"
+"""Overflow-menu item — opens the same Settings dialog as MAIN_SETTINGS_BUTTON."""
+
 MAIN_STATUS_STRIP = "main-status-strip"
 """The 30px status strip inside the footer.  Distinct from MAIN_STATUS_BAR (the
 summary <p> inside it) because the footer also carries the two conditional

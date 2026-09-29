@@ -45,8 +45,15 @@ import urllib.request
 from pathlib import Path
 
 from qa.web._pw import PWContext
-from qa.web._invariants import click_row, ctrl_click_row, run_scan
+from qa.web._invariants import (
+    click_row,
+    ctrl_click_row,
+    run_scan,
+    wait_no_modal_overlay,
+)
 from qa.web.testid_constants import (
+    ACTION_MAIN_BUTTON,
+    DLGE_SETTINGS_DIALOG,
     EXECUTE_DIALOG,
     MAIN_BULK_LABEL,
     MAIN_MANIFEST_INPUT,
@@ -59,7 +66,13 @@ from qa.web.testid_constants import (
     MAIN_DENSITY_TOGGLE,
     MAIN_FILTER_INPUT,
     MAIN_LANG_TOGGLE,
+    MAIN_OVERFLOW_LANG_EN,
+    MAIN_OVERFLOW_LANG_ZH,
+    MAIN_OVERFLOW_MENU,
+    MAIN_OVERFLOW_SET_ACTION,
+    MAIN_OVERFLOW_SETTINGS,
     MAIN_RESULT_TREE,
+    MAIN_SETTINGS_BUTTON,
     MAIN_SCAN_SUMMARY,
     MAIN_STATUS_DELETE_COUNT,
     MAIN_STATUS_RECLAIM,
@@ -611,22 +624,86 @@ def run(*, base_url: str) -> None:
                 f"(input={manifest_present}, open={open_present}), so the strip "
                 "has to scroll to reach the Delete CTA."
             )
-            # 1000px is BELOW the 1280 design width, so the contract here is
-            # weaker than the zero-overflow one asserted above, and
-            # deliberately so. Shedding the manifest pair is as far as this can
-            # go: the only other controls with a menu-bar duplicate are the
-            # language toggle and Set Action…, and both are pinned — the owner
-            # kept the language and Settings buttons in the toolbar, and
-            # ACTION_MAIN_BUTTON is on the slice's must-not-change list. So
-            # below ~1050px on a wide (non-Segoe) stack the strip genuinely
-            # scrolls, which is what `overflow-x: auto` is the net for.
-            #
-            # What must still hold at this width is the thing the shed exists
-            # to protect: the one destructive control is REACHABLE — scrollable
-            # into view, fully inside the viewport once there, and hit-testing
-            # to itself rather than to something covering it. A CTA you cannot
-            # reach and a CTA you must scroll to are different failures, and
-            # only the first is a bug.
+            # ── 10b. Second stage (#918): the ⋯ overflow menu ──────────────
+            # The manifest shed alone left this strip 127px over at 1000px on
+            # CI's wide (non-Segoe) stack, parking the Delete CTA off the end
+            # of a scrolling toolbar. Below the second threshold Set Action…,
+            # the language toggle and Settings fold into one "⋯" menu, and the
+            # contract at 1000px becomes the same ZERO-overflow one as 1280.
+            folded = {
+                "set_action": page.get_by_test_id(ACTION_MAIN_BUTTON).count(),
+                "lang": page.get_by_test_id(MAIN_LANG_TOGGLE).count(),
+                "settings": page.get_by_test_id(MAIN_SETTINGS_BUTTON).count(),
+                "overflow": page.get_by_test_id(MAIN_OVERFLOW_MENU).count(),
+            }
+            print(f"probe_status: s76 at 1000px folded={folded}")
+            assert folded == {
+                "set_action": 0,
+                "lang": 0,
+                "settings": 0,
+                "overflow": 1,
+            }, (
+                "#918 — at 1000px Set Action…, the language toggle and Settings "
+                f"must fold into the ⋯ menu, got {folded}."
+            )
+            assert narrow["overflowPx"] <= 1, (
+                f"#918 — the toolbar still overflows by {narrow['overflowPx']}px "
+                "at 1000px after both shed stages, so the Delete CTA is off the "
+                f"end of a scrolling strip. Per-child widths: {narrow['kids']}"
+            )
+
+            # The folded controls must still WORK from the menu — a Radix
+            # popup portalled out of an `overflow-x: auto` strip is exactly
+            # the kind of thing jsdom cannot tell clipped from rendered.
+            page.get_by_test_id(MAIN_OVERFLOW_MENU).click()
+            page.wait_for_timeout(300)
+            menu_items = {
+                name: page.get_by_test_id(testid).is_visible()
+                for name, testid in (
+                    ("set_action", MAIN_OVERFLOW_SET_ACTION),
+                    ("lang_en", MAIN_OVERFLOW_LANG_EN),
+                    ("lang_zh", MAIN_OVERFLOW_LANG_ZH),
+                    ("settings", MAIN_OVERFLOW_SETTINGS),
+                )
+            }
+            print(f"probe_status: s76 overflow menu items visible = {menu_items}")
+            assert all(menu_items.values()), (
+                f"#918 — the ⋯ menu opened without all four items: {menu_items}"
+            )
+            page.get_by_test_id(MAIN_OVERFLOW_SETTINGS).click()
+            page.wait_for_timeout(500)
+            settings_open = page.get_by_test_id(DLGE_SETTINGS_DIALOG).is_visible()
+            print(f"probe_status: s76 Settings via ⋯ opened dialog = {settings_open}")
+            assert settings_open, (
+                "#918 — ⋯ → Settings did not open the Settings dialog."
+            )
+            page.keyboard.press("Escape")
+            wait_no_modal_overlay(page)
+
+            page.get_by_test_id(MAIN_OVERFLOW_MENU).click()
+            page.wait_for_timeout(300)
+            page.get_by_test_id(MAIN_OVERFLOW_LANG_ZH).click()
+            page.wait_for_timeout(800)
+            menu_zh_cta = page.get_by_test_id(MAIN_DELETE_CTA).inner_text()
+            page.get_by_test_id(MAIN_OVERFLOW_MENU).click()
+            page.wait_for_timeout(300)
+            page.get_by_test_id(MAIN_OVERFLOW_LANG_EN).click()
+            page.wait_for_timeout(800)
+            menu_en_cta = page.get_by_test_id(MAIN_DELETE_CTA).inner_text()
+            print(
+                f"probe_status: s76 language via ⋯ = {menu_zh_cta!r} → {menu_en_cta!r}"
+            )
+            assert "刪除" in menu_zh_cta, (
+                f"#918 — ⋯ → 中文 did not switch the UI: CTA reads {menu_zh_cta!r}"
+            )
+            assert "Delete" in menu_en_cta, (
+                f"#918 — ⋯ → English did not switch back: CTA reads {menu_en_cta!r}"
+            )
+
+            # The CTA must also be REACHABLE — fully inside the viewport and
+            # hit-testing to itself rather than to something covering it. With
+            # zero overflow the scroll below is a no-op; it stays so that a
+            # regression reports "unreachable" separately from "overflows".
             page.get_by_test_id(MAIN_DELETE_CTA).scroll_into_view_if_needed()
             page.wait_for_timeout(300)
             cta_reachable = page.evaluate(
@@ -669,6 +746,22 @@ def run(*, base_url: str) -> None:
             assert page.get_by_test_id(MAIN_MANIFEST_INPUT).count() == 1, (
                 "The manifest input did not come BACK at 1280px — a shed that "
                 "never restores is a removal."
+            )
+            restored = {
+                "set_action": page.get_by_test_id(ACTION_MAIN_BUTTON).count(),
+                "lang": page.get_by_test_id(MAIN_LANG_TOGGLE).count(),
+                "settings": page.get_by_test_id(MAIN_SETTINGS_BUTTON).count(),
+                "overflow": page.get_by_test_id(MAIN_OVERFLOW_MENU).count(),
+            }
+            print(f"probe_status: s76 back at 1280px = {restored}")
+            assert restored == {
+                "set_action": 1,
+                "lang": 1,
+                "settings": 1,
+                "overflow": 0,
+            }, (
+                "#918 — the folded controls did not come back inline at 1280px "
+                f"(or the ⋯ menu stayed): {restored}."
             )
     finally:
         # ALWAYS put the server back to English — `ui.locale` lives in the
