@@ -6,6 +6,7 @@ Tests here verify the REAL-BUG scenarios:
 - Terminal event delivery and status transitions
 - cancel_token.request() → status='cancelled' path
 - hash_pool_measured → store_hash_pool_rates persistence
+- #886: log lines and pipeline errors mirrored into the rotating app log
 """
 
 from __future__ import annotations
@@ -13,13 +14,18 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections import deque
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from loguru import logger
+from PIL import Image
 
 from app.web.models import ScanTask
 from app.web.routes.scan import SseScanBus
 from core.app_service.cancel_token import _CancelToken
+from core.app_service.dtos import ScanConfig
+from core.app_service.scan_runner import run_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -533,3 +539,104 @@ class TestSseDuplicateDelivery:
         # The interleaved event must have been delivered exactly once.
         assert len(all_delivered) == 1
         assert all_delivered[0][1] == "log"
+
+
+# ---------------------------------------------------------------------------
+# #886 — scan events reach the rotating app log (#49's guarantee)
+# ---------------------------------------------------------------------------
+
+def _write_jpeg(path: Path, color: tuple[int, int, int]) -> None:
+    Image.new("RGB", (32, 32), color).save(path, "JPEG")
+
+
+class TestScanAppLogMirror:
+    """The scan dialog's log box is gone once it closes; the app log is the
+    only durable record of what a scan skipped or why it failed.
+
+    Ported from the desktop client's #49 test
+    (``65876ba:tests/test_scan_worker.py`` ``TestScanWorkerLogging``), driven
+    through the web bus and ``run_pipeline`` directly (no TestClient).
+    """
+
+    def test_progress_and_skips_reach_app_log_at_pipeline_cadence(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        # 101 readable JPEGs + 1 truncated one = 102 files, so the pipeline's
+        # "Hashed N/M" progress fires at 100 and 102 — never once per file.
+        for i in range(101):
+            _write_jpeg(src / f"good_{i:03d}.jpg", (i, 128, 255 - i))
+        full = tmp_path / "_full.jpg"
+        Image.new("RGB", (200, 150), (200, 100, 50)).save(full, "JPEG")
+        (src / "bad_truncated.jpg").write_bytes(full.read_bytes()[:1024])
+
+        task = _make_task()
+        loop = asyncio.new_event_loop()
+        bus = SseScanBus(task, loop)
+        config = ScanConfig(
+            sources={"src": src},
+            output_path=tmp_path / "manifest.sqlite",
+            recursive_map={"src": False},
+            workers=2,
+        )
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda m: captured.append(m.record["message"]), level="INFO")
+        try:
+            run_pipeline(config, task.cancel_token, bus)
+        finally:
+            logger.remove(sink_id)
+            loop.close()
+
+        assert task.status == "finished"
+        scan_lines = [m for m in captured if m.startswith("scan: ")]
+        mirrored = [m[len("scan: "):] for m in scan_lines]
+        with task.buffer_lock:
+            sse_logs = [p["msg"] for _, name, p in task.event_buffer if name == "log"]
+        # Every line the dialog showed is in the app log, in order — and the
+        # SSE stream still carries them (fan-out unchanged).
+        assert sse_logs, "the SSE stream should still carry the log lines"
+        assert mirrored == sse_logs
+
+        joined = "\n".join(scan_lines)
+        assert "bad_truncated.jpg" in joined, "skipped file path must reach the app log"
+        assert "ImageDecodeError" in joined, "skip reason must reach the app log"
+        assert "Done." in joined
+
+        hashed = [m.strip() for m in mirrored if m.strip().startswith("Hashed")]
+        assert hashed == ["Hashed 100/102", "Hashed 102/102"]
+        assert len(scan_lines) < 102, "the app log must not get one line per file"
+
+    def test_pipeline_error_reaches_app_log_with_traceback(self, tmp_path):
+        from app.web.routes.scan import _run_scan
+
+        src = tmp_path / "src"
+        src.mkdir()
+        _write_jpeg(src / "a.jpg", (0, 128, 255))
+        # A regular file where the manifest's folder should be: the WRITE
+        # stage's mkdir raises FileExistsError — a mistyped output path.
+        blocker = tmp_path / "not_a_folder"
+        blocker.write_text("x", encoding="utf-8")
+        config = ScanConfig(
+            sources={"src": src},
+            output_path=blocker / "manifest.sqlite",
+            recursive_map={"src": False},
+            workers=1,
+        )
+        task = _make_task()
+        loop = asyncio.new_event_loop()
+        bus = SseScanBus(task, loop)
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda m: captured.append(str(m)), level="ERROR")
+        try:
+            _run_scan(config, task.cancel_token, bus)
+        finally:
+            logger.remove(sink_id)
+            loop.close()
+
+        assert task.status == "failed"
+        assert task.terminal_event["name"] == "failed"
+        joined = "\n".join(captured)
+        assert "Scan pipeline failed" in joined
+        # The exception TYPE only appears in the traceback, not in str(exc).
+        assert "FileExistsError" in joined, f"traceback missing from app log: {joined!r}"
