@@ -276,7 +276,7 @@ jobs:
         shell: bash
         run: |
           [ -f web-batch.log ] || exit 0
-          passes=$(grep -iE 'probe_status:[[:space:]]*PASS' web-batch.log || true)
+          passes=$(grep -aiE 'probe_status:[[:space:]]*PASS' web-batch.log || true)
           if [ -n "$passes" ]; then
             echo '::error::A soft probe is now passing — its target bug appears to be fixed.'
             echo '::error::Promote it to a hard assertion (failures.append) in the scenario, or delete the probe block.'
