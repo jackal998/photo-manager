@@ -2367,7 +2367,7 @@ class TestScanTeardownGaps:
         )
         # D: → spinning HDD, J: → remote NAS share. is_remote_drive must
         # also accept the resolved \\SERVER key for the NAS bucket
-        # (device_key collapses J: to \\LINXIAOYUN when WNetGetConnectionW
+        # (device_key collapses J: to \\NAS-HOST when WNetGetConnectionW
         # resolves it; the patched stub returns the letter unchanged so
         # the bucket key here stays "J:").
         monkeypatch.setattr(

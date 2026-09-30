@@ -3,7 +3,7 @@
 Issue #596 · fix PR for #596 · sibling cancel-deadlock #594/PR#595.
 
 ## Trigger
-User: a real multi-device scan (D: Takeout HDD + H:/J: NAS `\\LINXIAOYUN`,
+User: a real multi-device scan (D: Takeout HDD + H:/J: NAS `\\NAS-HOST`,
 32 GB RAM) showed "忽高忽低" throughput that "doesn't look like the hardware is
 maxed out." We live-monitored a faithful headless run of the real `ScanWorker`
 (CPU / RAM / D: disk / network at 3 s; harness in `.claude/tmp-monitor/`,
@@ -23,7 +23,7 @@ two cheap controls:
 ## Findings (all measured)
 - HASH is **read-supply-limited**, NOT CPU- or RAM-bound (CPU median 14 %, >80 %
   only 3.9 %; RAM steady 19–20 GB / 32; the #587/#590 OOM fix holds).
-- The NAS ran at **knee=1** (cached `read_knee_cache["\\LINXIAOYUN"]={knee:1}`),
+- The NAS ran at **knee=1** (cached `read_knee_cache["\\NAS-HOST"]={knee:1}`),
   i.e. one active read at a time — yet alone it is healthy: **137 MB/s mean, zero
   stalls** (NAS-only control).
 - With D: present the NAS is **idle ~46 % of HASH** (stalls up to 137 s). The

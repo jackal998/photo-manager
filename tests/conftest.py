@@ -27,9 +27,9 @@ def _isolate_unc_resolution(monkeypatch):
     ``_unc_cache`` and, by default, resolves via the real
     ``WNetGetConnectionW``. On a dev machine where a test drive letter (e.g.
     ``J:``) is a live NAS mapping, the real call leaks the actual server
-    (``\\\\LINXIAOYUN``) into the bucket key, and the memo persists across
+    (``\\\\NAS-HOST``) into the bucket key, and the memo persists across
     tests — so a later test that mocks ``is_remote_drive`` only for ``"J:"``
-    sees a ``\\\\LINXIAOYUN`` key it doesn't recognise and the per-device
+    sees a ``\\\\NAS-HOST`` key it doesn't recognise and the per-device
     worker count regresses 8→4. CI never hit this (no mapped drives there),
     so the suite passed in CI but failed on the dev machine in full-file runs.
 
@@ -43,7 +43,7 @@ def _isolate_unc_resolution(monkeypatch):
     fixture MUST patch the defining module: patching the re-exporting one
     would rebind a name ``device_key`` no longer reads, so the fixture would
     go quietly inert and the real ``WNetGetConnectionW`` would resolve a live
-    ``J:`` back to ``\\\\LINXIAOYUN`` on the dev machine — the exact
+    ``J:`` back to ``\\\\NAS-HOST`` on the dev machine — the exact
     dev-passes/CI-differs asymmetry described above.
     """
     import infrastructure.device_key as _dk

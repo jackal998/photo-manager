@@ -63,8 +63,8 @@ J: NAS portion only got the trailing ~10–20 s of each 300 s window.
 
 | Arm | Wall (s) | n_hashed | Status | Reader counts |
 |-----|---------|---------|--------|--------------|
-| OFF | 301.44  | 1800/3400 | cancelled (timeout) | D:=1, \\\\LINXIAOYUN=8 |
-| ON  | 301.50  | 2100/3400 | cancelled (timeout) | D:=1, \\\\LINXIAOYUN=8 |
+| OFF | 301.44  | 1800/3400 | cancelled (timeout) | D:=1, \\\\NAS-HOST=8 |
+| ON  | 301.50  | 2100/3400 | cancelled (timeout) | D:=1, \\\\NAS-HOST=8 |
 
 **Load-bearing precondition confirmed at scan-start:** post-#606,
 D: HDD runs at **1 reader** (not 4), and `disk_incurs_seek_penalty`
@@ -122,7 +122,7 @@ floor.
   models a **mis-fit NAS** with a hard latency cliff at c>2 (a real
   ~6× slowdown at c=3+). On that synthetic cliff, the cache-warm
   knee=2 wins decisively → ratio 0.689 (ON 31 % faster).
-* This rig's J: NAS (the user's `\\LINXIAOYUN`) scales **linearly**
+* This rig's J: NAS (the user's `\\NAS-HOST`) scales **linearly**
   through the full ladder (knee=8) — it is the **well-fit case**.
   GATE-2's synthetic cliff is not the situation here. The autotune
   ramp's c=1/c=2/c=4 measurement transient is pure tax → ON is 11 %
@@ -155,7 +155,7 @@ fills (1601 samples per device, recorded at every acquire/release):
 | Device | Mean fill | Peak fill | Samples at ≥99 % | Budget |
 |--------|-----------|-----------|-------------------|--------|
 | **D:** (HDD, 1 reader, ProRAW-heavy) | 36.0 % | 64.6 % | **0 / 1601** | 1.00 GiB |
-| **\\\\LINXIAOYUN** (NAS, 8 readers) | 24.2 % | 52.9 % | **0 / 1601** | 1.00 GiB |
+| **\\\\NAS-HOST** (NAS, 8 readers) | 24.2 % | 52.9 % | **0 / 1601** | 1.00 GiB |
 
 **Pre-fix (single shared 2 GiB budget, from
 [`scan-nas-starvation-2026-06-06.md`](scan-nas-starvation-2026-06-06.md)):**

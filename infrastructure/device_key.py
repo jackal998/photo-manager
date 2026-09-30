@@ -49,7 +49,7 @@ def _resolve_unc_via_win32(letter: str) -> str | None:
         buf = ctypes.create_unicode_buffer(260)
         buf_size = ctypes.c_ulong(260)
         # WNetGetConnectionW: maps a drive letter (e.g. "J:") to its remote
-        # name (e.g. "\\\\LINXIAOYUN\\home"). Returns 0 (NO_ERROR) on success.
+        # name (e.g. "\\\\NAS-HOST\\home"). Returns 0 (NO_ERROR) on success.
         result = ctypes.windll.mpr.WNetGetConnectionW(
             letter, buf, ctypes.byref(buf_size)
         )
@@ -107,7 +107,7 @@ def device_key(
     relative path returns ``''`` — callers treat ``''`` as a single bucket.
 
     **NAS server collapsing (#565):** multiple Windows drive letters that map
-    to the same physical NAS server (e.g. H: and J: both on ``\\\\LINXIAOYUN``)
+    to the same physical NAS server (e.g. H: and J: both on ``\\\\NAS-HOST``)
     are collapsed to a single ``\\\\SERVER`` key. Without this each letter
     produces its own device bucket, each gets _NAS_WORKERS=8 readers, and the
     NAS box sees 16 concurrent SMB reads instead of 8 — over-subscription.
@@ -142,7 +142,7 @@ def device_key(
         # Native UNC: \\SERVER\SHARE\... → splitdrive gives \\SERVER\SHARE.
         # Collapse to \\SERVER so two shares on the same box share one bucket.
         if raw.startswith("\\\\") and raw.count("\\") >= 3:
-            # e.g. \\LINXIAOYUN\HOME → split on 3rd backslash → \\LINXIAOYUN
+            # e.g. \\NAS-HOST\HOME → split on 3rd backslash → \\NAS-HOST
             parts = raw.split("\\", 3)  # ['', '', 'SERVER', 'SHARE...']
             return "\\\\" + parts[2]
     except Exception:  # noqa: BLE001 — fail-open; device_key must never raise
@@ -179,7 +179,7 @@ def _server_key_for_letter(
 def _extract_server(unc: str) -> str:
     """Extract the ``\\\\SERVER`` prefix from a UNC path string.
 
-    ``\\\\LINXIAOYUN\\home`` → ``\\\\LINXIAOYUN``
+    ``\\\\NAS-HOST\\home`` → ``\\\\NAS-HOST``
     Returns the input unchanged if it doesn't look like a valid UNC.
     """
     upper = unc.upper()
