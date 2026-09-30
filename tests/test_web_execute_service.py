@@ -14,11 +14,13 @@ from pathlib import Path
 import pytest
 
 from core.app_service.execute_service import (
+    classify_singletons,
     execute_decisions,
     prune_singletons,
     remove_from_review,
     save_manifest,
 )
+from core.app_service.review_service import load_review
 from infrastructure.manifest_repository import ManifestRepository
 from scanner.manifest import _DDL as _MANIFEST_DDL
 
@@ -306,6 +308,44 @@ class TestExecuteDecisions:
         assert not f1.exists()
         assert f2.exists()   # not in scope
         assert f3.exists()   # not in scope
+
+    def test_unscoped_execute_skips_actioned_singleton_hidden_from_review(self, tmp_path):
+        """#941: a partial execute leaves g1's other delete row as a kept
+        actioned singleton. The review drops it (orphan-skip), so no tree,
+        count or #733 confirm can show it — and an unscoped Execute must not
+        delete it ("visible = committed"). It keeps its pending decision."""
+        a, b, c, d = _make_real_files(tmp_path, 4)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(a), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "delete", "file_size_bytes": 64},
+            {"source_path": str(b), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "", "user_decision": "delete",
+             "file_size_bytes": 64},
+            {"source_path": str(c), "action": "", "group_id": "g2",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(d), "action": "REVIEW_DUPLICATE", "group_id": "g2",
+             "hamming_distance": 2, "outcome": "", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+
+        # "Execute selected" on b alone; the user keeps the actioned singleton.
+        execute_decisions(str(manifest), scope_paths=[str(b)], recycle=False)
+        assert classify_singletons(str(manifest))["actioned"] == [str(a)]
+        visible = {
+            item["file_path"]
+            for group in load_review(str(manifest))["groups"]
+            for item in group["items"]
+        }
+        assert visible == {str(c), str(d)}
+
+        # Plain "Execute": the dialog lists only d.
+        result = execute_decisions(str(manifest), recycle=False)
+
+        assert result["success_paths"] == [str(d)]
+        assert not d.exists()
+        assert a.exists(), "hidden singleton a was deleted by an unscoped Execute"
+        assert _read_col(manifest, str(a), "outcome") == ""
+        assert _read_col(manifest, str(a), "user_decision") == "delete"
 
 
 # ---------------------------------------------------------------------------
@@ -894,9 +934,11 @@ class TestExecuteDecisionsOutOfRoot:
 
     def test_no_allowed_roots_skips_safety_check(self, tmp_path):
         """When allowed_roots is None, the safety check is skipped (legacy behavior)."""
-        files = _make_real_files(tmp_path, 1)
-        f = files[0]
+        files = _make_real_files(tmp_path, 2)
+        f, partner = files
 
+        # The undecided partner keeps g1 a group the review shows — a lone row
+        # would be a hidden singleton, which execute never acts on (#941).
         manifest = _make_manifest(tmp_path, [
             {
                 "source_path": str(f),
@@ -904,6 +946,15 @@ class TestExecuteDecisionsOutOfRoot:
                 "group_id": "g1",
                 "outcome": "",
                 "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(partner),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "",
                 "file_size_bytes": 64,
             },
         ])
