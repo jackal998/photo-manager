@@ -901,6 +901,178 @@ describe("immediate Skip + singleton prune – Undo reverses both", () => {
     expect(toast!.kind).toBe("skip-now");
     expect(toast!.prunedPaths).toEqual([]);
   });
+
+  it("a slow prune from an earlier skip never folds into a later skip's toast", async () => {
+    // Review F2: with pref=always there is no dialog to serialise the flows,
+    // and a prune reload takes seconds on a large manifest. Skip A (pair A/B),
+    // then skip C (pair C/D) while A's prune is still in flight: B belongs to
+    // the FIRST skip, whose toast is gone — folding it into the second would
+    // make that Undo revive B while A stays skipped.
+    seedManifest([
+      makeGroup(1, ["/p/a.jpg", "/p/b.jpg"]),
+      makeGroup(2, ["/p/c.jpg", "/p/d.jpg"]),
+    ]);
+    vi.mocked(client.getSettings).mockResolvedValue({
+      "sorting.defaults": null,
+      "ui.prune_singletons": "always",
+      "ui.scan_dialog.autotune_read_knee": null,
+    });
+    vi.mocked(client.postPruneCandidates)
+      .mockResolvedValueOnce({ plain: ["/p/b.jpg"], actioned: [], locked: [] })
+      .mockResolvedValueOnce({ plain: ["/p/d.jpg"], actioned: [], locked: [] });
+    let releaseFirstPrune!: (r: Response) => void;
+    const firstPrune = new Promise<Response>((resolve) => {
+      releaseFirstPrune = resolve;
+    });
+    let removeCalls = 0;
+    let pruneCalls = 0;
+    // A standing implementation, not a queue of once-values: the two flows
+    // interleave, so the order of requests is the thing under test. Restored
+    // below — clearAllMocks would leave it routing every later test's fetch.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/remove") {
+        removeCalls += 1;
+        return ok200({
+          removed: 1,
+          groups: removeCalls === 1 ? [makeGroup(2, ["/p/c.jpg", "/p/d.jpg"])] : [],
+        });
+      }
+      if (url === "/api/prune") {
+        pruneCalls += 1;
+        if (pruneCalls === 1) return firstPrune;
+        return ok200({ pruned: ["/p/d.jpg"], locked_skipped: [], groups: [] });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const first = useAppStore
+      .getState()
+      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+    await vi.waitFor(() => expect(pruneCalls).toBe(1));
+    await useAppStore
+      .getState()
+      .removeFromList(["/p/c.jpg"], false, { undoable: true });
+    releaseFirstPrune(
+      ok200({ pruned: ["/p/b.jpg"], locked_skipped: [], groups: [] })
+    );
+    await first;
+    fetchSpy.mockRestore();
+
+    const { toast } = useAppStore.getState();
+    expect(toast!.snapshot.map((r) => r.file_path)).toEqual(["/p/c.jpg"]);
+    expect(toast!.prunedPaths).toEqual(["/p/d.jpg"]);
+  });
+
+  it("a prune confirmed in the dialog folds into the skip that opened it", async () => {
+    // The "ask" path: the dialog resolves the prompt THIS skip opened, and
+    // calls applyPrune without knowing about toasts — the owner travels on
+    // the prompt.
+    const pair = makeGroup(1, ["/p/a.jpg", "/p/b.jpg"]);
+    seedManifest([pair]);
+    vi.mocked(client.postPruneCandidates).mockResolvedValue({
+      plain: ["/p/b.jpg"],
+      actioned: [],
+      locked: [],
+    });
+    vi.mocked(client.getSettings).mockResolvedValue({
+      "sorting.defaults": null,
+      "ui.prune_singletons": "ask",
+      "ui.scan_dialog.autotune_read_knee": null,
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ removed: 1, groups: [] }))
+      .mockResolvedValueOnce(
+        ok200({ pruned: ["/p/b.jpg"], locked_skipped: [], groups: [] })
+      );
+
+    await useAppStore
+      .getState()
+      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+    expect(useAppStore.getState().execute.prunePrompt).not.toBeNull();
+    // What PruneConfirmDialog's Remove does.
+    await useAppStore.getState().applyPrune(["/p/b.jpg"]);
+
+    expect(useAppStore.getState().toast!.prunedPaths).toEqual(["/p/b.jpg"]);
+  });
+});
+
+describe("loadManifest – a new manifest takes the undo toast with it", () => {
+  it("an Undo pressed after loading another manifest never writes to it", async () => {
+    // Review F1: the toast's rows live in the manifest that was loaded when
+    // the user skipped. Loading another one (Open, or a scan that auto-loads)
+    // before the toast expires used to leave the toast up, and its Undo then
+    // POSTed those rows to the NEW manifest — a no-op there, while the rows
+    // stayed skipped in the old one and the toast cleared as if it had worked.
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg", "/p/c.jpg"])]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        ok200({ removed: 1, groups: [makeGroup(1, ["/p/b.jpg", "/p/c.jpg"])] })
+      );
+    await useAppStore
+      .getState()
+      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+    expect(useAppStore.getState().toast).not.toBeNull();
+
+    vi.mocked(client.getManifest).mockResolvedValueOnce({
+      manifest_path: "/data/other.db",
+      groups: [makeGroup(1, ["/q/x.jpg", "/q/y.jpg"])],
+      total_groups: 1,
+      total_files: 2,
+    } as never);
+    await useAppStore.getState().loadManifest("/data/other.db");
+
+    expect(useAppStore.getState().toast).toBeNull();
+    await useAppStore.getState().undoSkipNow();
+    // Only the skip itself ever reached the network.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("an Undo already in flight restores the OLD manifest without painting it over the new one", async () => {
+    // Undo pressed, then another manifest opened before the restore returned
+    // (a restore reloads the whole review — seconds on a large manifest).
+    const m2 = makeGroup(1, ["/q/x.jpg", "/q/y.jpg"]);
+    seedManifest([]);
+    useAppStore.setState({
+      toast: {
+        id: 42,
+        kind: "skip-now",
+        groupNumber: null,
+        decision: null,
+        affectedCount: 1,
+        lockedCount: 0,
+        snapshot: [{ file_path: "/p/a.jpg", decision: "", locked: false }],
+        prunedPaths: [],
+        undoing: false,
+      },
+    });
+    let releaseRestore!: (r: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        releaseRestore = resolve;
+      })
+    );
+
+    const undo = useAppStore.getState().undoSkipNow();
+    vi.mocked(client.getManifest).mockResolvedValueOnce({
+      manifest_path: "/data/other.db",
+      groups: [m2],
+      total_groups: 1,
+      total_files: 2,
+    } as never);
+    await useAppStore.getState().loadManifest("/data/other.db");
+    releaseRestore(
+      ok200({ restored: 1, groups: [makeGroup(1, ["/p/a.jpg", "/p/b.jpg"])] })
+    );
+    await undo;
+
+    // The restore went to the manifest the rows live in…
+    expect(fetchBody(fetchSpy, 0)).toMatchObject({ manifest_path: "/data/scan.db" });
+    // …and the screen still shows the one the user just opened.
+    expect(useAppStore.getState().manifest.path).toBe("/data/other.db");
+    expect(useAppStore.getState().manifest.groups).toEqual([m2]);
+  });
 });
 
 // ---------------------------------------------------------------------------

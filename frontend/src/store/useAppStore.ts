@@ -82,12 +82,6 @@ let _bulkDecideSeq = 0;
 // remainder of the first one's.
 let _toastSeq = 0;
 
-// The "skip-now" toast (#909) whose skip started the prune flow now in
-// progress, or null for a flow some other action started (execute). Set by
-// maybeOfferPrune, read by applyPrune — one prune flow runs at a time (the
-// prompt / lock gate are single slots), so one owner id is enough.
-let _pruneUndoToastId: number | null = null;
-
 // The classifier values apply-best-copy treats as a positively-identified
 // duplicate, i.e. the rows it may write `delete` onto. Mirrors the server's
 // allowlist (core.services.auto_select.non_keepers_for_aggressive_delete) —
@@ -306,6 +300,12 @@ export const useAppStore = create<AppStore>()(
       set((state) => {
         state.manifest.loading = true;
         state.manifest.error = null;
+        // #909 review F1 — an undo toast describes rows in the manifest that
+        // was loaded when it was raised, and both Undo actions send them to
+        // whatever manifest is loaded when Undo is PRESSED. Once another one
+        // starts loading, that is the wrong file: drop the toast rather than
+        // let its Undo write to a manifest the rows never lived in.
+        state.toast = null;
       });
       try {
         const data = await getManifest(path);
@@ -888,9 +888,11 @@ export const useAppStore = create<AppStore>()(
     },
 
     async maybeOfferPrune(undoToastId) {
-      // Every prune flow starts here, so an execute's flow resets the owner
-      // and its prune never lands in a skip's undo.
-      _pruneUndoToastId = undoToastId ?? null;
+      // #909 — the skip toast this flow belongs to. It travels WITH the flow
+      // (lock gate → prompt → applyPrune) rather than living in one shared
+      // slot: with pref "always" nothing serialises two skips, so a slow prune
+      // from the first can resolve after the second has started (review F2).
+      const owner = undoToastId ?? null;
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -931,7 +933,12 @@ export const useAppStore = create<AppStore>()(
       // does not bypass the lock confirmation.
       if (locked.length > 0) {
         set((state) => {
-          state.execute.prunePending = { plain, actioned, pref };
+          state.execute.prunePending = {
+            plain,
+            actioned,
+            pref,
+            undoToastId: owner,
+          };
           state.execute.lockConflict = {
             paths: locked,
             op: "prune",
@@ -943,7 +950,7 @@ export const useAppStore = create<AppStore>()(
 
       if (pref === "always") {
         // Sweep both unlocked buckets in one explicit-paths call.
-        await get().applyPrune([...plain, ...actioned]);
+        await get().applyPrune([...plain, ...actioned], owner);
         return;
       }
 
@@ -951,11 +958,22 @@ export const useAppStore = create<AppStore>()(
       // unlocked buckets (guaranteed non-empty: we returned early if all three
       // buckets were empty, and locked is empty on this branch).
       set((state) => {
-        state.execute.prunePrompt = { plain, actioned, lockedToPrune: [] };
+        state.execute.prunePrompt = {
+          plain,
+          actioned,
+          lockedToPrune: [],
+          undoToastId: owner,
+        };
       });
     },
 
-    async applyPrune(paths) {
+    async applyPrune(paths, undoToastId) {
+      // Read before anything clears the prompt: the dialog resolves the prompt
+      // its flow opened, so an omitted owner is the one recorded there.
+      const owner =
+        undoToastId !== undefined
+          ? undoToastId
+          : get().execute.prunePrompt?.undoToastId ?? null;
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -983,11 +1001,13 @@ export const useAppStore = create<AppStore>()(
           state.selection.selectedPaths = [];
           state.selection.anchorPath = null;
           // #909 — this prune is the tail of an immediate Skip whose toast is
-          // still up: its Undo has to bring these partners back as well.
+          // still up: its Undo has to bring these partners back as well. Only
+          // THAT skip's toast — a later skip's toast gets its own prune.
           if (
+            owner !== null &&
             state.toast !== null &&
             state.toast.kind === "skip-now" &&
-            state.toast.id === _pruneUndoToastId
+            state.toast.id === owner
           ) {
             state.toast.prunedPaths = [
               ...(state.toast.prunedPaths ?? []),
@@ -1025,6 +1045,8 @@ export const useAppStore = create<AppStore>()(
       // Close the gate now: the verdict is being resolved, so prunePending must
       // not survive any early return below (a failed unlock) and re-fire later.
       const { plain, actioned, pref } = pending;
+      // #909 — the skip toast (if any) this gate's flow belongs to.
+      const owner = pending.undoToastId ?? null;
       set((state) => {
         state.execute.prunePending = null;
       });
@@ -1055,7 +1077,7 @@ export const useAppStore = create<AppStore>()(
       // "unlocked-only" / "cancel": hold the locked singletons (lockedToPrune=[]).
 
       if (pref === "always") {
-        await get().applyPrune([...plain, ...actioned, ...lockedToPrune]);
+        await get().applyPrune([...plain, ...actioned, ...lockedToPrune], owner);
         return;
       }
 
@@ -1064,11 +1086,16 @@ export const useAppStore = create<AppStore>()(
       // buckets are empty there is nothing to ask — prune the already-decided
       // set (just lockedToPrune, possibly empty) directly.
       if (plain.length === 0 && actioned.length === 0) {
-        await get().applyPrune(lockedToPrune);
+        await get().applyPrune(lockedToPrune, owner);
         return;
       }
       set((state) => {
-        state.execute.prunePrompt = { plain, actioned, lockedToPrune };
+        state.execute.prunePrompt = {
+          plain,
+          actioned,
+          lockedToPrune,
+          undoToastId: owner,
+        };
       });
     },
 
@@ -1643,7 +1670,12 @@ export const useAppStore = create<AppStore>()(
           ],
         });
         set((state) => {
-          state.manifest.groups = result.groups;
+          // An Undo already in flight when another manifest was opened still
+          // lands in the right file (it captured manifestPath), but its groups
+          // must not replace the newly loaded manifest's.
+          if (state.manifest.path === manifestPath) {
+            state.manifest.groups = result.groups;
+          }
           if (state.toast?.id === toast.id) state.toast = null;
         });
       } catch (err) {
