@@ -777,6 +777,37 @@ describe("ExecuteDialog", () => {
     });
   });
 
+  // The dialog stays mounted (App renders it unconditionally), so its local
+  // highlight survives Cancel. Reopening via "Execute (only selected)" on a
+  // DIFFERENT group must not let that out-of-scope row ride along: it is not
+  // in the tree, and the confirm gate sees an empty in-scope subset, so the
+  // base code sent it with no prompt at all.
+  it("a highlight left over from an earlier open is not sent once the dialog is scoped to other groups", () => {
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP]); // unscoped "Execute…"
+    });
+    render(<ExecuteDialog />);
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-2-a.jpg"));
+    });
+    act(() => {
+      useAppStore.getState().closeExecuteDialog();
+    });
+
+    act(() => {
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP], [1]); // scoped to group 1
+    });
+    expect(screen.queryByTestId("execute-row-2-a.jpg")).not.toBeInTheDocument();
+    const btn = screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED);
+    expect(btn).toBeDisabled();
+    act(() => {
+      fireEvent.click(btn);
+    });
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // #733 — the pre-execute blocking gate must fire whenever ANY group is
   // complete-delete, not just when the ENTIRE scope is complete-delete. A
