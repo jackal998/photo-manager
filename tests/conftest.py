@@ -140,6 +140,35 @@ def _revive_wic_executor():
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_delete_log_dir(monkeypatch, tmp_path_factory):
+    """Keep every test's delete-audit CSV out of the user's real profile (#948).
+
+    ``write_delete_log`` falls back to ``get_delete_log_directory()`` —
+    ``%LOCALAPPDATA%\\PhotoManager\\delete_logs`` — when no ``log_dir`` is given,
+    and ``execute_decisions`` never passes one. That directory is the audit
+    trail a user reads to recover what a real Execute deleted; on the dev rig
+    it held 2369 pytest CSVs out of 2845 before this fixture.
+
+    Redirect it to a per-test temp dir, created only when a test actually
+    writes a delete log (most never do), so it never shows up inside a test's
+    own ``tmp_path``. Same trap as ``_isolate_unc_resolution``: patch the
+    DEFINING module, because ``write_delete_log`` looks the name up in
+    ``infrastructure.logging``'s globals. Guarded by
+    ``tests/test_web_execute_service.py::TestExecuteAuditCsvIsolation``.
+    """
+    import infrastructure.logging as _log
+
+    per_test_dir: list[str] = []
+
+    def _redirected_delete_log_dir() -> str:
+        if not per_test_dir:
+            per_test_dir.append(str(tmp_path_factory.mktemp("delete_logs")))
+        return per_test_dir[0]
+
+    monkeypatch.setattr(_log, "get_delete_log_directory", _redirected_delete_log_dir)
+
+
 # ---------------------------------------------------------------------------
 # Playwright live-server fixture — web_probe tests only
 # ---------------------------------------------------------------------------
