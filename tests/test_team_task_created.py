@@ -170,6 +170,25 @@ class TestBypassTokenShape:
         })
         assert rc == 0
 
+    @pytest.mark.parametrize(
+        ("subject", "expected_rc"),
+        [
+            # Unclosed on its line; a checklist box on the next line must
+            # not close it (#883).
+            ("task [team-task-freeform: forgot to close\n- [ ] x", 2),
+            ("task [team-task-freeform: forgot to close\r\n- [ ] x", 2),
+            # Closed on its own line: still a bypass with more text below.
+            ("task [team-task-freeform: LEAD debugging]\n- [ ] x", 0),
+        ],
+        ids=["lf-unclosed", "crlf-unclosed", "closed-then-more-lines"],
+    )
+    def test_token_must_close_on_its_own_line(self, monkeypatch, subject, expected_rc):
+        rc = _run(monkeypatch, {
+            "tool_name": "TaskCreate",
+            "tool_input": {"subject": subject},
+        })
+        assert rc == expected_rc
+
 
 # ── check() direct entry point ────────────────────────────────────────────
 
