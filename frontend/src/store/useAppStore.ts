@@ -313,6 +313,14 @@ export const useAppStore = create<AppStore>()(
           state.manifest.totalGroups = data.total_groups;
           state.manifest.totalFiles = data.total_files;
           state.manifest.loading = false;
+          // #923 — an Action sort survives the load (one sort state, like
+          // name/size), but its snapshot described the OLD rows. Left alone,
+          // a new manifest's rows would sort by their LIVE decisions (so a
+          // decision change moves them) and re-opened rows by stale ones.
+          // The loaded manifest therefore starts a fresh, not-stale order.
+          if (state.resultView.sortColumn === "action") {
+            state.resultView.decisionSortSnapshot = snapshotDecisions(data.groups);
+          }
           // A fresh manifest invalidates any prior selection (paths may vanish),
           // so by default we clear it. The post-scan auto-select call site
           // (opts.selectKeepers) instead selects the action==="KEEP" rows and

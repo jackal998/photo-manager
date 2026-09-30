@@ -3,13 +3,22 @@
 // manifest directly: that is the state `setDecision`'s optimistic update
 // produces, without the network round trip it would need here.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act } from "@testing-library/react";
+
+// Only the two network calls a manifest load and a decision write make; the
+// rest of the client module stays real.
+const api = vi.hoisted(() => ({ getManifest: vi.fn(), patchDecisions: vi.fn() }));
+vi.mock("../api/client", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../api/client")>();
+  return { ...real, getManifest: api.getManifest, patchDecisions: api.patchDecisions };
+});
 
 import { useAppStore } from "./useAppStore";
 import type { DecisionValue, FileRow, Group } from "@/api/types";
-import { DEFAULT_COLUMN_WIDTHS } from "@/lib/resultColumns";
+import { DEFAULT_COLUMN_WIDTHS, makeRowComparator } from "@/lib/resultColumns";
 import { DEFAULT_PANEL_WIDTHS } from "@/lib/panelWidths";
+import { isDecisionSortStale } from "@/lib/decisionSort";
 
 function mk(basename: string, decision: DecisionValue): FileRow {
   return { file_path: `/p/${basename}`, basename, user_decision: decision } as FileRow;
@@ -120,5 +129,64 @@ describe("silent re-sort triggers (F3) and persistence", () => {
     act(() => store().setDensity("compact"));
     const stored = Object.keys(localStorage).map((k) => `${k}=${localStorage.getItem(k)}`);
     expect(stored.join("\n")).not.toMatch(/action|sort/i);
+  });
+});
+
+// Review H1 on #949: `loadManifest` keeps an Action sort (one sort state) but
+// used to keep the OLD manifest's snapshot too — so a new manifest's rows
+// sorted by their LIVE decisions and jumped buckets on a decision change, and
+// re-opened rows sorted by stale decisions with the dot already lit.
+describe("a manifest load starts a fresh Action sort (review H1)", () => {
+  function manifestOf(items: FileRow[]) {
+    return {
+      manifest_path: "/m/next.db",
+      groups: [{ group_number: 1, member_count: items.length, items }],
+      total_groups: 1,
+      total_files: items.length,
+    };
+  }
+
+  /** The order ResultTree renders: the store's comparator over the group. */
+  function order(): string[] {
+    const v = view();
+    const cmp = makeRowComparator(v.sortColumn, v.sortDirection, v.decisionSortSnapshot);
+    const items = store().manifest.groups[0].items;
+    return (cmp ? [...items].sort(cmp) : items).map((r) => r.basename);
+  }
+
+  const stale = () => {
+    const snapshot = view().decisionSortSnapshot;
+    return snapshot !== null && isDecisionSortStale(store().manifest.groups, snapshot);
+  };
+
+  it("keeps a NEW manifest's rows still when a decision changes after the load", async () => {
+    act(() => store().toggleSort("action")); // Keep first, on the previous manifest
+    api.getManifest.mockResolvedValueOnce(
+      manifestOf([mk("x1", ""), mk("x2", ""), mk("x3", "delete")])
+    );
+    await act(async () => {
+      await store().loadManifest("/m/next.db");
+    });
+    expect(order()).toEqual(["x1", "x2", "x3"]);
+    expect(stale()).toBe(false);
+
+    api.patchDecisions.mockResolvedValueOnce(undefined);
+    await act(async () => {
+      await store().setDecision("/p/x1", "delete");
+    });
+    // x1 must NOT jump into the Delete bucket under the pointer (F3) …
+    expect(order()).toEqual(["x1", "x2", "x3"]);
+    // … the order is stale instead, which is what lights the dot.
+    expect(stale()).toBe(true);
+  });
+
+  it("re-opens the same paths with new decisions un-stale, in the new order", async () => {
+    act(() => store().toggleSort("action")); // snapshot: a = Keep, b = Delete
+    api.getManifest.mockResolvedValueOnce(manifestOf([mk("a", "delete"), mk("b", "")]));
+    await act(async () => {
+      await store().loadManifest("/m/next.db");
+    });
+    expect(stale()).toBe(false);
+    expect(order()).toEqual(["b", "a"]);
   });
 });

@@ -51,8 +51,12 @@ export function snapshotDecisions(groups: readonly Group[]): DecisionSnapshot {
 /**
  * True when some row's live decision no longer matches the decision the
  * order was built from — i.e. the rows on screen are not where a fresh sort
- * would put them. A row the snapshot never saw (a manifest reload added it)
- * sorts by its live decision, so it cannot be out of place.
+ * would put them. The snapshot covers every loaded row: it is re-taken when
+ * the sort is applied, on each re-sort, AND on every manifest load
+ * (useAppStore.loadManifest) — the load is the only thing that adds rows, and
+ * without that re-take a new manifest's rows would sort by their LIVE
+ * decisions and jump on a decision change. A path the snapshot lacks is
+ * therefore not expected; it is skipped rather than guessed at.
  */
 export function isDecisionSortStale(
   groups: readonly Group[],
@@ -68,9 +72,10 @@ export function isDecisionSortStale(
 }
 
 /**
- * Comparator for the Action sort. Buckets by the SNAPSHOT decision (falling
- * back to the live one for a row the snapshot never saw) and returns 0 inside
- * a bucket so a stable sort keeps the server order there.
+ * Comparator for the Action sort. Buckets by the SNAPSHOT decision and
+ * returns 0 inside a bucket so a stable sort keeps the server order there.
+ * The live-decision fallback only covers a path the snapshot lacks, which
+ * the manifest-load re-take (see isDecisionSortStale) keeps from happening.
  */
 export function makeDecisionComparator(
   direction: "asc" | "desc",
