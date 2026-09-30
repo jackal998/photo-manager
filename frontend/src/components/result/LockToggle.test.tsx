@@ -1,6 +1,7 @@
 // Clickable padlock (#878 slice b).
 //
-// The visual claim (faint vs solid) is a class here and a computed colour in
+// The visual claim (muted vs warm ink, design F1 / #922) is a class here and
+// a computed colour in
 // qa/web/scenarios/s74_daylight_theme.py. What these pin is the part a
 // scenario would not notice going wrong: the toggle still dispatches the same
 // lock action, still reports its state, and still emits the `data-state`
