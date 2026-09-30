@@ -57,6 +57,7 @@ export const SCAN_SOURCE_LIST = "scan-source-list";
 export const SCAN_OUTPUT_PATH = "scan-output-path";
 export const SCAN_OUTPUT_BROWSE = "scan-output-browse";
 export const SCAN_START_BUTTON = "scan-start-button";
+export const SCAN_EMPTY_MESSAGE = "scan-empty-message";
 export const SCAN_CANCEL_BUTTON = "scan-cancel-button";
 export const SCAN_PROGRESS_LOG = "scan-progress-log";
 export const SCAN_PROGRESS_BAR = "scan-progress-bar";

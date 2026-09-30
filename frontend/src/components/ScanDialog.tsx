@@ -36,6 +36,7 @@ import {
   SCAN_DHASH_PARITY_NOTE,
   SCAN_DHASH_THRESHOLD,
   SCAN_DIALOG,
+  SCAN_EMPTY_MESSAGE,
   SCAN_OUTPUT_PATH,
   SCAN_OUTPUT_BROWSE,
   SCAN_PHASH_PARITY_NOTE,
@@ -58,8 +59,11 @@ function nextId(): string {
   return String((_nextId += 1));
 }
 
+// #896 — a new source row includes subfolders by default, as Qt's
+// _SourceListWidget.add_entry did (recursive=True). With the box unticked, a
+// folder whose photos all sit in subfolders scanned 0 files.
 function blankSource(): SourceEntry {
-  return { id: nextId(), label: "", path: "", recursive: false };
+  return { id: nextId(), label: "", path: "", recursive: true };
 }
 
 /** Split a path into its directory and final segment (for save-mode picker). */
@@ -167,8 +171,9 @@ function snapThresholdInput(
  * derived from the basename (the web SourceRow needs a non-empty label for
  * `canStart`; the persisted shape carries only {path, recursive}, matching
  * what _save_to_settings writes). Recursive is taken from the explicit
- * persisted flag (web always writes it; a missing flag defaults to false,
- * the web blankSource convention).
+ * persisted flag (web always writes it, so a user's unticked box stays
+ * unticked); a missing or non-boolean flag falls back to true, the
+ * blankSource default and Qt's resolve_source_entries default (#896).
  */
 function sourcesFromSettings(raw: unknown): SourceEntry[] {
   if (!Array.isArray(raw)) return [];
@@ -177,11 +182,12 @@ function sourcesFromSettings(raw: unknown): SourceEntry[] {
     if (item === null || typeof item !== "object") continue;
     const path = (item as { path?: unknown }).path;
     if (typeof path !== "string" || path.trim() === "") continue;
+    const recursive = (item as { recursive?: unknown }).recursive;
     out.push({
       id: nextId(),
       label: splitPath(path).name,
       path,
-      recursive: (item as { recursive?: unknown }).recursive === true,
+      recursive: typeof recursive === "boolean" ? recursive : true,
     });
   }
   return out;
@@ -329,12 +335,18 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // Transition: scan finished → load manifest (if output path present) + close dialog
   //
   // completed_empty sets status="finished" but leaves outputPath=null.
-  // The dialog closes in both cases; loadManifest is only called when
-  // there is a real output path (i.e. the scan produced results).
+  // #896 — an OPEN dialog then stays open with the no-files message and Start
+  // Scan available (Qt `_on_completed_empty` parity), so the user can fix the
+  // sources and retry; it used to close here, leaving only "Ready" behind.
+  // Closing it goes through handleOpenChange, which resets the scan. Only a
+  // real output path loads a manifest.
   // ---------------------------------------------------------------------------
+
+  const isEmptyResult = scan.status === "finished" && scan.outputPath === null;
 
   useEffect(() => {
     if (scan.status === "finished") {
+      if (scan.outputPath === null && open) return;
       if (scan.outputPath !== null) {
         // Post-scan auto-load. When the user enabled "Auto select after scan",
         // select + scroll to the auto-selected KEEP keepers (Qt #239 parity).
@@ -348,7 +360,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       // re-arms on the next open and the dialog shows stale sources.
       resetScan();
     }
-  }, [scan.status, scan.outputPath, autoSelect, loadManifest, onOpenChange, resetScan]);
+  }, [scan.status, scan.outputPath, open, autoSelect, loadManifest, onOpenChange, resetScan]);
 
   // Transition: cancelled → close dialog cleanly
   useEffect(() => {
@@ -917,6 +929,17 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         {showError && (
           <p role="alert" className="mt-2 text-sm text-danger-warm">
             {t("web.scan.error_prefix", "Error: {error}", { error: scan.error ?? "" })}
+          </p>
+        )}
+
+        {/* #896 — empty result: the dialog stays open with this message */}
+        {isEmptyResult && (
+          <p
+            role="status"
+            data-testid={SCAN_EMPTY_MESSAGE}
+            className="mt-2 text-sm text-ink"
+          >
+            {t("web.scan.empty_result", "No media files found — nothing to scan.")}
           </p>
         )}
 

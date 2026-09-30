@@ -285,6 +285,9 @@ SCAN_OUTPUT_BROWSE = "scan-output-browse"
 SCAN_START_BUTTON = "scan-start-button"
 """'Start scan' button inside the scan dialog."""
 
+SCAN_EMPTY_MESSAGE = "scan-empty-message"
+"""No-files message the scan dialog keeps open after an empty scan (#896)."""
+
 SCAN_CANCEL_BUTTON = "scan-cancel-button"
 """'Cancel' button shown while a scan is running."""
 

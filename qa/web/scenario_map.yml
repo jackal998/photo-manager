@@ -31,7 +31,7 @@ scenarios:
   - scenario: s02_empty_folder
     playwright_module: qa.web.scenarios.s02_empty_folder
     status: done
-    notes: "Scans a fresh empty tempdir; asserts 0 file rows and '0 groups · 0 files' status bar."
+    notes: "Scans a fresh empty tempdir. #896 (Qt parity): a fresh source row's recursive box defaults checked; after completed_empty the scan dialog stays OPEN with scan-empty-message visible and Start Scan enabled; no manifest loads (main-empty-state, 0 file rows); Escape closes and a reopen shows no stale message."
 
   - scenario: s03_cancel_scan
     playwright_module: qa.web.scenarios.s03_cancel_scan
