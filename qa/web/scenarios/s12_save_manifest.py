@@ -256,9 +256,7 @@ def _toggle_locale(page, gid: str, want_toggle_label: str) -> None:
 
     The toggle re-renders the tree in place from the i18n store — no reload, so
     the loaded manifest survives. A reload would NOT work here: it wipes the
-    store to the empty state (the fact step 3 below depends on), and re-opening
-    would then have to wait on ``wait_manifest_loaded``'s status-bar regex,
-    which only matches the ENGLISH "N groups · M files".
+    store to the empty state (the fact step 3 below depends on).
     """
     page.get_by_test_id(MAIN_LANG_TOGGLE).click()
     page.wait_for_function(
