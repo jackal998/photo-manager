@@ -172,8 +172,10 @@ function snapThresholdInput(
  * `canStart`; the persisted shape carries only {path, recursive}, matching
  * what _save_to_settings writes). Recursive is taken from the explicit
  * persisted flag (web always writes it, so a user's unticked box stays
- * unticked); a missing or non-boolean flag falls back to true, the
- * blankSource default and Qt's resolve_source_entries default (#896).
+ * unticked). A MISSING flag falls back to true, the blankSource default and
+ * Qt's resolve_source_entries default (`item.get("recursive", True)`) (#896).
+ * A present non-boolean flag is also coerced to true — web-only: Qt passed
+ * such a value through unchanged.
  */
 function sourcesFromSettings(raw: unknown): SourceEntry[] {
   if (!Array.isArray(raw)) return [];
