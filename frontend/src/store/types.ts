@@ -293,6 +293,12 @@ export interface PrunePrompt {
    * Unlock&Apply on the "ask" path.
    */
   lockedToPrune: string[];
+  /**
+   * #909 — the "skip-now" toast whose skip opened this prompt (null/absent
+   * for any other flow). The dialog's verdict folds its prune into THAT toast
+   * only, whatever toast is standing by then.
+   */
+  undoToastId?: number | null;
 }
 
 /** Pending prune state held while the locked-singleton lock gate is open. */
@@ -305,6 +311,8 @@ export interface PrunePending {
    * locked; "ask" opens the prune dialog for the unlocked buckets.
    */
   pref: PrunePref;
+  /** #909 — the owning "skip-now" toast, carried through the lock gate. */
+  undoToastId?: number | null;
 }
 
 /** User verdict on the prune-context lock gate (LockConfirmDialog op="prune"). */
@@ -618,9 +626,11 @@ export interface AppActions {
    * `_maybe_offer_singleton_prune`.
    *
    * `undoToastId` (#909): the "skip-now" toast whose skip triggered this
-   * offer. Whatever this offer ends up pruning is added to that toast's
-   * `prunedPaths` (if it is still the standing toast), so its Undo can
-   * restore the partners the skip orphaned.
+   * offer. It travels with this flow (the lock gate's pending state, the
+   * prompt, the applyPrune call), and whatever the flow ends up pruning is
+   * added to THAT toast's `prunedPaths` if it is still the standing toast —
+   * never to a later skip's — so its Undo can restore the partners the skip
+   * orphaned.
    */
   maybeOfferPrune(undoToastId?: number): Promise<void>;
 
@@ -628,8 +638,13 @@ export interface AppActions {
    * POST /api/prune with an explicit `paths` set (#686) to finalize exactly those
    * singletons (outcome='ignored'). Replaces manifest.groups from the response and
    * clears the transient prune state. A no-op (clears state only) for an empty set.
+   *
+   * `undoToastId` (#909): the "skip-now" toast that started this prune flow
+   * (null for none); the pruned paths fold into that toast only. The store's
+   * own callers pass it; when it is omitted — PruneConfirmDialog resolving
+   * the open prompt — the owner recorded on that prompt is used.
    */
-  applyPrune(paths: string[]): Promise<void>;
+  applyPrune(paths: string[], undoToastId?: number | null): Promise<void>;
 
   /**
    * Resolve the prune-context lock gate (LockConfirmDialog op="prune").
