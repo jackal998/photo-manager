@@ -333,7 +333,7 @@ class TestScenarioMapParity:
 # ---------------------------------------------------------------------------
 
 _STATUS_LOCALES = ("en", "zh_TW")
-# The four catalog keys App.tsx composes into the loaded-manifest summary.
+# The five catalog keys App.tsx composes into the loaded-manifest summary.
 _SUMMARY_KEYS = frozenset({
     "web.status.summary",
     "web.status.group_singular",
