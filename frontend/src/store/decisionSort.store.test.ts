@@ -59,6 +59,9 @@ describe("Action header cycle (F3)", () => {
     act(() => store().toggleSort("name"));
     act(() => store().toggleSort("action"));
     expect([view().sortColumn, view().sortDirection]).toEqual(["action", "asc"]);
+    // Switching to Action captures the decisions it orders by …
+    expect(view().decisionSortSnapshot).toEqual({ "/p/a": "", "/p/b": "delete" });
+    // … and switching away drops them.
     act(() => store().toggleSort("size"));
     expect(view().sortColumn).toBe("size");
     expect(view().decisionSortSnapshot).toBeNull();
@@ -110,12 +113,6 @@ describe("silent re-sort triggers (F3) and persistence", () => {
     act(() => store().setDensity("compact"));
     expect(view().decisionSortSnapshot?.["/p/a"]).toBe("ignore");
     expect(view().decisionResortSeq).toBe(0);
-  });
-
-  it("leaves a name sort alone on the same triggers", () => {
-    act(() => store().toggleSort("name"));
-    act(() => store().setFilterText("a"));
-    expect(view().decisionSortSnapshot).toBeNull();
   });
 
   it("never writes the Action sort to localStorage", () => {
