@@ -2,9 +2,10 @@
 // tree.
 //
 // Positioning: floating fixed div anchored at {x, y} from the right-click
-// event, then kept inside the viewport (#897, lib/menuPlacement): it flips
-// above / left of the cursor when it would overflow, slides in when neither
-// side fits, and scrolls internally when it is taller than the window.
+// event, then kept inside the viewport (#897, hooks/useMenuPlacement +
+// lib/menuPlacement): it flips above / left of the cursor when it would
+// overflow, slides in when neither side fits, and scrolls internally when it
+// is taller than the window.
 // Dismiss: click outside (via mousedown listener) or Esc key.
 // Controlled entirely via props — the caller owns the mount/unmount state.
 //
@@ -20,17 +21,11 @@
 // file-row/group-row targetPaths selection, so it isn't gated by variant the
 // way Keep/Delete/Lock/Open-folder are.
 
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { resolveInitialField } from "@/lib/actionDialogFields";
-import { placeMenu, type MenuPlacement } from "@/lib/menuPlacement";
+import { useMenuPlacement } from "@/hooks/useMenuPlacement";
 import {
   CONTEXT_MENU,
   CTX_APPLY_BEST_COPY,
@@ -112,34 +107,8 @@ export function ContextMenu({
   const t = useT();
 
   const menuRef = useRef<HTMLDivElement>(null);
-  const [placement, setPlacement] = useState<MenuPlacement | null>(null);
-
-  // #897 — measure after layout and re-place before the browser paints, so the
-  // menu is never drawn hanging off the window first. scrollHeight is the full
-  // content height even after a maxHeight has clipped the box; offsetHeight -
-  // clientHeight adds the border back.
-  useLayoutEffect(() => {
-    const el = menuRef.current;
-    if (el === null) return;
-    setPlacement(
-      placeMenu(
-        { x, y },
-        {
-          width: el.offsetWidth,
-          height: el.scrollHeight + (el.offsetHeight - el.clientHeight),
-        },
-        { width: window.innerWidth, height: window.innerHeight }
-      )
-    );
-  }, [x, y]);
-
-  const menuStyle: CSSProperties = {
-    left: placement?.left ?? x,
-    top: placement?.top ?? y,
-    ...(placement?.maxHeight != null
-      ? { maxHeight: placement.maxHeight, overflowY: "auto" }
-      : {}),
-  };
+  // #897 — measured and kept inside the window before it paints.
+  const menuStyle = useMenuPlacement(menuRef, x, y);
 
   // Dismiss on outside mousedown.
   useEffect(() => {
