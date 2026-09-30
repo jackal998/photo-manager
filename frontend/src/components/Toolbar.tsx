@@ -105,6 +105,11 @@ const BTN_DANGER =
 // under a deliberately wider fallback (no Segoe UI on the Linux CI runner, so
 // it falls back to DejaVu/Liberation) it overflowed by 64px and s76 went red.
 // 104 + 56 buys 90px back, leaving ~26px of margin on that stack.
+const FILTER_INPUT =
+  "h-[34px] w-full rounded-[8px] border border-hairline bg-panel pl-[30px] pr-3 " +
+  "text-[13px] text-ink placeholder:text-ink-muted focus:border-warm " +
+  "focus:outline-none focus:ring-2 focus:ring-inset focus:ring-warm/35";
+
 // The "⋯" overflow menu's popup (#918) — the MenuBar's content/item classes,
 // repeated rather than imported so the two menus read as one family without
 // MenuBar.tsx exporting non-component constants (react-refresh lint).
@@ -112,11 +117,6 @@ const MENU_CONTENT_CLASS =
   "min-w-[12rem] rounded border border-hairline bg-panel py-1 shadow-md z-50";
 const MENU_ITEM_CLASS =
   "flex items-center justify-between px-3 py-1.5 text-sm cursor-pointer outline-none data-[highlighted]:bg-subtle data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed";
-
-const FILTER_INPUT =
-  "h-[34px] w-full rounded-[8px] border border-hairline bg-panel pl-[30px] pr-3 " +
-  "text-[13px] text-ink placeholder:text-ink-muted focus:border-warm " +
-  "focus:outline-none focus:ring-2 focus:ring-inset focus:ring-warm/35";
 
 export interface ToolbarProps {
   manifestPath: string | null;
