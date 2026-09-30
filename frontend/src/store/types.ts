@@ -3,6 +3,7 @@
 
 import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
 import type { ColumnId, SortDirection } from "../lib/resultColumns";
+import type { DecisionSnapshot } from "../lib/decisionSort";
 import type { PanelId } from "../lib/panelWidths";
 import type { Density } from "../lib/density";
 import type { PrunePref } from "../lib/prune";
@@ -163,6 +164,21 @@ export interface ResultViewState {
    * CTA — those count the whole manifest, which is what Execute acts on.
    */
   filterText: string;
+  /**
+   * #923 — the decisions the Action sort ordered by (lib/decisionSort.ts),
+   * captured when that sort was applied or last re-sorted; null whenever
+   * Action is not the sort column. Rows are ordered by THIS rather than by the
+   * live decisions, so staging a decision never moves a row (design F3's
+   * deferred re-sort); a live decision that differs from it is what lights the
+   * header's stale dot. Not persisted — neither is the Action sort itself.
+   */
+  decisionSortSnapshot: DecisionSnapshot | null;
+  /**
+   * #923 — bumped on each EXPLICIT re-sort of a stale Action order (a header
+   * click or a View-menu entry), never on a silent one. It is the only signal
+   * ResultTree animates the moving rows on (F3: 120ms ease-out).
+   */
+  decisionResortSeq: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -487,8 +503,27 @@ export interface AppActions {
    * a repeat click on the same column flips to descending. Switching columns
    * resets to ascending. The result tree re-sorts each group's rows by the
    * new (column, direction); group order is unchanged.
+   *
+   * ``action`` (#923) CYCLES instead: asc (Keep first) → desc (Delete first)
+   * → cleared. While its order is stale a click re-sorts in place rather than
+   * advancing the cycle — the stale dot's tooltip promises exactly that.
    */
   toggleSort(column: ColumnId): void;
+
+  /**
+   * #923 — the View menu's mirror of the Action header: ``"asc"`` (Keep
+   * first) / ``"desc"`` (Delete first) applies that order, re-sorting in
+   * place if it is already the active one; ``null`` (Clear sort) clears
+   * whatever sort is active. Same single sort state as the header.
+   */
+  setDecisionSort(direction: SortDirection | null): void;
+
+  /**
+   * #923 — re-sort a live Action order silently (no animation, no dot): the
+   * F3 triggers are a group collapse/expand, a filter change and a density
+   * change. A no-op when Action is not the sort column.
+   */
+  refreshDecisionSort(): void;
 
   /**
    * Set the width (px) of ``column``. During a resize drag this is called per

@@ -341,6 +341,12 @@ ALL_SCENARIOS = [
     # ABSENCE — the dropped Q10 safety line and the un-built recent-sources
     # list — asserted in both locales.
     "s78_empty_state",
+    # WEB-ONLY (#923, design F3) — sort by decision. The Action header cycles
+    # Keep first → Delete first → cleared over the VIRTUALISED rows, spells the
+    # order in the rendered (uppercase) case, and — the part that protects a
+    # user — a decision change never moves a row: a 4px stale dot appears and
+    # the next click re-sorts. The View-menu mirror drives the same state.
+    "s79_decision_sort",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -360,4 +366,5 @@ WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s76_toolbar_status_density",
     "s77_preview_pane",
     "s78_empty_state",
+    "s79_decision_sort",
 })

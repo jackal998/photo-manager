@@ -39,6 +39,9 @@ import {
   MENU_VIEW,
   MENU_VIEW_LANG_EN,
   MENU_VIEW_LANG_ZH,
+  MENU_VIEW_SORT_CLEAR,
+  MENU_VIEW_SORT_DELETE_FIRST,
+  MENU_VIEW_SORT_KEEP_FIRST,
 } from "@/testids";
 
 // ---------------------------------------------------------------------------
@@ -104,6 +107,12 @@ export function MenuBar({
     [groups, manifestPath]
   );
   const numberLocale = dateLocaleFor(locale);
+
+  // #923 — the one sort state, shared with the Action column header.
+  const sortColumn = useAppStore((s) => s.resultView.sortColumn);
+  const sortDirection = useAppStore((s) => s.resultView.sortDirection);
+  const setDecisionSort = useAppStore((s) => s.setDecisionSort);
+  const decisionSortDirection = sortColumn === "action" ? sortDirection : null;
 
   return (
     <nav
@@ -221,6 +230,41 @@ export function MenuBar({
             >
               <span>{t("web.menu.lang_zh", "中文 (繁體)")}</span>
               {locale === "zh_TW" && <span aria-hidden="true">✓</span>}
+            </DropdownMenu.Item>
+            {/* #923 — the MIRROR of the Action-header sort (owner ruling Q1:
+                here, not in the toolbar, whose strip has no width left at
+                1280). It reads and writes the one sort state the header does;
+                re-picking the ticked order is F3's "or the menu entry"
+                re-sort. */}
+            <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
+            <DropdownMenu.Label className="px-3 py-1 text-xs uppercase tracking-wide text-ink-muted">
+              {t("web.menu.view_sort", "Sort by action")}
+            </DropdownMenu.Label>
+            <DropdownMenu.Item
+              data-testid={MENU_VIEW_SORT_KEEP_FIRST}
+              className={ITEM_CLASS}
+              disabled={!manifestLoaded}
+              onSelect={() => setDecisionSort("asc")}
+            >
+              <span>{t("web.column.sort_keep_first", "Keep first")}</span>
+              {decisionSortDirection === "asc" && <span aria-hidden="true">✓</span>}
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              data-testid={MENU_VIEW_SORT_DELETE_FIRST}
+              className={ITEM_CLASS}
+              disabled={!manifestLoaded}
+              onSelect={() => setDecisionSort("desc")}
+            >
+              <span>{t("web.column.sort_delete_first", "Delete first")}</span>
+              {decisionSortDirection === "desc" && <span aria-hidden="true">✓</span>}
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              data-testid={MENU_VIEW_SORT_CLEAR}
+              className={ITEM_CLASS}
+              disabled={!manifestLoaded || sortColumn === null}
+              onSelect={() => setDecisionSort(null)}
+            >
+              {t("web.menu.view_sort_clear", "Clear sort")}
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

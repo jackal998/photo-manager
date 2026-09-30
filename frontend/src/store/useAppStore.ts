@@ -47,7 +47,8 @@ import type {
   SettingsState,
 } from "./types";
 import { loadColumnWidths, saveColumnWidths } from "../lib/columnWidths";
-import { MIN_COLUMN_WIDTH, type ColumnId } from "../lib/resultColumns";
+import { MIN_COLUMN_WIDTH, type ColumnId, type SortDirection } from "../lib/resultColumns";
+import { isDecisionSortStale, snapshotDecisions } from "../lib/decisionSort";
 import { loadPanelWidths, savePanelWidths, clampPanelWidth } from "../lib/panelWidths";
 import { loadDensity, saveDensity, type Density } from "../lib/density";
 import { visibleSelectedPaths } from "../lib/rowFilter";
@@ -148,6 +149,10 @@ const initialResultView: ResultViewState = {
   // Slice TB — view-only, and deliberately not hydrated from anywhere: a
   // filter that came back after a reload hides rows with no visible cause.
   filterText: "",
+  // #923 — the Action sort's decision snapshot and its explicit re-sort count.
+  // Never hydrated: the Action sort does not persist (F3).
+  decisionSortSnapshot: null,
+  decisionResortSeq: 0,
 };
 
 const initialExecute: ExecuteState = {
@@ -553,7 +558,41 @@ export const useAppStore = create<AppStore>()(
     // -----------------------------------------------------------------------
 
     toggleSort(column: ColumnId) {
+      if (column === "action") {
+        // #923 — the Action header CYCLES (design F3): whatever was active →
+        // asc (Keep first) → desc (Delete first) → cleared. A stale order is
+        // the exception: the click re-sorts in place and the cycle waits.
+        const { resultView, manifest } = get();
+        const snapshot = resultView.decisionSortSnapshot;
+        if (
+          resultView.sortColumn === "action" &&
+          snapshot !== null &&
+          isDecisionSortStale(manifest.groups, snapshot)
+        ) {
+          const fresh = snapshotDecisions(manifest.groups);
+          set((state) => {
+            state.resultView.decisionSortSnapshot = fresh;
+            state.resultView.decisionResortSeq += 1;
+          });
+          return;
+        }
+        set((state) => {
+          const view = state.resultView;
+          if (view.sortColumn === "action" && view.sortDirection === "desc") {
+            view.sortColumn = null;
+            view.sortDirection = "asc";
+            view.decisionSortSnapshot = null;
+            return;
+          }
+          view.sortDirection = view.sortColumn === "action" ? "desc" : "asc";
+          view.sortColumn = "action";
+          view.decisionSortSnapshot = snapshotDecisions(manifest.groups);
+        });
+        return;
+      }
       set((state) => {
+        // ONE sort state: picking another column replaces an Action sort.
+        state.resultView.decisionSortSnapshot = null;
         if (state.resultView.sortColumn === column) {
           // Repeat click on the active column flips direction (asc <-> desc).
           state.resultView.sortDirection =
@@ -563,6 +602,44 @@ export const useAppStore = create<AppStore>()(
           state.resultView.sortColumn = column;
           state.resultView.sortDirection = "asc";
         }
+      });
+    },
+
+    setDecisionSort(direction: SortDirection | null) {
+      // #923 — the View-menu mirror writes the SAME state the header does.
+      const { resultView, manifest } = get();
+      if (direction === null) {
+        set((state) => {
+          state.resultView.sortColumn = null;
+          state.resultView.sortDirection = "asc";
+          state.resultView.decisionSortSnapshot = null;
+        });
+        return;
+      }
+      // Re-picking the active order is F3's "or the menu entry" re-sort; it
+      // only animates when it actually moves something (the order was stale).
+      const resortsStale =
+        resultView.sortColumn === "action" &&
+        resultView.sortDirection === direction &&
+        resultView.decisionSortSnapshot !== null &&
+        isDecisionSortStale(manifest.groups, resultView.decisionSortSnapshot);
+      const fresh = snapshotDecisions(manifest.groups);
+      set((state) => {
+        state.resultView.sortColumn = "action";
+        state.resultView.sortDirection = direction;
+        state.resultView.decisionSortSnapshot = fresh;
+        if (resortsStale) state.resultView.decisionResortSeq += 1;
+      });
+    },
+
+    refreshDecisionSort() {
+      // #923 — F3's silent re-sort: no animation, and the dot simply clears
+      // because the snapshot matches the live decisions again.
+      const { resultView, manifest } = get();
+      if (resultView.sortColumn !== "action") return;
+      const fresh = snapshotDecisions(manifest.groups);
+      set((state) => {
+        state.resultView.decisionSortSnapshot = fresh;
       });
     },
 
@@ -611,6 +688,8 @@ export const useAppStore = create<AppStore>()(
       // No drag to throttle here (a density change is one discrete choice), so
       // unlike the two width setters this always writes through.
       saveDensity(density);
+      // #923 — a density change is one of F3's silent re-sort triggers.
+      get().refreshDecisionSort();
     },
 
     // -----------------------------------------------------------------------
@@ -621,6 +700,8 @@ export const useAppStore = create<AppStore>()(
       set((state) => {
         state.resultView.filterText = text;
       });
+      // #923 — a filter change is one of F3's silent re-sort triggers.
+      get().refreshDecisionSort();
     },
 
     // -----------------------------------------------------------------------

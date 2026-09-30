@@ -124,6 +124,8 @@ function seed(groups: Group[]): void {
       panelWidths: { ...DEFAULT_PANEL_WIDTHS },
       density: DEFAULT_DENSITY,
       filterText: "",
+      decisionSortSnapshot: null,
+      decisionResortSeq: 0,
     },
   });
 }

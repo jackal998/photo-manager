@@ -38,6 +38,16 @@ was told the row list starts at, which must equal the sticky column-header
 row's measured height.  A scenario compares the two to prove the virtualizer's
 coordinate space matches the real layout."""
 
+COL_SORT_SUBLABEL = "col-sort-sublabel"
+"""The Action header's sort sub-label (#923) — "Keep first" / "Delete first"
+after the field name while the decision sort is active (rendered uppercase:
+"ACTION · KEEP FIRST").  It truncates before the field name ever does."""
+
+COL_SORT_STALE_DOT = "col-sort-stale-dot"
+"""The 4px accent dot right of the Action header's ▴/▾ (#923).  Present only
+while a decision changed under the Action sort — the rows deliberately stay put
+(design F3's deferred re-sort) — and gone after the next re-sort."""
+
 RESULT_COL_HEADER_ROW = "result-col-header-row"
 """Root of the sticky column-header row inside the result tree (#685/#699).
 
@@ -252,6 +262,20 @@ MENU_VIEW_LANG_EN = "menu-view-lang-en"
 
 MENU_VIEW_LANG_ZH = "menu-view-lang-zh"
 """View → Language → 中文 (zh_TW) menu item."""
+
+MENU_VIEW_SORT_KEEP_FIRST = "menu-view-sort-keep-first"
+"""View → Sort by action → Keep first (#923).  The menu MIRROR of the Action
+column header's ascending sort (Keep → Skip → Delete); ticked while that order
+is the active one.  Re-picking it while the order is stale re-sorts."""
+
+MENU_VIEW_SORT_DELETE_FIRST = "menu-view-sort-delete-first"
+"""View → Sort by action → Delete first (#923) — the descending order
+(Delete → Skip → Keep); ticked while active."""
+
+MENU_VIEW_SORT_CLEAR = "menu-view-sort-clear"
+"""View → Sort by action → Clear sort (#923).  Clears whatever sort is active
+(one sort state), returning every group to the server order; disabled when no
+sort is active."""
 
 # ---------------------------------------------------------------------------
 # Filesystem picker (FsBrowser — directory / file / save modes)
