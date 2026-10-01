@@ -24,7 +24,9 @@ Bypass
 Include the literal token ``[team-empty-ok: <reason>]`` in the
 completion comment when an empty-findings completion is intentional
 (e.g. the gate's trigger fired but the rubric explicitly returned
-CLEAN with a documented reason).
+CLEAN with a documented reason). The whole token — opener, reason and
+``]`` — sits on one line; an opener left unclosed on its line does not
+bypass, whatever ``]`` appears further down (#883).
 
 Hook protocol
 -------------
@@ -52,7 +54,12 @@ _TRIGGERED_GATE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^quality[- ]reviewer:.*", re.IGNORECASE),
 )
 
-_BYPASS_PATTERN = re.compile(r"\[team-empty-ok:[^\]]*\]")
+# The reason stays on one line (#883, the #872 fix on the PR-body guards):
+# the text searched is several comments joined with "\n", so a reason class
+# that spanned line breaks let an unclosed ``[team-empty-ok: `` be closed by
+# any later ``]`` — a ``- [ ]`` checklist box, a markdown link — and turned
+# the lines in between into "the reason", passing an empty completion.
+_BYPASS_PATTERN = re.compile(r"\[team-empty-ok:[^\]\r\n]*\]")
 
 # A "CLEAN with reason" completion is acceptable — it signals the
 # teammate did look and found nothing worth flagging.

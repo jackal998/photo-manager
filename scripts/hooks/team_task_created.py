@@ -24,7 +24,8 @@ Include the literal token ``[team-task-freeform: <reason>]`` in the
 task subject when a one-off task genuinely doesn't fit the allowlist
 (e.g. a manual instruction from LEAD to a teammate during debugging).
 The reason becomes part of the subject so the choice is visible in
-the team's task list.
+the team's task list. The whole token — opener, reason and ``]`` — sits
+on one line (#883).
 
 Hook protocol
 -------------
@@ -58,7 +59,10 @@ _ALLOWED_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^quality[- ]reviewer:.*", re.IGNORECASE),
 )
 
-_BYPASS_PATTERN = re.compile(r"\[team-task-freeform:[^\]]*\]")
+# One line, like every bypass token (#883 / #872). A subject is normally a
+# single line, so this is uniformity more than a live hole — it keeps the
+# next guard copied from this one from inheriting the line-spanning class.
+_BYPASS_PATTERN = re.compile(r"\[team-task-freeform:[^\]\r\n]*\]")
 
 
 def _extract_subject(payload: dict) -> str | None:
