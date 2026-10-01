@@ -479,6 +479,9 @@ web:
     execute: "Execute"
     settings: "Settings"
     open: "Open"
+    # #918 — accessible name of the "⋯" overflow trigger that holds Set
+    # Action…, the language choice and Settings on a narrow toolbar.
+    more_aria: "More actions"
     # The toolbar button had been borrowing web.action_dialog.title (copy
     # audit T1); a button wants a shorter label than the dialog's title.
     set_action: "Set Action…"
