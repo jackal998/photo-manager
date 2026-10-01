@@ -1,7 +1,11 @@
 // Right-click context menu for a file row or group-header row in the result
 // tree.
 //
-// Positioning: floating fixed div placed at {x, y} from the right-click event.
+// Positioning: floating fixed div anchored at {x, y} from the right-click
+// event, then kept inside the viewport (#897, hooks/useMenuPlacement +
+// lib/menuPlacement): it flips above / left of the cursor when it would
+// overflow, slides in when neither side fits, and scrolls internally when it
+// is taller than the window.
 // Dismiss: click outside (via mousedown listener) or Esc key.
 // Controlled entirely via props — the caller owns the mount/unmount state.
 //
@@ -21,6 +25,7 @@ import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { resolveInitialField } from "@/lib/actionDialogFields";
+import { useMenuPlacement } from "@/hooks/useMenuPlacement";
 import {
   CONTEXT_MENU,
   CTX_APPLY_BEST_COPY,
@@ -33,6 +38,13 @@ import {
   CTX_SET_ACTION_REMOVE,
   CTX_UNLOCK,
 } from "@/testids";
+
+// `w-max` pins the width to the content (#897): a fixed box with auto width
+// shrinks to fit the space right of `left`, so a menu opened near the right
+// edge would wrap its labels — measuring taller and narrower than it really
+// is — before placeMenu could move it.
+const MENU_CLASS =
+  "fixed z-[200] w-max min-w-[160px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm";
 
 export interface ContextMenuProps {
   x: number;
@@ -95,6 +107,8 @@ export function ContextMenu({
   const t = useT();
 
   const menuRef = useRef<HTMLDivElement>(null);
+  // #897 — measured and kept inside the window before it paints.
+  const menuStyle = useMenuPlacement(menuRef, x, y);
 
   // Dismiss on outside mousedown.
   useEffect(() => {
@@ -261,8 +275,8 @@ export function ContextMenu({
         ref={menuRef}
         data-testid={CONTEXT_MENU}
         role="menu"
-        className="fixed z-[200] min-w-[160px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm"
-        style={{ left: x, top: y }}
+        className={MENU_CLASS}
+        style={menuStyle}
       >
         {setActionByFieldItem}
         {removeFromListItem}
@@ -277,8 +291,8 @@ export function ContextMenu({
       ref={menuRef}
       data-testid={CONTEXT_MENU}
       role="menu"
-      className="fixed z-[200] min-w-[160px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm"
-      style={{ left: x, top: y }}
+      className={MENU_CLASS}
+      style={menuStyle}
     >
       <button
         data-testid={CTX_SET_ACTION_KEEP}

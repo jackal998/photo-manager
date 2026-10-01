@@ -6,8 +6,9 @@
 //   3. Lock/Unlock item shown conditionally based on isLocked prop.
 //   4. Clicking Keep calls store.setDecisions(targetPaths, "") and onClose.
 //   5. Clicking Delete calls store.setDecisions(targetPaths, "delete") and onClose.
-//   6. Clicking Remove calls store.removeFromList(targetPaths) and onClose (#694
-//      finalize — NOT a staged setDecisions(..., "ignore")).
+//   6. Clicking Remove calls store.removeFromList(targetPaths, false,
+//      { undoable: true }) and onClose (#694 finalize — NOT a staged
+//      setDecisions(..., "ignore"); #909 — `undoable` raises the undo toast).
 //   7. Clicking Lock calls store.setLocks(targetPaths, true) and onClose.
 //   8. Clicking Unlock calls store.setLocks(targetPaths, false) and onClose.
 //   9. Clicking Open folder calls store.revealInExplorer(filePath) and onClose.
@@ -23,11 +24,14 @@
 //      (#744), hides Execute-selected/Keep/Delete/Lock/Open-folder; Remove
 //      calls removeFromList with the group's member paths (targetPaths);
 //      Apply-best-copy calls applyBestCopy(groupNumber) regardless of variant.
+//  16. (#897) The menu is placed through lib/menuPlacement from its measured
+//      size: in a short window it flips above the cursor, and when taller than
+//      the window it scrolls inside it.
 
 import type { ComponentProps } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { useAppStore } from "@/store/useAppStore";
 import { ContextMenu } from "./ContextMenu";
@@ -361,6 +365,59 @@ describe("ContextMenu", () => {
       await user.click(screen.getByTestId(CTX_APPLY_BEST_COPY));
       expect(applyBestCopyMock).toHaveBeenCalledWith(GROUP_NUMBER);
       expect(onClose).toHaveBeenCalledOnce();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // #897 — the menu stays inside the window. jsdom does no layout, so the
+  // menu's size and the window's are stubbed; what is under test is that the
+  // component measures itself and applies lib/menuPlacement's answer (the
+  // math has its own tests in menuPlacement.test.ts).
+  // -------------------------------------------------------------------------
+
+  describe("#897 viewport placement", () => {
+    const restore: Array<() => void> = [];
+
+    function stub(target: object, prop: string, value: number) {
+      const prior = Object.getOwnPropertyDescriptor(target, prop);
+      Object.defineProperty(target, prop, { configurable: true, get: () => value });
+      restore.push(() => {
+        if (prior) Object.defineProperty(target, prop, prior);
+        else delete (target as Record<string, unknown>)[prop];
+      });
+    }
+
+    /** A menu of this size in a 1024 x 400 window. */
+    function sizeMenu(width: number, height: number) {
+      stub(window, "innerWidth", 1024);
+      stub(window, "innerHeight", 400);
+      stub(HTMLElement.prototype, "offsetWidth", width);
+      stub(HTMLElement.prototype, "offsetHeight", height);
+      stub(HTMLElement.prototype, "clientHeight", height);
+      stub(HTMLElement.prototype, "scrollHeight", height);
+    }
+
+    afterEach(() => {
+      while (restore.length > 0) restore.pop()!();
+    });
+
+    it("flips above the cursor when a right-click near the bottom would push it off", () => {
+      sizeMenu(220, 330);
+      renderMenu(false, [FILE_PATH], { x: 100, y: 350 });
+      const menu = screen.getByTestId(CONTEXT_MENU);
+      // Bottom edge at the cursor: 350 - 330.
+      expect(menu.style.top).toBe("20px");
+      expect(menu.style.left).toBe("100px");
+      expect(menu.style.maxHeight).toBe("");
+    });
+
+    it("scrolls inside the window when taller than it, so the last item stays reachable", () => {
+      sizeMenu(220, 500);
+      renderMenu(false, [FILE_PATH], { x: 100, y: 350 });
+      const menu = screen.getByTestId(CONTEXT_MENU);
+      expect(menu.style.top).toBe("4px");
+      expect(menu.style.maxHeight).toBe("392px");
+      expect(menu.style.overflowY).toBe("auto");
     });
   });
 });
