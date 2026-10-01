@@ -654,6 +654,7 @@ web:
     color_tooltip: "兩張影像之間平均 RGB 色彩的 L2 距離。在 pHash 檢查之後，平均色彩差距超過此值的影像將被排除於分組之外 — 用以排除 pHash 假陽性（DCT 結構相似但色彩不同）。0 = 停用；越高 = 越寬鬆。"
     error_prefix: "錯誤：{error}"
     start_button: "開始掃描"
+    empty_result: "找不到媒體檔案 — 沒有可掃描的內容。"
     progress_aria: "掃描進度"
     log_aria: "掃描記錄"
     files_found_singular: "已找到 {n} 個檔案"

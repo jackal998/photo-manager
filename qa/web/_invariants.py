@@ -315,6 +315,7 @@ def add_scan_source(
     *,
     idx: int = 0,
     label: str = "",
+    recursive: bool = False,
     timeout: float = 5_000,
 ) -> None:
     """Ensure a source row exists at position ``idx`` and fill its inputs.
@@ -340,6 +341,11 @@ def add_scan_source(
         0-based position of the source row (default 0 — the pre-existing row).
     label:
         Label text to fill.  Defaults to ``os.path.basename(path)``.
+    recursive:
+        State to SET on the row's "recursive" checkbox.  The ScanDialog now
+        defaults it to checked (#896, Qt parity), so the helper always sets
+        it explicitly; the default ``False`` keeps every existing driver's
+        non-recursive scan scope unchanged.
     timeout:
         Maximum milliseconds to wait for each element.
     """
@@ -350,6 +356,14 @@ def add_scan_source(
     label_input.wait_for(state="visible", timeout=timeout)
     label_input.fill(effective_label)
     page.get_by_test_id(f"scan-source-{idx}-path").fill(path)
+    box = page.get_by_test_id(scan_source_recursive_testid(idx))
+    box.set_checked(recursive)
+    assert box.is_checked() == recursive, (
+        f"recursive checkbox for source row {idx} is "
+        f"{'checked' if box.is_checked() else 'unchecked'}, expected "
+        f"{'checked' if recursive else 'unchecked'} — the scan would walk the "
+        f"wrong scope"
+    )
 
 
 def set_output_path(page: "Page", path: str) -> None:
@@ -420,11 +434,11 @@ def run_scan(
         Maximum milliseconds to wait for the manifest-loaded status bar text.
         Scans on large directories can take several minutes.
     recursive:
-        Tick every source row's "recursive" checkbox before starting.  The
-        ScanDialog default is UNCHECKED (``ScanDialog.tsx:60`` —
-        ``recursive: false``), so a scenario whose fixture has a nested
-        subdirectory gets that subdirectory silently skipped unless it passes
-        ``recursive=True``.  Default False so existing callers are unchanged.
+        Set every source row's "recursive" checkbox to this state before
+        starting (via :func:`add_scan_source`).  The ScanDialog default is
+        CHECKED since #896, but a scenario whose fixture has a nested
+        subdirectory it must NOT walk relies on the helper unticking it, so
+        the default False keeps existing callers' scan scope unchanged.
 
     Returns
     -------
@@ -436,16 +450,9 @@ def run_scan(
     for idx, spec in enumerate(sources):
         if isinstance(spec, tuple):
             lbl, pth = spec
-            add_scan_source(page, pth, idx=idx, label=lbl)
+            add_scan_source(page, pth, idx=idx, label=lbl, recursive=recursive)
         else:
-            add_scan_source(page, spec, idx=idx)
-        if recursive:
-            box = page.get_by_test_id(scan_source_recursive_testid(idx))
-            box.check()
-            assert box.is_checked(), (
-                f"recursive checkbox for source row {idx} did not tick — the "
-                f"scan would silently skip every subdirectory of that source"
-            )
+            add_scan_source(page, spec, idx=idx, recursive=recursive)
     set_output_path(page, output_path)
     start_scan(page)
     return wait_manifest_loaded(page, timeout=scan_timeout)

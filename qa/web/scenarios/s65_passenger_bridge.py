@@ -33,9 +33,9 @@ Web slice:
      them as TWO ordered sources:
        source 0 "bridge-a" → {scene_left.jpg, scene_right.jpg}  (priority 0)
        source 1 "bridge-b" → {scene_bridge.jpg}                 (priority 1)
-     Two sources — not one parent dir — because (a) the web ScanDialog adds
-     sources non-recursively, so a single parent-of-subdirs source walks zero
-     files, and (b) source ORDER encodes priority: bridge-a (first) is
+     Two sources — not one parent dir — because (a) the add_scan_source
+     helper adds sources non-recursively, so a single parent-of-subdirs source
+     walks zero files, and (b) source ORDER encodes priority: bridge-a (first) is
      Ref-tier, bridge-b (second) is the lower-priority bridge that becomes
      REVIEW_DUPLICATE, matching the desktop driver's two-source priority
      setup.  The output db lives BESIDE the source dirs (tmpdir root),
@@ -153,9 +153,10 @@ def run(*, base_url: str) -> None:
     try:
         # ── Copy each fixture dir into its own FLAT source dir ──────────────
         # Two scan sources (NOT one parent-of-subdirs) for two reasons:
-        #   1. The web ScanDialog adds sources non-recursively (recursive
-        #      defaults to false), so a single parent-of-subdirs source would
-        #      walk ZERO files.  Each fixture dir holds its images directly, so
+        #   1. The add_scan_source helper adds sources non-recursively (it
+        #      unticks the box, which the dialog defaults to checked since
+        #      #896), so a single parent-of-subdirs source would walk ZERO
+        #      files.  Each fixture dir holds its images directly, so
         #      a flat per-dir source needs no recursion.
         #   2. Source ORDER encodes priority: bridge-a (added first → priority
         #      0) is Ref-tier; bridge-b (added second → priority 1) is the
