@@ -87,8 +87,8 @@ def _rand_hex(n: int, rng: random.Random) -> str:
 def _rand_path(rng: random.Random, group_idx: int, item_idx: int) -> str:
     """Realistic NAS UNC path, 100-300 chars."""
     nas_share = rng.choice([
-        r"\\LINXIAOYUN\photos",
-        r"\\LINXIAOYUN\圖片",
+        r"\\NAS-HOST\photos",
+        r"\\NAS-HOST\圖片",
         r"D:\Takeout-0508",
     ])
     subfolder_depth = rng.randint(2, 5)

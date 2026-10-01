@@ -59,7 +59,7 @@ in walk order**, 8 worker processes all grab D: records first and
 **simultaneously read from the same HDD spindle** — exactly the
 seek-thrash bug #605/#606 fixed for thread mode, now reproduced in
 the compute path. The H+J NAS portion also has 8 workers contending
-on the same `\\\\LINXIAOYUN` server.
+on the same `\\\\NAS-HOST` server.
 
 ## Fix
 

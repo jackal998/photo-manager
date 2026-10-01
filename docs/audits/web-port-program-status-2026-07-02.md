@@ -180,8 +180,8 @@ From the memory checkpoint (LEAD-tracked, supersets #646's acceptance criteria):
 
 ## 8. Key facts / gotchas for a successor
 
-- **Worktree:** `C:\Users\J\repository\photo-manager\.claude\worktrees\web-port-phase2`.
-  **Venv python:** `C:/Users/J/repository/photo-manager/.venv/Scripts/python.exe`
+- **Worktree:** `C:\Users\<user>\repository\photo-manager\.claude\worktrees\web-port-phase2`.
+  **Venv python:** `C:/Users/<user>/repository/photo-manager/.venv/Scripts/python.exe`
   (from the worktree it is `../../../.venv/...`, not `.venv/...`).
 - **Never merge PRs** — the user merges every one in the GitHub UI. Surface "ready for your merge".
 - **pin base to `origin/master` after `git fetch`**, never a stale local `master`.

@@ -301,12 +301,12 @@ class TestReadKneeCache:
         settings_path.write_text(json.dumps({"sources": {}}), encoding="utf-8")
         settings = JsonSettings(settings_path)
 
-        store_read_knee(settings, r"\\LINXIAOYUN", 2)
+        store_read_knee(settings, r"\\NAS-HOST", 2)
 
-        entry = settings.get("scan.read_knee_cache")[r"\\LINXIAOYUN"]
+        entry = settings.get("scan.read_knee_cache")[r"\\NAS-HOST"]
         assert entry == {"knee": 2, "recipe": AUTOTUNE_RECIPE_VERSION}
         reloaded = JsonSettings(settings_path)  # next session reads from disk
-        assert reloaded.get("scan.read_knee_cache")[r"\\LINXIAOYUN"]["knee"] == 2
+        assert reloaded.get("scan.read_knee_cache")[r"\\NAS-HOST"]["knee"] == 2
 
     def test_store_read_knee_is_per_device_not_per_source_set(self, tmp_path):
         # The whole point of dropping the source-path fingerprint: two devices'
