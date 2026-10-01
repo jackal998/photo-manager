@@ -309,6 +309,56 @@ class TestExecuteDecisions:
 
 
 # ---------------------------------------------------------------------------
+# execute_decisions — audit CSV stays out of the user's profile (#948)
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteAuditCsvIsolation:
+    """Guard for ``tests/conftest.py::_isolate_delete_log_dir`` (#948).
+
+    ``execute_decisions`` calls ``write_delete_log`` with no ``log_dir``, so the
+    CSV goes to ``%LOCALAPPDATA%\\PhotoManager\\delete_logs`` — the audit trail a
+    user reads to recover what a real Execute deleted. Before #948 every local
+    suite run buried that trail under thousands of pytest CSVs.
+
+    ``LOCALAPPDATA`` is pointed at a temp dir here, so if the conftest redirect
+    ever goes inert the stray CSV lands in that temp dir and fails this test —
+    never in the real profile.
+    """
+
+    def test_audit_csv_lands_in_pytest_temp_not_localappdata(
+        self, tmp_path, tmp_path_factory, monkeypatch
+    ):
+        fake_localappdata = tmp_path / "LOCALAPPDATA"
+        fake_localappdata.mkdir()
+        monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
+
+        (victim,) = _make_real_files(tmp_path, 1)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(victim),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = execute_decisions(str(manifest), recycle=False)
+
+        log_path = result["log_path"]
+        assert log_path is not None, "execute wrote no audit CSV at all"
+        assert not (fake_localappdata / "PhotoManager").exists(), (
+            f"audit CSV escaped into %LOCALAPPDATA%\\PhotoManager: {log_path}"
+        )
+        assert tmp_path_factory.getbasetemp() in Path(log_path).parents, (
+            f"audit CSV is not under pytest's temp root: {log_path}"
+        )
+        assert str(victim) in Path(log_path).read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # remove_from_review
 # ---------------------------------------------------------------------------
 
