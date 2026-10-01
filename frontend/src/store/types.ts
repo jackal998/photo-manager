@@ -3,6 +3,7 @@
 
 import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
 import type { ColumnId, SortDirection } from "../lib/resultColumns";
+import type { DecisionSnapshot } from "../lib/decisionSort";
 import type { PanelId } from "../lib/panelWidths";
 import type { Density } from "../lib/density";
 import type { PrunePref } from "../lib/prune";
@@ -163,6 +164,21 @@ export interface ResultViewState {
    * CTA — those count the whole manifest, which is what Execute acts on.
    */
   filterText: string;
+  /**
+   * #923 — the decisions the Action sort ordered by (lib/decisionSort.ts),
+   * captured when that sort was applied or last re-sorted; null whenever
+   * Action is not the sort column. Rows are ordered by THIS rather than by the
+   * live decisions, so staging a decision never moves a row (design F3's
+   * deferred re-sort); a live decision that differs from it is what lights the
+   * header's stale dot. Not persisted — neither is the Action sort itself.
+   */
+  decisionSortSnapshot: DecisionSnapshot | null;
+  /**
+   * #923 — bumped on each EXPLICIT re-sort of a stale Action order (a header
+   * click or a View-menu entry), never on a silent one. It is the only signal
+   * ResultTree animates the moving rows on (F3: 120ms ease-out).
+   */
+  decisionResortSeq: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,8 +218,14 @@ export interface UndoToast {
    * only). The two differ in what their sentence can say: keep-best names ONE
    * group and always writes `delete`, a toolbar verb acts on a ctrl/shift
    * selection that may span groups and writes whichever decision was pressed.
+   *
+   * "skip-now" (#909) is the immediate Skip — the context menu's "Skip now"
+   * and List → Skip Selected now — which FINALIZES `outcome='ignored'` rather
+   * than staging a decision, so its Undo goes through `undoSkipNow` (POST
+   * /api/restore) instead of a decision PATCH. Its snapshot rows carry the
+   * decision and lock only as a record: the skip changes neither.
    */
-  kind: "keep-best" | "bulk-decision";
+  kind: "keep-best" | "bulk-decision" | "skip-now";
   /** The group keep-best acted on; null for a toolbar verb (see `kind`). */
   groupNumber: number | null;
   /**
@@ -223,6 +245,13 @@ export interface UndoToast {
   lockedCount: number;
   /** Prior state of every row the write touched — what Undo restores. */
   snapshot: KeepBestSnapshotRow[];
+  /**
+   * skip-now only: singletons the prune that followed THIS skip finalized.
+   * Undo must restore them too — skipping one row of a pair leaves its
+   * partner a singleton, and if the prune took the partner, restoring the
+   * skipped row alone brings back a one-member group the tree never shows.
+   */
+  prunedPaths?: string[];
   /** True while an Undo is in flight, so the button cannot fire twice. */
   undoing: boolean;
 }
@@ -280,6 +309,12 @@ export interface PrunePrompt {
    * Unlock&Apply on the "ask" path.
    */
   lockedToPrune: string[];
+  /**
+   * #909 — the "skip-now" toast whose skip opened this prompt (null/absent
+   * for any other flow). The dialog's verdict folds its prune into THAT toast
+   * only, whatever toast is standing by then.
+   */
+  undoToastId?: number | null;
 }
 
 /** Pending prune state held while the locked-singleton lock gate is open. */
@@ -292,6 +327,8 @@ export interface PrunePending {
    * locked; "ask" opens the prune dialog for the unlocked buckets.
    */
   pref: PrunePref;
+  /** #909 — the owning "skip-now" toast, carried through the lock gate. */
+  undoToastId?: number | null;
 }
 
 /** User verdict on the prune-context lock gate (LockConfirmDialog op="prune"). */
@@ -487,8 +524,27 @@ export interface AppActions {
    * a repeat click on the same column flips to descending. Switching columns
    * resets to ascending. The result tree re-sorts each group's rows by the
    * new (column, direction); group order is unchanged.
+   *
+   * ``action`` (#923) CYCLES instead: asc (Keep first) → desc (Delete first)
+   * → cleared. While its order is stale a click re-sorts in place rather than
+   * advancing the cycle — the stale dot's tooltip promises exactly that.
    */
   toggleSort(column: ColumnId): void;
+
+  /**
+   * #923 — the View menu's mirror of the Action header: ``"asc"`` (Keep
+   * first) / ``"desc"`` (Delete first) applies that order, re-sorting in
+   * place if it is already the active one; ``null`` (Clear sort) clears
+   * whatever sort is active. Same single sort state as the header.
+   */
+  setDecisionSort(direction: SortDirection | null): void;
+
+  /**
+   * #923 — re-sort a live Action order silently (no animation, no dot): the
+   * F3 triggers are a group collapse/expand, a filter change and a density
+   * change. A no-op when Action is not the sort column.
+   */
+  refreshDecisionSort(): void;
 
   /**
    * Set the width (px) of ``column``. During a resize drag this is called per
@@ -584,8 +640,15 @@ export interface AppActions {
    *
    * - On success: replaces manifest.groups from response.groups.
    * - On 409 locked_paths: sets lockConflict (with op="remove").
+   * - `undoable` (#909): the immediate Skip entry points (context menu, List
+   *   menu) pass it so a success raises the "skip-now" undo toast. The
+   *   Execute dialog's Skip does not — it is already behind a confirm.
    */
-  removeFromList(paths: string[], forceLocked?: boolean): Promise<void>;
+  removeFromList(
+    paths: string[],
+    forceLocked?: boolean,
+    opts?: { undoable?: boolean }
+  ): Promise<void>;
 
   /**
    * After a destructive op (execute / finalizing remove) updates the groups,
@@ -596,15 +659,27 @@ export interface AppActions {
    * plain/actioned/locked, and branches: never→noop; locked→open the lock gate;
    * always→auto-prune; ask→open the prune dialog. The web port of Qt's
    * `_maybe_offer_singleton_prune`.
+   *
+   * `undoToastId` (#909): the "skip-now" toast whose skip triggered this
+   * offer. It travels with this flow (the lock gate's pending state, the
+   * prompt, the applyPrune call), and whatever the flow ends up pruning is
+   * added to THAT toast's `prunedPaths` if it is still the standing toast —
+   * never to a later skip's — so its Undo can restore the partners the skip
+   * orphaned.
    */
-  maybeOfferPrune(): Promise<void>;
+  maybeOfferPrune(undoToastId?: number): Promise<void>;
 
   /**
    * POST /api/prune with an explicit `paths` set (#686) to finalize exactly those
    * singletons (outcome='ignored'). Replaces manifest.groups from the response and
    * clears the transient prune state. A no-op (clears state only) for an empty set.
+   *
+   * `undoToastId` (#909): the "skip-now" toast that started this prune flow
+   * (null for none); the pruned paths fold into that toast only. The store's
+   * own callers pass it; when it is omitted — PruneConfirmDialog resolving
+   * the open prompt — the owner recorded on that prompt is used.
    */
-  applyPrune(paths: string[]): Promise<void>;
+  applyPrune(paths: string[], undoToastId?: number | null): Promise<void>;
 
   /**
    * Resolve the prune-context lock gate (LockConfirmDialog op="prune").
@@ -742,6 +817,14 @@ export interface AppActions {
    * pressing Undo.
    */
   undoKeepBest(): Promise<void>;
+
+  /**
+   * Reverse the immediate Skip the current "skip-now" toast describes (#909):
+   * POST /api/restore for the skipped rows plus any singletons the follow-up
+   * prune took, then dismiss the toast. Same no-op and failure rules as
+   * `undoKeepBest` — a failed restore leaves the toast up.
+   */
+  undoSkipNow(): Promise<void>;
 
   /** Clear the toast (its timer expired, or Undo finished). */
   dismissToast(): void;

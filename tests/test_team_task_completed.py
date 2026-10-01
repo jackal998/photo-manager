@@ -216,6 +216,64 @@ class TestBypassTokenShape:
         })
         assert rc == 2
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            # Two comments — the hook joins their bodies with "\n" — and the
+            # second carries a markdown checklist box.
+            {
+                "task": {
+                    "subject": "docs-reviewer: gates 2+3",
+                    "comments": [
+                        {"body": "[team-empty-ok: nothing to report"},
+                        {"body": "- [ ] re-run the rubric on the final diff"},
+                    ],
+                },
+            },
+            # The TaskUpdate shape — comment + body joined with "\n" — where
+            # the body's markdown link supplies the stray "]".
+            {
+                "tool_name": "TaskUpdate",
+                "tool_input": {
+                    "status": "completed",
+                    "subject": "Gate 7: app-level security",
+                    "comment": "[team-empty-ok: ",
+                    "body": "see [the rubric](.claude/skills/app-security-patterns/SKILL.md)",
+                },
+            },
+            # One comment body with Windows line endings.
+            {
+                "task": {
+                    "subject": "quality-reviewer: gates 8+9+10",
+                    "comments": [{"body": "[team-empty-ok: nothing\r\n\r\n- [ ] x\r\n"}],
+                },
+            },
+        ],
+        ids=["comments-checklist", "taskupdate-link", "crlf-body"],
+    )
+    def test_unclosed_token_is_not_closed_by_a_later_line(self, monkeypatch, payload):
+        """#883: the text is multi-line by construction, so an opener left
+        unclosed on its line must not borrow a ``]`` from further down —
+        otherwise an empty completion passes with the lines in between
+        counted as "the reason"."""
+        assert _run(monkeypatch, payload) == 2
+
+    def test_token_closed_on_its_line_still_bypasses_in_multiline_text(
+        self, monkeypatch
+    ):
+        """The must-match half: a properly closed token keeps working when
+        other comments — checklist boxes included — follow it."""
+        rc = _run(monkeypatch, {
+            "task": {
+                "subject": "docs-reviewer: gates 2+3",
+                "comments": [
+                    {"body": "[team-empty-ok: trigger fired on the file list; rubric noops (#883)]"},
+                    {"body": "- [ ] follow-up: widen the trigger"},
+                ],
+            },
+        })
+        assert rc == 0
+
 
 # ── check() direct entry point ────────────────────────────────────────────
 

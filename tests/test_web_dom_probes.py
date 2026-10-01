@@ -329,6 +329,92 @@ class TestScenarioMapParity:
 
 
 # ---------------------------------------------------------------------------
+# 2b. wait_manifest_loaded's status pattern — every shipped locale (#910)
+# ---------------------------------------------------------------------------
+
+_STATUS_LOCALES = ("en", "zh_TW")
+# The five catalog keys App.tsx composes into the loaded-manifest summary.
+_SUMMARY_KEYS = frozenset({
+    "web.status.summary",
+    "web.status.group_singular",
+    "web.status.group_plural",
+    "web.status.file_singular",
+    "web.status.file_plural",
+})
+
+
+def _status_catalog(locale: str) -> dict[str, str]:
+    """The ``web.status.*`` strings for *locale*, read by the same loader that
+    serves the browser's catalog (``/api/i18n/{locale}``) — never a hand copy."""
+    from infrastructure.i18n import Translator
+    strings = Translator(locale, _REPO / "translations").strings
+    return {k: v for k, v in strings.items() if k.startswith("web.status.")}
+
+
+def _interpolate(template: str, params: dict[str, object]) -> str:
+    """The frontend's ``interpolate`` (frontend/src/i18n/useT.ts), in Python."""
+    return re.sub(
+        r"\{(\w+)\}", lambda m: str(params.get(m.group(1), m.group(0))), template
+    )
+
+
+def _rendered_summary(catalog: dict[str, str], groups: int, files: int) -> str:
+    """``web.status.summary`` rendered exactly as App.tsx renders it."""
+    return _interpolate(catalog["web.status.summary"], {
+        "groups": groups,
+        "groupWord": catalog[
+            "web.status.group_singular" if groups == 1 else "web.status.group_plural"
+        ],
+        "files": files,
+        "fileWord": catalog[
+            "web.status.file_singular" if files == 1 else "web.status.file_plural"
+        ],
+    })
+
+
+class TestManifestLoadedStatusPattern:
+    """`wait_manifest_loaded` must see a loaded manifest in EVERY locale.
+
+    Real failure mode (#910): the pattern spelled out the English nouns, so a
+    scenario that switched the UI to zh_TW and then opened or reloaded a
+    manifest waited the full 60 s and timed out on 「5 個群組 · 12 個檔案」.
+    """
+
+    @staticmethod
+    def _pattern() -> "re.Pattern[str]":
+        from qa.web._invariants import _STATUS_MANIFEST_LOADED
+        return _STATUS_MANIFEST_LOADED
+
+    @pytest.mark.parametrize("locale", _STATUS_LOCALES)
+    @pytest.mark.parametrize(("groups", "files"), [(0, 0), (1, 1), (1, 5), (5, 12)])
+    def test_matches_the_loaded_summary(self, locale: str, groups: int, files: int) -> None:
+        text = _rendered_summary(_status_catalog(locale), groups, files)
+        assert self._pattern().search(text), (
+            f"wait_manifest_loaded would time out on the {locale} status bar: {text!r}"
+        )
+
+    @pytest.mark.parametrize("locale", _STATUS_LOCALES)
+    def test_rejects_every_other_status_string(self, locale: str) -> None:
+        """The false-positive half: a pattern loosened to "any digit" would
+        report "loaded" while the bar still says Loading / Scanning / failed."""
+        catalog = _status_catalog(locale)
+        # Digits in every placeholder — the fill most likely to trip a loose pattern.
+        others = {
+            key: _interpolate(value, {"stage": " 3", "error": "3", "count": 3, "size": "3 MB"})
+            for key, value in catalog.items()
+            if key not in _SUMMARY_KEYS
+        }
+        # Named, not counted: a catalog that failed to load must not pass vacuously.
+        for must_cover in ("web.status.ready", "web.status.loading_manifest",
+                           "web.status.scanning", "web.status.scan_failed"):
+            assert must_cover in others, f"{locale} catalog lacks {must_cover}"
+        false_hits = {k: v for k, v in others.items() if self._pattern().search(v)}
+        assert not false_hits, (
+            f"these {locale} status strings would pass as a loaded manifest: {false_hits}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # 3. Import isolation — no playwright at module load time
 # ---------------------------------------------------------------------------
 

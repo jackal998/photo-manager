@@ -1,0 +1,1 @@
+Write web scan progress, skipped files and scan errors to the rotating app log again, so a failed scan can be diagnosed after its dialog closes (#886).

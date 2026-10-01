@@ -925,4 +925,54 @@ describe("ActionDialog", () => {
 
     expect(useAppStore.getState().action.pattern).toBe("2024");
   });
+
+  // -------------------------------------------------------------------------
+  // 27-28. #899 — the Simple row follows a hand-edited regex
+  // -------------------------------------------------------------------------
+
+  it("#899 re-syncs the Simple row from a hand-edited regex, so an op flip keeps the edit", async () => {
+    const user = userEvent.setup();
+    seedManifest();
+    act(() => {
+      useAppStore.getState().openActionDialog("File Name", SEED_ROW_PATH);
+    });
+    render(<ActionDialog />);
+
+    // Hand-edit the Regex line away from the seed.
+    const regexInput = screen.getByTestId(ACTION_REGEX_INPUT) as HTMLInputElement;
+    await user.clear(regexInput);
+    await user.type(regexInput, "^neardup_0");
+
+    // The Simple row now describes the edited regex, not the mount-time seed.
+    const opSelect = screen.getByTestId(ACTION_SIMPLE_OP) as HTMLSelectElement;
+    expect(opSelect.value).toBe("starts_with");
+    expect((screen.getByTestId(ACTION_SIMPLE_TEXT) as HTMLInputElement).value).toBe(
+      "neardup_0"
+    );
+
+    // Flipping the op derives from the edited regex. Before #899 this wrote the
+    // stale seed back: "IMG_0042 \(1\)\.HEIC".
+    await user.selectOptions(opSelect, "contains");
+    expect(useAppStore.getState().action.pattern).toBe("neardup_0");
+  });
+
+  it("#899 clearing the Simple text keeps the chosen op", async () => {
+    // The re-sync must not fight the Simple row's own write-through: a blank
+    // row writes "" for every op, and "" alone would re-parse as "contains".
+    const user = userEvent.setup();
+    seedManifest();
+    act(() => {
+      useAppStore.getState().openActionDialog("File Name", SEED_ROW_PATH);
+    });
+    render(<ActionDialog />);
+
+    const opSelect = screen.getByTestId(ACTION_SIMPLE_OP) as HTMLSelectElement;
+    await user.selectOptions(opSelect, "ends_with");
+    expect(useAppStore.getState().action.pattern).toBe("IMG_0042 \\(1\\)\\.HEIC$");
+
+    // Retyping the text from scratch: the pattern drops to "" on the way.
+    await user.clear(screen.getByTestId(ACTION_SIMPLE_TEXT));
+    expect(useAppStore.getState().action.pattern).toBe("");
+    expect(opSelect.value).toBe("ends_with");
+  });
 });

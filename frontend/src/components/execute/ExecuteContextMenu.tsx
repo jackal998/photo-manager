@@ -24,6 +24,7 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
+import { useMenuPlacement } from "@/hooks/useMenuPlacement";
 import {
   CONTEXT_MENU,
   CTX_LOCK,
@@ -60,6 +61,10 @@ export function ExecuteContextMenu({
   const t = useT();
 
   const menuRef = useRef<HTMLDivElement>(null);
+  // #897 — kept inside the WINDOW, not the dialog: the dialog does not clip
+  // this menu (s30), so the window edge is the one that hides items. {x, y}
+  // are layer-relative; the hook converts through the layer's origin.
+  const menuStyle = useMenuPlacement(menuRef, x, y);
 
   // Dismiss on outside mousedown (capture so it beats the row's own handlers).
   useEffect(() => {
@@ -127,8 +132,10 @@ export function ExecuteContextMenu({
       ref={menuRef}
       data-testid={CONTEXT_MENU}
       role="menu"
-      className="absolute z-50 min-w-[170px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm pointer-events-auto"
-      style={{ left: x, top: y }}
+      // `w-max`: an auto-width absolute box shrinks to the space right of
+      // `left` and would wrap its labels (measuring wrong) near the edge.
+      className="absolute z-50 w-max min-w-[170px] rounded-md border border-hairline bg-panel py-1 shadow-md text-sm pointer-events-auto"
+      style={menuStyle}
     >
       <button
         data-testid={CTX_SET_ACTION_DELETE}

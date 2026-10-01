@@ -1,0 +1,1 @@
+Fail the `web-scenario-batch` CI job when a qa soft probe prints `probe_status: PASS`, restoring the promotion forcing function lost with the Qt batch (#890).

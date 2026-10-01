@@ -388,6 +388,8 @@ web:
     execute: "執行"
     settings: "設定"
     open: "開啟"
+    # #918：窄工具列上「⋯」溢出選單按鈕的無障礙名稱（內含設定動作、語言、設定）。
+    more_aria: "更多動作"
     set_action: "設定動作…"
     # Layout slice TB（#878）：篩選框、帶計數的批次動作、危險 CTA。計數寫在標籤
     # 裡，「刪除」才不會是一個未知的數字；CTA 在零筆時停用但保留標籤，按鈕不會
@@ -430,6 +432,9 @@ web:
     # 為說出「動作」；{verb} 由 web.decision.* 帶入，與列控制項、右鍵選單同一套
     # 用語。
     bulk_decision: "已將 {count} 個{fileWord}設為{verb}"
+    # #909 — 立即略過(右鍵「立即略過」、清單 → 立即略過選取項目)是直接定案而非
+    # 暫存決策，所以句子說的是這些列「已移除」。
+    skip_now: "已從本次檢閱中移除 {count} 個{fileWord}"
     file_singular: "檔案"
     file_plural: "檔案"
     locked_unchanged_singular: "{count} 個鎖定的檔案未變更"
@@ -483,6 +488,12 @@ web:
     score: "分數"
     size: "大小"
     decision: "決策"
+    # 依決定排序（#923，設計 F3 + 2026-09-29 擁有者裁定）。動作欄標題的副標寫出
+    # 排序方向；檢視選單的鏡像項目沿用同樣的字。
+    sort_keep_first: "保留優先"
+    sort_delete_first: "刪除優先"
+    # 在「動作」排序下變更決定後出現的 4px 圓點提示：列刻意不移動，排序已過期。
+    sort_stale: "排序已過期 — 點擊重新排序"
   # Layout slice R (#878): the score cell's label, riding above the number.
   score:
     keep_label: "保留分數"
@@ -589,6 +600,9 @@ web:
     view_language: "語言"
     lang_en: "English"
     lang_zh: "中文 (繁體)"
+    # #923：動作欄排序在檢視選單的鏡像（Q1 裁定：放這裡，不放工具列）。
+    view_sort: "依動作排序"
+    view_sort_clear: "清除排序"
     # 折入選單列右端的掃描摘要（#878 slice TB，F3/F4）。來源名稱另外接在後面，
     # 這樣被截斷的永遠是名稱，而不是數字，而且絕不換行。
     scan_summary: "{photos} 個{photoWord} · {groups} 個{groupWord}"
@@ -643,6 +657,7 @@ web:
     color_tooltip: "兩張影像之間平均 RGB 色彩的 L2 距離。在 pHash 檢查之後，平均色彩差距超過此值的影像將被排除於分組之外 — 用以排除 pHash 假陽性（DCT 結構相似但色彩不同）。0 = 停用；越高 = 越寬鬆。"
     error_prefix: "錯誤：{error}"
     start_button: "開始掃描"
+    empty_result: "找不到媒體檔案 — 沒有可掃描的內容。"
     progress_aria: "掃描進度"
     log_aria: "掃描記錄"
     files_found_singular: "已找到 {n} 個檔案"

@@ -1354,13 +1354,10 @@ class TestPipelineExifPipeline:
         assert not leaked, f"exif-consumer thread leaked: {leaked!r}"
 
 
-# GAP left by #646 (surfaced, not created): the desktop client mirrored every
-# progress line into the rotating app_<date>.log via loguru, and
-# TestScanWorkerLogging pinned it (issue #49 — "the scan stopped" reports need
-# an artifact to attach). SseScanBus (app/web/routes/scan.py:135) fans out over
-# SSE only, so the web client has no such log and the test had nothing left to
-# assert. Restoring it is a web-behaviour change, deliberately out of scope for
-# the cutover PR.
+# The desktop client's #49 test (TestScanWorkerLogging — progress lines and
+# skip records mirrored into the rotating app_<date>.log) was lost with #646 and
+# restored for the web bus by #886: tests/test_web_scan_bus.py
+# TestScanAppLogMirror.
 
 
 class TestPipelineLateCancel:
@@ -2367,7 +2364,7 @@ class TestScanTeardownGaps:
         )
         # D: → spinning HDD, J: → remote NAS share. is_remote_drive must
         # also accept the resolved \\SERVER key for the NAS bucket
-        # (device_key collapses J: to \\LINXIAOYUN when WNetGetConnectionW
+        # (device_key collapses J: to \\NAS-HOST when WNetGetConnectionW
         # resolves it; the patched stub returns the letter unchanged so
         # the bucket key here stays "J:").
         monkeypatch.setattr(

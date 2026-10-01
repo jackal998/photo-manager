@@ -67,7 +67,8 @@
      at the 3:1 floor, which it clears. The VALUE is unchanged; only the role
      narrowed. The token keeps its old name because `--color-hairline` is
      already the #e7ddcd border and a rename would churn every remaining call
-     site plus LockToggle.test.tsx; `--color-ink-hairline` is published beside
+     site (the unlocked padlock is no longer one — design F1 / #922 moved it to
+     `ink-muted`, a state ink); `--color-ink-hairline` is published beside
      it as an alias so slices R/PV can move their call sites onto the role name
      without a second value change. Both names, one value, until then. */
   --color-ink-faint: #a89f8f;

@@ -177,12 +177,12 @@ def run(*, base_url: str) -> None:
             )
 
             # ── #893 ──────────────────────────────────────────────────────────
-            # Back to an ordinary window first. #893 has nothing to do with the
-            # viewport, and the row context menu is taller than 400 px, so at
-            # the #894 window its lower items sit outside the viewport and
-            # Playwright cannot click them. (That clipping is real — a context
-            # menu opened near the bottom of a short window has unreachable
-            # items — but it is a separate defect, not this scenario's subject.)
+            # Back to an ordinary window first: #893 has nothing to do with the
+            # viewport, so this half runs in the window it was written for.
+            # (The resize was once forced — the row context menu opened at the
+            # cursor regardless, and at the #894 window its lower items fell
+            # past the viewport edge. #897 keeps the menu inside the window;
+            # s15 step (g) is that defect's own probe.)
             page.set_viewport_size({"width": 1280, "height": 800})
             page.wait_for_timeout(300)
 
