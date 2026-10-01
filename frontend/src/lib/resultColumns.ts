@@ -7,6 +7,7 @@
 // headed columns). Sort + resize (#685 → s45/s47) operate over THIS registry.
 
 import type { FileRow as FileRowData } from "@/api/types";
+import { makeDecisionComparator, type DecisionSnapshot } from "./decisionSort";
 
 // ---------------------------------------------------------------------------
 // Column identity
@@ -73,7 +74,10 @@ export interface ColumnDef {
 export const COLUMNS: readonly ColumnDef[] = [
   { id: "name", labelKey: "web.column.file_name", labelFallback: "File Name", defaultWidth: 160, sortable: true, align: "left", mono: false, flexible: true },
   { id: "similarity", labelKey: "web.column.similarity", labelFallback: "Similarity", defaultWidth: 92, sortable: false, align: "left", mono: false, flexible: false },
-  { id: "action", labelKey: "web.column.action", labelFallback: "Action", defaultWidth: 168, sortable: false, align: "left", mono: false, flexible: false },
+  // Sortable since #923 (design F3): the header is the CANONICAL decision-sort
+  // control — Action never sheds, so it is always reachable — and its click
+  // cycles asc → desc → clear instead of flipping (store `toggleSort`).
+  { id: "action", labelKey: "web.column.action", labelFallback: "Action", defaultWidth: 168, sortable: true, align: "left", mono: false, flexible: false },
   { id: "score", labelKey: "web.column.score", labelFallback: "Score", defaultWidth: 96, sortable: false, align: "right", mono: true, flexible: false },
   { id: "dims", labelKey: "web.column.resolution", labelFallback: "Resolution", defaultWidth: 88, sortable: false, align: "right", mono: true, flexible: false },
   { id: "size", labelKey: "web.column.size", labelFallback: "Size", defaultWidth: 72, sortable: true, align: "right", mono: true, flexible: false },
@@ -152,10 +156,10 @@ export const MIN_COLUMN_WIDTH = 40;
 //
 // Nothing becomes unreachable — every dropped column is still rendered in the
 // preview pane's metadata table, which is always present. The REPLY also wants
-// dropped columns to stay listed as sort options; there is no sort MENU in the
-// web header today (sorting is click-the-header only, and neither sheddable
-// column is sortable), so there is nothing to keep them listed in — see the PR
-// body. Neither `name` nor `size`, the only two sortable columns, is sheddable,
+// dropped columns to stay listed as sort options; the only sort menu is the
+// View menu's decision-sort mirror (#923), and neither sheddable column is
+// sortable, so there is nothing to keep them listed in — see the PR body. None
+// of the sortable columns — `name`, `size` and (#923) `action` — is sheddable,
 // so a shed can never strand an active sort.
 
 /** Width (px) the Score cell collapses to when even the shed set will not fit. */
@@ -398,11 +402,19 @@ function compareSize(a: FileRowData, b: FileRowData): number {
  * Build a comparator for the given (column, direction), or null when no
  * sort is active (the default — rows render in server response order, which
  * is what every existing result-tree scenario relies on).
+ *
+ * `action` (#923) orders by `decisionSnapshot` — the decisions captured when
+ * the sort was applied — not by the live ones, so a decision change never
+ * moves a row; see lib/decisionSort.ts.
  */
 export function makeRowComparator(
   sortColumn: ColumnId | null,
-  direction: SortDirection
+  direction: SortDirection,
+  decisionSnapshot: DecisionSnapshot | null = null
 ): ((a: FileRowData, b: FileRowData) => number) | null {
+  if (sortColumn === "action") {
+    return makeDecisionComparator(direction, decisionSnapshot ?? {});
+  }
   let base: ((a: FileRowData, b: FileRowData) => number) | null = null;
   if (sortColumn === "name") base = compareName;
   else if (sortColumn === "size") base = compareSize;

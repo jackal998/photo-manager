@@ -485,6 +485,12 @@ web:
     score: "分數"
     size: "大小"
     decision: "決策"
+    # 依決定排序（#923，設計 F3 + 2026-09-29 擁有者裁定）。動作欄標題的副標寫出
+    # 排序方向；檢視選單的鏡像項目沿用同樣的字。
+    sort_keep_first: "保留優先"
+    sort_delete_first: "刪除優先"
+    # 在「動作」排序下變更決定後出現的 4px 圓點提示：列刻意不移動，排序已過期。
+    sort_stale: "排序已過期 — 點擊重新排序"
   # Layout slice R (#878): the score cell's label, riding above the number.
   score:
     keep_label: "保留分數"
@@ -591,6 +597,9 @@ web:
     view_language: "語言"
     lang_en: "English"
     lang_zh: "中文 (繁體)"
+    # #923：動作欄排序在檢視選單的鏡像（Q1 裁定：放這裡，不放工具列）。
+    view_sort: "依動作排序"
+    view_sort_clear: "清除排序"
     # 折入選單列右端的掃描摘要（#878 slice TB，F3/F4）。來源名稱另外接在後面，
     # 這樣被截斷的永遠是名稱，而不是數字，而且絕不換行。
     scan_summary: "{photos} 個{photoWord} · {groups} 個{groupWord}"

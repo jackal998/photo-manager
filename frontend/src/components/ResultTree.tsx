@@ -19,6 +19,8 @@ import { MAIN_RESULT_TREE } from "@/testids";
 import { GroupRow } from "./result/GroupRow";
 import { FileRow } from "./result/FileRow";
 import { ColumnHeaderRow } from "./result/ColumnHeaderRow";
+import { useResortAnimation } from "./result/useResortAnimation";
+import { isDecisionSortStale } from "@/lib/decisionSort";
 import {
   clampResizeWidth,
   effectiveColumnWidths,
@@ -148,6 +150,11 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   const columnWidths = useAppStore((s) => s.resultView.columnWidths);
   const toggleSort = useAppStore((s) => s.toggleSort);
   const setColumnWidth = useAppStore((s) => s.setColumnWidth);
+  // #923 — the Action sort orders by this snapshot, never by live decisions,
+  // so staging a decision cannot move a row (design F3's deferred re-sort).
+  const decisionSortSnapshot = useAppStore((s) => s.resultView.decisionSortSnapshot);
+  const decisionResortSeq = useAppStore((s) => s.resultView.decisionResortSeq);
+  const refreshDecisionSort = useAppStore((s) => s.refreshDecisionSort);
   // #878 layout slice R — row density. Read here rather than in each row so
   // the virtualiser's `estimateSize` and the rows it sizes read ONE value.
   const density = useAppStore((s) => s.resultView.density);
@@ -170,7 +177,10 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       }
       return next;
     });
-  }, []);
+    // #923 — a collapse/expand is one of F3's silent re-sort triggers (the
+    // other two, filter and density, re-sort inside their store actions).
+    refreshDecisionSort();
+  }, [refreshDecisionSort]);
 
   // Per-group item order. When a sort is active each group's items are a
   // SORTED COPY (the Qt tree proxy sorts children within each parent — group
@@ -180,12 +190,23 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   // rows by testid. fileIndex on each FileVRow indexes INTO this ordered array.
   const orderedItemsByGroup = useMemo(() => {
     const map = new Map<number, FileRowData[]>();
-    const cmp = makeRowComparator(sortColumn, sortDirection);
+    const cmp = makeRowComparator(sortColumn, sortDirection, decisionSortSnapshot);
     for (const g of groups) {
       map.set(g.group_number, cmp ? [...g.items].sort(cmp) : g.items);
     }
     return map;
-  }, [groups, sortColumn, sortDirection]);
+  }, [groups, sortColumn, sortDirection, decisionSortSnapshot]);
+
+  // #923 — the order on screen no longer matches a fresh sort (a decision
+  // changed and, deliberately, nothing moved). Read against the WHOLE
+  // manifest, the same thing the store checks before a click re-sorts.
+  const decisionSortStale = useMemo(
+    () =>
+      sortColumn === "action" &&
+      decisionSortSnapshot !== null &&
+      isDecisionSortStale(allGroups, decisionSortSnapshot),
+    [sortColumn, decisionSortSnapshot, allGroups]
+  );
 
   // Flatten all groups into a single list of virtual rows.
   const vrows = useMemo<VRow[]>(() => {
@@ -639,6 +660,20 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
       ? rowDomId(vrows[activeIndex])
       : undefined;
 
+  // #923 — F3's 120ms slide on an EXPLICIT re-sort of a stale Action order.
+  // Called before the early returns below: a hook must run on every render.
+  useResortAnimation(
+    scrollRef,
+    virtualItems,
+    (index) => {
+      const vrow = vrows[index];
+      return vrow?.kind === "file"
+        ? orderedItemsByGroup.get(vrow.groupNumber)?.[vrow.fileIndex]?.file_path
+        : undefined;
+    },
+    decisionResortSeq
+  );
+
   if (manifest.loading) {
     return (
       <div
@@ -715,6 +750,7 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
         density={density}
         sortColumn={sortColumn}
         sortDirection={sortDirection}
+        decisionSortStale={decisionSortStale}
         onToggleSort={toggleSort}
         onResize={handleColumnResize}
       />

@@ -598,6 +598,15 @@ web:
     # Accessible name of the inline decision control in each file row (copy
     # audit R5 — it was a hardcoded English aria-label).
     decision: "Decision"
+    # Sort by decision (#923, design F3 + owner ruling 2026-09-29). The Action
+    # header's sub-label spells the order — ▾/▴ means nothing on a three-value
+    # enum — and the View menu's mirror entries reuse the same two words. The
+    # header renders them uppercase: "ACTION · KEEP FIRST".
+    sort_keep_first: "Keep first"
+    sort_delete_first: "Delete first"
+    # Tooltip of the 4px dot that appears when a decision changed under an
+    # Action sort: the rows deliberately did NOT move, so the order is stale.
+    sort_stale: "Order is out of date — click to re-sort"
   # Layout slice R (#878): the score cell gained a label above the number —
   # "without it a bare bar and a number in a 96px cell is an unlabelled
   # quantity, and this number is the one the 'keep best' button acts on".
@@ -717,6 +726,10 @@ web:
     view_language: "Language"
     lang_en: "English"
     lang_zh: "中文 (繁體)"
+    # #923 — the View menu mirror of the Action-header sort (Q1 ruling: here,
+    # not in the toolbar). Entries reuse web.column.sort_keep_first/_delete_first.
+    view_sort: "Sort by action"
+    view_sort_clear: "Clear sort"
     # Scan summary folded into the RIGHT end of the menu bar (#878 slice TB,
     # F3/F4). The source name is appended separately so it can be the one part
     # that truncates — «truncate the source name first; never wrap».

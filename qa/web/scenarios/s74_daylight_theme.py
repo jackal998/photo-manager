@@ -364,7 +364,11 @@ _READ_COLUMN_HEADER = """(testid) => {
     letterSpacing: cs.letterSpacing,
     borderBottomWidth: cs.borderBottomWidth,
     borderBottomColor: cs.borderBottomColor,
-    actionText: action ? (action.textContent || '').trim() : null,
+    // The LABEL, not the cell: since #923 Action is sortable, so the cell also
+    // carries the hover-only ▾ glyph (and, when sorted, the order sub-label).
+    actionText: action
+      ? ((action.querySelector('[data-col-label]') || action).textContent || '').trim()
+      : null,
     classificationHeads:
       head.querySelectorAll('[data-testid="col-header-classification"]').length,
     resizeHitWidth: handle ? handle.getBoundingClientRect().width : null,
