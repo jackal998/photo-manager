@@ -643,10 +643,9 @@ Inside an existing `qa/web/scenarios/sNN_*.py`, immediately after the setup step
 # ---------- Probe #NNN: <one-line invariant description> ----------
 # Currently XFAIL: <what is broken today and why>.
 # Promote when fixed: swap the two commented lines below (print → failures.append).
-# NOTE: the automatic "Detect probes ready for promotion" step lived in the
-# deleted qa-batch workflow (#646) and has no web replacement yet — see
-# "Open work" below. Until it is rebuilt, promotion is a review-time duty:
-# a PR that fixes bug #NNN promotes this block in the same PR.
+# A `probe_status: PASS` line fails the web-scenario-batch CI job ("Detect
+# probes ready for promotion" in web-eval-gates.yml), so the PR that fixes
+# bug #NNN has to promote this block in the same PR.
 print("step: probe_nnn_<invariant_name>")
 observed = _some_dom_query(page)
 if not _invariant_holds(observed):
@@ -664,26 +663,28 @@ Once promoted (bug fixed, PR merges), collapse the entire block to the single `f
 
 ### Forcing-function design
 
-One mechanism still ensures probes never stagnate silently; the second
-was lost in the Phase-4 cutover and is tracked under "Open work".
+Two mechanisms ensure probes never stagnate silently.
 
 **Static probes — `xfail(strict=True)`.**
 The moment the bug is fixed the probe emits XPASS. With `strict=True`, XPASS is a CI failure. The bug-fix PR cannot merge until the `@pytest.mark.xfail` decorator is removed.
 
-**Soft live probes — currently no forcing function.**
-The "Detect probes ready for promotion" step (which grepped the batch log
-for `probe_status: PASS` and failed the job) lived in `qa-batch.yml`,
-deleted with the desktop client in
-[#646](https://github.com/jackal998/photo-manager/issues/646). No
-equivalent step exists in `web-eval-gates.yml` yet, so a soft probe that
-has started passing will sit there silently until a human notices.
+**Soft live probes — the `probe_status: PASS` grep.**
+`web-eval-gates.yml` → `web-scenario-batch` tees the batch output to
+`web-batch.log`, and its "Detect probes ready for promotion" step greps
+that log for `probe_status: PASS` (case-insensitive) and fails the job,
+printing the matching lines. The step went with `qa-batch.yml` in
+[#646](https://github.com/jackal998/photo-manager/issues/646) and was
+restored in [#890](https://github.com/jackal998/photo-manager/issues/890).
+Only the PASS form trips it: the observation lines most web drivers print
+(`probe_status: s06 total_files=…`) and `probe_status: XFAIL_KNOWN_BUG_N`
+never match.
 
-The static path still produces the CI-red moment that forces the probe
-lifecycle forward:
+Both paths produce the CI-red moment that forces the probe lifecycle
+forward:
 
 ```
 Active (bug open)  →  Triggered (bug fixed, probe not promoted)  →  Promoted (permanent guard)
-   XFAIL / print         CI red (static only, today)                 hard assertion
+   XFAIL / print         CI red (XPASS strict / PASS grep)            hard assertion
 ```
 
 ---
@@ -729,12 +730,6 @@ Pattern: keep a `_TRANSLATION_EXEMPT_KEYS: frozenset[str]` set in `tests/test_so
   enough that proactive coverage would mostly duplicate layer 3.
 - **Layer-3 hardening.** [#80](https://github.com/jackal998/photo-manager/issues/80) closed: scenarios for Save Manifest (s12), Execute Action (s13, destructive), Set Action by Field (s14), and right-click context-menu decisions (s15) all merged. Each driver now also calls cross-scenario probes from `qa/web/_invariants.py` (status-bar shape, manifest-actions toggle consistency, destructive-confirm shape) — no maintained extra suite, just lines added inside the existing drivers.
 - **CI for layer 3.** [#74](https://github.com/jackal998/photo-manager/issues/74) is done: `web-eval-gates.yml`'s `web-scenario-batch` job runs `qa.web._batch` on every web-touching PR and has been blocking since [PR #817](https://github.com/jackal998/photo-manager/pull/817).
-- **Soft-probe promotion forcing function.** The "Detect probes ready for
-  promotion" step went with `qa-batch.yml` in
-  [#646](https://github.com/jackal998/photo-manager/issues/646) and has no
-  `web-eval-gates.yml` replacement. Rebuilding it means capturing the
-  `web-scenario-batch` output and grepping it for `probe_status: PASS`.
-  Until then a soft probe can pass silently — see "Forcing-function design".
 
 ---
 
