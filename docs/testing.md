@@ -509,6 +509,7 @@ the qa/web scaffold's own invariants:
 | `TestTestidConstants` | Every parameterised testid helper (`rowFileTestid`, `rowGroupTestid`, `rowDecisionTestid`, `rowLockTestid`, the all-delete jump) yields the documented kebab shape and stays distinct per group — so a driver can never silently address the wrong row |
 | `TestRequiredTestidsParity` | Every name in `REQUIRED_TESTIDS` is defined in `qa/web/testid_constants.py` with the expected kebab value — the static half of the `frontend/src/testids.ts` ↔ driver contract (`scripts/check_testid_parity.py` + `tests/test_testid_parity.py` own the TS half) |
 | `TestScenarioMapParity` | `qa/web/scenario_map.yml` and `qa.scenario_ids.ALL_SCENARIOS` agree in count, keys and uniqueness |
+| `TestManifestLoadedStatusPattern` | `wait_manifest_loaded`'s status pattern matches `web.status.summary` as rendered from BOTH shipped catalogs (en + zh_TW, read through `infrastructure.i18n.Translator`), and matches no other `web.status.*` string — so a zh_TW scenario can reload a manifest, and the waiter never reports "loaded" while the bar says Loading / Scanning / failed (#910) |
 | `TestImportIsolation` | `qa/web/_pw.py`, `_batch.py`, `_invariants.py` and `smoke_test.py` import no Playwright at module level — otherwise the whole scaffold becomes unimportable in the unit job |
 | `test_shell_testids_present` (`web_probe` mark) | The live half: the shell testids really are in the rendered DOM. Needs a browser + server, so it is opt-in |
 
