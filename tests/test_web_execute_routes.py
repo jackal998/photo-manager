@@ -117,7 +117,7 @@ def client_with_roots(tmp_path):
 
 
 class TestAllowedRootsGuard:
-    """Parametrized across all 5 routes: path outside allowed_roots → 403."""
+    """Parametrized across all 6 routes: path outside allowed_roots → 403."""
 
     @pytest.mark.parametrize("route,method,payload_fn", [
         (
@@ -127,6 +127,11 @@ class TestAllowedRootsGuard:
         ),
         (
             "/api/remove",
+            "post",
+            lambda outside: {"manifest_path": str(outside / "x.sqlite"), "file_paths": [str(outside / "a.bin")]},
+        ),
+        (
+            "/api/restore",
             "post",
             lambda outside: {"manifest_path": str(outside / "x.sqlite"), "file_paths": [str(outside / "a.bin")]},
         ),
@@ -753,6 +758,60 @@ class TestPostRemove:
         })
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"]["code"] == "locked_paths"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/restore — the Undo of an immediate Skip (#909)
+# ---------------------------------------------------------------------------
+
+
+class TestPostRestore:
+    def test_restore_undoes_remove(self, client_with_roots, tmp_path):
+        """remove → restore through the HTTP layer puts the rows back in review."""
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "",
+                "file_size_bytes": 128,
+            },
+            {
+                "source_path": str(f2),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 4,
+                "outcome": "",
+                "user_decision": "",
+                "file_size_bytes": 128,
+            },
+        ])
+        paths = [str(f1), str(f2)]
+        resp = client.post("/api/remove", json={"manifest_path": str(manifest), "file_paths": paths})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["groups"] == []
+
+        resp = client.post("/api/restore", json={"manifest_path": str(manifest), "file_paths": paths})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["restored"] == 2
+        [group] = body["groups"]
+        assert {item["file_path"] for item in group["items"]} == set(paths)
+        assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_outcome(manifest, str(f2)) == ""
+
+    def test_missing_manifest_returns_404(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        resp = client.post("/api/restore", json={
+            "manifest_path": str(tmp_path / "absent.sqlite"),
+            "file_paths": [],
+        })
+        assert resp.status_code == 404, resp.text
+        # The manifest's 404, not an unrouted path's.
+        assert "Manifest not found" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

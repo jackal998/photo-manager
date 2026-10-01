@@ -19,6 +19,7 @@ import {
   postPrune,
   postPruneCandidates,
   postRemove,
+  postRestore,
   postReveal,
   postSave,
   startScan,
@@ -304,6 +305,12 @@ export const useAppStore = create<AppStore>()(
       set((state) => {
         state.manifest.loading = true;
         state.manifest.error = null;
+        // #909 review F1 — an undo toast describes rows in the manifest that
+        // was loaded when it was raised, and both Undo actions send them to
+        // whatever manifest is loaded when Undo is PRESSED. Once another one
+        // starts loading, that is the wrong file: drop the toast rather than
+        // let its Undo write to a manifest the rows never lived in.
+        state.toast = null;
       });
       try {
         const data = await getManifest(path);
@@ -882,9 +889,28 @@ export const useAppStore = create<AppStore>()(
       }
     },
 
-    async removeFromList(paths, forceLocked = false) {
+    async removeFromList(paths, forceLocked = false, opts = {}) {
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
+
+      // #909 — the immediate Skip's undo toast. The rows it records are read
+      // BEFORE the write: after it they are gone from the groups. Only rows
+      // actually in the review count — they are what the toast reports and
+      // what Undo puts back.
+      const snapshot: KeepBestSnapshotRow[] = [];
+      if (opts.undoable === true) {
+        const wanted = new Set(paths);
+        for (const group of get().manifest.groups) {
+          for (const row of group.items) {
+            if (!wanted.has(row.file_path)) continue;
+            snapshot.push({
+              file_path: row.file_path,
+              decision: row.user_decision,
+              locked: row.is_locked,
+            });
+          }
+        }
+      }
 
       // #718 — clear any stale error from a previous action before this one
       // has a chance to fail; must run before the try/await below so a
@@ -900,15 +926,36 @@ export const useAppStore = create<AppStore>()(
           force_locked: forceLocked,
         });
 
+        let undoToastId: number | undefined;
+        if (snapshot.length > 0) {
+          _toastSeq += 1;
+          undoToastId = _toastSeq;
+        }
         set((state) => {
           state.manifest.groups = result.groups;
           // Removed rows are gone — clear any selection referencing them.
           state.selection.selectedPaths = [];
           state.selection.anchorPath = null;
+          // Raised only on success: a 409 wrote nothing (the service checks
+          // locks before any write), so there would be nothing to undo.
+          if (undoToastId !== undefined) {
+            state.toast = {
+              id: undoToastId,
+              kind: "skip-now",
+              // A selection can span groups, as with the toolbar verbs.
+              groupNumber: null,
+              decision: null,
+              affectedCount: snapshot.length,
+              lockedCount: 0,
+              snapshot,
+              prunedPaths: [],
+              undoing: false,
+            };
+          }
         });
         // #686 — a finalizing remove can collapse groups to singletons, so
         // offer / auto-run a prune (the desktop "Remove from List" parity).
-        await get().maybeOfferPrune();
+        await get().maybeOfferPrune(undoToastId);
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
           set((state) => {
@@ -929,7 +976,12 @@ export const useAppStore = create<AppStore>()(
       }
     },
 
-    async maybeOfferPrune() {
+    async maybeOfferPrune(undoToastId) {
+      // #909 — the skip toast this flow belongs to. It travels WITH the flow
+      // (lock gate → prompt → applyPrune) rather than living in one shared
+      // slot: with pref "always" nothing serialises two skips, so a slow prune
+      // from the first can resolve after the second has started (review F2).
+      const owner = undoToastId ?? null;
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -970,7 +1022,12 @@ export const useAppStore = create<AppStore>()(
       // does not bypass the lock confirmation.
       if (locked.length > 0) {
         set((state) => {
-          state.execute.prunePending = { plain, actioned, pref };
+          state.execute.prunePending = {
+            plain,
+            actioned,
+            pref,
+            undoToastId: owner,
+          };
           state.execute.lockConflict = {
             paths: locked,
             op: "prune",
@@ -982,7 +1039,7 @@ export const useAppStore = create<AppStore>()(
 
       if (pref === "always") {
         // Sweep both unlocked buckets in one explicit-paths call.
-        await get().applyPrune([...plain, ...actioned]);
+        await get().applyPrune([...plain, ...actioned], owner);
         return;
       }
 
@@ -990,11 +1047,22 @@ export const useAppStore = create<AppStore>()(
       // unlocked buckets (guaranteed non-empty: we returned early if all three
       // buckets were empty, and locked is empty on this branch).
       set((state) => {
-        state.execute.prunePrompt = { plain, actioned, lockedToPrune: [] };
+        state.execute.prunePrompt = {
+          plain,
+          actioned,
+          lockedToPrune: [],
+          undoToastId: owner,
+        };
       });
     },
 
-    async applyPrune(paths) {
+    async applyPrune(paths, undoToastId) {
+      // Read before anything clears the prompt: the dialog resolves the prompt
+      // its flow opened, so an omitted owner is the one recorded there.
+      const owner =
+        undoToastId !== undefined
+          ? undoToastId
+          : get().execute.prunePrompt?.undoToastId ?? null;
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -1021,6 +1089,20 @@ export const useAppStore = create<AppStore>()(
           // Pruned rows leave the manifest — drop the stale selection.
           state.selection.selectedPaths = [];
           state.selection.anchorPath = null;
+          // #909 — this prune is the tail of an immediate Skip whose toast is
+          // still up: its Undo has to bring these partners back as well. Only
+          // THAT skip's toast — a later skip's toast gets its own prune.
+          if (
+            owner !== null &&
+            state.toast !== null &&
+            state.toast.kind === "skip-now" &&
+            state.toast.id === owner
+          ) {
+            state.toast.prunedPaths = [
+              ...(state.toast.prunedPaths ?? []),
+              ...result.pruned,
+            ];
+          }
         });
       } catch (err) {
         set((state) => {
@@ -1052,6 +1134,8 @@ export const useAppStore = create<AppStore>()(
       // Close the gate now: the verdict is being resolved, so prunePending must
       // not survive any early return below (a failed unlock) and re-fire later.
       const { plain, actioned, pref } = pending;
+      // #909 — the skip toast (if any) this gate's flow belongs to.
+      const owner = pending.undoToastId ?? null;
       set((state) => {
         state.execute.prunePending = null;
       });
@@ -1082,7 +1166,7 @@ export const useAppStore = create<AppStore>()(
       // "unlocked-only" / "cancel": hold the locked singletons (lockedToPrune=[]).
 
       if (pref === "always") {
-        await get().applyPrune([...plain, ...actioned, ...lockedToPrune]);
+        await get().applyPrune([...plain, ...actioned, ...lockedToPrune], owner);
         return;
       }
 
@@ -1091,11 +1175,16 @@ export const useAppStore = create<AppStore>()(
       // buckets are empty there is nothing to ask — prune the already-decided
       // set (just lockedToPrune, possibly empty) directly.
       if (plain.length === 0 && actioned.length === 0) {
-        await get().applyPrune(lockedToPrune);
+        await get().applyPrune(lockedToPrune, owner);
         return;
       }
       set((state) => {
-        state.execute.prunePrompt = { plain, actioned, lockedToPrune };
+        state.execute.prunePrompt = {
+          plain,
+          actioned,
+          lockedToPrune,
+          undoToastId: owner,
+        };
       });
     },
 
@@ -1632,6 +1721,57 @@ export const useAppStore = create<AppStore>()(
         // it. The error line under the status bar says what happened.
         set((state) => {
           if (state.toast !== null) state.toast.undoing = false;
+          state.manifest.error =
+            err instanceof Error ? err.message : String(err);
+        });
+      }
+    },
+
+    async undoSkipNow() {
+      const toast = get().toast;
+      const manifestPath = get().manifest.path;
+      if (
+        toast === null ||
+        toast.kind !== "skip-now" ||
+        toast.undoing ||
+        manifestPath === null
+      ) {
+        return;
+      }
+
+      set((state) => {
+        if (state.toast !== null) state.toast.undoing = true;
+        state.manifest.error = null;
+      });
+
+      try {
+        // A skip writes nothing but outcome='ignored' (no file I/O, no CSV,
+        // no decision or lock change — a locked row 409s before any write),
+        // and neither does POST /api/prune after it, so resetting outcome on
+        // the same rows is the whole reversal. (A LOCKED singleton only
+        // prunes after the lock dialog's own confirmed unlock PATCH; that
+        // unlock is not reversed here.)
+        const result = await postRestore({
+          manifest_path: manifestPath,
+          file_paths: [
+            ...toast.snapshot.map((row) => row.file_path),
+            ...(toast.prunedPaths ?? []),
+          ],
+        });
+        set((state) => {
+          // An Undo already in flight when another manifest was opened still
+          // lands in the right file (it captured manifestPath), but its groups
+          // must not replace the newly loaded manifest's.
+          if (state.manifest.path === manifestPath) {
+            state.manifest.groups = result.groups;
+          }
+          if (state.toast?.id === toast.id) state.toast = null;
+        });
+      } catch (err) {
+        // Leave the toast up on failure, as undoKeepBest does — dismissing it
+        // would take the only way back with it.
+        set((state) => {
+          if (state.toast?.id === toast.id) state.toast.undoing = false;
           state.manifest.error =
             err instanceof Error ? err.message : String(err);
         });

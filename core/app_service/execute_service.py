@@ -351,6 +351,50 @@ def remove_from_review(
     return {"removed": len(safe_paths), "groups": groups}
 
 
+def restore_to_review(
+    manifest_path: str,
+    file_paths: list[str],
+    allowed_roots: list[str] | None = None,
+) -> dict[str, Any]:
+    """Undo an immediate Skip: put dismissed rows back in review (#909).
+
+    ``remove_from_review`` (and the singleton prune that can follow it) writes
+    nothing but ``outcome='ignored'`` — no file is touched, no delete CSV is
+    written — so resetting ``outcome`` to ``''`` reverses it exactly. Only rows
+    currently 'ignored' change; a 'deleted' row stays deleted.
+
+    Args:
+        manifest_path: Absolute path to the manifest sqlite.
+        file_paths: Paths to return to review.
+        allowed_roots: Trusted root directories.  Out-of-root rows in
+            ``file_paths`` are skipped (not restored), as in remove.
+
+    Returns:
+        Dict with keys: restored (rows changed), groups.
+    """
+    _require_manifest(manifest_path)
+    if allowed_roots:
+        safe_paths = [p for p in file_paths if is_under_roots(p, allowed_roots)]
+        for p in file_paths:
+            if not is_under_roots(p, allowed_roots):
+                logger.warning(
+                    "Refusing restore_to_review of out-of-root source_path: {}", p
+                )
+    else:
+        safe_paths = file_paths
+
+    restored = ManifestRepository().restore_to_review(manifest_path, safe_paths)
+
+    from core.app_service.review_service import load_review
+    try:
+        groups = load_review(manifest_path)["groups"]
+    except Exception as exc:
+        logger.warning("Failed to reload groups after restore: {}", exc)
+        groups = []
+
+    return {"restored": restored, "groups": groups}
+
+
 def _fetch_singleton_rows(conn) -> list:
     """Return (source_path, user_decision, is_locked, group_id) for every row
     whose group has exactly ONE remaining in-review (outcome='') member.

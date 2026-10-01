@@ -534,6 +534,9 @@ web:
     # group — {verb} is interpolated from web.decision.*, the one decision
     # vocabulary the row control and the right-click menu also read.
     bulk_decision: "{count} {fileWord} set to {verb}"
+    # #909 — the immediate Skip (context menu "Skip now", List → Skip Selected
+    # now) finalizes rather than stages, so the sentence says the rows LEFT.
+    skip_now: "{count} {fileWord} dropped from this review"
     file_singular: "file"
     file_plural: "files"
     locked_unchanged_singular: "{count} locked file unchanged"

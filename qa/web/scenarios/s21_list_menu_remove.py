@@ -21,6 +21,8 @@ Web slice (#678-D — the List menu was the last unshipped MenuBar entry):
     immediately (finalize outcome='ignored' — verified BOTH via manifest
     absence and a direct sqlite read of the outcome column), files stay on
     disk, unselected rows keep their staged decisions.
+  - #909: with no confirm on this path, branch (c) must raise the undo toast
+    with the count ("2 files dropped from this review"). s20 drives its Undo.
 
 Desktop source: the s21_list_menu_remove driver (removed with #646)
 Fixture:        qa/sandbox/near-duplicates (5 files, one near-dup group)
@@ -47,6 +49,7 @@ from qa.web._invariants import (
 )
 from qa.web.testid_constants import (
     CTX_SET_ACTION_DELETE,
+    MAIN_TOAST,
     MENU_LIST,
     MENU_LIST_REMOVE_FROM_LIST,
     row_file_testid,
@@ -193,6 +196,12 @@ def run(*, base_url: str) -> None:
             ctrl_click_row(page, row_file_testid(gid, _Q80))
             item = _open_list_menu_item(page)
             item.click()
+            # #909 — read before the polling below spends the toast's ~6 s.
+            # Filtered on the count: branch B's 1-file toast may still be up.
+            page.get_by_test_id(MAIN_TOAST).filter(
+                has_text="2 files dropped from this review"
+            ).wait_for(state="visible", timeout=5_000)
+            print("probe_status: s21 branch_c undo toast '2 files dropped' OK")
             post_c = _await_removed(base_url, db_path, (_Q88, _Q80))
             outcomes = _sqlite_outcomes(db_path, (_Q88, _Q80))
             for name in (_Q88, _Q80):

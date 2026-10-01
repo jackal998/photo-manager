@@ -239,6 +239,18 @@ export interface RemoveResult {
   groups: Group[];
 }
 
+// POST /api/restore (#909 — the Undo of an immediate Skip)
+
+export interface RestoreRequest {
+  manifest_path: string;
+  file_paths: string[];
+}
+
+export interface RestoreResult {
+  restored: number;
+  groups: Group[];
+}
+
 // POST /api/prune
 
 export interface PruneRequest {
