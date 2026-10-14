@@ -61,6 +61,15 @@ def test_misordered_index_is_detected() -> None:
     assert problems and any("misordered" in p for p in problems), problems
 
 
+def test_single_stale_row_names_only_that_label() -> None:
+    text = _doc(_ENTRIES).replace(
+        "| [Similarity column](#similarity-column) | Review |",
+        "| [Similarity column](#similarity-column) | Menus |",
+    )
+    problems = gfi.check_text(text)
+    assert problems == ["stale row (anchor or Area differs): Similarity column"], problems
+
+
 def test_crlf_copy_of_correct_file_passes() -> None:
     text = _doc(_ENTRIES)
     assert gfi.check_text(text.replace("\n", "\r\n")) == []

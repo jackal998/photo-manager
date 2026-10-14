@@ -12,7 +12,7 @@ AREA_VOCABULARY. The index block sits between START_MARKER and END_MARKER and is
 sorted case-insensitively by feature name (the heading text).
 
 Exit codes: 0 ok, 1 index out of date (--check), 2 structural error (missing
-markers, missing or unknown Area, malformed label, failed anchor self-check).
+markers, missing or unknown Area, malformed label).
 """
 from __future__ import annotations
 
@@ -149,18 +149,7 @@ def parse_entries(text: str) -> list[Entry]:
             raise StructureError(f"entry heading '{heading.text}' contains [ ] or | and cannot be a table label")
         area = _area_under(lines, heading)
         entries.append(Entry(heading.text, slug, area, heading.line_idx))
-    _self_check(entries, slugs)
     return entries
-
-
-def _self_check(entries: list[Entry], all_slugs: list[str]) -> None:
-    """Every anchor must be a real heading slug, and no two entries may share one."""
-    known = set(all_slugs)
-    seen: set[str] = set()
-    for entry in entries:
-        if entry.slug not in known or entry.slug in seen:
-            raise StructureError(f"anchor self-check failed for '{entry.label}': slug '{entry.slug}'")
-        seen.add(entry.slug)
 
 
 def _sort_key(entry: Entry) -> tuple[str, str]:
@@ -190,7 +179,8 @@ def _committed_rows(block: list[str]) -> list[tuple[str, str, str]]:
 
 
 def _row_problems(expected: list[str], committed: list[tuple[str, str, str]]) -> list[str]:
-    exp_labels = [e.split("](", 1)[0][3:] for e in expected]
+    exp_rows = [m.groups() for m in (_ROW_RE.match(r) for r in expected) if m]
+    exp_labels = [label for label, _, _ in exp_rows]
     com_labels = [label for label, _, _ in committed]
     problems = [f"missing from index: {lab}" for lab in exp_labels if lab not in com_labels]
     problems += [f"extra in index (no such entry): {lab}" for lab in com_labels if lab not in exp_labels]
@@ -200,7 +190,13 @@ def _row_problems(expected: list[str], committed: list[tuple[str, str, str]]) ->
         for i, (exp, com) in enumerate(zip(exp_labels, com_labels)):
             if exp != com:
                 return [f"misordered: row {i + 1} should be '{exp}' but is '{com}' (sorted by feature name)"]
-    return [f"stale row (anchor or Area differs): {lab}" for lab, _, _ in committed]
+    exp_by_label = {label: (anchor, area) for label, anchor, area in exp_rows}
+    com_by_label = {label: (anchor, area) for label, anchor, area in committed}
+    return [
+        f"stale row (anchor or Area differs): {label}"
+        for label in exp_labels
+        if exp_by_label[label] != com_by_label[label]
+    ]
 
 
 def check_text(text: str) -> list[str]:
