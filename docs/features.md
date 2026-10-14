@@ -1475,6 +1475,10 @@ action scope, new keyboard shortcut, new menu item, post-action state
 change, new condition gating a flow), add or update the corresponding
 section here in the same PR.
 
+Cross-cutting rules (lock gate, Skip vs Delete, Execute scope and similar) are
+stated once in [`behaviour/rules.md`](behaviour/rules.md). Cite a rule by its ID
+there instead of restating it; `scripts/check_rules_register.py` checks the IDs.
+
 The [`update-docs` skill](../.claude/skills/update-docs/SKILL.md)'s
 "User-visible behaviour changed?" row is the trigger. The
 [`docs_guard` hook](../scripts/hooks/docs_guard.py) enforces the touch
