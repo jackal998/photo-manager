@@ -11,13 +11,15 @@
 // registry entry) — no "branch was reached" padding, per CLAUDE.md.
 
 import { act, render, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { useEffect } from "react";
 
 import { VideoTile } from "./VideoTile";
 import { GroupMediaProvider } from "./GroupMediaProvider";
 import { useGroupMedia } from "@/hooks/useGroupMedia";
 import type { FileRow } from "@/api/types";
+import type { HevcSupport } from "@/lib/videoCapabilities";
+import { useHevcHintStore } from "@/lib/hevcHint";
 
 // #787 — the HEVC capability probe, mocked so these tests exercise the wiring
 // (does the tile consult it, with its own path, when the <video> is created on
@@ -27,6 +29,8 @@ import type { FileRow } from "@/api/types";
 const capabilities = vi.hoisted(() => ({
   canPlayHevc: vi.fn(() => Promise.resolve(false)),
   prefersTranscodedVideo: vi.fn<(filePath: string) => boolean>(() => false),
+  // #869 — the HEVC notice reads the probe's verdict; "unknown" is jsdom's.
+  hevcSupportSync: vi.fn<() => HevcSupport>(() => "unknown"),
 }));
 vi.mock("@/lib/videoCapabilities", () => capabilities);
 
@@ -328,5 +332,56 @@ describe("VideoTile", () => {
 
     const video = container.querySelector<HTMLVideoElement>("video")!;
     expect(video.getAttribute("src") ?? "").not.toContain("transcode=h264");
+  });
+
+  // -------------------------------------------------------------------------
+  // #869 — the tile reports the transcode it plays to the HEVC notice
+  // -------------------------------------------------------------------------
+
+  describe("HEVC notice wiring (#869)", () => {
+    beforeEach(() => {
+      useHevcHintStore.setState({ visible: false, shown: false });
+      localStorage.clear();
+      Object.defineProperty(navigator, "userAgentData", {
+        configurable: true,
+        value: { platform: "Windows" },
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, "userAgentData");
+      capabilities.hevcSupportSync.mockReturnValue("unknown");
+    });
+
+    it("a poster that was never clicked raises nothing; the transcoding player does", () => {
+      // In grid mode the tiles are the only video surface on screen, so a
+      // tile that never reported its transcode would keep the notice down.
+      capabilities.hevcSupportSync.mockReturnValue("unsupported");
+      capabilities.prefersTranscodedVideo.mockReturnValue(true);
+      const { container } = render(
+        <GroupMediaProvider>
+          <VideoTile row={MOV_ROW} data-testid={TILE_TESTID} />
+        </GroupMediaProvider>
+      );
+      expect(useHevcHintStore.getState().visible).toBe(false);
+
+      act(() => {
+        fireEvent.click(container.querySelector(`[data-testid="${TILE_TESTID}"]`)!);
+      });
+
+      expect(tileSrc(container)).toContain("transcode=h264");
+      expect(useHevcHintStore.getState().visible).toBe(true);
+    });
+
+    it("supported: a tile's reactive transcode raises nothing", () => {
+      capabilities.hevcSupportSync.mockReturnValue("supported");
+      capabilities.prefersTranscodedVideo.mockReturnValue(false);
+      const { container } = mountPlayer(VIDEO_ROW);
+
+      fireTileError(container);
+
+      expect(tileSrc(container)).toContain("transcode=h264");
+      expect(useHevcHintStore.getState().visible).toBe(false);
+    });
   });
 });

@@ -25,6 +25,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { mediaUrl } from "@/api/client";
 import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
+import { noteTranscodeChosen } from "@/lib/hevcHint";
 import { useGroupMedia } from "@/hooks/useGroupMedia";
 import type { FileRow } from "@/api/types";
 
@@ -75,6 +76,12 @@ export function VideoTile({
     setCanPlay(false);
     setPosterFailed(false);
   }, [row.file_path]);
+
+  // #869 — tell the HEVC notice when this tile's player runs the transcode.
+  const transcoding = playerMounted && useTranscode;
+  useEffect(() => {
+    if (transcoding) noteTranscodeChosen();
+  }, [transcoding]);
 
   // Ref to the <video> element — used to register/unregister with the context.
   const videoRef = useRef<HTMLVideoElement | null>(null);

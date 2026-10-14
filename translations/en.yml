@@ -1024,6 +1024,15 @@ web:
     legend_near: "near match"
     legend_indirect: "linked indirectly"
     legend_none: "video / no image"
+    # #869 — the once-per-session notice shown when this browser cannot
+    # decode HEVC on Windows and a video took the transcode. ONE template:
+    # the component splits it on {link} and puts the Store link there, so a
+    # locale can place the product name wherever its grammar needs it.
+    # hevc_hint_link is the Store's own product name for the locale.
+    hevc_hint: "This browser cannot decode HEVC; videos are being converted first. Install {link} from the Microsoft Store for native playback."
+    hevc_hint_link: "HEVC Video Extensions"
+    hevc_hint_dismiss: "Dismiss"
+    hevc_hint_never: "Don't show again"
   # lib/format.ts similarityLabel() — the one natural-language word among its
   # symbol-only outputs (web audit fix 5).
   format:

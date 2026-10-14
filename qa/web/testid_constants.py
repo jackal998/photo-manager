@@ -558,6 +558,23 @@ stays visible while the metadata scrolls — a legend that scrolls away is one
 nobody finds at the moment they need it.  Present whether or not a file is
 selected."""
 
+PREVIEW_HEVC_HINT = "preview-hevc-hint"
+"""The "install HEVC Video Extensions" notice (#869), under the pane's title
+strip.  Raised at most ONCE per page life, the first time a video surface
+chooses the H.264 transcode while the #787 probe says ``unsupported`` on a
+Windows engine; never on ``supported`` / ``unknown``.  The Q9 caution banner
+frame plus two outline buttons below it.  s70 forces both probe verdicts."""
+
+PREVIEW_HEVC_HINT_STORE_LINK = "preview-hevc-hint-store-link"
+"""The inline ``ms-windows-store://`` link inside the #869 notice's sentence."""
+
+PREVIEW_HEVC_HINT_DISMISS = "preview-hevc-hint-dismiss"
+"""Closes the #869 notice for this page life."""
+
+PREVIEW_HEVC_HINT_NEVER = "preview-hevc-hint-never"
+"""The "Don't show again" button — closes the #869 notice and persists
+``pm.hevc-hint.dismissed.v1`` in localStorage."""
+
 PREVIEW_RESIZE_HANDLE = "preview-resize-handle"
 """Drag handle for resizing the preview pane (#739).  Sits between the result
 tree and the preview pane in App.tsx; mousedown here begins a resize drag
