@@ -168,6 +168,37 @@ def test_vitest_title_missing_fails(tmp_path):
     assert any("R-LOCK-1" in p and "absent title" in p for p in problems), problems
 
 
+def _vitest_problems(tmp_path, source, title="does a thing"):
+    root = _root(tmp_path, _register(_block(pins=f'`frontend/src/x.test.ts::"{title}"`')))
+    (root / "frontend/src/x.test.ts").write_bytes(source.encode("utf-8"))
+    problems, _, _ = crr.check(root)
+    return problems
+
+
+def test_commented_out_it_fails(tmp_path):
+    problems = _vitest_problems(tmp_path, '// it("does a thing", () => {});\n')
+    assert any("does a thing" in p for p in problems), problems
+
+
+def test_title_only_in_trailing_comment_fails(tmp_path):
+    problems = _vitest_problems(tmp_path, 'const a = 1; // it("does a thing", () => {});\n')
+    assert any("does a thing" in p for p in problems), problems
+
+
+def test_skipped_it_and_describe_fail(tmp_path):
+    assert _vitest_problems(tmp_path, 'it.skip("does a thing", () => {});\n')
+    assert _vitest_problems(tmp_path, 'describe("does a thing", () => {});\n')
+
+
+def test_test_call_passes(tmp_path):
+    assert _vitest_problems(tmp_path, 'test("does a thing", () => {});\n') == []
+
+
+def test_indented_it_inside_describe_passes(tmp_path):
+    source = 'describe("suite", () => {\n  it("does a thing", () => {});\n});\n'
+    assert _vitest_problems(tmp_path, source) == []
+
+
 def test_unresolved_citation_in_features_reported_once(tmp_path):
     root = _root(
         tmp_path,

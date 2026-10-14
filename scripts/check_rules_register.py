@@ -135,8 +135,8 @@ def _check_vitest_pin(rid: str, token: str, root: Path, problems: list[str]) -> 
     if not path.is_file():
         problems.append(f"{rid}: pin file does not exist: {rel}")
         return
-    title_re = rf"\b(?:it|test)\(\s*([\"'`]){re.escape(title)}\1"
-    if not re.search(title_re, _read(path)):
+    title_re = rf"^[ \t]*(?:it|test)\(\s*([\"'`]){re.escape(title)}\1"
+    if not re.search(title_re, _read(path), re.M):
         problems.append(f"{rid}: vitest title {title!r} not found as an it()/test() title in {rel}")
 
 

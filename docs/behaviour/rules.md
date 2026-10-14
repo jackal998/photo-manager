@@ -24,9 +24,9 @@ code decides it, and which test or scenario pins it.
 
 ### R-LOCK-1 — A decision write or Skip now on a locked row is refused with 409
 
-- **Rule:** A decision write (PATCH /api/decision or bulk decide) or a Skip now that targets a locked row is refused with HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set (a decision write also accepts `skip_locked`), and the web client answers that 409 by opening the lock-confirm dialog.
-- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/execute_service.py::remove_from_review`, `frontend/src/store/useAppStore.ts::lockConflict`
-- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_locked_row_without_flags_returns_409`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_without_force_returns_409`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_locked_row_raises_without_force`, `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`
+- **Rule:** A decision write (PATCH /api/decision or bulk decide), an apply best copy, or a Skip now that targets a locked row is refused with HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set (a decision write and apply best copy also accept `skip_locked`), and the web client answers that 409 by opening the lock-confirm dialog.
+- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/action_service.py::apply_best_copy`, `core/app_service/execute_service.py::remove_from_review`, `frontend/src/store/useAppStore.ts::lockConflict`
+- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_locked_row_without_flags_returns_409`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_without_force_returns_409`, `tests/test_web_action_routes.py::TestApplyBestCopy::test_locked_peer_without_override_returns_409`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_locked_row_raises_without_force`, `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`
 - **Status:** pinned
 
 ### R-LOCK-2 — Force-locked re-send of a decision write or Execute unlocks its rows
@@ -49,6 +49,13 @@ code decides it, and which test or scenario pins it.
 - **Owning code:** `core/app_service/execute_service.py::execute_decisions`
 - **Pins:** `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_delete_row_without_force_returns_409`, `tests/test_web_execute_service.py::TestExecuteDecisions::test_locked_rows_raise_without_force`, `qa/web/scenarios/s34_lock_confirm_at_execute.py`
 - **Status:** pinned
+
+### R-LOCK-5 — Skip now with force_locked unlocks the locked rows and removes them
+
+- **Rule:** Skip now with `force_locked` set clears the lock of each locked row it is given and then sets the rows it accepts to outcome `ignored`; rows outside the allowed roots are not accepted.
+- **Owning code:** `core/app_service/execute_service.py::remove_from_review`
+- **Pins:** none
+- **Status:** unpinned
 
 ## DIALOG
 
@@ -129,8 +136,8 @@ code decides it, and which test or scenario pins it.
 
 - **Rule:** The Similarity, Score, Resolution and Shot Date column headers have no sort control and do not respond to a header click.
 - **Owning code:** `frontend/src/lib/resultColumns.ts::COLUMNS`, `frontend/src/components/result/ColumnHeaderRow.tsx::ColumnHeaderRow`
-- **Pins:** none
-- **Status:** unpinned
+- **Pins:** `frontend/src/lib/resultColumns.test.ts::"marks exactly File Name, Size (s45) and Action (#923) sortable"`, `frontend/src/components/result/ColumnHeaderRow.test.tsx::"clicking a non-sortable header (Similarity) does NOT sort"`
+- **Status:** pinned
 
 ## LANG
 
@@ -154,5 +161,5 @@ code decides it, and which test or scenario pins it.
 
 - **Rule:** Dragging the preview-pane divider writes the final width to localStorage once, when the drag ends, and writes nothing on each intermediate move.
 - **Owning code:** `frontend/src/App.tsx::endDrag`, `frontend/src/store/useAppStore.ts::setPreviewWidth`
-- **Pins:** none
-- **Status:** unpinned
+- **Pins:** `frontend/src/App.previewResize.test.tsx::"widens the pane live during the drag and persists the width once on mouseup"`
+- **Status:** pinned
