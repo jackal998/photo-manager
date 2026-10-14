@@ -40,7 +40,11 @@ AREA_VOCABULARY = (
     "Web UI",
     "i18n",
 )
-DEFAULT_PATH = Path(__file__).resolve().parent.parent / "docs" / "features.md"
+BLOCK_FALLBACK = (
+    "index block differs from generated output (header, blank, duplicate or unparsed line); "
+    "regenerate with scripts/gen_features_index.py"
+)
+DEFAULT_PATH =Path(__file__).resolve().parent.parent / "docs" / "features.md"
 
 _HEADING_RE = re.compile(r"^(#{1,6}) (.+?)\s*$")
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
@@ -208,7 +212,7 @@ def check_text(text: str) -> list[str]:
     committed = lines[start : end + 1]
     if committed == expected:
         return []
-    return _row_problems(expected[3:-1], _committed_rows(committed))
+    return _row_problems(expected[3:-1], _committed_rows(committed)) or [BLOCK_FALLBACK]
 
 
 def regenerate_text(text: str) -> str:

@@ -70,6 +70,38 @@ def test_single_stale_row_names_only_that_label() -> None:
     assert problems == ["stale row (anchor or Area differs): Similarity column"], problems
 
 
+def _dup_last_row(text: str) -> str:
+    rows = [ln for ln in text.split("\n") if ln.startswith("| [")]
+    return text.replace(rows[-1], rows[-1] + "\n" + rows[-1], 1)
+
+
+def _blank_after_separator(text: str) -> str:
+    return text.replace("|---|---|\n", "|---|---|\n\n", 1)
+
+
+def _rename_header(text: str) -> str:
+    return text.replace("| Feature | Area |", "| Name | Area |", 1)
+
+
+def _stray_line(text: str) -> str:
+    rows = [ln for ln in text.split("\n") if ln.startswith("| [")]
+    return text.replace(rows[0], rows[0] + "\nstray text", 1)
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [_dup_last_row, _blank_after_separator, _rename_header, _stray_line],
+    ids=["duplicate-row", "blank-line", "header", "stray-text"],
+)
+def test_block_difference_with_matching_rows_still_fails(probe, tmp_path: Path) -> None:
+    text = probe(_doc(_ENTRIES))
+    problems = gfi.check_text(text)
+    assert problems, "a differing block must never pass"
+    path = tmp_path / "features.md"
+    path.write_bytes(text.encode("utf-8"))
+    assert gfi.main(["--check", str(path)]) == 1
+
+
 def test_crlf_copy_of_correct_file_passes() -> None:
     text = _doc(_ENTRIES)
     assert gfi.check_text(text.replace("\n", "\r\n")) == []
