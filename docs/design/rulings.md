@@ -145,7 +145,7 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 - **Implemented by:** `frontend/src/components/ResultTree.tsx::ResultTree`, `frontend/src/index.css`
 
 ### F3 — Sort by decision: the header is canonical, re-sort is deferred
-- **Decision:** Built as ruled: the Action header is the canonical control, there is one sort state, lock is not a sort key, the sort is not persisted, a decision change never moves a row, and a stale sort shows a 4px dot and re-sorts only on an explicit action. Modified by OWN-923 (order, sub-labels and menu placement) and OWN-743 (tie order).
+- **Decision:** Built as ruled: the Action header is the canonical control, there is one sort state, lock is not a sort key, the sort is not persisted, a decision change never moves a row, a stale sort shows a 4px dot and re-sorts only on an explicit action, and the third click on the header or "Clear sort" returns to score-descending (post-implementation F3 §3; FEEDBACK item 2, "built as F3 says"). Modified by OWN-923 (order, sub-labels and menu placement) and OWN-743 (tie order).
 - **Date:** 2026-09-20
 - **Source:** REPLY - review screen post-implementation.md (archived design project); FEEDBACK - F1 F3 implementation deviations.md item 2 ("everything else in F3 is built as ruled")
 - **Status:** implemented
@@ -177,7 +177,7 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 ### OWN-923 — Sort by decision: View-menu mirror, Keep → Skip → Delete
 - **Decision:** Modifies F3 and DEV-1. The sort mirror lives in the menu bar's View menu, not the toolbar. Ascending runs Keep, Skip, Delete, and descending reverses it. The sub-labels are "ACTION · KEEP FIRST" and "ACTION · DELETE FIRST" (zh_TW 「動作 · 保留優先」 and 「動作 · 刪除優先」).
 - **Date:** 2026-09-30
-- **Source:** FEEDBACK - F1 F3 implementation deviations.md (archived design project), item 2; owner answer to AskUserQuestion, 2026-09-30. Conflict: the code comment in MenuBar.tsx cites a 2026-09-29 ruling and docs/testing.md:207 says "2026-09-29 rulings"; the ledger's 2026-09-30 date is used here.
+- **Source:** FEEDBACK - F1 F3 implementation deviations.md (archived design project), item 2; owner answer to AskUserQuestion, 2026-09-30. Conflict: the code comment in frontend/src/lib/decisionSort.ts:1 and docs/testing.md:207 cite "the owner's 2026-09-29 rulings"; the ledger's 2026-09-30 date is used here.
 - **Status:** implemented
 - **Implemented by:** `frontend/src/components/MenuBar.tsx::MenuBar`, `frontend/src/components/result/ColumnHeaderRow.tsx::ColumnHeaderRow`, `frontend/src/lib/decisionSort.ts`
 
