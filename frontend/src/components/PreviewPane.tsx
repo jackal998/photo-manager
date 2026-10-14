@@ -37,6 +37,7 @@ import { useDateLocale } from "@/i18n/useDateLocale";
 import { thumbnailUrl, mediaUrl } from "@/api/client";
 import { cn } from "@/lib/utils";
 import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
+import { noteTranscodeChosen } from "@/lib/hevcHint";
 import {
   formatBytes,
   formatScore,
@@ -64,6 +65,7 @@ import {
 } from "@/testids";
 import type { DecisionValue, FileRow } from "@/api/types";
 import { GroupGrid } from "./GroupGrid";
+import { HevcHint } from "./HevcHint";
 import { SimilarityLegend } from "./SimilarityLegend";
 
 // ---------------------------------------------------------------------------
@@ -196,6 +198,18 @@ export function PreviewPane() {
     setImageFailed(false);
   }, [selectedFilePath]);
 
+  // #869 — tell the HEVC notice when this pane actually plays the transcode.
+  // Gated on the pane SHOWING a video: the transcode choice above is re-made
+  // for every selected path, including in grid mode, where the <video> it
+  // would drive is not rendered (the grid's tiles report their own).
+  const transcoding =
+    previewMode === "single" && row?.media_type === "video" && useTranscode;
+  useEffect(() => {
+    if (transcoding) noteTranscodeChosen();
+    // selectedFilePath is a dep so a second .mov selected while useTranscode
+    // stays true re-tells the notice (its verdict may have resolved since).
+  }, [transcoding, selectedFilePath]);
+
   const handleVideoError = useCallback(() => {
     if (!swapAttempted) {
       // First error: swap to the OTHER source. Started on the original bytes
@@ -251,6 +265,9 @@ export function PreviewPane() {
           ? t("web.preview.title_group", "Preview · Group")
           : t("web.preview.title", "Preview · Selected photo")}
       </div>
+      {/* #869 HEVC notice — renders nothing until a transcode raises it. Above
+          the scroller, not in it, so it stays in view in both modes. */}
+      <HevcHint />
       {previewMode === "grid" && selectedGroupId !== null ? (
         // Grid mode — GroupGrid is keyed on selectedGroupId so a group change
         // forces a full unmount+remount of the GroupMediaProvider and all its

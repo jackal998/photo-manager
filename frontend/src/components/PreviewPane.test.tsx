@@ -2,7 +2,7 @@
 // Seeds the Zustand store directly (same pattern as ResultTree.test.tsx).
 
 import { act, render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { PreviewPane } from "./PreviewPane";
 import { FullResViewer } from "./FullResViewer";
@@ -17,8 +17,12 @@ import {
   PREVIEW_LEGEND,
   FULLRES_DIALOG,
   FULLRES_IMAGE,
+  PREVIEW_HEVC_HINT,
+  PREVIEW_HEVC_HINT_DISMISS,
 } from "@/testids";
 import type { Group } from "@/api/types";
+import type { HevcSupport } from "@/lib/videoCapabilities";
+import { useHevcHintStore } from "@/lib/hevcHint";
 
 // #787 — the HEVC capability probe. Mocked here so these tests exercise the
 // WIRING (does the surface consult it, with the right path, for the INITIAL
@@ -29,6 +33,10 @@ import type { Group } from "@/api/types";
 const capabilities = vi.hoisted(() => ({
   canPlayHevc: vi.fn(() => Promise.resolve(false)),
   prefersTranscodedVideo: vi.fn<(filePath: string) => boolean>(() => false),
+  // #869 — the notice reads the probe's three-state verdict. "unknown" is what
+  // jsdom's real module reports, so the notice stays down for every test that
+  // does not opt in.
+  hevcSupportSync: vi.fn<() => HevcSupport>(() => "unknown"),
 }));
 vi.mock("@/lib/videoCapabilities", () => capabilities);
 
@@ -991,5 +999,183 @@ describe("FullResViewer", () => {
 
     expect(screen.getByText(/video cannot be played/i)).toBeInTheDocument();
     expect(screen.queryByTestId(FULLRES_IMAGE)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #869 — the HEVC notice, as the preview pane shows it
+// ---------------------------------------------------------------------------
+//
+// The decision itself (three probe states × Don't-show-again, platform, once
+// per page life) is lib/hevcHint.test.ts against the real probe. These pin the
+// WIRING: the pane reports the transcode it actually plays, draws the notice,
+// and leaves the transcode path's own behaviour exactly as it was.
+
+function setPlatform(platform: string): void {
+  Object.defineProperty(navigator, "userAgentData", {
+    configurable: true,
+    value: { platform },
+  });
+}
+
+function seedPaneVideo(path: string, surface: "pane" | "fullres" = "pane"): void {
+  useAppStore.setState({
+    manifest: {
+      path: "/manifests/test.db",
+      groups: [
+        {
+          group_number: 1,
+          member_count: 1,
+          items: [
+            {
+              ...testRow,
+              file_path: path,
+              basename: path.split("/").pop() ?? path,
+              media_type: "video" as const,
+            },
+          ],
+        },
+      ],
+      totalGroups: 1,
+      totalFiles: 1,
+      loading: false,
+      error: null,
+    },
+    preview:
+      surface === "pane"
+        ? { selectedFilePath: path, fullResPath: null, selectedGroupId: null }
+        : { selectedFilePath: null, fullResPath: path, selectedGroupId: null },
+  });
+}
+
+function paneSrc(): string {
+  return screen.getByTestId(PREVIEW_SINGLE_IMAGE).getAttribute("src") ?? "";
+}
+
+describe("PreviewPane — HEVC notice (#869)", () => {
+  beforeEach(() => {
+    resetStore();
+    useHevcHintStore.setState({ visible: false, shown: false });
+    localStorage.clear();
+    setPlatform("Windows");
+    capabilities.prefersTranscodedVideo.mockReturnValue(false);
+    capabilities.hevcSupportSync.mockReturnValue("unknown");
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "userAgentData");
+    capabilities.hevcSupportSync.mockReturnValue("unknown");
+  });
+
+  it("unsupported: a transcoded .mov shows the notice, and the transcode is unchanged", () => {
+    capabilities.hevcSupportSync.mockReturnValue("unsupported");
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedPaneVideo("/photos/clip.mov");
+    render(<PreviewPane />);
+
+    expect(screen.getAllByTestId(PREVIEW_HEVC_HINT)).toHaveLength(1);
+    expect(paneSrc()).toContain("transcode=h264");
+  });
+
+  it("unsupported: a reactive swap (native .mp4 failed) shows the notice too", () => {
+    capabilities.hevcSupportSync.mockReturnValue("unsupported");
+    seedPaneVideo("/photos/clip.mp4");
+    render(<PreviewPane />);
+    expect(screen.queryByTestId(PREVIEW_HEVC_HINT)).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.error(screen.getByTestId(PREVIEW_SINGLE_IMAGE));
+    });
+
+    expect(paneSrc()).toContain("transcode=h264");
+    expect(screen.getAllByTestId(PREVIEW_HEVC_HINT)).toHaveLength(1);
+  });
+
+  it("supported: a transcode never shows the notice", () => {
+    // The engine plays HEVC; this .mp4 failed for another reason (a codec the
+    // engine lacks, a corrupt file). Advising the HEVC package would be wrong.
+    capabilities.hevcSupportSync.mockReturnValue("supported");
+    seedPaneVideo("/photos/clip.mp4");
+    render(<PreviewPane />);
+
+    act(() => {
+      fireEvent.error(screen.getByTestId(PREVIEW_SINGLE_IMAGE));
+    });
+
+    expect(paneSrc()).toContain("transcode=h264");
+    expect(screen.queryByTestId(PREVIEW_HEVC_HINT)).not.toBeInTheDocument();
+  });
+
+  it("unsupported: shown once — the next transcoded video after Dismiss stays quiet", () => {
+    capabilities.hevcSupportSync.mockReturnValue("unsupported");
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedPaneVideo("/photos/clip.mov");
+    render(<PreviewPane />);
+    fireEvent.click(screen.getByTestId(PREVIEW_HEVC_HINT_DISMISS));
+    expect(screen.queryByTestId(PREVIEW_HEVC_HINT)).not.toBeInTheDocument();
+
+    act(() => {
+      seedPaneVideo("/photos/other.mov");
+    });
+
+    expect(paneSrc()).toContain("transcode=h264");
+    expect(screen.queryByTestId(PREVIEW_HEVC_HINT)).not.toBeInTheDocument();
+  });
+
+  it("unsupported: a still image never raises it", () => {
+    capabilities.hevcSupportSync.mockReturnValue("unsupported");
+    // A .mov-named path the gate would preempt, but the row is a PHOTO: the
+    // pane renders an <img>, so no transcode is played and nothing is said.
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedManifest();
+    useAppStore.setState({
+      preview: { selectedFilePath: FILE_PATH, fullResPath: null, selectedGroupId: null },
+    });
+    render(<PreviewPane />);
+
+    expect(screen.queryByTestId(PREVIEW_HEVC_HINT)).not.toBeInTheDocument();
+  });
+
+  it("unsupported: a transcode chosen in the full-res viewer raises it in the pane", () => {
+    // The viewer can be where the first transcode happens; a viewer that never
+    // reported it would leave the notice down for the whole session.
+    capabilities.hevcSupportSync.mockReturnValue("unsupported");
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    seedPaneVideo("/photos/clip.mov", "fullres");
+    render(
+      <>
+        <PreviewPane />
+        <FullResViewer />
+      </>
+    );
+
+    expect(screen.getByTestId(FULLRES_IMAGE).getAttribute("src") ?? "").toContain(
+      "transcode=h264"
+    );
+    expect(screen.getAllByTestId(PREVIEW_HEVC_HINT)).toHaveLength(1);
+  });
+
+  it("unsupported: a second .mov after a pending-probe swap still raises it", () => {
+    // The first .mov swaps to the transcode while the probe is still pending,
+    // so that choice spends nothing. The probe then resolves "unsupported" and
+    // the next .mov also starts on the transcode; the pane's useTranscode stays
+    // true across the two selections, so only the path change can re-tell it.
+    capabilities.hevcSupportSync.mockReturnValue("unknown");
+    seedPaneVideo("/photos/first.mov");
+    render(<PreviewPane />);
+    act(() => {
+      fireEvent.error(screen.getByTestId(PREVIEW_SINGLE_IMAGE));
+    });
+    expect(paneSrc()).toContain("transcode=h264");
+    expect(screen.queryByTestId(PREVIEW_HEVC_HINT)).not.toBeInTheDocument();
+
+    capabilities.hevcSupportSync.mockReturnValue("unsupported");
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    act(() => {
+      seedPaneVideo("/photos/second.mov");
+    });
+
+    expect(paneSrc()).toContain("transcode=h264");
+    expect(screen.getAllByTestId(PREVIEW_HEVC_HINT)).toHaveLength(1);
   });
 });

@@ -850,6 +850,13 @@ web:
     legend_near: "外觀相近"
     legend_indirect: "間接關聯"
     legend_none: "影片／無影像"
+    # #869 — 此瀏覽器在 Windows 上無法解碼 HEVC、影片改走轉檔時，每個工作階段
+    # 只出現一次的提示。{link} 是元件插入 Microsoft Store 連結的位置；
+    # hevc_hint_link 用的是 Microsoft Store 繁中頁面上的產品名稱。
+    hevc_hint: "此瀏覽器無法解碼 HEVC，影片會先轉檔再播放。從 Microsoft Store 安裝 {link} 即可直接播放。"
+    hevc_hint_link: "HEVC 視訊延伸模組"
+    hevc_hint_dismiss: "關閉"
+    hevc_hint_never: "不再顯示"
   format:
     similarity_ref: "參考"
     # 對應桌面版 tree.similarity_near_dup（R6）— 原本是寫死的半形「~」。

@@ -36,6 +36,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { fullResUrl, mediaUrl } from "@/api/client";
 import { canPlayHevc, prefersTranscodedVideo } from "@/lib/videoCapabilities";
+import { noteTranscodeChosen } from "@/lib/hevcHint";
 import { useOverlayGeometry } from "@/hooks/useOverlayGeometry";
 import { OverlayResizeHandle } from "@/components/ui/overlay-resize-handle";
 import {
@@ -129,6 +130,15 @@ export function FullResViewer() {
     setVideoFailed(false);
     setVideoCanPlay(false);
   }, [fullResPath]);
+
+  // #869 — tell the HEVC notice when the viewer actually plays the transcode
+  // (the notice itself lives in the preview pane, under this overlay).
+  const transcoding = isVideo && useTranscode;
+  useEffect(() => {
+    if (transcoding) noteTranscodeChosen();
+    // fullResPath is a dep so a second .mov opened while useTranscode stays
+    // true re-tells the notice (its verdict may have resolved since).
+  }, [transcoding, fullResPath]);
 
   // ---------------------------------------------------------------------------
   // Pan + zoom state
