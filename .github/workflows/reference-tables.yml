@@ -1,0 +1,39 @@
+name: reference-tables
+
+# Guards the generated reference tables in docs/reference/ (scripts/gen_reference.py).
+# Its own workflow, not a step in tests.yml, for the same reason features-index.yml
+# is separate: tests.yml skips pytest on docs-only diffs, and a stale table is
+# exactly a docs-only defect. No paths filter: a PR that changes a source a table
+# reads (a TS registry, a route, a catalogue) must regenerate the table.
+# Unlike features-index.yml this job imports the app (create_app().openapi()), so
+# it installs requirements.txt the way tests.yml does. Exit 1 = a table is stale,
+# exit 2 = a source no longer has the shape the generator parses (named in the log).
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  reference-tables:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: reference tables match a fresh regeneration
+        run: python scripts/gen_reference.py --check
