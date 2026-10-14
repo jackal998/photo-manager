@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib
 import re
 import sys
 import tempfile
@@ -153,6 +154,12 @@ def parse_toolbar_shed(text: str, source: str) -> dict[str, int]:
         m[1]: int(m[2])
         for m in re.finditer(r"^export const (\w+) = (\d+);$", text, re.MULTILINE)
     }
+    found = {m[1] for m in re.finditer(r"^export const (TOOLBAR_\w+_WIDTH) = ", text, re.MULTILINE)}
+    if found != set(TOOLBAR_EFFECTS):
+        raise StructureError(
+            f"{source}: width constants {sorted(found)} differ from the described set "
+            f"{sorted(TOOLBAR_EFFECTS)}; describe the new one in TOOLBAR_EFFECTS in gen_reference.py"
+        )
     widths: dict[str, int] = {}
     for name in TOOLBAR_EFFECTS:
         match = re.search(rf"^export const {name} = (\w+);$", text, re.MULTILINE)
@@ -285,9 +292,21 @@ def _read(root: Path, rel: str) -> str:
     return (root / rel).read_text(encoding="utf-8")
 
 
-def _review_decision_rows() -> list[tuple[str, str]]:
-    from core.app_service.review_service import VALID_DECISIONS
+def _import_attr(module_name: str, attr: str, source: str) -> object:
+    """Import a fact from a repo module. A failed import is a source error (exit 2), never exit 1."""
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise StructureError(f"{source}: cannot import {module_name}: {exc}") from exc
+    if not hasattr(module, attr):
+        raise StructureError(f"{source}: {module_name} has no attribute {attr!r}")
+    return getattr(module, attr)
 
+
+def _review_decision_rows() -> list[tuple[str, str]]:
+    VALID_DECISIONS = _import_attr(
+        "core.app_service.review_service", "VALID_DECISIONS", "core/app_service/review_service.py"
+    )
     if set(DECISION_MEANINGS) != set(VALID_DECISIONS):
         raise StructureError(
             "core/app_service/review_service.py: VALID_DECISIONS "
@@ -301,18 +320,14 @@ def _review_decision_rows() -> list[tuple[str, str]]:
 
 
 def _settings_key_rows() -> list[tuple[str]]:
-    from app.web.routes.settings import _WEB_SETTINGS_KEYS
-
-    if not _WEB_SETTINGS_KEYS:
+    keys = _import_attr("app.web.routes.settings", "_WEB_SETTINGS_KEYS", "app/web/routes/settings.py")
+    if not keys:
         raise StructureError("app/web/routes/settings.py: _WEB_SETTINGS_KEYS is empty")
-    return [(f"`{key}`",) for key in _WEB_SETTINGS_KEYS]
+    return [(f"`{key}`",) for key in keys]
 
 
 def _route_rows() -> list[tuple[str, str, str]]:
-    try:
-        from app.web.main import create_app
-    except ImportError as exc:
-        raise StructureError(f"cannot import the app for the routes table: {exc}") from exc
+    create_app = _import_attr("app.web.main", "create_app", "app/web/main.py")
     with tempfile.TemporaryDirectory() as tmp:
         schema = create_app(frontend_dist=Path(tmp)).openapi()
     rows: list[tuple[str, str, str]] = []
@@ -523,6 +538,10 @@ def check_tables(expected: dict[str, str], docs_dir: Path) -> list[str]:
         committed = _lf(path.read_bytes().decode("utf-8"))
         if committed != expected[name]:
             problems.append(f"{name}: stale (hand-edited or out of date)")
+    if docs_dir.is_dir():
+        for path in sorted(docs_dir.glob("*.md")):
+            if path.name not in expected:
+                problems.append(f"{path.name}: orphaned (no table in gen_reference.py produces it)")
     return problems
 
 

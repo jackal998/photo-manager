@@ -113,6 +113,26 @@ def test_toolbar_parser_fails_closed_when_a_constant_is_missing() -> None:
         gr.parse_toolbar_shed(only_one, "toolbarShed.ts")
 
 
+def test_toolbar_parser_fails_closed_on_an_unlisted_width_constant() -> None:
+    # A new shed width the table does not describe must stop the table, not vanish from it.
+    extra = TOOLBAR_TS + "\nexport const TOOLBAR_COMPACT_SEARCH_WIDTH = 900;\n"
+    with pytest.raises(gr.StructureError, match="TOOLBAR_COMPACT_SEARCH_WIDTH"):
+        gr.parse_toolbar_shed(extra, "toolbarShed.ts")
+
+
+def test_check_flags_an_orphaned_table(tmp_path: Path) -> None:
+    (tmp_path / "columns.md").write_text("a\n", encoding="utf-8", newline="\n")
+    (tmp_path / "old-table.md").write_text("gone\n", encoding="utf-8", newline="\n")
+    problems = gr.check_tables({"columns.md": "a\n"}, tmp_path)
+    assert len(problems) == 1
+    assert "old-table.md" in problems[0]
+
+
+def test_import_helper_fails_closed_with_a_structure_error() -> None:
+    with pytest.raises(gr.StructureError, match="no_such_module"):
+        gr._import_attr("app.web.no_such_module", "X", "app/web/no_such_module.py")
+
+
 def test_scan_events_parser_names_literal_events_and_keepalive() -> None:
     events = {(e.name, e.terminal) for e in gr.parse_scan_events(SCAN_PY, "scan.py")}
     assert events == {
