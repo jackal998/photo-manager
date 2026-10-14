@@ -374,7 +374,7 @@ class TestExecuteAuditCsvIsolation:
         fake_localappdata.mkdir()
         monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
 
-        (victim,) = _make_real_files(tmp_path, 1)
+        victim, keeper = _make_real_files(tmp_path, 2)
         manifest = _make_manifest(tmp_path, [
             {
                 "source_path": str(victim),
@@ -384,11 +384,20 @@ class TestExecuteAuditCsvIsolation:
                 "user_decision": "delete",
                 "file_size_bytes": 64,
             },
+            {
+                "source_path": str(keeper),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "",
+                "file_size_bytes": 64,
+            },
         ])
 
         result = execute_decisions(str(manifest), recycle=False)
 
         log_path = result["log_path"]
+        assert keeper.exists(), "keeper in a two-member group must not be deleted"
         assert log_path is not None, "execute wrote no audit CSV at all"
         assert not (fake_localappdata / "PhotoManager").exists(), (
             f"audit CSV escaped into %LOCALAPPDATA%\\PhotoManager: {log_path}"
