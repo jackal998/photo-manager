@@ -154,7 +154,7 @@ def parse_toolbar_shed(text: str, source: str) -> dict[str, int]:
         m[1]: int(m[2])
         for m in re.finditer(r"^export const (\w+) = (\d+);$", text, re.MULTILINE)
     }
-    found = {m[1] for m in re.finditer(r"^export const (TOOLBAR_\w+_WIDTH) = ", text, re.MULTILINE)}
+    found = {m[1] for m in re.finditer(r"^export const (TOOLBAR_\w+_WIDTH)\b", text, re.MULTILINE)}
     if found != set(TOOLBAR_EFFECTS):
         raise StructureError(
             f"{source}: width constants {sorted(found)} differ from the described set "
@@ -164,7 +164,10 @@ def parse_toolbar_shed(text: str, source: str) -> dict[str, int]:
     for name in TOOLBAR_EFFECTS:
         match = re.search(rf"^export const {name} = (\w+);$", text, re.MULTILINE)
         if match is None:
-            raise StructureError(f"{source}: no 'export const {name} = ...;' line")
+            raise StructureError(
+                f"{source}: {name} is not declared as 'export const {name} = <number or constant>;' "
+                "(a typed or re-spaced declaration is refused, not skipped)"
+            )
         value = match[1]
         if value.isdigit():
             widths[name] = int(value)
@@ -296,7 +299,7 @@ def _import_attr(module_name: str, attr: str, source: str) -> object:
     """Import a fact from a repo module. A failed import is a source error (exit 2), never exit 1."""
     try:
         module = importlib.import_module(module_name)
-    except ImportError as exc:
+    except Exception as exc:  # any import-time failure (SyntaxError included) is a source defect
         raise StructureError(f"{source}: cannot import {module_name}: {exc}") from exc
     if not hasattr(module, attr):
         raise StructureError(f"{source}: {module_name} has no attribute {attr!r}")
@@ -570,7 +573,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"reference tables out of date in {docs_dir}:")
             for problem in problems:
                 print(f"  - {problem}")
-            print("fix: python scripts/gen_reference.py")
+            print(
+                "fix: python scripts/gen_reference.py regenerates stale tables; it never deletes files, "
+                "so delete any orphaned file listed above by hand"
+            )
             return 1
         print(f"reference tables up to date ({len(expected)} files)")
         return 0

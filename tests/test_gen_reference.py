@@ -113,11 +113,29 @@ def test_toolbar_parser_fails_closed_when_a_constant_is_missing() -> None:
         gr.parse_toolbar_shed(only_one, "toolbarShed.ts")
 
 
-def test_toolbar_parser_fails_closed_on_an_unlisted_width_constant() -> None:
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "export const TOOLBAR_COMPACT_SEARCH_WIDTH = 900;",
+        "export const TOOLBAR_COMPACT_SEARCH_WIDTH: number = 900;",
+        "export const TOOLBAR_COMPACT_SEARCH_WIDTH=900;",
+    ],
+    ids=["spaced", "typed", "unspaced"],
+)
+def test_toolbar_parser_fails_closed_on_an_unlisted_width_constant(declaration: str) -> None:
     # A new shed width the table does not describe must stop the table, not vanish from it.
-    extra = TOOLBAR_TS + "\nexport const TOOLBAR_COMPACT_SEARCH_WIDTH = 900;\n"
+    extra = TOOLBAR_TS + "\n" + declaration + "\n"
     with pytest.raises(gr.StructureError, match="TOOLBAR_COMPACT_SEARCH_WIDTH"):
         gr.parse_toolbar_shed(extra, "toolbarShed.ts")
+
+
+def test_toolbar_parser_fails_closed_on_a_typed_listed_constant() -> None:
+    typed = TOOLBAR_TS.replace(
+        "export const TOOLBAR_MANIFEST_SHED_WIDTH = 1100;",
+        "export const TOOLBAR_MANIFEST_SHED_WIDTH: number = 1100;",
+    )
+    with pytest.raises(gr.StructureError, match="TOOLBAR_MANIFEST_SHED_WIDTH"):
+        gr.parse_toolbar_shed(typed, "toolbarShed.ts")
 
 
 def test_check_flags_an_orphaned_table(tmp_path: Path) -> None:
@@ -131,6 +149,16 @@ def test_check_flags_an_orphaned_table(tmp_path: Path) -> None:
 def test_import_helper_fails_closed_with_a_structure_error() -> None:
     with pytest.raises(gr.StructureError, match="no_such_module"):
         gr._import_attr("app.web.no_such_module", "X", "app/web/no_such_module.py")
+
+
+def test_import_helper_turns_a_syntax_error_in_the_source_into_exit_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A repo module that does not even parse must exit 2 naming it, not exit 1 (read as "stale").
+    (tmp_path / "w_prd_badmod.py").write_text("def (:\n", encoding="utf-8", newline="\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(gr.StructureError, match="w_prd_badmod"):
+        gr._import_attr("w_prd_badmod", "X", "app/w_prd_badmod.py")
 
 
 def test_scan_events_parser_names_literal_events_and_keepalive() -> None:
