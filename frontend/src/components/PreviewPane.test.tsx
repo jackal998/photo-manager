@@ -1154,4 +1154,28 @@ describe("PreviewPane — HEVC notice (#869)", () => {
     );
     expect(screen.getAllByTestId(PREVIEW_HEVC_HINT)).toHaveLength(1);
   });
+
+  it("unsupported: a second .mov after a pending-probe swap still raises it", () => {
+    // The first .mov swaps to the transcode while the probe is still pending,
+    // so that choice spends nothing. The probe then resolves "unsupported" and
+    // the next .mov also starts on the transcode; the pane's useTranscode stays
+    // true across the two selections, so only the path change can re-tell it.
+    capabilities.hevcSupportSync.mockReturnValue("unknown");
+    seedPaneVideo("/photos/first.mov");
+    render(<PreviewPane />);
+    act(() => {
+      fireEvent.error(screen.getByTestId(PREVIEW_SINGLE_IMAGE));
+    });
+    expect(paneSrc()).toContain("transcode=h264");
+    expect(screen.queryByTestId(PREVIEW_HEVC_HINT)).not.toBeInTheDocument();
+
+    capabilities.hevcSupportSync.mockReturnValue("unsupported");
+    capabilities.prefersTranscodedVideo.mockReturnValue(true);
+    act(() => {
+      seedPaneVideo("/photos/second.mov");
+    });
+
+    expect(paneSrc()).toContain("transcode=h264");
+    expect(screen.getAllByTestId(PREVIEW_HEVC_HINT)).toHaveLength(1);
+  });
 });

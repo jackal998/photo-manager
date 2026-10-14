@@ -136,7 +136,9 @@ export function FullResViewer() {
   const transcoding = isVideo && useTranscode;
   useEffect(() => {
     if (transcoding) noteTranscodeChosen();
-  }, [transcoding]);
+    // fullResPath is a dep so a second .mov opened while useTranscode stays
+    // true re-tells the notice (its verdict may have resolved since).
+  }, [transcoding, fullResPath]);
 
   // ---------------------------------------------------------------------------
   // Pan + zoom state

@@ -206,7 +206,9 @@ export function PreviewPane() {
     previewMode === "single" && row?.media_type === "video" && useTranscode;
   useEffect(() => {
     if (transcoding) noteTranscodeChosen();
-  }, [transcoding]);
+    // selectedFilePath is a dep so a second .mov selected while useTranscode
+    // stays true re-tells the notice (its verdict may have resolved since).
+  }, [transcoding, selectedFilePath]);
 
   const handleVideoError = useCallback(() => {
     if (!swapAttempted) {
