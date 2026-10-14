@@ -25,6 +25,10 @@ _PIN_SRC = (
     "    assert True\n"
 )
 _SCENARIO_SRC = '"""Scenario fixture."""\n'
+_VITEST_SRC = (
+    'import { it } from "vitest";\n'
+    'it("does a thing", () => {});\n'
+)
 
 
 def _block(
@@ -53,6 +57,7 @@ def _root(tmp_path: Path, register: str, features: str | None = None) -> Path:
         "code/owner.py": _OWNER_SRC,
         "tests/test_pin.py": _PIN_SRC,
         "qa/web/scenarios/s01_thing.py": _SCENARIO_SRC,
+        "frontend/src/x.test.ts": _VITEST_SRC,
         "docs/behaviour/rules.md": register,
     }
     if features is not None:
@@ -126,14 +131,52 @@ def test_pinned_without_pins_fails(tmp_path):
     assert any("R-LOCK-1" in p and "pinned" in p for p in problems), problems
 
 
-def test_unresolved_citation_in_features_fails(tmp_path):
+def test_missing_test_file_fails(tmp_path):
+    root = _root(tmp_path, _register(_block(pins="`tests/test_nope.py::test_thing`")))
+    problems, _, _ = crr.check(root)
+    assert any("R-LOCK-1" in p and "tests/test_nope.py" in p for p in problems), problems
+
+
+def test_missing_class_fails(tmp_path):
+    root = _root(tmp_path, _register(_block(pins="`tests/test_pin.py::NoSuchClass::test_free`")))
+    problems, _, _ = crr.check(root)
+    assert any("R-LOCK-1" in p and "NoSuchClass" in p for p in problems), problems
+
+
+def test_module_level_test_function_passes(tmp_path):
+    root = _root(tmp_path, _register(_block(pins="`tests/test_pin.py::test_free`")))
+    problems, _, _ = crr.check(root)
+    assert problems == []
+
+
+def test_vitest_pin_passes_when_title_exists(tmp_path):
+    root = _root(
+        tmp_path,
+        _register(_block(pins='`frontend/src/x.test.ts::"does a thing"`')),
+    )
+    problems, rules, unpinned = crr.check(root)
+    assert problems == []
+    assert (rules, unpinned) == (1, 0)
+
+
+def test_vitest_title_missing_fails(tmp_path):
+    root = _root(
+        tmp_path,
+        _register(_block(pins='`frontend/src/x.test.ts::"absent title"`')),
+    )
+    problems, _, _ = crr.check(root)
+    assert any("R-LOCK-1" in p and "absent title" in p for p in problems), problems
+
+
+def test_unresolved_citation_in_features_reported_once(tmp_path):
     root = _root(
         tmp_path,
         _register(_block()),
         features="# Features\n\nA row cites R-LOCK-9 which is not registered.\n",
     )
     problems, _, _ = crr.check(root)
-    assert any("R-LOCK-9" in p for p in problems), problems
+    cited = [p for p in problems if "R-LOCK-9" in p]
+    assert len(cited) == 1, problems
 
 
 def test_real_register_passes():

@@ -8,8 +8,11 @@ Checks, per rule block (### R-<AREA>-<n> — title):
   - the ID matches R-[A-Z]+-\\d+ and is unique;
   - Rule, Owning code, Pins and Status are present;
   - each owning code is path::symbol, the file exists and the symbol occurs in it;
-  - each pin is a test (path::[Class::]test_fn: file exists, def and class occur,
-    the def sits inside the class) or a scenario file (path exists), or `none`;
+  - each pin is one of: a Python test `path::[Class::]test_fn` (file exists, def and
+    class occur, the def sits inside the class); a vitest test
+    `frontend/src/<file>.test.ts(x)::"<exact title>"` (file exists, the quoted title
+    occurs as an it(/test( title in it); a scenario file `qa/web/scenarios/...py`
+    (path exists); or the literal `none`;
   - Status is `unpinned` if and only if Pins is `none`.
 Across the docs: every R-<AREA>-<n> token in docs/features.md and docs/**/*.md
 resolves to a register ID.
@@ -31,6 +34,7 @@ TOKEN_RE = re.compile(r"\bR-[A-Z]+-\d+\b")
 HEADING_RE = re.compile(r"^### (.+?) — (.+)$")
 FIELD_RE = re.compile(r"^- \*\*(Rule|Owning code|Pins|Status):\*\* ?(.*)$")
 CODE_RE = re.compile(r"`([^`]+)`")
+VITEST_PIN_RE = re.compile(r'^(?P<path>[^:`]+\.test\.tsx?)::"(?P<title>[^"]+)"$')
 STATUSES = ("pinned", "unpinned")
 
 
@@ -121,6 +125,21 @@ def _check_test_pin(rid: str, token: str, root: Path, problems: list[str]) -> No
         problems.append(f"{rid}: test function {fn} not found{where} in {rel}")
 
 
+def _check_vitest_pin(rid: str, token: str, root: Path, problems: list[str]) -> None:
+    match = VITEST_PIN_RE.match(token)
+    if match is None:
+        problems.append(f'{rid}: vitest pin `{token}` must be frontend/src/<file>.test.ts(x)::"<title>"')
+        return
+    rel, title = match.group("path"), match.group("title")
+    path = root / rel
+    if not path.is_file():
+        problems.append(f"{rid}: pin file does not exist: {rel}")
+        return
+    title_re = rf"\b(?:it|test)\(\s*([\"'`]){re.escape(title)}\1"
+    if not re.search(title_re, _read(path)):
+        problems.append(f"{rid}: vitest title {title!r} not found as an it()/test() title in {rel}")
+
+
 def _check_scenario_pin(rid: str, token: str, root: Path, problems: list[str]) -> None:
     if not (root / token).is_file():
         problems.append(f"{rid}: scenario pin file does not exist: {token}")
@@ -152,7 +171,9 @@ def _check_block(rid: str, body: list[str], root: Path, problems: list[str]) -> 
     if status == "unpinned":
         problems.append(f"{rid}: Status is unpinned but Pins lists tests or scenarios")
     for token in pins:
-        if "::" in token:
+        if VITEST_PIN_RE.match(token) or '::"' in token:
+            _check_vitest_pin(rid, token, root, problems)
+        elif "::" in token:
             _check_test_pin(rid, token, root, problems)
         else:
             _check_scenario_pin(rid, token, root, problems)
@@ -160,14 +181,11 @@ def _check_block(rid: str, body: list[str], root: Path, problems: list[str]) -> 
 
 
 def _citation_files(root: Path) -> list[Path]:
-    files: list[Path] = []
-    features = root / "docs" / "features.md"
-    if features.is_file():
-        files.append(features)
+    """docs/features.md and every other docs/**/*.md, each file once."""
     docs = root / "docs"
-    if docs.is_dir():
-        files.extend(sorted(docs.rglob("*.md")))
-    return files
+    if not docs.is_dir():
+        return []
+    return sorted(set(docs.rglob("*.md")))
 
 
 def check(root: Path) -> tuple[list[str], int, int]:
