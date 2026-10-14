@@ -28,3 +28,19 @@ jobs:
       # stdlib only, so no pip step. Exit 1 = index stale, exit 2 = structural error.
       - name: features index is up to date
         run: python scripts/gen_features_index.py --check
+
+  # Same trigger and no paths filter as the job above: the rules register is
+  # linted on every PR and every master push, not only when rules.md changes.
+  # Stdlib only. Exit 1 = a register problem (named by rule ID).
+  rules-register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: rules register is well formed and its pins resolve
+        run: python scripts/check_rules_register.py

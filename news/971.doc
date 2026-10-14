@@ -1,0 +1,1 @@
+Add a register of cross-cutting behaviour rules with a CI lint, so each rule is stated once and pinned by a test or scenario (#971).
