@@ -107,3 +107,71 @@ def test_pins_at_risk_matches_test_vitest_and_scenario_pin_files():
     }
     # Owning code is not a pin, and a rule pinned to `none` can never be at risk through its pins.
     assert dr.pins_at_risk(rules, {"core/review.py", "infrastructure/delete_service.py"}) == {}
+
+
+def test_unpinned_rules_are_listed_for_unconditional_review():
+    # R-DELETE-1 is the only unpinned rule; it has no test net, so it is always re-verified.
+    assert [rule.rule_id for rule in dr.unpinned_rules(dr.parse_rules(REGISTER))] == ["R-DELETE-1"]
+
+
+FEATURES_BASE = """\
+## Index
+
+### Alpha
+
+Shows [x](../core/x.py) once.
+
+### Beta
+
+Plain text.
+"""
+
+FEATURES_HEAD = FEATURES_BASE.replace("once.", "twice.")
+
+FEATURES_DIFF = """\
+diff --git a/docs/features.md b/docs/features.md
+--- a/docs/features.md
++++ b/docs/features.md
+@@ -5 +5 @@
+-Shows [x](../core/x.py) once.
++Shows [x](../core/x.py) twice.
+"""
+
+
+def test_touched_entries_maps_the_docs_impact_diff_and_reads_surface_paths():
+    # Fixture diff text: the line-5 hunk lies inside Alpha, so only Alpha is touched.
+    touched, labels, entries = dr.touched_entries(FEATURES_BASE, FEATURES_HEAD, FEATURES_DIFF)
+    assert touched == {"alpha"}
+    assert labels == {"alpha": "Alpha", "beta": "Beta"}
+    assert entries == [("Alpha", "alpha", {"core/x.py"}), ("Beta", "beta", set())]
+
+
+def test_surface_paths_keeps_source_links_and_drops_tests_scenarios_and_docs():
+    lines = [
+        "See [a](../core/a.py#L3) and `core/b/c.ts`.",
+        "Layer-1: [t](../tests/test_x.py) and [v](../frontend/src/X.test.tsx) and `docs/y.md`.",
+    ]
+    assert dr.surface_paths(lines) == {"core/a.py", "core/b/c.ts"}
+
+
+def test_stale_candidates_flags_untouched_entries_whose_cited_source_changed():
+    entries = [
+        ("Alpha", "alpha", {"core/x.py"}),
+        ("Beta", "beta", {"core/y.py"}),
+        ("Gamma", "gamma", {"core/z.py"}),
+    ]
+    stale = dr.stale_candidates(entries, touched={"gamma"}, changed={"core/x.py", "core/z.py"})
+    assert stale == [("Alpha", ["core/x.py"])]
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        (["app/web/routes/x.py"], True),
+        (["frontend/src/a.ts"], True),
+        (["docs/x.md", "scripts/y.py"], False),
+        (["frontend/test.md"], False),
+    ],
+)
+def test_is_behaviour_bearing_follows_the_behaviour_source_roots(files, expected):
+    assert dr.is_behaviour_bearing(files) is expected

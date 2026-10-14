@@ -10,6 +10,7 @@ Prints a markdown report on stdout, sections (a)-(f):
   (b) changed files per PR / commit;
   (c) rules at risk: rules in docs/behaviour/rules.md whose owning-code path changed;
   (d) pins at risk: rules whose pin file (test, vitest file or scenario) changed;
+  (d2) unpinned rules: every one, changed or not, since nothing else asserts them;
   (e) features entries: touched in the range, and candidates that may be stale;
   (f) the existing mechanical checks, run on the working tree.
 
@@ -48,6 +49,7 @@ LOG_SHA_RE = re.compile(r"^- SHA: ([0-9a-f]{7,40})\s*$", re.M)
 _LINK_PATH_RE = re.compile(r"\]\(((?:\.\./)*[\w./-]+\.(?:py|tsx?|ya?ml))(?:#[^)]*)?\)")
 _TICK_PATH_RE = re.compile(r"`((?:[\w-]+/)+[\w.-]+\.(?:py|tsx?|ya?ml))`")
 _NOT_SOURCE_PREFIXES = ("tests/", "qa/", "docs/", "news/")
+_BEHAVIOUR_ROOTS = ("app/", "core/", "infrastructure/", "scanner/", "frontend/src/")
 _TAIL_LINES = 12
 
 
@@ -73,6 +75,7 @@ class RuleRef:
     title: str
     owners: tuple[str, ...]
     pins: tuple[str, ...]
+    unpinned: bool
 
 
 @dataclass(frozen=True)
@@ -115,8 +118,18 @@ def parse_rules(register_text: str) -> list[RuleRef]:
             _pin_path(tok) for tok in crr.CODE_RE.findall(fields.get("Owning code", "")) if "::" in tok
         )
         pins = _unique(_pin_path(tok) for tok in crr.CODE_RE.findall(fields.get("Pins", "")))
-        rules.append(RuleRef(rule_id, title, owners, pins))
+        rules.append(RuleRef(rule_id, title, owners, pins, fields.get("Status") == "unpinned"))
     return rules
+
+
+def unpinned_rules(rules: list[RuleRef]) -> list[RuleRef]:
+    """Rules no test or scenario asserts: nothing else would notice them going stale."""
+    return [rule for rule in rules if rule.unpinned]
+
+
+def is_behaviour_bearing(files) -> bool:
+    """True when a change touches a source root whose behaviour the register and features describe."""
+    return any(path.startswith(_BEHAVIOUR_ROOTS) for path in files)
 
 
 def rules_at_risk(rules: list[RuleRef], changed: set[str]) -> dict[str, list[str]]:
@@ -203,21 +216,26 @@ def _units(since: str, until: str) -> list[Unit]:
     return units
 
 
-def _features_touched(since: str, until: str) -> tuple[set[str], dict[str, str], list[tuple[str, str, set[str]]]]:
-    """Entry slugs touched in the range (via docs_impact_guard's diff mapping), their labels,
-    and every head-side entry with the source paths its text cites."""
-    inputs = dig.Inputs(
-        base_text=_show(since, FEATURES_PATH),
-        head_text=_show(until, FEATURES_PATH),
-        diff=_git("diff", "--unified=0", since, until, "--", FEATURES_PATH),
-    )
-    state = dig._diff_state(inputs)
-    head_lines = inputs.head_text.replace("\r\n", "\n").split("\n")
+def touched_entries(
+    base_text: str, head_text: str, diff: str
+) -> tuple[set[str], dict[str, str], list[tuple[str, str, set[str]]]]:
+    """Entry slugs touched by a features.md diff (docs_impact_guard's hunk mapping), their labels,
+    and every head-side entry with the source paths its text cites. Pure: texts in, data out."""
+    state = dig._diff_state(dig.Inputs(base_text=base_text, head_text=head_text, diff=diff))
+    head_lines = head_text.replace("\r\n", "\n").split("\n")
     entries = [
         (sec.label, sec.slug, surface_paths(head_lines[sec.start - 1 : sec.end]))
-        for sec in entry_sections(inputs.head_text)
+        for sec in entry_sections(head_text)
     ]
     return state.touched, state.labels, entries
+
+
+def _features_touched(since: str, until: str) -> tuple[set[str], dict[str, str], list[tuple[str, str, set[str]]]]:
+    return touched_entries(
+        _show(since, FEATURES_PATH),
+        _show(until, FEATURES_PATH),
+        _git("diff", "--unified=0", since, until, "--", FEATURES_PATH),
+    )
 
 
 def _run_check(name: str, script: str, args: list[str]) -> CheckResult:
@@ -282,6 +300,17 @@ def _render_pins(rules: list[RuleRef], changed: set[str], units: list[Unit]) -> 
     return [*lines, ""]
 
 
+def _render_unpinned(rules: list[RuleRef]) -> list[str]:
+    """Unpinned rules have no test net: the skill re-verifies every one, changed or not."""
+    lines = [
+        "## (d2) Unpinned rules (always re-verified)",
+        "",
+        "No test or scenario asserts these; the skill sends every one to a fresh reviewer.",
+        "",
+    ]
+    return [*lines, *_list_or_none([f"{rule.rule_id} — {rule.title}" for rule in unpinned_rules(rules)]), ""]
+
+
 def _render_features(since: str, until: str, changed: set[str]) -> list[str]:
     touched, labels, entries = _features_touched(since, until)
     lines = [
@@ -332,11 +361,13 @@ def build_report(since: str, until: str) -> tuple[str, bool]:
         "",
     ]
     for unit in units:
-        lines.append(f"### {unit.label} — {unit.subject}")
+        bearing = " [behaviour-bearing]" if is_behaviour_bearing(unit.files) else ""
+        lines.append(f"### {unit.label} — {unit.subject}{bearing}")
         lines.extend(_list_or_none(list(unit.files)))
         lines.append("")
     lines.extend(_render_rules(rules, changed, units))
     lines.extend(_render_pins(rules, changed, units))
+    lines.extend(_render_unpinned(rules))
     lines.extend(_render_features(since, until, changed))
     lines.extend(_render_checks(checks))
     return "\n".join(lines) + "\n", all(check.code == 0 for check in checks)
