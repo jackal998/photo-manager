@@ -5,6 +5,7 @@
 - [ ] Tests added (unit + qa scenario if user-facing)
 - [ ] No `--no-verify` used
 - [ ] Pre-PR hooks (`docs_guard`, `qa_scenario_guard`) passed locally
+- [ ] `Docs impact:` line in this body: a list of the `docs/features.md` entries the diff touches, `none — <reason>`, or `restructure — <reason>` (CI `docs_impact_guard`)
 
 For any item that legitimately doesn't apply, replace `[ ]` with `[N/A]` so reviewers can see at a glance that you considered it and made a deliberate call. See [`CONTRIBUTING.md`](../CONTRIBUTING.md#pr-template-and-pre-merge-checklist) for details.
 

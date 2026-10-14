@@ -72,6 +72,17 @@ class Entry:
     line_idx: int
 
 
+@dataclass(frozen=True)
+class EntrySection:
+    """An entry and the lines it owns: the heading through the line before the
+    next heading of level 1-3. ``start`` and ``end`` are 1-based and inclusive."""
+
+    label: str
+    slug: str
+    start: int
+    end: int
+
+
 def _normalise(text: str) -> str:
     return text.replace("\r\n", "\n")
 
@@ -141,13 +152,32 @@ def _area_under(lines: list[str], heading: Heading) -> str:
     )
 
 
+def _is_entry(heading: Heading) -> bool:
+    return heading.level == 3 and heading.h2 != CONVENTIONS_H2
+
+
+def entry_sections(text: str) -> list[EntrySection]:
+    """Every entry with the line span it owns, in document order (for the docs-impact gate)."""
+    lines = _normalise(text).split("\n")
+    headings = _headings(lines)
+    slugs = slugify_all([h.text for h in headings])
+    sections: list[EntrySection] = []
+    for pos, (heading, slug) in enumerate(zip(headings, slugs)):
+        if not _is_entry(heading):
+            continue
+        following = [h.line_idx for h in headings[pos + 1 :] if h.level <= 3]
+        end_idx = following[0] if following else len(lines)
+        sections.append(EntrySection(heading.text, slug, heading.line_idx + 1, end_idx))
+    return sections
+
+
 def parse_entries(text: str) -> list[Entry]:
     lines = _normalise(text).split("\n")
     headings = _headings(lines)
     slugs = slugify_all([h.text for h in headings])
     entries: list[Entry] = []
     for heading, slug in zip(headings, slugs):
-        if heading.level != 3 or heading.h2 == CONVENTIONS_H2:
+        if not _is_entry(heading):
             continue
         if any(ch in heading.text for ch in "[]|"):
             raise StructureError(f"entry heading '{heading.text}' contains [ ] or | and cannot be a table label")

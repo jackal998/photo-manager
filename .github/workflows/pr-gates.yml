@@ -26,7 +26,10 @@ on:
   # Without this, intermediate PRs in a multi-PR feature chain bypass the
   # gates entirely. See tests.yml / web-eval-gates.yml for the matching
   # pattern.
+  # `edited` so fixing a PR body (the `Docs impact:` line, a bypass token)
+  # re-runs these gates against the live body (#958). Same form as news-gate.
   pull_request:
+    types: [opened, edited, synchronize, reopened]
 
 concurrency:
   group: pr-gates-${{ github.ref }}
@@ -66,7 +69,18 @@ jobs:
       # Two separate steps so each gate gets its own pass/fail line in the
       # GitHub Actions UI — triage is one click instead of grepping a log.
       - name: docs_guard
+        if: always()
         run: python scripts/hooks/docs_guard.py --ci
 
       - name: qa_scenario_guard
+        if: always()
         run: python scripts/hooks/qa_scenario_guard.py --ci
+
+      # Checks the body's `Docs impact:` line against the diff of
+      # docs/features.md (#958). Run as a module from the repo root so
+      # `scripts.gen_features_index` resolves; reads PR_BODY and DIFF_BASE
+      # from the job env above.
+      # `if: always()`: a red docs_guard must not hide this gate's verdict.
+      - name: docs_impact_guard
+        if: always()
+        run: python -m scripts.hooks.docs_impact_guard

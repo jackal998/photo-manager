@@ -734,6 +734,16 @@ configured. The bypass tokens work identically server-side (CI parses
 PR title + body). `zombie_check` stays local-only — it inspects host
 processes and has no CI analogue.
 
+A CI-only gate, `scripts/hooks/docs_impact_guard.py`, checks the PR body's
+`Docs impact: <value>` line against the diff of `docs/features.md`
+([`pr-gates.yml`](.github/workflows/pr-gates.yml), `gates` job; it also
+re-runs on a body edit). The value is a list of entries (exact heading text
+or `#slug`), `none — <reason>` when no entry section is touched, or
+`restructure — <reason>` for PRs that move many entries. It fails when a
+named entry is untouched, a touched entry is unnamed, or a name is unknown.
+It has no bypass token and no author or bot exemption; tests are in
+`tests/test_docs_impact_guard.py`.
+
 A third gate script, `scripts/hooks/news_guard.py`, has no client half
 at all: [`.github/workflows/news-gate.yml`](.github/workflows/news-gate.yml)
 calls it to require a `news/<PR>.<type>` changelog fragment, and the
